@@ -3,12 +3,12 @@
   <category name="Envelopes">
     <reapack name="TK_CopyAllEnvelopes.lua" type="script" desc="Copy all envelopes.">
       <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
-        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/377ce944e7af1af375c7528ee0a224be63cae179/Envelopes/TK_CopyAllEnvelopes.lua</source>
+        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Envelopes/TK_CopyAllEnvelopes.lua</source>
       </version>
     </reapack>
     <reapack name="TK_PasteAllEnvelopes.lua" type="script" desc="Paste all envelopes.">
       <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
-        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/f0165eb393895b01951a56d5ff3e01c90ea01514/Envelopes/TK_PasteAllEnvelopes.lua</source>
+        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Envelopes/TK_PasteAllEnvelopes.lua</source>
       </version>
     </reapack>
   </category>
