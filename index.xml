@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="TK Scripts" commit="37b89c70ad9b01b3f1362279f4ad5b7c2db02c7c">
+<index version="1" name="TK Scripts" commit="377ce944e7af1af375c7528ee0a224be63cae179">
   <category name="Envelopes">
     <reapack name="TK_CopyAllEnvelopes.lua" type="script" desc="Copy all envelopes.">
-      <source main="main">https://github.com/TouristKiller/TK Scripts/raw/master/Envelopes/nieuw_scriptTK_CopyAllEnvelopes.lua</source>
+      <version name="1.0" author="TouristKiller" time="2023-10-05T12:00:00Z">
+        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/377ce944e7af1af375c7528ee0a224be63cae179/Envelopes/TK_CopyAllEnvelopes.lua</source>
+      </version>
+    </reapack>
+  </category>
 </index>
-
