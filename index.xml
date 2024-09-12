@@ -2,6 +2,6 @@
 <index version="1" name="TK Scripts" commit="37b89c70ad9b01b3f1362279f4ad5b7c2db02c7c">
   <category name="Envelopes">
     <reapack name="TK_CopyAllEnvelopes.lua" type="script" desc="Copy all envelopes.">
-      <source main="main">https://github.com/jouwgebruikersnaamTouristKiller/TK Scripts/raw/NIEUWE_COMMIT_HASH/Example/nieuw_script.lua</source>
+      <source main="main">https://github.com/TouristKiller/TK Scripts/raw/3107e900239c7e9f668e474bfc2a68001b9685ab/Envelopes/nieuw_scriptTK_CopyAllEnvelopes.lua</source>
 </index>
 
