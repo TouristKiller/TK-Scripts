@@ -1,6 +1,6 @@
 -- @description CopyAllEnvelope
--- @author TouristKiller
 -- @version 1.0
+-- @author TouristKiller
 -- @about
 --   # CopyAllEnvelope
 --   This script copies all envelope points from selected tracks within the defined time selection. 

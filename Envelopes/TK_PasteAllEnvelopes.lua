@@ -1,10 +1,6 @@
-<<<<<<< HEAD
-
-=======
->>>>>>> 0a1b055c5132ecd8e9ab03097588225d5d0fd81d
 -- @description PasteAllEnvelope
--- @author TouristKiller
 -- @version 1.0
+-- @author TouristKiller
 -- @about
 --   # PasteAllEnvelope
 --   This script retrieves the previously copied envelope data from REAPER's extended state and pastes it onto the selected tracks at the current edit cursor position
