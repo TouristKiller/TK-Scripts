@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 
+=======
+>>>>>>> 0a1b055c5132ecd8e9ab03097588225d5d0fd81d
 -- @description PasteAllEnvelope
 -- @author TouristKiller
 -- @version 1.0
