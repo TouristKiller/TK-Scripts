@@ -1,5 +1,5 @@
 -- @description TK FX BROWSER
--- @version 0.1.1
+-- @version 0.1.2
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser 
@@ -467,13 +467,12 @@ local function ShowTrackFX()
 end
 
 function Frame()
-   
-    local search = FilterBox()
-    r.ImGui_SameLine(ctx)
+
     if r.ImGui_Button(ctx, "SCAN", 40) then
             FX_LIST_TEST, CAT_TEST = MakeFXFiles()
     end
-    
+    r.ImGui_SameLine(ctx)
+    local search = FilterBox()
     if search then return end
     for i = 1, #CAT_TEST do
         r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
