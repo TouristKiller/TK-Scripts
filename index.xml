@@ -15,7 +15,7 @@
     </reapack>
  </category>
 
- <category name="Markers">
+ <category name="TK SMART">
     <reapack name="TK_SMART.lua" type="script" desc="Simpel Marker And Region Tool">
     <version name="0.1.3" author="TouristKiller" time="2024-09-13T16:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK_SMART.lua</source>
