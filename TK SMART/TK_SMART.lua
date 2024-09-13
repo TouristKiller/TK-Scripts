@@ -89,7 +89,7 @@ local json = require("json")
 
 -- Definieer de paden voor project en globale presets
 local project_path = reaper.GetProjectPath("")
-local global_path = reaper.GetResourcePath() .. "/Scripts/TK SMART/presets/"
+local global_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/presets/"
 
 -- Nieuwe variabelen voor het preset systeem
 --local save_preset_globally = false 
@@ -1130,7 +1130,7 @@ local function move_markers_and_regions_to_cursor()
 end
 
 local function run_script(script_name)
-    local script_path = reaper.GetResourcePath() .. "/Scripts/TK SMART/" .. script_name
+    local script_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/" .. script_name
     if reaper.file_exists(script_path) then
         dofile(script_path)
     else
@@ -1404,7 +1404,7 @@ local function main()
         show_browser = false
         else
         SHOW_BROWSER = true
-        local browser_path = reaper.GetResourcePath() .. "/Scripts/TK SMART/TK_marker_Region_Action_Browser.lua"
+        local browser_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_marker_Region_Action_Browser.lua"
         dofile(browser_path)
         show_browser = true
         end
@@ -1664,7 +1664,7 @@ local function main()
                         show_action_browser = false
                     else
                         SHOW_ACTION_BROWSER = true
-                        local action_browser_path = reaper.GetResourcePath() .. "/Scripts/TK SMART/TK_Action_Browser.lua"
+                        local action_browser_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_Action_Browser.lua"
                         dofile(action_browser_path)
                         show_action_browser = true
                     end
@@ -1750,7 +1750,7 @@ local function main()
                         show_weblink_browser = false
                     else
                         SHOW_WEBLINK_BROWSER = true
-                        local weblink_browser_path = reaper.GetResourcePath() .. "/Scripts/TK SMART/TK_Learn_Browser(MR).lua"
+                        local weblink_browser_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_Learn_Browser(MR).lua"
                         dofile(weblink_browser_path)
                         show_weblink_browser = true
                     end

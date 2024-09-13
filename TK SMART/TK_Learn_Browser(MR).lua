@@ -55,7 +55,7 @@ local function ReadWeblinksFromFile(filename)
 end
 
 -- Weblinks inlezen
-local weblinks = ReadWeblinksFromFile(reaper.GetResourcePath() .. "/Scripts/TK SMART/weblinks.txt")
+local weblinks = ReadWeblinksFromFile(reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/weblinks.txt")
 
 -- Functie om weblinks te filteren op basis van de zoekterm
 local function SearchWeblinks(search_term)
