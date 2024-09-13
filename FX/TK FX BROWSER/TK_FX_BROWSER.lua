@@ -282,22 +282,32 @@ end
 
 local function FilterBox()
     local MAX_FX_SIZE = 84
-    
+    r.ImGui_PushItemWidth(ctx, MAX_FX_SIZE - 22) -- Maak ruimte voor de 'x' knop
     if r.ImGui_IsWindowAppearing(ctx) then
         r.ImGui_SetKeyboardFocusHere(ctx)
     end
     local changed
-    r.ImGui_PushItemWidth(ctx, MAX_FX_SIZE)
     changed, FILTER = r.ImGui_InputTextWithHint(ctx, '##input', "SEARCH FX", FILTER)
     if changed then
         print("Filter text changed: " .. FILTER)
     end
+    r.ImGui_SameLine(ctx)
+    local button_height = r.ImGui_GetFrameHeight(ctx)
+    if r.ImGui_Button(ctx, "x", 20, button_height) then
+        FILTER = ""
+    end
+    
     local filtered_fx = Filter_actions(FILTER)
-    local filter_h = #filtered_fx == 0 and 0 or (#filtered_fx > 40 and 20 * 17 or (17 * #filtered_fx))
+    
+    -- Bereken de beschikbare hoogte
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - 10
+
+
+    local window_width = r.ImGui_GetWindowWidth(ctx)
     ADDFX_Sel_Entry = SetMinMax(ADDFX_Sel_Entry or 1, 1, #filtered_fx)
     if #filtered_fx ~= 0 then
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        if r.ImGui_BeginChild(ctx, "##popupp", window_width, filter_h) then
+        if r.ImGui_BeginChild(ctx, "##popupp", window_width, available_height) then
             for i = 1, #filtered_fx do
                 if r.ImGui_Selectable(ctx, filtered_fx[i].name, i == ADDFX_Sel_Entry) then
                     r.TrackFX_AddByName(TRACK, filtered_fx[i].name, false, -1000 - r.TrackFX_GetCount(TRACK))
@@ -330,6 +340,7 @@ local function FilterBox()
     end
     return #filtered_fx ~= 0
 end
+
 
 local function DrawFxChains(tbl, path)
     local extension = ".RfxChain"
