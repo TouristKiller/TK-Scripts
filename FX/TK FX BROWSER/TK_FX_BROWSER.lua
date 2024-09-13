@@ -1,5 +1,5 @@
 -- @description TK FX BROWSER
--- @version 0.1.2
+-- @version 0.1.3
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser 
@@ -282,11 +282,12 @@ end
 
 local function FilterBox()
     local MAX_FX_SIZE = 84
-    r.ImGui_PushItemWidth(ctx, MAX_FX_SIZE)
+    
     if r.ImGui_IsWindowAppearing(ctx) then
         r.ImGui_SetKeyboardFocusHere(ctx)
     end
     local changed
+    r.ImGui_PushItemWidth(ctx, MAX_FX_SIZE)
     changed, FILTER = r.ImGui_InputTextWithHint(ctx, '##input', "SEARCH FX", FILTER)
     if changed then
         print("Filter text changed: " .. FILTER)
@@ -295,12 +296,18 @@ local function FilterBox()
     local filter_h = #filtered_fx == 0 and 0 or (#filtered_fx > 40 and 20 * 17 or (17 * #filtered_fx))
     ADDFX_Sel_Entry = SetMinMax(ADDFX_Sel_Entry or 1, 1, #filtered_fx)
     if #filtered_fx ~= 0 then
-        if r.ImGui_BeginChild(ctx, "##popupp", MAX_FX_SIZE, filter_h) then
+        local window_width = r.ImGui_GetWindowWidth(ctx)
+        if r.ImGui_BeginChild(ctx, "##popupp", window_width, filter_h) then
             for i = 1, #filtered_fx do
                 if r.ImGui_Selectable(ctx, filtered_fx[i].name, i == ADDFX_Sel_Entry) then
                     r.TrackFX_AddByName(TRACK, filtered_fx[i].name, false, -1000 - r.TrackFX_GetCount(TRACK))
                     r.ImGui_CloseCurrentPopup(ctx)
                     LAST_USED_FX = filtered_fx[i].name
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_BeginTooltip(ctx)
+                    r.ImGui_Text(ctx, filtered_fx[i].name)
+                    r.ImGui_EndTooltip(ctx)
                 end
             end
             r.ImGui_EndChild(ctx)
