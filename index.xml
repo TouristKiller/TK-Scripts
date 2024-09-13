@@ -15,13 +15,24 @@
     </reapack>
  </category>
 
-<category name="Markers">
-    <reapack name="TK_SMART.lua" type="script" desc="Copy all envelopes.">
-    <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
-    <source file="mijn_pakket.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK SMART.zip</source>
+ <category name="Markers">
+    <reapack name="TK_SMART.lua" type="script" desc="SMART script.">
+    <version name="0.1.3" author="TouristKiller" time="2024-09-13T16:00:00Z">
+    <source file="TK_SMART.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK_SMART.zip</source>
+    <provides>
+          <file main="main">TK_SMART.lua</file>
+          <file>TK_Action_Browser.lua</file>
+          <file>TK_Learn_Browser.lua</file>
+          <file>TK_marker at middle items on the track.lua</file>
+          <file>TK_marker at start items on the track.lua</file>
+          <file>TK_Marker_Region_Action_Browser.lua</file>
+          <file>weblinks.txt</file>
+          <file>TK_SMART_LOGO.png</file>
+          <file>presets/g_preset01.json</file>
+          <file>json.lua</file>
+    </provides>
     </version>
     </reapack>
-
- 
+  </category>
+  
 </index>
-
