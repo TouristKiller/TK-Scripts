@@ -1,7 +1,9 @@
---------------------------------------------------------------
---                         TK FX BROWSER                    --
---                  A MOD of Sexan's FX Browser             --
---------------------------------------------------------------
+-- @description TK FX BROWSER
+-- @version 0.1.1
+-- @author TouristKiller
+-- @about
+--   #  A MOD of Sexan's FX Browser 
+
 
 local r = reaper
 
