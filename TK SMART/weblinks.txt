@@ -1,0 +1,58 @@
+# FORMAT: category, author, site, title ,type, url
+
+# MARKERS
+# --------------------------------------------------------------
+Markers|Tormy van Cool|Tormy van Cool|Unlock the Power of Smart-Markers in Reaper!|Video|https://youtu.be/H-nlvKyogHs?si=YUfXAdNCuSRiCZNA
+
+Markers|Jon Tidey|ReaperBlog|Using Project Markers in REAPER|Video|https://youtu.be/8BWKJ2iWD_I?si=eOPjSqxDiNPnXH0o
+
+Markers|Jon Tidey|ReaperBlog|Marker Colors|Video|https://youtu.be/HgFrOPYVIOQ?si=6Zhg5zX9I1bqgYvw
+
+Markers|Mike|Let's Talk About Reaper|Smart Markers in REAPER - Automate Actions using Markers|Video|https://youtu.be/BhZa2m4UmBk?si=MNDrNTTlHRC35hMO
+
+Markers|Castaway Studios|Castaway Studios|How To Make Markers in Reaper you can move for times recordings|Video|https://youtu.be/p1ZzNMRpHrY?si=XIEzJ1ydcBWA5vEq
+
+# REGIONS
+# --------------------------------------------------------------
+Regions|Kenny Gioia|ReaperMania|Session View - Production w/Regions in REAPER|Video|https://youtu.be/QENZ0_Pywx4?si=cEQY_B08j0T-r4ri
+
+Regions|Jon Tidey|ReaperBlog|Instantly Assemble Rough Edit from Regions - Video Editing Workflow Only Possible in Reaper|Video|https://youtu.be/qBrzZltpRl8?si=BQULQfx9702nkwG1
+
+Regions|Jon Tidey|ReaperBlog|Dialog Edit with Regions - How to approach a list of edits to do|Video|https://youtu.be/FwU9Wa12ILo?si=Xgni04S9cJMiUaXO
+
+Regions|Tonebone Marone|Tonebone Marone|All You Need To Know And More About Regions In Reaper|Video|https://youtu.be/Uno07Z0GJRY?si=c_ABKLcnFkylPUTy
+
+Regions|Alejandro|Reapertips|How to move multiple regions in Reaper|Short Video|https://youtu.be/qY14pzf7nqk?si=i347hh5hIUH5Eeq2
+
+Regions|Mike|Lets Talk About Reaper|Usability Tips: Regions Clock by Xraym|Video|https://youtu.be/Vkqe0a2ehQA?si=OPekh5b7U15DxTLh
+
+# MARKERS AND REGIONS
+# --------------------------------------------------------------
+Markers and Regions|Kenny Gioia|ReaperMania|This is REAPER 6 - Markers & Regions (11/15)|Video|https://youtu.be/jumsoyUROzU?si=BJD7EIqzp4RNTIaO
+
+Markers and Regions|David Bode|Envato|How to Use Reaper Markers and Regions|Video|https://music.tutsplus.com/how-to-use-reaper-markers-and-regions--cms-107731t
+
+Markers and Regions|Tormy van Cool|Tormy van Cool|LUFS in REAPER: Graphic Loudness of Markers and Regions|Video|https://youtu.be/_Td-KdqnIoc?si=qTa7FDshKhKm7DEw
+
+Markers and Regions|David Bode|Envato|How to Use Reaper Markers and Regions|Site&Video|https://music.tutsplus.com/how-to-use-reaper-markers-and-regions--cms-107731t
+
+Markers and Regions|Reaper Tutorials|Reaper Tutorials|Reaper: How To Auto Color Tracks Regions and Markers|Video|https://youtu.be/1Y7PkvCrmr0?si=dssGgu4Wq9JF2PW6
+
+Markers and Regions|Mike|Let's Talk About Reaper|Jump to Time, Markers, or Regions|Video|https://youtu.be/-WiIsSc0SlU?si=vcq_HKLansIIrQxk
+
+Markers and Regions|Mike|Lets Talk About Reaper|Markers, Regions, and Time Selection|Video|https://youtu.be/xLH6Eqt7eJM?si=fvtE4qUlI8uJHznb
+
+Markers and Regions|Audiokenetic|Audiokenetic|Set Region and Marker Preferences|Site|https://www.audiokinetic.com/en/library/strata/?source=StrataLibrary&id=strata_region_marker_prefs
+
+
+
+# RELATED
+# --------------------------------------------------------------
+Related|Kenny Gioia|ReaperMania|Burning a CD in REAPER|Video|https://youtu.be/lVUSy7MKmAk?si=Ar3eGa708gpA_p7m
+
+Related|Adam Steele|Pro Mix Academy|Glass Master DDP Mastering For CD Production In REAPER|Video|https://youtu.be/4kItwnHFYb8?si=ujB05_UAEotKyv4B
+
+Related|Tormy van Cool|Tormy van Cool|DDP: Easy. How to make DDP with REAPER|Video|https://youtu.be/faene5EFhnA?si=21TpiDZ_6p5gQyp1
+
+Related|Geoffrey Francis|Nicolas|Reaper User Guide (Chapter 9)|PDF|https://dlz.reaper.fm/userguide/ReaperUserGuide720c.pdf
+
