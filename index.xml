@@ -30,7 +30,24 @@
     <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/json.lua</source>
     </version>
     </reapack>
-</category>
+ </category>
+
+ <category name="FX">
+    <reapack name="TK_FX+BROWSER.lua" type="script" desc="TK FX BROWSER">
+    <version name="0.1.0" author="TouristKiller" time="2024-09-13T20:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER.lua</source>
+    <source file="Sexan_FX_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Action_Browser.lua</source>
+    <source file="TK_Learn_Browser(MR).lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK_Learn_Browser(MR).lua</source>
+    <source file="TK_marker at middle items on the track.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK_marker%20at%20middle%20items%20on%20the%20track.lua</source>
+    <source file="TK_marker at start items on the track.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK_marker%20at%20start%20items%20on%20the%20track.lua</source>
+    <source file="TK_Marker_Region_Action_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK_Marker_Region_Action_Browser.lua</source>
+    <source file="weblinks.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/weblinks.txt</source>
+    <source file="TK SMART LOGO.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK%20SMART%20LOGO.png</source>
+    <source file="presets/g_preset01.json">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/presets/g_preset01.json</source>
+    <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/json.lua</source>
+    </version>
+    </reapack>
+ </category>
 
 </index>
 
