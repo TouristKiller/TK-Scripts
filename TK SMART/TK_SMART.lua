@@ -41,7 +41,7 @@ CHANGELOG (start from 0.1.1):
 - Hide minimap on double click on the project timeline
 - buttons to clear item name
 - Checkbox for Region Render Matrix
-- bezig met selectie van markers en regions methode
+
 
 0.1.2 2024-09-10:
 - Addad a button for the LEARN BROWSER (content about markers and regions)
