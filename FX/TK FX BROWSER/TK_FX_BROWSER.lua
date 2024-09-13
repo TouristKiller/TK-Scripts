@@ -565,11 +565,9 @@ function Main()
                 UpdateChainsTrackTemplates(CAT)
             end
             
-                if r.ImGui_Button(ctx, "T+/-", 40) then
-                ToggleFontSize()
-            end
+            
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, SHOW_PREVIEW and "OFF" or "ON" ,40) then
+            if r.ImGui_Button(ctx, SHOW_PREVIEW and "Sreenshot OFF" or "Sceenshot ON" ,85) then
                 SHOW_PREVIEW = not SHOW_PREVIEW
                 if SHOW_PREVIEW and current_hovered_plugin then
                     LoadPluginScreenshot(current_hovered_plugin)
