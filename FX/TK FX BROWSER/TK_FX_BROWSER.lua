@@ -566,7 +566,6 @@ function Main()
             end
             
             
-            r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, SHOW_PREVIEW and "Sreenshot OFF" or "Sceenshot ON" ,85) then
                 SHOW_PREVIEW = not SHOW_PREVIEW
                 if SHOW_PREVIEW and current_hovered_plugin then
