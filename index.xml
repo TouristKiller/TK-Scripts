@@ -18,21 +18,19 @@
  <category name="Markers">
     <reapack name="TK_SMART.lua" type="script" desc="Simpel Marker And Region Tool">
     <version name="0.1.3" author="TouristKiller" time="2024-09-13T16:00:00Z">
-    <source file="TK%20SMART.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART.zip</source>
-    <provides>
-          <file main="main">TK_SMART.lua</file>
-          <file>TK_Action_Browser.lua</file>
-          <file>TK_Learn_Browser.lua</file>
-          <file>TK_marker%20at%20middle%20items%20on%20the%20track.lua</file>
-          <file>TK_marker%20at%20start%20items%20on%20the%20track.lua</file>
-          <file>TK_Marker_Region_Action_Browser.lua</file>
-          <file>weblinks.txt</file>
-          <file>TK_SMART_LOGO.png</file>
-          <file>presets/g_preset01.json</file>
-          <file>json.lua</file>
-    </provides>
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/TK_SMART.lua</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/TK_Action_Browser.lua</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/TK_Learn_Browser.lua</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/TK_marker%20at%20middle%20items%20on%20the%20track.lua</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/TK_marker%20at%20start%20items%20on%20the%20track.lua</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/TK_Marker_Region_Action_Browser.lua</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/weblinks.txt</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/TK_SMART_LOGO.png</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/presets/g_preset01.json</source>
+    <source>https://github.com/TouristKiller/TK-Scripts/raw/master/Markers/json.lua</source>
     </version>
     </reapack>
   </category>
 
 </index>
+
