@@ -1,16 +1,27 @@
- <?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <index version="1" name="TK Scripts">
-  <category name="Envelopes">
+ 
+ <category name="Envelopes">
     <reapack name="TK_CopyAllEnvelopes.lua" type="script" desc="Copy all envelopes.">
-      <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
-        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Envelopes/TK_CopyAllEnvelopes.lua</source>
-      </version>
+    <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Envelopes/TK_CopyAllEnvelopes.lua</source>
+    </version>
     </reapack>
+   
     <reapack name="TK_PasteAllEnvelopes.lua" type="script" desc="Paste all envelopes.">
-      <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
-        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Envelopes/TK_PasteAllEnvelopes.lua</source>
-      </version>
+    <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Envelopes/TK_PasteAllEnvelopes.lua</source>
+    </version>
     </reapack>
-  </category>
+ </category>
+
+<category name="Markers">
+    <reapack name="TK_SMART.lua" type="script" desc="Copy all envelopes.">
+    <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
+    <source file="mijn_pakket.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK SMART.zip</source>
+    </version>
+    </reapack>
+
+ 
 </index>
 
