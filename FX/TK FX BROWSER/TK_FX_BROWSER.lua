@@ -576,7 +576,7 @@ function Main()
             
             -- Quit knop
             local window_width = reaper.ImGui_GetWindowWidth(ctx)
-            reaper.ImGui_SameLine(ctx, window_width - 40 - 5)
+            reaper.ImGui_SameLine(ctx)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
