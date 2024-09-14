@@ -1,9 +1,8 @@
 -- @description TK FX BROWSER
--- @version 0.1.3
+-- @version 0.1.5
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser 
-
 
 local r = reaper
 
@@ -30,7 +29,6 @@ local hover_gray = 0x303030FF
 local active_gray = 0x303030FF
 
 -- Globale variabelen
-local FX_BROWSER_OPEN = true
 local SHOW_PREVIEW = true
 local TRACK, LAST_USED_FX, FILTER, ADDFX_Sel_Entry
 local FX_LIST_TEST, CAT_TEST = ReadFXFile()
@@ -45,29 +43,88 @@ local current_hovered_plugin = nil
 local screenshot_texture = nil
 local screenshot_width, screenshot_height = 0, 0
 
+-- Dock / Undock
+local dock = 0
+local change_dock = false
+
+-- Stijl balans systeem
+local style_counters = {
+    color = 0,
+    var = 0,
+    font = 0
+}
+
+local function push_style(style_type)
+    style_counters[style_type] = style_counters[style_type] + 1
+end
+
+local function pop_style(style_type)
+    style_counters[style_type] = style_counters[style_type] - 1
+end
+
+local function check_style_balance()
+    for style_type, count in pairs(style_counters) do
+        if count ~= 0 then
+            print("Mismatch in " .. style_type .. " styles: " .. count)
+        end
+    end
+end
 
 --------------------------------------------------------------
+local function check_esc_key() 
+    if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
+        return true
+    end
+    return false
+end
+
+local function handleDocking()
+    if change_dock then
+        r.ImGui_SetNextWindowDockID(ctx, ~dock)
+        change_dock = nil
+    end
+end
+
 local function apply_style()
-   
+    push_style("var")
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)
+    push_style("var")
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
+    push_style("var")
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 3, 3)
 
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), 0x000000FF)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xFFFFFFFF)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), dark_gray)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hover_gray)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), active_gray)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Tab(), dark_gray)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_TabHovered(), hover_gray)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), dark_gray)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), hover_gray)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), active_gray)
+    push_style("color")
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
 end
 
 local function remove_style()
+    pop_style("var")
+    pop_style("var")
+    pop_style("var")
     reaper.ImGui_PopStyleVar(ctx, 3)
+    for i = 1, 11 do
+        pop_style("color")
+    end
     reaper.ImGui_PopStyleColor(ctx, 11)
 end
 
@@ -485,7 +542,6 @@ local function ShowTrackFX()
 end
 
 function Frame()
-
     if r.ImGui_Button(ctx, "SCAN", 40) then
             FX_LIST_TEST, CAT_TEST = MakeFXFiles()
     end
@@ -540,12 +596,11 @@ function Frame()
    
 end
 function Main()
-    if not FX_BROWSER_OPEN then return end
-    
     TRACK = r.GetSelectedTrack(0, 0)
    
     local font_pushed = false
     if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+        push_style("font")
         r.ImGui_PushFont(ctx, normal_font)
         font_pushed = true
     else
@@ -556,16 +611,20 @@ function Main()
     apply_style()  
     r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
     reaper.ImGui_SetNextWindowSizeConstraints(ctx, 140, 200, 16384, 16384)
-        
-
+    handleDocking()    
     local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
+    dock = r.ImGui_GetWindowDockID(ctx)
     if visible then
         if TRACK then
             local track_color = GetTrackColor(TRACK)
             local track_name = GetTrackName(TRACK)
             
+            push_style("color")
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
-            if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 30) then
+            push_style("var")
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 7)
+            if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 30, r.ImGui_WindowFlags_NoScrollbar()) then
+
                 local text_width = r.ImGui_CalcTextSize(ctx, track_name)
                 local window_width = r.ImGui_GetWindowWidth(ctx)
                 local pos_x = (window_width - text_width) * 0.5
@@ -577,6 +636,9 @@ function Main()
                 r.ImGui_Text(ctx, track_name)
                 r.ImGui_EndChild(ctx)
             end
+            pop_style("var")
+            r.ImGui_PopStyleVar(ctx)
+            pop_style("color")
             r.ImGui_PopStyleColor(ctx)
 
             if WANT_REFRESH then
@@ -584,22 +646,34 @@ function Main()
                 UpdateChainsTrackTemplates(CAT)
             end
             
-            
-            if r.ImGui_Button(ctx, SHOW_PREVIEW and "Screenshot OFF" or "Screenshot ON" ,84) then
+                    
+                    
+            if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF" ,40) then
                 SHOW_PREVIEW = not SHOW_PREVIEW
                 if SHOW_PREVIEW and current_hovered_plugin then
                     LoadPluginScreenshot(current_hovered_plugin)
                 end
             end
+
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "DOCK", 40) then
+                change_dock = true
+            end
             
-            
-            -- Quit knop
-            local window_width = reaper.ImGui_GetWindowWidth(ctx)
             reaper.ImGui_SameLine(ctx)
+
+            push_style("color")
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
+            push_style("color")
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
+            push_style("color")
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
+
             if reaper.ImGui_Button(ctx, 'Quit', 40) then open = false end
+
+            pop_style("color")
+            pop_style("color")
+            pop_style("color")
             reaper.ImGui_PopStyleColor(ctx, 3)
 
             Frame()
@@ -609,23 +683,19 @@ function Main()
         if SHOW_PREVIEW and current_hovered_plugin then 
             ShowPluginScreenshot() 
         end
+        if check_esc_key() then open = false end
         r.ImGui_End(ctx)
     end
 
-    
     remove_style()  
-
     if font_pushed then
+        pop_style("font")
         r.ImGui_PopFont(ctx)
     end
-
+    check_style_balance()
     if open then
         r.defer(Main)
-    else
-        FX_BROWSER_OPEN = false
     end
 end
 
-
 r.defer(Main)
-            
