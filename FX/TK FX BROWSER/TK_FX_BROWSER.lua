@@ -1,8 +1,14 @@
 -- @description TK FX BROWSER
--- @version 0.1.5
+-- @version 0.1.6
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser 
+-- @changelog
+--   - Save FX on track to FXChain (SWS Needed)
+--   - Right click on FX chain to remove
+--   - ALT + Right click on FX chain to rename
+--   - Switch between Item Mode en Track Mode
+--   
 
 local r = reaper
 
@@ -25,7 +31,7 @@ local normal_font = reaper.ImGui_CreateFont('Arial', font_size)
 r.ImGui_Attach(ctx, normal_font)
 
 local dark_gray = 0x303030FF
-local hover_gray = 0x303030FF
+local hover_gray = 0x444444FF
 local active_gray = 0x303030FF
 
 -- Globale variabelen
@@ -35,6 +41,8 @@ local FX_LIST_TEST, CAT_TEST = ReadFXFile()
 if not FX_LIST_TEST or not CAT_TEST then
     FX_LIST_TEST, CAT_TEST = MakeFXFiles()
 end
+
+local ADD_FX_TO_ITEM = false
 
 local old_t = {}
 local old_filter = ""
@@ -127,6 +135,35 @@ local function remove_style()
     end
     reaper.ImGui_PopStyleColor(ctx, 11)
 end
+local function AddFXToItem(fx_name)
+    local item = r.GetSelectedMediaItem(0, 0)
+    if item then
+        local take = r.GetActiveTake(item)
+        if take then
+            r.TakeFX_AddByName(take, fx_name, 1)
+        end
+    end
+end
+
+
+local function CreateFXChain()
+    if not TRACK then return end
+    
+    local fx_count = r.TrackFX_GetCount(TRACK)
+    if fx_count == 0 then return end
+    
+    -- Selecteer de huidige track
+    r.SetOnlyTrackSelected(TRACK)
+    
+    -- Voer de SWS-actie uit om de FX-chain op te slaan
+    r.Main_OnCommand(r.NamedCommandLookup("_S&M_SAVE_FXCHAIN_SLOT1"), 0)
+    
+    -- Vernieuw de FX-lijst
+    FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+    
+    r.ShowMessageBox("FX Chain created successfully!", "Success", 0)
+end
+
 
 local function LoadTexture(file)
     return r.ImGui_CreateImage(file)
@@ -402,28 +439,76 @@ end
 local function DrawFxChains(tbl, path)
     local extension = ".RfxChain"
     path = path or ""
-    for i = 1, #tbl do
-        if tbl[i].dir then
+    local i = 1
+    while i <= #tbl do
+        local item = tbl[i]
+        if type(item) == "table" and item.dir then
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)  
             r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF) 
            
-            if r.ImGui_BeginMenu(ctx, tbl[i].dir) then               
-                DrawFxChains(tbl[i], table.concat({ path, os_separator, tbl[i].dir }))              
+            if r.ImGui_BeginMenu(ctx, item.dir) then               
+                DrawFxChains(item, table.concat({ path, os_separator, item.dir }))              
                 r.ImGui_EndMenu(ctx)               
             end  
             reaper.ImGui_PopStyleColor(ctx)
-        end
-        if type(tbl[i]) ~= "table" then
-            if r.ImGui_Selectable(ctx, tbl[i]) then
-                if TRACK then
-                    r.TrackFX_AddByName(TRACK, table.concat({ path, os_separator, tbl[i], extension }), false,
-                        -1000 - r.TrackFX_GetCount(TRACK))
+        elseif type(item) ~= "table" then
+            if r.ImGui_Selectable(ctx, item) then
+                if ADD_FX_TO_ITEM then
+                    local selected_item = r.GetSelectedMediaItem(0, 0)
+                    if selected_item then
+                        local take = r.GetActiveTake(selected_item)
+                        if take then
+                            r.TakeFX_AddByName(take, table.concat({ path, os_separator, item, extension }), 1)
+                        end
+                    end
+                else
+                    if TRACK then
+                        r.TrackFX_AddByName(TRACK, table.concat({ path, os_separator, item, extension }), false,
+                            -1000 - r.TrackFX_GetCount(TRACK))
+                    end
                 end
             end
-        end
-    end
-end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                local mods = r.ImGui_GetKeyMods(ctx)
+                if (mods & r.ImGui_Mod_Alt()) ~= 0 then
+                    -- Alt+Rechtermuisklik: Hernoem
+                    local retval, new_name = r.GetUserInputs("Rename FX Chain", 1, "New name:", item)
+                    if retval then
+                        local resource_path = r.GetResourcePath()
+                        local fx_chains_path = resource_path .. "/FXChains"
+                        local old_path = fx_chains_path .. "/" .. item .. extension
+                        local new_path = fx_chains_path .. "/" .. new_name .. extension
+                        if os.rename(old_path, new_path) then
+                            tbl[i] = new_name
+                            FX_LIST_TEST, CAT_TEST = MakeFXFiles()  -- Vernieuw de FX-lijst
+                            r.ShowMessageBox("FX Chain renamed", "Success", 0)
+                        else
+                            r.ShowMessageBox("Could not rename FX Chain", "Error", 0)
+                        end
+                    end
+                else
+                    -- Rechtermuisklik: Verwijder
+                    local resource_path = r.GetResourcePath()
+                    local fx_chains_path = resource_path .. "/FXChains"
+                    local file_path = fx_chains_path .. "/" .. item .. extension
+                    if os.remove(file_path) then
+                        table.remove(tbl, i)
+                        FX_LIST_TEST, CAT_TEST = MakeFXFiles()  -- Vernieuw de FX-lijst
+                        r.ShowMessageBox("FX Chain deleted", "Success", 0)
+                        i = i - 1  -- Pas de index aan omdat we een element hebben verwijderd
+                    else
+                        r.ShowMessageBox("Could not delete FX Chain", "Error", 0)
+                    end
+                end
+            end
+                    end
+                    i = i + 1
+                end
+            end
+            
+
+
 
 local function DrawTrackTemplates(tbl, path)
     local extension = ".RTrackTemplate"
@@ -479,11 +564,15 @@ local function DrawItems(tbl, main_cat_name)
                         name = name:gsub(' %(' .. Literalize(tbl[i].name) .. '%)', "")
                     end
                     if r.ImGui_Selectable(ctx, name) then
-                        if TRACK then
-                            r.TrackFX_AddByName(TRACK, tbl[i].fx[j], false,
-                                -1000 - r.TrackFX_GetCount(TRACK))
-                            LAST_USED_FX = tbl[i].fx[j]
+                        if ADD_FX_TO_ITEM then
+                            AddFXToItem(tbl[i].fx[j])
+                        else
+                            if TRACK then
+                                r.TrackFX_AddByName(TRACK, tbl[i].fx[j], false,
+                                    -1000 - r.TrackFX_GetCount(TRACK))
+                            end
                         end
+                        LAST_USED_FX = tbl[i].fx[j]
                     end
                     if r.ImGui_IsItemHovered(ctx) then
                         if tbl[i].fx[j] ~= current_hovered_plugin then
@@ -541,11 +630,50 @@ local function ShowTrackFX()
     end
 end
 
+local function ShowItemFX()
+    local item = r.GetSelectedMediaItem(0, 0)
+    if not item then return end
+    
+    local take = r.GetActiveTake(item)
+    if not take then return end
+    
+    r.ImGui_Text(ctx, "FX on Item:")
+    if r.ImGui_BeginChild(ctx, "ItemFXList", -1, 0) then
+        apply_style()
+        local fx_count = r.TakeFX_GetCount(take)
+        if fx_count > 0 then
+            for i = 0, fx_count - 1 do
+                local retval, fx_name = r.TakeFX_GetFXName(take, i, "")
+                local is_open = r.TakeFX_GetFloatingWindow(take, i)
+                if r.ImGui_Selectable(ctx, fx_name) then
+                    if is_open then
+                        r.TakeFX_Show(take, i, 2)
+                    else
+                        r.TakeFX_Show(take, i, 3)
+                    end
+                end
+                
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.TakeFX_Delete(take, i)
+                    break
+                end
+            end
+        else
+            r.ImGui_Text(ctx, "No FX on Item")
+        end
+        remove_style()
+        r.ImGui_EndChild(ctx)
+    end
+end
+
+
 function Frame()
     if r.ImGui_Button(ctx, "SCAN", 40) then
             FX_LIST_TEST, CAT_TEST = MakeFXFiles()
     end
+
     r.ImGui_SameLine(ctx)
+
     local search = FilterBox()
     if search then return end
     for i = 1, #CAT_TEST do
@@ -588,12 +716,18 @@ function Frame()
         end
     end
     r.ImGui_Separator(ctx)
-    ShowTrackFX()
     
+    if ADD_FX_TO_ITEM then
+        ShowItemFX()
+    else
+        ShowTrackFX()
+    end
     if not r.ImGui_IsAnyItemHovered(ctx) then
         current_hovered_plugin = nil
     end
-   
+    
+
+
 end
 function Main()
     TRACK = r.GetSelectedTrack(0, 0)
@@ -640,15 +774,8 @@ function Main()
             r.ImGui_PopStyleVar(ctx)
             pop_style("color")
             r.ImGui_PopStyleColor(ctx)
-
-            if WANT_REFRESH then
-                WANT_REFRESH = nil
-                UpdateChainsTrackTemplates(CAT)
-            end
             
-                    
-                    
-            if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF" ,40) then
+            if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", 40) then
                 SHOW_PREVIEW = not SHOW_PREVIEW
                 if SHOW_PREVIEW and current_hovered_plugin then
                     LoadPluginScreenshot(current_hovered_plugin)
@@ -659,7 +786,7 @@ function Main()
             if r.ImGui_Button(ctx, "DOCK", 40) then
                 change_dock = true
             end
-            
+
             reaper.ImGui_SameLine(ctx)
 
             push_style("color")
@@ -675,6 +802,18 @@ function Main()
             pop_style("color")
             pop_style("color")
             reaper.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "Item Mode" or "Track Mode", 62.5) then
+                ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
+            end
+            reaper.ImGui_SameLine(ctx)
+
+            if WANT_REFRESH then
+                WANT_REFRESH = nil
+                UpdateChainsTrackTemplates(CAT)
+            end
+            if r.ImGui_Button(ctx, "FXChain", 62.5) then
+                CreateFXChain()
+            end
 
             Frame()
         else
