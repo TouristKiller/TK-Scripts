@@ -1,9 +1,10 @@
 -- @description TK FX BROWSER
--- @version 0.1.6
+-- @version 0.1.7
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser 
 -- @changelog
+--   - Fixed screencapture
 --   - Save FX on track to FXChain (SWS Needed)
 --   - Right click on FX chain to remove
 --   - ALT + Right click on FX chain to rename
@@ -199,7 +200,7 @@ local function CapWindowToPng(hwnd, filename, win10)
         w, h = w-0, h-0
     end
 
-    h = h - 100
+    h = h - 150
 
     local destBmp = r.JS_LICE_CreateBitmap(true, w, h + 100)
     local destDC = r.JS_LICE_GetDC(destBmp)
