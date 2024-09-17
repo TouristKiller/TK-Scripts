@@ -1,15 +1,17 @@
 -- @description TK FX BROWSER
--- @version 0.1.7
+-- @version 0.1.8
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser 
 -- @changelog
---   - Fixed screencapture
---   - Save FX on track to FXChain (SWS Needed)
---   - Right click on FX chain to remove
---   - ALT + Right click on FX chain to rename
---   - Switch between Item Mode en Track Mode
+--   - Added track type under track name
+--   - Also shows if track is folder or child
+--   - Set max menu en list width
+--   - Buttons to toggle track solo and mute
+--   - Button to Arm track
+--   - Script reworked (Main and Frame functions)
 --   
+
 
 local r = reaper
 
@@ -24,16 +26,10 @@ local screenshot_path = script_path .. "Screenshots" .. os_separator
 
 -- GUI instellingen
 local ctx = r.ImGui_CreateContext('TK FX BROWSER')
-
-local window_flags = r.ImGui_WindowFlags_NoTitleBar()
-local MAX_SUBMENU_WIDTH = 250
-local font_size = 11
-local normal_font = reaper.ImGui_CreateFont('Arial', font_size)
-r.ImGui_Attach(ctx, normal_font)
-
-local dark_gray = 0x303030FF
-local hover_gray = 0x444444FF
-local active_gray = 0x303030FF
+local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
+local MAX_SUBMENU_WIDTH = 170
+local FX_LIST_WIDTH = 340
+local FLT_MAX = 3.402823466e+38
 
 -- Globale variabelen
 local SHOW_PREVIEW = true
@@ -42,13 +38,14 @@ local FX_LIST_TEST, CAT_TEST = ReadFXFile()
 if not FX_LIST_TEST or not CAT_TEST then
     FX_LIST_TEST, CAT_TEST = MakeFXFiles()
 end
-
 local ADD_FX_TO_ITEM = false
 
 local old_t = {}
 local old_filter = ""
 
 local current_hovered_plugin = nil
+
+-- Screenshot
 local screenshot_texture = nil
 local screenshot_width, screenshot_height = 0, 0
 
@@ -56,30 +53,13 @@ local screenshot_width, screenshot_height = 0, 0
 local dock = 0
 local change_dock = false
 
--- Stijl balans systeem
-local style_counters = {
-    color = 0,
-    var = 0,
-    font = 0
-}
+local NormalFont = r.ImGui_CreateFont('Arial', 11)
+r.ImGui_Attach(ctx, NormalFont)
+local dark_gray = 0x303030FF
+local hover_gray = 0x444444FF
+local active_gray = 0x303030F
 
-local function push_style(style_type)
-    style_counters[style_type] = style_counters[style_type] + 1
-end
-
-local function pop_style(style_type)
-    style_counters[style_type] = style_counters[style_type] - 1
-end
-
-local function check_style_balance()
-    for style_type, count in pairs(style_counters) do
-        if count ~= 0 then
-            print("Mismatch in " .. style_type .. " styles: " .. count)
-        end
-    end
-end
-
---------------------------------------------------------------
+---------------------------------------------------------------
 local function check_esc_key() 
     if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
         return true
@@ -94,48 +74,31 @@ local function handleDocking()
     end
 end
 
-local function apply_style()
-    push_style("var")
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)
-    push_style("var")
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
-    push_style("var")
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 3, 3)
-
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), 0x000000FF)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xFFFFFFFF)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), dark_gray)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hover_gray)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), active_gray)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Tab(), dark_gray)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_TabHovered(), hover_gray)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), dark_gray)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), hover_gray)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), active_gray)
-    push_style("color")
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
+local function IsMuted(track)
+    return r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
+end
+local function ToggleMute(track)
+    local mute = r.GetMediaTrackInfo_Value(track, "B_MUTE")
+    r.SetMediaTrackInfo_Value(track, "B_MUTE", mute == 0 and 1 or 0)
 end
 
-local function remove_style()
-    pop_style("var")
-    pop_style("var")
-    pop_style("var")
-    reaper.ImGui_PopStyleVar(ctx, 3)
-    for i = 1, 11 do
-        pop_style("color")
-    end
-    reaper.ImGui_PopStyleColor(ctx, 11)
+local function IsSoloed(track)
+    return r.GetMediaTrackInfo_Value(track, "I_SOLO") ~= 0
 end
+local function ToggleSolo(track)
+    local solo = r.GetMediaTrackInfo_Value(track, "I_SOLO")
+    r.SetMediaTrackInfo_Value(track, "I_SOLO", solo == 0 and 1 or 0)
+end
+local function ToggleArm(track)
+    local armed = r.GetMediaTrackInfo_Value(track, "I_RECARM")
+    r.SetMediaTrackInfo_Value(track, "I_RECARM", armed == 0 and 1 or 0)
+end
+
+local function IsArmed(track)
+    return r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
+end
+
+
 local function AddFXToItem(fx_name)
     local item = r.GetSelectedMediaItem(0, 0)
     if item then
@@ -146,25 +109,15 @@ local function AddFXToItem(fx_name)
     end
 end
 
-
 local function CreateFXChain()
     if not TRACK then return end
-    
     local fx_count = r.TrackFX_GetCount(TRACK)
     if fx_count == 0 then return end
-    
-    -- Selecteer de huidige track
     r.SetOnlyTrackSelected(TRACK)
-    
-    -- Voer de SWS-actie uit om de FX-chain op te slaan
     r.Main_OnCommand(r.NamedCommandLookup("_S&M_SAVE_FXCHAIN_SLOT1"), 0)
-    
-    -- Vernieuw de FX-lijst
     FX_LIST_TEST, CAT_TEST = MakeFXFiles()
-    
     r.ShowMessageBox("FX Chain created successfully!", "Success", 0)
 end
-
 
 local function LoadTexture(file)
     return r.ImGui_CreateImage(file)
@@ -184,7 +137,6 @@ local function SortTable(tab, val1, val2)
     end)
 end
 
-
 local function GetBounds(hwnd)
     local _, left, top, right, bottom = r.JS_Window_GetRect(hwnd)
     return left, top, right-left, bottom-top
@@ -200,7 +152,7 @@ local function CapWindowToPng(hwnd, filename, win10)
         w, h = w-0, h-0
     end
 
-    h = h - 150
+    h = h - 150 -- ruimte van onder onstellen
 
     local destBmp = r.JS_LICE_CreateBitmap(true, w, h + 100)
     local destDC = r.JS_LICE_GetDC(destBmp)
@@ -284,7 +236,6 @@ local function MakeScreenshot(plugin_name)
         end
         Wait()
     end
-
     Timer()
 end
 
@@ -301,6 +252,7 @@ function LoadPluginScreenshot(plugin_name)
         screenshot_texture = nil
     end
 end
+
 function ShowPluginScreenshot()
     if screenshot_texture and current_hovered_plugin then
         local display_width = 250
@@ -376,8 +328,7 @@ local function Filter_actions(filter_text)
 end
 
 local function FilterBox()
-    local MAX_FX_SIZE = 84
-    r.ImGui_PushItemWidth(ctx, MAX_FX_SIZE - 22) -- Maak ruimte voor de 'x' knop
+    r.ImGui_PushItemWidth(ctx, 100) -- Maak ruimte voor de 'x' knop
     if r.ImGui_IsWindowAppearing(ctx) then
         r.ImGui_SetKeyboardFocusHere(ctx)
     end
@@ -388,17 +339,14 @@ local function FilterBox()
     end
     r.ImGui_SameLine(ctx)
     local button_height = r.ImGui_GetFrameHeight(ctx)
-    if r.ImGui_Button(ctx, "x", 20, button_height) then
+    if r.ImGui_Button(ctx, "x", 23, button_height) then
         FILTER = ""
     end
     
     local filtered_fx = Filter_actions(FILTER)
     
-    -- Bereken de beschikbare hoogte
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - 10
-
-
     local window_width = r.ImGui_GetWindowWidth(ctx)
     ADDFX_Sel_Entry = SetMinMax(ADDFX_Sel_Entry or 1, 1, #filtered_fx)
     if #filtered_fx ~= 0 then
@@ -436,7 +384,6 @@ local function FilterBox()
     return #filtered_fx ~= 0
 end
 
-
 local function DrawFxChains(tbl, path)
     local extension = ".RfxChain"
     path = path or ""
@@ -446,13 +393,14 @@ local function DrawFxChains(tbl, path)
         if type(item) == "table" and item.dir then
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)  
             r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
+            
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF) 
-           
             if r.ImGui_BeginMenu(ctx, item.dir) then               
                 DrawFxChains(item, table.concat({ path, os_separator, item.dir }))              
                 r.ImGui_EndMenu(ctx)               
             end  
             reaper.ImGui_PopStyleColor(ctx)
+
         elseif type(item) ~= "table" then
             if r.ImGui_Selectable(ctx, item) then
                 if ADD_FX_TO_ITEM then
@@ -507,10 +455,6 @@ local function DrawFxChains(tbl, path)
                     i = i + 1
                 end
             end
-            
-
-
-
 local function DrawTrackTemplates(tbl, path)
     local extension = ".RTrackTemplate"
     path = path or ""
@@ -521,13 +465,11 @@ local function DrawTrackTemplates(tbl, path)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)  
            
             if r.ImGui_BeginMenu(ctx, tbl[i].dir) then
-            
                 local cur_path = table.concat({ path, os_separator, tbl[i].dir })
                 DrawTrackTemplates(tbl[i], cur_path)
                 reaper.ImGui_PopStyleColor(ctx)
                 r.ImGui_EndMenu(ctx)
             end
-       
         end
         if type(tbl[i]) ~= "table" then
             if r.ImGui_Selectable(ctx, tbl[i]) then
@@ -549,13 +491,13 @@ local function DrawItems(tbl, main_cat_name)
         local items = tbl or {}
     for i = 1, #items do
        
-        reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
-        reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)
+        r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
+        r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)       
+        r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF) 
         r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF) 
-
+        r.ImGui_SetNextWindowSize(ctx, FX_LIST_WIDTH, 0)
+        
         if r.ImGui_BeginMenu(ctx, tbl[i].name) then
-           
             for j = 1, #tbl[i].fx do
                 if tbl[i].fx[j] then
                     local name = tbl[i].fx[j]
@@ -586,9 +528,7 @@ local function DrawItems(tbl, main_cat_name)
                     end
                 end
             end
-           
-    r.ImGui_EndMenu(ctx)
-    
+        r.ImGui_EndMenu(ctx)
         end
         reaper.ImGui_PopStyleVar(ctx, 2)
         reaper.ImGui_PopStyleColor(ctx)
@@ -596,15 +536,50 @@ local function DrawItems(tbl, main_cat_name)
     if menu_direction_right then
         r.ImGui_PopStyleVar(ctx)
     end
-
 end
+
+local function DrawBottomButtons()
+    local windowHeight = r.ImGui_GetWindowHeight(ctx)
+    local buttonHeight = 30
+    r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
+    
+    r.ImGui_Separator(ctx)
+    local mute_color = IsMuted(TRACK) and 0xFF0000FF or 0x4CAF50FF
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), mute_color)
+    if r.ImGui_Button(ctx, "MUTE", 40, 15) then
+    ToggleMute(TRACK)
+    end
+    r.ImGui_PopStyleColor(ctx)
+
+    r.ImGui_SameLine(ctx)
+    local solo_color = IsSoloed(TRACK) and 0xFFFF00FF or 0x4CAF50FF
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), solo_color)
+    if r.ImGui_Button(ctx, "SOLO", 40, 15) then
+    ToggleSolo(TRACK)
+    end
+    r.ImGui_PopStyleColor(ctx)
+
+    r.ImGui_SameLine(ctx)
+    local arm_color = IsArmed(TRACK) and 0xFF0000FF or 0x4CAF50FF
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), arm_color)
+    if r.ImGui_Button(ctx, "ARM", 40, 15) then
+    ToggleArm(TRACK)
+    end
+    r.ImGui_PopStyleColor(ctx)
+                
+    r.ImGui_Separator(ctx)
+end
+
+local BUTTON_HEIGHT = 15
 
 local function ShowTrackFX()
     if not TRACK then return end
     
     r.ImGui_Text(ctx, "FX on Track:")
-    if r.ImGui_BeginChild(ctx, "TrackFXList", -1, 0) then
-        apply_style()
+    local availWidth, availHeight = r.ImGui_GetContentRegionAvail(ctx)
+    local listHeight = availHeight - BUTTON_HEIGHT
+    if r.ImGui_BeginChild(ctx, "TrackFXList", -1, listHeight) then
+        --apply_style()
         local fx_count = r.TrackFX_GetCount(TRACK)
         if fx_count > 0 then
             for i = 0, fx_count - 1 do
@@ -617,16 +592,15 @@ local function ShowTrackFX()
                         r.TrackFX_Show(TRACK, i, 3)
                     end
                 end
-                
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.TrackFX_Delete(TRACK, i)
                     break
                 end
             end
         else
-            r.ImGui_Text(ctx, "No FX on Track")
+        r.ImGui_Text(ctx, "No FX on Track")
         end
-        remove_style()
+        --emove_style()
         r.ImGui_EndChild(ctx)
     end
 end
@@ -639,8 +613,10 @@ local function ShowItemFX()
     if not take then return end
     
     r.ImGui_Text(ctx, "FX on Item:")
-    if r.ImGui_BeginChild(ctx, "ItemFXList", -1, 0) then
-        apply_style()
+    local availWidth, availHeight = r.ImGui_GetContentRegionAvail(ctx)
+    local listHeight = availHeight - BUTTON_HEIGHT
+    if r.ImGui_BeginChild(ctx, "ItemFXList", -1, listHeight) then
+        --apply_style()
         local fx_count = r.TakeFX_GetCount(take)
         if fx_count > 0 then
             for i = 0, fx_count - 1 do
@@ -653,7 +629,6 @@ local function ShowItemFX()
                         r.TakeFX_Show(take, i, 3)
                     end
                 end
-                
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.TakeFX_Delete(take, i)
                     break
@@ -662,19 +637,50 @@ local function ShowItemFX()
         else
             r.ImGui_Text(ctx, "No FX on Item")
         end
-        remove_style()
+        --remove_style()
         r.ImGui_EndChild(ctx)
     end
 end
 
-
-function Frame()
-    if r.ImGui_Button(ctx, "SCAN", 40) then
-            FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+local function GetTrackType(track)
+    local audio_count = 0
+    local midi_count = 0
+    local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") > 0
+    local is_child = r.GetParentTrack(track) ~= nil
+    
+    local item_count = r.CountTrackMediaItems(track)
+    for i = 0, item_count - 1 do
+        local item = r.GetTrackMediaItem(track, i)
+        local take = r.GetActiveTake(item)
+        if take then
+            if r.TakeIsMIDI(take) then
+                midi_count = midi_count + 1
+            else
+                audio_count = audio_count + 1
+            end
+        end
     end
+    local track_type = ""
+    if is_folder then
+        track_type = "Folder "
+    elseif is_child then
+        track_type = "Child "
+    end
+    
+    if audio_count > 0 and midi_count > 0 then
+        return track_type .. "Mixed"
+    elseif midi_count > 0 then
+        return track_type .. "MIDI"
+    elseif audio_count > 0 then
+        return track_type .. "Audio"
+    else
+        return track_type .. "Empty"
+    end
+end
 
-    r.ImGui_SameLine(ctx)
 
+-------------------------------------------------------------------
+function Frame()
     local search = FilterBox()
     if search then return end
     for i = 1, #CAT_TEST do
@@ -685,7 +691,6 @@ function Frame()
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x000000FF)
 
-
         if r.ImGui_BeginMenu(ctx, CAT_TEST[i].name) then
             if CAT_TEST[i].name == "FX CHAINS" then
                 DrawFxChains(CAT_TEST[i].list)
@@ -693,13 +698,13 @@ function Frame()
                 DrawTrackTemplates(CAT_TEST[i].list)
             else
                 DrawItems(CAT_TEST[i].list, CAT_TEST[i].name)
-                end
+             end
             r.ImGui_EndMenu(ctx)
         end
         r.ImGui_PopStyleVar(ctx, 3)
         r.ImGui_PopStyleColor(ctx)
-
     end
+
     if r.ImGui_Selectable(ctx, "CONTAINER") then
         r.TrackFX_AddByName(TRACK, "Container", false,
             -1000 - r.TrackFX_GetCount(TRACK))
@@ -716,8 +721,8 @@ function Frame()
                 -1000 - r.TrackFX_GetCount(TRACK))
         end
     end
+
     r.ImGui_Separator(ctx)
-    
     if ADD_FX_TO_ITEM then
         ShowItemFX()
     else
@@ -726,57 +731,73 @@ function Frame()
     if not r.ImGui_IsAnyItemHovered(ctx) then
         current_hovered_plugin = nil
     end
-    
-
-
 end
+
+-----------------------------------------------------------------
 function Main()
     TRACK = r.GetSelectedTrack(0, 0)
-   
-    local font_pushed = false
-    if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
-        push_style("font")
-        r.ImGui_PushFont(ctx, normal_font)
-        font_pushed = true
-    else
-        ctx = r.ImGui_CreateContext('TK FX BROWSER')
-        r.ImGui_Attach(ctx, normal_font)
-    end
+    TRACK = r.GetSelectedTrack(0, 0)
+    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 2)
+    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
+    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 3, 3)
 
-    apply_style()  
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), 0x000000FF)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xFFFFFFFF)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), dark_gray)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hover_gray)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), active_gray)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Tab(), dark_gray)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_TabHovered(), hover_gray)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), dark_gray)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), hover_gray)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), active_gray)
+    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
+    reaper.ImGui_PushFont(ctx, NormalFont)
+    --apply_style()  
+
     r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
-    reaper.ImGui_SetNextWindowSizeConstraints(ctx, 140, 200, 16384, 16384)
-    handleDocking()    
-    local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
-    dock = r.ImGui_GetWindowDockID(ctx)
+    r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 280, 16384, 16384)
+          
+        handleDocking() 
+        local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
+        dock = r.ImGui_GetWindowDockID(ctx)
+    
     if visible then
         if TRACK then
             local track_color = GetTrackColor(TRACK)
             local track_name = GetTrackName(TRACK)
-            
-            push_style("color")
+            local track_type = GetTrackType(TRACK)
+         
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
-            push_style("var")
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 7)
-            if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 30, r.ImGui_WindowFlags_NoScrollbar()) then
-
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 4)
+            if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 50, r.ImGui_WindowFlags_NoScrollbar()) then
                 local text_width = r.ImGui_CalcTextSize(ctx, track_name)
                 local window_width = r.ImGui_GetWindowWidth(ctx)
                 local pos_x = (window_width - text_width) * 0.5
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local text_height = r.ImGui_GetTextLineHeight(ctx)
-                local pos_y = (window_height - text_height) * 0.5
+                local pos_y = (window_height - text_height) * 0.25
 
                 r.ImGui_SetCursorPos(ctx, pos_x, pos_y)
                 r.ImGui_Text(ctx, track_name)
+                
+                local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
+                local type_pos_x = (window_width - type_text_width) * 0.5
+                local type_pos_y = pos_y + text_height
+
+                r.ImGui_SetCursorPos(ctx, type_pos_x, type_pos_y)
+                r.ImGui_Text(ctx, track_type)
                 r.ImGui_EndChild(ctx)
             end
-            pop_style("var")
             r.ImGui_PopStyleVar(ctx)
-            pop_style("color")
             r.ImGui_PopStyleColor(ctx)
-            
-            if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", 40) then
+
+            if r.ImGui_Button(ctx, "Scan", 40) then
+                FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+            end
+        
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, SHOW_PREVIEW and "On" or "Off", 40) then
                 SHOW_PREVIEW = not SHOW_PREVIEW
                 if SHOW_PREVIEW and current_hovered_plugin then
                     LoadPluginScreenshot(current_hovered_plugin)
@@ -784,26 +805,15 @@ function Main()
             end
 
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "DOCK", 40) then
-                change_dock = true
+            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
+            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
+            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
+            if r.ImGui_Button(ctx, 'Quit', 40) then 
+            open = false 
             end
-
-            reaper.ImGui_SameLine(ctx)
-
-            push_style("color")
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
-            push_style("color")
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
-            push_style("color")
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
-
-            if reaper.ImGui_Button(ctx, 'Quit', 40) then open = false end
-
-            pop_style("color")
-            pop_style("color")
-            pop_style("color")
             reaper.ImGui_PopStyleColor(ctx, 3)
-            if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "Item Mode" or "Track Mode", 62.5) then
+
+            if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "Item" or "Track", 40) then
                 ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
             end
             reaper.ImGui_SameLine(ctx)
@@ -812,27 +822,32 @@ function Main()
                 WANT_REFRESH = nil
                 UpdateChainsTrackTemplates(CAT)
             end
-            if r.ImGui_Button(ctx, "FXChain", 62.5) then
+            if r.ImGui_Button(ctx, "FXChn", 40) then
                 CreateFXChain()
             end
 
-            Frame()
-        else
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Dock", 40) then
+                change_dock = true 
+            end
+                Frame()
+            else
             r.ImGui_Text(ctx, "SELECT TRACK")
-        end
-        if SHOW_PREVIEW and current_hovered_plugin then 
-            ShowPluginScreenshot() 
-        end
-        if check_esc_key() then open = false end
-        r.ImGui_End(ctx)
-    end
+            end
 
-    remove_style()  
-    if font_pushed then
-        pop_style("font")
-        r.ImGui_PopFont(ctx)
-    end
-    check_style_balance()
+            if SHOW_PREVIEW and current_hovered_plugin then 
+            ShowPluginScreenshot() 
+            end
+            DrawBottomButtons()
+
+            if check_esc_key() then open = false end
+            r.ImGui_End(ctx)
+        end
+
+    --remove_style()  
+    r.ImGui_PopFont(ctx) -- remove font
+    r.ImGui_PopStyleVar(ctx, 3)
+    r.ImGui_PopStyleColor(ctx, 11)
     if open then
         r.defer(Main)
     end
