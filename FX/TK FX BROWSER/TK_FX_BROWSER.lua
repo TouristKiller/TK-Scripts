@@ -1,17 +1,25 @@
 -- @description TK FX BROWSER
--- @version 0.1.9
+-- @version 0.2.0
 -- @author TouristKiller
 -- @about
---   #  A MOD of Sexan's FX Browser 
+--   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog
---   - Correction if no track is selected
---   - Adjust track title info text depending on track brightness
---   - Made start with settings window
---   
+--   - On advice of Sexan, I have changed the captere from get window to get client window
+--   - works For Mac and Windows now
+--   - Added bulk screenshot capture (You still can make one screenshot at a time)
+--   - Reset button to emtpy the screenshot folder
+--   - Added a button to open the screenshot folder
+--   - Auto create screenshot folder if it doesn't exist
+--   - Added logging system for errors and succesfull screenshots
+--   - Fixed a bug for error that accured with settings image when there was no folder selected 
+--   - Anc probably some other things I forgot ;o)
 
+--   - Some issues:  
+--      - ONLY USE ON EMPTY PROJECT!! The script will most likely crash one or more times during the process (but the screenshots are still saved, and process wil continue where it left off)
+--      - Left out the capture of JS plugins for now. I will add it later (You CAN make individual screenshots of JS plugins)
+--      - Bulk screenshots will probably crash at end of process 
 
 local r = reaper
-
 -- Pad en module instellingen
 local os_separator = package.config:sub(1, 1)
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -20,7 +28,6 @@ require("Sexan_FX_Browser")
 local json = require("json")
 -- Pad definities
 local screenshot_path = script_path .. "Screenshots" .. os_separator
-local settings_icon = r.ImGui_CreateImage(script_path .. "settings.png")
 
 -- GUI instellingen
 local ctx = r.ImGui_CreateContext('TK FX BROWSER')
@@ -28,9 +35,6 @@ local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoSc
 local MAX_SUBMENU_WIDTH = 170
 local FX_LIST_WIDTH = 340
 local FLT_MAX = 3.402823466e+38
-
-
-
 -- Globale variabelen
 local SHOW_PREVIEW = true
 local TRACK, LAST_USED_FX, FILTER, ADDFX_Sel_Entry
@@ -39,20 +43,19 @@ if not FX_LIST_TEST or not CAT_TEST then
     FX_LIST_TEST, CAT_TEST = MakeFXFiles()
 end
 local ADD_FX_TO_ITEM = false
-
 local old_t = {}
 local old_filter = ""
-
 local current_hovered_plugin = nil
-
 -- Screenshot
 local screenshot_texture = nil
 local screenshot_width, screenshot_height = 0, 0
-
+local is_bulk_screenshot_running = false
+local STOP_REQUESTED = false
+local screenshot_database = {} -- Database voor opgeslagen screenshots
 -- Dock / Undock
 local dock = 0
 local change_dock = false
-
+-- GUI
 local NormalFont = r.ImGui_CreateFont('Arial', 11)
 r.ImGui_Attach(ctx, NormalFont)
 local LargeFont = r.ImGui_CreateFont('Arial', 14) -- Pas de grootte aan naar wens
@@ -61,7 +64,35 @@ local dark_gray = 0x303030FF
 local hover_gray = 0x444444FF
 local active_gray = 0x303030F
 
+local settings_icon = nil
 ---------------------------------------------------------------
+local log_file_path = script_path .. "screenshot_log.txt"
+
+local function log_to_file(message)
+    local file = io.open(log_file_path, "a")
+    if file then
+        file:write(message .. "\n")
+        file:close()
+    end
+end
+
+local function EnsureScreenshotFolderExists()
+    if not r.file_exists(screenshot_path) then
+        local success = r.RecursiveCreateDirectory(screenshot_path, 0)
+        if success then
+            log_to_file("Screenshots map aangemaakt: " .. screenshot_path)
+        else
+            log_to_file("Fout bij het aanmaken van Screenshots map: " .. screenshot_path)
+        end
+    end
+end
+EnsureScreenshotFolderExists()
+local function InitializeSettingsIcon()
+    if not settings_icon then
+        settings_icon = r.ImGui_CreateImage(script_path .. "settings.png")
+    end
+end
+
 local function check_esc_key() 
     if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
         return true
@@ -73,6 +104,35 @@ local function handleDocking()
     if change_dock then
         r.ImGui_SetNextWindowDockID(ctx, ~dock)
         change_dock = nil
+    end
+end
+
+
+local function BuildScreenshotDatabase()
+    screenshot_database = {}
+    for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
+        local plugin_name = file:gsub("%.png$", ""):gsub("_", " ")
+        screenshot_database[plugin_name] = true
+    end
+end
+
+local function IsX86Bridged(plugin_name)
+    return plugin_name:find("x86") ~= nil
+end
+
+local function ScreenshotExists(plugin_name)
+    return screenshot_database[plugin_name] ~= nil
+end
+BuildScreenshotDatabase()
+
+local function OpenScreenshotsFolder()
+    local os_name = reaper.GetOS()
+    if os_name:match("Win") then
+        os.execute('start "" "' .. screenshot_path .. '"')
+    elseif os_name:match("OSX") then
+        os.execute('open "' .. screenshot_path .. '"')
+    else
+        reaper.ShowMessageBox("Unsupported OS", "Error", 0)
     end
 end
 
@@ -124,6 +184,7 @@ local function ShowConfigWindow()
         if r.ImGui_Button(ctx, "Cancel") then
             config_open = false
         end
+       
         r.ImGui_End(ctx)
     end
     return config_open
@@ -214,41 +275,6 @@ local function SortTable(tab, val1, val2)
     end)
 end
 
-local function GetBounds(hwnd)
-    local _, left, top, right, bottom = r.JS_Window_GetRect(hwnd)
-    return left, top, right-left, bottom-top
-end
-
-local function CapWindowToPng(hwnd, filename)
-    local srcx, srcy = config.srcx, config.srcy
-    local srcDC = r.JS_GDI_GetWindowDC(hwnd)
-    local _, _, w, h = GetBounds(hwnd)
-
-    h = h - config.capture_height_offset
-
-    local destBmp = r.JS_LICE_CreateBitmap(true, w, h + 100)
-    local destDC = r.JS_LICE_GetDC(destBmp)
-    r.JS_GDI_Blit(destDC, 0, 0, srcDC, srcx, srcy, w, h + 100)
-    r.JS_LICE_WritePNG(filename, destBmp, false)
-    r.JS_GDI_ReleaseDC(hwnd, srcDC)
-    r.JS_LICE_DestroyBitmap(destBmp)
-end
-
-
-local function Literalize(str)
-    return str:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%1")
-end
-
-local function GetFileContext(filename)
-    local file = io.open(filename, "r")
-    if file then
-        local content = file:read("*all")
-        file:close()
-        return content
-    end
-    return nil
-end
-
 local function GetTrackColorAndTextColor(track)
     local color = r.GetTrackColor(track)
     
@@ -266,56 +292,246 @@ local function GetTrackColorAndTextColor(track)
     end
 end
 
+local function GetBounds(hwnd)
+    local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+    return left, top, right-left, bottom-top
+end
+
+local function Literalize(str)
+    return str:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%1")
+end
+
+local function GetFileContext(filename)
+    local file = io.open(filename, "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        return content
+    end
+    return nil
+end
 
 local function GetTrackName(track)
     local _, name = r.GetTrackName(track)
     return name
 end
 
-local function MakeScreenshot(plugin_name)
+local function IsOSX()
+    local platform = reaper.GetOS()
+    return platform:match("OSX") or platform:match("macOS")
+end
+
+local function ScreenshotOSX(path, x, y, w, h)
+    x, y = r.ImGui_PointConvertNative(ctx, x, y, false)
+    local command = 'screencapture -x -R %d,%d,%d,%d -t png "%s"'
+    os.execute(command:format(x, y, w, h, path))
+end
+
+local wait_time = 0.5 -- Wachttijd in seconden
+local timeout_duration = 5 -- Timeout duur in seconden
+
+local function Wait(callback, start_time)
+    start_time = start_time or r.time_precise()
+    local function check()
+        if r.time_precise() - start_time >= wait_time then
+            callback()
+        else
+            r.defer(check)
+        end
+    end
+    r.defer(check)
+end
+
+local function IsPluginClosed(fx_index)
+    return not r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+end
+
+local function EnsurePluginRemoved(fx_index, callback)
+    local function check()
+        if IsPluginClosed(fx_index) then
+            if callback then
+                callback()
+            else
+                print("Error: callback is nil")
+            end
+        else
+            r.defer(check)
+        end
+    end
+    r.defer(check)
+end
+
+
+
+local function CaptureScreenshot(plugin_name, fx_index)
+    local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+    if hwnd then
+        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+        local filename = screenshot_path .. safe_name .. ".png"
+        
+        local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+        local w, h = right - left, bottom - top
+        
+        -- Stel de offset in op 0 voor JS plugins, anders gebruik de configuratie
+        local offset = plugin_name:match("^JS") and 0 or config.capture_height_offset
+        h = h - offset
+
+        log_to_file("Capturing screenshot for plugin: " .. plugin_name)  -- Log de plugin naam
+        if not IsOSX() then
+            local srcDC = r.JS_GDI_GetClientDC(hwnd)
+            local destBmp = r.JS_LICE_CreateBitmap(true, w, h)
+            local destDC = r.JS_LICE_GetDC(destBmp)
+            r.JS_GDI_Blit(destDC, 0, 0, srcDC, config.srcx, config.srcy, w, h)
+            r.JS_LICE_WritePNG(filename, destBmp, false)
+            r.JS_GDI_ReleaseDC(hwnd, srcDC)
+            r.JS_LICE_DestroyBitmap(destBmp)
+        else
+            ScreenshotOSX(filename, left, top, w, h)
+        end
+        
+        local file = io.open(filename, "rb")
+        if file then
+            local size = file:seek("end")
+            file:close()
+            if size > 0 then
+                print("Screenshot Saved " .. filename .. " (Grootte: " .. size .. " bytes)")
+            else
+                print("Screenshot File is Empty: " .. filename)
+            end
+        else
+            print("Cant make screenshot: " .. filename)
+        end
+    else
+        print("No Plugin Window " .. plugin_name)
+    end
+    r.TrackFX_Show(TRACK, fx_index, 2)
+    r.TrackFX_Delete(TRACK, fx_index)
+end
+local function MakeScreenshot(plugin_name, callback)
+    if type(plugin_name) ~= "string" then
+        r.ShowMessageBox("Invalid plugin name", "Error", 0)
+        return
+    end
     local fx_index = r.TrackFX_AddByName(TRACK, plugin_name, false, -1)
     r.TrackFX_Show(TRACK, fx_index, 3)
     
-    local wait_time = 1000
+    Wait(function()
+        CaptureScreenshot(plugin_name, fx_index)
+        r.TrackFX_Show(TRACK, fx_index, 2) -- Sluit de plugin
+        r.TrackFX_Delete(TRACK, fx_index) -- Verwijder de plugin
+        EnsurePluginRemoved(fx_index, callback) -- Controleer of de plugin is verwijderd
+    end)
+end
 
-    local function CaptureScreenshot()
-        local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
-        if hwnd then
-            local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-            local filename = screenshot_path .. safe_name .. ".png"
-            CapWindowToPng(hwnd, filename, true)
-            
-            local file = io.open(filename, "rb")
-            if file then
-                local size = file:seek("end")
-                file:close()
-                if size > 0 then
-                    print("Screenshot Saved " .. filename .. " (Grootte: " .. size .. " bytes)")
-                else
-                    print("Screenshot File is Empty: " .. filename)
-                end
-            else
-                print("Cant make screenshot: " .. filename)
-            end
+
+
+
+local bulk_screenshot_progress = 0
+local total_fx_count = 0
+local loaded_fx_count = 0  
+local fx_list = {}
+local function EnumerateInstalledFX()
+    fx_list = {}
+    total_fx_count = 0
+    for i = 1, math.huge do
+        local retval, fx_name = r.EnumInstalledFX(i)
+        if not retval then break end
+        if not fx_name:match("^JS:") then
+            total_fx_count = total_fx_count + 1
+            fx_list[total_fx_count] = fx_name
+        end
+    end
+end
+
+local function ScreenshotExists(plugin_name)
+    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+    local filename = screenshot_path .. safe_name .. ".png"
+    local file = io.open(filename, "r")
+    if file then
+        file:close()
+        return true
+    end
+    return false
+end
+
+local PROCESS = false
+local START = false
+local function ProcessFX(index, start_time)
+    start_time = start_time or r.time_precise()
+    if STOP_REQUESTED or index > total_fx_count then
+        log_to_file("Process completed or stopped at index: " .. index)
+        START = false
+        PROCESS = false
+        STOP_REQUESTED = false
+        bulk_screenshot_progress = 0
+        loaded_fx_count = 0
+        r.defer(function()
+            reaper.ShowMessageBox("Bulk screenshot process " .. (STOP_REQUESTED and "stopped" or "completed"), "Info", 0)
+        end)
+    elseif index <= total_fx_count then
+        local plugin_name = fx_list[index]
+        if not plugin_name:match("^JS:")  and not IsX86Bridged(plugin_name) and not ScreenshotExists(plugin_name) then
+            MakeScreenshot(plugin_name, function()
+                loaded_fx_count = loaded_fx_count + 1
+                bulk_screenshot_progress = loaded_fx_count / total_fx_count
+                log_to_file("Processed plugin: " .. plugin_name .. " Progress: " .. bulk_screenshot_progress)
+                r.defer(function() 
+                    if r.time_precise() - start_time > 300 then -- 5 minuten timeout
+                        log_to_file("Process timed out")
+                        ProcessFX(total_fx_count + 1) -- Forceer afsluiting
+                    else
+                        ProcessFX(index + 1) 
+                    end
+                end)
+            end)
         else
-            print("No Plugin Window " .. plugin_name)
+            loaded_fx_count = loaded_fx_count + 1
+            bulk_screenshot_progress = loaded_fx_count / total_fx_count
+            r.defer(function() ProcessFX(index + 1) end)
         end
-        r.TrackFX_Show(TRACK, fx_index, 2)
-        r.TrackFX_Delete(TRACK, fx_index)
     end
+end
 
-    local function Timer()
-        local start_time = r.time_precise()
-        local function Wait()
-            if r.time_precise() - start_time >= wait_time / 1000 then
-                CaptureScreenshot()
-            else
-                r.defer(Wait)
-            end
-        end
-        Wait()
+
+local function ClearScreenshots()
+    for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
+        os.remove(screenshot_path .. file)
     end
-    Timer()
+    BuildScreenshotDatabase() -- Update de database na het verwijderen van de screenshots
+    print("All screenshots cleared.")
+end
+
+local function ShowConfirmClearPopup()
+    local popup_open = true
+    r.ImGui_OpenPopup(ctx, "Confirm Clear Screenshots")
+    if r.ImGui_BeginPopupModal(ctx, "Confirm Clear Screenshots", popup_open, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Are you sure you want to clear all screenshots?")
+        if r.ImGui_Button(ctx, "Yes", 80, 0) then
+            ClearScreenshots()
+            show_confirm_clear = false
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "No", 80, 0) then
+            show_confirm_clear = false
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+end
+
+local function StartBulkScreenshot()
+    if not START then
+        EnumerateInstalledFX()
+        bulk_screenshot_progress = 0
+        loaded_fx_count = 0  -- Reset het aantal geladen plugins
+        START = true
+        PROCESS = true
+        STOP_REQUESTED = false
+        ProcessFX(1)
+    else
+        STOP_REQUESTED = true
+    end
 end
 
 function LoadPluginScreenshot(plugin_name)
@@ -407,10 +623,6 @@ local function Filter_actions(filter_text)
 end
 
 local function FilterBox()
-    local icon_size = 10 
-    if r.ImGui_ImageButton(ctx, "SettingsButton", settings_icon, icon_size, icon_size) then
-    show_config = true
-    end
     r.ImGui_SameLine(ctx)
     r.ImGui_PushItemWidth(ctx, 82) 
     if r.ImGui_IsWindowAppearing(ctx) then
@@ -820,9 +1032,15 @@ end
 
 -----------------------------------------------------------------
 function Main()
-    
+    local prev_track = TRACK
     TRACK = r.GetSelectedTrack(0, 0)
-    TRACK = r.GetSelectedTrack(0, 0)
+
+    if TRACK and TRACK ~= prev_track then
+        InitializeSettingsIcon()
+    elseif not TRACK then
+        settings_icon = nil
+    end
+
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 2)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 3, 3)
@@ -842,111 +1060,141 @@ function Main()
     --apply_style()  
 
     r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
-    r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 280, 16384, 16384)
+    r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 340, 16384, 16384)
           
-        handleDocking() 
-        local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
-        dock = r.ImGui_GetWindowDockID(ctx)
+    handleDocking() 
+    local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
+    dock = r.ImGui_GetWindowDockID(ctx)
 
-        if visible then
-            if TRACK then
-                local track_color, text_color = GetTrackColorAndTextColor(TRACK)
-                local track_name = GetTrackName(TRACK)
-                local track_type = GetTrackType(TRACK)
-             
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
-                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 4)
-                if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 50, r.ImGui_WindowFlags_NoScrollbar()) then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
-                    r.ImGui_PushFont(ctx, LargeFont)
-    
-                    local text_width = r.ImGui_CalcTextSize(ctx, track_name)
-                    local window_width = r.ImGui_GetWindowWidth(ctx)
-                    local pos_x = (window_width - text_width) * 0.5
-                    local window_height = r.ImGui_GetWindowHeight(ctx)
-                    local text_height = r.ImGui_GetTextLineHeight(ctx)
-                    local pos_y = (window_height - text_height) * 0.25
-    
-                    r.ImGui_SetCursorPos(ctx, pos_x, pos_y)
-                    r.ImGui_Text(ctx, track_name)
-                    
-                    local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
-                    local type_pos_x = (window_width - type_text_width) * 0.5
-                    local type_pos_y = pos_y + text_height
-    
-                    r.ImGui_SetCursorPos(ctx, type_pos_x, type_pos_y)
-                    r.ImGui_Text(ctx, track_type)
-    
-                    r.ImGui_PopFont(ctx)
-                    r.ImGui_PopStyleColor(ctx)
-                    r.ImGui_EndChild(ctx)
-                end
-                r.ImGui_PopStyleVar(ctx)
-                r.ImGui_PopStyleColor(ctx)
-    
-                if r.ImGui_Button(ctx, "Scan", 40) then
-                    FX_LIST_TEST, CAT_TEST = MakeFXFiles()
-                end
-            
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, SHOW_PREVIEW and "On" or "Off", 40) then
-                    SHOW_PREVIEW = not SHOW_PREVIEW
-                    if SHOW_PREVIEW and current_hovered_plugin then
-                        LoadPluginScreenshot(current_hovered_plugin)
-                    end
-                end
-    
-                r.ImGui_SameLine(ctx)
-                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
-                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
-                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
-                if r.ImGui_Button(ctx, 'Quit', 40) then 
-                    open = false 
-                end
-                reaper.ImGui_PopStyleColor(ctx, 3)
-    
-                if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "Item" or "Track", 40) then
-                    ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
-                end
-                reaper.ImGui_SameLine(ctx)
-    
-                if WANT_REFRESH then
-                    WANT_REFRESH = nil
-                    UpdateChainsTrackTemplates(CAT)
-                end
-                if r.ImGui_Button(ctx, "FXChn", 40) then
-                    CreateFXChain()
-                end
-    
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Dock", 40) then
-                    change_dock = true 
-                end
+    if visible then
+        if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
+            local progress_text = string.format("Loading %d/%d (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
+            r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 0, progress_text)
+        end
+
+        if TRACK then
+            local track_color, text_color = GetTrackColorAndTextColor(TRACK)
+            local track_name = GetTrackName(TRACK)
+            local track_type = GetTrackType(TRACK)
+         
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 4)
+            if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 50, r.ImGui_WindowFlags_NoScrollbar()) then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
+                r.ImGui_PushFont(ctx, LargeFont)
+
+                local text_width = r.ImGui_CalcTextSize(ctx, track_name)
+                local window_width = r.ImGui_GetWindowWidth(ctx)
+                local pos_x = (window_width - text_width) * 0.5
+                local window_height = r.ImGui_GetWindowHeight(ctx)
+                local text_height = r.ImGui_GetTextLineHeight(ctx)
+                local pos_y = (window_height - text_height) * 0.25
+
+                r.ImGui_SetCursorPos(ctx, pos_x, pos_y)
+                r.ImGui_Text(ctx, track_name)
                 
-                if show_config then
-                    show_config = ShowConfigWindow()
-                end
+                local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
+                local type_pos_x = (window_width - type_text_width) * 0.5
+                local type_pos_y = pos_y + text_height
 
-                Frame()
-            else
-                r.ImGui_Text(ctx, "NO TRACK SELECTED")
+                r.ImGui_SetCursorPos(ctx, type_pos_x, type_pos_y)
+                r.ImGui_Text(ctx, track_type)
+
+                r.ImGui_PopFont(ctx)
+                r.ImGui_PopStyleColor(ctx)
+                r.ImGui_EndChild(ctx)
             end
-    
-            if SHOW_PREVIEW and current_hovered_plugin then 
-                ShowPluginScreenshot() 
+            r.ImGui_PopStyleVar(ctx)
+            r.ImGui_PopStyleColor(ctx)
+
+            if r.ImGui_Button(ctx, "Scan", 40) then
+                FX_LIST_TEST, CAT_TEST = MakeFXFiles()
             end
-            DrawBottomButtons()
-    
-            if check_esc_key() then open = false end
-            r.ImGui_End(ctx)
+        
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, SHOW_PREVIEW and "On" or "Off", 40) then
+                SHOW_PREVIEW = not SHOW_PREVIEW
+                if SHOW_PREVIEW and current_hovered_plugin then
+                    LoadPluginScreenshot(current_hovered_plugin)
+                end
+            end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
+            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
+            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
+            if r.ImGui_Button(ctx, 'Quit', 40) then 
+                open = false 
+            end
+            reaper.ImGui_PopStyleColor(ctx, 3)
+
+            if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "Item" or "Track", 40) then
+                ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
+            end
+            reaper.ImGui_SameLine(ctx)
+
+            if WANT_REFRESH then
+                WANT_REFRESH = nil
+                UpdateChainsTrackTemplates(CAT)
+            end
+            if r.ImGui_Button(ctx, "FXChn", 40) then
+                CreateFXChain()
+            end
+
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Dock", 40) then
+                change_dock = true 
+            end
+            
+            if reaper.ImGui_Button(ctx, START and "Stop" or "Bulk", 40) then
+                StartBulkScreenshot()
+            end
+
+            r.ImGui_SameLine(ctx)
+            if reaper.ImGui_Button(ctx, "Reset", 40) then
+                show_confirm_clear = true
+            end
+
+            r.ImGui_SameLine(ctx)
+            if reaper.ImGui_Button(ctx, "Folder", 40) then
+                OpenScreenshotsFolder()
+            end
+
+            if settings_icon then
+                local icon_size = 10 
+                if r.ImGui_ImageButton(ctx, "SettingsButton", settings_icon, icon_size, icon_size) then
+                    show_config = true
+                end
+            end
+
+            if show_config then
+                show_config = ShowConfigWindow()
+            end
+
+            if show_confirm_clear then
+                ShowConfirmClearPopup()
+            end
+
+            Frame()
+        else
+            r.ImGui_Text(ctx, "NO TRACK SELECTED")
         end
-    
-        r.ImGui_PopFont(ctx)
-        r.ImGui_PopStyleVar(ctx, 3)
-        r.ImGui_PopStyleColor(ctx, 11)
-        if open then
-            r.defer(Main)
+
+        if SHOW_PREVIEW and current_hovered_plugin then 
+            ShowPluginScreenshot() 
         end
+        DrawBottomButtons()
+
+        if check_esc_key() then open = false end
+        r.ImGui_End(ctx)
     end
+
+    r.ImGui_PopFont(ctx)
+    r.ImGui_PopStyleVar(ctx, 3)
+    r.ImGui_PopStyleColor(ctx, 11)
+    if open then
+        r.defer(Main)
+    end
+end
 
 r.defer(Main)
