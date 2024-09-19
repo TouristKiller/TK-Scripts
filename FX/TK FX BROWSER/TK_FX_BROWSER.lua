@@ -1,5 +1,5 @@
 -- @description TK FX BROWSER
--- @version 0.2.1
+-- @version 0.2.2
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
