@@ -1,5 +1,5 @@
 -- @description TK FX BROWSER
--- @version 0.2.0
+-- @version 0.2.1
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
@@ -139,8 +139,8 @@ end
 -- Script config
 local config = {
     srcx = 0,
-    srcy = 100,
-    capture_height_offset = 150,
+    srcy = 27,
+    capture_height_offset = 0,
 }
 
 local function SaveConfig()
