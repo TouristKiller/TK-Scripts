@@ -1,24 +1,14 @@
 -- @description TK FX BROWSER
--- @version 0.2.2
+-- @version 0.2.3
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
--- @changelog
---   - On advice of Sexan, I have changed the captere from get window to get client window
---   - works For Mac and Windows now
---   - Added bulk screenshot capture (You still can make one screenshot at a time)
---   - Reset button to emtpy the screenshot folder
---   - Added a button to open the screenshot folder
---   - Auto create screenshot folder if it doesn't exist
---   - Added logging system for errors and succesfull screenshots
---   - Fixed a bug for error that accured with settings image when there was no folder selected 
---   - Anc probably some other things I forgot ;o)
+-- @changelog:
+--   - added to settings:  
+--          *set screenshot view size
+--          *set auto refresh on startup
 
---   - Some issues:  
---      - ONLY USE ON EMPTY PROJECT!! The script will most likely crash one or more times during the process (but the screenshots are still saved, and process wil continue where it left off)
---      - Left out the capture of JS plugins for now. I will add it later (You CAN make individual screenshots of JS plugins)
---      - Bulk screenshots will probably crash at end of process 
-
+--------------------------------------------------------------------------
 local r = reaper
 -- Pad en module instellingen
 local os_separator = package.config:sub(1, 1)
@@ -26,9 +16,7 @@ local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 package.path = script_path .. "?.lua;"
 require("Sexan_FX_Browser")
 local json = require("json")
--- Pad definities
 local screenshot_path = script_path .. "Screenshots" .. os_separator
-
 -- GUI instellingen
 local ctx = r.ImGui_CreateContext('TK FX BROWSER')
 local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
@@ -63,11 +51,20 @@ r.ImGui_Attach(ctx, LargeFont)
 local dark_gray = 0x303030FF
 local hover_gray = 0x444444FF
 local active_gray = 0x303030F
-
 local settings_icon = nil
----------------------------------------------------------------
+-- variabele voor de logbestandspad
 local log_file_path = script_path .. "screenshot_log.txt"
 
+-- Script config
+local config = {
+    srcx = 0,
+    srcy = 27,
+    capture_height_offset = 0,
+    screenshot_display_size = 250,
+    auto_refresh_fx_list = true, -- Nieuwe instelling
+}
+---------------------------------------------------------------
+-- Funtie om info te loggen naar file
 local function log_to_file(message)
     local file = io.open(log_file_path, "a")
     if file then
@@ -76,6 +73,61 @@ local function log_to_file(message)
     end
 end
 
+-- Functie om de configuratie op te slaan
+local function SaveConfig()
+    local file = io.open(script_path .. "config.json", "w")
+    if file then
+        file:write(json.encode(config))
+        file:close()
+    end
+end
+
+local function LoadConfig()
+    local file = io.open(script_path .. "config.json", "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        local loaded_config = json.decode(content)
+        for k, v in pairs(loaded_config) do
+            config[k] = v
+        end
+    end
+end
+LoadConfig()
+
+local function ShowConfigWindow()
+    local config_open = true
+    local window_width = 300
+    local window_height = 240 
+    r.ImGui_SetNextWindowSize(ctx, window_width, window_height, r.ImGui_Cond_Always())
+    r.ImGui_SetNextWindowSizeConstraints(ctx, window_width, window_height, window_width, window_height)
+    local visible, open = r.ImGui_Begin(ctx, "Settings", true, window_flags | r.ImGui_WindowFlags_NoResize())
+    if visible then
+        r.ImGui_Text(ctx, "Screenshot settings")
+        r.ImGui_Separator(ctx)
+        _, config.srcx = r.ImGui_SliderInt(ctx, "X Offset", config.srcx, 0, 500)
+        _, config.srcy = r.ImGui_SliderInt(ctx, "Y Offset", config.srcy, 0, 500)
+        _, config.capture_height_offset = r.ImGui_SliderInt(ctx, "Height Offset", config.capture_height_offset, 0, 500)
+        _, config.screenshot_display_size = r.ImGui_SliderInt(ctx, "Display Size", config.screenshot_display_size, 100, 500)
+        
+        r.ImGui_Separator(ctx)
+        _, config.auto_refresh_fx_list = r.ImGui_Checkbox(ctx, "Auto-refresh FX list on startup", config.auto_refresh_fx_list)
+        
+        if r.ImGui_Button(ctx, "Save") then
+            SaveConfig()
+            config_open = false
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel") then
+            config_open = false
+        end
+       
+        r.ImGui_End(ctx)
+    end
+    return config_open
+end
+
+---------------------------------------------------------------------
 local function EnsureScreenshotFolderExists()
     if not r.file_exists(screenshot_path) then
         local success = r.RecursiveCreateDirectory(screenshot_path, 0)
@@ -87,6 +139,7 @@ local function EnsureScreenshotFolderExists()
     end
 end
 EnsureScreenshotFolderExists()
+
 local function InitializeSettingsIcon()
     if not settings_icon then
         settings_icon = r.ImGui_CreateImage(script_path .. "settings.png")
@@ -136,59 +189,13 @@ local function OpenScreenshotsFolder()
     end
 end
 
--- Script config
-local config = {
-    srcx = 0,
-    srcy = 27,
-    capture_height_offset = 0,
-}
 
-local function SaveConfig()
-    local file = io.open(script_path .. "config.json", "w")
-    if file then
-        file:write(json.encode(config))
-        file:close()
-    end
-end
 
-local function LoadConfig()
-    local file = io.open(script_path .. "config.json", "r")
-    if file then
-        local content = file:read("*all")
-        file:close()
-        local loaded_config = json.decode(content)
-        for k, v in pairs(loaded_config) do
-            config[k] = v
-        end
-    end
-end
 
-LoadConfig()
 
-local function ShowConfigWindow()
-    local config_open = true
-    r.ImGui_SetNextWindowSize(ctx, 300, 200, r.ImGui_Cond_FirstUseEver())
-    local visible, open = r.ImGui_Begin(ctx, "Settings", true, window_flags)
-    if visible then
-        r.ImGui_Text(ctx, "Screenshot settings")
-        r.ImGui_Separator(ctx)
-        _, config.srcx = r.ImGui_SliderInt(ctx, "X Offset", config.srcx, 0, 500)
-        _, config.srcy = r.ImGui_SliderInt(ctx, "Y Offset", config.srcy, 0, 500)
-        _, config.capture_height_offset = r.ImGui_SliderInt(ctx, "Height Offset", config.capture_height_offset, 0, 500)
-        
-        if r.ImGui_Button(ctx, "Save") then
-            SaveConfig()
-            config_open = false
-        end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Cancel") then
-            config_open = false
-        end
-       
-        r.ImGui_End(ctx)
-    end
-    return config_open
-end
+
+
+
 --------------------------------
 
 
@@ -549,9 +556,10 @@ function LoadPluginScreenshot(plugin_name)
 end
 
 function ShowPluginScreenshot()
-    if screenshot_texture and current_hovered_plugin then
-        local display_width = 250
-        local display_height = display_width * (screenshot_height / screenshot_width)
+   
+        if screenshot_texture and current_hovered_plugin then
+            local display_width = config.screenshot_display_size
+            local display_height = display_width * (screenshot_height / screenshot_width)
         
         local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
         local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
@@ -1037,6 +1045,9 @@ function Main()
 
     if TRACK and TRACK ~= prev_track then
         InitializeSettingsIcon()
+        if config.auto_refresh_fx_list then
+            FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+        end
     elseif not TRACK then
         settings_icon = nil
     end
