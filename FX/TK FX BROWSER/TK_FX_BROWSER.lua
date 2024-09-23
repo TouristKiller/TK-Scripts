@@ -1,13 +1,19 @@
 -- @description TK FX BROWSER
--- @version 0.2.3
+-- @version 0.2.4
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog:
+--   - adjusted length search list
+--   - added screenshots in search list (can be turned off in settings)
 --   - added to settings:  
---          *set screenshot view size
---          *set auto refresh on startup
-
+--          * toggle screenshots on /off in search list
+--          * Search result screenshot window (with all sorts of settings in settings window)
+--          * Show FOLDERS in screenshot window
+--          * Dock Screenshot window to the left or right of the main window
+--          * leftklik on screenshots to add fx to selected track
+--          * Gui settings (Background color, font color, background transparency)
+--         
 --------------------------------------------------------------------------
 local r = reaper
 -- Pad en module instellingen
@@ -39,7 +45,23 @@ local screenshot_texture = nil
 local screenshot_width, screenshot_height = 0, 0
 local is_bulk_screenshot_running = false
 local STOP_REQUESTED = false
-local screenshot_database = {} -- Database voor opgeslagen screenshots
+local screenshot_database = {} 
+local screenshot_search_results = nil
+local update_search_screenshots = false
+local search_texture_cache = {}
+local texture_load_queue = {}
+local MAX_TEXTURES_PER_FRAME = 5
+local texture_last_used = {}
+local MAX_CACHED_SEARCH_TEXTURES = 50
+local MIN_CACHED_TEXTURES = 10
+local TEXTURE_RELOAD_DELAY = 5 -- in seconden
+local screenshot_window_opened = false 
+local show_screenshot_window = false 
+local screenshot_window_interactive = false 
+local screenshot_window_display_size = 250
+
+
+local selected_folder = nil
 -- Dock / Undock
 local dock = 0
 local change_dock = false
@@ -61,10 +83,22 @@ local config = {
     srcy = 27,
     capture_height_offset = 0,
     screenshot_display_size = 250,
-    auto_refresh_fx_list = true, -- Nieuwe instelling
+    auto_refresh_fx_list = true,
+    show_screenshot_in_search = true,
+    show_screenshot_window = false,
+    screenshot_window_width = 200,
+    resize_screenshots_with_window = false,
+    dock_screenshot_window = false, 
+    dock_screenshot_left = true,
+    background_color = 0x000000FF,
+    background_gray = 0,
+    window_alpha = 0.75, -- Standaard transparantie
+    text_gray = 255, -- Standaard witte tekst    
+
 }
+
+local window_alpha_int = math.floor(config.window_alpha * 100)
 ---------------------------------------------------------------
--- Funtie om info te loggen naar file
 local function log_to_file(message)
     local file = io.open(log_file_path, "a")
     if file then
@@ -73,7 +107,6 @@ local function log_to_file(message)
     end
 end
 
--- Functie om de configuratie op te slaan
 local function SaveConfig()
     local file = io.open(script_path .. "config.json", "w")
     if file then
@@ -97,20 +130,54 @@ LoadConfig()
 
 local function ShowConfigWindow()
     local config_open = true
-    local window_width = 300
-    local window_height = 240 
+    local window_width = 340
+    local window_height = 360
     r.ImGui_SetNextWindowSize(ctx, window_width, window_height, r.ImGui_Cond_Always())
     r.ImGui_SetNextWindowSizeConstraints(ctx, window_width, window_height, window_width, window_height)
     local visible, open = r.ImGui_Begin(ctx, "Settings", true, window_flags | r.ImGui_WindowFlags_NoResize())
     if visible then
-        r.ImGui_Text(ctx, "Screenshot settings")
+        r.ImGui_Text(ctx, "SETTINGS:")
         r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Screenshot settings")
         _, config.srcx = r.ImGui_SliderInt(ctx, "X Offset", config.srcx, 0, 500)
         _, config.srcy = r.ImGui_SliderInt(ctx, "Y Offset", config.srcy, 0, 500)
         _, config.capture_height_offset = r.ImGui_SliderInt(ctx, "Height Offset", config.capture_height_offset, 0, 500)
         _, config.screenshot_display_size = r.ImGui_SliderInt(ctx, "Display Size", config.screenshot_display_size, 100, 500)
-        
         r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Search Screenshot Preview")
+        _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Show Screenshots in Search", config.show_screenshot_in_search)
+        _, config.show_screenshot_window = r.ImGui_Checkbox(ctx, "Show Screenshot Window", config.show_screenshot_window)
+        _, config.resize_screenshots_with_window = r.ImGui_Checkbox(ctx, "Resize screenshots with window", config.resize_screenshots_with_window)
+        _, config.dock_screenshot_window = r.ImGui_Checkbox(ctx, "Dock screenshot window", config.dock_screenshot_window)
+        if config.dock_screenshot_window then
+        r.ImGui_SameLine(ctx)
+        _, config.dock_screenshot_left = r.ImGui_Checkbox(ctx, "Dock left (uncheck for right)", config.dock_screenshot_left)
+        end
+   
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "GUI Settings")
+    
+        local changed, new_gray = r.ImGui_SliderInt(ctx, "Background Color", config.background_gray, 0, 255)
+        if changed then
+            config.background_gray = new_gray
+            config.background_color = r.ImGui_ColorConvertDouble4ToU32(new_gray/255, new_gray/255, new_gray/255, config.window_alpha)
+        end
+    
+        local changed_alpha, new_alpha_int = r.ImGui_SliderInt(ctx, "Window Transparency", window_alpha_int, 0, 100, "%d%%")
+if changed_alpha then
+    window_alpha_int = new_alpha_int
+    config.window_alpha = window_alpha_int / 100
+    config.background_color = r.ImGui_ColorConvertDouble4ToU32(config.background_gray/255, config.background_gray/255, config.background_gray/255, config.window_alpha)
+end
+    
+        local changed_text, new_text_gray = r.ImGui_SliderInt(ctx, "Text Color", config.text_gray, 0, 255)
+        if changed_text then
+            config.text_gray = new_text_gray
+            config.text_color = r.ImGui_ColorConvertDouble4ToU32(new_text_gray/255, new_text_gray/255, new_text_gray/255, 1)
+        end
+    
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Other settings")
         _, config.auto_refresh_fx_list = r.ImGui_Checkbox(ctx, "Auto-refresh FX list on startup", config.auto_refresh_fx_list)
         
         if r.ImGui_Button(ctx, "Save") then
@@ -127,7 +194,6 @@ local function ShowConfigWindow()
     return config_open
 end
 
----------------------------------------------------------------------
 local function EnsureScreenshotFolderExists()
     if not r.file_exists(screenshot_path) then
         local success = r.RecursiveCreateDirectory(screenshot_path, 0)
@@ -160,7 +226,6 @@ local function handleDocking()
     end
 end
 
-
 local function BuildScreenshotDatabase()
     screenshot_database = {}
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
@@ -188,17 +253,7 @@ local function OpenScreenshotsFolder()
         reaper.ShowMessageBox("Unsupported OS", "Error", 0)
     end
 end
-
-
-
-
-
-
-
-
 --------------------------------
-
-
 -- bodem knoppen
 local function IsMuted(track)
     if track then
@@ -241,7 +296,6 @@ local function IsArmed(track)
     end
     return false
 end
-
 -------------
 
 local function AddFXToItem(fx_name)
@@ -265,7 +319,82 @@ local function CreateFXChain()
 end
 
 local function LoadTexture(file)
-    return r.ImGui_CreateImage(file)
+    local texture = r.ImGui_CreateImage(file)
+    if texture == nil then
+        log_to_file("Failed to load texture: " .. file)
+    end
+    return texture
+end
+    
+local function LoadSearchTexture(file)
+    if search_texture_cache[file] then
+        texture_last_used[file] = r.time_precise()
+        return search_texture_cache[file]
+    end
+    
+    if not texture_load_queue[file] then
+        texture_load_queue[file] = r.time_precise()
+    end
+    return nil
+end
+
+local function ProcessTextureLoadQueue()
+    local textures_loaded = 0
+    local current_time = r.time_precise()
+    
+    -- Laad nieuwe textures
+    for file, queue_time in pairs(texture_load_queue) do
+        if textures_loaded >= MAX_TEXTURES_PER_FRAME then break end
+        
+        if not search_texture_cache[file] then
+            local texture = r.ImGui_CreateImage(file)
+            if texture then
+                search_texture_cache[file] = texture
+                texture_last_used[file] = current_time
+                textures_loaded = textures_loaded + 1
+                log_to_file("Texture geladen: " .. file)
+            else
+                log_to_file("Fout bij laden texture: " .. file)
+            end
+        end
+        
+        texture_load_queue[file] = nil
+    end
+    
+    -- Verwijder oude textures, maar houd een minimum aantal
+    local cache_size = 0
+    for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
+    
+    if cache_size > MAX_CACHED_SEARCH_TEXTURES then
+        local textures_to_remove = {}
+        for file, last_used in pairs(texture_last_used) do
+            if current_time - last_used > TEXTURE_RELOAD_DELAY and cache_size > MIN_CACHED_TEXTURES then
+                table.insert(textures_to_remove, file)
+                cache_size = cache_size - 1
+            end
+        end
+        
+        for _, file in ipairs(textures_to_remove) do
+            if r.ImGui_DestroyImage then
+                r.ImGui_DestroyImage(ctx, search_texture_cache[file])
+            else
+                -- Alternative cleanup method or log the issue
+                log_to_file("ImGui_DestroyImage not available, texture not destroyed: " .. file)
+            end
+            search_texture_cache[file] = nil
+            texture_last_used[file] = nil
+            log_to_file("Texture verwijderd: " .. file)
+        end
+    end
+    
+    -- Herlaad verwijderde textures indien nodig
+    if cache_size < MIN_CACHED_TEXTURES then
+        for file in pairs(texture_last_used) do
+            if not search_texture_cache[file] then
+                texture_load_queue[file] = current_time
+            end
+        end
+    end
 end
 
 local function Lead_Trim_ws(s) return s:match '^%s*(.*)' end
@@ -368,8 +497,6 @@ local function EnsurePluginRemoved(fx_index, callback)
     r.defer(check)
 end
 
-
-
 local function CaptureScreenshot(plugin_name, fx_index)
     local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
     if hwnd then
@@ -429,8 +556,6 @@ local function MakeScreenshot(plugin_name, callback)
         EnsurePluginRemoved(fx_index, callback) -- Controleer of de plugin is verwijderd
     end)
 end
-
-
 
 
 local bulk_screenshot_progress = 0
@@ -499,7 +624,6 @@ local function ProcessFX(index, start_time)
     end
 end
 
-
 local function ClearScreenshots()
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
         os.remove(screenshot_path .. file)
@@ -544,7 +668,7 @@ end
 function LoadPluginScreenshot(plugin_name)
     local safe_name = plugin_name:gsub("[^%w%s-]", "_")
     local screenshot_file = screenshot_path .. safe_name .. ".png"
-    
+   
     if r.file_exists(screenshot_file) then
         screenshot_texture = LoadTexture(screenshot_file)
         if screenshot_texture then
@@ -556,57 +680,249 @@ function LoadPluginScreenshot(plugin_name)
 end
 
 function ShowPluginScreenshot()
-   
-        if screenshot_texture and current_hovered_plugin then
-            local display_width = config.screenshot_display_size
-            local display_height = display_width * (screenshot_height / screenshot_width)
-        
-        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-        local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
-        
-        local window_pos_x = mouse_x + 20
-        local window_pos_y = mouse_y + 20
-        
-        if window_pos_x + display_width > vp_width then
-            window_pos_x = mouse_x - display_width - 20
+    if screenshot_texture and current_hovered_plugin then
+        if r.ImGui_ValidatePtr(screenshot_texture, 'ImGui_Image*') then
+            local width, height = r.ImGui_Image_GetSize(screenshot_texture)
+            if width and height then
+                local display_width = config.screenshot_display_size
+                local display_height = display_width * (height / width)
+            
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
+                
+                local window_pos_x = mouse_x + 20
+                local window_pos_y = mouse_y + 20
+                
+                if window_pos_x + display_width > vp_width then
+                    window_pos_x = mouse_x - display_width - 20
+                end
+                if window_pos_y + display_height > vp_height * 3 then
+                    window_pos_y = mouse_y - display_height - 20
+                end
+                
+                r.ImGui_SetNextWindowSize(ctx, display_width, display_height + 30)
+                r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
+                r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
+                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 7)
+                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 14)
+                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(), 7)
+                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 1, 1)
+                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 3,3)
+                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 7)
+                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), 0x000000FF)      
+                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
+                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), 0x000000FF)
+                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
+                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
+                
+                if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+                    r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
+                    
+                    local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
+                    local text_pos_x = (display_width - text_width) * 0.5
+                    local text_pos_y = display_height + 12
+                    
+                    r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
+                    r.ImGui_Text(ctx, current_hovered_plugin)
+                    
+                    r.ImGui_End(ctx)
+                end
+                
+                reaper.ImGui_PopStyleVar(ctx, 6)
+                reaper.ImGui_PopStyleColor(ctx, 5)
+            else
+                log_to_file("Ongeldige afmetingen voor texture: " .. tostring(screenshot_texture))
+                screenshot_texture = nil
+            end
+        else
+            log_to_file("Ongeldige texture voor plugin: " .. current_hovered_plugin)
+            screenshot_texture = nil
         end
-        if window_pos_y + display_height > vp_height * 3 then
-            window_pos_y = mouse_y - display_height - 20
-        end
-        
-        r.ImGui_SetNextWindowSize(ctx, display_width, display_height)
-        r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
-        r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
-        reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 7)
-        reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 14)
-        reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(), 7)
-        reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 1, 1)
-        reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 3,3)
-        reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 7)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), 0x000000FF)      
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), 0x000000FF)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
-        
-        if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
-            r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
-            r.ImGui_End(ctx)
-        end
-        
-        reaper.ImGui_PopStyleVar(ctx, 6)
-        reaper.ImGui_PopStyleColor(ctx, 5)
     end
 end
 
-local function LoadTemplate(template, replace)
-    local track_template_path = r.GetResourcePath() .. "/TrackTemplates" .. template
-    if replace then
-        local chunk = GetFileContext(track_template_path)
-        r.SetTrackStateChunk(TRACK, chunk, true)
-    else
-        r.Main_openProject(track_template_path)
+local function ShowScreenshotWindow()
+    if not config.show_screenshot_window then return end
+
+    
+    local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
+    local main_window_width = r.ImGui_GetWindowWidth(ctx)
+    local main_window_height = r.ImGui_GetWindowHeight(ctx)
+
+    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoFocusOnAppearing()
+    
+    if config.dock_screenshot_window then
+        if config.dock_screenshot_left then
+            r.ImGui_SetNextWindowPos(ctx, main_window_pos_x - config.screenshot_window_width - 5, main_window_pos_y, r.ImGui_Cond_Always())
+        else
+            r.ImGui_SetNextWindowPos(ctx, main_window_pos_x + main_window_width + 5, main_window_pos_y, r.ImGui_Cond_Always())
+        end
+        r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, FLT_MAX, main_window_height)
     end
+
+    r.ImGui_SetNextWindowSize(ctx, config.screenshot_window_width, main_window_height, r.ImGui_Cond_FirstUseEver())
+    local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
+    if visible then
+        r.ImGui_Text(ctx, "Screenshots: " .. (FILTER or ""))
+        r.ImGui_Separator(ctx)
+        
+        local folders_category
+        for i = 1, #CAT_TEST do
+            if CAT_TEST[i].name == "FOLDERS" then
+                folders_category = CAT_TEST[i].list
+                break
+            end
+        end
+
+        if folders_category then
+            if r.ImGui_BeginCombo(ctx, "##FolderDropdown", selected_folder or "Select Folder") then
+                if r.ImGui_Selectable(ctx, "No Folder", selected_folder == nil) then
+                    selected_folder = nil
+                end
+                r.ImGui_Separator(ctx)
+    
+                for i = 1, #folders_category do
+                    local is_selected = (selected_folder == folders_category[i].name)
+                    if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
+                        selected_folder = folders_category[i].name
+                    end
+                    if is_selected then
+                        r.ImGui_SetItemDefaultFocus(ctx)
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+        end
+    
+        if not config.resize_screenshots_with_window then
+            _, screenshot_window_display_size = r.ImGui_SliderInt(ctx, "Screenshot Size", screenshot_window_display_size, 100, 500)
+        end
+        
+        local available_width = r.ImGui_GetContentRegionAvail(ctx)
+        local display_size = config.resize_screenshots_with_window and available_width or screenshot_window_display_size
+        local num_columns = math.max(1, math.floor(available_width / display_size))
+    
+        if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
+            if selected_folder then
+                local filtered_plugins = {}
+                for i = 1, #CAT_TEST do
+                    if CAT_TEST[i].name == "FOLDERS" then
+                        for j = 1, #CAT_TEST[i].list do
+                            if CAT_TEST[i].list[j].name == selected_folder then
+                                for k = 1, #CAT_TEST[i].list[j].fx do
+                                    table.insert(filtered_plugins, CAT_TEST[i].list[j].fx[k])
+                                end
+                                break
+                            end
+                        end
+                        break
+                    end
+                end
+
+                if #filtered_plugins > 0 then
+                    local column_width = available_width / num_columns
+                    for i, fx_name in ipairs(filtered_plugins) do
+                        local column = (i - 1) % num_columns
+                        if column > 0 then
+                            r.ImGui_SameLine(ctx)
+                        end
+                        r.ImGui_BeginGroup(ctx)
+                        r.ImGui_PushItemWidth(ctx, column_width)
+
+                        local safe_name = fx_name:gsub("[^%w%s-]", "_")
+                        local screenshot_file = screenshot_path .. safe_name .. ".png"
+                        if r.file_exists(screenshot_file) then
+                            local texture = LoadSearchTexture(screenshot_file)
+                            if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                                local width, height = r.ImGui_Image_GetSize(texture)
+                                if width and height then
+                                    local aspect_ratio = height > 0 and width / height or 1
+                                    local display_width = config.resize_screenshots_with_window and (column_width - 10) or screenshot_window_display_size
+                                    local display_height = display_width / aspect_ratio
+                                    
+                                    if r.ImGui_ImageButton(ctx, "##"..fx_name, texture, display_width, display_height) then
+                                        if TRACK then
+                                            r.TrackFX_AddByName(TRACK, fx_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                        end
+                                    end
+                                    
+                                    r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                    r.ImGui_Text(ctx, fx_name)
+                                    r.ImGui_PopTextWrapPos(ctx)
+                                else
+                                    log_to_file("Ongeldige afmetingen voor texture: " .. tostring(texture))
+                                    search_texture_cache[screenshot_file] = nil
+                                end
+                            else
+                                log_to_file("Ongeldige texture voor fx: " .. fx_name)
+                            end
+                        end
+
+                        r.ImGui_PopItemWidth(ctx)
+                        r.ImGui_EndGroup(ctx)
+                        
+                        if column == num_columns - 1 then
+                            r.ImGui_Separator(ctx)
+                        end
+                    end
+                else
+                    r.ImGui_Text(ctx, "Geen plugins gevonden voor de geselecteerde map.")
+                end
+            elseif screenshot_search_results and #screenshot_search_results > 0 then
+                local column_width = available_width / num_columns
+                for i, fx in ipairs(screenshot_search_results) do
+                    local column = (i - 1) % num_columns
+                    if column > 0 then
+                        r.ImGui_SameLine(ctx)
+                    end
+                    r.ImGui_BeginGroup(ctx)
+                    r.ImGui_PushItemWidth(ctx, column_width)
+                    
+                    local safe_name = fx.name:gsub("[^%w%s-]", "_")
+                    local screenshot_file = screenshot_path .. safe_name .. ".png"
+                    if r.file_exists(screenshot_file) then
+                        local texture = LoadSearchTexture(screenshot_file)
+                        if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                            local width, height = r.ImGui_Image_GetSize(texture)
+                            if width and height then
+                                local aspect_ratio = height > 0 and width / height or 1
+                                local display_width = config.resize_screenshots_with_window and (column_width - 10) or screenshot_window_display_size
+                                local display_height = display_width / aspect_ratio
+                                
+                                if r.ImGui_ImageButton(ctx, "##"..fx.name, texture, display_width, display_height) then
+                                    if TRACK then
+                                        r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK)) 
+                                    end 
+                                end
+                                r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                r.ImGui_Text(ctx, fx.name)
+                                r.ImGui_PopTextWrapPos(ctx)
+                            else
+                                log_to_file("Ongeldige afmetingen voor texture: " .. tostring(texture))
+                                search_texture_cache[screenshot_file] = nil
+                            end
+                        else
+                            log_to_file("Ongeldige texture voor fx: " .. fx.name)
+                        end
+                    end
+                    
+                    r.ImGui_PopItemWidth(ctx)
+                    r.ImGui_EndGroup(ctx)
+                    
+                    if column == num_columns - 1 then
+                        r.ImGui_Separator(ctx)
+                    end
+                end
+            else
+                r.ImGui_Text(ctx, "Select a folder or enter a search term.")
+            end
+            r.ImGui_EndChild(ctx)
+        end
+    end
+    -- Update de breedte van het screenshot venster
+    config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
+
+    r.ImGui_End(ctx)
 end
 
 local function Filter_actions(filter_text)
@@ -639,20 +955,31 @@ local function FilterBox()
     local changed
     changed, FILTER = r.ImGui_InputTextWithHint(ctx, '##input', "SEARCH FX", FILTER)
     if changed then
-        print("Filter text changed: " .. FILTER)
+        -- We hoeven hier niets te doen, omdat we de zoekresultaten pas willen updaten bij het klikken op de knop   
     end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+        screenshot_search_results = Filter_actions(FILTER)
+        update_search_screenshots = true
+        show_screenshot_window = true
+        screenshot_window_interactive = true
+        selected_folder = nil  -- Reset de geselecteerde map naar "Select Folder"
+    end
+
     r.ImGui_SameLine(ctx)
     local button_height = r.ImGui_GetFrameHeight(ctx)
     if r.ImGui_Button(ctx, "X", 20, button_height) then
         FILTER = ""
+        screenshot_search_results = nil  -- Reset de zoekresultaten wanneer het zoekveld wordt gewist
+        show_screenshot_window = false -- Sluit het screenshotvenster wanneer het zoekveld wordt gewist
     end
     
     local filtered_fx = Filter_actions(FILTER)
     
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - 10
-    local window_width = r.ImGui_GetWindowWidth(ctx)
-    ADDFX_Sel_Entry = SetMinMax(ADDFX_Sel_Entry or 1, 1, #filtered_fx)
+    local bottom_buttons_height = 30  -- Pas dit aan naar de werkelijke hoogte van je onderste knoppen
+    local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 10  -- Extra marge
+
     if #filtered_fx ~= 0 then
         if r.ImGui_BeginChild(ctx, "##popupp", window_width, available_height) then
             for i = 1, #filtered_fx do
@@ -662,23 +989,35 @@ local function FilterBox()
                     LAST_USED_FX = filtered_fx[i].name
                 end
                 if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_BeginTooltip(ctx)
-                    r.ImGui_Text(ctx, filtered_fx[i].name)
-                    r.ImGui_EndTooltip(ctx)
+                    if filtered_fx[i].name ~= current_hovered_plugin then
+                        current_hovered_plugin = filtered_fx[i].name
+                        if config.show_screenshot_in_search then
+                            LoadPluginScreenshot(current_hovered_plugin)
+                        end
+                    end
+                    if not config.show_screenshot_in_search or not ScreenshotExists(filtered_fx[i].name) then
+                        r.ImGui_BeginTooltip(ctx)
+                        r.ImGui_Text(ctx, filtered_fx[i].name)
+                        r.ImGui_EndTooltip(ctx)
+                    end
                 end
             end
             r.ImGui_EndChild(ctx)
         end
         if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
-            r.TrackFX_AddByName(TRACK, filtered_fx[ADDFX_Sel_Entry].name, false, -1000 - r.TrackFX_GetCount(TRACK))
-            LAST_USED_FX = filtered_fx[ADDFX_Sel_Entry].name
-            ADDFX_Sel_Entry = nil
-            FILTER = ''
-            r.ImGui_CloseCurrentPopup(ctx)
+            if ADDFX_Sel_Entry and ADDFX_Sel_Entry > 0 and ADDFX_Sel_Entry <= #filtered_fx then
+                r.TrackFX_AddByName(TRACK, filtered_fx[ADDFX_Sel_Entry].name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                LAST_USED_FX = filtered_fx[ADDFX_Sel_Entry].name
+                ADDFX_Sel_Entry = nil
+                FILTER = ''
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
         elseif r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_UpArrow()) then
-            ADDFX_Sel_Entry = ADDFX_Sel_Entry - 1
+            ADDFX_Sel_Entry = (ADDFX_Sel_Entry or 1) - 1
+            if ADDFX_Sel_Entry < 1 then ADDFX_Sel_Entry = #filtered_fx end
         elseif r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) then
-            ADDFX_Sel_Entry = ADDFX_Sel_Entry + 1
+            ADDFX_Sel_Entry = (ADDFX_Sel_Entry or 0) + 1
+            if ADDFX_Sel_Entry > #filtered_fx then ADDFX_Sel_Entry = 1 end
         end
     end
     if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
@@ -876,7 +1215,6 @@ local function DrawBottomButtons()
 end
 
 local BUTTON_HEIGHT = 15
-
 local function ShowTrackFX()
     if not TRACK then return end
     
@@ -983,7 +1321,6 @@ local function GetTrackType(track)
     end
 end
 
-
 -------------------------------------------------------------------
 function Frame()
     local search = FilterBox()
@@ -1037,7 +1374,6 @@ function Frame()
         current_hovered_plugin = nil
     end
 end
-
 -----------------------------------------------------------------
 function Main()
     local prev_track = TRACK
@@ -1051,13 +1387,14 @@ function Main()
     elseif not TRACK then
         settings_icon = nil
     end
+    ProcessTextureLoadQueue()
 
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 2)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 3, 3)
 
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), 0x000000FF)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xFFFFFFFF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1))
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), dark_gray)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hover_gray)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), active_gray)
@@ -1068,9 +1405,8 @@ function Main()
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), active_gray)
     reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
     reaper.ImGui_PushFont(ctx, NormalFont)
-    --apply_style()  
 
-    r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
+    r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
     r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 340, 16384, 16384)
           
     handleDocking() 
@@ -1187,6 +1523,10 @@ function Main()
             end
 
             Frame()
+            if config.show_screenshot_window then
+                ShowScreenshotWindow()
+            end
+
         else
             r.ImGui_Text(ctx, "NO TRACK SELECTED")
         end
@@ -1207,5 +1547,4 @@ function Main()
         r.defer(Main)
     end
 end
-
 r.defer(Main)
