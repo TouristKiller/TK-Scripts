@@ -1,19 +1,12 @@
 -- @description TK FX BROWSER
--- @version 0.2.4
+-- @version 0.2.5
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog:
---   - adjusted length search list
---   - added screenshots in search list (can be turned off in settings)
---   - added to settings:  
---          * toggle screenshots on /off in search list
---          * Search result screenshot window (with all sorts of settings in settings window)
---          * Show FOLDERS in screenshot window
---          * Dock Screenshot window to the left or right of the main window
---          * leftklik on screenshots to add fx to selected track
---          * Gui settings (Background color, font color, background transparency)
---         
+--          * Just some more GUI settings
+
+     
 --------------------------------------------------------------------------
 local r = reaper
 -- Pad en module instellingen
@@ -92,10 +85,21 @@ local config = {
     dock_screenshot_left = true,
     background_color = 0x000000FF,
     background_gray = 0,
-    window_alpha = 0.75, -- Standaard transparantie
-    text_gray = 255, -- Standaard witte tekst    
-
-}
+    window_alpha = 0.75,
+    text_gray = 255,  
+    button_background_gray = 156,
+    button_background_color = r.ImGui_ColorConvertDouble4ToU32(128/255, 128/255, 128/255, 1),
+    button_hover_gray = 68,
+    button_hover_color = r.ImGui_ColorConvertDouble4ToU32(128/255, 128/255, 128/255, 1),
+    button_active_gray = 48,
+    frame_bg_gray = 48,
+    frame_bg_color = r.ImGui_ColorConvertDouble4ToU32(128/255, 128/255, 128/255, 1),
+    frame_bg_hover_gray = 68,
+    frame_bg_hover_color = r.ImGui_ColorConvertDouble4ToU32(128/255, 128/255, 128/255, 1),
+    frame_bg_active_gray = 88,
+    frame_bg_active_color = r.ImGui_ColorConvertDouble4ToU32(128/255, 128/255, 128/255, 1),
+    dropdown_bg_color = 0x000000FF,
+  }
 
 local window_alpha_int = math.floor(config.window_alpha * 100)
 ---------------------------------------------------------------
@@ -130,14 +134,17 @@ LoadConfig()
 
 local function ShowConfigWindow()
     local config_open = true
-    local window_width = 340
-    local window_height = 360
+    local window_width = 300
+    local window_height = 460
+    local slider_width = 140 -- of een andere gewenste breedte
+   
     r.ImGui_SetNextWindowSize(ctx, window_width, window_height, r.ImGui_Cond_Always())
     r.ImGui_SetNextWindowSizeConstraints(ctx, window_width, window_height, window_width, window_height)
     local visible, open = r.ImGui_Begin(ctx, "Settings", true, window_flags | r.ImGui_WindowFlags_NoResize())
     if visible then
         r.ImGui_Text(ctx, "SETTINGS:")
         r.ImGui_Separator(ctx)
+        r.ImGui_PushItemWidth(ctx, slider_width)
         r.ImGui_Text(ctx, "Screenshot settings")
         _, config.srcx = r.ImGui_SliderInt(ctx, "X Offset", config.srcx, 0, 500)
         _, config.srcy = r.ImGui_SliderInt(ctx, "Y Offset", config.srcy, 0, 500)
@@ -156,30 +163,63 @@ local function ShowConfigWindow()
    
         r.ImGui_Separator(ctx)
         r.ImGui_Text(ctx, "GUI Settings")
-    
         local changed, new_gray = r.ImGui_SliderInt(ctx, "Background Color", config.background_gray, 0, 255)
         if changed then
             config.background_gray = new_gray
             config.background_color = r.ImGui_ColorConvertDouble4ToU32(new_gray/255, new_gray/255, new_gray/255, config.window_alpha)
         end
-    
         local changed_alpha, new_alpha_int = r.ImGui_SliderInt(ctx, "Window Transparency", window_alpha_int, 0, 100, "%d%%")
-if changed_alpha then
-    window_alpha_int = new_alpha_int
-    config.window_alpha = window_alpha_int / 100
-    config.background_color = r.ImGui_ColorConvertDouble4ToU32(config.background_gray/255, config.background_gray/255, config.background_gray/255, config.window_alpha)
-end
-    
+        if changed_alpha then
+            window_alpha_int = new_alpha_int
+            config.window_alpha = window_alpha_int / 100
+            config.background_color = r.ImGui_ColorConvertDouble4ToU32(config.background_gray/255, config.background_gray/255, config.background_gray/255, config.window_alpha)
+        end
         local changed_text, new_text_gray = r.ImGui_SliderInt(ctx, "Text Color", config.text_gray, 0, 255)
         if changed_text then
             config.text_gray = new_text_gray
             config.text_color = r.ImGui_ColorConvertDouble4ToU32(new_text_gray/255, new_text_gray/255, new_text_gray/255, 1)
         end
-    
+        r.ImGui_Separator(ctx)
+        local changed_button_bg, new_button_bg_gray = r.ImGui_SliderInt(ctx, "Button Background Color", config.button_background_gray, 0, 255)
+        if changed_button_bg then
+            config.button_background_gray = new_button_bg_gray
+            config.button_background_color = r.ImGui_ColorConvertDouble4ToU32(new_button_bg_gray/255, new_button_bg_gray/255, new_button_bg_gray/255, 1)
+        end
+        local changed_hover, new_hover_gray = r.ImGui_SliderInt(ctx, "Button Hover Color", config.button_hover_gray, 0, 255)
+        if changed_hover then
+            config.button_hover_gray = new_hover_gray
+            config.button_hover_color = r.ImGui_ColorConvertDouble4ToU32(new_hover_gray/255, new_hover_gray/255, new_hover_gray/255, 1)
+        end
+        r.ImGui_Separator(ctx)
+        local changed_frame_bg, new_frame_bg_gray = r.ImGui_SliderInt(ctx, "Frame Background Color", config.frame_bg_gray, 0, 255)
+        if changed_frame_bg then
+            config.frame_bg_gray = new_frame_bg_gray
+            config.frame_bg_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_bg_gray/255, new_frame_bg_gray/255, new_frame_bg_gray/255, 1)
+        end
+
+        local changed_frame_hover, new_frame_hover_gray = r.ImGui_SliderInt(ctx, "Frame Hover Color", config.frame_bg_hover_gray, 0, 255)
+        if changed_frame_hover then
+            config.frame_bg_hover_gray = new_frame_hover_gray
+            config.frame_bg_hover_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_hover_gray/255, new_frame_hover_gray/255, new_frame_hover_gray/255, 1)
+        end
+
+        local changed_frame_active, new_frame_active_gray = r.ImGui_SliderInt(ctx, "Frame Active Color", config.frame_bg_active_gray, 0, 255)
+        if changed_frame_active then
+            config.frame_bg_active_gray = new_frame_active_gray
+            config.frame_bg_active_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_active_gray/255, new_frame_active_gray/255, new_frame_active_gray/255, 1)
+        end
+        local changed_dropdown, new_dropdown_gray = r.ImGui_SliderInt(ctx, "Dropdown Background Color", config.dropdown_bg_gray, 0, 255)
+        if changed_dropdown then
+            config.dropdown_bg_gray = new_dropdown_gray
+            config.dropdown_bg_color = r.ImGui_ColorConvertDouble4ToU32(new_dropdown_gray/255, new_dropdown_gray/255, new_dropdown_gray/255, 1)
+        end
+
+        
+
         r.ImGui_Separator(ctx)
         r.ImGui_Text(ctx, "Other settings")
         _, config.auto_refresh_fx_list = r.ImGui_Checkbox(ctx, "Auto-refresh FX list on startup", config.auto_refresh_fx_list)
-        
+        r.ImGui_PopItemWidth(ctx)
         if r.ImGui_Button(ctx, "Save") then
             SaveConfig()
             config_open = false
@@ -188,7 +228,7 @@ end
         if r.ImGui_Button(ctx, "Cancel") then
             config_open = false
         end
-       
+        
         r.ImGui_End(ctx)
     end
     return config_open
@@ -702,18 +742,20 @@ function ShowPluginScreenshot()
                 
                 r.ImGui_SetNextWindowSize(ctx, display_width, display_height + 30)
                 r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
-                r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
-                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 7)
-                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 14)
-                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(), 7)
-                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 1, 1)
-                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 3,3)
-                reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 7)
-                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), 0x000000FF)      
-                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
-                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), 0x000000FF)
-                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
-                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
+                r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 1)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 14)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(), 1)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 1, 1)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 2,2)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 7)
+
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), 0x000000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
                 
                 if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
                     r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
@@ -728,8 +770,8 @@ function ShowPluginScreenshot()
                     r.ImGui_End(ctx)
                 end
                 
-                reaper.ImGui_PopStyleVar(ctx, 6)
-                reaper.ImGui_PopStyleColor(ctx, 5)
+                r.ImGui_PopStyleVar(ctx, 6)
+                r.ImGui_PopStyleColor(ctx, 6)
             else
                 log_to_file("Ongeldige afmetingen voor texture: " .. tostring(screenshot_texture))
                 screenshot_texture = nil
@@ -1035,7 +1077,7 @@ local function DrawFxChains(tbl, path)
         local item = tbl[i]
         if type(item) == "table" and item.dir then
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)  
-            r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
+            r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF) 
             if r.ImGui_BeginMenu(ctx, item.dir) then               
@@ -1104,7 +1146,7 @@ local function DrawTrackTemplates(tbl, path)
     for i = 1, #tbl do
         if tbl[i].dir then
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
-            r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
+            r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)  
            
             if r.ImGui_BeginMenu(ctx, tbl[i].dir) then
@@ -1136,8 +1178,9 @@ local function DrawItems(tbl, main_cat_name)
        
         r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
         r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)       
-        r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF) 
-        r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
+        
+        r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), config.background_color)
+        r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         r.ImGui_SetNextWindowSize(ctx, FX_LIST_WIDTH, 0)
         
         if r.ImGui_BeginMenu(ctx, tbl[i].name) then
@@ -1327,11 +1370,12 @@ function Frame()
     if search then return end
     for i = 1, #CAT_TEST do
         r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
-        r.ImGui_SetNextWindowBgAlpha(ctx, 0.75)
+        r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x000000FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
 
         if r.ImGui_BeginMenu(ctx, CAT_TEST[i].name) then
             if CAT_TEST[i].name == "FX CHAINS" then
@@ -1344,7 +1388,7 @@ function Frame()
             r.ImGui_EndMenu(ctx)
         end
         r.ImGui_PopStyleVar(ctx, 3)
-        r.ImGui_PopStyleColor(ctx)
+        r.ImGui_PopStyleColor(ctx, 2)
     end
 
     if r.ImGui_Selectable(ctx, "CONTAINER") then
@@ -1395,16 +1439,15 @@ function Main()
 
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1))
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), dark_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hover_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), active_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Tab(), dark_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_TabHovered(), hover_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), dark_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), hover_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), active_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
-    reaper.ImGui_PushFont(ctx, NormalFont)
+    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), config.button_background_color)
+    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), config.button_hover_color)
+    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Tab(), dark_gray)
+    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_TabHovered(), hover_gray)
+    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), config.frame_bg_color)
+    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), config.frame_bg_hover_color)
+    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), config.frame_bg_active_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
+    r.ImGui_PushFont(ctx, NormalFont)
 
     r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
     r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 340, 16384, 16384)
@@ -1542,7 +1585,7 @@ function Main()
 
     r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleVar(ctx, 3)
-    r.ImGui_PopStyleColor(ctx, 11)
+    r.ImGui_PopStyleColor(ctx, 10)
     if open then
         r.defer(Main)
     end
