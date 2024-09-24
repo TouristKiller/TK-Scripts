@@ -1,5 +1,5 @@
 -- @description TK FX BROWSER
--- @version 0.2.7
+-- @version 0.2.8 (restauration)
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
@@ -1235,13 +1235,11 @@ local function DrawTrackTemplates(tbl, path)
 end
 
 local function DrawItems(tbl, main_cat_name)
-   
-        if menu_direction_right then
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_SelectableTextAlign(), 1, 0.5)
-        end
-        local items = tbl or {}
+    if menu_direction_right then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_SelectableTextAlign(), 1, 0.5)
+    end
+    local items = tbl or {}
     for i = 1, #items do
-       
         r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
         r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)       
         
@@ -1274,13 +1272,18 @@ local function DrawItems(tbl, main_cat_name)
                             current_hovered_plugin = tbl[i].fx[j]
                             LoadPluginScreenshot(current_hovered_plugin)
                         end
+                        is_screenshot_visible = true
                     end
                     if r.ImGui_IsItemClicked(ctx, 1) then
                         MakeScreenshot(tbl[i].fx[j])
                     end
                 end
             end
-        r.ImGui_EndMenu(ctx)
+            if not r.ImGui_IsWindowHovered(ctx) then
+                is_screenshot_visible = false
+                current_hovered_plugin = nil
+            end
+            r.ImGui_EndMenu(ctx)
         end
         reaper.ImGui_PopStyleVar(ctx, 2)
         reaper.ImGui_PopStyleColor(ctx)
@@ -1289,6 +1292,7 @@ local function DrawItems(tbl, main_cat_name)
         r.ImGui_PopStyleVar(ctx)
     end
 end
+
 
 local function DrawBottomButtons()
     if not TRACK then return end
