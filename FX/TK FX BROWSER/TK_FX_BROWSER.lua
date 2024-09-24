@@ -1,10 +1,14 @@
 -- @description TK FX BROWSER
--- @version 0.2.5
+-- @version 0.2.6
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog:
---          * Just some more GUI settings
+--          * Performance settings 
+--          * Settings to dock screenshot window left and right
+--          * Added a button to capture the first track FX
+--          * Added a button to Bypass FX on Track
+--          * Added a button to copy /paste  all effects on track
 
      
 --------------------------------------------------------------------------
@@ -43,11 +47,7 @@ local screenshot_search_results = nil
 local update_search_screenshots = false
 local search_texture_cache = {}
 local texture_load_queue = {}
-local MAX_TEXTURES_PER_FRAME = 5
 local texture_last_used = {}
-local MAX_CACHED_SEARCH_TEXTURES = 50
-local MIN_CACHED_TEXTURES = 10
-local TEXTURE_RELOAD_DELAY = 5 -- in seconden
 local screenshot_window_opened = false 
 local show_screenshot_window = false 
 local screenshot_window_interactive = false 
@@ -99,6 +99,10 @@ local config = {
     frame_bg_active_gray = 88,
     frame_bg_active_color = r.ImGui_ColorConvertDouble4ToU32(128/255, 128/255, 128/255, 1),
     dropdown_bg_color = 0x000000FF,
+    max_textures_per_frame = 20,
+    max_cached_search_textures = 55,
+    min_cached_textures = 20,
+    texture_reload_delay = 2
   }
 
 local window_alpha_int = math.floor(config.window_alpha * 100)
@@ -135,7 +139,7 @@ LoadConfig()
 local function ShowConfigWindow()
     local config_open = true
     local window_width = 300
-    local window_height = 460
+    local window_height = 580
     local slider_width = 140 -- of een andere gewenste breedte
    
     r.ImGui_SetNextWindowSize(ctx, window_width, window_height, r.ImGui_Cond_Always())
@@ -213,8 +217,12 @@ local function ShowConfigWindow()
             config.dropdown_bg_gray = new_dropdown_gray
             config.dropdown_bg_color = r.ImGui_ColorConvertDouble4ToU32(new_dropdown_gray/255, new_dropdown_gray/255, new_dropdown_gray/255, 1)
         end
-
-        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Screenshot Performance Settings")
+        _, config.max_textures_per_frame = r.ImGui_SliderInt(ctx, "Max Textures Per Frame", config.max_textures_per_frame, 1, 30)
+        _, config.max_cached_search_textures = r.ImGui_SliderInt(ctx, "Max Cached Search Textures", config.max_cached_search_textures, 10, 100)
+        _, config.min_cached_textures = r.ImGui_SliderInt(ctx, "Min Cached Textures", config.min_cached_textures, 5, 50)
+        _, config.texture_reload_delay = r.ImGui_SliderInt(ctx, "Texture Reload Delay (s)", config.texture_reload_delay or 3, 1, 10)
 
         r.ImGui_Separator(ctx)
         r.ImGui_Text(ctx, "Other settings")
@@ -372,8 +380,13 @@ local function LoadSearchTexture(file)
         return search_texture_cache[file]
     end
     
-    if not texture_load_queue[file] then
-        texture_load_queue[file] = r.time_precise()
+    local cache_size = 0
+    for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
+    
+    if cache_size < config.max_cached_search_textures then
+        if not texture_load_queue[file] then
+            texture_load_queue[file] = r.time_precise()
+        end
     end
     return nil
 end
@@ -384,7 +397,7 @@ local function ProcessTextureLoadQueue()
     
     -- Laad nieuwe textures
     for file, queue_time in pairs(texture_load_queue) do
-        if textures_loaded >= MAX_TEXTURES_PER_FRAME then break end
+        if textures_loaded >= config.max_textures_per_frame then break end
         
         if not search_texture_cache[file] then
             local texture = r.ImGui_CreateImage(file)
@@ -405,10 +418,10 @@ local function ProcessTextureLoadQueue()
     local cache_size = 0
     for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
     
-    if cache_size > MAX_CACHED_SEARCH_TEXTURES then
+    if cache_size > config.max_cached_search_textures then
         local textures_to_remove = {}
         for file, last_used in pairs(texture_last_used) do
-            if current_time - last_used > TEXTURE_RELOAD_DELAY and cache_size > MIN_CACHED_TEXTURES then
+            if current_time - last_used > config.texture_reload_delay and cache_size > config.min_cached_textures then
                 table.insert(textures_to_remove, file)
                 cache_size = cache_size - 1
             end
@@ -418,17 +431,16 @@ local function ProcessTextureLoadQueue()
             if r.ImGui_DestroyImage then
                 r.ImGui_DestroyImage(ctx, search_texture_cache[file])
             else
-                -- Alternative cleanup method or log the issue
                 log_to_file("ImGui_DestroyImage not available, texture not destroyed: " .. file)
             end
             search_texture_cache[file] = nil
             texture_last_used[file] = nil
-            log_to_file("Texture verwijderd: " .. file)
+            log_to_file("Texture removed: " .. file)
         end
     end
     
     -- Herlaad verwijderde textures indien nodig
-    if cache_size < MIN_CACHED_TEXTURES then
+    if cache_size < config.min_cached_textures then
         for file in pairs(texture_last_used) do
             if not search_texture_cache[file] then
                 texture_load_queue[file] = current_time
@@ -581,6 +593,51 @@ local function CaptureScreenshot(plugin_name, fx_index)
     r.TrackFX_Show(TRACK, fx_index, 2)
     r.TrackFX_Delete(TRACK, fx_index)
 end
+local function CaptureExistingFX(track, fx_index)
+    local retval, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
+    if retval then
+        local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
+        if hwnd then
+            local safe_name = fx_name:gsub("[^%w%s-]", "_")
+            local filename = screenshot_path .. safe_name .. ".png"
+            
+            local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+            local w, h = right - left, bottom - top
+            
+            local offset = fx_name:match("^JS") and 0 or config.capture_height_offset
+            h = h - offset
+
+            log_to_file("Capturing screenshot for existing FX: " .. fx_name)
+            if not IsOSX() then
+                local srcDC = r.JS_GDI_GetClientDC(hwnd)
+                local destBmp = r.JS_LICE_CreateBitmap(true, w, h)
+                local destDC = r.JS_LICE_GetDC(destBmp)
+                r.JS_GDI_Blit(destDC, 0, 0, srcDC, config.srcx, config.srcy, w, h)
+                r.JS_LICE_WritePNG(filename, destBmp, false)
+                r.JS_GDI_ReleaseDC(hwnd, srcDC)
+                r.JS_LICE_DestroyBitmap(destBmp)
+            else
+                ScreenshotOSX(filename, left, top, w, h)
+            end
+            
+            print("Screenshot Saved: " .. filename)
+        else
+            print("No Plugin Window for " .. fx_name)
+        end
+    end
+end
+local function CaptureFirstTrackFX()
+    if not TRACK then return end
+    
+    local fx_count = r.TrackFX_GetCount(TRACK)
+    if fx_count > 0 then
+        CaptureExistingFX(TRACK, 0)
+    else
+        r.ShowMessageBox("No FX on the selected track", "Info", 0)
+    end
+end
+
+
 local function MakeScreenshot(plugin_name, callback)
     if type(plugin_name) ~= "string" then
         r.ShowMessageBox("Invalid plugin name", "Error", 0)
@@ -1019,8 +1076,8 @@ local function FilterBox()
     local filtered_fx = Filter_actions(FILTER)
     
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local bottom_buttons_height = 30  -- Pas dit aan naar de werkelijke hoogte van je onderste knoppen
-    local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 10  -- Extra marge
+    local bottom_buttons_height = 50  -- Pas dit aan naar de werkelijke hoogte van je onderste knoppen
+    local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 50  -- Extra marge
 
     if #filtered_fx ~= 0 then
         if r.ImGui_BeginChild(ctx, "##popupp", window_width, available_height) then
@@ -1227,8 +1284,32 @@ end
 local function DrawBottomButtons()
     if not TRACK then return end
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
-    local buttonHeight = 30
+    local buttonHeight = 50
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
+    
+    r.ImGui_Separator(ctx)
+    if r.ImGui_Button(ctx, "1ST FX", 40, 15) then
+        CaptureFirstTrackFX()
+    end
+    r.ImGui_SameLine(ctx)
+    local bypass_state = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
+    local bypass_color = bypass_state and 0xFF0000FF or 0x4CAF50FF
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), bypass_color)
+    if r.ImGui_Button(ctx, "BYPASS", 46, 15) then
+        local new_state = bypass_state and 1 or 0
+        r.SetMediaTrackInfo_Value(TRACK, "I_FXEN", new_state)
+    end
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "C", 15, 15) then
+        r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_CPY_FXCHAIN"), 0)
+    end
+    
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "P", 15, 15) then
+        r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_PST_FXCHAIN"), 0)
+    end
+
     
     r.ImGui_Separator(ctx)
     local mute_color = IsMuted(TRACK) and 0xFF0000FF or 0x4CAF50FF
@@ -1257,7 +1338,7 @@ local function DrawBottomButtons()
     r.ImGui_Separator(ctx)
 end
 
-local BUTTON_HEIGHT = 15
+local BUTTON_HEIGHT = 40
 local function ShowTrackFX()
     if not TRACK then return end
     
@@ -1472,28 +1553,47 @@ function Main()
             if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 50, r.ImGui_WindowFlags_NoScrollbar()) then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_PushFont(ctx, LargeFont)
-
+            
                 local text_width = r.ImGui_CalcTextSize(ctx, track_name)
                 local window_width = r.ImGui_GetWindowWidth(ctx)
                 local pos_x = (window_width - text_width) * 0.5
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local text_height = r.ImGui_GetTextLineHeight(ctx)
                 local pos_y = (window_height - text_height) * 0.25
-
+            
                 r.ImGui_SetCursorPos(ctx, pos_x, pos_y)
                 r.ImGui_Text(ctx, track_name)
                 
                 local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
                 local type_pos_x = (window_width - type_text_width) * 0.5
                 local type_pos_y = pos_y + text_height
-
+            
                 r.ImGui_SetCursorPos(ctx, type_pos_x, type_pos_y)
                 r.ImGui_Text(ctx, track_type)
-
+            
+                -- Voeg de < en > knoppen toe
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Doorzichtige knop
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)  -- Licht grijs bij hover
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)  -- Donkerder grijs bij klik
+            
+                r.ImGui_SetCursorPos(ctx, 5, window_height - 25)
+                if r.ImGui_Button(ctx, "<", 20, 20) then
+                    local prev_track = r.GetTrack(0, r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") - 2)
+                    if prev_track then r.SetOnlyTrackSelected(prev_track) end
+                end
+            
+                r.ImGui_SetCursorPos(ctx, window_width - 25, window_height - 25)
+                if r.ImGui_Button(ctx, ">", 20, 20) then
+                    local next_track = r.GetTrack(0, r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
+                    if next_track then r.SetOnlyTrackSelected(next_track) end
+                end
+            
+                r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopFont(ctx)
                 r.ImGui_PopStyleColor(ctx)
                 r.ImGui_EndChild(ctx)
             end
+            
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx)
 
