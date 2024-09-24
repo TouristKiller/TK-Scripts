@@ -1,14 +1,12 @@
 -- @description TK FX BROWSER
--- @version 0.2.6
+-- @version 0.2.7
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog:
---          * Performance settings 
---          * Settings to dock screenshot window left and right
---          * Added a button to capture the first track FX
---          * Added a button to Bypass FX on Track
---          * Added a button to copy /paste  all effects on track
+--         * Bugfix: Added better closing of screenshots 
+--         * You can make screenshots by right clicking on the plugin name in search result list
+
 
      
 --------------------------------------------------------------------------
@@ -38,6 +36,7 @@ local old_t = {}
 local old_filter = ""
 local current_hovered_plugin = nil
 -- Screenshot
+local is_screenshot_visible = false
 local screenshot_texture = nil
 local screenshot_width, screenshot_height = 0, 0
 local is_bulk_screenshot_running = false
@@ -777,7 +776,7 @@ function LoadPluginScreenshot(plugin_name)
 end
 
 function ShowPluginScreenshot()
-    if screenshot_texture and current_hovered_plugin then
+    if screenshot_texture and current_hovered_plugin and is_screenshot_visible then
         if r.ImGui_ValidatePtr(screenshot_texture, 'ImGui_Image*') then
             local width, height = r.ImGui_Image_GetSize(screenshot_texture)
             if width and height then
@@ -1094,15 +1093,24 @@ local function FilterBox()
                             LoadPluginScreenshot(current_hovered_plugin)
                         end
                     end
+                    is_screenshot_visible = true
                     if not config.show_screenshot_in_search or not ScreenshotExists(filtered_fx[i].name) then
                         r.ImGui_BeginTooltip(ctx)
                         r.ImGui_Text(ctx, filtered_fx[i].name)
                         r.ImGui_EndTooltip(ctx)
                     end
                 end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    MakeScreenshot(filtered_fx[i].name)
+                end
+            end
+            if not r.ImGui_IsWindowHovered(ctx) then
+                is_screenshot_visible = false
+                current_hovered_plugin = nil
             end
             r.ImGui_EndChild(ctx)
         end
+        
         if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
             if ADDFX_Sel_Entry and ADDFX_Sel_Entry > 0 and ADDFX_Sel_Entry <= #filtered_fx then
                 r.TrackFX_AddByName(TRACK, filtered_fx[ADDFX_Sel_Entry].name, false, -1000 - r.TrackFX_GetCount(TRACK))
@@ -1118,6 +1126,7 @@ local function FilterBox()
             ADDFX_Sel_Entry = (ADDFX_Sel_Entry or 0) + 1
             if ADDFX_Sel_Entry > #filtered_fx then ADDFX_Sel_Entry = 1 end
         end
+        
     end
     if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
         FILTER = ''
