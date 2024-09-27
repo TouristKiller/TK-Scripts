@@ -1,5 +1,5 @@
 -- @description TK FX BROWSER
--- @version 0.3.0 (restauration)
+-- @version 0.3.1 (restauration)
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
@@ -1994,7 +1994,7 @@ local function ShowTrackFX()
                     r.TrackFX_CopyToTrack(TRACK, i, TRACK, i + 1, true)
                 end
                 r.ImGui_SameLine(ctx)
-                if r.ImGui_Selectable(ctx, fx_name) then
+                if r.ImGui_Selectable(ctx, fx_name .. "##" .. i) then
                     if is_open then
                         r.TrackFX_Show(TRACK, i, 2)
                     else
