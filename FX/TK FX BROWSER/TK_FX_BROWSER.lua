@@ -1,18 +1,20 @@
 -- @description TK FX BROWSER
--- @version 0.2.9 (restauration)
+-- @version 0.3.0 (restauration)
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog:
---         * Remade settings window
---         * Included all original Folders from Sexans FX Browser in the menu
---         * Select witch folders will be shown in the menu in settings
---         * Select witch type of FX will have a screenshot taken in Bulk
---         * Plugin manager to include or exlcude plugins from screenshot 
---         * Set dropdown length in settings
---         * Choose default folder for screenshots window
---         * When you erase the searchfeeld with "X"button, it will go back to defaul folder
---         * Fix in color popup in FXChains
+--         * Enter empty seachbox sould bring you back to last selected volder 
+--          (does not always work, still finding out why....)
+--         * Added folder that shows all plugin screenshots of current project:
+--           - shows the screenshots grouped per track 
+--           - clicking the track title bar selects the corrosponding track
+--           - left click collapse/open butten to collapse/open the track
+--           - right click coplapse/open button to collapse/open all tracks
+--         * Button at (left) top of track title bar tot toggle screenshot window
+--         * Added buttons next to fx on track list to move them up and down
+--         * Right click on items in "fx on track list" now gives a pop up menu 
+--           with option to delete or copy plugin to all tracks
 --------------------------------------------------------------------------
 local r = reaper
 -- Pad en module instellingen
@@ -40,6 +42,7 @@ local ADD_FX_TO_ITEM = false
 local old_t = {}
 local old_filter = ""
 local current_hovered_plugin = nil
+
 -- Screenshot
 local is_screenshot_visible = false
 local screenshot_texture = nil
@@ -55,10 +58,13 @@ local texture_last_used = {}
 local screenshot_window_opened = false 
 local show_screenshot_window = false 
 local screenshot_window_interactive = false 
-local screenshot_window_display_size = 250
+local screenshot_window_display_size = 200
 local selected_folder = nil
 local plugin_visibility = {}
 local show_plugin_manager = false
+local last_viewed_folder = nil
+local collapsed_tracks = {}
+local all_tracks_collapsed = false
 -- Dock / Undock
 local dock = 0
 local change_dock = false
@@ -84,7 +90,7 @@ local function SetDefaultConfig()
         srcx = 0,
         srcy = 27,
         capture_height_offset = 0,
-        screenshot_display_size = 250,
+        screenshot_display_size = 200,
         screenshot_window_width = 200,
         dropdown_menu_length = 20,
         max_textures_per_frame = 15,
@@ -131,7 +137,8 @@ local function SetDefaultConfig()
         bulk_screenshot_js = true,
         bulk_screenshot_au = true,
         bulk_screenshot_clap = true,
-        bulk_screenshot_lv2 = true,     
+        bulk_screenshot_lv2 = true,
+        default_folder = nil,
     } 
 end
 local config = SetDefaultConfig()    
@@ -165,6 +172,13 @@ local function ResetConfig()
     SaveConfig()
 end
 
+local function ClearScreenshotCache()
+    search_texture_cache = {}
+    texture_load_queue = {}
+    texture_last_used = {}
+end
+
+
 local folders_category = {}
 local function initFoldersCategory()
     for i = 1, #CAT_TEST do
@@ -175,6 +189,12 @@ local function initFoldersCategory()
     end
 end
 initFoldersCategory()
+
+local function UpdateLastViewedFolder(new_folder)
+    if new_folder ~= "Current Project FX" then
+        last_viewed_folder = new_folder
+    end
+end
 
 function LoadPluginVisibility()
     local str = r.GetExtState("TK_PluginManager", "PluginVisibility")
@@ -197,6 +217,31 @@ end
 function IsPluginVisible(plugin_name)
     return plugin_visibility[plugin_name] ~= false
 end
+
+local function GetCurrentProjectFX()
+    local fx_list = {}
+    local track_count = reaper.CountTracks(0)
+    for i = 0, track_count - 1 do
+        local track = reaper.GetTrack(0, i)
+        local _, track_name = reaper.GetTrackName(track)
+        local track_number = reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+        local track_color = reaper.GetTrackColor(track)
+        local fx_count = reaper.TrackFX_GetCount(track)
+        for j = 0, fx_count - 1 do
+            local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
+            if retval then
+                table.insert(fx_list, {
+                    fx_name = fx_name,
+                    track_name = track_name,
+                    track_number = track_number,
+                    track_color = track_color
+                })
+            end
+        end
+    end
+    return fx_list
+end
+
 
 local search_filter = ""
 local filtered_plugins = {}
@@ -226,8 +271,8 @@ local function ShowPluginManagerTab()
         table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
     end
 
-    r.ImGui_Text(ctx, string.format("Totaal aantal plugins: %d", #PLUGIN_LIST))
-    r.ImGui_Text(ctx, string.format("Weergegeven plugins: %d", #filtered_plugins))
+    r.ImGui_Text(ctx, string.format("Total plugins: %d", #PLUGIN_LIST))
+    r.ImGui_Text(ctx, string.format("Shown plugins: %d", #filtered_plugins))
 
     if r.ImGui_BeginChild(ctx, "PluginList", 0, -30) then
         for _, plugin in ipairs(filtered_plugins) do
@@ -254,6 +299,20 @@ local function ShowPluginManagerTab()
         end
         SavePluginVisibility()
     end
+end
+
+local function GetPluginsForFolder(folder_name)
+    local filtered_plugins = {}
+    for i = 1, #CAT_TEST do
+        if CAT_TEST[i].name == "FOLDERS" then
+            for j = 1, #CAT_TEST[i].list do
+                if CAT_TEST[i].list[j].name == folder_name then
+                    return CAT_TEST[i].list[j].fx
+                end
+            end
+        end
+    end
+    return filtered_plugins
 end
 
 local function ShowConfigWindow()
@@ -1191,28 +1250,6 @@ function LoadPluginScreenshot(plugin_name)
     end
 end
 
-local function ClearScreenshotCache()
-    search_texture_cache = {}
-    texture_load_queue = {}
-    texture_last_used = {}
-end
-
-local function GetPluginsForFolder(folder_name)
-    local filtered_plugins = {}
-    for i = 1, #CAT_TEST do
-        if CAT_TEST[i].name == "FOLDERS" then
-            for j = 1, #CAT_TEST[i].list do
-                if CAT_TEST[i].list[j].name == folder_name then
-                    return CAT_TEST[i].list[j].fx
-                end
-            end
-        end
-    end
-    return filtered_plugins
-end
-
-
-
 function ShowPluginScreenshot()
     if screenshot_texture and current_hovered_plugin and is_screenshot_visible then
         if r.ImGui_ValidatePtr(screenshot_texture, 'ImGui_Image*') then
@@ -1277,6 +1314,32 @@ function ShowPluginScreenshot()
     end
 end
 
+
+local function GetCurrentProjectFX()
+    local fx_list = {}
+    local track_count = reaper.CountTracks(0)
+    for i = 0, track_count - 1 do
+        local track = reaper.GetTrack(0, i)
+        local _, track_name = reaper.GetTrackName(track)
+        local track_number = reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+        local track_color = reaper.GetTrackColor(track)
+        local fx_count = reaper.TrackFX_GetCount(track)
+        for j = 0, fx_count - 1 do
+            local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
+            if retval then
+                table.insert(fx_list, {
+                    fx_name = fx_name,
+                    track_name = track_name,
+                    track_number = track_number,
+                    track_color = track_color
+                })
+            end
+        end
+    end
+    return fx_list
+end
+
+
 local function ShowScreenshotWindow()
     if not config.show_screenshot_window then return end
     if screenshot_search_results and #screenshot_search_results > 0 then
@@ -1320,14 +1383,20 @@ local function ShowScreenshotWindow()
                 if r.ImGui_Selectable(ctx, "No Folder", selected_folder == nil) then
                     selected_folder = nil
                 end
+                if r.ImGui_Selectable(ctx, "Current Project FX", selected_folder == "Current Project FX") then
+                    selected_folder = "Current Project FX"
+                    ClearScreenshotCache()
+                end
                 r.ImGui_Separator(ctx)
         
                 for i = 1, #folders_category do
                     local is_selected = (selected_folder == folders_category[i].name)
                     if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
                         selected_folder = folders_category[i].name
+                        UpdateLastViewedFolder(selected_folder)
+                        screenshot_search_results = nil
                         ClearScreenshotCache()
-                        GetPluginsForFolder(folder_name)
+                        GetPluginsForFolder(selected_folder)
                     end
                     if is_selected then
                         r.ImGui_SetItemDefaultFocus(ctx)
@@ -1346,65 +1415,143 @@ local function ShowScreenshotWindow()
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
             if selected_folder then
                 local filtered_plugins = {}
-                for i = 1, #CAT_TEST do
-                    if CAT_TEST[i].name == "FOLDERS" then
-                        for j = 1, #CAT_TEST[i].list do
-                            if CAT_TEST[i].list[j].name == selected_folder then
-                                for k = 1, #CAT_TEST[i].list[j].fx do
-                                    table.insert(filtered_plugins, CAT_TEST[i].list[j].fx[k])
-                                end
-                                break
-                            end
-                        end
-                        break
-                    end
-                end
-
-                if #filtered_plugins > 0 then
-                    local column_width = available_width / num_columns
-                    for i, fx_name in ipairs(filtered_plugins) do
-                        local column = (i - 1) % num_columns
-                        if column > 0 then
-                            r.ImGui_SameLine(ctx)
-                        end
-                        r.ImGui_BeginGroup(ctx)
-                        r.ImGui_PushItemWidth(ctx, column_width)
-
-                        local safe_name = fx_name:gsub("[^%w%s-]", "_")
-                        local screenshot_file = screenshot_path .. safe_name .. ".png"
-                        if r.file_exists(screenshot_file) then
-                            local texture = LoadSearchTexture(screenshot_file)
-                            if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
-                                local width, height = r.ImGui_Image_GetSize(texture)
-                                if width and height then
-                                    local aspect_ratio = height > 0 and width / height or 1
-                                    local display_width = config.resize_screenshots_with_window and (column_width - 10) or screenshot_window_display_size
-                                    local display_height = display_width / aspect_ratio
-                                    
-                                    if r.ImGui_ImageButton(ctx, "##"..fx_name, texture, display_width, display_height) then
-                                        if TRACK then
-                                            r.TrackFX_AddByName(TRACK, fx_name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                                        end
+                if selected_folder == "Current Project FX" then
+                    filtered_plugins = GetCurrentProjectFX()
+                else
+                    for i = 1, #CAT_TEST do
+                        if CAT_TEST[i].name == "FOLDERS" then
+                            for j = 1, #CAT_TEST[i].list do
+                                if CAT_TEST[i].list[j].name == selected_folder then
+                                    for k = 1, #CAT_TEST[i].list[j].fx do
+                                        table.insert(filtered_plugins, {fx_name = CAT_TEST[i].list[j].fx[k], track_name = "Unknown Track"})
                                     end
-                                    
-                                    r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                    r.ImGui_Text(ctx, fx_name)
-                                    r.ImGui_PopTextWrapPos(ctx)
-                                else
-                                    log_to_file("Ongeldige afmetingen voor texture: " .. tostring(texture))
-                                    search_texture_cache[screenshot_file] = nil
+                                    break
                                 end
-                            else
-                                log_to_file("Ongeldige texture voor fx: " .. fx_name)
                             end
+                            break
                         end
-
-                        r.ImGui_PopItemWidth(ctx)
-                        r.ImGui_EndGroup(ctx)
-                        
-                        if column == num_columns - 1 then
-                            r.ImGui_Dummy(ctx, 0, 15)
-                            --r.ImGui_Separator(ctx)
+                    end
+                end  
+                if #filtered_plugins > 0 then
+                    local current_track = nil
+                    local column_width = available_width / num_columns
+                    for i, plugin in ipairs(filtered_plugins) do
+                        if selected_folder == "Current Project FX" and plugin.track_name ~= current_track then
+                            current_track = plugin.track_name
+                            local track_color, text_color = GetTrackColorAndTextColor(reaper.GetTrack(0, plugin.track_number - 1))
+                            local track_number = plugin.track_number
+                            r.ImGui_Separator(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
+                            if r.ImGui_BeginChild(ctx, "TrackHeader" .. track_number, -1, 20) then
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
+                                
+                                -- Voeg een uitklapknop toe
+                                local is_collapsed = collapsed_tracks[track_number] or false
+                                if r.ImGui_Button(ctx, is_collapsed and "+" or "-", 20, 20) then
+                                    collapsed_tracks[track_number] = not is_collapsed
+                                    if not is_collapsed then
+                                        ClearScreenshotCache()
+                                        GetPluginsForFolder(selected_folder)
+                                    end
+                                end
+                                if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
+                                    all_tracks_collapsed = not all_tracks_collapsed
+                                    for i = 1, r.CountTracks(0) do
+                                        collapsed_tracks[i] = all_tracks_collapsed
+                                    end
+                                    ClearScreenshotCache()
+                                    GetPluginsForFolder(selected_folder)
+                                end
+                                r.ImGui_SameLine(ctx)
+                                
+                                if r.ImGui_Button(ctx, "Track " .. track_number .. ": " .. plugin.track_name) then
+                                    r.SetOnlyTrackSelected(reaper.GetTrack(0, plugin.track_number - 1))
+                                end
+                                r.ImGui_PopStyleColor(ctx, 4)
+                                r.ImGui_EndChild(ctx)
+                            end
+                            r.ImGui_PopStyleColor(ctx)
+                         -- r.ImGui_NewLine(ctx)
+                         r.ImGui_Dummy(ctx, 0, 0)
+                        end
+                
+                        -- Toon alleen screenshots als de track niet is ingeklapt
+                        if selected_folder ~= "Current Project FX" or not collapsed_tracks[plugin.track_number] then
+                            local column = (i - 1) % num_columns
+                            if column > 0 then
+                                r.ImGui_SameLine(ctx)
+                            end
+                            r.ImGui_BeginGroup(ctx)
+                            r.ImGui_PushItemWidth(ctx, column_width)
+                    
+                            local safe_name = plugin.fx_name:gsub("[^%w%s-]", "_")
+                            local screenshot_file = screenshot_path .. safe_name .. ".png"
+                            if r.file_exists(screenshot_file) then
+                                local texture = LoadSearchTexture(screenshot_file)
+                                if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                                    local width, height = r.ImGui_Image_GetSize(texture)
+                                    if width and height then
+                                        local aspect_ratio = height > 0 and width / height or 1
+                                        local display_width = config.resize_screenshots_with_window and (column_width - 10) or screenshot_window_display_size
+                                        local display_height = display_width / aspect_ratio
+                                        
+                                        if r.ImGui_ImageButton(ctx, "##"..plugin.fx_name, texture, display_width, display_height) then
+                                            if selected_folder == "Current Project FX" then
+                                                -- Toggle de FX op de track
+                                                local track = reaper.GetTrack(0, plugin.track_number - 1)
+                                                local fx_count = reaper.TrackFX_GetCount(track)
+                                                for j = 0, fx_count - 1 do
+                                                    local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
+                                                    if retval and fx_name == plugin.fx_name then
+                                                        local is_open = reaper.TrackFX_GetFloatingWindow(track, j) ~= nil
+                                                        reaper.TrackFX_Show(track, j, is_open and 2 or 3)  -- Toggle de FX
+                                                        break
+                                                    end
+                                                end
+                                            else
+                                                -- Voeg de FX toe aan de track
+                                                if TRACK then
+                                                    r.TrackFX_AddByName(TRACK, plugin.fx_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                                end
+                                            end
+                                        end
+                    
+                                        if selected_folder == "Current Project FX" and r.ImGui_IsItemClicked(ctx, 1) then  -- Rechterklik
+                                            if TRACK then
+                                                -- Verwijder de FX van de track
+                                                local track = reaper.GetTrack(0, plugin.track_number - 1)
+                                                local fx_count = reaper.TrackFX_GetCount(track)
+                                                for j = 0, fx_count - 1 do
+                                                    local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
+                                                    if retval and fx_name == plugin.fx_name then
+                                                        reaper.TrackFX_Delete(track, j)
+                                                        break
+                                                    end
+                                                end
+                                            end
+                                        end
+                                        
+                                        r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                        r.ImGui_Text(ctx, plugin.fx_name)
+                                        r.ImGui_PopTextWrapPos(ctx)
+                                    else
+                                        log_to_file("Ongeldige afmetingen voor texture: " .. tostring(texture))
+                                        search_texture_cache[screenshot_file] = nil
+                                    end
+                                else
+                                    log_to_file("Ongeldige texture voor fx: " .. plugin.fx_name)
+                                end
+                            end
+                    
+                            r.ImGui_PopItemWidth(ctx)
+                            r.ImGui_EndGroup(ctx)
+                            
+                            if column == num_columns - 1 then
+                                r.ImGui_Dummy(ctx, 0, 15)
+                            end
                         end
                     end
                 else
@@ -1467,6 +1614,9 @@ local function ShowScreenshotWindow()
     r.ImGui_End(ctx)
 end
 
+
+
+
 local function Filter_actions(filter_text)
     if old_filter == filter_text then return old_t end
     filter_text = Lead_Trim_ws(filter_text)
@@ -1501,11 +1651,24 @@ local function FilterBox()
     end
     r.ImGui_SameLine(ctx)
     if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
-        screenshot_search_results = Filter_actions(FILTER)
-        update_search_screenshots = true
-        show_screenshot_window = true
-        screenshot_window_interactive = true
-        selected_folder = nil  
+        if FILTER == "" then
+            if last_viewed_folder then
+                selected_folder = last_viewed_folder
+                show_screenshot_window = true
+                screenshot_window_interactive = true
+                screenshot_search_results = nil
+                ClearScreenshotCache()
+                GetPluginsForFolder(selected_folder)
+            end
+        else
+            UpdateLastViewedFolder(selected_folder)
+            screenshot_search_results = Filter_actions(FILTER)
+            update_search_screenshots = true
+            show_screenshot_window = true
+            screenshot_window_interactive = true
+            selected_folder = nil
+            ClearScreenshotCache()
+        end
     end
 
     r.ImGui_SameLine(ctx)
@@ -1765,18 +1928,18 @@ local function DrawBottomButtons()
     local bypass_state = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
     local bypass_color = bypass_state and 0xFF0000FF or 0x4CAF50FF
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), bypass_color)
-    if r.ImGui_Button(ctx, "BYPASS", 46, 15) then
+    if r.ImGui_Button(ctx, "BYPSS", 40, 15) then
         local new_state = bypass_state and 1 or 0
         r.SetMediaTrackInfo_Value(TRACK, "I_FXEN", new_state)
     end
     r.ImGui_PopStyleColor(ctx)
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "C", 15, 15) then
+    if r.ImGui_Button(ctx, "C", 17, 15) then
         r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_CPY_FXCHAIN"), 0)
     end
     
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "P", 15, 15) then
+    if r.ImGui_Button(ctx, "P", 17, 15) then
         r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_PST_FXCHAIN"), 0)
     end
 
@@ -1822,6 +1985,15 @@ local function ShowTrackFX()
             for i = 0, fx_count - 1 do
                 local retval, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                 local is_open = r.TrackFX_GetFloatingWindow(TRACK, i)
+                
+                if r.ImGui_Button(ctx, "U##" .. i) and i > 0 then
+                    r.TrackFX_CopyToTrack(TRACK, i, TRACK, i - 1, true)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "D##" .. i) and i < fx_count - 1 then
+                    r.TrackFX_CopyToTrack(TRACK, i, TRACK, i + 1, true)
+                end
+                r.ImGui_SameLine(ctx)
                 if r.ImGui_Selectable(ctx, fx_name) then
                     if is_open then
                         r.TrackFX_Show(TRACK, i, 2)
@@ -1829,18 +2001,36 @@ local function ShowTrackFX()
                         r.TrackFX_Show(TRACK, i, 3)
                     end
                 end
+        
                 if r.ImGui_IsItemClicked(ctx, 1) then
-                    r.TrackFX_Delete(TRACK, i)
-                    break
+                    r.ImGui_OpenPopup(ctx, "FX_Options_" .. i)
                 end
+                
+                if r.ImGui_BeginPopup(ctx, "FX_Options_" .. i) then
+                    if r.ImGui_MenuItem(ctx, "Delete") then
+                        r.TrackFX_Delete(TRACK, i)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
+                        local track_count = r.CountTracks(0)
+                        for j = 0, track_count - 1 do
+                            local target_track = r.GetTrack(0, j)
+                            if target_track ~= TRACK then
+                                r.TrackFX_CopyToTrack(TRACK, i, target_track, r.TrackFX_GetCount(target_track), false)
+                            end
+                        end
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+                
             end
         else
-        r.ImGui_Text(ctx, "No FX on Track")
+            r.ImGui_Text(ctx, "No FX on Track")
         end
      
         r.ImGui_EndChild(ctx)
     end
 end
+
 
 local function ShowItemFX()
     local item = r.GetSelectedMediaItem(0, 0)
@@ -2022,6 +2212,11 @@ function Main()
 
     if visible then
         if config.show_screenshot_window then
+            if screenshot_search_results and #screenshot_search_results > 0 then
+                selected_folder = nil
+            elseif config.default_folder and selected_folder == nil then
+                selected_folder = config.default_folder
+            end
             ShowScreenshotWindow()
         end
         if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
@@ -2036,6 +2231,20 @@ function Main()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 4)
             if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 50, r.ImGui_WindowFlags_NoScrollbar()) then
+                
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Volledig transparante knop
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)  -- Licht grijs bij hover
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)  -- Donkerder grijs bij klik
+
+                r.ImGui_SetCursorPos(ctx, 0, 0)
+                if r.ImGui_Button(ctx, "##ScreenshotWindow", 20, 20) then
+                    config.show_screenshot_window = not config.show_screenshot_window
+                    ClearScreenshotCache()
+                    GetPluginsForFolder(selected_folder)
+                end
+
+                r.ImGui_PopStyleColor(ctx, 3)
+                
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_PushFont(ctx, LargeFont)
             
