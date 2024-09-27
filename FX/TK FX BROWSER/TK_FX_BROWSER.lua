@@ -1,27 +1,69 @@
 -- @description TK FX BROWSER
--- @version 0.3.1 (restauration)
+-- @version 0.3.2
 -- @author TouristKiller
 -- @about
---   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
+--   #  A MOD of Sexan's FX Browser
 -- @changelog:
---         * Enter empty seachbox sould bring you back to last selected volder 
---          (does not always work, still finding out why....)
---         * Added folder that shows all plugin screenshots of current project:
---           - shows the screenshots grouped per track 
---           - clicking the track title bar selects the corrosponding track
---           - left click collapse/open butten to collapse/open the track
---           - right click coplapse/open button to collapse/open all tracks
---         * Button at (left) top of track title bar tot toggle screenshot window
---         * Added buttons next to fx on track list to move them up and down
---         * Right click on items in "fx on track list" now gives a pop up menu 
---           with option to delete or copy plugin to all tracks
+--         * Finaly imlemented auto update Sexan's FX Browser Parser V7
 --------------------------------------------------------------------------
 local r = reaper
 -- Pad en module instellingen
 local os_separator = package.config:sub(1, 1)
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 package.path = script_path .. "?.lua;"
-require("Sexan_FX_Browser")
+
+------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
+function ThirdPartyDeps()
+    local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
+    local fx_browser_reapack = '"sexan fx browser parser v7"'
+   
+    local reapack_process
+    local repos = {
+        { name = "Sexan_Scripts",   url = 'https://github.com/GoranKovac/ReaScripts/raw/master/index.xml' }
+    }
+
+    for i = 1, #repos do
+        local retinfo, url, enabled, autoInstall = r.ReaPack_GetRepositoryInfo(repos[i].name)
+        if not retinfo then
+            retval, error = r.ReaPack_AddSetRepository(repos[i].name, repos[i].url, true, 0)
+            reapack_process = true
+        end
+    end
+
+    if reapack_process then
+        r.ShowMessageBox("Added Third-Party ReaPack Repositories", "ADDING REPACK REPOSITORIES", 0)
+        r.ReaPack_ProcessQueue(true)
+        reapack_process = nil
+    end
+
+    if not reapack_process then
+        local deps = {}
+        if not r.ImGui_GetBuiltinPath then
+           deps[#deps + 1] = '"Dear Imgui"'
+        end
+        if r.file_exists(fx_browser) then
+            dofile(fx_browser)
+        else
+            deps[#deps + 1] = fx_browser_reapack
+        end        
+
+        if #deps ~= 0 then
+            r.ShowMessageBox("Need Additional Packages.\nPlease Install it in next window", "MISSING DEPENDENCIES", 0)
+            r.ReaPack_BrowsePackages(table.concat(deps, " OR "))
+            return true
+        end
+    end
+end
+if ThirdPartyDeps() then return end
+
+local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
+if r.file_exists(fx_browser) then
+    dofile(fx_browser)
+else
+    error("Sexan FX Browser Parser not found. Please run the script again to install dependencies.")
+end
+-- The engine that makes it all work....I'm still waiting for it to make coffee....;o) --
+
 local json = require("json")
 local screenshot_path = script_path .. "Screenshots" .. os_separator
 -- GUI instellingen
