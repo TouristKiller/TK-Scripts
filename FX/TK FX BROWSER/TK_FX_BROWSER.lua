@@ -1,69 +1,20 @@
 -- @description TK FX BROWSER
--- @version 0.3.2
+-- @version 0.3.3
 -- @author TouristKiller
 -- @about
---   #  A MOD of Sexan's FX Browser
+--   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog:
---         * Finaly imlemented auto update Sexan's FX Browser Parser V7
+--         * Addad VSTi, VST3i, CLAPi, UAi, LV2i in type selection
+--         * When testing this olso solverd the problems with the plugin manager. 
+--         * THE SETTINGS IN THE PLUGIN MANAGER AND TYPE SELECTION 
+--           ALSO EFFECT THE INDIVIDUAL TAKING OF SCREENSHOTS
 --------------------------------------------------------------------------
 local r = reaper
 -- Pad en module instellingen
 local os_separator = package.config:sub(1, 1)
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 package.path = script_path .. "?.lua;"
-
------- SEXAN FX BROWSER PARSER V7 ----------------------------------------
-function ThirdPartyDeps()
-    local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
-    local fx_browser_reapack = '"sexan fx browser parser v7"'
-   
-    local reapack_process
-    local repos = {
-        { name = "Sexan_Scripts",   url = 'https://github.com/GoranKovac/ReaScripts/raw/master/index.xml' }
-    }
-
-    for i = 1, #repos do
-        local retinfo, url, enabled, autoInstall = r.ReaPack_GetRepositoryInfo(repos[i].name)
-        if not retinfo then
-            retval, error = r.ReaPack_AddSetRepository(repos[i].name, repos[i].url, true, 0)
-            reapack_process = true
-        end
-    end
-
-    if reapack_process then
-        r.ShowMessageBox("Added Third-Party ReaPack Repositories", "ADDING REPACK REPOSITORIES", 0)
-        r.ReaPack_ProcessQueue(true)
-        reapack_process = nil
-    end
-
-    if not reapack_process then
-        local deps = {}
-        if not r.ImGui_GetBuiltinPath then
-           deps[#deps + 1] = '"Dear Imgui"'
-        end
-        if r.file_exists(fx_browser) then
-            dofile(fx_browser)
-        else
-            deps[#deps + 1] = fx_browser_reapack
-        end        
-
-        if #deps ~= 0 then
-            r.ShowMessageBox("Need Additional Packages.\nPlease Install it in next window", "MISSING DEPENDENCIES", 0)
-            r.ReaPack_BrowsePackages(table.concat(deps, " OR "))
-            return true
-        end
-    end
-end
-if ThirdPartyDeps() then return end
-
-local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
-if r.file_exists(fx_browser) then
-    dofile(fx_browser)
-else
-    error("Sexan FX Browser Parser not found. Please run the script again to install dependencies.")
-end
--- The engine that makes it all work....I'm still waiting for it to make coffee....;o) --
-
+require("Sexan_FX_Browser")
 local json = require("json")
 local screenshot_path = script_path .. "Screenshots" .. os_separator
 -- GUI instellingen
@@ -180,6 +131,12 @@ local function SetDefaultConfig()
         bulk_screenshot_au = true,
         bulk_screenshot_clap = true,
         bulk_screenshot_lv2 = true,
+        bulk_screenshot_vsti = true,  -- Toegevoegd
+        bulk_screenshot_vst3i = true, -- Toegevoegd
+        bulk_screenshot_jsi = true,   -- Toegevoegd
+        bulk_screenshot_aui = true,   -- Toegevoegd
+        bulk_screenshot_clapi = true, -- Toegevoegd
+        bulk_screenshot_lv2i = true,  -- Toegevoegd
         default_folder = nil,
     } 
 end
@@ -290,7 +247,11 @@ local filtered_plugins = {}
 local function InitializeFilteredPlugins()
     filtered_plugins = {}
     for _, plugin_name in ipairs(PLUGIN_LIST) do
-        table.insert(filtered_plugins, {name = plugin_name, visible = plugin_visibility[plugin_name] or true})
+        if plugin_name:match("^VSTi:") or plugin_name:match("^VST3i:") or plugin_name:match("^JSi:") or plugin_name:match("^AUi:") or plugin_name:match("^CLAPi:") or plugin_name:match("^LV2i:") then
+            table.insert(filtered_plugins, {name = plugin_name, visible = plugin_visibility[plugin_name] or true})
+        else
+            table.insert(filtered_plugins, {name = plugin_name, visible = plugin_visibility[plugin_name] or true})
+        end
     end
     table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
 end
@@ -629,25 +590,42 @@ local function ShowConfigWindow()
         end
 
         r.ImGui_Dummy(ctx, 0, 5)
-        NewSection("BULK:")
-        
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        changed, config.bulk_screenshot_vst = r.ImGui_Checkbox(ctx, "VST Plugins", config.bulk_screenshot_vst)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        changed, config.bulk_screenshot_vst3 = r.ImGui_Checkbox(ctx, "VST3 Plugins", config.bulk_screenshot_vst3)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        changed, config.bulk_screenshot_js = r.ImGui_Checkbox(ctx, "JS Plugins", config.bulk_screenshot_js)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        changed, config.bulk_screenshot_au = r.ImGui_Checkbox(ctx, "AU Plugins", config.bulk_screenshot_au)
-       
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        changed, config.bulk_screenshot_clap = r.ImGui_Checkbox(ctx, "CLAP Plugins", config.bulk_screenshot_clap)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        changed, config.bulk_screenshot_lv2 = r.ImGui_Checkbox(ctx, "LV2 Plugins", config.bulk_screenshot_lv2)
+                NewSection("BULK:")
+
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+                changed, config.bulk_screenshot_vst = r.ImGui_Checkbox(ctx, "VST Plugins", config.bulk_screenshot_vst)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column2_width)
+                changed, config.bulk_screenshot_vsti = r.ImGui_Checkbox(ctx, "VSTi Plugins", config.bulk_screenshot_vsti)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column3_width)
+                changed, config.bulk_screenshot_vst3 = r.ImGui_Checkbox(ctx, "VST3 Plugins", config.bulk_screenshot_vst3)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column4_width)
+                changed, config.bulk_screenshot_vst3i = r.ImGui_Checkbox(ctx, "VST3i Plugins", config.bulk_screenshot_vst3i)
+                r.ImGui_SetCursorPosX(ctx, column4_width)
+                
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+                changed, config.bulk_screenshot_au = r.ImGui_Checkbox(ctx, "AU Plugins", config.bulk_screenshot_au)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column2_width)
+                changed, config.bulk_screenshot_aui = r.ImGui_Checkbox(ctx, "AUi Plugins", config.bulk_screenshot_aui)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column3_width)
+                changed, config.bulk_screenshot_lv2 = r.ImGui_Checkbox(ctx, "LV2 Plugins", config.bulk_screenshot_lv2)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column4_width)
+                changed, config.bulk_screenshot_lv2i = r.ImGui_Checkbox(ctx, "LV2i Plugins", config.bulk_screenshot_lv2i)
+                
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+                changed, config.bulk_screenshot_js = r.ImGui_Checkbox(ctx, "JS Plugins", config.bulk_screenshot_js)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column2_width)
+                changed, config.bulk_screenshot_clap = r.ImGui_Checkbox(ctx, "CLAP Plugins", config.bulk_screenshot_clap)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column3_width)
+                changed, config.bulk_screenshot_clapi = r.ImGui_Checkbox(ctx, "CLAPi Plugins", config.bulk_screenshot_clapi)
+
 
         r.ImGui_Dummy(ctx, 0, 5)
         NewSection("MISC:")
@@ -1168,15 +1146,27 @@ local function EnumerateInstalledFX()
         local include_fx = false
         if fx_name:match("^VST:") and config.bulk_screenshot_vst then
             include_fx = true
+        elseif fx_name:match("^VSTi:") and config.bulk_screenshot_vsti then
+            include_fx = true
         elseif fx_name:match("^VST3:") and config.bulk_screenshot_vst3 then
+            include_fx = true
+        elseif fx_name:match("^VST3i:") and config.bulk_screenshot_vst3i then
             include_fx = true
         elseif fx_name:match("^JS:") and config.bulk_screenshot_js then
             include_fx = true
+        elseif fx_name:match("^JSi:") and config.bulk_screenshot_jsi then
+            include_fx = true
         elseif fx_name:match("^AU:") and config.bulk_screenshot_au then
+            include_fx = true
+        elseif fx_name:match("^AUi:") and config.bulk_screenshot_aui then
             include_fx = true
         elseif fx_name:match("^CLAP:") and config.bulk_screenshot_clap then
             include_fx = true
+        elseif fx_name:match("^CLAPi:") and config.bulk_screenshot_clapi then
+            include_fx = true
         elseif fx_name:match("^LV2:") and config.bulk_screenshot_lv2 then
+            include_fx = true
+        elseif fx_name:match("^LV2i:") and config.bulk_screenshot_lv2i then
             include_fx = true
         end
         
