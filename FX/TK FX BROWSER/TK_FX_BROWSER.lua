@@ -1,13 +1,14 @@
 -- @description TK FX BROWSER
--- @version 0.3.6
+-- @version 0.3.7
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog:
---         * Some "internal" improvements
---         * You can choose how big you want the sceenshots capture size 500(width) or original
---         * You can also choose 128x128 for TrackIcon creation saved in seperate folder (TrackIcons)
---           This setting will ignore if the screenshot already exists in the folder screensots
+--         * Option in settings to close the script after adding a plugin
+--         * No console screen @script start ;o)
+--         * No more lag if switching tracks
+--         * Made a few adjustments to the individual screenshot taking
+
 --------------------------------------------------------------------------
 local r = reaper
 -- Pad en module instellingen
@@ -111,6 +112,9 @@ local show_plugin_manager = false
 local last_viewed_folder = nil
 local collapsed_tracks = {}
 local all_tracks_collapsed = false
+local SHOULD_CLOSE_SCRIPT = false
+local IS_COPYING_TO_ALL_TRACKS = false
+
 -- Dock / Undock
 local dock = 0
 local change_dock = false
@@ -163,7 +167,7 @@ local function SetDefaultConfig()
         tab_color = r.ImGui_ColorConvertDouble4ToU32(41/255, 41/255, 41/255, 1),
         tab_hovered_gray = 61,
         tab_hovered_color = r.ImGui_ColorConvertDouble4ToU32(61/255, 61/255, 61/255, 1),
-        auto_refresh_fx_list = true,
+        auto_refresh_fx_list = false,
         show_screenshot_in_search = false,
         show_screenshot_window = true,
         resize_screenshots_with_window = false,
@@ -193,6 +197,7 @@ local function SetDefaultConfig()
         default_folder = nil,
         screenshot_size_option = 2, -- 1 = 128x128, 2 = 500x(to scale), 3 = original
         screenshot_default_folder_only = false,
+        close_after_adding_fx = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -231,6 +236,8 @@ local function ClearScreenshotCache()
     texture_load_queue = {}
     texture_last_used = {}
 end
+
+
 
 
 local folders_category = {}
@@ -376,7 +383,7 @@ end
 local function ShowConfigWindow()
     local config_open = true
     local window_width = 480
-    local window_height = 640
+    local window_height = 650
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -696,13 +703,13 @@ local function ShowConfigWindow()
         r.ImGui_Dummy(ctx, 0, 5)
         NewSection("MISC:")
 
+        -- r.ImGui_SetCursorPosX(ctx, column1_width)
+        -- _, config.auto_refresh_fx_list = r.ImGui_Checkbox(ctx, "Auto-refresh FX list", config.auto_refresh_fx_list)
+        -- r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, column1_width)
-        _, config.auto_refresh_fx_list = r.ImGui_Checkbox(ctx, "Auto-refresh FX list", config.auto_refresh_fx_list)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
         r.ImGui_Text(ctx, "Default Folder")
         r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
+        r.ImGui_SetCursorPosX(ctx, column2_width)
         r.ImGui_PushItemWidth(ctx, slider_width)
         r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
         if r.ImGui_BeginCombo(ctx, "##Default Folder", config.default_folder or "None") then
@@ -751,7 +758,10 @@ local function ShowConfigWindow()
         r.ImGui_SetCursorPosX(ctx, column4_width)
         changed, new_value = r.ImGui_Checkbox(ctx, "Video Processor", config.show_video_processor)
         if changed then config.show_video_processor = new_value end
+        r.ImGui_Separator(ctx)
+        _, config.close_after_adding_fx = r.ImGui_Checkbox(ctx, "Close script after adding FX", config.close_after_adding_fx)
 
+        r.ImGui_Separator(ctx)
         r.ImGui_SetCursorPosY(ctx, window_height - 30)
         local button_width = (window_width - 20) / 3
         if r.ImGui_Button(ctx, "Save", button_width, 20) then
@@ -798,9 +808,9 @@ local function EnsureScreenshotFolderExists()
     if not r.file_exists(screenshot_path) then
         local success = r.RecursiveCreateDirectory(screenshot_path, 0)
         if success then
-            log_to_file("Screenshots map aangemaakt: " .. screenshot_path)
+            log_to_file("Made screenshot Folder: " .. screenshot_path)
         else
-            log_to_file("Fout bij het aanmaken van Screenshots map: " .. screenshot_path)
+            log_to_file("Error making screenshot Folder: " .. screenshot_path)
         end
     end
 end
@@ -811,6 +821,7 @@ local function InitializeSettingsIcon()
         settings_icon = r.ImGui_CreateImage(script_path .. "settings.png")
     end
 end
+
 
 local function check_esc_key() 
     if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
@@ -826,13 +837,13 @@ local function handleDocking()
     end
 end
 
-local function BuildScreenshotDatabase()
+--[[local function BuildScreenshotDatabase()
     screenshot_database = {}
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
         local plugin_name = file:gsub("%.png$", ""):gsub("_", " ")
         screenshot_database[plugin_name] = true
     end
-end
+end]]--
 
 local function IsX86Bridged(plugin_name)
     return plugin_name:find("x86") ~= nil
@@ -854,7 +865,7 @@ local function ScreenshotExists(plugin_name, size_option)
     end
 end
 
-BuildScreenshotDatabase()
+-- BuildScreenshotDatabase()
 
 local function OpenScreenshotsFolder()
     local os_name = reaper.GetOS()
@@ -1232,16 +1243,17 @@ local function CaptureFirstTrackFX()
 end
 
 
-local function MakeScreenshot(plugin_name, callback)
+local function MakeScreenshot(plugin_name, callback, is_individual)
     if not IsPluginVisible(plugin_name) then
         if callback then callback() end
         return
     end
-    if config.screenshot_size_option ~= 1 and ScreenshotExists(plugin_name, config.screenshot_size_option) then
-        log_to_file("Screenshot already exists: " .. plugin_name)
-        if callback then callback() end
-        return
-    end
+    if not is_individual then
+        if config.screenshot_size_option ~= 1 and ScreenshotExists(plugin_name, config.screenshot_size_option) then
+            log_to_file("Screenshot already exists: " .. plugin_name)
+            if callback then callback() end
+            return
+        end
 
     
     local should_screenshot = false
@@ -1270,13 +1282,12 @@ local function MakeScreenshot(plugin_name, callback)
         should_screenshot = true
     end
     
-    if not should_screenshot then
-        log_to_file("Plugin skipt because of configuration: " .. plugin_name)
-        if callback then callback() end
-        return
+        if not should_screenshot then
+            log_to_file("Plugin skipped because of configuration: " .. plugin_name)
+            if callback then callback() end
+            return
+        end
     end
-        
-
     if type(plugin_name) ~= "string" then
         r.ShowMessageBox("Invalid plugin name", "Error", 0)
         return
@@ -1718,10 +1729,15 @@ local function ShowScreenshotWindow()
                                                 -- Voeg de FX toe aan de track
                                                 if TRACK then
                                                     r.TrackFX_AddByName(TRACK, plugin.fx_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                                    if config.close_after_adding_fx then
+                                                        SHOULD_CLOSE_SCRIPT = true
+                                                    end
                                                 end
                                             end
                                         end
-                    
+                                        if r.ImGui_IsItemClicked(ctx, 1) then  -- 1 staat voor rechtermuisklik
+                                            MakeScreenshot(plugin.fx_name, nil, true)
+                                        end
                                         if selected_folder == "Current Project FX" and r.ImGui_IsItemClicked(ctx, 1) then  -- Rechterklik
                                             if TRACK then
                                                 -- Verwijder de FX van de track
@@ -1786,6 +1802,11 @@ local function ShowScreenshotWindow()
                                         r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK)) 
                                     end 
                                 end
+                                if r.ImGui_IsItemClicked(ctx, 1) then  
+                                    local full_plugin_name = fx.name  -- Gebruik de volledige naam van de plugin
+                                    MakeScreenshot(full_plugin_name, nil, true)
+                                end
+
                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                 r.ImGui_Text(ctx, fx.name)
                                 r.ImGui_PopTextWrapPos(ctx)
@@ -1989,13 +2010,19 @@ local function DrawFxChains(tbl, path)
                     if TRACK then
                         r.TrackFX_AddByName(TRACK, table.concat({ path, os_separator, item, extension }), false,
                             -1000 - r.TrackFX_GetCount(TRACK))
+                        if config.close_after_adding_fx then
+                            SHOULD_CLOSE_SCRIPT = true
+                        end
                     end
                 end
             end
+            
             if r.ImGui_IsItemClicked(ctx, 1) then
-                local mods = r.ImGui_GetKeyMods(ctx)
-                if (mods & r.ImGui_Mod_Alt()) ~= 0 then
-                    -- Alt+Rechtermuisklik: Hernoem
+                r.ImGui_OpenPopup(ctx, "FXChainOptions_" .. i)
+            end
+            
+            if r.ImGui_BeginPopup(ctx, "FXChainOptions_" .. i) then
+                if r.ImGui_MenuItem(ctx, "Rename") then
                     local retval, new_name = r.GetUserInputs("Rename FX Chain", 1, "New name:", item)
                     if retval then
                         local resource_path = r.GetResourcePath()
@@ -2010,8 +2037,8 @@ local function DrawFxChains(tbl, path)
                             r.ShowMessageBox("Could not rename FX Chain", "Error", 0)
                         end
                     end
-                else
-                    -- Rechtermuisklik: Verwijder
+                end
+                if r.ImGui_MenuItem(ctx, "Delete") then
                     local resource_path = r.GetResourcePath()
                     local fx_chains_path = resource_path .. "/FXChains"
                     local file_path = fx_chains_path .. "/" .. item .. extension
@@ -2024,38 +2051,61 @@ local function DrawFxChains(tbl, path)
                         r.ShowMessageBox("Could not delete FX Chain", "Error", 0)
                     end
                 end
+                r.ImGui_EndPopup(ctx)
             end
         end
         i = i + 1
     end
 end
+function LoadTemplate(template_path)
+    local full_path = r.GetResourcePath() .. "/TrackTemplates" .. template_path
+    if r.file_exists(full_path) then
+        local track_count = r.CountTracks(0)
+        
+        r.PreventUIRefresh(1)
+        r.Undo_BeginBlock()
+        
+        r.Main_openProject(full_path, 1)
+        
+        local new_track = r.GetTrack(0, track_count)
+        if new_track then
+            r.SetOnlyTrackSelected(new_track)
+        end
+        
+        r.Undo_EndBlock("Load Track Template", -1)
+        r.PreventUIRefresh(-1)
+        r.UpdateArrange()
+        r.TrackList_AdjustWindows(false)
+
+        if config.close_after_adding_fx then
+            SHOULD_CLOSE_SCRIPT = true
+        end
+    else
+        r.ShowConsoleMsg("Template file not found: " .. full_path .. "\n")
+    end
+end
+
+
+
 local function DrawTrackTemplates(tbl, path)
     local extension = ".RTrackTemplate"
     path = path or ""
     for i = 1, #tbl do
         if tbl[i].dir then
-            r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
-            r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
-            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)  
-           
             if r.ImGui_BeginMenu(ctx, tbl[i].dir) then
                 local cur_path = table.concat({ path, os_separator, tbl[i].dir })
                 DrawTrackTemplates(tbl[i], cur_path)
-                reaper.ImGui_PopStyleColor(ctx)
                 r.ImGui_EndMenu(ctx)
             end
-        end
-        if type(tbl[i]) ~= "table" then
+        elseif type(tbl[i]) ~= "table" then
             if r.ImGui_Selectable(ctx, tbl[i]) then
-                if TRACK then
-                    local template_str = table.concat({ path, os_separator, tbl[i], extension })
-                    LoadTemplate(template_str)
-                    LoadTemplate(template_str, true)
-                end
+                local template_str = table.concat({ path, os_separator, tbl[i], extension })
+                LoadTemplate(template_str)
             end
         end
     end
 end
+
 
 local function DrawItems(tbl, main_cat_name)
     if menu_direction_right then
@@ -2089,6 +2139,9 @@ local function DrawItems(tbl, main_cat_name)
                             end
                         end
                         LAST_USED_FX = tbl[i].fx[j]
+                        if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
+                            SHOULD_CLOSE_SCRIPT = true
+                        end
                     end
                     if r.ImGui_IsItemHovered(ctx) then
                         if tbl[i].fx[j] ~= current_hovered_plugin then
@@ -2098,7 +2151,7 @@ local function DrawItems(tbl, main_cat_name)
                         is_screenshot_visible = true
                     end
                     if r.ImGui_IsItemClicked(ctx, 1) then
-                        MakeScreenshot(tbl[i].fx[j])
+                        MakeScreenshot(tbl[i].fx[j], nil, true)
                     end
                 end
             end
@@ -2214,6 +2267,7 @@ local function ShowTrackFX()
                         r.TrackFX_Delete(TRACK, i)
                     end
                     if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
+                        IS_COPYING_TO_ALL_TRACKS = true
                         local track_count = r.CountTracks(0)
                         for j = 0, track_count - 1 do
                             local target_track = r.GetTrack(0, j)
@@ -2221,6 +2275,7 @@ local function ShowTrackFX()
                                 r.TrackFX_CopyToTrack(TRACK, i, target_track, r.TrackFX_GetCount(target_track), false)
                             end
                         end
+                        IS_COPYING_TO_ALL_TRACKS = false
                     end
                     r.ImGui_EndPopup(ctx)
                 end
@@ -2344,26 +2399,40 @@ function Frame()
         end
     end
 
-    if config.show_container then
-        if r.ImGui_Selectable(ctx, "CONTAINER") then
-            r.TrackFX_AddByName(TRACK, "Container", false,
-                -1000 - r.TrackFX_GetCount(TRACK))
-            LAST_USED_FX = "Container"
+    -- Voor Container
+        if config.show_container then
+            if r.ImGui_Selectable(ctx, "CONTAINER") then
+                r.TrackFX_AddByName(TRACK, "Container", false,
+                    -1000 - r.TrackFX_GetCount(TRACK))
+                LAST_USED_FX = "Container"
+                if config.close_after_adding_fx then
+                    SHOULD_CLOSE_SCRIPT = true
+                end
+            end
         end
-    end
-    if config.show_video_processor then
-        if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
-            r.TrackFX_AddByName(TRACK, "Video processor", false,
-                -1000 - r.TrackFX_GetCount(TRACK))
-            LAST_USED_FX = "Video processor"
+
+        -- Voor Video Processor
+        if config.show_video_processor then
+            if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
+                r.TrackFX_AddByName(TRACK, "Video processor", false,
+                    -1000 - r.TrackFX_GetCount(TRACK))
+                LAST_USED_FX = "Video processor"
+                if config.close_after_adding_fx then
+                    SHOULD_CLOSE_SCRIPT = true
+                end
+            end
         end
-    end
-    if LAST_USED_FX then
-        if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
-            r.TrackFX_AddByName(TRACK, LAST_USED_FX, false,
-                -1000 - r.TrackFX_GetCount(TRACK))
+
+        -- Voor Recent
+        if LAST_USED_FX then
+            if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
+                r.TrackFX_AddByName(TRACK, LAST_USED_FX, false,
+                    -1000 - r.TrackFX_GetCount(TRACK))
+                if config.close_after_adding_fx then
+                    SHOULD_CLOSE_SCRIPT = true
+                end
+            end
         end
-    end
 
     r.ImGui_Separator(ctx)
     if ADD_FX_TO_ITEM then
@@ -2388,7 +2457,7 @@ function Main()
             FX_LIST_TEST, CAT_TEST = MakeFXFiles()
         end
     end
-    ProcessTextureLoadQueue()
+        ProcessTextureLoadQueue()
 
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 2)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
@@ -2561,13 +2630,16 @@ function Main()
         if show_config then
             show_config = ShowConfigWindow()
         end
+        
         if check_esc_key() then open = false end
         r.ImGui_End(ctx)
     end
     r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleVar(ctx, 3)
     r.ImGui_PopStyleColor(ctx, 10)
-
+    if SHOULD_CLOSE_SCRIPT then
+        return
+    end
     if open then
         r.defer(Main)
     end
