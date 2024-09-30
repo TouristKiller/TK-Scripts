@@ -1,5 +1,5 @@
 -- @description TK FX BROWSER
--- @version 0.3.5
+-- @version 0.3.6
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
@@ -838,9 +838,22 @@ local function IsX86Bridged(plugin_name)
     return plugin_name:find("x86") ~= nil
 end
 
-local function ScreenshotExists(plugin_name)
-    return screenshot_database[plugin_name] ~= nil
+local function ScreenshotExists(plugin_name, size_option)
+    if screenshot_database[plugin_name] ~= nil then
+        return true
+    end
+
+    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+    if size_option == 1 then -- 128x128
+        local track_icons_path = script_path .. "TrackIcons" .. os_separator
+        local filename = track_icons_path .. safe_name .. ".png"
+        return r.file_exists(filename)
+    else
+        local filename = screenshot_path .. safe_name .. ".png"
+        return r.file_exists(filename)
+    end
 end
+
 BuildScreenshotDatabase()
 
 local function OpenScreenshotsFolder()
@@ -1225,7 +1238,7 @@ local function MakeScreenshot(plugin_name, callback)
         return
     end
     if config.screenshot_size_option ~= 1 and ScreenshotExists(plugin_name, config.screenshot_size_option) then
-        log_to_file("Screenshot bestaat al: " .. plugin_name)
+        log_to_file("Screenshot already exists: " .. plugin_name)
         if callback then callback() end
         return
     end
@@ -1344,17 +1357,7 @@ local function EnumerateInstalledFX()
     log_to_file("Totaal aantal geselecteerde plugins voor screenshots: " .. total_fx_count)
 end
 
-local function ScreenshotExists(plugin_name, size_option)
-    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-    if size_option == 1 then -- 128x128
-        local track_icons_path = script_path .. "TrackIcons" .. os_separator
-        local filename = track_icons_path .. safe_name .. ".png"
-        return r.file_exists(filename)
-    else
-        local filename = screenshot_path .. safe_name .. ".png"
-        return r.file_exists(filename)
-    end
-end
+
 
 
 local PROCESS = false
