@@ -1,13 +1,13 @@
 -- @description TK FX BROWSER
--- @version 0.3.4
+-- @version 0.3.5
 -- @author TouristKiller
 -- @about
 --   #  A MOD of Sexan's FX Browser (THANX FOR ALL THE HELP)
 -- @changelog:
---         * Addad VSTi, VST3i, CLAPi, UAi, LV2i in type selection
---         * When testing this olso solverd the problems with the plugin manager. 
---         * THE SETTINGS IN THE PLUGIN MANAGER AND TYPE SELECTION 
---           ALSO EFFECT THE INDIVIDUAL TAKING OF SCREENSHOTS
+--         * Some "internal" improvements
+--         * You can choose how big you want the sceenshots capture size 500(width) or original
+--         * You can also choose 128x128 for TrackIcon creation saved in seperate folder (TrackIcons)
+--           This setting will ignore if the screenshot already exists in the folder screensots
 --------------------------------------------------------------------------
 local r = reaper
 -- Pad en module instellingen
@@ -191,6 +191,8 @@ local function SetDefaultConfig()
         bulk_screenshot_clapi = true, -- Toegevoegd
         bulk_screenshot_lv2i = true,  -- Toegevoegd
         default_folder = nil,
+        screenshot_size_option = 2, -- 1 = 128x128, 2 = 500x(to scale), 3 = original
+        screenshot_default_folder_only = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -374,7 +376,7 @@ end
 local function ShowConfigWindow()
     local config_open = true
     local window_width = 480
-    local window_height = 600
+    local window_height = 640
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -428,6 +430,15 @@ local function ShowConfigWindow()
         _, config.capture_height_offset = r.ImGui_SliderInt(ctx, "##Height Offset", config.capture_height_offset, 0, 500)
         r.ImGui_PopItemWidth(ctx)
 
+        r.ImGui_SetCursorPosX(ctx, column1_width)
+        r.ImGui_Text(ctx, "Screenshot Size:")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, column2_width)
+        r.ImGui_PushItemWidth(ctx, slider_width)
+        local size_options = "128x128 (TrackIcon\0 500x(Scale)\0Original\0\0"
+        _, config.screenshot_size_option = r.ImGui_Combo(ctx, "##Size Option", config.screenshot_size_option - 1, size_options)
+        config.screenshot_size_option = config.screenshot_size_option + 1
+        r.ImGui_PopItemWidth(ctx)
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, column3_width)
         r.ImGui_Text(ctx, "Display Size")
@@ -678,7 +689,9 @@ local function ShowConfigWindow()
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPosX(ctx, column3_width)
                 changed, config.bulk_screenshot_clapi = r.ImGui_Checkbox(ctx, "CLAPi Plugins", config.bulk_screenshot_clapi)
-
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column4_width)
+                _, config.screenshot_default_folder_only = r.ImGui_Checkbox(ctx, "Default Only", config.screenshot_default_folder_only)
 
         r.ImGui_Dummy(ctx, 0, 5)
         NewSection("MISC:")
@@ -767,6 +780,19 @@ local function ShowConfigWindow()
     end
     return config_open
 end
+local function EnsureTrackIconsFolderExists()
+    local track_icons_path = script_path .. "TrackIcons" .. os_separator
+    if not r.file_exists(track_icons_path) then
+        local success = r.RecursiveCreateDirectory(track_icons_path, 0)
+        if success then
+            log_to_file("TrackIcons map aangemaakt: " .. track_icons_path)
+        else
+            log_to_file("Fout bij het aanmaken van TrackIcons map: " .. track_icons_path)
+        end
+    end
+    return track_icons_path
+end
+EnsureTrackIconsFolderExists()
 
 local function EnsureScreenshotFolderExists()
     if not r.file_exists(screenshot_path) then
@@ -931,9 +957,9 @@ local function ProcessTextureLoadQueue()
                 search_texture_cache[file] = texture
                 texture_last_used[file] = current_time
                 textures_loaded = textures_loaded + 1
-                log_to_file("Texture geladen: " .. file)
+                log_to_file("Texture loaded: " .. file)
             else
-                log_to_file("Fout bij laden texture: " .. file)
+                log_to_file("Error loading texture: " .. file)
             end
         end
         
@@ -1079,25 +1105,53 @@ local function CaptureScreenshot(plugin_name, fx_index)
     local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
     if hwnd then
         local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-        local filename = screenshot_path .. safe_name .. ".png"
+        local filename
+        if config.screenshot_size_option == 1 then
+        local track_icons_path = EnsureTrackIconsFolderExists()
+        filename = track_icons_path .. safe_name .. ".png"
+        else
+        filename = screenshot_path .. safe_name .. ".png"
+        end
         
         local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
         local w, h = right - left, bottom - top
         
-        -- Stel de offset in op 0 voor JS plugins, anders gebruik de configuratie
         local offset = plugin_name:match("^JS") and 0 or config.capture_height_offset
         h = h - offset
 
-        log_to_file("Capturing screenshot for plugin: " .. plugin_name)  -- Log de plugin naam
+        log_to_file("Capturing screenshot for plugin: " .. plugin_name)
         if not IsOSX() then
             local srcDC = r.JS_GDI_GetClientDC(hwnd)
-            local destBmp = r.JS_LICE_CreateBitmap(true, w, h)
-            local destDC = r.JS_LICE_GetDC(destBmp)
-            r.JS_GDI_Blit(destDC, 0, 0, srcDC, config.srcx, config.srcy, w, h)
+            local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
+            local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
+            r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, config.srcx, config.srcy, w, h)
+            
+            local destBmp
+            if config.screenshot_size_option == 1 then
+                -- 128x128
+                destBmp = r.JS_LICE_CreateBitmap(true, 128, 128)
+                r.JS_LICE_ScaledBlit(destBmp, 0, 0, 128, 128, srcBmp, 0, 0, w, h, 1, "FAST")
+            elseif config.screenshot_size_option == 2 then
+                -- 500x(verhouding)
+                local scale = 500 / w
+                local newW, newH = 500, math.floor(h * scale)
+                destBmp = r.JS_LICE_CreateBitmap(true, newW, newH)
+                r.JS_LICE_ScaledBlit(destBmp, 0, 0, newW, newH, srcBmp, 0, 0, w, h, 1, "FAST")
+            else
+                -- Origineel
+                destBmp = srcBmp
+            end
+            
             r.JS_LICE_WritePNG(filename, destBmp, false)
+            
+            if destBmp ~= srcBmp then
+                r.JS_LICE_DestroyBitmap(destBmp)
+            end
+            
             r.JS_GDI_ReleaseDC(hwnd, srcDC)
-            r.JS_LICE_DestroyBitmap(destBmp)
+            r.JS_LICE_DestroyBitmap(srcBmp)
         else
+            -- Voor macOS gebruiken we nog steeds de originele methode
             ScreenshotOSX(filename, left, top, w, h)
         end
         
@@ -1119,6 +1173,7 @@ local function CaptureScreenshot(plugin_name, fx_index)
     r.TrackFX_Show(TRACK, fx_index, 2)
     r.TrackFX_Delete(TRACK, fx_index)
 end
+
 local function CaptureExistingFX(track, fx_index)
     local retval, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
     if retval then
@@ -1169,6 +1224,46 @@ local function MakeScreenshot(plugin_name, callback)
         if callback then callback() end
         return
     end
+    if config.screenshot_size_option ~= 1 and ScreenshotExists(plugin_name, config.screenshot_size_option) then
+        log_to_file("Screenshot bestaat al: " .. plugin_name)
+        if callback then callback() end
+        return
+    end
+
+    
+    local should_screenshot = false
+    
+    if plugin_name:match("^VST3i:") and config.bulk_screenshot_vst3i then
+        should_screenshot = true
+    elseif plugin_name:match("^VST3:") and config.bulk_screenshot_vst3 then
+        should_screenshot = true
+    elseif plugin_name:match("^VSTi:") and config.bulk_screenshot_vsti then
+        should_screenshot = true
+    elseif plugin_name:match("^VST:") and config.bulk_screenshot_vst then
+        should_screenshot = true
+    elseif plugin_name:match("^JS:") and config.bulk_screenshot_js then
+        should_screenshot = true
+    elseif plugin_name:match("^AU:") and config.bulk_screenshot_au then
+        should_screenshot = true
+    elseif plugin_name:match("^AUi:") and config.bulk_screenshot_aui then
+        should_screenshot = true
+    elseif plugin_name:match("^CLAP:") and config.bulk_screenshot_clap then
+        should_screenshot = true
+    elseif plugin_name:match("^CLAPi:") and config.bulk_screenshot_clapi then
+        should_screenshot = true
+    elseif plugin_name:match("^LV2:") and config.bulk_screenshot_lv2 then
+        should_screenshot = true
+    elseif plugin_name:match("^LV2i:") and config.bulk_screenshot_lv2i then
+        should_screenshot = true
+    end
+    
+    if not should_screenshot then
+        log_to_file("Plugin skipt because of configuration: " .. plugin_name)
+        if callback then callback() end
+        return
+    end
+        
+
     if type(plugin_name) ~= "string" then
         r.ShowMessageBox("Invalid plugin name", "Error", 0)
         return
@@ -1192,54 +1287,75 @@ local fx_list = {}
 local function EnumerateInstalledFX()
     fx_list = {}
     total_fx_count = 0
+    local default_folder_plugins = {}
+    
+    if config.screenshot_default_folder_only and config.default_folder then
+        for i = 1, #CAT_TEST do
+            if CAT_TEST[i].name == "FOLDERS" then
+                for j = 1, #CAT_TEST[i].list do
+                    if CAT_TEST[i].list[j].name == config.default_folder then
+                        for k = 1, #CAT_TEST[i].list[j].fx do
+                            default_folder_plugins[CAT_TEST[i].list[j].fx[k]] = true
+                        end
+                        break
+                    end
+                end
+                break
+            end
+        end
+    end
     for i = 1, math.huge do
         local retval, fx_name = r.EnumInstalledFX(i)
         if not retval then break end
         
         local include_fx = false
-        if fx_name:match("^VST:") and config.bulk_screenshot_vst then
-            include_fx = true
-        elseif fx_name:match("^VSTi:") and config.bulk_screenshot_vsti then
-            include_fx = true
-        elseif fx_name:match("^VST3:") and config.bulk_screenshot_vst3 then
-            include_fx = true
-        elseif fx_name:match("^VST3i:") and config.bulk_screenshot_vst3i then
-            include_fx = true
-        elseif fx_name:match("^JS:") and config.bulk_screenshot_js then
-            include_fx = true
-        elseif fx_name:match("^JSi:") and config.bulk_screenshot_jsi then
-            include_fx = true
-        elseif fx_name:match("^AU:") and config.bulk_screenshot_au then
-            include_fx = true
-        elseif fx_name:match("^AUi:") and config.bulk_screenshot_aui then
-            include_fx = true
-        elseif fx_name:match("^CLAP:") and config.bulk_screenshot_clap then
-            include_fx = true
-        elseif fx_name:match("^CLAPi:") and config.bulk_screenshot_clapi then
-            include_fx = true
-        elseif fx_name:match("^LV2:") and config.bulk_screenshot_lv2 then
-            include_fx = true
-        elseif fx_name:match("^LV2i:") and config.bulk_screenshot_lv2i then
-            include_fx = true
+        if not config.screenshot_default_folder_only or default_folder_plugins[fx_name] then
+            if fx_name:match("^VST:") and not fx_name:match("^VST3:") and not fx_name:match("^VSTi:") and config.bulk_screenshot_vst then
+                include_fx = true
+            elseif fx_name:match("^VSTi:") and not fx_name:match("^VST3i:") and config.bulk_screenshot_vsti then
+                include_fx = true
+            elseif fx_name:match("^VST3:") and not fx_name:match("^VST3i:") and config.bulk_screenshot_vst3 then
+                include_fx = true
+            elseif fx_name:match("^VST3i:") and config.bulk_screenshot_vst3i then
+                include_fx = true
+            elseif fx_name:match("^JS:") and not fx_name:match("^JSi:") and config.bulk_screenshot_js then
+                include_fx = true
+            elseif fx_name:match("^JSi:") and config.bulk_screenshot_jsi then
+                include_fx = true
+            elseif fx_name:match("^AU:") and not fx_name:match("^AUi:") and config.bulk_screenshot_au then
+                include_fx = true
+            elseif fx_name:match("^AUi:") and config.bulk_screenshot_aui then
+                include_fx = true
+            elseif fx_name:match("^CLAP:") and not fx_name:match("^CLAPi:") and config.bulk_screenshot_clap then
+                include_fx = true
+            elseif fx_name:match("^CLAPi:") and config.bulk_screenshot_clapi then
+                include_fx = true
+            elseif fx_name:match("^LV2:") and not fx_name:match("^LV2i:") and config.bulk_screenshot_lv2 then
+                include_fx = true
+            elseif fx_name:match("^LV2i:") and config.bulk_screenshot_lv2i then
+                include_fx = true
+            end
         end
-        
         if include_fx then
             total_fx_count = total_fx_count + 1
             fx_list[total_fx_count] = fx_name
         end
     end
+    log_to_file("Totaal aantal geselecteerde plugins voor screenshots: " .. total_fx_count)
 end
 
-local function ScreenshotExists(plugin_name)
+local function ScreenshotExists(plugin_name, size_option)
     local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-    local filename = screenshot_path .. safe_name .. ".png"
-    local file = io.open(filename, "r")
-    if file then
-        file:close()
-        return true
+    if size_option == 1 then -- 128x128
+        local track_icons_path = script_path .. "TrackIcons" .. os_separator
+        local filename = track_icons_path .. safe_name .. ".png"
+        return r.file_exists(filename)
+    else
+        local filename = screenshot_path .. safe_name .. ".png"
+        return r.file_exists(filename)
     end
-    return false
 end
+
 
 local PROCESS = false
 local START = false
@@ -1257,8 +1373,7 @@ local function ProcessFX(index, start_time)
         end)
     elseif index <= total_fx_count then
         local plugin_name = fx_list[index]
-          --  if not plugin_name:match("^JS:")  and not IsX86Bridged(plugin_name) and not ScreenshotExists(plugin_name) then
-            if not IsX86Bridged(plugin_name) and not ScreenshotExists(plugin_name) then    
+        if not IsX86Bridged(plugin_name) and (config.screenshot_size_option == 1 or not ScreenshotExists(plugin_name, config.screenshot_size_option)) then       
             MakeScreenshot(plugin_name, function()
                 loaded_fx_count = loaded_fx_count + 1
                 bulk_screenshot_progress = loaded_fx_count / total_fx_count
