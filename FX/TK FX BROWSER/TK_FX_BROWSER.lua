@@ -1,14 +1,8 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.4.2
+-- @version 0.4.3
 -- @changelog:
---         * Lettertype gewijzigd en Gui wijzigingen
---         * mannier om plugins volgorde te wijzigen die op de track staan gewijzigd
---           (links klik is omhoog en rechts klik is omlaag)
---         * In de screenshot window kun je nu per folder en globaal de grote van de screenshots wijzigen
---           (de grote per folder wordt opgeslagen en dus onthouden voor volgende keren)
---         * Dropdown menu's nu navigeerbaar met scrollwheel
---         * Nieuwe folder "Current Track FX toegevoegd"
+--         * Bug Fix (sceenshotwindow view)
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -1748,8 +1742,28 @@ local function ShowScreenshotWindow()
                         end
                     end
                 end
+                                
                 if selected_folder and selected_folder ~= "Current Project FX" and selected_folder ~= "Current Track FX" then
+                    local available_width = r.ImGui_GetContentRegionAvail(ctx)
+                    local display_size
+                    if config.use_global_screenshot_size then
+                        display_size = config.global_screenshot_size
+                    elseif config.resize_screenshots_with_window then
+                        display_size = available_width
+                    else
+                        display_size = selected_folder and (config.folder_specific_sizes[selected_folder] or config.screenshot_window_size) or config.screenshot_window_size
+                    end
+                    local num_columns = math.max(1, math.floor(available_width / display_size))
+                    local column_width = available_width / num_columns
+                
                     for i = 1, #filtered_plugins do
+                        local column = (i - 1) % num_columns
+                        if column > 0 then
+                            r.ImGui_SameLine(ctx)
+                        end
+                        
+                        r.ImGui_BeginGroup(ctx)
+                        
                         local plugin_name = filtered_plugins[i]
                         local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                         local screenshot_file = screenshot_path .. safe_name .. ".png"
@@ -1757,7 +1771,6 @@ local function ShowScreenshotWindow()
                         if r.file_exists(screenshot_file) then
                             local texture = LoadSearchTexture(screenshot_file)
                             if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
-                                -- Toon de screenshot zoals in het hoofdvenster
                                 local width, height = r.ImGui_Image_GetSize(texture)
                                 if width and height then
                                     local aspect_ratio = height > 0 and width / height or 1
@@ -1772,15 +1785,27 @@ local function ShowScreenshotWindow()
                                             end
                                         end
                                     end
-                
+                                    
+                                    if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik voor nieuwe screenshot
+                                        MakeScreenshot(plugin_name, nil, true)
+                                    end
+                                    
                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                     r.ImGui_Text(ctx, plugin_name)
                                     r.ImGui_PopTextWrapPos(ctx)
                                 end
                             end
                         end
+                        
+                        r.ImGui_EndGroup(ctx)
+                        
+                        if column == num_columns - 1 then
+                            r.ImGui_Dummy(ctx, 0, 10)  -- Voeg wat ruimte toe tussen de rijen
+                        end
                     end
                 end
+                
+                
                 if #filtered_plugins > 0 then
                     local current_track = nil
                     local column_width = available_width / num_columns
