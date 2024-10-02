@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.4.0
+-- @version 0.4.1
 -- @changelog:
 --         * Lettertype gewijzigd en Gui wijzigingen
 --         * mannier om plugins volgorde te wijzigen die op de track staan gewijzigd
