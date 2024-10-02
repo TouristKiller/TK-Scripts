@@ -1864,70 +1864,79 @@ local function ShowScreenshotWindow()
                             if plugin and plugin.fx_name then
                                 local safe_name = plugin.fx_name:gsub("[^%w%s-]", "_")
                                 local screenshot_file = screenshot_path .. safe_name .. ".png"
-                            if r.file_exists(screenshot_file) then
-                                local texture = LoadSearchTexture(screenshot_file)
-                                if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
-                                    local width, height = r.ImGui_Image_GetSize(texture)
-                                    if width and height then
-                                        local aspect_ratio = height > 0 and width / height or 1
-                                        local display_width = config.resize_screenshots_with_window and (column_width - 10) or display_size
-                                        local display_height = display_width / aspect_ratio
-                                        
-                                        if r.ImGui_ImageButton(ctx, "##"..plugin.fx_name, texture, display_width, display_height) then
-                                            if selected_folder == "Current Project FX" then
-                                                -- Toggle de FX op de track
-                                                local track = reaper.GetTrack(0, plugin.track_number - 1)
-                                                local fx_count = reaper.TrackFX_GetCount(track)
-                                                for j = 0, fx_count - 1 do
-                                                    local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
-                                                    if retval and fx_name == plugin.fx_name then
-                                                        local is_open = reaper.TrackFX_GetFloatingWindow(track, j) ~= nil
-                                                        reaper.TrackFX_Show(track, j, is_open and 2 or 3)  -- Toggle de FX
-                                                        break
-                                                    end
-                                                end
-                                            else
-                                                -- Voeg de FX toe aan de track
-                                                if TRACK then
-                                                    r.TrackFX_AddByName(TRACK, plugin.fx_name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                                                    if config.close_after_adding_fx then
-                                                        SHOULD_CLOSE_SCRIPT = true
-                                                    end
-                                                end
-                                            end
-                                        end
-
-                                        if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
-                                            if selected_folder == "Current Project FX" then
-                                                if TRACK then
-                                                    -- Verwijder de FX van de track
+                                if r.file_exists(screenshot_file) then
+                                    local texture = LoadSearchTexture(screenshot_file)
+                                    if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                                        local width, height = r.ImGui_Image_GetSize(texture)
+                                        if width and height then
+                                            local aspect_ratio = height > 0 and width / height or 1
+                                            local display_width = config.resize_screenshots_with_window and (column_width - 10) or display_size
+                                            local display_height = display_width / aspect_ratio
+                                            
+                                            if r.ImGui_ImageButton(ctx, "##"..plugin.fx_name, texture, display_width, display_height) then
+                                                if selected_folder == "Current Project FX" then
                                                     local track = reaper.GetTrack(0, plugin.track_number - 1)
                                                     local fx_count = reaper.TrackFX_GetCount(track)
                                                     for j = 0, fx_count - 1 do
                                                         local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
                                                         if retval and fx_name == plugin.fx_name then
-                                                            reaper.TrackFX_Delete(track, j)
+                                                            local is_open = reaper.TrackFX_GetFloatingWindow(track, j) ~= nil
+                                                            reaper.TrackFX_Show(track, j, is_open and 2 or 3)
                                                             break
                                                         end
                                                     end
+                                                elseif selected_folder == "Current Track FX" then
+                                                    local fx_index = r.TrackFX_GetByName(TRACK, plugin.fx_name, false)
+                                                    if fx_index >= 0 then
+                                                        local is_open = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+                                                        r.TrackFX_Show(TRACK, fx_index, is_open and 2 or 3)
+                                                    end
+                                                else
+                                                    if TRACK then
+                                                        r.TrackFX_AddByName(TRACK, plugin.fx_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                                        if config.close_after_adding_fx then
+                                                            SHOULD_CLOSE_SCRIPT = true
+                                                        end
+                                                    end
                                                 end
-                                            else
-                                                MakeScreenshot(plugin.fx_name, nil, true)
                                             end
+                        
+                                            if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
+                                                if selected_folder == "Current Project FX" then
+                                                    if TRACK then
+                                                        local track = reaper.GetTrack(0, plugin.track_number - 1)
+                                                        local fx_count = reaper.TrackFX_GetCount(track)
+                                                        for j = 0, fx_count - 1 do
+                                                            local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
+                                                            if retval and fx_name == plugin.fx_name then
+                                                                reaper.TrackFX_Delete(track, j)
+                                                                break
+                                                            end
+                                                        end
+                                                    end
+                                                elseif selected_folder == "Current Track FX" then
+                                                    local fx_index = r.TrackFX_GetByName(TRACK, plugin.fx_name, false)
+                                                    if fx_index >= 0 then
+                                                        r.TrackFX_Delete(TRACK, fx_index)
+                                                        update_search_screenshots = true
+                                                    end
+                                                else
+                                                    MakeScreenshot(plugin.fx_name, nil, true)
+                                                end
+                                            end
+                        
+                                            r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                            r.ImGui_Text(ctx, plugin.fx_name)
+                                            r.ImGui_PopTextWrapPos(ctx)
+                                        else
+                                            log_to_file("Ongeldige afmetingen voor texture: " .. tostring(texture))
+                                            search_texture_cache[screenshot_file] = nil
                                         end
-
-                                        r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                        r.ImGui_Text(ctx, plugin.fx_name)
-                                        r.ImGui_PopTextWrapPos(ctx)
                                     else
-                                        log_to_file("Ongeldige afmetingen voor texture: " .. tostring(texture))
-                                        search_texture_cache[screenshot_file] = nil
+                                        log_to_file("Ongeldige texture voor fx: " .. plugin.fx_name)
                                     end
-                                else
-                                    log_to_file("Ongeldige texture voor fx: " .. plugin.fx_name)
                                 end
                             end
-                        end
                             r.ImGui_PopItemWidth(ctx)
                             r.ImGui_EndGroup(ctx)
                             
