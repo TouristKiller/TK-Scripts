@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.4.1
+-- @version 0.4.2
 -- @changelog:
 --         * Lettertype gewijzigd en Gui wijzigingen
 --         * mannier om plugins volgorde te wijzigen die op de track staan gewijzigd
@@ -1748,6 +1748,39 @@ local function ShowScreenshotWindow()
                         end
                     end
                 end
+                if selected_folder and selected_folder ~= "Current Project FX" and selected_folder ~= "Current Track FX" then
+                    for i = 1, #filtered_plugins do
+                        local plugin_name = filtered_plugins[i]
+                        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+                        local screenshot_file = screenshot_path .. safe_name .. ".png"
+                        
+                        if r.file_exists(screenshot_file) then
+                            local texture = LoadSearchTexture(screenshot_file)
+                            if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                                -- Toon de screenshot zoals in het hoofdvenster
+                                local width, height = r.ImGui_Image_GetSize(texture)
+                                if width and height then
+                                    local aspect_ratio = height > 0 and width / height or 1
+                                    local display_width = config.resize_screenshots_with_window and (column_width - 10) or display_size
+                                    local display_height = display_width / aspect_ratio
+                                    
+                                    if r.ImGui_ImageButton(ctx, "##"..plugin_name, texture, display_width, display_height) then
+                                        if TRACK then
+                                            r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                            if config.close_after_adding_fx then
+                                                SHOULD_CLOSE_SCRIPT = true
+                                            end
+                                        end
+                                    end
+                
+                                    r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                    r.ImGui_Text(ctx, plugin_name)
+                                    r.ImGui_PopTextWrapPos(ctx)
+                                end
+                            end
+                        end
+                    end
+                end
                 if #filtered_plugins > 0 then
                     local current_track = nil
                     local column_width = available_width / num_columns
@@ -1802,9 +1835,10 @@ local function ShowScreenshotWindow()
                             end
                             r.ImGui_BeginGroup(ctx)
                             r.ImGui_PushItemWidth(ctx, column_width)
-                    
-                            local safe_name = plugin.fx_name:gsub("[^%w%s-]", "_")
-                            local screenshot_file = screenshot_path .. safe_name .. ".png"
+                            
+                            if plugin and plugin.fx_name then
+                                local safe_name = plugin.fx_name:gsub("[^%w%s-]", "_")
+                                local screenshot_file = screenshot_path .. safe_name .. ".png"
                             if r.file_exists(screenshot_file) then
                                 local texture = LoadSearchTexture(screenshot_file)
                                 if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
@@ -1868,7 +1902,7 @@ local function ShowScreenshotWindow()
                                     log_to_file("Ongeldige texture voor fx: " .. plugin.fx_name)
                                 end
                             end
-                    
+                        end
                             r.ImGui_PopItemWidth(ctx)
                             r.ImGui_EndGroup(ctx)
                             
