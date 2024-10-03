@@ -1,11 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.4.5
+-- @version 0.4.6
 -- @changelog:
---         * Added Projects to the browser with searchbox
---          (opens in screenshot window, left click open, right click in tab)
---         * Tracks with the same name are now shown in the Current Project FX Folder
---         * Added master /normal track toggle
+--         * New whay of texture chache to prevent mixing up screenshots
+--         * made seach result screenshots view correction
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -126,6 +124,9 @@ local collapsed_tracks = {}
 local all_tracks_collapsed = false
 local SHOULD_CLOSE_SCRIPT = false
 local IS_COPYING_TO_ALL_TRACKS = false
+local function get_safe_name(name)
+    return (name or ""):gsub("[^%w%s-]", "_")
+end
 -- DOCK
 local dock = 0
 local change_dock = false
@@ -239,11 +240,37 @@ local function ResetConfig()
     SaveConfig()
 end
 --------------------------------------------------------------------------
-local function ClearScreenshotCache()
-    search_texture_cache = {}
-    texture_load_queue = {}
-    texture_last_used = {}
+local function ClearScreenshotCache(periodic_cleanup)
+    local current_time = r.time_precise()
+    
+    if periodic_cleanup then
+        local to_remove = {}
+        for key, last_used in pairs(texture_last_used) do
+            if current_time - last_used > 300 then -- 5 minuten timeout
+                table.insert(to_remove, key)
+            end
+        end
+        for _, key in ipairs(to_remove) do
+            if search_texture_cache[key] and r.ImGui_DestroyImage then
+                r.ImGui_DestroyImage(ctx, search_texture_cache[key])
+            end
+            search_texture_cache[key] = nil
+            texture_last_used[key] = nil
+            texture_load_queue[key] = nil
+        end
+    else
+        -- Volledige cache wissen
+        if r.ImGui_DestroyImage then
+            for key, texture in pairs(search_texture_cache) do
+                r.ImGui_DestroyImage(ctx, texture)
+            end
+        end
+        search_texture_cache = {}
+        texture_last_used = {}
+        texture_load_queue = {}
+    end
 end
+
 
 local folders_category = {}
 local function initFoldersCategory()
@@ -992,22 +1019,33 @@ local function LoadTexture(file)
     return texture
 end
     
-local function LoadSearchTexture(file)
-    if search_texture_cache[file] then
-        texture_last_used[file] = r.time_precise()
-        return search_texture_cache[file]
+local function LoadSearchTexture(file, plugin_name)
+    local unique_key = file .. "_" .. (plugin_name or "unknown")
+    local current_time = r.time_precise()
+
+    if search_texture_cache[unique_key] then
+        texture_last_used[unique_key] = current_time
+        return search_texture_cache[unique_key]
     end
     
-    local cache_size = 0
-    for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
-    
-    if cache_size < config.max_cached_search_textures then
-        if not texture_load_queue[file] then
-            texture_load_queue[file] = r.time_precise()
+    if r.file_exists(file) then
+        local texture = r.ImGui_CreateImage(file)
+        if texture then
+            search_texture_cache[unique_key] = texture
+            texture_last_used[unique_key] = current_time
+            log_to_file("Texture loaded: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
+            return texture
+        else
+            log_to_file("Failed to create texture: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
         end
+    else
+        log_to_file("File does not exist: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
     end
+    
     return nil
 end
+
+
 
 local function ProcessTextureLoadQueue()
     local textures_loaded = 0
@@ -1828,7 +1866,8 @@ local function ShowScreenshotWindow()
             display_size = selected_folder and (config.folder_specific_sizes[selected_folder] or config.screenshot_window_size) or config.screenshot_window_size
         end
         local num_columns = math.max(1, math.floor(available_width / display_size))
-        
+        local column_width = available_width / num_columns --!!!!!!!!
+
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
             if selected_folder then
                 local filtered_plugins = {}
@@ -1865,8 +1904,8 @@ local function ShowScreenshotWindow()
                         display_size = selected_folder and (config.folder_specific_sizes[selected_folder] or config.screenshot_window_size) or config.screenshot_window_size
                     end
                     local num_columns = math.max(1, math.floor(available_width / display_size))
-                    local column_width = available_width / num_columns
-                
+                    local column_width = available_width / num_columns --!!!!!!!!
+                        
                     for i = 1, #filtered_plugins do
                         local column = (i - 1) % num_columns
                         if column > 0 then
@@ -1880,7 +1919,7 @@ local function ShowScreenshotWindow()
                         local screenshot_file = screenshot_path .. safe_name .. ".png"
                         
                         if r.file_exists(screenshot_file) then
-                            local texture = LoadSearchTexture(screenshot_file)
+                            local texture = LoadSearchTexture(screenshot_file, plugin and plugin.fx_name or get_safe_name(plugin_name))
                             if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                 local width, height = r.ImGui_Image_GetSize(texture)
                                 if width and height then
@@ -1978,7 +2017,7 @@ local function ShowScreenshotWindow()
                                 local safe_name = plugin.fx_name:gsub("[^%w%s-]", "_")
                                 local screenshot_file = screenshot_path .. safe_name .. ".png"
                                 if r.file_exists(screenshot_file) then
-                                    local texture = LoadSearchTexture(screenshot_file)
+                                    local texture = LoadSearchTexture(screenshot_file, plugin and plugin.fx_name or get_safe_name(plugin_name))
                                     if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                         local width, height = r.ImGui_Image_GetSize(texture)
                                         if width and height then
@@ -2062,31 +2101,45 @@ local function ShowScreenshotWindow()
                     r.ImGui_Text(ctx, "No Plugins in Selected Folder.")
                 end
             elseif screenshot_search_results and #screenshot_search_results > 0 then
+                local available_width = r.ImGui_GetContentRegionAvail(ctx)
+                local display_size
+                if config.use_global_screenshot_size then
+                    display_size = config.global_screenshot_size
+                elseif config.resize_screenshots_with_window then
+                    display_size = available_width
+                else
+                    display_size = config.screenshot_window_size
+                end
+                local num_columns = math.max(1, math.floor(available_width / display_size))
                 local column_width = available_width / num_columns
+            
                 for i, fx in ipairs(screenshot_search_results) do
                     local column = (i - 1) % num_columns
                     if column > 0 then
                         r.ImGui_SameLine(ctx)
                     end
                     r.ImGui_BeginGroup(ctx)
-                    r.ImGui_PushItemWidth(ctx, column_width)
                     
                     local safe_name = fx.name:gsub("[^%w%s-]", "_")
                     local screenshot_file = screenshot_path .. safe_name .. ".png"
                     if r.file_exists(screenshot_file) then
-                        local texture = LoadSearchTexture(screenshot_file)
+                        local texture = LoadSearchTexture(screenshot_file, fx.name)
                         if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                             local width, height = r.ImGui_Image_GetSize(texture)
                             if width and height then
                                 local aspect_ratio = height > 0 and width / height or 1
-                                local display_width = config.resize_screenshots_with_window and (column_width - 10) or screenshot_window_display_size
+                                local display_width = config.resize_screenshots_with_window and (column_width - 10) or display_size
                                 local display_height = display_width / aspect_ratio
                                 
                                 if r.ImGui_ImageButton(ctx, "##"..fx.name, texture, display_width, display_height) then
                                     if TRACK then
-                                        r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK)) 
-                                    end 
+                                        r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                        if config.close_after_adding_fx then
+                                            SHOULD_CLOSE_SCRIPT = true
+                                        end
+                                    end
                                 end
+                                -- ... (bestaande co
                                 if r.ImGui_IsItemClicked(ctx, 1) then  
                                     local full_plugin_name = fx.name  -- Gebruik de volledige naam van de plugin
                                     MakeScreenshot(full_plugin_name, nil, true)
@@ -2103,8 +2156,6 @@ local function ShowScreenshotWindow()
                             log_to_file("Ongeldige texture voor fx: " .. fx.name)
                         end
                     end
-                    
-                    r.ImGui_PopItemWidth(ctx)
                     r.ImGui_EndGroup(ctx)
                     
                     if column == num_columns - 1 then
@@ -2751,6 +2802,10 @@ function Main()
     end
     last_selected_track = TRACK
         ProcessTextureLoadQueue()
+
+    if r.time_precise() % 300 < 1 then -- Elke 5 minuten
+        ClearScreenshotCache(true)
+    end
 
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 2)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
