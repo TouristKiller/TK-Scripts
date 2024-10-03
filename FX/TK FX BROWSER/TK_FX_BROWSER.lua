@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.4.3
+-- @version 0.4.5
 -- @changelog:
---         * Bug Fix (sceenshotwindow view)
+--         * Added Projects to the browser with searchbox
+--          (opens in screenshot window, left click open, right click in tab)
+--         * Tracks with the same name are now shown in the Current Project FX Folder
+--         * Added master /normal track toggle
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -82,6 +85,22 @@ local ADD_FX_TO_ITEM = false
 local old_t = {}
 local old_filter = ""
 local current_hovered_plugin = nil
+local is_master_track_selected = false
+-- PROJECTS
+local function GetProjectsDirectory()
+    local path = reaper.GetProjectPath("")
+    if path ~= "" then
+        path = path:match("(.*[/\\])")
+    else
+        path = reaper.GetResourcePath() .. "/Projects/"
+    end
+    return path
+end
+PROJECTS_DIR = GetProjectsDirectory()
+local PROJECTS_INFO_FILE = PROJECTS_DIR .. "projects_info.txt"
+local projects = {}
+local project_search_term = ""
+local filtered_projects = {}
 -- SCREENSHOTS
 local is_screenshot_visible = false
 local screenshot_texture = nil
@@ -177,17 +196,17 @@ local function SetDefaultConfig()
         bulk_screenshot_au = true,
         bulk_screenshot_clap = true,
         bulk_screenshot_lv2 = true,
-        bulk_screenshot_vsti = true,  -- Toegevoegd
-        bulk_screenshot_vst3i = true, -- Toegevoegd
-        bulk_screenshot_jsi = true,   -- Toegevoegd
-        bulk_screenshot_aui = true,   -- Toegevoegd
-        bulk_screenshot_clapi = true, -- Toegevoegd
-        bulk_screenshot_lv2i = true,  -- Toegevoegd
+        bulk_screenshot_vsti = true,  
+        bulk_screenshot_vst3i = true, 
+        bulk_screenshot_jsi = true,   
+        bulk_screenshot_aui = true,   
+        bulk_screenshot_clapi = true, 
+        bulk_screenshot_lv2i = true,  
         default_folder = nil,
         screenshot_size_option = 2, -- 1 = 128x128, 2 = 500x(to scale), 3 = original
         screenshot_default_folder_only = false,
         close_after_adding_fx = false,
-        folder_specific_sizes = {}
+        folder_specific_sizes = {},
     } 
 end
 local config = SetDefaultConfig()    
@@ -266,6 +285,8 @@ function IsPluginVisible(plugin_name)
 end
 
 local function GetTrackName(track)
+    if not track then return "No Track Selected" end
+    if track == r.GetMasterTrack(0) then return "Master Track" end
     local _, name = r.GetTrackName(track)
     return name
 end
@@ -809,14 +830,12 @@ local function ShowConfigWindow()
         end
         r.ImGui_EndTabItem(ctx)
     end
-
     if r.ImGui_BeginTabItem(ctx, "PLUGIN MANAGER") then
         ShowPluginManagerTab()
         r.ImGui_EndTabItem(ctx)
     end
     r.ImGui_EndTabBar(ctx)
     end
-        
     r.ImGui_End(ctx)
     end
     return config_open
@@ -903,42 +922,42 @@ end
 
 -- bodem knoppen
 local function IsMuted(track)
-    if track then
+    if track and reaper.ValidatePtr(track, "MediaTrack*") then
         return r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
     end
     return false
 end
 
 local function ToggleMute(track)
-    if track then
+    if track and reaper.ValidatePtr(track, "MediaTrack*") then
         local mute = r.GetMediaTrackInfo_Value(track, "B_MUTE")
         r.SetMediaTrackInfo_Value(track, "B_MUTE", mute == 0 and 1 or 0)
     end
 end
 
 local function IsSoloed(track)
-    if track then
+    if track and reaper.ValidatePtr(track, "MediaTrack*") then
         return r.GetMediaTrackInfo_Value(track, "I_SOLO") ~= 0
     end
     return false
 end
 
 local function ToggleSolo(track)
-    if track then
+    if track and reaper.ValidatePtr(track, "MediaTrack*") then
         local solo = r.GetMediaTrackInfo_Value(track, "I_SOLO")
         r.SetMediaTrackInfo_Value(track, "I_SOLO", solo == 0 and 1 or 0)
     end
 end
 
 local function ToggleArm(track)
-    if track then
+    if track and reaper.ValidatePtr(track, "MediaTrack*") then
         local armed = r.GetMediaTrackInfo_Value(track, "I_RECARM")
         r.SetMediaTrackInfo_Value(track, "I_RECARM", armed == 0 and 1 or 0)
     end
 end
 
 local function IsArmed(track)
-    if track then
+    if track and reaper.ValidatePtr(track, "MediaTrack*") then
         return r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
     end
     return false
@@ -1063,6 +1082,10 @@ local function SortTable(tab, val1, val2)
 end
 
 local function GetTrackColorAndTextColor(track)
+    if not track or not reaper.ValidatePtr(track, "MediaTrack*") then
+        return r.ImGui_ColorConvertDouble4ToU32(0.5, 0.5, 0.5, 1), 0xFFFFFFFF
+    end
+    
     local color = r.GetTrackColor(track)
     
     if color == 0 then
@@ -1099,10 +1122,12 @@ local function GetFileContext(filename)
 end
 
 local function GetTrackName(track)
+    if not track or not reaper.ValidatePtr(track, "MediaTrack*") then
+        return "No Track Selected"
+    end
     local _, name = r.GetTrackName(track)
     return name
 end
-
 local function IsOSX()
     local platform = reaper.GetOS()
     return platform:match("OSX") or platform:match("macOS")
@@ -1265,7 +1290,6 @@ local function CaptureFirstTrackFX()
     end
 end
 
-
 local function MakeScreenshot(plugin_name, callback, is_individual)
     if not IsPluginVisible(plugin_name) then
         if callback then callback() end
@@ -1277,10 +1301,8 @@ local function MakeScreenshot(plugin_name, callback, is_individual)
             if callback then callback() end
             return
         end
-
     
     local should_screenshot = false
-    
     if plugin_name:match("^VST3i:") and config.bulk_screenshot_vst3i then
         should_screenshot = true
     elseif plugin_name:match("^VST3:") and config.bulk_screenshot_vst3 then
@@ -1304,7 +1326,6 @@ local function MakeScreenshot(plugin_name, callback, is_individual)
     elseif plugin_name:match("^LV2i:") and config.bulk_screenshot_lv2i then
         should_screenshot = true
     end
-    
         if not should_screenshot then
             log_to_file("Plugin skipped because of configuration: " .. plugin_name)
             if callback then callback() end
@@ -1570,7 +1591,66 @@ local function GetCurrentProjectFX()
     end
     return fx_list
 end
+------------------------------------------------
+local function get_all_projects()
+    local projects = {}
+    local stack = {{path = PROJECTS_DIR, depth = 0}}
+    local max_depth = 2
+    
+    while #stack > 0 do
+        local current = table.remove(stack)
+        local path, depth = current.path, current.depth
+        
+        local i = 0
+        repeat
+            local file = r.EnumerateFiles(path, i)
+            if file then
+                local full_path = path .. file
+                if file:match("%.rpp$") then
+                    local project_name = file:gsub("%.rpp$", "")
+                    table.insert(projects, {
+                        name = project_name,
+                        path = full_path
+                    })
+                end
+            end
+            i = i + 1
+        until not file
+        
+        if depth < max_depth then
+            i = 0
+            repeat
+                local subdir = r.EnumerateSubdirectories(path, i)
+                if subdir then
+                    table.insert(stack, {path = path .. subdir .. "\\", depth = depth + 1})
+                end
+                i = i + 1
+            until not subdir
+        end
+    end
+    
+    table.sort(projects, function(a, b) return a.name:lower() < b.name:lower() end)
+    return projects
+  end
+    local function open_project(project_path)
+        r.Main_openProject(project_path)
+    end
+    local function save_projects_info(projects)
+        local file = io.open(PROJECTS_INFO_FILE, "w")
+        if file then
+            for _, project in ipairs(projects) do
+                file:write(string.format("%s|%s\n", project.name, project.path))
+            end
+            file:close()
+        end
+    end
+    local function LoadProjects()
+        projects = get_all_projects()
+        filtered_projects = projects
+        save_projects_info(projects)
+    end
 
+------------------------------------------------------
 local function ShowScreenshotWindow()
     if not config.show_screenshot_window then return end
     if screenshot_search_results and #screenshot_search_results > 0 then
@@ -1598,17 +1678,48 @@ local function ShowScreenshotWindow()
     local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
     if visible then
         r.ImGui_PushFont(ctx, LargeFont)
-        r.ImGui_Text(ctx, "SCREENSHOTS: " .. (FILTER or ""))
+        if show_media_browser then
+            r.ImGui_Text(ctx, "PROJECTS:")          
+        else
+            r.ImGui_Text(ctx, "SCREENSHOTS: " .. (FILTER or ""))
+        end
         r.ImGui_Separator(ctx)
         r.ImGui_PopFont(ctx)
-
-        local folders_category
-        for i = 1, #CAT_TEST do
-            if CAT_TEST[i].name == "FOLDERS" then
-                folders_category = CAT_TEST[i].list
-                break
+    
+        if show_media_browser then
+            r.ImGui_PushItemWidth(ctx, -1)
+            local changed, new_search_term = r.ImGui_InputText(ctx, "##ProjectSearch", project_search_term)
+            if changed then
+                project_search_term = new_search_term
+                filtered_projects = {}
+                for _, project in ipairs(projects) do
+                    if project.name:lower():find(project_search_term:lower(), 1, true) then
+                        table.insert(filtered_projects, project)
+                    end
+                end
             end
-        end
+            r.ImGui_PopItemWidth(ctx)
+            if r.ImGui_BeginChild(ctx, "MediaBrowserList", 0, 0) then
+                for _, project in ipairs(filtered_projects) do
+                    if r.ImGui_Selectable(ctx, project.name) then
+                        open_project(project.path)
+                    end
+                    if r.ImGui_IsItemClicked(ctx, 1) then  
+                        r.Main_OnCommand(41929, 0)  -- New project tab (ignore default template)
+                        r.Main_openProject(project.path)
+                    end
+                end
+                r.ImGui_EndChild(ctx)
+            end
+        else
+            local folders_category
+            for i = 1, #CAT_TEST do
+                if CAT_TEST[i].name == "FOLDERS" then
+                    folders_category = CAT_TEST[i].list
+                    break
+                end
+            end
+    
 
         if folders_category and #folders_category > 0 then
             r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
@@ -1807,11 +1918,13 @@ local function ShowScreenshotWindow()
                 
                 
                 if #filtered_plugins > 0 then
-                    local current_track = nil
+                    local current_track_identifier = nil
                     local column_width = available_width / num_columns
                     for i, plugin in ipairs(filtered_plugins) do
-                        if selected_folder == "Current Project FX" and plugin.track_name ~= current_track then
-                            current_track = plugin.track_name
+                        local track_identifier = (plugin.track_number or "Unknown") .. "_" .. (plugin.track_name or "Unnamed")
+
+                        if selected_folder == "Current Project FX" and track_identifier ~= current_track_identifier then
+                            current_track_identifier = track_identifier
                             local track_color, text_color = GetTrackColorAndTextColor(reaper.GetTrack(0, plugin.track_number - 1))
                             local track_number = plugin.track_number
                             r.ImGui_Separator(ctx)
@@ -2006,7 +2119,7 @@ local function ShowScreenshotWindow()
     end
     -- Update de breedte van het screenshot venster
     config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
-
+    end
     r.ImGui_End(ctx)
 end
 
@@ -2335,7 +2448,7 @@ local function DrawItems(tbl, main_cat_name)
 end
 
 local function DrawBottomButtons()
-    if not TRACK then return end
+    if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
     local buttonHeight = 50
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
@@ -2388,7 +2501,10 @@ end
 
 local BUTTON_HEIGHT = 40
 local function ShowTrackFX()
-    if not TRACK then return end
+    if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then
+        r.ImGui_Text(ctx, "No track selected")
+        return
+    end
     
     r.ImGui_Text(ctx, "FX on Track:")
     local availWidth, availHeight = r.ImGui_GetContentRegionAvail(ctx)
@@ -2460,7 +2576,6 @@ local function ShowTrackFX()
     end
 end
 
-
 local function ShowItemFX()
     local item = r.GetSelectedMediaItem(0, 0)
     if not item then return end
@@ -2499,6 +2614,10 @@ local function ShowItemFX()
 end
 
 local function GetTrackType(track)
+    if not track or not reaper.ValidatePtr(track, "MediaTrack*") then
+        return "No Track"
+    end
+    if track == r.GetMasterTrack(0) then return "Master" end
     local audio_count = 0
     local midi_count = 0
     local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") > 0
@@ -2568,7 +2687,6 @@ function Frame()
             r.ImGui_PopStyleColor(ctx, 2)
         end
     end
-
     -- Voor Container
         if config.show_container then
             if r.ImGui_Selectable(ctx, "CONTAINER") then
@@ -2580,7 +2698,6 @@ function Frame()
                 end
             end
         end
-
         -- Voor Video Processor
         if config.show_video_processor then
             if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
@@ -2592,7 +2709,13 @@ function Frame()
                 end
             end
         end
-
+        if r.ImGui_Selectable(ctx, "PROJECTS") then
+            show_media_browser = not show_media_browser
+            if show_media_browser then
+                LoadProjects()
+                ClearScreenshotCache()
+            end
+        end
         -- Voor Recent
         if LAST_USED_FX then
             if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
@@ -2603,7 +2726,6 @@ function Frame()
                 end
             end
         end
-
     r.ImGui_Separator(ctx)
     if ADD_FX_TO_ITEM then
         ShowItemFX()
@@ -2617,7 +2739,7 @@ end
 -----------------------------------------------------------------
 function Main()
     local prev_track = TRACK
-    TRACK = r.GetSelectedTrack(0, 0)
+    TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
     if TRACK and TRACK ~= prev_track then
         if config.auto_refresh_fx_list then
             FX_LIST_TEST, CAT_TEST = MakeFXFiles()
@@ -2649,11 +2771,7 @@ function Main()
     --r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
     --r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), r.ImGui_ColorConvertDouble4ToU32(0.8, 0.8, 0.8, 1.0))
     --r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabActive(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
-
-
-
     r.ImGui_PushFont(ctx, NormalFont)
-
     r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
     r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 340, 16384, 16384)
           
@@ -2792,6 +2910,11 @@ function Main()
             if show_confirm_clear then
                 ShowConfirmClearPopup()
             end
+
+            if r.ImGui_Button(ctx, is_master_track_selected and "Normal Track" or "Master Track", 126) then
+                is_master_track_selected = not is_master_track_selected
+            end
+
             Frame()
         else
             r.ImGui_Text(ctx, "NO TRACK SELECTED")
