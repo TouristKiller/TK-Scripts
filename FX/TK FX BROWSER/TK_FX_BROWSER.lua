@@ -1,9 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.4.8
+-- @version 0.4.9
 -- @changelog:
---         * Change track name by left clicking on it.
----        * Right click on track name to open menu (with al kinds of track stuff)
+--         * Ad your own scripts to Richt click trackname menu
+--         * Fallback to Reaper Color Picker if SWS colors do not load
+--         * Some GUI changes (mostly color related)
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -90,6 +91,10 @@ local new_track_name = ""
 local show_color_picker = false
 local current_color = 0
 local picker_color = {0, 0, 0, 1}
+local show_add_script_popup = false
+local userScripts = {}
+
+
 -- PROJECTS
 local function GetProjectsDirectory()
     local path = reaper.GetProjectPath("")
@@ -2699,8 +2704,93 @@ function moveTrackUp(track)
         r.TrackList_AdjustWindows(false)
     end
 end
+
+local function getScriptsIniPath()
+    return r.GetResourcePath() .. "/Scripts/user_scripts.ini"
+end
+
+local function createEmptyUserScriptsIni()
+    local file = io.open(getScriptsIniPath(), "w")
+    if file then
+        file:write("# User defined scripts\n")
+        file:close()
+    end
+end
+
+local function loadUserScripts()
+    local scripts = {}
+    local file = io.open(getScriptsIniPath(), "r")
+    if file then
+        local currentScript = {}
+        for line in file:lines() do
+            if line:match("^%[Script%]") then
+                if currentScript.name and currentScript.command_id then
+                    table.insert(scripts, currentScript)
+                end
+                currentScript = {}
+            elseif line:match("^name=") then
+                currentScript.name = line:match("^name=(.*)")
+            elseif line:match("^command_id=") then
+                currentScript.command_id = line:match("^command_id=(.*)")
+            end
+        end
+        if currentScript.name and currentScript.command_id then
+            table.insert(scripts, currentScript)
+        end
+        file:close()
+    end
+    return scripts
+end
+
+
+local function saveUserScript(name, command_id)
+    local file = io.open(getScriptsIniPath(), "a")
+    if file then
+        file:write(string.format("\n[Script]\nname=%s\ncommand_id=%s\n", name, command_id))
+        file:close()
+        userScripts = loadUserScripts()  -- Herlaad de scripts
+        r.ShowMessageBox("Script added: " .. name, "Script added", 0)
+    end
+end
+
+
+local show_add_script_popup = false
+local new_script_name = ""
+local new_command_id = ""
+
+local function showAddScriptPopup()
+    if r.ImGui_BeginPopupModal(ctx, "Add User Script", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
+        r.ImGui_Text(ctx, "Enter script details:")
+        _, new_script_name = r.ImGui_InputText(ctx, "Script Name", new_script_name)
+        _, new_command_id = r.ImGui_InputText(ctx, "Command ID", new_command_id)
+        if r.ImGui_Button(ctx, "Add") and new_script_name ~= "" and new_command_id ~= "" then
+            saveUserScript(new_script_name, new_command_id)
+            r.ImGui_CloseCurrentPopup(ctx)
+            show_add_script_popup = false
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel") then
+            r.ImGui_CloseCurrentPopup(ctx)
+            show_add_script_popup = false
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+end
+local function removeUserScript(index)
+    table.remove(userScripts, index)
+    local file = io.open(getScriptsIniPath(), "w")
+    if file then
+        for _, script in ipairs(userScripts) do
+            file:write(string.format("[Script]\nname=%s\ncommand_id=%s\n\n", script.name, script.command_id))
+        end
+        file:close()
+    end
+end
+
+
 -----------------------------------------------------------------
 function Main()
+    userScripts = loadUserScripts()
     local prev_track = TRACK
     TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
     if TRACK and TRACK ~= prev_track then
@@ -2717,6 +2807,7 @@ function Main()
     if r.time_precise() % 300 < 1 then -- Elke 5 minuten
         ClearScreenshotCache(true)
     end
+   
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 2)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 3, 3)
@@ -2794,14 +2885,14 @@ function Main()
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopFont(ctx)
                 r.ImGui_PushFont(ctx, NormalFont)
-
                 if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
                 
                 if r.ImGui_BeginPopup(ctx, "TrackContextMenu") then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)  -- Witte tekst
-                
+                   
+                    
                     if r.ImGui_MenuItem(ctx, "Color Picker") then
                         show_color_picker = true
                     end
@@ -2859,21 +2950,37 @@ function Main()
                             r.ShowMessageBox("Track Icon Selector (Reapertips) is not installed. Install this action to use this function.", "Action not found", 0)
                         end
                     end
-
-                    
-
-                
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_Text(ctx, "User Scripts (" .. #userScripts .. "):")
+                    for i, script in ipairs(userScripts) do
+                        if r.ImGui_MenuItem(ctx, script.name) then
+                            local script_id = r.NamedCommandLookup(script.command_id)
+                            if script_id ~= 0 then
+                                r.Main_OnCommand(script_id, 0)
+                            else
+                                r.ShowMessageBox(script.name .. " is not installed. Install this action to use this function.", "Action not found", 0)
+                            end
+                        end
+                        if r.ImGui_BeginPopupContextItem(ctx) then
+                            if r.ImGui_MenuItem(ctx, "Remove") then
+                                removeUserScript(i)
+                            end
+                            r.ImGui_EndPopup(ctx)
+                        end
+                    end
+                    if r.ImGui_MenuItem(ctx, "+") then
+                        show_add_script_popup = true
+                    end
                     r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndPopup(ctx)
                 end
-              
                 if show_rename_popup then
                     local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
                     r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
                     r.ImGui_OpenPopup(ctx, "Rename Track")
                 end
                 if r.ImGui_BeginPopupModal(ctx, "Rename Track", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)  -- Witte tekst
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF) 
                     r.ImGui_Text(ctx, "Enter new track name:")
                     r.ImGui_SetNextItemWidth(ctx, 200)
                     local changed, value = r.ImGui_InputText(ctx, "##NewTrackName", new_track_name)
@@ -2892,7 +2999,7 @@ function Main()
                         show_rename_popup = false
                         r.ImGui_CloseCurrentPopup(ctx)
                     end
-                    r.ImGui_PopStyleColor(ctx)  -- Herstel de oorspronkelijke tekstkleur
+                    r.ImGui_PopStyleColor(ctx)  -
                     r.ImGui_EndPopup(ctx)
                 end
                 local sws_colors, has_sws_colors = get_sws_colors()
@@ -2902,7 +3009,10 @@ function Main()
                     r.ImGui_OpenPopup(ctx, "Change Track Color")
                 end
                 
-                if r.ImGui_BeginPopupModal(ctx, "Change Track Color", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+                if r.ImGui_BeginPopupModal(ctx, "Change Track Color", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)  
+                    local sws_colors, has_sws_colors = get_sws_colors()
+                    -- has_sws_colors = false  -- Tijdelijk voor testdoeleinden
                     if has_sws_colors then
                         local columns = 4
                         local color_count = #sws_colors
@@ -2928,13 +3038,24 @@ function Main()
                             r.ImGui_PopID(ctx)
                         end
                     else
-                        r.ImGui_Text(ctx, "No SWS colors found.")
+                        r.ImGui_Text(ctx, "No SWS Colors Found...")
+                        if r.ImGui_Button(ctx, "Open Reaper Color Picker") then
+                            local current_color = r.GetTrackColor(TRACK)
+                            local ok, new_color = r.GR_SelectColor(current_color)
+                            if ok then
+                                r.SetTrackColor(TRACK, new_color)
+                            end
+                            show_color_picker = false
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
                     end
+                    
                     r.ImGui_Separator(ctx)
                     if r.ImGui_Button(ctx, "Cancel") or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
                         show_color_picker = false
                         r.ImGui_CloseCurrentPopup(ctx)
                     end
+                    r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndPopup(ctx)
                 end
                 r.ImGui_PopFont(ctx)
@@ -3030,6 +3151,11 @@ function Main()
         if show_settings then
             show_settings = ShowConfigWindow()
         end
+        if show_add_script_popup then
+            r.ImGui_OpenPopup(ctx, "Add User Script")
+            showAddScriptPopup()
+        end
+        
         if check_esc_key() then open = false end
         r.ImGui_End(ctx)
     end
