@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.4.9
+-- @version 0.5.0
 -- @changelog:
 --         * Ad your own scripts to Richt click trackname menu
 --         * Fallback to Reaper Color Picker if SWS colors do not load
@@ -2999,7 +2999,7 @@ function Main()
                         show_rename_popup = false
                         r.ImGui_CloseCurrentPopup(ctx)
                     end
-                    r.ImGui_PopStyleColor(ctx)  -
+                    r.ImGui_PopStyleColor(ctx) 
                     r.ImGui_EndPopup(ctx)
                 end
                 local sws_colors, has_sws_colors = get_sws_colors()
