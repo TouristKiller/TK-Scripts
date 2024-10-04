@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.4.7
+-- @version 0.4.8
 -- @changelog:
 --         * Change track name by left clicking on it.
 ---        * Right click on track name to open menu (with al kinds of track stuff)
@@ -2691,11 +2691,11 @@ local function get_sws_colors()
 
     return colors, #colors > 0
 end
-local function moveTrackUp(track)
-    local trackIndex = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
-    if trackIndex > 1 then
+function moveTrackUp(track)
+    local id = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+    if id > 1 then
         r.SetOnlyTrackSelected(track)
-        r.ReorderSelectedTracks(trackIndex - 1, 0)
+        r.ReorderSelectedTracks(id - 2, 0)
         r.TrackList_AdjustWindows(false)
     end
 end
