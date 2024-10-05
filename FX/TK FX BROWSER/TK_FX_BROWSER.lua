@@ -1,10 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.0
+-- @version 0.5.1
 -- @changelog:
---         * Ad your own scripts to Richt click trackname menu
---         * Fallback to Reaper Color Picker if SWS colors do not load
---         * Some GUI changes (mostly color related)
+--         * Bugfix for Clear Screenshot folder (Removed BuildScreenshotDatabase)
+--         * Rechtsklik op track plugin fx list menu -> bypass /unbypass toggle
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -1456,7 +1455,7 @@ local function ClearScreenshots()
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
         os.remove(screenshot_path .. file)
     end
-    BuildScreenshotDatabase() -- Update de database na het verwijderen van de screenshots
+    -- BuildScreenshotDatabase() -- Update de database na het verwijderen van de screenshots
     print("All screenshots cleared.")
 end
 
@@ -2460,6 +2459,9 @@ local function ShowTrackFX()
             for i = 0, fx_count - 1 do
                 local retval, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                 local is_open = r.TrackFX_GetFloatingWindow(TRACK, i)
+                local is_enabled = r.TrackFX_GetEnabled(TRACK, i)
+                local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"
+                
                 r.ImGui_PushID(ctx, i)
                 r.ImGui_BeginGroup(ctx)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
@@ -2481,13 +2483,23 @@ local function ShowTrackFX()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
                 r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)
-                if r.ImGui_Button(ctx, fx_name, -1, 13) then
+                
+                if not is_enabled then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)  -- Grijze kleur voor gebypaste plugins
+                end
+                
+                if r.ImGui_Button(ctx, display_name, -1, 13) then
                     if is_open then
                         r.TrackFX_Show(TRACK, i, 2)
                     else
                         r.TrackFX_Show(TRACK, i, 3)
                     end
                 end
+                
+                if not is_enabled then
+                    r.ImGui_PopStyleColor(ctx)
+                end
+                
                 r.ImGui_PopStyleColor(ctx, 3)
                 if r.ImGui_BeginPopupContextItem(ctx) then
                     if r.ImGui_MenuItem(ctx, "Delete") then
@@ -2504,9 +2516,12 @@ local function ShowTrackFX()
                         end
                         IS_COPYING_TO_ALL_TRACKS = false
                     end
+                    if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
+                        r.TrackFX_SetEnabled(TRACK, i, not is_enabled)
+                    end
                     r.ImGui_EndPopup(ctx)
                 end
-
+                
                 r.ImGui_EndGroup(ctx)
                 r.ImGui_PopID(ctx)
             end
@@ -2516,6 +2531,7 @@ local function ShowTrackFX()
         r.ImGui_EndChild(ctx)
     end
 end
+
 
 local function ShowItemFX()
     local item = r.GetSelectedMediaItem(0, 0)
