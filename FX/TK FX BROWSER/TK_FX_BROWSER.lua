@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.1
+-- @version 0.5.2
 -- @changelog:
---         * Bugfix for Clear Screenshot folder (Removed BuildScreenshotDatabase)
---         * Rechtsklik op track plugin fx list menu -> bypass /unbypass toggle
+--         * You can select if You want screenshots (bulk and individual) of X86 Bridged plugins
+--         * Added button to toggle virtual keyboard
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -218,6 +218,7 @@ local function SetDefaultConfig()
         screenshot_default_folder_only = false,
         close_after_adding_fx = false,
         folder_specific_sizes = {},
+        include_x86_bridged = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -837,7 +838,8 @@ local function ShowConfigWindow()
         if changed then config.show_video_processor = new_value end
         r.ImGui_Separator(ctx)
         _, config.close_after_adding_fx = r.ImGui_Checkbox(ctx, "Close script after adding FX", config.close_after_adding_fx)
-
+        r.ImGui_SameLine(ctx)
+        _, config.include_x86_bridged = r.ImGui_Checkbox(ctx, "Include x86 bridged plugins", config.include_x86_bridged)
         r.ImGui_Separator(ctx)
         r.ImGui_SetCursorPosY(ctx, window_height - 30)
         local button_width = (window_width - 20) / 3
@@ -1338,16 +1340,21 @@ local function MakeScreenshot(plugin_name, callback, is_individual)
         r.ShowMessageBox("Invalid plugin name", "Error", 0)
         return
     end
-    local fx_index = r.TrackFX_AddByName(TRACK, plugin_name, false, -1)
-    r.TrackFX_Show(TRACK, fx_index, 3)
-    
-    Wait(function()
-        CaptureScreenshot(plugin_name, fx_index)
-        r.TrackFX_Show(TRACK, fx_index, 2) -- Sluit de plugin
-        r.TrackFX_Delete(TRACK, fx_index) -- Verwijder de plugin
-        EnsurePluginRemoved(fx_index, callback) -- Controleer of de plugin is verwijderd
-    end)
+    if not IsX86Bridged(plugin_name) or config.include_x86_bridged then
+        local fx_index = r.TrackFX_AddByName(TRACK, plugin_name, false, -1)
+        r.TrackFX_Show(TRACK, fx_index, 3)
+        
+        Wait(function()
+            CaptureScreenshot(plugin_name, fx_index)
+            r.TrackFX_Show(TRACK, fx_index, 2) -- Sluit de plugin
+            r.TrackFX_Delete(TRACK, fx_index) -- Verwijder de plugin
+            EnsurePluginRemoved(fx_index, callback) -- Controleer of de plugin is verwijderd
+        end)
+    else
+        if callback then callback() end
+    end
 end
+
 
 local bulk_screenshot_progress = 0
 local total_fx_count = 0
@@ -1405,13 +1412,15 @@ local function EnumerateInstalledFX()
                 include_fx = true
             end
         end
-        if include_fx then
+        if include_fx and (not IsX86Bridged(fx_name) or config.include_x86_bridged) then
             total_fx_count = total_fx_count + 1
             fx_list[total_fx_count] = fx_name
         end
     end
     log_to_file("Totaal aantal geselecteerde plugins voor screenshots: " .. total_fx_count)
 end
+
+
 
 local PROCESS = false
 local START = false
@@ -1429,27 +1438,32 @@ local function ProcessFX(index, start_time)
         end)
     elseif index <= total_fx_count then
         local plugin_name = fx_list[index]
-        if not IsX86Bridged(plugin_name) and (config.screenshot_size_option == 1 or not ScreenshotExists(plugin_name, config.screenshot_size_option)) then       
-            MakeScreenshot(plugin_name, function()
+        if config.include_x86_bridged or not IsX86Bridged(plugin_name) then
+            if config.screenshot_size_option == 1 or not ScreenshotExists(plugin_name, config.screenshot_size_option) then       
+                MakeScreenshot(plugin_name, function()
+                    loaded_fx_count = loaded_fx_count + 1
+                    bulk_screenshot_progress = loaded_fx_count / total_fx_count
+                    log_to_file("Processed plugin: " .. plugin_name .. " Progress: " .. bulk_screenshot_progress)
+                    r.defer(function() 
+                        if r.time_precise() - start_time > 300 then -- 5 minuten timeout
+                            log_to_file("Process timed out")
+                            ProcessFX(total_fx_count + 1) -- Forceer afsluiting
+                        else
+                            ProcessFX(index + 1) 
+                        end
+                    end)
+                end)
+            else
                 loaded_fx_count = loaded_fx_count + 1
                 bulk_screenshot_progress = loaded_fx_count / total_fx_count
-                log_to_file("Processed plugin: " .. plugin_name .. " Progress: " .. bulk_screenshot_progress)
-                r.defer(function() 
-                    if r.time_precise() - start_time > 300 then -- 5 minuten timeout
-                        log_to_file("Process timed out")
-                        ProcessFX(total_fx_count + 1) -- Forceer afsluiting
-                    else
-                        ProcessFX(index + 1) 
-                    end
-                end)
-            end)
+                r.defer(function() ProcessFX(index + 1) end)
+            end
         else
-            loaded_fx_count = loaded_fx_count + 1
-            bulk_screenshot_progress = loaded_fx_count / total_fx_count
             r.defer(function() ProcessFX(index + 1) end)
         end
     end
 end
+
 
 local function ClearScreenshots()
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
@@ -2164,7 +2178,7 @@ local function FilterBox()
     end
     local filtered_fx = Filter_actions(FILTER)
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local bottom_buttons_height = 50  
+    local bottom_buttons_height = 70
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 50  -- Extra marge
     if #filtered_fx ~= 0 then
         if r.ImGui_BeginChild(ctx, "##popupp", window_width, available_height) then
@@ -2401,8 +2415,17 @@ end
 local function DrawBottomButtons()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
-    local buttonHeight = 50
+    local buttonHeight = 70
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
+    r.ImGui_Separator(ctx)
+    if r.ImGui_Button(ctx, is_master_track_selected and "Normal Track" or "Master Track", 80) then
+        is_master_track_selected = not is_master_track_selected
+        TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "KEYS", 40) then
+        r.Main_OnCommand(40377, 0)  -- Virtual MIDI keyboard
+    end
     r.ImGui_Separator(ctx)
     if r.ImGui_Button(ctx, "SNAP", 40) then
         CaptureFirstTrackFX()
@@ -2444,7 +2467,7 @@ local function DrawBottomButtons()
     r.ImGui_Separator(ctx)
 end
 
-local BUTTON_HEIGHT = 40
+local BUTTON_HEIGHT = 70
 local function ShowTrackFX()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then
         r.ImGui_Text(ctx, "No track selected")
@@ -3148,9 +3171,7 @@ function Main()
             if show_confirm_clear then
                 ShowConfirmClearPopup()
             end
-            if r.ImGui_Button(ctx, is_master_track_selected and "Normal Track" or "Master Track", 126) then
-                is_master_track_selected = not is_master_track_selected
-            end
+            
             Frame()
         else
             r.ImGui_Text(ctx, "NO TRACK SELECTED")
