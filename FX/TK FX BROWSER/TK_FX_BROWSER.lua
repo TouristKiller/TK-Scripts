@@ -1,9 +1,8 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.2
+-- @version 0.5.3
 -- @changelog:
---         * You can select if You want screenshots (bulk and individual) of X86 Bridged plugins
---         * Added button to toggle virtual keyboard
+--         * modified the LoadSearchTexture function to use relative paths for creating unique keys
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -1010,7 +1009,8 @@ local function LoadTexture(file)
 end
     
 local function LoadSearchTexture(file, plugin_name)
-    local unique_key = file .. "_" .. (plugin_name or "unknown")
+    local relative_path = file:gsub(screenshot_path, "")
+    local unique_key = relative_path .. "_" .. (plugin_name or "unknown")
     local current_time = r.time_precise()
     if search_texture_cache[unique_key] then
         texture_last_used[unique_key] = current_time
