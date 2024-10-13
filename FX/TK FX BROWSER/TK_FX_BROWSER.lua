@@ -1,15 +1,15 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.4
+-- @version 0.5.5
 -- @changelog:
---          * You can now set plugins as favorites
---          * Added Favorites folder (also to Screenshot window)
---          * Add plugin to all selected tracks
---          * Add plugin to all tracks
---          * Ratio "long" screenshots (100%/120%)
---        TODO:
---         * Check ARA plugins
---         * Focus of screenshot window
+--          * maak een favorieten systeem -- gedaan
+--       
+--         * voeg plugin toe aan alle geselecteerde tracks -- gedaan
+--         * voeg plugin toe aan alle tracks -- gedaam
+--         * verhouding lange screenshots -- gedaam
+--
+--         * ARA plugins
+--         * Focus van screenshot als master ook in de doch staat ????
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -2323,24 +2323,24 @@ local function FilterBox()
                     end
                 end
                 if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
-                    r.ImGui_OpenPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j)
+                    r.ImGui_OpenPopup(ctx, "DrawItemsPluginMenu_" .. i)
                 end
                 
-                if r.ImGui_BeginPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j) then
+                if r.ImGui_BeginPopup(ctx, "DrawItemsPluginMenu_" .. i) then
                     if r.ImGui_MenuItem(ctx, "Make Screenshot") then
-                        MakeScreenshot(tbl[i].fx[j], nil, true)
+                        MakeScreenshot(filtered_fx[i].name, nil, true)
                     end
                     if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                        AddPluginToSelectedTracks(tbl[i].fx[j], false)
+                        AddPluginToSelectedTracks(filtered_fx[i].name, false)
                     end
                     if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                       AddPluginToAllTracks(tbl[i].fx[j], false)
+                        AddPluginToAllTracks(filtered_fx[i].name, false)
                     end
                     if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                        AddToFavorites(tbl[i].fx[j])
+                        AddToFavorites(filtered_fx[i].name)
                     end
                     if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                        RemoveFromFavorites(tbl[i].fx[j])
+                        RemoveFromFavorites(filtered_fx[i].name)
                     end
                     r.ImGui_EndPopup(ctx)
                 end
