@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.5
+-- @version 0.5.6
 -- @changelog:
 --          * maak een favorieten systeem -- gedaan
 --       
@@ -2198,9 +2198,27 @@ local function ShowScreenshotWindow()
                                         end
                                     end
                                 end
-                                if r.ImGui_IsItemClicked(ctx, 1) then  
-                                    local full_plugin_name = fx.name  -- Gebruik de volledige naam van de plugin
-                                    MakeScreenshot(full_plugin_name, nil, true)
+                                if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
+                                    r.ImGui_OpenPopup(ctx, "ScreenshotPluginMenu_" .. i)
+                                end
+                                
+                                if r.ImGui_BeginPopup(ctx, "ScreenshotPluginMenu_" .. i) then
+                                    if r.ImGui_MenuItem(ctx, "Make Screenshot") then
+                                        MakeScreenshot(fx.name, nil, true)
+                                    end
+                                    if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                                        AddPluginToSelectedTracks(fx.name)
+                                    end
+                                    if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                                        AddPluginToAllTracks(fx.name)
+                                    end
+                                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                                        AddToFavorites(fx.name)
+                                    end
+                                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                                        RemoveFromFavorites(fx.name)
+                                    end
+                                    r.ImGui_EndPopup(ctx)
                                 end
 
                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
