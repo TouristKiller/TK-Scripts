@@ -1,8 +1,15 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.3
+-- @version 0.5.4
 -- @changelog:
---         * modified the LoadSearchTexture function to use relative paths for creating unique keys
+--          * You can now set plugins as favorites
+--          * Added Favorites folder (also to Screenshot window)
+--          * Add plugin to all selected tracks
+--          * Add plugin to all tracks
+--          * Ratio "long" screenshots (100%/120%)
+--        TODO:
+--         * Check ARA plugins
+--         * Focus of screenshot window
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -80,9 +87,11 @@ end
 local PLUGIN_LIST = GetFXTbl()
 local ADD_FX_TO_ITEM = false
 local old_t = {}
+local favorite_plugins = {}
 local old_filter = ""
 local current_hovered_plugin = nil
 local is_master_track_selected = false
+local copied_plugin = nil
 -- TRACK INFO
 local show_rename_popup = false
 local new_track_name = ""
@@ -91,8 +100,6 @@ local current_color = 0
 local picker_color = {0, 0, 0, 1}
 local show_add_script_popup = false
 local userScripts = {}
-
-
 -- PROJECTS
 local function GetProjectsDirectory()
     local path = reaper.GetProjectPath("")
@@ -200,6 +207,8 @@ local function SetDefaultConfig()
         show_category = true,
         show_container = true,
         show_video_processor = true,
+        show_favorites = true,
+        show_projects = true,
         bulk_screenshot_vst = true,
         bulk_screenshot_vst3 = true,
         bulk_screenshot_js = true,
@@ -249,7 +258,38 @@ local function ResetConfig()
     config = SetDefaultConfig()
     SaveConfig()
 end
+
+local function SaveFavorites()
+    local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
+    local file = io.open(script_path .. "favorite_plugins.txt", "w")
+    if file then
+        for _, fav in ipairs(favorite_plugins) do
+            file:write(fav .. "\n")
+        end
+        file:close()
+    end
+end
+
+local function LoadFavorites()
+    local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
+    local file = io.open(script_path .. "favorite_plugins.txt", "r")
+    if file then
+        for line in file:lines() do
+            table.insert(favorite_plugins, line)
+        end
+        file:close()
+    end
+end
+LoadFavorites()
 --------------------------------------------------------------------------
+function table.contains(tbl, item)
+    for _, value in pairs(tbl) do
+        if value == item then
+            return true
+        end
+    end
+    return false
+end
 local function ClearScreenshotCache(periodic_cleanup)
     local current_time = r.time_precise()
     
@@ -439,7 +479,7 @@ end
 local function ShowConfigWindow()
     local config_open = true
     local window_width = 480
-    local window_height = 680
+    local window_height = 700
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -764,6 +804,9 @@ local function ShowConfigWindow()
             if r.ImGui_Selectable(ctx, "None", config.default_folder == nil) then
                 config.default_folder = nil
             end
+            if r.ImGui_Selectable(ctx, "Favorites", config.default_folder == "Favorites") then
+                config.default_folder = "Favorites"
+            end
             if r.ImGui_Selectable(ctx, "Current Project FX", config.default_folder == "Current Project FX") then
                 config.default_folder = "Current Project FX"
             end
@@ -835,6 +878,14 @@ local function ShowConfigWindow()
         r.ImGui_SetCursorPosX(ctx, column4_width)
         changed, new_value = r.ImGui_Checkbox(ctx, "Video Processor", config.show_video_processor)
         if changed then config.show_video_processor = new_value end
+        r.ImGui_SetCursorPosX(ctx, column1_width)
+        changed, new_value = r.ImGui_Checkbox(ctx, "Favorites", config.show_favorites)
+        if changed then config.show_favorites = new_value end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, column2_width)
+        changed, new_value = r.ImGui_Checkbox(ctx, "Projects", config.show_projects)
+        if changed then config.show_projects = new_value end
+
         r.ImGui_Separator(ctx)
         _, config.close_after_adding_fx = r.ImGui_Checkbox(ctx, "Close script after adding FX", config.close_after_adding_fx)
         r.ImGui_SameLine(ctx)
@@ -1527,62 +1578,68 @@ function ShowPluginScreenshot()
             if width and height then
                 local display_width = config.screenshot_display_size
                 local display_height = display_width * (height / width)
+                local max_height = display_width * 1.2 -- 120% van de ingestelde breedte
+                
+                if display_height > max_height then
+                    display_height = max_height
+                    display_width = display_height * (width / height)
+                end
             
-                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-                local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
-                
-                local window_pos_x = mouse_x + 20
-                local window_pos_y = mouse_y + 20
-                
-                if window_pos_x + display_width > vp_width then
-                    window_pos_x = mouse_x - display_width - 20
-                end
-                if window_pos_y + display_height > vp_height * 3 then
-                    window_pos_y = mouse_y - display_height - 20
-                end
-                
-                r.ImGui_SetNextWindowSize(ctx, display_width, display_height + 30)
-                r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
-                r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
-                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 1)
-                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 14)
-                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(), 1)
-                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 1, 1)
-                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 2,2)
-                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 7)
+                    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                    local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
+                    
+                    local window_pos_x = mouse_x + 20
+                    local window_pos_y = mouse_y + 20
+                    
+                    if window_pos_x + display_width > vp_width then
+                        window_pos_x = mouse_x - display_width - 20
+                    end
+                    if window_pos_y + display_height > vp_height * 3 then
+                        window_pos_y = mouse_y - display_height - 20
+                    end
+                    
+                    r.ImGui_SetNextWindowSize(ctx, display_width, display_height + 30)
+                    r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
+                    r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
+                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 1)
+                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 14)
+                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(), 1)
+                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 1, 1)
+                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 2,2)
+                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 7)
 
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
-                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
-                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
-                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), 0x000000FF)
-                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
-                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
-                
-                if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
-                    r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
+                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
+                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), 0x000000FF)
+                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
+                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
                     
-                    local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
-                    local text_pos_x = (display_width - text_width) * 0.5
-                    local text_pos_y = display_height + 12
+                    if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+                        r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
+                        
+                        local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
+                        local text_pos_x = (display_width - text_width) * 0.5
+                        local text_pos_y = display_height + 12
+                        
+                        r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
+                        r.ImGui_Text(ctx, current_hovered_plugin)
+                        
+                        r.ImGui_End(ctx)
+                    end
                     
-                    r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
-                    r.ImGui_Text(ctx, current_hovered_plugin)
-                    
-                    r.ImGui_End(ctx)
+                    r.ImGui_PopStyleVar(ctx, 6)
+                    r.ImGui_PopStyleColor(ctx, 6)
+                else
+                    log_to_file("Ongeldige afmetingen voor texture: " .. tostring(screenshot_texture))
+                    screenshot_texture = nil
                 end
-                
-                r.ImGui_PopStyleVar(ctx, 6)
-                r.ImGui_PopStyleColor(ctx, 6)
             else
-                log_to_file("Ongeldige afmetingen voor texture: " .. tostring(screenshot_texture))
+                log_to_file("Ongeldige texture voor plugin: " .. current_hovered_plugin)
                 screenshot_texture = nil
             end
-        else
-            log_to_file("Ongeldige texture voor plugin: " .. current_hovered_plugin)
-            screenshot_texture = nil
         end
     end
-end
 
 local function GetCurrentProjectFX()
     local fx_list = {}
@@ -1663,6 +1720,39 @@ local function get_all_projects()
     end
 
 ------------------------------------------------------
+local function AddPluginToSelectedTracks(plugin_name)
+    local track_count = r.CountSelectedTracks(0)
+    for i = 0, track_count - 1 do
+        local track = r.GetSelectedTrack(0, i)
+        local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - r.TrackFX_GetCount(track))
+        r.TrackFX_Show(track, fx_index, 2)  -- 2 sluit het venster
+    end
+end
+
+local function AddPluginToAllTracks(plugin_name)
+    local track_count = r.CountTracks(0)
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - r.TrackFX_GetCount(track))
+        r.TrackFX_Show(track, fx_index, 2)  -- 2 sluit het venster
+    end
+end
+
+local function AddToFavorites(plugin_name)
+    table.insert(favorite_plugins, plugin_name)
+    SaveFavorites()
+end
+
+local function RemoveFromFavorites(plugin_name)
+    for i, fav in ipairs(favorite_plugins) do
+        if fav == plugin_name then
+            table.remove(favorite_plugins, i)
+            SaveFavorites()
+            break
+        end
+    end
+end
+
 local function ShowScreenshotWindow()
     if not config.show_screenshot_window then return end
     if screenshot_search_results and #screenshot_search_results > 0 then
@@ -1731,6 +1821,10 @@ local function ShowScreenshotWindow()
             if r.ImGui_BeginCombo(ctx, "##FolderDropdown", selected_folder or "Select Folder") then
                 if r.ImGui_Selectable(ctx, "No Folder", selected_folder == nil) then
                     selected_folder = nil
+                end
+                if r.ImGui_Selectable(ctx, "Favorites", selected_folder == "Favorites") then
+                    selected_folder = "Favorites"
+                    ClearScreenshotCache()
                 end
                 if r.ImGui_Selectable(ctx, "Current Project FX", selected_folder == "Current Project FX") then
                     selected_folder = "Current Project FX"
@@ -1827,13 +1921,30 @@ local function ShowScreenshotWindow()
         end
         local num_columns = math.max(1, math.floor(available_width / display_size))
         local column_width = available_width / num_columns 
+
+        local function ScaleScreenshotSize(width, height, max_display_size)
+            local max_height = max_display_size * 1.2 -- 120% van de ingestelde breedte
+            local display_width = max_display_size
+            local display_height = display_width * (height / width)
+            
+            if display_height > max_height then
+                display_height = max_height
+                display_width = display_height * (width / height)
+            end
+            
+            return display_width, display_height
+        end
+
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
             if selected_folder then
                 local filtered_plugins = {}
-                if selected_folder == "Current Project FX" then
+                if selected_folder == "Favorites" then
+                    filtered_plugins = favorite_plugins
+                elseif selected_folder == "Current Project FX" then
                     filtered_plugins = GetCurrentProjectFX()
                 elseif selected_folder == "Current Track FX" then
                     filtered_plugins = GetCurrentTrackFX()
+            
                     if update_search_screenshots then
                         screenshot_search_results = nil
                         update_search_screenshots = false
@@ -1862,7 +1973,7 @@ local function ShowScreenshotWindow()
                         display_size = selected_folder and (config.folder_specific_sizes[selected_folder] or config.screenshot_window_size) or config.screenshot_window_size
                     end
                     local num_columns = math.max(1, math.floor(available_width / display_size))
-                    local column_width = available_width / num_columns --!!!!!!!!
+                    local column_width = available_width / num_columns
                     for i = 1, #filtered_plugins do
                         local column = (i - 1) % num_columns
                         if column > 0 then
@@ -1877,9 +1988,7 @@ local function ShowScreenshotWindow()
                             if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                 local width, height = r.ImGui_Image_GetSize(texture)
                                 if width and height then
-                                    local aspect_ratio = height > 0 and width / height or 1
-                                    local display_width = config.resize_screenshots_with_window and (column_width - 10) or display_size
-                                    local display_height = display_width / aspect_ratio
+                                    local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                     if r.ImGui_ImageButton(ctx, "##"..plugin_name, texture, display_width, display_height) then
                                         if TRACK then
                                             r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
@@ -1888,9 +1997,29 @@ local function ShowScreenshotWindow()
                                             end
                                         end
                                     end
-                                    if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik voor nieuwe screenshot
-                                        MakeScreenshot(plugin_name, nil, true)
+                                    if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
+                                        r.ImGui_OpenPopup(ctx, "ScreenshotPluginMenu_" .. i)
                                     end
+                                    
+                                    if r.ImGui_BeginPopup(ctx, "ScreenshotPluginMenu_" .. i) then
+                                        if r.ImGui_MenuItem(ctx, "Make Screenshot") then
+                                            MakeScreenshot(plugin_name, nil, true)
+                                        end
+                                        if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                                            AddPluginToSelectedTracks(plugin_name)
+                                        end
+                                        if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                                            AddPluginToAllTracks(plugin_name)
+                                        end
+                                        if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                                            AddToFavorites(plugin_name)
+                                        end
+                                        if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                                            RemoveFromFavorites(plugin_name)
+                                        end
+                                        r.ImGui_EndPopup(ctx)
+                                    end
+                                    
                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                     r.ImGui_Text(ctx, plugin_name)
                                     r.ImGui_PopTextWrapPos(ctx)
@@ -1961,19 +2090,21 @@ local function ShowScreenshotWindow()
                                     if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                         local width, height = r.ImGui_Image_GetSize(texture)
                                         if width and height then
-                                            local aspect_ratio = height > 0 and width / height or 1
-                                            local display_width = config.resize_screenshots_with_window and (column_width - 10) or display_size
-                                            local display_height = display_width / aspect_ratio
-                                            if r.ImGui_ImageButton(ctx, "##"..plugin.fx_name, texture, display_width, display_height) then
+                                            local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
+                                            
+                                            if r.ImGui_ImageButton(ctx, "##"..plugin.fx_name..(plugin.track_number and ("_"..plugin.track_number) or ""), texture, display_width, display_height) then
+
                                                 if selected_folder == "Current Project FX" then
-                                                    local track = reaper.GetTrack(0, plugin.track_number - 1)
-                                                    local fx_count = reaper.TrackFX_GetCount(track)
-                                                    for j = 0, fx_count - 1 do
-                                                        local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
-                                                        if retval and fx_name == plugin.fx_name then
-                                                            local is_open = reaper.TrackFX_GetFloatingWindow(track, j) ~= nil
-                                                            reaper.TrackFX_Show(track, j, is_open and 2 or 3)
-                                                            break
+                                                    local track = r.GetTrack(0, plugin.track_number - 1)
+                                                    if track then
+                                                        local fx_count = r.TrackFX_GetCount(track)
+                                                        for j = 0, fx_count - 1 do
+                                                            local retval, fx_name = r.TrackFX_GetFXName(track, j, "")
+                                                            if retval and fx_name == plugin.fx_name then
+                                                                local is_open = r.TrackFX_GetFloatingWindow(track, j) ~= nil
+                                                                r.TrackFX_Show(track, j, is_open and 2 or 3)
+                                                                break
+                                                            end
                                                         end
                                                     end
                                                 elseif selected_folder == "Current Track FX" then
@@ -2017,12 +2148,7 @@ local function ShowScreenshotWindow()
                                             r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                             r.ImGui_Text(ctx, plugin.fx_name)
                                             r.ImGui_PopTextWrapPos(ctx)
-                                        else
-                                            log_to_file("Ongeldige afmetingen voor texture: " .. tostring(texture))
-                                            search_texture_cache[screenshot_file] = nil
                                         end
-                                    else
-                                        log_to_file("Ongeldige texture voor fx: " .. plugin.fx_name)
                                     end
                                 end
                             end
@@ -2062,9 +2188,8 @@ local function ShowScreenshotWindow()
                         if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                             local width, height = r.ImGui_Image_GetSize(texture)
                             if width and height then
-                                local aspect_ratio = height > 0 and width / height or 1
-                                local display_width = config.resize_screenshots_with_window and (column_width - 10) or display_size
-                                local display_height = display_width / aspect_ratio
+                                local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
+                                
                                 if r.ImGui_ImageButton(ctx, "##"..fx.name, texture, display_width, display_height) then
                                     if TRACK then
                                         r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
@@ -2081,12 +2206,7 @@ local function ShowScreenshotWindow()
                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                 r.ImGui_Text(ctx, fx.name)
                                 r.ImGui_PopTextWrapPos(ctx)
-                            else
-                                log_to_file("Ongeldige afmetingen voor texture: " .. tostring(texture))
-                                search_texture_cache[screenshot_file] = nil
                             end
-                        else
-                            log_to_file("Ongeldige texture voor fx: " .. fx.name)
                         end
                     end
                     r.ImGui_EndGroup(ctx)
@@ -2202,8 +2322,27 @@ local function FilterBox()
                         r.ImGui_EndTooltip(ctx)
                     end
                 end
-                if r.ImGui_IsItemClicked(ctx, 1) then
-                    MakeScreenshot(filtered_fx[i].name)
+                if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
+                    r.ImGui_OpenPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j)
+                end
+                
+                if r.ImGui_BeginPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j) then
+                    if r.ImGui_MenuItem(ctx, "Make Screenshot") then
+                        MakeScreenshot(tbl[i].fx[j], nil, true)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                        AddPluginToSelectedTracks(tbl[i].fx[j], false)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                       AddPluginToAllTracks(tbl[i].fx[j], false)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                        AddToFavorites(tbl[i].fx[j])
+                    end
+                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                        RemoveFromFavorites(tbl[i].fx[j])
+                    end
+                    r.ImGui_EndPopup(ctx)
                 end
             end
             if not r.ImGui_IsWindowHovered(ctx) then
@@ -2284,7 +2423,7 @@ local function DrawFxChains(tbl, path)
                         local new_path = fx_chains_path .. "/" .. new_name .. extension
                         if os.rename(old_path, new_path) then
                             tbl[i] = new_name
-                            FX_LIST_TEST, CAT_TEST = MakeFXFiles()  -- Vernieuw de FX-lijst
+                            FX_LIST_TEST, CAT_TEST = MakeFXFiles()  
                             r.ShowMessageBox("FX Chain renamed", "Success", 0)
                         else
                             r.ShowMessageBox("Could not rename FX Chain", "Error", 0)
@@ -2297,7 +2436,7 @@ local function DrawFxChains(tbl, path)
                     local file_path = fx_chains_path .. "/" .. item .. extension
                     if os.remove(file_path) then
                         table.remove(tbl, i)
-                        FX_LIST_TEST, CAT_TEST = MakeFXFiles()  -- Vernieuw de FX-lijst
+                        FX_LIST_TEST, CAT_TEST = MakeFXFiles() 
                         r.ShowMessageBox("FX Chain deleted", "Success", 0)
                         i = i - 1  -- Pas de index aan omdat we een element hebben verwijderd
                     else
@@ -2356,10 +2495,42 @@ local function DrawItems(tbl, main_cat_name)
     if menu_direction_right then
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_SelectableTextAlign(), 1, 0.5)
     end
+
+    --[[ Teken eerst favorieten
+    if #favorite_plugins > 0 then
+        r.ImGui_Text(ctx, "Favorites")
+        r.ImGui_Separator(ctx)
+        for k, fav in ipairs(favorite_plugins) do
+            if r.ImGui_Selectable(ctx, fav) then
+                if ADD_FX_TO_ITEM then
+                    AddFXToItem(fav)
+                else
+                    if TRACK then
+                        r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
+                    end
+                end
+                LAST_USED_FX = fav
+                if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
+                    SHOULD_CLOSE_SCRIPT = true
+                end
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "FavoritePluginMenu_" .. k)
+            end
+            if r.ImGui_BeginPopup(ctx, "FavoritePluginMenu_" .. k) then
+                if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                    RemoveFromFavorites(fav)
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+        end
+        r.ImGui_Separator(ctx)
+    end]]--
+
     local items = tbl or {}
     for i = 1, #items do
         r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
-        r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)       
+        r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)      
         r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), config.background_color)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         r.ImGui_SetNextWindowSize(ctx, FX_LIST_WIDTH, 0)
@@ -2377,8 +2548,7 @@ local function DrawItems(tbl, main_cat_name)
                             AddFXToItem(tbl[i].fx[j])
                         else
                             if TRACK then
-                                r.TrackFX_AddByName(TRACK, tbl[i].fx[j], false,
-                                    -1000 - r.TrackFX_GetCount(TRACK))
+                                r.TrackFX_AddByName(TRACK, tbl[i].fx[j], false, -1000 - r.TrackFX_GetCount(TRACK))
                             end
                         end
                         LAST_USED_FX = tbl[i].fx[j]
@@ -2393,8 +2563,27 @@ local function DrawItems(tbl, main_cat_name)
                         end
                         is_screenshot_visible = true
                     end
-                    if r.ImGui_IsItemClicked(ctx, 1) then
-                        MakeScreenshot(tbl[i].fx[j], nil, true)
+                    if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
+                        r.ImGui_OpenPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j)
+                    end
+                   
+                    if r.ImGui_BeginPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j) then
+                        if r.ImGui_MenuItem(ctx, "Make Screenshot") then
+                            MakeScreenshot(tbl[i].fx[j], nil, true)
+                        end
+                        if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                            AddPluginToSelectedTracks(tbl[i].fx[j], false)
+                        end
+                        if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                            AddPluginToAllTracks(tbl[i].fx[j], false)
+                        end
+                        if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                            AddToFavorites(tbl[i].fx[j])
+                        end
+                        if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                            RemoveFromFavorites(tbl[i].fx[j])
+                        end
+                        r.ImGui_EndPopup(ctx)
                     end
                 end
             end
@@ -2409,6 +2598,48 @@ local function DrawItems(tbl, main_cat_name)
     end
     if menu_direction_right then
         r.ImGui_PopStyleVar(ctx)
+    end
+end
+local function DrawFavorites()
+    for i, fav in ipairs(favorite_plugins) do
+        if r.ImGui_Selectable(ctx, fav) then
+            if TRACK then
+                r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
+            end
+            LAST_USED_FX = fav
+            if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
+                SHOULD_CLOSE_SCRIPT = true
+            end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            if fav ~= current_hovered_plugin then
+                current_hovered_plugin = fav
+                LoadPluginScreenshot(current_hovered_plugin)
+            end
+            is_screenshot_visible = true
+        end
+        if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
+            r.ImGui_OpenPopup(ctx, "FavoritePluginMenu_" .. i)
+        end
+        if r.ImGui_BeginPopup(ctx, "FavoritePluginMenu_" .. i) then
+            if r.ImGui_MenuItem(ctx, "Make Screenshot") then
+                MakeScreenshot(fav, nil, true)
+            end
+            if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                AddPluginToSelectedTracks(fav, false)
+            end
+            if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                AddPluginToAllTracks(fav, false)
+            end
+            if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                RemoveFromFavorites(fav)
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+    end
+    if not r.ImGui_IsWindowHovered(ctx) then
+        is_screenshot_visible = false
+        current_hovered_plugin = nil
     end
 end
 
@@ -2539,8 +2770,25 @@ local function ShowTrackFX()
                         end
                         IS_COPYING_TO_ALL_TRACKS = false
                     end
+                    if r.ImGui_MenuItem(ctx, "Copy Plugin") then
+                        copied_plugin = {track = TRACK, index = i}
+                    end
+                    if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
+                        if copied_plugin then
+                            r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, i, true)
+                        end
+                    end
                     if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
                         r.TrackFX_SetEnabled(TRACK, i, not is_enabled)
+                    end
+                    if table.contains(favorite_plugins, fx_name) then
+                        if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                            RemoveFromFavorites(fx_name)
+                        end
+                    else
+                        if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                            AddToFavorites(fx_name)
+                        end
                     end
                     r.ImGui_EndPopup(ctx)
                 end
@@ -2551,10 +2799,23 @@ local function ShowTrackFX()
         else
             r.ImGui_Text(ctx, "No FX on Track")
         end
+        if fx_count == 0 or copied_plugin then
+            if r.ImGui_Button(ctx, fx_count == 0 and "Paste Plugin" or "Paste Plugin at End") and copied_plugin then
+                r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, fx_count, true)
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
+                r.ImGui_OpenPopup(ctx, "PastePluginMenu")
+            end
+            if r.ImGui_BeginPopup(ctx, "PastePluginMenu") then
+                if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) and copied_plugin then
+                    r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, fx_count, true)
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+        end
         r.ImGui_EndChild(ctx)
     end
 end
-
 
 local function ShowItemFX()
     local item = r.GetSelectedMediaItem(0, 0)
@@ -2630,6 +2891,21 @@ end
 function Frame()
     local search = FilterBox()
     if search then return end
+    if config.show_favorites and #favorite_plugins > 0 then
+        r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+        r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+        if r.ImGui_BeginMenu(ctx, "FAVORITES") then
+            DrawFavorites()
+            r.ImGui_EndMenu(ctx)
+        end
+        r.ImGui_PopStyleVar(ctx, 3)
+        r.ImGui_PopStyleColor(ctx, 2)
+    end
     for i = 1, #CAT_TEST do
         local category_name = CAT_TEST[i].name
         if (category_name == "ALL PLUGINS" and config.show_all_plugins) or
@@ -2679,11 +2955,13 @@ function Frame()
                 end
             end
         end
-        if r.ImGui_Selectable(ctx, "PROJECTS") then
-            show_media_browser = not show_media_browser
-            if show_media_browser then
-                LoadProjects()
-                ClearScreenshotCache()
+        if config.show_projects then
+            if r.ImGui_Selectable(ctx, "PROJECTS") then
+                show_media_browser = not show_media_browser
+                if show_media_browser then
+                    LoadProjects()
+                    ClearScreenshotCache()
+                end
             end
         end
         if LAST_USED_FX then
@@ -2781,7 +3059,6 @@ local function loadUserScripts()
     return scripts
 end
 
-
 local function saveUserScript(name, command_id)
     local file = io.open(getScriptsIniPath(), "a")
     if file then
@@ -2825,8 +3102,6 @@ local function removeUserScript(index)
         file:close()
     end
 end
-
-
 -----------------------------------------------------------------
 function Main()
     userScripts = loadUserScripts()
@@ -3047,11 +3322,9 @@ function Main()
                     r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
                     r.ImGui_OpenPopup(ctx, "Change Track Color")
                 end
-                
                 if r.ImGui_BeginPopupModal(ctx, "Change Track Color", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)  
                     local sws_colors, has_sws_colors = get_sws_colors()
-                    -- has_sws_colors = false  -- Tijdelijk voor testdoeleinden
                     if has_sws_colors then
                         local columns = 4
                         local color_count = #sws_colors
