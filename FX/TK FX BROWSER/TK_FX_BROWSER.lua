@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.8
+-- @version 0.5.9
 -- @changelog:
 --         * Enable /disable Screenshot names (for screensot window and individual)
 --         * Enable /disable screenshot names per plugin
@@ -2222,9 +2222,11 @@ local function ShowScreenshotWindow()
                                                     MakeScreenshot(plugin.fx_name, nil, true)
                                                 end
                                             end
-                                            r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                            r.ImGui_Text(ctx, plugin.fx_name)
-                                            r.ImGui_PopTextWrapPos(ctx)
+                                            if config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] then
+                                                r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                                r.ImGui_Text(ctx, plugin.fx_name)
+                                                r.ImGui_PopTextWrapPos(ctx)
+                                            end
                                         end
                                     end
                                 end
@@ -2295,16 +2297,30 @@ local function ShowScreenshotWindow()
                                     if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                                         RemoveFromFavorites(fx.name)
                                     end
+                                    if config.hidden_names[fx.name] then
+                                        if r.ImGui_MenuItem(ctx, "Show Name") then
+                                            config.hidden_names[fx.name] = nil
+                                            SaveConfig()
+                                        end
+                                    else
+                                        if r.ImGui_MenuItem(ctx, "Hide Name") then
+                                            config.hidden_names[fx.name] = true
+                                            SaveConfig()
+                                        end
+                                    end
                                     r.ImGui_EndPopup(ctx)
                                 end
-
-                                r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                r.ImGui_Text(ctx, fx.name)
-                                r.ImGui_PopTextWrapPos(ctx)
+                    
+                                if config.show_name_in_screenshot_window and not config.hidden_names[fx.name] then
+                                    r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                    r.ImGui_Text(ctx, fx.name)
+                                    r.ImGui_PopTextWrapPos(ctx)
+                                end
                             end
                         end
                     end
                     r.ImGui_EndGroup(ctx)
+                    
                     if column == num_columns - 1 then
                         r.ImGui_Separator(ctx)
                     end
