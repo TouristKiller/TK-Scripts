@@ -1,15 +1,12 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.6
+-- @version 0.5.7
 -- @changelog:
---          * maak een favorieten systeem -- gedaan
---       
---         * voeg plugin toe aan alle geselecteerde tracks -- gedaan
---         * voeg plugin toe aan alle tracks -- gedaam
---         * verhouding lange screenshots -- gedaam
+--         * Enable /disable standard menu items rightclick track titlebar menu
+--         * Scrolbar always starts at the top in showscreenshot window
 --
---         * ARA plugins
---         * Focus van screenshot als master ook in de doch staat ????
+--         
+--         * Screenshot windows sluiten als fx browser uit focus
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -92,6 +89,9 @@ local old_filter = ""
 local current_hovered_plugin = nil
 local is_master_track_selected = false
 local copied_plugin = nil
+local last_selected_folder = nil
+local new_search_performed = false
+local folder_changed = false
 -- TRACK INFO
 local show_rename_popup = false
 local new_track_name = ""
@@ -227,6 +227,7 @@ local function SetDefaultConfig()
         close_after_adding_fx = false,
         folder_specific_sizes = {},
         include_x86_bridged = false,
+        hide_default_titlebar_menu_items = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -479,7 +480,7 @@ end
 local function ShowConfigWindow()
     local config_open = true
     local window_width = 480
-    local window_height = 700
+    local window_height = 720
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -752,6 +753,9 @@ local function ShowConfigWindow()
         r.ImGui_SameLine(ctx, 0, 20)
         _, config.dock_screenshot_left = r.ImGui_Checkbox(ctx, "Left", config.dock_screenshot_left)
         end
+        r.ImGui_SetCursorPosX(ctx, column1_width)
+        _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
+
 
         r.ImGui_Dummy(ctx, 0, 5)
                 NewSection("BULK:")
@@ -1345,6 +1349,41 @@ local function CaptureFirstTrackFX()
     end
 end
 
+local function IsARAPlugin(track, fx_index)
+    return r.TrackFX_GetNamedConfigParm(track, fx_index, "ARA")
+end
+
+local function CaptureARAScreenshot(track, fx_index, plugin_name)
+    local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
+    if hwnd then
+        -- Open ARA interface
+        r.TrackFX_Show(track, fx_index, 3)
+        r.defer(function()
+            -- Geef de ARA interface tijd om te openen
+            r.time_precise()
+            r.defer(function()
+                local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+                local filename = screenshot_path .. safe_name .. ".png"
+                local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+                local w, h = right - left, bottom - top
+                
+                -- Maak screenshot van ARA interface
+                local srcDC = r.JS_GDI_GetClientDC(hwnd)
+                local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
+                local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
+                r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, config.srcx, config.srcy, w, h)
+                r.JS_LICE_WritePNG(filename, srcBmp, false)
+                r.JS_GDI_ReleaseDC(hwnd, srcDC)
+                r.JS_LICE_DestroyBitmap(srcBmp)
+                
+                -- Sluit ARA interface
+                r.TrackFX_Show(track, fx_index, 2)
+            end)
+        end)
+    end
+end
+
+
 local function MakeScreenshot(plugin_name, callback, is_individual)
     if not IsPluginVisible(plugin_name) then
         if callback then callback() end
@@ -1396,15 +1435,20 @@ local function MakeScreenshot(plugin_name, callback, is_individual)
         r.TrackFX_Show(TRACK, fx_index, 3)
         
         Wait(function()
-            CaptureScreenshot(plugin_name, fx_index)
-            r.TrackFX_Show(TRACK, fx_index, 2) -- Sluit de plugin
-            r.TrackFX_Delete(TRACK, fx_index) -- Verwijder de plugin
-            EnsurePluginRemoved(fx_index, callback) -- Controleer of de plugin is verwijderd
+            if IsARAPlugin(TRACK, fx_index) then
+                CaptureARAScreenshot(TRACK, fx_index, plugin_name)
+            else
+                CaptureScreenshot(plugin_name, fx_index)
+            end
+            r.TrackFX_Show(TRACK, fx_index, 2)
+            r.TrackFX_Delete(TRACK, fx_index)
+            EnsurePluginRemoved(fx_index, callback)
         end)
     else
         if callback then callback() end
     end
 end
+
 
 
 local bulk_screenshot_progress = 0
@@ -1850,6 +1894,7 @@ local function ShowScreenshotWindow()
                 end
                 r.ImGui_EndCombo(ctx)
             end
+            
                 if r.ImGui_IsItemHovered(ctx) then
                     local wheel_delta = r.ImGui_GetMouseWheel(ctx)
                     if wheel_delta ~= 0 then
@@ -1936,6 +1981,16 @@ local function ShowScreenshotWindow()
         end
 
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
+            if folder_changed or new_search_performed then
+                r.ImGui_SetScrollY(ctx, 0)
+                folder_changed = false
+                new_search_performed = false
+            end
+            if selected_folder ~= last_selected_folder then
+                folder_changed = true
+                last_selected_folder = selected_folder
+            end
+            
             if selected_folder then
                 local filtered_plugins = {}
                 if selected_folder == "Favorites" then
@@ -2273,12 +2328,14 @@ local function FilterBox()
     local changed
     changed, FILTER = r.ImGui_InputTextWithHint(ctx, '##input', "SEARCH FX", FILTER)
     if changed then
+        new_search_performed = true
     end
     r.ImGui_SameLine(ctx)
     if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
         if FILTER == "" then
             if last_viewed_folder then
                 selected_folder = last_viewed_folder
+                r.ImGui_SetScrollY(ctx, 0)
                 show_screenshot_window = true
                 screenshot_window_interactive = true
                 screenshot_search_results = nil
@@ -2288,6 +2345,7 @@ local function FilterBox()
         else
             UpdateLastViewedFolder(selected_folder)
             screenshot_search_results = Filter_actions(FILTER)
+            new_search_performed = true
             update_search_screenshots = true
             show_screenshot_window = true
             screenshot_window_interactive = true
@@ -2300,6 +2358,7 @@ local function FilterBox()
     if r.ImGui_Button(ctx, "X", 20, button_height) then
         FILTER = ""
         screenshot_search_results = nil
+        r.ImGui_SetScrollY(ctx, 0)
         show_screenshot_window = true
         selected_folder = config.default_folder
         ClearScreenshotCache()
@@ -3221,68 +3280,70 @@ function Main()
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
                 
-                if r.ImGui_BeginPopup(ctx, "TrackContextMenu") then
+                if r.ImGui_BeginPopupContextItem(ctx) then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)  -- Witte tekst
-                   
                     
-                    if r.ImGui_MenuItem(ctx, "Color Picker") then
-                        show_color_picker = true
-                    end
-                    if r.ImGui_MenuItem(ctx, "Duplicate Track") then
-                        r.Main_OnCommand(40062, 0)  -- Track: Duplicate tracks
-                    end
-                    if r.ImGui_MenuItem(ctx, "Delete Track") then
-                        r.DeleteTrack(TRACK)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Add New Track") then
-                        r.InsertTrackAtIndex(r.GetNumTracks(), true)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Show/Hide Envelope") then
-                        r.Main_OnCommand(41151, 0)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Move Track Up") then
-                        moveTrackUp(TRACK)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Move Track Down") then
-                        r.ReorderSelectedTracks(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") + 1, 0)
-                    end
-                    
-                    if r.ImGui_MenuItem(ctx, "Go to First Track") then
-                        local first_track = r.GetTrack(0, 0)
-                        if first_track then r.SetOnlyTrackSelected(first_track) end
-                    end
-                    if r.ImGui_MenuItem(ctx, "Go to Last Track") then
-                        local last_track = r.GetTrack(0, r.GetNumTracks() - 1)
-                        if last_track then r.SetOnlyTrackSelected(last_track) end
-                    end
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_Text(ctx, "3rd party: " )
-                    local send_buddy_id = r.NamedCommandLookup("_RS39115aaa5f19081d275c9a8dbdf990de23d6d9fa")
-                    
-                    if r.ImGui_MenuItem(ctx, "Send Buddy (Oded)") then
-                        if send_buddy_id ~= 0 then
-                            r.Main_OnCommand(send_buddy_id, 0)
-                        else
-                            r.ShowMessageBox("Send Buddy (Oded) is not installed. Install this action to use this function.", "Action not found", 0)
+                    if not config.hide_default_titlebar_menu_items then
+                        if r.ImGui_MenuItem(ctx, "Color Picker") then
+                            show_color_picker = true
                         end
-                    end
-                    local track_snapshot_id = r.NamedCommandLookup("_RSf9d888b66c9bb4971001d0788a38a00a930ad499")
-                    if r.ImGui_MenuItem(ctx, "Track Snapshot (daniellumertz)") then
-                        if track_snapshot_id ~= 0 then
-                            r.Main_OnCommand(track_snapshot_id, 0)
-                        else
-                            r.ShowMessageBox("Track Snapshot (daniellumertz) is not installed. Install this action to use this function.", "Action not found", 0)
+                        if r.ImGui_MenuItem(ctx, "Duplicate Track") then
+                            r.Main_OnCommand(40062, 0)  -- Track: Duplicate tracks
                         end
-                    end
-                    local track_icon_selector_id = r.NamedCommandLookup("_RSd166add798d24704e0ae7dfd5a50848258c1a3e9")
-                    if r.ImGui_MenuItem(ctx, "Track Icon Selector (Reapertips)") then
-                        if track_icon_selector_id ~= 0 then
-                            r.Main_OnCommand(track_icon_selector_id, 0)
-                        else
-                            r.ShowMessageBox("Track Icon Selector (Reapertips) is not installed. Install this action to use this function.", "Action not found", 0)
+                        if r.ImGui_MenuItem(ctx, "Delete Track") then
+                            r.DeleteTrack(TRACK)
                         end
+                        if r.ImGui_MenuItem(ctx, "Add New Track") then
+                            r.InsertTrackAtIndex(r.GetNumTracks(), true)
+                        end
+                        if r.ImGui_MenuItem(ctx, "Show/Hide Envelope") then
+                            r.Main_OnCommand(41151, 0)
+                        end
+                        if r.ImGui_MenuItem(ctx, "Move Track Up") then
+                            moveTrackUp(TRACK)
+                        end
+                        if r.ImGui_MenuItem(ctx, "Move Track Down") then
+                            r.ReorderSelectedTracks(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") + 1, 0)
+                        end
+                        
+                        if r.ImGui_MenuItem(ctx, "Go to First Track") then
+                            local first_track = r.GetTrack(0, 0)
+                            if first_track then r.SetOnlyTrackSelected(first_track) end
+                        end
+                        if r.ImGui_MenuItem(ctx, "Go to Last Track") then
+                            local last_track = r.GetTrack(0, r.GetNumTracks() - 1)
+                            if last_track then r.SetOnlyTrackSelected(last_track) end
+                        end
+                        r.ImGui_Separator(ctx)
+                        r.ImGui_Text(ctx, "3rd party: " )
+                        local send_buddy_id = r.NamedCommandLookup("_RS39115aaa5f19081d275c9a8dbdf990de23d6d9fa")
+                        
+                        if r.ImGui_MenuItem(ctx, "Send Buddy (Oded)") then
+                            if send_buddy_id ~= 0 then
+                                r.Main_OnCommand(send_buddy_id, 0)
+                            else
+                                r.ShowMessageBox("Send Buddy (Oded) is not installed. Install this action to use this function.", "Action not found", 0)
+                            end
+                        end
+                        local track_snapshot_id = r.NamedCommandLookup("_RSf9d888b66c9bb4971001d0788a38a00a930ad499")
+                        if r.ImGui_MenuItem(ctx, "Track Snapshot (daniellumertz)") then
+                            if track_snapshot_id ~= 0 then
+                                r.Main_OnCommand(track_snapshot_id, 0)
+                            else
+                                r.ShowMessageBox("Track Snapshot (daniellumertz) is not installed. Install this action to use this function.", "Action not found", 0)
+                            end
+                        end
+                        local track_icon_selector_id = r.NamedCommandLookup("_RSd166add798d24704e0ae7dfd5a50848258c1a3e9")
+                        if r.ImGui_MenuItem(ctx, "Track Icon Selector (Reapertips)") then
+                            if track_icon_selector_id ~= 0 then
+                                r.Main_OnCommand(track_icon_selector_id, 0)
+                            else
+                                r.ShowMessageBox("Track Icon Selector (Reapertips) is not installed. Install this action to use this function.", "Action not found", 0)
+                            end
+                        end
+                        r.ImGui_Separator(ctx)
                     end
-                    r.ImGui_Separator(ctx)
+                
                     r.ImGui_Text(ctx, "User Scripts (" .. #userScripts .. "):")
                     for i, script in ipairs(userScripts) do
                         if r.ImGui_MenuItem(ctx, script.name) then
@@ -3306,81 +3367,81 @@ function Main()
                     r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndPopup(ctx)
                 end
-                if show_rename_popup then
-                    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-                    r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
-                    r.ImGui_OpenPopup(ctx, "Rename Track")
-                end
-                if r.ImGui_BeginPopupModal(ctx, "Rename Track", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF) 
-                    r.ImGui_Text(ctx, "Enter new track name:")
-                    r.ImGui_SetNextItemWidth(ctx, 200)
-                    local changed, value = r.ImGui_InputText(ctx, "##NewTrackName", new_track_name)
-                    if changed then
-                        new_track_name = value
+                    if show_rename_popup then
+                        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                        r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
+                        r.ImGui_OpenPopup(ctx, "Rename Track")
                     end
-                    if r.ImGui_Button(ctx, "OK", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
-                        if new_track_name ~= "" then
-                            r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", new_track_name, true)
+                    if r.ImGui_BeginPopupModal(ctx, "Rename Track", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF) 
+                        r.ImGui_Text(ctx, "Enter new track name:")
+                        r.ImGui_SetNextItemWidth(ctx, 200)
+                        local changed, value = r.ImGui_InputText(ctx, "##NewTrackName", new_track_name)
+                        if changed then
+                            new_track_name = value
                         end
-                        show_rename_popup = false
-                        r.ImGui_CloseCurrentPopup(ctx)
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Cancel", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
-                        show_rename_popup = false
-                        r.ImGui_CloseCurrentPopup(ctx)
-                    end
-                    r.ImGui_PopStyleColor(ctx) 
-                    r.ImGui_EndPopup(ctx)
-                end
-                local sws_colors, has_sws_colors = get_sws_colors()
-                if show_color_picker then
-                    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-                    r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
-                    r.ImGui_OpenPopup(ctx, "Change Track Color")
-                end
-                if r.ImGui_BeginPopupModal(ctx, "Change Track Color", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)  
-                    local sws_colors, has_sws_colors = get_sws_colors()
-                    if has_sws_colors then
-                        local columns = 4
-                        local color_count = #sws_colors
-                        local rows = math.max(1, math.ceil(color_count / columns))
-                        for row = 1, rows do
-                            r.ImGui_PushID(ctx, row)
-                            for col = 1, columns do
-                                local color_index = (row - 1) * columns + col
-                                if color_index <= color_count then
-                                    local color = sws_colors[color_index]
-                                    local red, g, b = reaper.ColorFromNative(color)
-                                    local color_vec4 = r.ImGui_ColorConvertDouble4ToU32(red/255, g/255, b/255, 1.0)
-                                    
-                                    if r.ImGui_ColorButton(ctx, "##SWSColor" .. color_index, color_vec4, 0, 30, 30) then
-                                        local native_color = reaper.ColorToNative(red, g, b)|0x1000000
-                                        reaper.SetTrackColor(TRACK, native_color)
-                                        show_color_picker = false
-                                        r.ImGui_CloseCurrentPopup(ctx)
-                                    end
-                                    if col < columns then r.ImGui_SameLine(ctx) end
-                                end
+                        if r.ImGui_Button(ctx, "OK", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+                            if new_track_name ~= "" then
+                                r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", new_track_name, true)
                             end
-                            r.ImGui_PopID(ctx)
-                        end
-                    else
-                        r.ImGui_Text(ctx, "No SWS Colors Found...")
-                        if r.ImGui_Button(ctx, "Open Reaper Color Picker") then
-                            local current_color = r.GetTrackColor(TRACK)
-                            local ok, new_color = r.GR_SelectColor(current_color)
-                            if ok then
-                                r.SetTrackColor(TRACK, new_color)
-                            end
-                            show_color_picker = false
+                            show_rename_popup = false
                             r.ImGui_CloseCurrentPopup(ctx)
                         end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "Cancel", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+                            show_rename_popup = false
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
+                        r.ImGui_PopStyleColor(ctx) 
+                        r.ImGui_EndPopup(ctx)
                     end
+                    local sws_colors, has_sws_colors = get_sws_colors()
+                    if show_color_picker then
+                        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                        r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
+                        r.ImGui_OpenPopup(ctx, "Change Track Color")
+                    end
+                    if r.ImGui_BeginPopupModal(ctx, "Change Track Color", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)  
+                        local sws_colors, has_sws_colors = get_sws_colors()
+                        if has_sws_colors then
+                            local columns = 4
+                            local color_count = #sws_colors
+                            local rows = math.max(1, math.ceil(color_count / columns))
+                            for row = 1, rows do
+                                r.ImGui_PushID(ctx, row)
+                                for col = 1, columns do
+                                    local color_index = (row - 1) * columns + col
+                                    if color_index <= color_count then
+                                        local color = sws_colors[color_index]
+                                        local red, g, b = reaper.ColorFromNative(color)
+                                        local color_vec4 = r.ImGui_ColorConvertDouble4ToU32(red/255, g/255, b/255, 1.0)
+                                        
+                                        if r.ImGui_ColorButton(ctx, "##SWSColor" .. color_index, color_vec4, 0, 30, 30) then
+                                            local native_color = reaper.ColorToNative(red, g, b)|0x1000000
+                                            reaper.SetTrackColor(TRACK, native_color)
+                                            show_color_picker = false
+                                            r.ImGui_CloseCurrentPopup(ctx)
+                                        end
+                                        if col < columns then r.ImGui_SameLine(ctx) end
+                                    end
+                                end
+                                r.ImGui_PopID(ctx)
+                            end
+                        else
+                            r.ImGui_Text(ctx, "No SWS Colors Found...")
+                            if r.ImGui_Button(ctx, "Open Reaper Color Picker") then
+                                local current_color = r.GetTrackColor(TRACK)
+                                local ok, new_color = r.GR_SelectColor(current_color)
+                                if ok then
+                                    r.SetTrackColor(TRACK, new_color)
+                                end
+                                show_color_picker = false
+                                r.ImGui_CloseCurrentPopup(ctx)
+                            end
+                        end
                     
-                    r.ImGui_Separator(ctx)
+                        r.ImGui_Separator(ctx)
                     if r.ImGui_Button(ctx, "Cancel") or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
                         show_color_picker = false
                         r.ImGui_CloseCurrentPopup(ctx)
@@ -3494,6 +3555,7 @@ function Main()
         return
     end
     if open then
+        
         r.defer(Main)
     end
 end
