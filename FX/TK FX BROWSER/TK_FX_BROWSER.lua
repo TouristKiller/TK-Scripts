@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.7
+-- @version 0.5.8
 -- @changelog:
---         * Enable /disable standard menu items rightclick track titlebar menu
---         * Scrolbar always starts at the top in showscreenshot window
+--         * Enable /disable Screenshot names (for screensot window and individual)
+--         * Enable /disable screenshot names per plugin
 --
 --         
 --         * Screenshot windows sluiten als fx browser uit focus
@@ -228,6 +228,9 @@ local function SetDefaultConfig()
         folder_specific_sizes = {},
         include_x86_bridged = false,
         hide_default_titlebar_menu_items = false,
+        show_name_in_screenshot_window = true,
+        show_name_in_main_window = true,
+        hidden_names = {},
     } 
 end
 local config = SetDefaultConfig()    
@@ -480,7 +483,7 @@ end
 local function ShowConfigWindow()
     local config_open = true
     local window_width = 480
-    local window_height = 720
+    local window_height = 740
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -754,8 +757,12 @@ local function ShowConfigWindow()
         _, config.dock_screenshot_left = r.ImGui_Checkbox(ctx, "Left", config.dock_screenshot_left)
         end
         r.ImGui_SetCursorPosX(ctx, column1_width)
+        _, config.show_name_in_screenshot_window = r.ImGui_Checkbox(ctx, "Show Names in Screenshot Window", config.show_name_in_screenshot_window)
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, column3_width)
+        _, config.show_name_in_main_window = r.ImGui_Checkbox(ctx, "Show Names in Main Window", config.show_name_in_main_window)
+        r.ImGui_SetCursorPosX(ctx, column1_width)
         _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
-
 
         r.ImGui_Dummy(ctx, 0, 5)
                 NewSection("BULK:")
@@ -1628,7 +1635,7 @@ function ShowPluginScreenshot()
                     display_height = max_height
                     display_width = display_height * (width / height)
                 end
-            
+                    
                     local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
                     local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
                     
@@ -1641,8 +1648,9 @@ function ShowPluginScreenshot()
                     if window_pos_y + display_height > vp_height * 3 then
                         window_pos_y = mouse_y - display_height - 20
                     end
-                    
-                    r.ImGui_SetNextWindowSize(ctx, display_width, display_height + 30)
+                    local show_name = config.show_name_in_main_window and not config.hidden_names[current_hovered_plugin]
+                    local window_height = display_height + (show_name and 30 or 0)
+                    r.ImGui_SetNextWindowSize(ctx, display_width, window_height)
                     r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
                     r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
                     r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 1)
@@ -1662,13 +1670,14 @@ function ShowPluginScreenshot()
                     if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
                         r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
                         
-                        local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
-                        local text_pos_x = (display_width - text_width) * 0.5
-                        local text_pos_y = display_height + 12
-                        
-                        r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
-                        r.ImGui_Text(ctx, current_hovered_plugin)
-                        
+                        if show_name then
+                            local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
+                            local text_pos_x = (display_width - text_width) * 0.5
+                            local text_pos_y = display_height + 12
+                            
+                            r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
+                            r.ImGui_Text(ctx, current_hovered_plugin)
+                        end
                         r.ImGui_End(ctx)
                     end
                     
@@ -2072,12 +2081,25 @@ local function ShowScreenshotWindow()
                                         if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                                             RemoveFromFavorites(plugin_name)
                                         end
+                                        if config.hidden_names[plugin_name] then
+                                            if r.ImGui_MenuItem(ctx, "Show Name") then
+                                                config.hidden_names[plugin_name] = nil
+                                                SaveConfig()  -- Sla de configuratie op na wijziging
+                                            end
+                                        else
+                                            if r.ImGui_MenuItem(ctx, "Hide Name") then
+                                                config.hidden_names[plugin_name] = true
+                                                SaveConfig()  -- Sla de configuratie op na wijziging
+                                            end
+                                        end
                                         r.ImGui_EndPopup(ctx)
                                     end
+                                    if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
+                                        r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                        r.ImGui_Text(ctx, plugin_name)
+                                        r.ImGui_PopTextWrapPos(ctx)
+                                    end
                                     
-                                    r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                    r.ImGui_Text(ctx, plugin_name)
-                                    r.ImGui_PopTextWrapPos(ctx)
                                 end
                             end
                         end
@@ -2419,6 +2441,17 @@ local function FilterBox()
                     if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                         RemoveFromFavorites(filtered_fx[i].name)
                     end
+                    if config.hidden_names[filtered_fx[i].name] then
+                        if r.ImGui_MenuItem(ctx, "Show Name") then
+                            config.hidden_names[filtered_fx[i].name] = nil
+                            SaveConfig()
+                        end
+                    else
+                        if r.ImGui_MenuItem(ctx, "Hide Name") then
+                            config.hidden_names[filtered_fx[i].name] = true
+                            SaveConfig()
+                        end
+                    end
                     r.ImGui_EndPopup(ctx)
                 end
             end
@@ -2639,6 +2672,7 @@ local function DrawItems(tbl, main_cat_name)
                             LoadPluginScreenshot(current_hovered_plugin)
                         end
                         is_screenshot_visible = true
+                       
                     end
                     if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
                         r.ImGui_OpenPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j)
@@ -2659,6 +2693,17 @@ local function DrawItems(tbl, main_cat_name)
                         end
                         if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                             RemoveFromFavorites(tbl[i].fx[j])
+                        end
+                        if config.hidden_names[tbl[i].fx[j]] then
+                            if r.ImGui_MenuItem(ctx, "Show Name") then
+                                config.hidden_names[tbl[i].fx[j]] = nil
+                                SaveConfig()
+                            end
+                        else
+                            if r.ImGui_MenuItem(ctx, "Hide Name") then
+                                config.hidden_names[tbl[i].fx[j]] = true
+                                SaveConfig()
+                            end
                         end
                         r.ImGui_EndPopup(ctx)
                     end
@@ -2710,6 +2755,17 @@ local function DrawFavorites()
             end
             if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                 RemoveFromFavorites(fav)
+            end
+            if config.hidden_names[fav] then
+                if r.ImGui_MenuItem(ctx, "Show Name") then
+                    config.hidden_names[fav] = nil
+                    SaveConfig()
+                end
+            else
+                if r.ImGui_MenuItem(ctx, "Hide Name") then
+                    config.hidden_names[fav] = true
+                    SaveConfig()
+                end
             end
             r.ImGui_EndPopup(ctx)
         end
