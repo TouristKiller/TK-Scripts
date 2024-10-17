@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.5.9
+-- @version 0.6.0
 -- @changelog:
---         * Enable /disable Screenshot names (for screensot window and individual)
---         * Enable /disable screenshot names per plugin
+--         * Gui resizes with the width of the window
+--         * Close button on screenshot window
 --
 --         
 --         * Screenshot windows sluiten als fx browser uit focus
@@ -1828,14 +1828,26 @@ local function ShowScreenshotWindow()
     r.ImGui_SetNextWindowSize(ctx, config.screenshot_window_width, main_window_height, r.ImGui_Cond_FirstUseEver())
     local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
     if visible then
+        
         r.ImGui_PushFont(ctx, LargeFont)
         if show_media_browser then
             r.ImGui_Text(ctx, "PROJECTS:")          
         else
             r.ImGui_Text(ctx, "SCREENSHOTS: " .. (FILTER or ""))
         end
-        r.ImGui_Separator(ctx)
         r.ImGui_PopFont(ctx)
+        r.ImGui_SameLine(ctx)
+        local window_width = r.ImGui_GetWindowWidth(ctx)
+        local button_width = 15
+        local button_height = 15
+        -- Plaats de cursor in de rechterbovenhoek
+        r.ImGui_SetCursorPos(ctx, window_width - button_width - 5, 5)
+        if r.ImGui_Button(ctx, "X", button_width, button_height) then
+            config.show_screenshot_window = false
+            SaveConfig()
+        end
+        r.ImGui_Separator(ctx)
+        
         if show_media_browser then
             r.ImGui_PushItemWidth(ctx, -1)
             local changed, new_search_term = r.ImGui_InputText(ctx, "##ProjectSearch", project_search_term)
@@ -2358,16 +2370,21 @@ local function Filter_actions(filter_text)
 end
 
 local function FilterBox()
-    --r.ImGui_SameLine(ctx)
-    r.ImGui_PushItemWidth(ctx, 103) 
+    local window_width = r.ImGui_GetWindowWidth(ctx)
+    local track_info_width = math.max(window_width - 20, 125)
+    local x_button_width = 20
+    local margin = 3
+    local search_width = track_info_width - x_button_width - margin    
     if r.ImGui_IsWindowAppearing(ctx) then
         r.ImGui_SetKeyboardFocusHere(ctx)
     end
+    r.ImGui_PushItemWidth(ctx, search_width)
     local changed
     changed, FILTER = r.ImGui_InputTextWithHint(ctx, '##input', "SEARCH FX", FILTER)
     if changed then
         new_search_performed = true
     end
+    r.ImGui_PopItemWidth(ctx)
     r.ImGui_SameLine(ctx)
     if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
         if FILTER == "" then
@@ -2393,7 +2410,7 @@ local function FilterBox()
     end
     r.ImGui_SameLine(ctx)
     local button_height = r.ImGui_GetFrameHeight(ctx)
-    if r.ImGui_Button(ctx, "X", 20, button_height) then
+    if r.ImGui_Button(ctx, "X", x_button_width, r.ImGui_GetFrameHeight(ctx)) then
         FILTER = ""
         screenshot_search_results = nil
         r.ImGui_SetScrollY(ctx, 0)
@@ -2622,36 +2639,7 @@ local function DrawItems(tbl, main_cat_name)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_SelectableTextAlign(), 1, 0.5)
     end
 
-    --[[ Teken eerst favorieten
-    if #favorite_plugins > 0 then
-        r.ImGui_Text(ctx, "Favorites")
-        r.ImGui_Separator(ctx)
-        for k, fav in ipairs(favorite_plugins) do
-            if r.ImGui_Selectable(ctx, fav) then
-                if ADD_FX_TO_ITEM then
-                    AddFXToItem(fav)
-                else
-                    if TRACK then
-                        r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
-                    end
-                end
-                LAST_USED_FX = fav
-                if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
-                    SHOULD_CLOSE_SCRIPT = true
-                end
-            end
-            if r.ImGui_IsItemClicked(ctx, 1) then
-                r.ImGui_OpenPopup(ctx, "FavoritePluginMenu_" .. k)
-            end
-            if r.ImGui_BeginPopup(ctx, "FavoritePluginMenu_" .. k) then
-                if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                    RemoveFromFavorites(fav)
-                end
-                r.ImGui_EndPopup(ctx)
-            end
-        end
-        r.ImGui_Separator(ctx)
-    end]]--
+    
 
     local items = tbl or {}
     for i = 1, #items do
@@ -2792,55 +2780,71 @@ local function DrawFavorites()
     end
 end
 
+local function CalculateButtonWidths(total_width, num_buttons, spacing)
+    local available_width = total_width - (spacing * (num_buttons - 1))
+    return available_width / num_buttons
+end
+
 local function DrawBottomButtons()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
+    local window_width = r.ImGui_GetWindowWidth(ctx)
+    local track_info_width = math.max(window_width - 20, 125)
+    local button_spacing = 3
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
     local buttonHeight = 70
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
-    r.ImGui_Separator(ctx)
-    if r.ImGui_Button(ctx, is_master_track_selected and "Normal Track" or "Master Track", 80) then
+    
+    -- Eerste rij knoppen
+    local num_buttons_row1 = 3
+    local button_width_row1 = CalculateButtonWidths(track_info_width, num_buttons_row1, button_spacing)
+    if r.ImGui_Button(ctx, is_master_track_selected and "NORM" or "MSTR", button_width_row1) then
         is_master_track_selected = not is_master_track_selected
         TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
     end
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "KEYS", 40) then
-        r.Main_OnCommand(40377, 0)  -- Virtual MIDI keyboard
+    r.ImGui_SameLine(ctx, 0, button_spacing)
+    if r.ImGui_Button(ctx, "KEYS", button_width_row1) then
+        r.Main_OnCommand(40377, 0)
     end
-    r.ImGui_Separator(ctx)
-    if r.ImGui_Button(ctx, "SNAP", 40) then
+    r.ImGui_SameLine(ctx, 0, button_spacing)
+    if r.ImGui_Button(ctx, "SNAP", button_width_row1) then
         CaptureFirstTrackFX()
     end
-    r.ImGui_SameLine(ctx)
+    -- Tweede rij knoppen
+    local num_buttons_row2 = 3
+    local button_width_row2 = CalculateButtonWidths(track_info_width, num_buttons_row2, button_spacing)
     local bypass_state = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), bypass_state and 0xFF0000FF or config.button_background_color)
-    if r.ImGui_Button(ctx, "BYPS", 40) then
+    if r.ImGui_Button(ctx, "BYPS", button_width_row2) then
         local new_state = bypass_state and 1 or 0
         r.SetMediaTrackInfo_Value(TRACK, "I_FXEN", new_state)
     end
     r.ImGui_PopStyleColor(ctx)
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "C", 17) then
+    r.ImGui_SameLine(ctx, 0, button_spacing)
+    if r.ImGui_Button(ctx, "CPY", button_width_row2) then
         r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_CPY_FXCHAIN"), 0)
     end
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "P", 17) then
+    r.ImGui_SameLine(ctx, 0, button_spacing)
+    if r.ImGui_Button(ctx, "PST", button_width_row2) then
         r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_PST_FXCHAIN"), 0)
     end
-    r.ImGui_Separator(ctx)
+
+    -- Derde rij knoppen
+    local num_buttons_row3 = 3
+    local button_width_row3 = CalculateButtonWidths(track_info_width, num_buttons_row3, button_spacing)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), IsMuted(TRACK) and 0xFF0000FF or config.button_background_color)
-    if r.ImGui_Button(ctx, "MUTE", 40) then
+    if r.ImGui_Button(ctx, "MUTE", button_width_row3) then
     ToggleMute(TRACK)
     end
     r.ImGui_PopStyleColor(ctx)
-    r.ImGui_SameLine(ctx)
+    r.ImGui_SameLine(ctx, 0, button_spacing)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), IsSoloed(TRACK) and 0xFF0000FF or config.button_background_color)
-    if r.ImGui_Button(ctx, "SOLO", 40) then
+    if r.ImGui_Button(ctx, "SOLO", button_width_row3) then
     ToggleSolo(TRACK)
     end
     r.ImGui_PopStyleColor(ctx)
-    r.ImGui_SameLine(ctx)
+    r.ImGui_SameLine(ctx, 0, button_spacing)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), IsArmed(TRACK) and 0xFF0000FF or config.button_background_color)
-    if r.ImGui_Button(ctx, "ARM", 40) then
+    if r.ImGui_Button(ctx, "ARM", button_width_row3) then
     ToggleArm(TRACK)
     end
     r.ImGui_PopStyleColor(ctx)
@@ -2891,7 +2895,7 @@ local function ShowTrackFX()
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)  -- Grijze kleur voor gebypaste plugins
                 end
                 
-                if r.ImGui_Button(ctx, display_name, -1, 13) then
+                if r.ImGui_Button(ctx, display_name, 0, 13) then
                     if is_open then
                         r.TrackFX_Show(TRACK, i, 2)
                     else
@@ -3310,7 +3314,10 @@ function Main()
             local track_type = GetTrackType(TRACK)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 4)
-            if r.ImGui_BeginChild(ctx, "TrackInfo", 125, 50, r.ImGui_WindowFlags_NoScrollbar()) then
+            local window_width = r.ImGui_GetWindowWidth(ctx)
+            local track_info_width = math.max(window_width - 20, 125)  -- Minimaal 125, of vensterbreedte - 20
+
+            if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50, r.ImGui_WindowFlags_NoScrollbar()) then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Volledig transparante knop
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)  -- Licht grijs bij hover
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)  -- Donkerder grijs bij klik
@@ -3548,11 +3555,14 @@ function Main()
             end
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx)
-            if r.ImGui_Button(ctx, "SCAN", 40) then
+
+            local button_spacing = 3
+            local button_width = (track_info_width - (2 * button_spacing)) / 3
+            if r.ImGui_Button(ctx, "SCAN", button_width, 20) then
                 FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", 40) then
+            if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", button_width, 20) then
                 SHOW_PREVIEW = not SHOW_PREVIEW
                 if SHOW_PREVIEW and current_hovered_plugin then
                     LoadPluginScreenshot(current_hovered_plugin)
@@ -3562,11 +3572,11 @@ function Main()
             r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
             r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
             r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
-            if r.ImGui_Button(ctx, 'QUIT', 40) then 
+            if r.ImGui_Button(ctx, 'QUIT', button_width, 20) then 
                 open = false 
             end
             reaper.ImGui_PopStyleColor(ctx, 3)
-            if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRCK", 40) then
+            if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRCK", button_width, 20) then
                 ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
             end
             reaper.ImGui_SameLine(ctx)
@@ -3574,22 +3584,22 @@ function Main()
                 WANT_REFRESH = nil
                 UpdateChainsTrackTemplates(CAT)
             end
-            if r.ImGui_Button(ctx, "FXCH", 40) then
+            if r.ImGui_Button(ctx, "FXCH", button_width, 20) then
                 CreateFXChain()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "DOCK", 40) then
+            if r.ImGui_Button(ctx, "DOCK", button_width, 20) then
                 change_dock = true 
             end
-            if reaper.ImGui_Button(ctx, START and "STOP" or "BULK", 40) then
+            if reaper.ImGui_Button(ctx, START and "STOP" or "BULK", button_width, 20) then
                 StartBulkScreenshot()
             end
             r.ImGui_SameLine(ctx)
-            if reaper.ImGui_Button(ctx, "CLRR", 40) then
+            if reaper.ImGui_Button(ctx, "CLRR", button_width, 20) then
                 show_confirm_clear = true
             end
             r.ImGui_SameLine(ctx)
-            if reaper.ImGui_Button(ctx, "FLDR", 40) then
+            if reaper.ImGui_Button(ctx, "FLDR", button_width, 20) then
                 OpenScreenshotsFolder()
             end
             if show_confirm_clear then

@@ -34,7 +34,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="0.5.9" author="TouristKiller" time="2024-10-13T23:30:00Z">
+    <version name="0.6.0" author="TouristKiller" time="2024-10-17T13:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/json.lua</source>
     <source file="arial.ttf">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/arial.ttf</source>
