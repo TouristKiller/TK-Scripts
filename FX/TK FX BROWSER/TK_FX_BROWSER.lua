@@ -1,12 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.0
+-- @version 0.6.1
 -- @changelog:
---         * Gui resizes with the width of the window
---         * Close button on screenshot window
---
---         
---         * Screenshot windows sluiten als fx browser uit focus
+--         * Exclude plugins from search in plugin manager
+--         * Settings in plugin manager for are now saved in config and remain persistent
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -132,7 +129,6 @@ local show_screenshot_window = false
 local screenshot_window_interactive = false 
 local screenshot_window_display_size = 200
 local selected_folder = nil
-local plugin_visibility = {}
 local show_plugin_manager = false
 local last_viewed_folder = nil
 local last_selected_track = nil
@@ -231,6 +227,8 @@ local function SetDefaultConfig()
         show_name_in_screenshot_window = true,
         show_name_in_main_window = true,
         hidden_names = {},
+        excluded_plugins = {},
+        plugin_visibility = {},
     } 
 end
 local config = SetDefaultConfig()    
@@ -342,26 +340,8 @@ local function UpdateLastViewedFolder(new_folder)
     end
 end
 
-function LoadPluginVisibility()
-    local str = r.GetExtState("TK_PluginManager", "PluginVisibility")
-    if str ~= "" then
-        for name, visible in str:gmatch("([^,]+):([^,]+)") do
-            plugin_visibility[name] = visible == "true"
-        end
-    end
-end
-LoadPluginVisibility()
-
-function SavePluginVisibility()
-    local str = ""
-    for name, visible in pairs(plugin_visibility) do
-        str = str .. name .. ":" .. tostring(visible) .. ","
-    end
-    r.SetExtState("TK_PluginManager", "PluginVisibility", str, true)
-end
-
 function IsPluginVisible(plugin_name)
-    return plugin_visibility[plugin_name] ~= false
+    return config.plugin_visibility[plugin_name] ~= false
 end
 
 local function GetTrackName(track)
@@ -412,17 +392,17 @@ end
 local search_filter = ""
 local filtered_plugins = {}
 local function InitializeFilteredPlugins()
-    filtered_plugins = {}
     for _, plugin_name in ipairs(PLUGIN_LIST) do
-        if plugin_name:match("^VSTi:") or plugin_name:match("^VST3i:") or plugin_name:match("^JSi:") or plugin_name:match("^AUi:") or plugin_name:match("^CLAPi:") or plugin_name:match("^LV2i:") then
-            table.insert(filtered_plugins, {name = plugin_name, visible = plugin_visibility[plugin_name] or true})
-        else
-            table.insert(filtered_plugins, {name = plugin_name, visible = plugin_visibility[plugin_name] or true})
-        end
+        table.insert(filtered_plugins, {
+            name = plugin_name, 
+            visible = config.plugin_visibility[plugin_name] ~= false,
+            searchable = not config.excluded_plugins[plugin_name]
+        })
     end
     table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
 end
 
+local CHECKBOX_WIDTH = 15
 local function ShowPluginManagerTab()
     if #filtered_plugins == 0 then
         InitializeFilteredPlugins()
@@ -433,36 +413,90 @@ local function ShowPluginManagerTab()
         filtered_plugins = {}
         for _, plugin in ipairs(PLUGIN_LIST) do
             if search_filter == "" or string.find(string.lower(plugin), string.lower(search_filter)) then
-                table.insert(filtered_plugins, {name = plugin, visible = plugin_visibility[plugin] or true})
+                table.insert(filtered_plugins, {
+                    name = plugin, 
+                    visible = config.plugin_visibility[plugin] ~= false,
+                    searchable = not config.excluded_plugins[plugin]
+                })
             end
         end
         table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
     end
     r.ImGui_Text(ctx, string.format("Total plugins: %d", #PLUGIN_LIST))
     r.ImGui_Text(ctx, string.format("Shown plugins: %d", #filtered_plugins))
+    
+    if r.ImGui_BeginChild(ctx, "PluginList", 0, -60) then
+        local window_width = r.ImGui_GetWindowWidth(ctx)
+        local column1_width = 50  -- Voor "Bulk" checkbox
+        local column2_width = 50  -- Voor "Search" checkbox
+        local column3_width = window_width - column1_width - column2_width - 20  -- Voor plugin naam
 
-    if r.ImGui_BeginChild(ctx, "PluginList", 0, -30) then
+        -- Koppen
+        r.ImGui_SetCursorPosX(ctx, column1_width / 2 - r.ImGui_CalcTextSize(ctx, "Bulk") / 2)
+        r.ImGui_Text(ctx, "Bulk")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, column1_width + column2_width / 2 - r.ImGui_CalcTextSize(ctx, "Search") / 2)
+        r.ImGui_Text(ctx, "Search")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, column1_width + column2_width + 10)
+        r.ImGui_Text(ctx, "Plugin Name")
+        
+        r.ImGui_Separator(ctx)
+
         for _, plugin in ipairs(filtered_plugins) do
-            local checkbox_changed, new_visible = r.ImGui_Checkbox(ctx, plugin.name, plugin_visibility[plugin.name])
-            if checkbox_changed then
-                plugin_visibility[plugin.name] = new_visible
-                SavePluginVisibility()
+            r.ImGui_SetCursorPosX(ctx, (column1_width - 15) / 2)
+            local checkbox_visible_changed, new_visible = r.ImGui_Checkbox(ctx, "##Visible"..plugin.name, config.plugin_visibility[plugin.name])
+            if checkbox_visible_changed then
+                config.plugin_visibility[plugin.name] = new_visible
+                SaveConfig()
             end  
+            r.ImGui_SameLine(ctx)
+            
+            r.ImGui_SetCursorPosX(ctx, column1_width + (column2_width - 15) / 2)  -- Centreer de checkbox
+            local checkbox_searchable_changed, new_searchable = r.ImGui_Checkbox(ctx, "##Searchable"..plugin.name, not config.excluded_plugins[plugin.name])
+            if checkbox_searchable_changed then
+                config.excluded_plugins[plugin.name] = not new_searchable
+                SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            
+            r.ImGui_SetCursorPosX(ctx, column1_width + column2_width + 10)
+            r.ImGui_Text(ctx, plugin.name)
         end
         r.ImGui_EndChild(ctx)
     end
-    if r.ImGui_Button(ctx, "Select All") then
+    local button_width = (r.ImGui_GetWindowWidth(ctx) - 15) / 2
+    if r.ImGui_Button(ctx, "Select All for Bulk", button_width, 20) then
         for _, plugin in ipairs(filtered_plugins) do
-            plugin_visibility[plugin.name] = true
+            config.plugin_visibility[plugin.name] = true
         end
-        SavePluginVisibility()
+        SaveConfig()
     end
+
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Deselect All") then
+
+    if r.ImGui_Button(ctx, "Deselect All for Bulk", button_width, 20) then
         for _, plugin in ipairs(filtered_plugins) do
-            plugin_visibility[plugin.name] = false
+            config.plugin_visibility[plugin.name] = false
         end
-        SavePluginVisibility()
+        SaveConfig()
+    end
+    local button_width = (r.ImGui_GetWindowWidth(ctx) - 15) / 2  -- Bereken de breedte voor twee knoppen
+    
+    if r.ImGui_Button(ctx, "Select All for Search", button_width, 20) then
+        for _, plugin in ipairs(filtered_plugins) do
+            config.excluded_plugins[plugin.name] = nil
+        end
+        SaveConfig()
+    end
+    
+    r.ImGui_SameLine(ctx)
+    
+    if r.ImGui_Button(ctx, "Deselect All for Search", button_width, 20) then
+        for _, plugin in ipairs(filtered_plugins) do
+            config.excluded_plugins[plugin.name] = true
+        end
+        SaveConfig()
     end
 end
 
@@ -2354,15 +2388,17 @@ local function Filter_actions(filter_text)
     local t = {}
     if filter_text == "" or not filter_text then return t end
     for i = 1, #FX_LIST_TEST do
-        local name = FX_LIST_TEST[i]:lower()
-        local found = true
-        for word in filter_text:gmatch("%S+") do
-            if not name:find(word:lower(), 1, true) then
-                found = false
-                break
+        if not config.excluded_plugins[FX_LIST_TEST[i]] then
+            local name = FX_LIST_TEST[i]:lower()
+            local found = true
+            for word in filter_text:gmatch("%S+") do
+                if not name:find(word:lower(), 1, true) then
+                    found = false
+                    break
+                end
             end
+            if found then t[#t + 1] = { score = FX_LIST_TEST[i]:len() - filter_text:len(), name = FX_LIST_TEST[i] } end
         end
-        if found then t[#t + 1] = { score = FX_LIST_TEST[i]:len() - filter_text:len(), name = FX_LIST_TEST[i] } end
     end
     if #t >= 2 then SortTable(t, "score", "name") end
     old_t, old_filter = t, filter_text
