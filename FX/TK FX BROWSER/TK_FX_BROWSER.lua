@@ -1,9 +1,14 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.1
+-- @version 0.6.2
 -- @changelog:
---         * Exclude plugins from search in plugin manager
---         * Settings in plugin manager for are now saved in config and remain persistent
+--        * Fixed bug in copy paste plugin funtionality
+--        * Added Tooltips (You can turn tooltips of in settings window)
+--        * Added Rightclick menu to current track /project FX
+--        * If you Leftclick on TrackInfo bar then you can now also set name to first FX on track
+--        * FX on Track list gray's out if BYPS button is pressed
+--        * Added Paranormal FX Router (Sexan) to 3ed party scripts (it's a must have!)
+--        * Added a Volume slider (Rightclik 0db /double Rightclick -12db)
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -229,6 +234,7 @@ local function SetDefaultConfig()
         hidden_names = {},
         excluded_plugins = {},
         plugin_visibility = {},
+        show_tooltips = true,
     } 
 end
 local config = SetDefaultConfig()    
@@ -797,7 +803,9 @@ local function ShowConfigWindow()
         _, config.show_name_in_main_window = r.ImGui_Checkbox(ctx, "Show Names in Main Window", config.show_name_in_main_window)
         r.ImGui_SetCursorPosX(ctx, column1_width)
         _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
-
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, column3_width)
+        _, config.show_tooltips = r.ImGui_Checkbox(ctx, "Show Tooltips", config.show_tooltips)
         r.ImGui_Dummy(ctx, 0, 5)
                 NewSection("BULK:")
                 r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -2245,29 +2253,81 @@ local function ShowScreenshotWindow()
                                                     end
                                                 end
                                             end
+                                            
                                             if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
-                                                if selected_folder == "Current Project FX" then
-                                                    if TRACK then
-                                                        local track = reaper.GetTrack(0, plugin.track_number - 1)
-                                                        local fx_count = reaper.TrackFX_GetCount(track)
-                                                        for j = 0, fx_count - 1 do
-                                                            local retval, fx_name = reaper.TrackFX_GetFXName(track, j, "")
-                                                            if retval and fx_name == plugin.fx_name then
-                                                                reaper.TrackFX_Delete(track, j)
-                                                                break
-                                                            end
-                                                        end
-                                                    end
-                                                elseif selected_folder == "Current Track FX" then
-                                                    local fx_index = r.TrackFX_GetByName(TRACK, plugin.fx_name, false)
-                                                    if fx_index >= 0 then
-                                                        r.TrackFX_Delete(TRACK, fx_index)
-                                                        update_search_screenshots = true
-                                                    end
+                                                if selected_folder == "Current Project FX" or selected_folder == "Current Track FX" then
+                                                    r.ImGui_OpenPopup(ctx, "FXContextMenu_" .. i)
                                                 else
                                                     MakeScreenshot(plugin.fx_name, nil, true)
                                                 end
                                             end
+                                            
+                                            if r.ImGui_BeginPopup(ctx, "FXContextMenu_" .. i) then
+                                                local track = selected_folder == "Current Project FX" 
+                                                    and r.GetTrack(0, plugin.track_number - 1) 
+                                                    or TRACK
+                                                local fx_index = selected_folder == "Current Project FX"
+                                                    and (function()
+                                                        local fx_count = r.TrackFX_GetCount(track)
+                                                        for j = 0, fx_count - 1 do
+                                                            local retval, fx_name = r.TrackFX_GetFXName(track, j, "")
+                                                            if retval and fx_name == plugin.fx_name then
+                                                                return j
+                                                            end
+                                                        end
+                                                    end)()
+                                                    or r.TrackFX_GetByName(TRACK, plugin.fx_name, false)
+                                            
+                                                if r.ImGui_MenuItem(ctx, "Delete") then
+                                                    r.TrackFX_Delete(track, fx_index)
+                                                    if selected_folder == "Current Track FX" then
+                                                        update_search_screenshots = true
+                                                    end
+                                                end
+                                            
+                                                if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
+                                                    IS_COPYING_TO_ALL_TRACKS = true
+                                                    local track_count = r.CountTracks(0)
+                                                    for j = 0, track_count - 1 do
+                                                        local target_track = r.GetTrack(0, j)
+                                                        if target_track ~= track then
+                                                            r.TrackFX_CopyToTrack(track, fx_index, target_track, r.TrackFX_GetCount(target_track), false)
+                                                        end
+                                                    end
+                                                    IS_COPYING_TO_ALL_TRACKS = false
+                                                end
+                                            
+                                                if r.ImGui_MenuItem(ctx, "Copy Plugin") then
+                                                    copied_plugin = {track = track, index = fx_index}
+                                                end
+                                            
+                                                if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
+                                                    if copied_plugin then
+                                                        local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
+                                                        r.TrackFX_AddByName(track, orig_name, false, -1000)
+                                                    end
+                                                end
+                                            
+                                                local is_enabled = r.TrackFX_GetEnabled(track, fx_index)
+                                                if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
+                                                    r.TrackFX_SetEnabled(track, fx_index, not is_enabled)
+                                                end
+                                            
+                                                local fx_name = plugin.fx_name
+                                                if table.contains(favorite_plugins, fx_name) then
+                                                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                                                        RemoveFromFavorites(fx_name)
+                                                    end
+                                                else
+                                                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                                                        AddToFavorites(fx_name)
+                                                    end
+                                                end
+                                            
+                                                r.ImGui_EndPopup(ctx)
+                                            end
+
+
                                             if config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] then
                                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                                 r.ImGui_Text(ctx, plugin.fx_name)
@@ -2466,8 +2526,8 @@ local function FilterBox()
     end
     local filtered_fx = Filter_actions(FILTER)
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local bottom_buttons_height = 70
-    local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 50  -- Extra marge
+    local bottom_buttons_height = 100
+    local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 10
     if #filtered_fx ~= 0 then
         if r.ImGui_BeginChild(ctx, "##popupp", window_width, available_height) then
             for i = 1, #filtered_fx do
@@ -2827,24 +2887,58 @@ local function DrawBottomButtons()
     local track_info_width = math.max(window_width - 20, 125)
     local button_spacing = 3
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
-    local buttonHeight = 70
+    local buttonHeight = 60
+    r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight - 20)
+
+    -- volumeslider
+    local volume = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
+local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
+r.ImGui_PushItemWidth(ctx, track_info_width)
+local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
+
+if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Rightclick 0db /double Rightclick -12db")
+    if r.ImGui_IsMouseDoubleClicked(ctx, 1) then  -- Rechts dubbelklik
+        new_volume_db = -12
+        changed = true
+    elseif r.ImGui_IsMouseClicked(ctx, 1) then  -- Rechts enkelklik
+            new_volume_db = 0
+            changed = true
+    end
+end
+
+if changed then
+    local new_volume = 10^(new_volume_db/20)
+    r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
+end
+r.ImGui_PopItemWidth(ctx)
+
+
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
-    
     -- Eerste rij knoppen
     local num_buttons_row1 = 3
     local button_width_row1 = CalculateButtonWidths(track_info_width, num_buttons_row1, button_spacing)
-    if r.ImGui_Button(ctx, is_master_track_selected and "NORM" or "MSTR", button_width_row1) then
-        is_master_track_selected = not is_master_track_selected
-        TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
+    if r.ImGui_Button(ctx, "FXCH", button_width_row1) then
+        CreateFXChain()
+    end
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Make FXChain from Plugins on selected Track")
     end
     r.ImGui_SameLine(ctx, 0, button_spacing)
-    if r.ImGui_Button(ctx, "KEYS", button_width_row1) then
-        r.Main_OnCommand(40377, 0)
+    if r.ImGui_Button(ctx, "CPY", button_width_row1) then
+        r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_CPY_FXCHAIN"), 0)
+    end
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Copy All FX on the Selected Track")
     end
     r.ImGui_SameLine(ctx, 0, button_spacing)
-    if r.ImGui_Button(ctx, "SNAP", button_width_row1) then
-        CaptureFirstTrackFX()
+    if r.ImGui_Button(ctx, "PST", button_width_row1) then
+        r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_PST_FXCHAIN"), 0)
     end
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Paste All FX to The selected Track")
+    end
+    
     -- Tweede rij knoppen
     local num_buttons_row2 = 3
     local button_width_row2 = CalculateButtonWidths(track_info_width, num_buttons_row2, button_spacing)
@@ -2855,14 +2949,24 @@ local function DrawBottomButtons()
         r.SetMediaTrackInfo_Value(TRACK, "I_FXEN", new_state)
     end
     r.ImGui_PopStyleColor(ctx)
-    r.ImGui_SameLine(ctx, 0, button_spacing)
-    if r.ImGui_Button(ctx, "CPY", button_width_row2) then
-        r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_CPY_FXCHAIN"), 0)
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "ByPass All FX on the selected Track")
     end
     r.ImGui_SameLine(ctx, 0, button_spacing)
-    if r.ImGui_Button(ctx, "PST", button_width_row2) then
-        r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_PST_FXCHAIN"), 0)
+    if r.ImGui_Button(ctx, "KEYS", button_width_row2) then
+        r.Main_OnCommand(40377, 0)
     end
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show Virtual Keyboard")
+    end
+    r.ImGui_SameLine(ctx, 0, button_spacing)
+    if r.ImGui_Button(ctx, "SNAP", button_width_row2) then
+        CaptureFirstTrackFX()
+    end
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Make screenshot of First FX on the selected Track (must be floating)")
+    end
+    
 
     -- Derde rij knoppen
     local num_buttons_row3 = 3
@@ -2872,18 +2976,27 @@ local function DrawBottomButtons()
     ToggleMute(TRACK)
     end
     r.ImGui_PopStyleColor(ctx)
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Mute selected Track")
+    end
     r.ImGui_SameLine(ctx, 0, button_spacing)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), IsSoloed(TRACK) and 0xFF0000FF or config.button_background_color)
     if r.ImGui_Button(ctx, "SOLO", button_width_row3) then
     ToggleSolo(TRACK)
     end
     r.ImGui_PopStyleColor(ctx)
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Solo selected Track")
+    end
     r.ImGui_SameLine(ctx, 0, button_spacing)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), IsArmed(TRACK) and 0xFF0000FF or config.button_background_color)
     if r.ImGui_Button(ctx, "ARM", button_width_row3) then
     ToggleArm(TRACK)
     end
     r.ImGui_PopStyleColor(ctx)
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Arm selected Track")
+    end
     r.ImGui_Separator(ctx)
 end
 
@@ -2899,10 +3012,12 @@ local function ShowTrackFX()
     if r.ImGui_BeginChild(ctx, "TrackFXList", -1, listHeight) then
         local fx_count = r.TrackFX_GetCount(TRACK)
         if fx_count > 0 then
+            local track_bypassed = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
             for i = 0, fx_count - 1 do
                 local retval, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                 local is_open = r.TrackFX_GetFloatingWindow(TRACK, i)
                 local is_enabled = r.TrackFX_GetEnabled(TRACK, i)
+                
                 local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"
                 
                 r.ImGui_PushID(ctx, i)
@@ -2916,6 +3031,9 @@ local function ShowTrackFX()
                     end
                     r.ImGui_SetNextWindowFocus(ctx)
                 end
+                if r.ImGui_IsItemHovered(ctx) and config.show_tooltips then
+                    r.ImGui_SetTooltip(ctx, "Left click up / Right click down")
+                end
                 if r.ImGui_IsItemClicked(ctx, 1) and i < fx_count - 1 then
                     r.TrackFX_CopyToTrack(TRACK, i, TRACK, i + 1, true)
                     r.ImGui_SetNextWindowFocus(ctx)
@@ -2927,7 +3045,7 @@ local function ShowTrackFX()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
                 r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)
                 
-                if not is_enabled then
+                if not is_enabled or track_bypassed then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)  -- Grijze kleur voor gebypaste plugins
                 end
                 
@@ -2939,7 +3057,7 @@ local function ShowTrackFX()
                     end
                 end
                 
-                if not is_enabled then
+                if not is_enabled or track_bypassed then
                     r.ImGui_PopStyleColor(ctx)
                 end
                 
@@ -2962,11 +3080,14 @@ local function ShowTrackFX()
                     if r.ImGui_MenuItem(ctx, "Copy Plugin") then
                         copied_plugin = {track = TRACK, index = i}
                     end
+                    
                     if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
                         if copied_plugin then
-                            r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, i, true)
+                            local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
+                            r.TrackFX_AddByName(TRACK, orig_name, false, -1000)
                         end
                     end
+                    
                     if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
                         r.TrackFX_SetEnabled(TRACK, i, not is_enabled)
                     end
@@ -2988,20 +3109,28 @@ local function ShowTrackFX()
         else
             r.ImGui_Text(ctx, "No FX on Track")
         end
-        if fx_count == 0 or copied_plugin then
-            if r.ImGui_Button(ctx, fx_count == 0 and "Paste Plugin" or "Paste Plugin at End") and copied_plugin then
-                r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, fx_count, true)
+        if copied_plugin then
+            local is_empty_track = fx_count == 0
+            local button_text = is_empty_track and "Paste Plugin" or "Paste Plugin at End"
+            if r.ImGui_Button(ctx, button_text) then
+                local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
+                local insert_position = is_empty_track and 0 or fx_count
+                r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, insert_position, false)
             end
+        
             if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
                 r.ImGui_OpenPopup(ctx, "PastePluginMenu")
             end
+        
             if r.ImGui_BeginPopup(ctx, "PastePluginMenu") then
-                if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) and copied_plugin then
-                    r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, fx_count, true)
+                if r.ImGui_MenuItem(ctx, "Paste Plugin at Beginning") then
+                    local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
+                    r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, 0, false)
                 end
                 r.ImGui_EndPopup(ctx)
             end
         end
+        
         r.ImGui_EndChild(ctx)
     end
 end
@@ -3456,6 +3585,14 @@ function Main()
                                 r.ShowMessageBox("Track Icon Selector (Reapertips) is not installed. Install this action to use this function.", "Action not found", 0)
                             end
                         end
+                        local track_icon_selector_id = r.NamedCommandLookup("_RS4466532563f07c099f8ec22b9b79e819e0d3f3d4")
+                        if r.ImGui_MenuItem(ctx, "Paranormal FX Router (Sexan)") then
+                            if track_icon_selector_id ~= 0 then
+                                r.Main_OnCommand(track_icon_selector_id, 0)
+                            else
+                                r.ShowMessageBox("Paranormal FX Router (Sexan) is not installed. Install this action to use this function.", "Action not found", 0)
+                            end
+                        end
                         r.ImGui_Separator(ctx)
                     end
                 
@@ -3482,34 +3619,48 @@ function Main()
                     r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndPopup(ctx)
                 end
-                    if show_rename_popup then
-                        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-                        r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
-                        r.ImGui_OpenPopup(ctx, "Rename Track")
+                if show_rename_popup then
+                    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                    r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
+                    r.ImGui_OpenPopup(ctx, "Rename Track")
+                end
+                
+                if r.ImGui_BeginPopupModal(ctx, "Rename Track", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+                    r.ImGui_Text(ctx, "Enter new track name:")
+                    r.ImGui_SetNextItemWidth(ctx, 200)
+                    local changed, value = r.ImGui_InputText(ctx, "##NewTrackName", new_track_name)
+                    if changed then
+                        new_track_name = value
                     end
-                    if r.ImGui_BeginPopupModal(ctx, "Rename Track", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF) 
-                        r.ImGui_Text(ctx, "Enter new track name:")
-                        r.ImGui_SetNextItemWidth(ctx, 200)
-                        local changed, value = r.ImGui_InputText(ctx, "##NewTrackName", new_track_name)
-                        if changed then
-                            new_track_name = value
-                        end
-                        if r.ImGui_Button(ctx, "OK", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
-                            if new_track_name ~= "" then
-                                r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", new_track_name, true)
+                
+                    if r.ImGui_Button(ctx, "Use First Plugin Name") then
+                        local fx_count = r.TrackFX_GetCount(TRACK)
+                        if fx_count > 0 then
+                            local retval, fx_name = r.TrackFX_GetFXName(TRACK, 0, "")
+                            if retval then
+                                new_track_name = fx_name:match("^[^:]+:%s*(.+)") or fx_name
+                                new_track_name = new_track_name:gsub("%s*%(.*%)", "")
                             end
-                            show_rename_popup = false
-                            r.ImGui_CloseCurrentPopup(ctx)
                         end
-                        r.ImGui_SameLine(ctx)
-                        if r.ImGui_Button(ctx, "Cancel", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
-                            show_rename_popup = false
-                            r.ImGui_CloseCurrentPopup(ctx)
-                        end
-                        r.ImGui_PopStyleColor(ctx) 
-                        r.ImGui_EndPopup(ctx)
                     end
+                
+                    if r.ImGui_Button(ctx, "OK", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+                        if new_track_name ~= "" then
+                            r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", new_track_name, true)
+                        end
+                        show_rename_popup = false
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Cancel", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+                        show_rename_popup = false
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                    r.ImGui_PopStyleColor(ctx)
+                    r.ImGui_EndPopup(ctx)
+                end
+                
                     local sws_colors, has_sws_colors = get_sws_colors()
                     if show_color_picker then
                         local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
@@ -3597,12 +3748,18 @@ function Main()
             if r.ImGui_Button(ctx, "SCAN", button_width, 20) then
                 FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
             end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Scan for new Plugins")
+            end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", button_width, 20) then
                 SHOW_PREVIEW = not SHOW_PREVIEW
                 if SHOW_PREVIEW and current_hovered_plugin then
                     LoadPluginScreenshot(current_hovered_plugin)
                 end
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show or hide Plugin Preview in item list")
             end
             r.ImGui_SameLine(ctx)
             r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
@@ -3611,32 +3768,54 @@ function Main()
             if r.ImGui_Button(ctx, 'QUIT', button_width, 20) then 
                 open = false 
             end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Quit the script (You can also use ESC)")
+            end
             reaper.ImGui_PopStyleColor(ctx, 3)
             if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRCK", button_width, 20) then
                 ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Switch between Track or Item")
             end
             reaper.ImGui_SameLine(ctx)
             if WANT_REFRESH then
                 WANT_REFRESH = nil
                 UpdateChainsTrackTemplates(CAT)
             end
-            if r.ImGui_Button(ctx, "FXCH", button_width, 20) then
-                CreateFXChain()
+            if r.ImGui_Button(ctx, is_master_track_selected and "MSTR" or "NORM", button_width, 20) then
+                is_master_track_selected = not is_master_track_selected
+                TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Switch between normal and master Track")
             end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "DOCK", button_width, 20) then
                 change_dock = true 
             end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Dock/Undock the window")
+            end
             if reaper.ImGui_Button(ctx, START and "STOP" or "BULK", button_width, 20) then
                 StartBulkScreenshot()
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Start or stop Bulk Screenshots")
             end
             r.ImGui_SameLine(ctx)
             if reaper.ImGui_Button(ctx, "CLRR", button_width, 20) then
                 show_confirm_clear = true
             end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Clear the Screenshot folder")
+            end
             r.ImGui_SameLine(ctx)
             if reaper.ImGui_Button(ctx, "FLDR", button_width, 20) then
                 OpenScreenshotsFolder()
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Open Screenshot folder location")
             end
             if show_confirm_clear then
                 ShowConfirmClearPopup()
