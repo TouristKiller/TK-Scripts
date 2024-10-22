@@ -1,14 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.2
+-- @version 0.6.3
 -- @changelog:
---        * Fixed bug in copy paste plugin funtionality
---        * Added Tooltips (You can turn tooltips of in settings window)
---        * Added Rightclick menu to current track /project FX
---        * If you Leftclick on TrackInfo bar then you can now also set name to first FX on track
---        * FX on Track list gray's out if BYPS button is pressed
---        * Added Paranormal FX Router (Sexan) to 3ed party scripts (it's a must have!)
---        * Added a Volume slider (Rightclik 0db /double Rightclick -12db)
+--        * Hide top and bottom buttons in settings (for minimal UI)
+--        * Select /deselect multiple plugins in plugin manager with Shift + leftclick
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -235,6 +230,8 @@ local function SetDefaultConfig()
         excluded_plugins = {},
         plugin_visibility = {},
         show_tooltips = true,
+        hideBottomButtons = false,
+        hideTopButtons = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -409,6 +406,8 @@ local function InitializeFilteredPlugins()
 end
 
 local CHECKBOX_WIDTH = 15
+local last_clicked_plugin_index = nil
+local last_clicked_column = nil  -- 1 voor Bulk, 2 voor Search
 local function ShowPluginManagerTab()
     if #filtered_plugins == 0 then
         InitializeFilteredPlugins()
@@ -449,19 +448,43 @@ local function ShowPluginManagerTab()
         
         r.ImGui_Separator(ctx)
 
-        for _, plugin in ipairs(filtered_plugins) do
+        for i, plugin in ipairs(filtered_plugins) do
             r.ImGui_SetCursorPosX(ctx, (column1_width - 15) / 2)
+            
+            -- Bulk checkbox
             local checkbox_visible_changed, new_visible = r.ImGui_Checkbox(ctx, "##Visible"..plugin.name, config.plugin_visibility[plugin.name])
             if checkbox_visible_changed then
-                config.plugin_visibility[plugin.name] = new_visible
+                if r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) and last_clicked_plugin_index and last_clicked_column == 1 then
+                    local start_idx = math.min(i, last_clicked_plugin_index)
+                    local end_idx = math.max(i, last_clicked_plugin_index)
+                    for j = start_idx, end_idx do
+                        config.plugin_visibility[filtered_plugins[j].name] = new_visible
+                    end
+                else
+                    config.plugin_visibility[plugin.name] = new_visible
+                end
+                last_clicked_plugin_index = i
+                last_clicked_column = 1
                 SaveConfig()
-            end  
+            end
+            
             r.ImGui_SameLine(ctx)
             
-            r.ImGui_SetCursorPosX(ctx, column1_width + (column2_width - 15) / 2)  -- Centreer de checkbox
+            -- Search checkbox
+            r.ImGui_SetCursorPosX(ctx, column1_width + (column2_width - 15) / 2)
             local checkbox_searchable_changed, new_searchable = r.ImGui_Checkbox(ctx, "##Searchable"..plugin.name, not config.excluded_plugins[plugin.name])
             if checkbox_searchable_changed then
-                config.excluded_plugins[plugin.name] = not new_searchable
+                if r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) and last_clicked_plugin_index and last_clicked_column == 2 then
+                    local start_idx = math.min(i, last_clicked_plugin_index)
+                    local end_idx = math.max(i, last_clicked_plugin_index)
+                    for j = start_idx, end_idx do
+                        config.excluded_plugins[filtered_plugins[j].name] = not new_searchable
+                    end
+                else
+                    config.excluded_plugins[plugin.name] = not new_searchable
+                end
+                last_clicked_plugin_index = i
+                last_clicked_column = 2
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
@@ -523,7 +546,7 @@ end
 local function ShowConfigWindow()
     local config_open = true
     local window_width = 480
-    local window_height = 740
+    local window_height = 760
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -806,6 +829,15 @@ local function ShowConfigWindow()
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, column3_width)
         _, config.show_tooltips = r.ImGui_Checkbox(ctx, "Show Tooltips", config.show_tooltips)
+        r.ImGui_SetCursorPosX(ctx, column1_width)
+        _, config.hideBottomButtons = r.ImGui_Checkbox(ctx, "Hide Bottom Buttons", config.hideBottomButtons)
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, column3_width)
+        _, config.hideTopButtons = r.ImGui_Checkbox(ctx, "Hide Top Bottons", config.hideTopButtons)
+
+       
+       
+       
         r.ImGui_Dummy(ctx, 0, 5)
                 NewSection("BULK:")
                 r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -2526,7 +2558,7 @@ local function FilterBox()
     end
     local filtered_fx = Filter_actions(FILTER)
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local bottom_buttons_height = 100
+    local bottom_buttons_height = config.hideBottomButtons and 0 or 80
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 10
     if #filtered_fx ~= 0 then
         if r.ImGui_BeginChild(ctx, "##popupp", window_width, available_height) then
@@ -2882,6 +2914,7 @@ local function CalculateButtonWidths(total_width, num_buttons, spacing)
 end
 
 local function DrawBottomButtons()
+    if not config.hideBottomButtons then
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local track_info_width = math.max(window_width - 20, 125)
@@ -2998,6 +3031,7 @@ r.ImGui_PopItemWidth(ctx)
         r.ImGui_SetTooltip(ctx, "Arm selected Track")
     end
     r.ImGui_Separator(ctx)
+    end
 end
 
 local BUTTON_HEIGHT = 70
@@ -3456,7 +3490,7 @@ function Main()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
     r.ImGui_PushFont(ctx, NormalFont)
     r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
-    r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 340, 16384, 16384)   
+    r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 200, 16384, 16384)   
     handleDocking() 
     local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
     dock = r.ImGui_GetWindowDockID(ctx)
@@ -3743,84 +3777,85 @@ function Main()
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx)
 
-            local button_spacing = 3
-            local button_width = (track_info_width - (2 * button_spacing)) / 3
-            if r.ImGui_Button(ctx, "SCAN", button_width, 20) then
-                FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
-            end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Scan for new Plugins")
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", button_width, 20) then
-                SHOW_PREVIEW = not SHOW_PREVIEW
-                if SHOW_PREVIEW and current_hovered_plugin then
-                    LoadPluginScreenshot(current_hovered_plugin)
+            if not config.hideTopButtons then
+                local button_spacing = 3
+                local button_width = (track_info_width - (2 * button_spacing)) / 3
+                if r.ImGui_Button(ctx, "SCAN", button_width, 20) then
+                    FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Scan for new Plugins")
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", button_width, 20) then
+                    SHOW_PREVIEW = not SHOW_PREVIEW
+                    if SHOW_PREVIEW and current_hovered_plugin then
+                        LoadPluginScreenshot(current_hovered_plugin)
+                    end
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Show or hide Plugin Preview in item list")
+                end
+                r.ImGui_SameLine(ctx)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
+                if r.ImGui_Button(ctx, 'QUIT', button_width, 20) then 
+                    open = false 
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Quit the script (You can also use ESC)")
+                end
+                reaper.ImGui_PopStyleColor(ctx, 3)
+                if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRCK", button_width, 20) then
+                    ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Switch between Track or Item")
+                end
+                reaper.ImGui_SameLine(ctx)
+                if WANT_REFRESH then
+                    WANT_REFRESH = nil
+                    UpdateChainsTrackTemplates(CAT)
+                end
+                if r.ImGui_Button(ctx, is_master_track_selected and "MSTR" or "NORM", button_width, 20) then
+                    is_master_track_selected = not is_master_track_selected
+                    TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Switch between normal and master Track")
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "DOCK", button_width, 20) then
+                    change_dock = true 
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Dock/Undock the window")
+                end
+                if reaper.ImGui_Button(ctx, START and "STOP" or "BULK", button_width, 20) then
+                    StartBulkScreenshot()
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Start or stop Bulk Screenshots")
+                end
+                r.ImGui_SameLine(ctx)
+                if reaper.ImGui_Button(ctx, "CLRR", button_width, 20) then
+                    show_confirm_clear = true
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Clear the Screenshot folder")
+                end
+                r.ImGui_SameLine(ctx)
+                if reaper.ImGui_Button(ctx, "FLDR", button_width, 20) then
+                    OpenScreenshotsFolder()
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Open Screenshot folder location")
+                end
+                if show_confirm_clear then
+                    ShowConfirmClearPopup()
                 end
             end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Show or hide Plugin Preview in item list")
-            end
-            r.ImGui_SameLine(ctx)
-            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
-            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
-            r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
-            if r.ImGui_Button(ctx, 'QUIT', button_width, 20) then 
-                open = false 
-            end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Quit the script (You can also use ESC)")
-            end
-            reaper.ImGui_PopStyleColor(ctx, 3)
-            if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRCK", button_width, 20) then
-                ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
-            end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Switch between Track or Item")
-            end
-            reaper.ImGui_SameLine(ctx)
-            if WANT_REFRESH then
-                WANT_REFRESH = nil
-                UpdateChainsTrackTemplates(CAT)
-            end
-            if r.ImGui_Button(ctx, is_master_track_selected and "MSTR" or "NORM", button_width, 20) then
-                is_master_track_selected = not is_master_track_selected
-                TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
-            end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Switch between normal and master Track")
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "DOCK", button_width, 20) then
-                change_dock = true 
-            end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Dock/Undock the window")
-            end
-            if reaper.ImGui_Button(ctx, START and "STOP" or "BULK", button_width, 20) then
-                StartBulkScreenshot()
-            end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Start or stop Bulk Screenshots")
-            end
-            r.ImGui_SameLine(ctx)
-            if reaper.ImGui_Button(ctx, "CLRR", button_width, 20) then
-                show_confirm_clear = true
-            end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Clear the Screenshot folder")
-            end
-            r.ImGui_SameLine(ctx)
-            if reaper.ImGui_Button(ctx, "FLDR", button_width, 20) then
-                OpenScreenshotsFolder()
-            end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Open Screenshot folder location")
-            end
-            if show_confirm_clear then
-                ShowConfirmClearPopup()
-            end
-            
             Frame()
         else
             r.ImGui_Text(ctx, "NO TRACK SELECTED")
