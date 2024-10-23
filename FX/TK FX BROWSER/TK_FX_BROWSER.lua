@@ -1,9 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.3
+-- @version 0.6.4
 -- @changelog:
---        * Hide top and bottom buttons in settings (for minimal UI)
---        * Select /deselect multiple plugins in plugin manager with Shift + leftclick
+--        * Removed label "user scripts" 
+--        * Invisible botton top of Track info bar to switch between normal track and master
+--        * Added option to lock the context menu of Track info bar
+--
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -97,6 +99,8 @@ local current_color = 0
 local picker_color = {0, 0, 0, 1}
 local show_add_script_popup = false
 local userScripts = {}
+local keep_context_menu_open = false
+local pinned_menu_pos_x, pinned_menu_pos_y = nil, nil
 -- PROJECTS
 local function GetProjectsDirectory()
     local path = reaper.GetProjectPath("")
@@ -2920,31 +2924,30 @@ local function DrawBottomButtons()
     local track_info_width = math.max(window_width - 20, 125)
     local button_spacing = 3
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
-    local buttonHeight = 60
+    local buttonHeight = 70
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight - 20)
-
     -- volumeslider
     local volume = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
-local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
-r.ImGui_PushItemWidth(ctx, track_info_width)
-local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
+    local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
+    r.ImGui_PushItemWidth(ctx, track_info_width)
+    local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
 
-if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, "Rightclick 0db /double Rightclick -12db")
-    if r.ImGui_IsMouseDoubleClicked(ctx, 1) then  -- Rechts dubbelklik
-        new_volume_db = -12
-        changed = true
-    elseif r.ImGui_IsMouseClicked(ctx, 1) then  -- Rechts enkelklik
-            new_volume_db = 0
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Rightclick 0db /double Rightclick -12db")
+        if r.ImGui_IsMouseDoubleClicked(ctx, 1) then  -- Rechts dubbelklik
+            new_volume_db = -12
             changed = true
+        elseif r.ImGui_IsMouseClicked(ctx, 1) then  -- Rechts enkelklik
+                new_volume_db = 0
+                changed = true
+        end
     end
-end
 
-if changed then
-    local new_volume = 10^(new_volume_db/20)
-    r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
-end
-r.ImGui_PopItemWidth(ctx)
+    if changed then
+        local new_volume = 10^(new_volume_db/20)
+        r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
+    end
+    r.ImGui_PopItemWidth(ctx)
 
 
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
@@ -3030,11 +3033,11 @@ r.ImGui_PopItemWidth(ctx)
     if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
         r.ImGui_SetTooltip(ctx, "Arm selected Track")
     end
-    r.ImGui_Separator(ctx)
+    
     end
 end
 
-local BUTTON_HEIGHT = 70
+local BUTTON_HEIGHT = 80
 local function ShowTrackFX()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then
         r.ImGui_Text(ctx, "No track selected")
@@ -3517,22 +3520,40 @@ function Main()
             local track_info_width = math.max(window_width - 20, 125)  -- Minimaal 125, of vensterbreedte - 20
 
             if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50, r.ImGui_WindowFlags_NoScrollbar()) then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Volledig transparante knop
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)  -- Licht grijs bij hover
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)  -- Donkerder grijs bij klik
+                -- Stel de stijlen voor de knoppen in
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Transparante knop
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
+            
+                -- Voeg de '+' knop toe linksboven
                 r.ImGui_SetCursorPos(ctx, 0, 0)
                 r.ImGui_PushFont(ctx, IconFont)
-                if r.ImGui_Button(ctx, "\u{0050}", 20, 20) then
+                if r.ImGui_Button(ctx, '\u{0050}', 20, 20) then
                     config.show_screenshot_window = not config.show_screenshot_window
                     ClearScreenshotCache()
                     GetPluginsForFolder(selected_folder)
                 end
+                r.ImGui_PopFont(ctx)
+            
+                -- Voeg de 'M/T' knop toe in het midden
                 local window_width = r.ImGui_GetWindowWidth(ctx)
+                local button_width = 20  -- De breedte van de knop
+                local pos_x = (window_width - button_width) * 0.5  -- Bereken de x-positie voor het midden
+                r.ImGui_SetCursorPos(ctx, pos_x, 0)
+                if r.ImGui_Button(ctx, is_master_track_selected and '##M' or '##T', button_width, 20) then
+                    is_master_track_selected = not is_master_track_selected
+                    TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
+                end
+
+                r.ImGui_PushFont(ctx, IconFont)
+                -- Voeg de instellingenknop toe rechtsboven
                 r.ImGui_SetCursorPos(ctx, window_width - 20, 0)
-                if r.ImGui_Button(ctx, show_settings and "\u{0047}" or "\u{0047}", 20, 20) then
+                if r.ImGui_Button(ctx, show_settings and '\u{0047}' or '\u{0047}', 20, 20) then
                     show_settings = not show_settings
                 end
+            
+                -- Herstel de stijlen
                 r.ImGui_PopFont(ctx)
                 r.ImGui_PopStyleColor(ctx, 4)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
@@ -3557,13 +3578,46 @@ function Main()
                 if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
+                if not keep_context_menu_open then
+                    pinned_menu_pos_x, pinned_menu_pos_y = nil, nil
+                end
                 
-                if r.ImGui_BeginPopupContextItem(ctx) then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)  -- Witte tekst
+                if keep_context_menu_open and pinned_menu_pos_x then
+                    r.ImGui_SetNextWindowPos(ctx, pinned_menu_pos_x, pinned_menu_pos_y)
+                end
+                
+                if r.ImGui_BeginPopupContextItem(ctx, "TrackContextMenu") or (keep_context_menu_open and r.ImGui_BeginPopup(ctx, "TrackContextMenu")) then
+                    if keep_context_menu_open and not pinned_menu_pos_x then
+                        pinned_menu_pos_x, pinned_menu_pos_y = r.ImGui_GetWindowPos(ctx)
+                    end
                     
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+                    
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
+                    r.ImGui_BeginGroup(ctx)
+                    if r.ImGui_Button(ctx, keep_context_menu_open and "Close Menu " or "Lock Menu ") then
+                        keep_context_menu_open = not keep_context_menu_open
+                        if not keep_context_menu_open then
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
+                    end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "|")
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, " Add Script") then
+                        show_add_script_popup = true
+                        keep_context_menu_open = false
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                    r.ImGui_EndGroup(ctx)
+                    r.ImGui_PopStyleVar(ctx)
+            
                     if not config.hide_default_titlebar_menu_items then
                         if r.ImGui_MenuItem(ctx, "Color Picker") then
                             show_color_picker = true
+                            keep_context_menu_open = false
+                            r.ImGui_CloseCurrentPopup(ctx)
                         end
                         if r.ImGui_MenuItem(ctx, "Duplicate Track") then
                             r.Main_OnCommand(40062, 0)  -- Track: Duplicate tracks
@@ -3630,7 +3684,6 @@ function Main()
                         r.ImGui_Separator(ctx)
                     end
                 
-                    r.ImGui_Text(ctx, "User Scripts (" .. #userScripts .. "):")
                     for i, script in ipairs(userScripts) do
                         if r.ImGui_MenuItem(ctx, script.name) then
                             local script_id = r.NamedCommandLookup(script.command_id)
@@ -3647,18 +3700,19 @@ function Main()
                             r.ImGui_EndPopup(ctx)
                         end
                     end
-                    if r.ImGui_MenuItem(ctx, "+") then
-                        show_add_script_popup = true
-                    end
+                    
                     r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndPopup(ctx)
+                end
+                
+                if keep_context_menu_open and not r.ImGui_IsPopupOpen(ctx, "TrackContextMenu") then
+                    r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
                 if show_rename_popup then
                     local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
                     r.ImGui_SetNextWindowPos(ctx, mouse_x, mouse_y, r.ImGui_Cond_Appearing())
                     r.ImGui_OpenPopup(ctx, "Rename Track")
                 end
-                
                 if r.ImGui_BeginPopupModal(ctx, "Rename Track", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
                     r.ImGui_Text(ctx, "Enter new track name:")
