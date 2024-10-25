@@ -1,19 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.5
+-- @version 0.6.6
 -- @changelog:
---          * Added automatic Master Track detection when selected in TCP/MCP
---          * Reorganized Settings window into three tabs:
---              -GUI & VIEW
---              -SCREENSHOTS
---              -PLUGIN MANAGER
---          * Moved BULK screenshot button to Settings window
---          * Moved CLRR button to Settings window under Screenshots tab
---          
---          * Added checkbox to hide/show Volume Slider
---          * Added Clear Log File button in Settings
---          * Moved Plugin Preview toggle to Settings window
---          * Reduced vertical spacing between screenshots in Screenshot window
+--          * Bugfixes
+--          * Volume slider works only with valid values
 --        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -2947,26 +2937,28 @@ local function DrawBottomButtons()
     -- volumeslider
     if not config.hideVolumeSlider then
         local volume = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
-        local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
-        r.ImGui_PushItemWidth(ctx, track_info_width)
-        local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
-
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Rightclick 0db /double Rightclick -12db")
-            if r.ImGui_IsMouseDoubleClicked(ctx, 1) then  -- Rechts dubbelklik
-                new_volume_db = -12
-                changed = true
-            elseif r.ImGui_IsMouseClicked(ctx, 1) then  -- Rechts enkelklik
+        if volume and volume > 0 then
+            local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
+            r.ImGui_PushItemWidth(ctx, track_info_width)
+            local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
+    
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Rightclick 0db /double Rightclick -12db")
+                if r.ImGui_IsMouseDoubleClicked(ctx, 1) then
+                    new_volume_db = -12
+                    changed = true
+                elseif r.ImGui_IsMouseClicked(ctx, 1) then
                     new_volume_db = 0
                     changed = true
+                end
             end
+    
+            if changed then
+                local new_volume = 10^(new_volume_db/20)
+                r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
+            end
+            r.ImGui_PopItemWidth(ctx)
         end
-
-        if changed then
-            local new_volume = 10^(new_volume_db/20)
-            r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
-        end
-        r.ImGui_PopItemWidth(ctx)
     end
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
     -- Eerste rij knoppen
@@ -3543,27 +3535,20 @@ function Main()
                     config.show_screenshot_window = not config.show_screenshot_window
                     ClearScreenshotCache()
                     GetPluginsForFolder(selected_folder)
-                end
-                r.ImGui_PopFont(ctx)
+                end             
                 local window_width = r.ImGui_GetWindowWidth(ctx)                          
-                r.ImGui_PushFont(ctx, IconFont)
                 r.ImGui_SetCursorPos(ctx, 20, 0)
                 if r.ImGui_Button(ctx, show_settings and '\u{0047}' or '\u{0047}', 20, 20) then
                     show_settings = not show_settings
                 end
                 r.ImGui_SameLine(ctx)
-                r.ImGui_PushFont(ctx, IconFont)
                 r.ImGui_SetCursorPos(ctx, window_width - 20, 0)
                 if r.ImGui_Button(ctx, "\u{0045}", 20, 20) then
                     change_dock = true 
                     ClearScreenshotCache()
                     ShowPluginScreenshot()
                 end
-                r.ImGui_PopFont(ctx)
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Dock/Undock the window")
-                end
-            
+              
                 -- Herstel de stijlen
                 r.ImGui_PopFont(ctx)
                 r.ImGui_PopStyleColor(ctx, 4)
