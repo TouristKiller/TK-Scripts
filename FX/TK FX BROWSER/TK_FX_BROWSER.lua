@@ -1,9 +1,14 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.6
+-- @version 0.6.7
 -- @changelog:
---          * Bugfixes
---          * Volume slider works only with valid values
+--          * Screenshot position changes when nearing the bottom om screen
+--          * If you use < > in the track info bar, this will now work cyclically. 
+--            If you go back from track 1, you will first come to the master track 
+--            and then you start at the last track. If you go forward at the last track,
+--            you will go via the master track back to the 1st track.
+--          * Improverd BULK Screenshots button.
+
 --        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -403,6 +408,7 @@ local search_filter = ""
 local filtered_plugins = {}
 local function InitializeFilteredPlugins()
     for _, plugin_name in ipairs(PLUGIN_LIST) do
+        config.plugin_visibility[plugin_name] = true -- Zet alle plugins standaard op zichtbaar
         table.insert(filtered_plugins, {
             name = plugin_name, 
             visible = config.plugin_visibility[plugin_name] ~= false,
@@ -451,14 +457,16 @@ local function ShowPluginManagerTab()
 
         -- Koppen
         r.ImGui_SetCursorPosX(ctx, column1_width / 2 - r.ImGui_CalcTextSize(ctx, "Bulk") / 2)
-        r.ImGui_Text(ctx, "Bulk")
+        r.ImGui_Text(ctx, "Bulk*")
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, column1_width + column2_width / 2 - r.ImGui_CalcTextSize(ctx, "Search") / 2)
         r.ImGui_Text(ctx, "Search")
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, column1_width + column2_width + 10)
         r.ImGui_Text(ctx, "Plugin Name")
-        
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, column1_width + column2_width + 155)
+        r.ImGui_Text(ctx, "(*also affects taking individual screenshots)")
         r.ImGui_Separator(ctx)
     if r.ImGui_BeginChild(ctx, "PluginList", 0, -25) then
         for i, plugin in ipairs(filtered_plugins) do
@@ -1003,15 +1011,21 @@ local function ShowConfigWindow()
             r.ImGui_Dummy(ctx, 0, 5)
 
             local button_width = (window_width - 20) / 2
-            if r.ImGui_Button(ctx, START and "Stop BULK Screenshots" or "Start BULK Screenshots", button_width, 20) then
-                if START then
+            local button_color = (START or PROCESS) and 0xFF0000FF or config.button_background_color
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_color)
+            if r.ImGui_Button(ctx, "BULK Screenshots", button_width, 20) then
+                if START or PROCESS then
+                    STOP_REQUESTED = true
                     START = false
+                    PROCESS = false
                 else
                     START = true
+                    PROCESS = true
                     StartBulkScreenshot()
                 end
             end
-            
+            r.ImGui_PopStyleColor(ctx)
+
             r.ImGui_SameLine(ctx)
             if reaper.ImGui_Button(ctx, "Show Screenshots Folder", button_width, 20) then
                 OpenScreenshotsFolder()
@@ -1737,69 +1751,77 @@ function ShowPluginScreenshot()
                 local display_width = config.screenshot_display_size
                 local display_height = display_width * (height / width)
                 local max_height = display_width * 1.2 -- 120% van de ingestelde breedte
-                
+               
                 if display_height > max_height then
                     display_height = max_height
                     display_width = display_height * (width / height)
                 end
-                    
-                    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-                    local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
-                    
-                    local window_pos_x = mouse_x + 20
-                    local window_pos_y = mouse_y + 20
-                    
-                    if window_pos_x + display_width > vp_width then
-                        window_pos_x = mouse_x - display_width - 20
-                    end
-                    if window_pos_y + display_height > vp_height * 3 then
-                        window_pos_y = mouse_y - display_height - 20
-                    end
-                    local show_name = config.show_name_in_main_window and not config.hidden_names[current_hovered_plugin]
-                    local window_height = display_height + (show_name and 30 or 0)
-                    r.ImGui_SetNextWindowSize(ctx, display_width, window_height)
-                    r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
-                    r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
-                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 1)
-                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 14)
-                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(), 1)
-                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 1, 1)
-                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 2,2)
-                    r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 7)
-
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
-                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
-                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
-                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), 0x000000FF)
-                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
-                    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
-                    
-                    if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
-                        r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
-                        
-                        if show_name then
-                            local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
-                            local text_pos_x = (display_width - text_width) * 0.5
-                            local text_pos_y = display_height + 12
-                            
-                            r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
-                            r.ImGui_Text(ctx, current_hovered_plugin)
-                        end
-                        r.ImGui_End(ctx)
-                    end
-                    
-                    r.ImGui_PopStyleVar(ctx, 6)
-                    r.ImGui_PopStyleColor(ctx, 6)
-                else
-                    log_to_file("Ongeldige afmetingen voor texture: " .. tostring(screenshot_texture))
-                    screenshot_texture = nil
+                   
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                local window_x, window_y = r.ImGui_GetWindowPos(ctx)
+                local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
+                
+                local window_pos_x = mouse_x + 20
+                local window_pos_y = mouse_y + 20
+                
+                -- Check voor horizontale ruimte
+                if window_pos_x + display_width > window_x + vp_width then
+                    window_pos_x = mouse_x - display_width - 20
                 end
+                
+                -- Check voor verticale ruimte
+                if window_pos_y + display_height > window_y + vp_height + 250 then
+                    window_pos_y = mouse_y - display_height - 20
+                end
+
+                local show_name = config.show_name_in_main_window and not config.hidden_names[current_hovered_plugin]
+                local window_height = display_height + (show_name and 30 or 0)
+                
+                r.ImGui_SetNextWindowSize(ctx, display_width, window_height)
+                r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
+                r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
+                
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 1)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 14)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_PopupRounding(), 1)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 1, 1)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 2,2)
+                r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), 7)
+
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), 0x000000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
+                r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
+                   
+                if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+                    r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
+                       
+                    if show_name then
+                        local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
+                        local text_pos_x = (display_width - text_width) * 0.5
+                        local text_pos_y = display_height + 12
+                           
+                        r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
+                        r.ImGui_Text(ctx, current_hovered_plugin)
+                    end
+                    r.ImGui_End(ctx)
+                end
+                   
+                r.ImGui_PopStyleVar(ctx, 6)
+                r.ImGui_PopStyleColor(ctx, 6)
             else
-                log_to_file("Ongeldige texture voor plugin: " .. current_hovered_plugin)
+                log_to_file("Ongeldige afmetingen voor texture: " .. tostring(screenshot_texture))
                 screenshot_texture = nil
             end
+        else
+            log_to_file("Ongeldige texture voor plugin: " .. current_hovered_plugin)
+            screenshot_texture = nil
         end
     end
+end
+
 
 local function GetCurrentProjectFX()
     local fx_list = {}
@@ -3802,15 +3824,38 @@ function Main()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)  -- Licht grijs bij hover
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)  -- Donkerder grijs bij klik
                 r.ImGui_SetCursorPos(ctx, -2, window_height - 20)
-                if r.ImGui_Button(ctx, "<", 20, 20) then
-                    local prev_track = r.GetTrack(0, r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") - 2)
-                    if prev_track then r.SetOnlyTrackSelected(prev_track) end
-                end
-                r.ImGui_SetCursorPos(ctx, window_width - 16, window_height - 20)
-                if r.ImGui_Button(ctx, ">", 20, 20) then
-                    local next_track = r.GetTrack(0, r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
-                    if next_track then r.SetOnlyTrackSelected(next_track) end
-                end
+if r.ImGui_Button(ctx, "<", 20, 20) then
+    local current_track_number = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER")
+    if current_track_number == 1 then
+        -- Bij eerste track, ga naar master
+        r.SetOnlyTrackSelected(r.GetMasterTrack(0))
+    elseif r.IsTrackSelected(r.GetMasterTrack(0)) then
+        -- Bij master track, ga naar laatste track
+        local last_track = r.GetTrack(0, r.GetNumTracks() - 1)
+        if last_track then r.SetOnlyTrackSelected(last_track) end
+    else
+        -- Anders ga naar vorige track
+        local prev_track = r.GetTrack(0, current_track_number - 2)
+        if prev_track then r.SetOnlyTrackSelected(prev_track) end
+    end
+end
+
+r.ImGui_SetCursorPos(ctx, window_width - 16, window_height - 20)
+if r.ImGui_Button(ctx, ">", 20, 20) then
+    if r.IsTrackSelected(r.GetMasterTrack(0)) then
+        -- Bij master track, ga naar eerste track
+        local first_track = r.GetTrack(0, 0)
+        if first_track then r.SetOnlyTrackSelected(first_track) end
+    else
+        local next_track = r.GetTrack(0, r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
+        if next_track then 
+            r.SetOnlyTrackSelected(next_track)
+        else
+            -- Bij laatste track, ga naar master
+            r.SetOnlyTrackSelected(r.GetMasterTrack(0))
+        end
+    end
+end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopFont(ctx)
                 r.ImGui_PopStyleColor(ctx)
