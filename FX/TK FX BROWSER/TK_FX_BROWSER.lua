@@ -1,11 +1,20 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.4
+-- @version 0.6.5
 -- @changelog:
---        * Removed label "user scripts" 
---        * Invisible botton top of Track info bar to switch between normal track and master
---        * Added option to lock the context menu of Track info bar
---
+--          * Added automatic Master Track detection when selected in TCP/MCP
+--          * Reorganized Settings window into three tabs:
+--              -GUI & VIEW
+--              -SCREENSHOTS
+--              -PLUGIN MANAGER
+--          * Moved BULK screenshot button to Settings window
+--          * Moved CLRR button to Settings window under Screenshots tab
+--          
+--          * Added checkbox to hide/show Volume Slider
+--          * Added Clear Log File button in Settings
+--          * Moved Plugin Preview toggle to Settings window
+--          * Reduced vertical spacing between screenshots in Screenshot window
+--        
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -13,6 +22,7 @@ local os_separator      = package.config:sub(1, 1)
 package.path            = script_path .. "?.lua;"
 local json              = require("json")
 local screenshot_path   = script_path .. "Screenshots" .. os_separator
+StartBulkScreenshot     = function() end
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
     local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
@@ -117,6 +127,7 @@ local projects = {}
 local project_search_term = ""
 local filtered_projects = {}
 -- SCREENSHOTS
+START = false
 local is_screenshot_visible = false
 local screenshot_texture = nil
 local screenshot_width, screenshot_height = 0, 0
@@ -140,6 +151,7 @@ local collapsed_tracks = {}
 local all_tracks_collapsed = false
 local SHOULD_CLOSE_SCRIPT = false
 local IS_COPYING_TO_ALL_TRACKS = false
+
 local function get_safe_name(name)
     return (name or ""):gsub("[^%w%s-]", "_")
 end
@@ -236,6 +248,7 @@ local function SetDefaultConfig()
         show_tooltips = true,
         hideBottomButtons = false,
         hideTopButtons = false,
+        hideVolumeSlider = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -416,7 +429,13 @@ local function ShowPluginManagerTab()
     if #filtered_plugins == 0 then
         InitializeFilteredPlugins()
     end
-    local changed, new_search_filter = r.ImGui_InputText(ctx, "Search plugins", search_filter)
+    if r.ImGui_Button(ctx, "Update Plugin List", 110) then
+        FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+    end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_PushItemWidth(ctx, 120)
+    local changed, new_search_filter = r.ImGui_InputTextWithHint(ctx, "##Search plugins", "SEARCH PLUGINS", search_filter)
+    r.ImGui_PopItemWidth(ctx)
     if changed then
         search_filter = new_search_filter
         filtered_plugins = {}
@@ -431,13 +450,13 @@ local function ShowPluginManagerTab()
         end
         table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
     end
-    r.ImGui_Text(ctx, string.format("Total plugins: %d", #PLUGIN_LIST))
-    r.ImGui_Text(ctx, string.format("Shown plugins: %d", #filtered_plugins))
-    
-    if r.ImGui_BeginChild(ctx, "PluginList", 0, -60) then
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        local column1_width = 50  -- Voor "Bulk" checkbox
-        local column2_width = 50  -- Voor "Search" checkbox
+    r.ImGui_SameLine(ctx)
+    r.ImGui_Text(ctx, string.format(" | Total plugins: %d", #PLUGIN_LIST))
+    r.ImGui_SameLine(ctx)
+    r.ImGui_Text(ctx, string.format(" | Shown plugins: %d", #filtered_plugins))
+    local window_width = r.ImGui_GetWindowWidth(ctx)
+        local column1_width = 45  -- Voor "Bulk" checkbox
+        local column2_width = 45  -- Voor "Search" checkbox
         local column3_width = window_width - column1_width - column2_width - 20  -- Voor plugin naam
 
         -- Koppen
@@ -451,9 +470,9 @@ local function ShowPluginManagerTab()
         r.ImGui_Text(ctx, "Plugin Name")
         
         r.ImGui_Separator(ctx)
-
+    if r.ImGui_BeginChild(ctx, "PluginList", 0, -25) then
         for i, plugin in ipairs(filtered_plugins) do
-            r.ImGui_SetCursorPosX(ctx, (column1_width - 15) / 2)
+            r.ImGui_SetCursorPosX(ctx, (column1_width - 35) / 2)
             
             -- Bulk checkbox
             local checkbox_visible_changed, new_visible = r.ImGui_Checkbox(ctx, "##Visible"..plugin.name, config.plugin_visibility[plugin.name])
@@ -475,7 +494,7 @@ local function ShowPluginManagerTab()
             r.ImGui_SameLine(ctx)
             
             -- Search checkbox
-            r.ImGui_SetCursorPosX(ctx, column1_width + (column2_width - 15) / 2)
+            r.ImGui_SetCursorPosX(ctx, column1_width + (column2_width - 35) / 2)
             local checkbox_searchable_changed, new_searchable = r.ImGui_Checkbox(ctx, "##Searchable"..plugin.name, not config.excluded_plugins[plugin.name])
             if checkbox_searchable_changed then
                 if r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) and last_clicked_plugin_index and last_clicked_column == 2 then
@@ -493,13 +512,13 @@ local function ShowPluginManagerTab()
             end
             r.ImGui_SameLine(ctx)
             
-            r.ImGui_SetCursorPosX(ctx, column1_width + column2_width + 10)
+            r.ImGui_SetCursorPosX(ctx, column1_width + column2_width + 2)
             r.ImGui_Text(ctx, plugin.name)
         end
         r.ImGui_EndChild(ctx)
     end
-    local button_width = (r.ImGui_GetWindowWidth(ctx) - 15) / 2
-    if r.ImGui_Button(ctx, "Select All for Bulk", button_width, 20) then
+    local button_width = (r.ImGui_GetWindowWidth(ctx) -28) / 4
+    if r.ImGui_Button(ctx, "Select Bulk", button_width, 20) then
         for _, plugin in ipairs(filtered_plugins) do
             config.plugin_visibility[plugin.name] = true
         end
@@ -508,15 +527,14 @@ local function ShowPluginManagerTab()
 
     r.ImGui_SameLine(ctx)
 
-    if r.ImGui_Button(ctx, "Deselect All for Bulk", button_width, 20) then
+    if r.ImGui_Button(ctx, "Deselect Bulk", button_width, 20) then
         for _, plugin in ipairs(filtered_plugins) do
             config.plugin_visibility[plugin.name] = false
         end
         SaveConfig()
     end
-    local button_width = (r.ImGui_GetWindowWidth(ctx) - 15) / 2  -- Bereken de breedte voor twee knoppen
-    
-    if r.ImGui_Button(ctx, "Select All for Search", button_width, 20) then
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Select Search", button_width, 20) then
         for _, plugin in ipairs(filtered_plugins) do
             config.excluded_plugins[plugin.name] = nil
         end
@@ -525,7 +543,7 @@ local function ShowPluginManagerTab()
     
     r.ImGui_SameLine(ctx)
     
-    if r.ImGui_Button(ctx, "Deselect All for Search", button_width, 20) then
+    if r.ImGui_Button(ctx, "Deselect Search", button_width, 20) then
         for _, plugin in ipairs(filtered_plugins) do
             config.excluded_plugins[plugin.name] = true
         end
@@ -547,10 +565,29 @@ local function GetPluginsForFolder(folder_name)
     return filtered_plugins
 end
 
+local function OpenScreenshotsFolder()
+    local os_name = reaper.GetOS()
+    if os_name:match("Win") then
+        os.execute('start "" "' .. screenshot_path .. '"')
+    elseif os_name:match("OSX") then
+        os.execute('open "' .. screenshot_path .. '"')
+    else
+        reaper.ShowMessageBox("Unsupported OS", "Error", 0)
+    end
+end
+
 local function ShowConfigWindow()
+    local function NewSection(title)
+        r.ImGui_Spacing(ctx)
+        r.ImGui_PushFont(ctx, NormalFont)
+        r.ImGui_Text(ctx, title)
+        r.ImGui_PopFont(ctx)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+    end
     local config_open = true
     local window_width = 480
-    local window_height = 760
+    local window_height = 500
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -565,447 +602,466 @@ local function ShowConfigWindow()
         r.ImGui_PopFont(ctx)
         r.ImGui_Separator(ctx)
         if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
-            if r.ImGui_BeginTabItem(ctx, "GENERAL") then
-
-        local function NewSection(title)
-            r.ImGui_Spacing(ctx)
-            r.ImGui_PushFont(ctx, NormalFont)
-            r.ImGui_Text(ctx, title)
-            r.ImGui_PopFont(ctx)
+            if r.ImGui_BeginTabItem(ctx, "GUI & VIEW") then
+            NewSection("GUI:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Background")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed, new_gray = r.ImGui_SliderInt(ctx, "##Background", config.background_gray, 0, 255)
+            if changed then
+                config.background_gray = new_gray
+                config.background_color = r.ImGui_ColorConvertDouble4ToU32(new_gray/255, new_gray/255, new_gray/255, config.window_alpha)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Transparency")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_alpha, new_alpha_int = r.ImGui_SliderInt(ctx, "##Transparency", window_alpha_int, 0, 100, "%d%%")
+            if changed_alpha then
+                window_alpha_int = new_alpha_int
+                config.window_alpha = window_alpha_int / 100
+                config.background_color = r.ImGui_ColorConvertDouble4ToU32(config.background_gray/255, config.background_gray/255, config.background_gray/255, config.window_alpha)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Text")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_text, new_text_gray = r.ImGui_SliderInt(ctx, "##Text", config.text_gray, 0, 255)
+            if changed_text then
+                config.text_gray = new_text_gray
+                config.text_color = r.ImGui_ColorConvertDouble4ToU32(new_text_gray/255, new_text_gray/255, new_text_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Dropdown BG")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_dropdown, new_dropdown_gray = r.ImGui_SliderInt(ctx, "##Dropdown BG", config.dropdown_bg_gray, 0, 255)
+            if changed_dropdown then
+                config.dropdown_bg_gray = new_dropdown_gray
+                config.dropdown_bg_color = r.ImGui_ColorConvertDouble4ToU32(new_dropdown_gray/255, new_dropdown_gray/255, new_dropdown_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Button BG")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_button_bg, new_button_bg_gray = r.ImGui_SliderInt(ctx, "##Button BG", config.button_background_gray, 0, 255)
+            if changed_button_bg then
+                config.button_background_gray = new_button_bg_gray
+                config.button_background_color = r.ImGui_ColorConvertDouble4ToU32(new_button_bg_gray/255, new_button_bg_gray/255, new_button_bg_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Button Hover")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_hover, new_hover_gray = r.ImGui_SliderInt(ctx, "##Button Hover", config.button_hover_gray, 0, 255)
+            if changed_hover then
+                config.button_hover_gray = new_hover_gray
+                config.button_hover_color = r.ImGui_ColorConvertDouble4ToU32(new_hover_gray/255, new_hover_gray/255, new_hover_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Frame BG")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_frame_bg, new_frame_bg_gray = r.ImGui_SliderInt(ctx, "##Frame BG", config.frame_bg_gray, 0, 255)
+            if changed_frame_bg then
+                config.frame_bg_gray = new_frame_bg_gray
+                config.frame_bg_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_bg_gray/255, new_frame_bg_gray/255, new_frame_bg_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Frame Hover")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_frame_hover, new_frame_hover_gray = r.ImGui_SliderInt(ctx, "##Frame Hover", config.frame_bg_hover_gray, 0, 255)
+            if changed_frame_hover then
+                config.frame_bg_hover_gray = new_frame_hover_gray
+                config.frame_bg_hover_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_hover_gray/255, new_frame_hover_gray/255, new_frame_hover_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Frame Active")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_frame_active, new_frame_active_gray = r.ImGui_SliderInt(ctx, "##Frame Active", config.frame_bg_active_gray, 0, 255)
+            if changed_frame_active then
+                config.frame_bg_active_gray = new_frame_active_gray
+                config.frame_bg_active_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_active_gray/255, new_frame_active_gray/255, new_frame_active_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Dropdown Length")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.dropdown_menu_length = r.ImGui_SliderInt(ctx, "##Dropdown Length", config.dropdown_menu_length, 5, 75)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Tab Color")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_tab, new_tab_gray = r.ImGui_SliderInt(ctx, "##Tab Color", config.tab_gray, 0, 255)
+            if changed_tab then
+                config.tab_gray = new_tab_gray
+                config.tab_color = r.ImGui_ColorConvertDouble4ToU32(new_tab_gray/255, new_tab_gray/255, new_tab_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Tab Hovered")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_tab_hovered, new_tab_hovered_gray = r.ImGui_SliderInt(ctx, "##Tab Hovered", config.tab_hovered_gray, 0, 255)
+            if changed_tab_hovered then
+                config.tab_hovered_gray = new_tab_hovered_gray
+                config.tab_hovered_color = r.ImGui_ColorConvertDouble4ToU32(new_tab_hovered_gray/255, new_tab_hovered_gray/255, new_tab_hovered_gray/255, 1)
+            end
+            r.ImGui_Dummy(ctx, 0, 5)
+            NewSection("MAIN WINDOW:")
+            local changed, new_value
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "All Plugins", config.show_all_plugins)
+            if changed then config.show_all_plugins = new_value end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Developer", config.show_developer)
+            if changed then config.show_developer = new_value end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Folders", config.show_folders)
+            if changed then config.show_folders = new_value end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "FX Chains", config.show_fx_chains)
+            if changed then config.show_fx_chains = new_value end
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Track Templates", config.show_track_templates)
+            if changed then config.show_track_templates = new_value end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Category", config.show_category)
+            if changed then config.show_category = new_value end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Container", config.show_container)
+            if changed then config.show_container = new_value end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Video Processor", config.show_video_processor)
+            if changed then config.show_video_processor = new_value end
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Favorites", config.show_favorites)
+            if changed then config.show_favorites = new_value end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Projects", config.show_projects)
+            if changed then config.show_projects = new_value end
             r.ImGui_Separator(ctx)
-            r.ImGui_Spacing(ctx)
-        end
-        r.ImGui_Dummy(ctx, 0, 5)
-        NewSection("SCREENSHOT:")
+            r.ImGui_Dummy(ctx, 0, 5)
+         
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.show_tooltips = r.ImGui_Checkbox(ctx, "Show Tooltips", config.show_tooltips)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.show_name_in_main_window = r.ImGui_Checkbox(ctx, "Show Plugin Names", config.show_name_in_main_window)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Show screenshots in Search", config.show_screenshot_in_search)
 
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "X Offset")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.srcx = r.ImGui_SliderInt(ctx, "##X Offset", config.srcx, 0, 500)
-        r.ImGui_PopItemWidth(ctx)
-       
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Y Offset")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.srcy = r.ImGui_SliderInt(ctx, "##Y Offset", config.srcy, 0, 500)
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Height Offset")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.capture_height_offset = r.ImGui_SliderInt(ctx, "##Height Offset", config.capture_height_offset, 0, 500)
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Screenshot Size:")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local size_options = "128x128 (TrackIcon\0 500x(Scale)\0Original\0\0"
-        _, config.screenshot_size_option = r.ImGui_Combo(ctx, "##Size Option", config.screenshot_size_option - 1, size_options)
-        config.screenshot_size_option = config.screenshot_size_option + 1
-        r.ImGui_PopItemWidth(ctx)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Display Size")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.screenshot_display_size = r.ImGui_SliderInt(ctx, "##Display Size", config.screenshot_display_size, 100, 500)
-        r.ImGui_PopItemWidth(ctx)
-        r.ImGui_Dummy(ctx, 0, 5)
-        NewSection("GUI:")
-
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Background")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed, new_gray = r.ImGui_SliderInt(ctx, "##Background", config.background_gray, 0, 255)
-        if changed then
-            config.background_gray = new_gray
-            config.background_color = r.ImGui_ColorConvertDouble4ToU32(new_gray/255, new_gray/255, new_gray/255, config.window_alpha)
-        end
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Transparency")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_alpha, new_alpha_int = r.ImGui_SliderInt(ctx, "##Transparency", window_alpha_int, 0, 100, "%d%%")
-        if changed_alpha then
-            window_alpha_int = new_alpha_int
-            config.window_alpha = window_alpha_int / 100
-            config.background_color = r.ImGui_ColorConvertDouble4ToU32(config.background_gray/255, config.background_gray/255, config.background_gray/255, config.window_alpha)
-        end
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Text")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_text, new_text_gray = r.ImGui_SliderInt(ctx, "##Text", config.text_gray, 0, 255)
-        if changed_text then
-            config.text_gray = new_text_gray
-            config.text_color = r.ImGui_ColorConvertDouble4ToU32(new_text_gray/255, new_text_gray/255, new_text_gray/255, 1)
-        end
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Dropdown BG")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_dropdown, new_dropdown_gray = r.ImGui_SliderInt(ctx, "##Dropdown BG", config.dropdown_bg_gray, 0, 255)
-        if changed_dropdown then
-            config.dropdown_bg_gray = new_dropdown_gray
-            config.dropdown_bg_color = r.ImGui_ColorConvertDouble4ToU32(new_dropdown_gray/255, new_dropdown_gray/255, new_dropdown_gray/255, 1)
-        end
-        r.ImGui_PopItemWidth(ctx)
-       
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Button BG")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_button_bg, new_button_bg_gray = r.ImGui_SliderInt(ctx, "##Button BG", config.button_background_gray, 0, 255)
-        if changed_button_bg then
-            config.button_background_gray = new_button_bg_gray
-            config.button_background_color = r.ImGui_ColorConvertDouble4ToU32(new_button_bg_gray/255, new_button_bg_gray/255, new_button_bg_gray/255, 1)
-        end
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Button Hover")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_hover, new_hover_gray = r.ImGui_SliderInt(ctx, "##Button Hover", config.button_hover_gray, 0, 255)
-        if changed_hover then
-            config.button_hover_gray = new_hover_gray
-            config.button_hover_color = r.ImGui_ColorConvertDouble4ToU32(new_hover_gray/255, new_hover_gray/255, new_hover_gray/255, 1)
-        end
-        r.ImGui_PopItemWidth(ctx)
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Frame BG")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_frame_bg, new_frame_bg_gray = r.ImGui_SliderInt(ctx, "##Frame BG", config.frame_bg_gray, 0, 255)
-        if changed_frame_bg then
-            config.frame_bg_gray = new_frame_bg_gray
-            config.frame_bg_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_bg_gray/255, new_frame_bg_gray/255, new_frame_bg_gray/255, 1)
-        end
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Frame Hover")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_frame_hover, new_frame_hover_gray = r.ImGui_SliderInt(ctx, "##Frame Hover", config.frame_bg_hover_gray, 0, 255)
-        if changed_frame_hover then
-            config.frame_bg_hover_gray = new_frame_hover_gray
-            config.frame_bg_hover_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_hover_gray/255, new_frame_hover_gray/255, new_frame_hover_gray/255, 1)
-        end
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Frame Active")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_frame_active, new_frame_active_gray = r.ImGui_SliderInt(ctx, "##Frame Active", config.frame_bg_active_gray, 0, 255)
-        if changed_frame_active then
-            config.frame_bg_active_gray = new_frame_active_gray
-            config.frame_bg_active_color = r.ImGui_ColorConvertDouble4ToU32(new_frame_active_gray/255, new_frame_active_gray/255, new_frame_active_gray/255, 1)
-        end
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Dropdown Length")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.dropdown_menu_length = r.ImGui_SliderInt(ctx, "##Dropdown Length", config.dropdown_menu_length, 5, 75)
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Tab Color")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_tab, new_tab_gray = r.ImGui_SliderInt(ctx, "##Tab Color", config.tab_gray, 0, 255)
-        if changed_tab then
-            config.tab_gray = new_tab_gray
-            config.tab_color = r.ImGui_ColorConvertDouble4ToU32(new_tab_gray/255, new_tab_gray/255, new_tab_gray/255, 1)
-        end
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Tab Hovered")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        local changed_tab_hovered, new_tab_hovered_gray = r.ImGui_SliderInt(ctx, "##Tab Hovered", config.tab_hovered_gray, 0, 255)
-        if changed_tab_hovered then
-            config.tab_hovered_gray = new_tab_hovered_gray
-            config.tab_hovered_color = r.ImGui_ColorConvertDouble4ToU32(new_tab_hovered_gray/255, new_tab_hovered_gray/255, new_tab_hovered_gray/255, 1)
-        end
-        
-        r.ImGui_Dummy(ctx, 0, 5)
-        NewSection("PERFORMANCE:")
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Max Textures/Frame")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.max_textures_per_frame = r.ImGui_SliderInt(ctx, "##Max Textures/Frame", config.max_textures_per_frame, 1, 30)
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Max Cached Textures")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.max_cached_search_textures = r.ImGui_SliderInt(ctx, "##Max Cached Textures", config.max_cached_search_textures, 10, 200)
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Min Cached Textures")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.min_cached_textures = r.ImGui_SliderInt(ctx, "##Min Cached Textures", config.min_cached_textures, 5, 50)
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        r.ImGui_Text(ctx, "Texture Reload Delay")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        _, config.texture_reload_delay = r.ImGui_SliderInt(ctx, "##Texture Reload Delay", config.texture_reload_delay or 2, 1, 10)
-        r.ImGui_PopItemWidth(ctx)
-
-        r.ImGui_Dummy(ctx, 0, 5)
-        NewSection("VIEW:")
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Show in Search", config.show_screenshot_in_search)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        _, config.resize_screenshots_with_window = r.ImGui_Checkbox(ctx, "Resize with Window", config.resize_screenshots_with_window)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        _, config.show_screenshot_window = r.ImGui_Checkbox(ctx, "Show Window", config.show_screenshot_window)
-        r.ImGui_SameLine(ctx)
-
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        _, config.dock_screenshot_window = r.ImGui_Checkbox(ctx, "Dock", config.dock_screenshot_window)
-        if config.dock_screenshot_window then
-
-        r.ImGui_SameLine(ctx, 0, 20)
-        _, config.dock_screenshot_left = r.ImGui_Checkbox(ctx, "Left", config.dock_screenshot_left)
-        end
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        _, config.show_name_in_screenshot_window = r.ImGui_Checkbox(ctx, "Show Names in Screenshot Window", config.show_name_in_screenshot_window)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        _, config.show_name_in_main_window = r.ImGui_Checkbox(ctx, "Show Names in Main Window", config.show_name_in_main_window)
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        _, config.show_tooltips = r.ImGui_Checkbox(ctx, "Show Tooltips", config.show_tooltips)
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        _, config.hideBottomButtons = r.ImGui_Checkbox(ctx, "Hide Bottom Buttons", config.hideBottomButtons)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        _, config.hideTopButtons = r.ImGui_Checkbox(ctx, "Hide Top Bottons", config.hideTopButtons)
-
-       
-       
-       
-        r.ImGui_Dummy(ctx, 0, 5)
-                NewSection("BULK:")
-                r.ImGui_SetCursorPosX(ctx, column1_width)
-                changed, config.bulk_screenshot_vst = r.ImGui_Checkbox(ctx, "VST Plugins", config.bulk_screenshot_vst)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column2_width)
-                changed, config.bulk_screenshot_vsti = r.ImGui_Checkbox(ctx, "VSTi Plugins", config.bulk_screenshot_vsti)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column3_width)
-                changed, config.bulk_screenshot_vst3 = r.ImGui_Checkbox(ctx, "VST3 Plugins", config.bulk_screenshot_vst3)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column4_width)
-                changed, config.bulk_screenshot_vst3i = r.ImGui_Checkbox(ctx, "VST3i Plugins", config.bulk_screenshot_vst3i)
-                r.ImGui_SetCursorPosX(ctx, column4_width)
-                
-                r.ImGui_SetCursorPosX(ctx, column1_width)
-                changed, config.bulk_screenshot_au = r.ImGui_Checkbox(ctx, "AU Plugins", config.bulk_screenshot_au)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column2_width)
-                changed, config.bulk_screenshot_aui = r.ImGui_Checkbox(ctx, "AUi Plugins", config.bulk_screenshot_aui)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column3_width)
-                changed, config.bulk_screenshot_lv2 = r.ImGui_Checkbox(ctx, "LV2 Plugins", config.bulk_screenshot_lv2)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column4_width)
-                changed, config.bulk_screenshot_lv2i = r.ImGui_Checkbox(ctx, "LV2i Plugins", config.bulk_screenshot_lv2i)
-                
-                r.ImGui_SetCursorPosX(ctx, column1_width)
-                changed, config.bulk_screenshot_js = r.ImGui_Checkbox(ctx, "JS Plugins", config.bulk_screenshot_js)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column2_width)
-                changed, config.bulk_screenshot_clap = r.ImGui_Checkbox(ctx, "CLAP Plugins", config.bulk_screenshot_clap)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column3_width)
-                changed, config.bulk_screenshot_clapi = r.ImGui_Checkbox(ctx, "CLAPi Plugins", config.bulk_screenshot_clapi)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, column4_width)
-                _, config.screenshot_default_folder_only = r.ImGui_Checkbox(ctx, "Default Only", config.screenshot_default_folder_only)
-
-        r.ImGui_Dummy(ctx, 0, 5)
-        NewSection("MISC:")
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        r.ImGui_Text(ctx, "Default Folder")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        r.ImGui_PushItemWidth(ctx, slider_width)
-        r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
-        if r.ImGui_BeginCombo(ctx, "##Default Folder", config.default_folder or "None") then
-            if r.ImGui_Selectable(ctx, "None", config.default_folder == nil) then
-                config.default_folder = nil
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.hideTopButtons = r.ImGui_Checkbox(ctx, "No Top Buttons", config.hideTopButtons)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.hideBottomButtons = r.ImGui_Checkbox(ctx, "No Bottom Buttons", config.hideBottomButtons)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
+            
+            r.ImGui_Dummy(ctx, 0, 5)
+            NewSection("SCREENSHOT WINDOW:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local changed, new_value = r.ImGui_Checkbox(ctx, "Show Window", config.show_screenshot_window)
+            if changed then
+                config.show_screenshot_window = new_value
+                ClearScreenshotCache()
             end
-            if r.ImGui_Selectable(ctx, "Favorites", config.default_folder == "Favorites") then
-                config.default_folder = "Favorites"
-            end
-            if r.ImGui_Selectable(ctx, "Current Project FX", config.default_folder == "Current Project FX") then
-                config.default_folder = "Current Project FX"
-            end
-            if r.ImGui_Selectable(ctx, "Current Track FX", config.default_folder == "Current Track FX") then
-                config.default_folder = "Current Track FX"
-            end
-            for i = 1, #folders_category do
-                local is_selected = (config.default_folder == folders_category[i].name)
-                if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
-                    config.default_folder = folders_category[i].name
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.show_name_in_screenshot_window = r.ImGui_Checkbox(ctx, "Show Names", config.show_name_in_screenshot_window)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.dock_screenshot_window = r.ImGui_Checkbox(ctx, "Dock", config.dock_screenshot_window)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.dock_screenshot_left = r.ImGui_Checkbox(ctx, "Dock Left", config.dock_screenshot_left)
+            r.ImGui_Dummy(ctx, 0, 5)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Default Folder:")
+            r.ImGui_SameLine(ctx, 0, 10)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
+            if r.ImGui_BeginCombo(ctx, "##Default Folder", config.default_folder or "None") then
+                if r.ImGui_Selectable(ctx, "None", config.default_folder == nil) then
+                    config.default_folder = nil
                 end
-            end
-            r.ImGui_EndCombo(ctx)
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            local wheel_delta = r.ImGui_GetMouseWheel(ctx)
-            if wheel_delta ~= 0 then
-                local current_index = 0
-                for i, folder in ipairs(folders_category) do
-                    if folder.name == config.default_folder then
-                        current_index = i
-                        break
+                if r.ImGui_Selectable(ctx, "Favorites", config.default_folder == "Favorites") then
+                    config.default_folder = "Favorites"
+                end
+                if r.ImGui_Selectable(ctx, "Current Project FX", config.default_folder == "Current Project FX") then
+                    config.default_folder = "Current Project FX"
+                end
+                if r.ImGui_Selectable(ctx, "Current Track FX", config.default_folder == "Current Track FX") then
+                    config.default_folder = "Current Track FX"
+                end
+                for i = 1, #folders_category do
+                    local is_selected = (config.default_folder == folders_category[i].name)
+                    if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
+                        config.default_folder = folders_category[i].name
                     end
                 end
-                current_index = current_index - wheel_delta
-                if current_index < 0 then
-                    config.default_folder = nil
-                elseif current_index == 0 then
-                    config.default_folder = folders_category[1].name
-                elseif current_index > #folders_category then
-                    config.default_folder = folders_category[#folders_category].name
-                else
-                    config.default_folder = folders_category[current_index].name
+                r.ImGui_EndCombo(ctx)
+            end  
+            if r.ImGui_IsItemHovered(ctx) then
+                local wheel_delta = r.ImGui_GetMouseWheel(ctx)
+                if wheel_delta ~= 0 then
+                    local current_index = 0
+                    for i, folder in ipairs(folders_category) do
+                        if folder.name == config.default_folder then
+                            current_index = i
+                            break
+                        end
+                    end
+                    current_index = current_index - wheel_delta
+                    if current_index < 0 then
+                        config.default_folder = nil
+                    elseif current_index == 0 then
+                        config.default_folder = folders_category[1].name
+                    elseif current_index > #folders_category then
+                        config.default_folder = folders_category[#folders_category].name
+                    else
+                        config.default_folder = folders_category[current_index].name
+                    end
+                    SaveConfig()
                 end
-                SaveConfig()
             end
-        end
-        r.ImGui_PopItemWidth(ctx)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.resize_screenshots_with_window = r.ImGui_Checkbox(ctx, "Auto Resize Screenshots", config.resize_screenshots_with_window)
+            -- Bottom Buttons (Save, Cancel, Reset)
+            r.ImGui_SetCursorPosY(ctx, window_height - 30)
+            r.ImGui_Separator(ctx)
+            local button_width = (window_width - 20) / 3
+            if r.ImGui_Button(ctx, "Save", button_width, 20) then
+                SaveConfig()
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset", button_width, 20) then
+                ResetConfig()
+            end
+            r.ImGui_EndTabItem(ctx)
+            end
 
-        local changed, new_value
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "All Plugins", config.show_all_plugins)
-        if changed then config.show_all_plugins = new_value end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "Developer", config.show_developer)
-        if changed then config.show_developer = new_value end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "Folders", config.show_folders)
-        if changed then config.show_folders = new_value end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "FX Chains", config.show_fx_chains)
-        if changed then config.show_fx_chains = new_value end
-       
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "Track Templates", config.show_track_templates)
-        if changed then config.show_track_templates = new_value end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "Category", config.show_category)
-        if changed then config.show_category = new_value end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column3_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "Container", config.show_container)
-        if changed then config.show_container = new_value end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column4_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "Video Processor", config.show_video_processor)
-        if changed then config.show_video_processor = new_value end
-        r.ImGui_SetCursorPosX(ctx, column1_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "Favorites", config.show_favorites)
-        if changed then config.show_favorites = new_value end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, column2_width)
-        changed, new_value = r.ImGui_Checkbox(ctx, "Projects", config.show_projects)
-        if changed then config.show_projects = new_value end
+            if r.ImGui_BeginTabItem(ctx, "SCREENSHOTS") then
+            NewSection("SETTINGS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "X Offset")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.srcx = r.ImGui_SliderInt(ctx, "##X Offset", config.srcx, 0, 500)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Y Offset")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.srcy = r.ImGui_SliderInt(ctx, "##Y Offset", config.srcy, 0, 500)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Height Offset")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.capture_height_offset = r.ImGui_SliderInt(ctx, "##Height Offset", config.capture_height_offset, 0, 500)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Screenshot Size:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local size_options = "128x128 (TrackIcon\0 500x(Scale)\0Original\0\0"
+            _, config.screenshot_size_option = r.ImGui_Combo(ctx, "##Size Option", config.screenshot_size_option - 1, size_options)
+            config.screenshot_size_option = config.screenshot_size_option + 1
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Display Size")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.screenshot_display_size = r.ImGui_SliderInt(ctx, "##Display Size", config.screenshot_display_size, 100, 500)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_Dummy(ctx, 0, 5)
+            NewSection("PERFORMANCE:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Max Textures/Frame")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.max_textures_per_frame = r.ImGui_SliderInt(ctx, "##Max Textures/Frame", config.max_textures_per_frame, 1, 30)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Max Cached Textures")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.max_cached_search_textures = r.ImGui_SliderInt(ctx, "##Max Cached Textures", config.max_cached_search_textures, 10, 200)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Min Cached Textures")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.min_cached_textures = r.ImGui_SliderInt(ctx, "##Min Cached Textures", config.min_cached_textures, 5, 50)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Texture Reload Delay")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.texture_reload_delay = r.ImGui_SliderInt(ctx, "##Texture Reload Delay", config.texture_reload_delay or 2, 1, 10)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_Dummy(ctx, 0, 5)
+                    NewSection("BULK:")
+                    r.ImGui_SetCursorPosX(ctx, column1_width)
+                    changed, config.bulk_screenshot_vst = r.ImGui_Checkbox(ctx, "VST Plugins", config.bulk_screenshot_vst)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column2_width)
+                    changed, config.bulk_screenshot_vsti = r.ImGui_Checkbox(ctx, "VSTi Plugins", config.bulk_screenshot_vsti)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column3_width)
+                    changed, config.bulk_screenshot_vst3 = r.ImGui_Checkbox(ctx, "VST3 Plugins", config.bulk_screenshot_vst3)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column4_width)
+                    changed, config.bulk_screenshot_vst3i = r.ImGui_Checkbox(ctx, "VST3i Plugins", config.bulk_screenshot_vst3i)
+                    r.ImGui_SetCursorPosX(ctx, column4_width)
+                    
+                    r.ImGui_SetCursorPosX(ctx, column1_width)
+                    changed, config.bulk_screenshot_au = r.ImGui_Checkbox(ctx, "AU Plugins", config.bulk_screenshot_au)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column2_width)
+                    changed, config.bulk_screenshot_aui = r.ImGui_Checkbox(ctx, "AUi Plugins", config.bulk_screenshot_aui)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column3_width)
+                    changed, config.bulk_screenshot_lv2 = r.ImGui_Checkbox(ctx, "LV2 Plugins", config.bulk_screenshot_lv2)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column4_width)
+                    changed, config.bulk_screenshot_lv2i = r.ImGui_Checkbox(ctx, "LV2i Plugins", config.bulk_screenshot_lv2i)
+                    
+                    r.ImGui_SetCursorPosX(ctx, column1_width)
+                    changed, config.bulk_screenshot_js = r.ImGui_Checkbox(ctx, "JS Plugins", config.bulk_screenshot_js)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column2_width)
+                    changed, config.bulk_screenshot_clap = r.ImGui_Checkbox(ctx, "CLAP Plugins", config.bulk_screenshot_clap)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column3_width)
+                    changed, config.bulk_screenshot_clapi = r.ImGui_Checkbox(ctx, "CLAPi Plugins", config.bulk_screenshot_clapi)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, column4_width)
+                    _, config.screenshot_default_folder_only = r.ImGui_Checkbox(ctx, "Default Only", config.screenshot_default_folder_only)
+            r.ImGui_Dummy(ctx, 0, 5)
+            r.ImGui_Separator(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.close_after_adding_fx = r.ImGui_Checkbox(ctx, "Close script after adding FX", config.close_after_adding_fx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.include_x86_bridged = r.ImGui_Checkbox(ctx, "Include x86 bridged plugins", config.include_x86_bridged)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Dummy(ctx, 0, 5)
 
-        r.ImGui_Separator(ctx)
-        _, config.close_after_adding_fx = r.ImGui_Checkbox(ctx, "Close script after adding FX", config.close_after_adding_fx)
-        r.ImGui_SameLine(ctx)
-        _, config.include_x86_bridged = r.ImGui_Checkbox(ctx, "Include x86 bridged plugins", config.include_x86_bridged)
-        r.ImGui_Separator(ctx)
-        r.ImGui_SetCursorPosY(ctx, window_height - 30)
-        local button_width = (window_width - 20) / 3
-        if r.ImGui_Button(ctx, "Save", button_width, 20) then
-            SaveConfig()
-            config_open = false
+            local button_width = (window_width - 20) / 2
+            if r.ImGui_Button(ctx, START and "Stop BULK Screenshots" or "Start BULK Screenshots", button_width, 20) then
+                if START then
+                    START = false
+                else
+                    START = true
+                    StartBulkScreenshot()
+                end
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if reaper.ImGui_Button(ctx, "Show Screenshots Folder", button_width, 20) then
+                OpenScreenshotsFolder()
+            end
+            if reaper.ImGui_Button(ctx, "Empty Screenshots Folder", button_width, 20) then
+                show_confirm_clear = true
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Clear Log File", button_width, 20) then
+                local log_file = io.open(log_file_path, "w")
+                if log_file then
+                    log_file:close()
+                end
+            end
+            r.ImGui_SetCursorPosY(ctx, window_height - 30)
+            local button_width = (window_width - 20) / 3
+            if r.ImGui_Button(ctx, "Save", button_width, 20) then
+                SaveConfig()
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset", button_width, 20) then
+                ResetConfig()
+            end
+            r.ImGui_EndTabItem(ctx)
         end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
-            config_open = false
+        if r.ImGui_BeginTabItem(ctx, "PLUGIN MANAGER") then
+            ShowPluginManagerTab()
+            r.ImGui_EndTabItem(ctx)
         end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Reset", button_width, 20) then
-            ResetConfig()
+        r.ImGui_EndTabBar(ctx)
         end
-        r.ImGui_EndTabItem(ctx)
+        r.ImGui_End(ctx)
+        end
+        return config_open
     end
-    if r.ImGui_BeginTabItem(ctx, "PLUGIN MANAGER") then
-        ShowPluginManagerTab()
-        r.ImGui_EndTabItem(ctx)
-    end
-    r.ImGui_EndTabBar(ctx)
-    end
-    r.ImGui_End(ctx)
-    end
-    return config_open
-end
 local function EnsureTrackIconsFolderExists()
     local track_icons_path = script_path .. "TrackIcons" .. os_separator
     if not r.file_exists(track_icons_path) then
@@ -1063,17 +1119,6 @@ local function ScreenshotExists(plugin_name, size_option)
     else
         local filename = screenshot_path .. safe_name .. ".png"
         return r.file_exists(filename)
-    end
-end
-
-local function OpenScreenshotsFolder()
-    local os_name = reaper.GetOS()
-    if os_name:match("Win") then
-        os.execute('start "" "' .. screenshot_path .. '"')
-    elseif os_name:match("OSX") then
-        os.execute('open "' .. screenshot_path .. '"')
-    else
-        reaper.ShowMessageBox("Unsupported OS", "Error", 0)
     end
 end
 
@@ -1468,7 +1513,6 @@ local function CaptureARAScreenshot(track, fx_index, plugin_name)
     end
 end
 
-
 local function MakeScreenshot(plugin_name, callback, is_individual)
     if not IsPluginVisible(plugin_name) then
         if callback then callback() end
@@ -1480,7 +1524,6 @@ local function MakeScreenshot(plugin_name, callback, is_individual)
             if callback then callback() end
             return
         end
-    
     local should_screenshot = false
     if plugin_name:match("^VST3i:") and config.bulk_screenshot_vst3i then
         should_screenshot = true
@@ -1533,8 +1576,6 @@ local function MakeScreenshot(plugin_name, callback, is_individual)
         if callback then callback() end
     end
 end
-
-
 
 local bulk_screenshot_progress = 0
 local total_fx_count = 0
@@ -1599,8 +1640,6 @@ local function EnumerateInstalledFX()
     end
     log_to_file("Totaal aantal geselecteerde plugins voor screenshots: " .. total_fx_count)
 end
-
-
 
 local PROCESS = false
 local START = false
@@ -1672,7 +1711,7 @@ local function ShowConfirmClearPopup()
     end
 end
 
-local function StartBulkScreenshot()
+StartBulkScreenshot = function()
     if not START then
         EnumerateInstalledFX()
         bulk_screenshot_progress = 0
@@ -1925,7 +1964,6 @@ local function ShowScreenshotWindow()
             SaveConfig()
         end
         r.ImGui_Separator(ctx)
-        
         if show_media_browser then
             r.ImGui_PushItemWidth(ctx, -1)
             local changed, new_search_term = r.ImGui_InputText(ctx, "##ProjectSearch", project_search_term)
@@ -1993,7 +2031,6 @@ local function ShowScreenshotWindow()
                 end
                 r.ImGui_EndCombo(ctx)
             end
-            
                 if r.ImGui_IsItemHovered(ctx) then
                     local wheel_delta = r.ImGui_GetMouseWheel(ctx)
                     if wheel_delta ~= 0 then
@@ -2078,7 +2115,6 @@ local function ShowScreenshotWindow()
             
             return display_width, display_height
         end
-
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
             if folder_changed or new_search_performed then
                 r.ImGui_SetScrollY(ctx, 0)
@@ -2089,7 +2125,6 @@ local function ShowScreenshotWindow()
                 folder_changed = true
                 last_selected_folder = selected_folder
             end
-            
             if selected_folder then
                 local filtered_plugins = {}
                 if selected_folder == "Favorites" then
@@ -2153,8 +2188,7 @@ local function ShowScreenshotWindow()
                                     end
                                     if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
                                         r.ImGui_OpenPopup(ctx, "ScreenshotPluginMenu_" .. i)
-                                    end
-                                    
+                                    end                                 
                                     if r.ImGui_BeginPopup(ctx, "ScreenshotPluginMenu_" .. i) then
                                         if r.ImGui_MenuItem(ctx, "Make Screenshot") then
                                             MakeScreenshot(plugin_name, nil, true)
@@ -2188,14 +2222,13 @@ local function ShowScreenshotWindow()
                                         r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                         r.ImGui_Text(ctx, plugin_name)
                                         r.ImGui_PopTextWrapPos(ctx)
-                                    end
-                                    
+                                    end    
                                 end
                             end
                         end
                         r.ImGui_EndGroup(ctx)
                         if column == num_columns - 1 then
-                            r.ImGui_Dummy(ctx, 0, 10)  -- Voeg wat ruimte toe tussen de rijen
+                            r.ImGui_Dummy(ctx, 0, 5)  -- Voeg wat ruimte toe tussen de rijen
                         end
                     end
                 end
@@ -2241,7 +2274,6 @@ local function ShowScreenshotWindow()
                             r.ImGui_PopStyleColor(ctx)
                          r.ImGui_Dummy(ctx, 0, 0)
                         end
-                
                         if selected_folder ~= "Current Project FX" or not collapsed_tracks[plugin.track_number] then
                             local column = (i - 1) % num_columns
                             if column > 0 then
@@ -2288,16 +2320,14 @@ local function ShowScreenshotWindow()
                                                         end
                                                     end
                                                 end
-                                            end
-                                            
+                                            end                          
                                             if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
                                                 if selected_folder == "Current Project FX" or selected_folder == "Current Track FX" then
                                                     r.ImGui_OpenPopup(ctx, "FXContextMenu_" .. i)
                                                 else
                                                     MakeScreenshot(plugin.fx_name, nil, true)
                                                 end
-                                            end
-                                            
+                                            end                  
                                             if r.ImGui_BeginPopup(ctx, "FXContextMenu_" .. i) then
                                                 local track = selected_folder == "Current Project FX" 
                                                     and r.GetTrack(0, plugin.track_number - 1) 
@@ -2312,15 +2342,13 @@ local function ShowScreenshotWindow()
                                                             end
                                                         end
                                                     end)()
-                                                    or r.TrackFX_GetByName(TRACK, plugin.fx_name, false)
-                                            
+                                                    or r.TrackFX_GetByName(TRACK, plugin.fx_name, false)                            
                                                 if r.ImGui_MenuItem(ctx, "Delete") then
                                                     r.TrackFX_Delete(track, fx_index)
                                                     if selected_folder == "Current Track FX" then
                                                         update_search_screenshots = true
                                                     end
-                                                end
-                                            
+                                                end           
                                                 if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
                                                     IS_COPYING_TO_ALL_TRACKS = true
                                                     local track_count = r.CountTracks(0)
@@ -2331,24 +2359,20 @@ local function ShowScreenshotWindow()
                                                         end
                                                     end
                                                     IS_COPYING_TO_ALL_TRACKS = false
-                                                end
-                                            
+                                                end                                           
                                                 if r.ImGui_MenuItem(ctx, "Copy Plugin") then
                                                     copied_plugin = {track = track, index = fx_index}
-                                                end
-                                            
+                                                end                                           
                                                 if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
                                                     if copied_plugin then
                                                         local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
                                                         r.TrackFX_AddByName(track, orig_name, false, -1000)
                                                     end
-                                                end
-                                            
+                                                end                                            
                                                 local is_enabled = r.TrackFX_GetEnabled(track, fx_index)
                                                 if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
                                                     r.TrackFX_SetEnabled(track, fx_index, not is_enabled)
-                                                end
-                                            
+                                                end                                            
                                                 local fx_name = plugin.fx_name
                                                 if table.contains(favorite_plugins, fx_name) then
                                                     if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
@@ -2362,8 +2386,6 @@ local function ShowScreenshotWindow()
                                             
                                                 r.ImGui_EndPopup(ctx)
                                             end
-
-
                                             if config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] then
                                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                                 r.ImGui_Text(ctx, plugin.fx_name)
@@ -2377,7 +2399,7 @@ local function ShowScreenshotWindow()
                             r.ImGui_EndGroup(ctx)
                             
                             if column == num_columns - 1 then
-                                r.ImGui_Dummy(ctx, 0, 15)
+                                r.ImGui_Dummy(ctx, 0, 5)
                             end
                         end
                     end
@@ -2451,8 +2473,7 @@ local function ShowScreenshotWindow()
                                         end
                                     end
                                     r.ImGui_EndPopup(ctx)
-                                end
-                    
+                                end                   
                                 if config.show_name_in_screenshot_window and not config.hidden_names[fx.name] then
                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                     r.ImGui_Text(ctx, fx.name)
@@ -2770,9 +2791,6 @@ local function DrawItems(tbl, main_cat_name)
     if menu_direction_right then
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_SelectableTextAlign(), 1, 0.5)
     end
-
-    
-
     local items = tbl or {}
     for i = 1, #items do
         r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
@@ -2927,29 +2945,29 @@ local function DrawBottomButtons()
     local buttonHeight = 70
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight - 20)
     -- volumeslider
-    local volume = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
-    local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
-    r.ImGui_PushItemWidth(ctx, track_info_width)
-    local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
+    if not config.hideVolumeSlider then
+        local volume = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
+        local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
+        r.ImGui_PushItemWidth(ctx, track_info_width)
+        local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
 
-    if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Rightclick 0db /double Rightclick -12db")
-        if r.ImGui_IsMouseDoubleClicked(ctx, 1) then  -- Rechts dubbelklik
-            new_volume_db = -12
-            changed = true
-        elseif r.ImGui_IsMouseClicked(ctx, 1) then  -- Rechts enkelklik
-                new_volume_db = 0
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Rightclick 0db /double Rightclick -12db")
+            if r.ImGui_IsMouseDoubleClicked(ctx, 1) then  -- Rechts dubbelklik
+                new_volume_db = -12
                 changed = true
+            elseif r.ImGui_IsMouseClicked(ctx, 1) then  -- Rechts enkelklik
+                    new_volume_db = 0
+                    changed = true
+            end
         end
+
+        if changed then
+            local new_volume = 10^(new_volume_db/20)
+            r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
+        end
+        r.ImGui_PopItemWidth(ctx)
     end
-
-    if changed then
-        local new_volume = 10^(new_volume_db/20)
-        r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
-    end
-    r.ImGui_PopItemWidth(ctx)
-
-
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
     -- Eerste rij knoppen
     local num_buttons_row1 = 3
@@ -2961,7 +2979,7 @@ local function DrawBottomButtons()
         r.ImGui_SetTooltip(ctx, "Make FXChain from Plugins on selected Track")
     end
     r.ImGui_SameLine(ctx, 0, button_spacing)
-    if r.ImGui_Button(ctx, "CPY", button_width_row1) then
+    if r.ImGui_Button(ctx, "COPY", button_width_row1) then
         r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_CPY_FXCHAIN"), 0)
     end
     if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
@@ -3001,8 +3019,7 @@ local function DrawBottomButtons()
     end
     if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
         r.ImGui_SetTooltip(ctx, "Make screenshot of First FX on the selected Track (must be floating)")
-    end
-    
+    end  
 
     -- Derde rij knoppen
     local num_buttons_row3 = 3
@@ -3053,10 +3070,8 @@ local function ShowTrackFX()
             for i = 0, fx_count - 1 do
                 local retval, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                 local is_open = r.TrackFX_GetFloatingWindow(TRACK, i)
-                local is_enabled = r.TrackFX_GetEnabled(TRACK, i)
-                
-                local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"
-                
+                local is_enabled = r.TrackFX_GetEnabled(TRACK, i)                
+                local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"                
                 r.ImGui_PushID(ctx, i)
                 r.ImGui_BeginGroup(ctx)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
@@ -3080,24 +3095,20 @@ local function ShowTrackFX()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-                r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)
-                
+                r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)               
                 if not is_enabled or track_bypassed then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)  -- Grijze kleur voor gebypaste plugins
-                end
-                
+                end               
                 if r.ImGui_Button(ctx, display_name, 0, 13) then
                     if is_open then
                         r.TrackFX_Show(TRACK, i, 2)
                     else
                         r.TrackFX_Show(TRACK, i, 3)
                     end
-                end
-                
+                end               
                 if not is_enabled or track_bypassed then
                     r.ImGui_PopStyleColor(ctx)
-                end
-                
+                end                
                 r.ImGui_PopStyleColor(ctx, 3)
                 if r.ImGui_BeginPopupContextItem(ctx) then
                     if r.ImGui_MenuItem(ctx, "Delete") then
@@ -3116,15 +3127,13 @@ local function ShowTrackFX()
                     end
                     if r.ImGui_MenuItem(ctx, "Copy Plugin") then
                         copied_plugin = {track = TRACK, index = i}
-                    end
-                    
+                    end                    
                     if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
                         if copied_plugin then
                             local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
                             r.TrackFX_AddByName(TRACK, orig_name, false, -1000)
                         end
-                    end
-                    
+                    end                   
                     if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
                         r.TrackFX_SetEnabled(TRACK, i, not is_enabled)
                     end
@@ -3138,8 +3147,7 @@ local function ShowTrackFX()
                         end
                     end
                     r.ImGui_EndPopup(ctx)
-                end
-                
+                end               
                 r.ImGui_EndGroup(ctx)
                 r.ImGui_PopID(ctx)
             end
@@ -3153,12 +3161,10 @@ local function ShowTrackFX()
                 local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
                 local insert_position = is_empty_track and 0 or fx_count
                 r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, insert_position, false)
-            end
-        
+            end        
             if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
                 r.ImGui_OpenPopup(ctx, "PastePluginMenu")
-            end
-        
+            end      
             if r.ImGui_BeginPopup(ctx, "PastePluginMenu") then
                 if r.ImGui_MenuItem(ctx, "Paste Plugin at Beginning") then
                     local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
@@ -3166,8 +3172,7 @@ local function ShowTrackFX()
                 end
                 r.ImGui_EndPopup(ctx)
             end
-        end
-        
+        end       
         r.ImGui_EndChild(ctx)
     end
 end
@@ -3424,11 +3429,9 @@ local function saveUserScript(name, command_id)
     end
 end
 
-
 local show_add_script_popup = false
 local new_script_name = ""
 local new_command_id = ""
-
 local function showAddScriptPopup()
     if r.ImGui_BeginPopupModal(ctx, "Add User Script", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
         r.ImGui_Text(ctx, "Enter script details:")
@@ -3459,23 +3462,30 @@ local function removeUserScript(index)
 end
 -----------------------------------------------------------------
 function Main()
-    userScripts = loadUserScripts()
-    local prev_track = TRACK
-    TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
-    if TRACK and TRACK ~= prev_track then
-        if config.auto_refresh_fx_list then
-            FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+        userScripts = loadUserScripts()
+        local prev_track = TRACK
+        local selected_track = r.GetSelectedTrack(0, 0)
+        local master_track = r.GetMasterTrack(0)
+        
+        if r.IsTrackSelected(master_track) then
+            TRACK = master_track
+            is_master_track_selected = true
+        elseif selected_track then
+            TRACK = selected_track
+            is_master_track_selected = false
         end
-    end
-    if TRACK ~= last_selected_track and selected_folder == "Current Track FX" then
-        ClearScreenshotCache()
-        update_search_screenshots = true
-    end
-    last_selected_track = TRACK
+    
+        if TRACK ~= last_selected_track and selected_folder == "Current Track FX" then
+            ClearScreenshotCache()
+            update_search_screenshots = true
+        end
+        last_selected_track = TRACK
+    
         ProcessTextureLoadQueue()
-    if r.time_precise() % 300 < 1 then -- Elke 5 minuten
-        ClearScreenshotCache(true)
-    end
+    
+        if r.time_precise() % 300 < 1 then
+            ClearScreenshotCache(true)
+        end
    
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 2)
     reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
@@ -3535,22 +3545,23 @@ function Main()
                     GetPluginsForFolder(selected_folder)
                 end
                 r.ImGui_PopFont(ctx)
-            
-                -- Voeg de 'M/T' knop toe in het midden
-                local window_width = r.ImGui_GetWindowWidth(ctx)
-                local button_width = 20  -- De breedte van de knop
-                local pos_x = (window_width - button_width) * 0.5  -- Bereken de x-positie voor het midden
-                r.ImGui_SetCursorPos(ctx, pos_x, 0)
-                if r.ImGui_Button(ctx, is_master_track_selected and '##M' or '##T', button_width, 20) then
-                    is_master_track_selected = not is_master_track_selected
-                    TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
-                end
-
+                local window_width = r.ImGui_GetWindowWidth(ctx)                          
                 r.ImGui_PushFont(ctx, IconFont)
-                -- Voeg de instellingenknop toe rechtsboven
-                r.ImGui_SetCursorPos(ctx, window_width - 20, 0)
+                r.ImGui_SetCursorPos(ctx, 20, 0)
                 if r.ImGui_Button(ctx, show_settings and '\u{0047}' or '\u{0047}', 20, 20) then
                     show_settings = not show_settings
+                end
+                r.ImGui_SameLine(ctx)
+                r.ImGui_PushFont(ctx, IconFont)
+                r.ImGui_SetCursorPos(ctx, window_width - 20, 0)
+                if r.ImGui_Button(ctx, "\u{0045}", 20, 20) then
+                    change_dock = true 
+                    ClearScreenshotCache()
+                    ShowPluginScreenshot()
+                end
+                r.ImGui_PopFont(ctx)
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Dock/Undock the window")
                 end
             
                 -- Herstel de stijlen
@@ -3563,7 +3574,7 @@ function Main()
                 local pos_x = (window_width - text_width -7) * 0.5
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local text_height = r.ImGui_GetTextLineHeight(ctx)
-                local pos_y = (window_height - text_height) * 0.3
+                local pos_y = (window_height - text_height) * 0.4
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Volledig doorzichtige knop
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)  -- Licht grijs bij hover
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)  -- Donkerder grijs bij klik
@@ -3575,24 +3586,21 @@ function Main()
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopFont(ctx)
                 r.ImGui_PushFont(ctx, NormalFont)
-                if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
+                if r.ImGui_IsItemClicked(ctx, 1) then 
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
                 if not keep_context_menu_open then
                     pinned_menu_pos_x, pinned_menu_pos_y = nil, nil
-                end
-                
+                end                
                 if keep_context_menu_open and pinned_menu_pos_x then
                     r.ImGui_SetNextWindowPos(ctx, pinned_menu_pos_x, pinned_menu_pos_y)
-                end
-                
+                end               
                 if r.ImGui_BeginPopupContextItem(ctx, "TrackContextMenu") or (keep_context_menu_open and r.ImGui_BeginPopup(ctx, "TrackContextMenu")) then
                     if keep_context_menu_open and not pinned_menu_pos_x then
                         pinned_menu_pos_x, pinned_menu_pos_y = r.ImGui_GetWindowPos(ctx)
                     end
                     
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-                    
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)                   
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
                     r.ImGui_BeginGroup(ctx)
                     if r.ImGui_Button(ctx, keep_context_menu_open and "Close Menu " or "Lock Menu ") then
@@ -3699,12 +3707,10 @@ function Main()
                             end
                             r.ImGui_EndPopup(ctx)
                         end
-                    end
-                    
+                    end                    
                     r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndPopup(ctx)
-                end
-                
+                end                
                 if keep_context_menu_open and not r.ImGui_IsPopupOpen(ctx, "TrackContextMenu") then
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
@@ -3731,8 +3737,7 @@ function Main()
                                 new_track_name = new_track_name:gsub("%s*%(.*%)", "")
                             end
                         end
-                    end
-                
+                    end                
                     if r.ImGui_Button(ctx, "OK", 120, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
                         if new_track_name ~= "" then
                             r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", new_track_name, true)
@@ -3747,8 +3752,7 @@ function Main()
                     end
                     r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndPopup(ctx)
-                end
-                
+                end                
                     local sws_colors, has_sws_colors = get_sws_colors()
                     if show_color_picker then
                         local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
@@ -3793,8 +3797,7 @@ function Main()
                                 show_color_picker = false
                                 r.ImGui_CloseCurrentPopup(ctx)
                             end
-                        end
-                    
+                        end                   
                         r.ImGui_Separator(ctx)
                     if r.ImGui_Button(ctx, "Cancel") or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
                         show_color_picker = false
@@ -3833,22 +3836,22 @@ function Main()
 
             if not config.hideTopButtons then
                 local button_spacing = 3
-                local button_width = (track_info_width - (2 * button_spacing)) / 3
-                if r.ImGui_Button(ctx, "SCAN", button_width, 20) then
-                    FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
-                end
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Scan for new Plugins")
-                end
-                r.ImGui_SameLine(ctx)
+                local button_width = (track_info_width - (2 * button_spacing)) / 3           
                 if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", button_width, 20) then
                     SHOW_PREVIEW = not SHOW_PREVIEW
                     if SHOW_PREVIEW and current_hovered_plugin then
-                        LoadPluginScreenshot(current_hovered_plugin)
+                        LoadPluginScreenshot(current_hovered_plugin)         
                     end
                 end
                 if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_SetTooltip(ctx, "Show or hide Plugin Preview in item list")
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRCK", button_width, 20) then
+                    ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
+                end
+                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Switch between Track or Item")
                 end
                 r.ImGui_SameLine(ctx)
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
@@ -3860,51 +3863,11 @@ function Main()
                 if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_SetTooltip(ctx, "Quit the script (You can also use ESC)")
                 end
-                reaper.ImGui_PopStyleColor(ctx, 3)
-                if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRCK", button_width, 20) then
-                    ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
-                end
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Switch between Track or Item")
-                end
-                reaper.ImGui_SameLine(ctx)
+                r.ImGui_PopStyleColor(ctx, 3)
+                -- reaper.ImGui_SameLine(ctx)
                 if WANT_REFRESH then
                     WANT_REFRESH = nil
                     UpdateChainsTrackTemplates(CAT)
-                end
-                if r.ImGui_Button(ctx, is_master_track_selected and "MSTR" or "NORM", button_width, 20) then
-                    is_master_track_selected = not is_master_track_selected
-                    TRACK = is_master_track_selected and r.GetMasterTrack(0) or r.GetSelectedTrack(0, 0)
-                end
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Switch between normal and master Track")
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "DOCK", button_width, 20) then
-                    change_dock = true 
-                end
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Dock/Undock the window")
-                end
-                if reaper.ImGui_Button(ctx, START and "STOP" or "BULK", button_width, 20) then
-                    StartBulkScreenshot()
-                end
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Start or stop Bulk Screenshots")
-                end
-                r.ImGui_SameLine(ctx)
-                if reaper.ImGui_Button(ctx, "CLRR", button_width, 20) then
-                    show_confirm_clear = true
-                end
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Clear the Screenshot folder")
-                end
-                r.ImGui_SameLine(ctx)
-                if reaper.ImGui_Button(ctx, "FLDR", button_width, 20) then
-                    OpenScreenshotsFolder()
-                end
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Open Screenshot folder location")
                 end
                 if show_confirm_clear then
                     ShowConfirmClearPopup()
@@ -3929,8 +3892,7 @@ function Main()
         if show_add_script_popup then
             r.ImGui_OpenPopup(ctx, "Add User Script")
             showAddScriptPopup()
-        end
-        
+        end       
         if check_esc_key() then open = false end
         r.ImGui_End(ctx)
     end
@@ -3940,8 +3902,7 @@ function Main()
     if SHOULD_CLOSE_SCRIPT then
         return
     end
-    if open then
-        
+    if open then        
         r.defer(Main)
     end
 end
