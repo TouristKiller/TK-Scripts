@@ -30,12 +30,15 @@ WWWMWWMWWWWWWMX:  .xNMWWWMMWk;:x;    :NMMMK,           ,KMMMWl         ;OWMMWKl.
 WWWMMWWWWMWWWKc.   .:kXWMMMMWXxc,.   :NMMMK,           ,KMMMWc          .oXMWWWO;       .dXWMWWWWMMM
 WWWWMMWKxxdo:.        .;cloooollc,.  .loloc.           .coool'            ,loollc.        ,dxkXWWMMM
 WWWWMWW0ddddddddooddoddddddddddddddoodddddddddddddddddddddddddddddddodoooddddddddddddddddodddxKWWMMM
-                                version 0.1.4 (alpha pre-release)                       
-                                        date: 2024-09-11                                 
+                                version 0.1.5 (alpha pre-release)                       
+                                        date: 2024-10-25                                 
                                      author: TouristKiller                              
                          Special thanks to Dax for the idea and inspiration                                                         
 
 CHANGELOG (start from 0.1.1):
+0.1.5 2024-10-25:
+- Added Custom Buttons (7)
+
 0.1.4 2024-10-23:
 - Play Regions and Markers (+select next one in line)
 - Removed Logo
@@ -1271,6 +1274,46 @@ local function handle_marker_playback()
     end
 end
 
+local function create_custom_button(button_id)
+    -- Gebruik vaste breedte van 120 pixels
+    local button_width = 120
+    
+    local stored_name = reaper.GetExtState("TK_SMART", "custom_button_" .. button_id .. "_name")
+    local button_name = stored_name ~= "" and stored_name or ("Dummy##btn" .. button_id)
+    local stored_action = reaper.GetExtState("TK_SMART", "custom_button_" .. button_id .. "_action")
+
+    -- Zet vaste breedte voor de button
+    reaper.ImGui_PushItemWidth(ctx, button_width)
+    if reaper.ImGui_Button(ctx, button_name, button_width) then
+        if stored_action ~= "" then
+            local command_id = reaper.NamedCommandLookup(stored_action)
+            if command_id ~= 0 then
+                reaper.Main_OnCommand(command_id, 0)
+            end
+        end
+    end
+    reaper.ImGui_PopItemWidth(ctx)
+
+    -- Rechtermuisklik voor actie toewijzing
+    if reaper.ImGui_IsItemClicked(ctx, 1) then
+        local retval, action_id = reaper.GetUserInputs("Actie Toewijzen", 1, "Command ID:", stored_action)
+        if retval then
+            reaper.SetExtState("TK_SMART", "custom_button_" .. button_id .. "_action", action_id, true)
+        end
+    end
+
+    -- Alt + linkermuisklik voor naam wijzigen
+    if reaper.ImGui_IsItemClicked(ctx, 0) and reaper.ImGui_IsKeyDown(ctx, reaper.ImGui_Mod_Alt()) then
+        local current_name = stored_name ~= "" and stored_name or "CUSTOM BUTTON"
+        local retval, new_name = reaper.GetUserInputs("Button Name", 1, "New Name:", current_name)
+        if retval then
+            reaper.SetExtState("TK_SMART", "custom_button_" .. button_id .. "_name", new_name .. "##btn" .. button_id, true)
+        end
+    end
+end
+
+
+
 -------------------------------------------------------------------------------------------------
 -- MAIN FUNCTION
 local function main()
@@ -1822,25 +1865,25 @@ local function main()
                 end
                 reaper.ImGui_PopStyleColor(ctx)
                 
-                if reaper.ImGui_Button(ctx, "Dummy", button_width) then
-                    -- Actie voor Knop 4
-                end
-                reaper.ImGui_SameLine(ctx)
-                
                 if reaper.ImGui_Button(ctx, "Move All to cursor", button_width) then
                     move_markers_and_regions_to_cursor()
                     items = get_markers_and_regions() -- Update de items na verplaatsing
                 end
                 reaper.ImGui_SameLine(ctx)
                 
-                if reaper.ImGui_Button(ctx, "Dummy", button_width) then
-                    -- Actie voor Knop 3
-                end
+                create_custom_button(1)
                 reaper.ImGui_SameLine(ctx)
-                
-                if reaper.ImGui_Button(ctx, "Dummy", button_width) then
-                    -- Actie voor Knop 4
-                end
+                create_custom_button(2)
+                reaper.ImGui_SameLine(ctx)
+                create_custom_button(3)
+
+                create_custom_button(4)
+                reaper.ImGui_SameLine(ctx)
+                create_custom_button(5)
+                reaper.ImGui_SameLine(ctx)
+                create_custom_button(6)
+                reaper.ImGui_SameLine(ctx)
+                create_custom_button(7)
                 
                 local ddp_action_id = reaper.NamedCommandLookup("__DDP_MARKER_EDITOR")
                 if ddp_action_id ~= 0 then
