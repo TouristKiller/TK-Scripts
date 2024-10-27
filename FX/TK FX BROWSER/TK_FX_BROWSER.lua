@@ -1,15 +1,18 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.7
+-- @version 0.6.8
 -- @changelog:
---          * Screenshot position changes when nearing the bottom om screen
---          * If you use < > in the track info bar, this will now work cyclically. 
---            If you go back from track 1, you will first come to the master track 
---            and then you start at the last track. If you go forward at the last track,
---            you will go via the master track back to the 1st track.
---          * Improverd BULK Screenshots button.
-
---        
+--[[ 
+        * Added unique IDs to all Selectable elements
+        * Added complete tag management system
+            Add tags via + button
+            View all available tags in popup
+            Click tag to add to current track
+            Right-click tag to remove from all tracks
+            Tags automatically wrap to next line
+            Tags section can be shown/hidden in config  
+        * Added a simple meter (can be hidden in config)
+]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
@@ -77,6 +80,7 @@ r.ImGui_Attach(ctx, IconFont)
 local MAX_SUBMENU_WIDTH = 160
 local FX_LIST_WIDTH = 280
 local FLT_MAX = 3.402823466e+38
+ 
 -- GLOBAl
 local show_settings = false
 local SHOW_PREVIEW = true
@@ -106,6 +110,17 @@ local show_add_script_popup = false
 local userScripts = {}
 local keep_context_menu_open = false
 local pinned_menu_pos_x, pinned_menu_pos_y = nil, nil
+local track_tags = {}
+local new_tag_buffer = ""
+local current_tag_window_height = 70
+-- METER:
+local peak_hold_L = -60
+local peak_hold_R = -60
+local peak_hold_time_L = 0
+local peak_hold_time_R = 0
+local PEAK_HOLD_DURATION = 2.0 
+-- local peak_hold_color_L = 0xFFFFFFFF  -- Standaard wit
+-- local peak_hold_color_R = 0xFFFFFFFF  -- Standaard wit
 -- PROJECTS
 local function GetProjectsDirectory()
     local path = reaper.GetProjectPath("")
@@ -169,7 +184,7 @@ local function SetDefaultConfig()
         srcx = 0,
         srcy = 27,
         capture_height_offset = 0,
-        screenshot_display_size = 200,
+        screenshot_display_size = 250,
         screenshot_window_width = 200,
         screenshot_window_size = 200,
         use_global_screenshot_size = false,
@@ -244,6 +259,8 @@ local function SetDefaultConfig()
         hideBottomButtons = false,
         hideTopButtons = false,
         hideVolumeSlider = false,
+        show_tags = true,
+        hideMeter = false, 
     } 
 end
 local config = SetDefaultConfig()    
@@ -298,6 +315,32 @@ local function LoadFavorites()
     end
 end
 LoadFavorites()
+
+local function SaveTags()
+    print("Saving tags...")  -- Debug log
+    local file = io.open(script_path .. "track_tags.json", "w")
+    if file then
+        local json_str = json.encode(track_tags)
+        print("Writing: " .. json_str)  -- Debug log
+        file:write(json_str)
+        file:close()
+        print("Tags saved successfully")  -- Debug log
+    else
+        print("Failed to create/open file")  -- Debug log
+    end
+end
+
+local function LoadTags()
+    local file = io.open(script_path .. "track_tags.json", "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        track_tags = json.decode(content) or {}
+    end
+end
+LoadTags()
+
+
 --------------------------------------------------------------------------
 function table.contains(tbl, item)
     for _, value in pairs(tbl) do
@@ -798,7 +841,13 @@ local function ShowConfigWindow()
             _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
-            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.show_tags = r.ImGui_Checkbox(ctx, "Show Tags", config.show_tags)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_SameLine(ctx)
+            _, config.hideMeter = r.ImGui_Checkbox(ctx, "Hide Meter", config.hideMeter)
+
             r.ImGui_Dummy(ctx, 0, 5)
             NewSection("SCREENSHOT WINDOW:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -963,43 +1012,41 @@ local function ShowConfigWindow()
             _, config.texture_reload_delay = r.ImGui_SliderInt(ctx, "##Texture Reload Delay", config.texture_reload_delay or 2, 1, 10)
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_Dummy(ctx, 0, 5)
-                    NewSection("BULK:")
-                    r.ImGui_SetCursorPosX(ctx, column1_width)
-                    changed, config.bulk_screenshot_vst = r.ImGui_Checkbox(ctx, "VST Plugins", config.bulk_screenshot_vst)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column2_width)
-                    changed, config.bulk_screenshot_vsti = r.ImGui_Checkbox(ctx, "VSTi Plugins", config.bulk_screenshot_vsti)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column3_width)
-                    changed, config.bulk_screenshot_vst3 = r.ImGui_Checkbox(ctx, "VST3 Plugins", config.bulk_screenshot_vst3)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column4_width)
-                    changed, config.bulk_screenshot_vst3i = r.ImGui_Checkbox(ctx, "VST3i Plugins", config.bulk_screenshot_vst3i)
-                    r.ImGui_SetCursorPosX(ctx, column4_width)
-                    
-                    r.ImGui_SetCursorPosX(ctx, column1_width)
-                    changed, config.bulk_screenshot_au = r.ImGui_Checkbox(ctx, "AU Plugins", config.bulk_screenshot_au)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column2_width)
-                    changed, config.bulk_screenshot_aui = r.ImGui_Checkbox(ctx, "AUi Plugins", config.bulk_screenshot_aui)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column3_width)
-                    changed, config.bulk_screenshot_lv2 = r.ImGui_Checkbox(ctx, "LV2 Plugins", config.bulk_screenshot_lv2)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column4_width)
-                    changed, config.bulk_screenshot_lv2i = r.ImGui_Checkbox(ctx, "LV2i Plugins", config.bulk_screenshot_lv2i)
-                    
-                    r.ImGui_SetCursorPosX(ctx, column1_width)
-                    changed, config.bulk_screenshot_js = r.ImGui_Checkbox(ctx, "JS Plugins", config.bulk_screenshot_js)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column2_width)
-                    changed, config.bulk_screenshot_clap = r.ImGui_Checkbox(ctx, "CLAP Plugins", config.bulk_screenshot_clap)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column3_width)
-                    changed, config.bulk_screenshot_clapi = r.ImGui_Checkbox(ctx, "CLAPi Plugins", config.bulk_screenshot_clapi)
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_SetCursorPosX(ctx, column4_width)
-                    _, config.screenshot_default_folder_only = r.ImGui_Checkbox(ctx, "Default Only", config.screenshot_default_folder_only)
+            NewSection("BULK:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            changed, config.bulk_screenshot_vst = r.ImGui_Checkbox(ctx, "VST Plugins", config.bulk_screenshot_vst)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            changed, config.bulk_screenshot_vsti = r.ImGui_Checkbox(ctx, "VSTi Plugins", config.bulk_screenshot_vsti)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            changed, config.bulk_screenshot_vst3 = r.ImGui_Checkbox(ctx, "VST3 Plugins", config.bulk_screenshot_vst3)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            changed, config.bulk_screenshot_vst3i = r.ImGui_Checkbox(ctx, "VST3i Plugins", config.bulk_screenshot_vst3i)
+            r.ImGui_SetCursorPosX(ctx, column4_width)            
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            changed, config.bulk_screenshot_au = r.ImGui_Checkbox(ctx, "AU Plugins", config.bulk_screenshot_au)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            changed, config.bulk_screenshot_aui = r.ImGui_Checkbox(ctx, "AUi Plugins", config.bulk_screenshot_aui)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            changed, config.bulk_screenshot_lv2 = r.ImGui_Checkbox(ctx, "LV2 Plugins", config.bulk_screenshot_lv2)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            changed, config.bulk_screenshot_lv2i = r.ImGui_Checkbox(ctx, "LV2i Plugins", config.bulk_screenshot_lv2i)        
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            changed, config.bulk_screenshot_js = r.ImGui_Checkbox(ctx, "JS Plugins", config.bulk_screenshot_js)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            changed, config.bulk_screenshot_clap = r.ImGui_Checkbox(ctx, "CLAP Plugins", config.bulk_screenshot_clap)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            changed, config.bulk_screenshot_clapi = r.ImGui_Checkbox(ctx, "CLAPi Plugins", config.bulk_screenshot_clapi)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.screenshot_default_folder_only = r.ImGui_Checkbox(ctx, "Default Only", config.screenshot_default_folder_only)
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_Separator(ctx)
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -1025,7 +1072,6 @@ local function ShowConfigWindow()
                 end
             end
             r.ImGui_PopStyleColor(ctx)
-
             r.ImGui_SameLine(ctx)
             if reaper.ImGui_Button(ctx, "Show Screenshots Folder", button_width, 20) then
                 OpenScreenshotsFolder()
@@ -2030,7 +2076,7 @@ local function ShowScreenshotWindow()
                 r.ImGui_Separator(ctx)
                 for i = 1, #folders_category do
                     local is_selected = (selected_folder == folders_category[i].name)
-                    if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
+                    if r.ImGui_Selectable(ctx, folders_category[i].name .. "##folder_" .. i, is_selected) then
                         selected_folder = folders_category[i].name
                         UpdateLastViewedFolder(selected_folder)
                         screenshot_search_results = nil
@@ -2173,13 +2219,18 @@ local function ShowScreenshotWindow()
                     else
                         display_size = selected_folder and (config.folder_specific_sizes[selected_folder] or config.screenshot_window_size) or config.screenshot_window_size
                     end
-                    local num_columns = math.max(1, math.floor(available_width / display_size))
+                    
+                    local min_columns = math.floor(available_width / display_size)
+                    local actual_display_size = math.min(display_size, available_width / min_columns)
+                    local num_columns = math.max(1, min_columns)
                     local column_width = available_width / num_columns
+                
                     for i = 1, #filtered_plugins do
                         local column = (i - 1) % num_columns
                         if column > 0 then
                             r.ImGui_SameLine(ctx)
                         end
+                
                         r.ImGui_BeginGroup(ctx)
                         local plugin_name = filtered_plugins[i]
                         local safe_name = plugin_name:gsub("[^%w%s-]", "_")
@@ -2511,6 +2562,25 @@ local function ShowScreenshotWindow()
     r.ImGui_End(ctx)
 end
 
+local function FilterTracksByTag(tag)
+    local matching_tracks = {}
+    local track_count = r.CountTracks(0)
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local guid = r.GetTrackGUID(track)
+        if track_tags[guid] then
+            for _, track_tag in ipairs(track_tags[guid]) do
+                if track_tag == tag then
+                    table.insert(matching_tracks, track)
+                    break
+                end
+            end
+        end
+    end
+    return matching_tracks
+end
+
+
 local function Filter_actions(filter_text)
     if old_filter == filter_text then return old_t end
     filter_text = Lead_Trim_ws(filter_text)
@@ -2534,15 +2604,29 @@ local function Filter_actions(filter_text)
     return t
 end
 
+
 local function FilterBox()
     local window_width = r.ImGui_GetWindowWidth(ctx)
+    local window_height = r.ImGui_GetWindowHeight(ctx)
     local track_info_width = math.max(window_width - 20, 125)
     local x_button_width = 20
     local margin = 3
     local search_width = track_info_width - x_button_width - margin    
+
+    -- Bereken hoogte van alle UI elementen
+    local top_buttons_height = config.hideTopButtons and 5 or 30
+    local tags_height = config.show_tags and current_tag_window_height or 0
+    local meter_height = config.hideMeter and 0 or 80
+    local meter_spacing = 5
+    local bottom_buttons_height = config.hideBottomButtons and 0 or 80
+    local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 20
+    
+    local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
+    local search_results_max_height = window_height - total_ui_elements - 80
     if r.ImGui_IsWindowAppearing(ctx) then
         r.ImGui_SetKeyboardFocusHere(ctx)
     end
+    
     r.ImGui_PushItemWidth(ctx, search_width)
     local changed
     changed, FILTER = r.ImGui_InputTextWithHint(ctx, '##input', "SEARCH FX", FILTER)
@@ -2598,9 +2682,9 @@ local function FilterBox()
     local bottom_buttons_height = config.hideBottomButtons and 0 or 80
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 10
     if #filtered_fx ~= 0 then
-        if r.ImGui_BeginChild(ctx, "##popupp", window_width, available_height) then
+        if r.ImGui_BeginChild(ctx, "##popupp", -1, search_results_max_height) then
             for i = 1, #filtered_fx do
-                if r.ImGui_Selectable(ctx, filtered_fx[i].name, i == ADDFX_Sel_Entry) then
+                if r.ImGui_Selectable(ctx, filtered_fx[i].name .. "##search_" .. i, i == ADDFX_Sel_Entry) then
                     r.TrackFX_AddByName(TRACK, filtered_fx[i].name, false, -1000 - r.TrackFX_GetCount(TRACK))
                     r.ImGui_CloseCurrentPopup(ctx)
                     LAST_USED_FX = filtered_fx[i].name
@@ -2699,7 +2783,7 @@ local function DrawFxChains(tbl, path)
             end  
             reaper.ImGui_PopStyleColor(ctx)
         elseif type(item) ~= "table" then
-            if r.ImGui_Selectable(ctx, item) then
+            if r.ImGui_Selectable(ctx, item .. "##fxchain_" .. i) then
                 if ADD_FX_TO_ITEM then
                     local selected_item = r.GetSelectedMediaItem(0, 0)
                     if selected_item then
@@ -2791,7 +2875,7 @@ local function DrawTrackTemplates(tbl, path)
                 r.ImGui_EndMenu(ctx)
             end
         elseif type(tbl[i]) ~= "table" then
-            if r.ImGui_Selectable(ctx, tbl[i]) then
+            if r.ImGui_Selectable(ctx, tbl[i] .. "##template_" .. i) then
                 local template_str = table.concat({ path, os_separator, tbl[i], extension })
                 LoadTemplate(template_str)
             end
@@ -2819,7 +2903,7 @@ local function DrawItems(tbl, main_cat_name)
                     elseif main_cat_name == "DEVELOPER" then
                         name = name:gsub(' %(' .. Literalize(tbl[i].name) .. '%)', "")
                     end
-                    if r.ImGui_Selectable(ctx, name) then
+                    if r.ImGui_Selectable(ctx, name .. "##plugin_list_" .. i .. "_" .. j) then
                         if ADD_FX_TO_ITEM then
                             AddFXToItem(tbl[i].fx[j])
                         else
@@ -2890,7 +2974,7 @@ local function DrawItems(tbl, main_cat_name)
 end
 local function DrawFavorites()
     for i, fav in ipairs(favorite_plugins) do
-        if r.ImGui_Selectable(ctx, fav) then
+        if r.ImGui_Selectable(ctx, fav .. "##favorites_" .. i) then
             if TRACK then
                 r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
             end
@@ -2941,6 +3025,180 @@ local function DrawFavorites()
         current_hovered_plugin = nil
     end
 end
+
+
+
+local function DrawMeter(track)
+    if not track then return end
+    
+    local function scaleTodB(peak)
+        if peak < 0.001 then return -60.0 end
+        return 20 * math.log(peak, 10)
+    end
+    
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local bottom_buttons_height = config.hideBottomButtons and 0 or 80
+    local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 20
+    local meter_height = 60
+    local spacing = 5
+    local margin = 5
+    local meter_offset = 5
+    local line_length = 3
+    local peak_text_width = 45
+    
+    local meter_y = window_height - bottom_buttons_height - volume_slider_height - meter_height - spacing
+    r.ImGui_SetCursorPosY(ctx, meter_y)
+    
+    if r.ImGui_BeginChild(ctx, "MeterSection", -1, meter_height) then
+        local window_width = r.ImGui_GetWindowWidth(ctx)
+        local meter_width = window_width - (margin * 2)
+        local meter_bar_height = 15
+        
+        -- Update peak hold waardes
+        local current_time = r.time_precise()
+        local peak_L = r.Track_GetPeakInfo(track, 0)
+        local peak_R = r.Track_GetPeakInfo(track, 1)
+        local db_L = math.max(-60, scaleTodB(peak_L))
+        local db_R = math.max(-60, scaleTodB(peak_R))
+        
+        if db_L > peak_hold_L then
+            peak_hold_L = db_L
+            peak_hold_time_L = current_time
+        elseif current_time - peak_hold_time_L > PEAK_HOLD_DURATION then
+            peak_hold_L = db_L
+        end
+        
+        if db_R > peak_hold_R then
+            peak_hold_R = db_R
+            peak_hold_time_R = current_time
+        elseif current_time - peak_hold_time_R > PEAK_HOLD_DURATION then
+            peak_hold_R = db_R
+        end
+
+        -- Functie om metersegmenten te tekenen
+        local function drawMeterSegments(x, y, width, height, db_value)
+            local draw_list = r.ImGui_GetWindowDrawList(ctx)
+            
+            -- Bereken posities voor verschillende dB niveaus
+            local pos_minus18 = x + (((-18) + 60) / 60) * width
+            local pos_minus4 = x + (((-4) + 60) / 60) * width
+            local pos_zero = x + ((0 + 60) / 60) * width
+            local current_pos = x + ((db_value + 60) / 60) * width
+            
+            -- Teken groene segment (-60 tot -18)
+            r.ImGui_DrawList_AddRectFilled(draw_list, x, y, math.min(current_pos, pos_minus18), y + height, 0x00FF00FF)
+            
+            -- Teken gele segment (-18 tot -4)
+            if db_value > -18 then
+                r.ImGui_DrawList_AddRectFilled(draw_list, pos_minus18, y, math.min(current_pos, pos_minus4), y + height, 0xFFFF00FF)
+            end
+            
+            -- Teken oranje segment (-4 tot 0)
+            if db_value > -4 then
+                r.ImGui_DrawList_AddRectFilled(draw_list, pos_minus4, y, math.min(current_pos, pos_zero), y + height, 0xFF8C00FF)
+            end
+            
+            -- Teken rode segment (boven 0)
+            if db_value > 0 then
+                r.ImGui_DrawList_AddRectFilled(draw_list, pos_zero, y, current_pos, y + height, 0xFF0000FF)
+            end
+        end
+
+        r.ImGui_PushFont(ctx, TinyFont)
+        
+        -- Linker meter met vaste layout
+        local meter_group_start = r.ImGui_GetCursorPosY(ctx)
+        r.ImGui_BeginGroup(ctx)
+        
+        -- Level tekst met vaste breedte
+        r.ImGui_SetNextItemWidth(ctx, 80)
+        r.ImGui_Text(ctx, string.format("Left: %.1f dB", db_L))
+        if peak_hold_L > -60 then
+            r.ImGui_SameLine(ctx, meter_width - peak_text_width)
+            if peak_hold_L > 0 then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
+            end
+            r.ImGui_Text(ctx, string.format("%.1f", peak_hold_L))
+            if peak_hold_L > 0 then
+                r.ImGui_PopStyleColor(ctx)
+            end
+        end
+        
+        
+        -- Meter tekenen
+        local meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
+        local meter_pos_x = meter_pos_x + meter_offset
+        drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, db_L)
+        r.ImGui_Dummy(ctx, meter_width, meter_bar_height)
+        
+        -- Schaalverdelingen voor linker meter
+        local scale_points = {0, -12, -24, -36, -48, -60}
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        
+        local text_color = r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1)
+        for _, db in ipairs(scale_points) do
+            local x_pos = meter_pos_x + ((db + 60) / 60) * (meter_width - meter_offset)
+            -- Lijntjes met nieuwe kleur
+            r.ImGui_DrawList_AddLine(draw_list, 
+                x_pos, meter_pos_y, 
+                x_pos, meter_pos_y + line_length, 
+                text_color)
+            r.ImGui_DrawList_AddLine(draw_list, 
+                x_pos, meter_pos_y + meter_bar_height - line_length, 
+                x_pos, meter_pos_y + meter_bar_height, 
+                text_color)
+            -- Tekst met nieuwe kleur
+            r.ImGui_DrawList_AddText(draw_list, 
+                x_pos - 8, meter_pos_y + (meter_bar_height - r.ImGui_GetFontSize(ctx))/2, 
+                text_color, tostring(db))
+        end
+        r.ImGui_EndGroup(ctx)
+        
+        -- Rechter meter met vaste layout
+        r.ImGui_BeginGroup(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 80)
+        r.ImGui_Text(ctx, string.format("Right: %.1f dB", db_R))
+        if peak_hold_R > -60 then
+            r.ImGui_SameLine(ctx, meter_width - peak_text_width)
+            if peak_hold_R > 0 then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
+            end
+            r.ImGui_Text(ctx, string.format("%.1f", peak_hold_R))
+            if peak_hold_R > 0 then
+                r.ImGui_PopStyleColor(ctx)
+            end
+        end
+        
+        meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
+        local meter_pos_x = meter_pos_x + meter_offset
+        drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, db_R)
+        r.ImGui_Dummy(ctx, meter_width, meter_bar_height)
+        
+        -- Schaalverdelingen voor rechter meter
+        for _, db in ipairs(scale_points) do
+            local x_pos = meter_pos_x + ((db + 60) / 60) * (meter_width - meter_offset)
+            -- Lijntjes met nieuwe kleur
+            r.ImGui_DrawList_AddLine(draw_list, 
+                x_pos, meter_pos_y, 
+                x_pos, meter_pos_y + line_length, 
+                text_color)
+            r.ImGui_DrawList_AddLine(draw_list, 
+                x_pos, meter_pos_y + meter_bar_height - line_length, 
+                x_pos, meter_pos_y + meter_bar_height, 
+                text_color)
+            -- Tekst met nieuwe kleur
+            r.ImGui_DrawList_AddText(draw_list, 
+                x_pos - 8, meter_pos_y + (meter_bar_height - r.ImGui_GetFontSize(ctx))/2, 
+                text_color, tostring(db))
+        end
+        r.ImGui_EndGroup(ctx)
+        
+        r.ImGui_PopFont(ctx)
+        r.ImGui_EndChild(ctx)
+    end
+end
+
+
 
 local function CalculateButtonWidths(total_width, num_buttons, spacing)
     local available_width = total_width - (spacing * (num_buttons - 1))
@@ -3021,7 +3279,7 @@ local function DrawBottomButtons()
         r.ImGui_SetTooltip(ctx, "ByPass All FX on the selected Track")
     end
     r.ImGui_SameLine(ctx, 0, button_spacing)
-    if r.ImGui_Button(ctx, "KEYS", button_width_row2) then
+    if r.ImGui_Button(ctx, "VKB", button_width_row2) then
         r.Main_OnCommand(40377, 0)
     end
     if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
@@ -3205,7 +3463,8 @@ local function ShowItemFX()
             for i = 0, fx_count - 1 do
                 local retval, fx_name = r.TakeFX_GetFXName(take, i, "")
                 local is_open = r.TakeFX_GetFloatingWindow(take, i)
-                if r.ImGui_Selectable(ctx, fx_name) then
+                if r.ImGui_Selectable(ctx, fx_name .. "##itemfx_" .. i) then
+
                     if is_open then
                         r.TakeFX_Show(take, i, 2)
                     else
@@ -3265,6 +3524,17 @@ end
 function Frame()
     local search = FilterBox()
     if search then return end
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local top_buttons_height = config.hideTopButtons and 5 or 30
+    local tags_height = config.show_tags and current_tag_window_height or 0
+    local meter_height = config.hideMeter and 0 or 80
+    local meter_spacing = 5
+    local bottom_buttons_height = config.hideBottomButtons and 0 or 80
+    local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 20
+    
+    local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
+    local pluginlist_max_height = window_height - total_ui_elements - 160
+
     if config.show_favorites and #favorite_plugins > 0 then
         r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
@@ -3349,9 +3619,15 @@ function Frame()
         end
     r.ImGui_Separator(ctx)
     if ADD_FX_TO_ITEM then
+        if r.ImGui_BeginChild(ctx, "##popup2", -1, pluginlist_max_height) then
         ShowItemFX()
+        r.ImGui_EndChild(ctx)
+        end
     else
+        if r.ImGui_BeginChild(ctx, "##popupp3", -1, pluginlist_max_height) then
         ShowTrackFX()
+        r.ImGui_EndChild(ctx)
+        end
     end
     if not r.ImGui_IsAnyItemHovered(ctx) then
         current_hovered_plugin = nil
@@ -3542,7 +3818,7 @@ function Main()
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 4)
             local window_width = r.ImGui_GetWindowWidth(ctx)
             local track_info_width = math.max(window_width - 20, 125)  -- Minimaal 125, of vensterbreedte - 20
-
+            
             if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50, r.ImGui_WindowFlags_NoScrollbar()) then
                 -- Stel de stijlen voor de knoppen in
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Transparante knop
@@ -3592,6 +3868,7 @@ function Main()
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopFont(ctx)
+
                 r.ImGui_PushFont(ctx, NormalFont)
                 if r.ImGui_IsItemClicked(ctx, 1) then 
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
@@ -3619,14 +3896,14 @@ function Main()
                     r.ImGui_SameLine(ctx)
                     r.ImGui_Text(ctx, "|")
                     r.ImGui_SameLine(ctx)
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, " Add Script") then
+                    if r.ImGui_Button(ctx, " Add Script ") then
                         show_add_script_popup = true
                         keep_context_menu_open = false
                         r.ImGui_CloseCurrentPopup(ctx)
                     end
                     r.ImGui_EndGroup(ctx)
                     r.ImGui_PopStyleVar(ctx)
+                  
             
                     if not config.hide_default_titlebar_menu_items then
                         if r.ImGui_MenuItem(ctx, "Color Picker") then
@@ -3824,38 +4101,38 @@ function Main()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)  -- Licht grijs bij hover
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)  -- Donkerder grijs bij klik
                 r.ImGui_SetCursorPos(ctx, -2, window_height - 20)
-if r.ImGui_Button(ctx, "<", 20, 20) then
-    local current_track_number = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER")
-    if current_track_number == 1 then
-        -- Bij eerste track, ga naar master
-        r.SetOnlyTrackSelected(r.GetMasterTrack(0))
-    elseif r.IsTrackSelected(r.GetMasterTrack(0)) then
-        -- Bij master track, ga naar laatste track
-        local last_track = r.GetTrack(0, r.GetNumTracks() - 1)
-        if last_track then r.SetOnlyTrackSelected(last_track) end
-    else
-        -- Anders ga naar vorige track
-        local prev_track = r.GetTrack(0, current_track_number - 2)
-        if prev_track then r.SetOnlyTrackSelected(prev_track) end
-    end
-end
+                if r.ImGui_Button(ctx, "<", 20, 20) then
+                    local current_track_number = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER")
+                    if current_track_number == 1 then
+                        -- Bij eerste track, ga naar master
+                        r.SetOnlyTrackSelected(r.GetMasterTrack(0))
+                    elseif r.IsTrackSelected(r.GetMasterTrack(0)) then
+                        -- Bij master track, ga naar laatste track
+                        local last_track = r.GetTrack(0, r.GetNumTracks() - 1)
+                        if last_track then r.SetOnlyTrackSelected(last_track) end
+                    else
+                        -- Anders ga naar vorige track
+                        local prev_track = r.GetTrack(0, current_track_number - 2)
+                        if prev_track then r.SetOnlyTrackSelected(prev_track) end
+                    end
+                end
 
-r.ImGui_SetCursorPos(ctx, window_width - 16, window_height - 20)
-if r.ImGui_Button(ctx, ">", 20, 20) then
-    if r.IsTrackSelected(r.GetMasterTrack(0)) then
-        -- Bij master track, ga naar eerste track
-        local first_track = r.GetTrack(0, 0)
-        if first_track then r.SetOnlyTrackSelected(first_track) end
-    else
-        local next_track = r.GetTrack(0, r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
-        if next_track then 
-            r.SetOnlyTrackSelected(next_track)
-        else
-            -- Bij laatste track, ga naar master
-            r.SetOnlyTrackSelected(r.GetMasterTrack(0))
-        end
-    end
-end
+                r.ImGui_SetCursorPos(ctx, window_width - 16, window_height - 20)
+                if r.ImGui_Button(ctx, ">", 20, 20) then
+                    if r.IsTrackSelected(r.GetMasterTrack(0)) then
+                        -- Bij master track, ga naar eerste track
+                        local first_track = r.GetTrack(0, 0)
+                        if first_track then r.SetOnlyTrackSelected(first_track) end
+                    else
+                        local next_track = r.GetTrack(0, r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
+                        if next_track then 
+                            r.SetOnlyTrackSelected(next_track)
+                        else
+                            -- Bij laatste track, ga naar master
+                            r.SetOnlyTrackSelected(r.GetMasterTrack(0))
+                        end
+                    end
+                end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopFont(ctx)
                 r.ImGui_PopStyleColor(ctx)
@@ -3863,7 +4140,107 @@ end
             end
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx)
-
+            
+            -- tag sectie
+            if TRACK and config.show_tags then
+                if r.ImGui_BeginChild(ctx, "TagSection", track_info_width, 45, r.ImGui_WindowFlags_NoScrollbar()) then
+                    current_tag_window_height = r.ImGui_GetWindowHeight(ctx) 
+                    if r.ImGui_Button(ctx, "+") then
+                        r.ImGui_OpenPopup(ctx, "TagManager")
+                    end
+                    r.ImGui_SameLine(ctx)
+                    local track_guid = r.GetTrackGUID(TRACK)
+                    if track_tags[track_guid] and #track_tags[track_guid] > 0 then
+                        local available_width = track_info_width - 10
+                        local current_line_width = 0
+                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, -4) -- Minimale verticale spacing
+                        for i, tag in ipairs(track_tags[track_guid]) do
+                            local tag_width = r.ImGui_CalcTextSize(ctx, tag) +10
+                            if current_line_width + tag_width > available_width then
+                                r.ImGui_NewLine(ctx)
+                                current_line_width = 0
+                            end
+                            if current_line_width > 0 then
+                                r.ImGui_SameLine(ctx)
+                            end
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), config.button_background_color)
+                            if r.ImGui_Button(ctx, tag) then
+                                -- Selecteer alle tracks met deze tag
+                                local track_count = r.CountTracks(0)
+                                for i = 0, track_count - 1 do
+                                    local tr = r.GetTrack(0, i)
+                                    local tr_guid = r.GetTrackGUID(tr)
+                                    if track_tags[tr_guid] then
+                                        for _, t in ipairs(track_tags[tr_guid]) do
+                                            if t == tag then
+                                                r.SetTrackSelected(tr, true)
+                                                break
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                            if r.ImGui_IsItemClicked(ctx, 1) then
+                                table.remove(track_tags[track_guid], i)
+                                SaveTags()
+                            end
+                            r.ImGui_PopStyleColor(ctx)
+                            current_line_width = current_line_width + tag_width
+                        end
+                        r.ImGui_PopStyleVar(ctx)
+                    end
+                    if r.ImGui_BeginPopup(ctx, "TagManager") then
+                        r.ImGui_SetNextWindowSize(ctx, 150, 0)
+                        r.ImGui_PushItemWidth(ctx, 110)
+                        local changed, new_tag = r.ImGui_InputText(ctx, "##AddTag", new_tag_buffer)
+                        if changed then
+                            new_tag_buffer = new_tag
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "+") and new_tag_buffer ~= "" then
+                            local track_guid = r.GetTrackGUID(TRACK)
+                            track_tags[track_guid] = track_tags[track_guid] or {}
+                            table.insert(track_tags[track_guid], new_tag_buffer)
+                            SaveTags()
+                            new_tag_buffer = ""
+                        end
+                        local all_tags = {}
+                        for guid, tags in pairs(track_tags) do
+                            for _, tag in ipairs(tags) do
+                                all_tags[tag] = true
+                            end
+                        end
+                        r.ImGui_Separator(ctx)
+                        r.ImGui_Text(ctx, "Available Tags:")
+                        for tag, _ in pairs(all_tags) do
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), config.button_background_color)
+                            if r.ImGui_Button(ctx, tag) then
+                                local track_guid = r.GetTrackGUID(TRACK)
+                                track_tags[track_guid] = track_tags[track_guid] or {}
+                                if not table.contains(track_tags[track_guid], tag) then
+                                    table.insert(track_tags[track_guid], tag)
+                                    SaveTags()
+                                end
+                            end
+                            if r.ImGui_IsItemClicked(ctx, 1) then 
+                                for guid, track_tag_list in pairs(track_tags) do
+                                    for i = #track_tag_list, 1, -1 do
+                                        if track_tag_list[i] == tag then
+                                            table.remove(track_tag_list, i)
+                                        end
+                                    end
+                                end
+                                SaveTags()
+                            end
+                            r.ImGui_PopStyleColor(ctx)
+                            --r.ImGui_SameLine(ctx)
+                        end
+                    
+                        r.ImGui_EndPopup(ctx)
+                    end
+                    r.ImGui_EndChild(ctx)
+                end
+            end
             if not config.hideTopButtons then
                 local button_spacing = 3
                 local button_width = (track_info_width - (2 * button_spacing)) / 3           
@@ -3914,6 +4291,9 @@ end
         end
         if SHOW_PREVIEW and current_hovered_plugin then 
             ShowPluginScreenshot() 
+        end
+        if TRACK and not config.hideMeter then
+            DrawMeter(TRACK)
         end
         DrawBottomButtons()
         if show_settings then
