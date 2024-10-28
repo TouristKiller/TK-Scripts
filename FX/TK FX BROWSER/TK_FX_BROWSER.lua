@@ -1,17 +1,13 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.8
+-- @version 0.6.9
 -- @changelog:
 --[[ 
-        * Added unique IDs to all Selectable elements
-        * Added complete tag management system
-            Add tags via + button
-            View all available tags in popup
-            Click tag to add to current track
-            Right-click tag to remove from all tracks
-            Tags automatically wrap to next line
-            Tags section can be shown/hidden in config  
-        * Added a simple meter (can be hidden in config)
+        * Bugfixes for when no track is loaded (error message for tags and meter that expect a track)
+        * Loading order of screenshot window and main window changed, which should result in less error messages by making the screenshot window visible/invisible if it is in the same docker as the main window
+        * Tags can be colored and associated tracks can be given the color of the tag
+        * Tags are now completely stored in a separate file, so that when resetting the config, the tag info does not disappear.
+        * Some other small improvements.
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -113,6 +109,9 @@ local pinned_menu_pos_x, pinned_menu_pos_y = nil, nil
 local track_tags = {}
 local new_tag_buffer = ""
 local current_tag_window_height = 70
+-- TAGS:
+local tag_colors = {}
+local available_tags = {}
 -- METER:
 local peak_hold_L = -60
 local peak_hold_R = -60
@@ -151,6 +150,7 @@ local texture_load_queue = {}
 local texture_last_used = {}
 local screenshot_window_opened = false 
 local show_screenshot_window = false 
+local show_screenshot_settings = true
 local screenshot_window_interactive = false 
 local screenshot_window_display_size = 200
 local selected_folder = nil
@@ -260,7 +260,7 @@ local function SetDefaultConfig()
         hideTopButtons = false,
         hideVolumeSlider = false,
         show_tags = true,
-        hideMeter = false, 
+        hideMeter = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -317,16 +317,18 @@ end
 LoadFavorites()
 
 local function SaveTags()
-    print("Saving tags...")  -- Debug log
+    local tags_data = {
+        tracks = track_tags,
+        colors = tag_colors,
+        filters = tag_filters,
+        available = available_tags, 
+    }
+    
     local file = io.open(script_path .. "track_tags.json", "w")
     if file then
-        local json_str = json.encode(track_tags)
-        print("Writing: " .. json_str)  -- Debug log
+        local json_str = json.encode(tags_data)
         file:write(json_str)
         file:close()
-        print("Tags saved successfully")  -- Debug log
-    else
-        print("Failed to create/open file")  -- Debug log
     end
 end
 
@@ -335,7 +337,12 @@ local function LoadTags()
     if file then
         local content = file:read("*all")
         file:close()
-        track_tags = json.decode(content) or {}
+        local data = json.decode(content) or {}
+        
+        track_tags = data.tracks or {}
+        tag_colors = data.colors or {}
+        tag_filters = data.filters or {}
+        available_tags = data.available or {}
     end
 end
 LoadTags()
@@ -435,7 +442,7 @@ end
 
 local function GetCurrentTrackFX()
     local fx_list = {}
-    if TRACK then
+    if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
         local fx_count = reaper.TrackFX_GetCount(TRACK)
         for j = 0, fx_count - 1 do
             local retval, fx_name = reaper.TrackFX_GetFXName(TRACK, j, "")
@@ -446,6 +453,7 @@ local function GetCurrentTrackFX()
     end
     return fx_list
 end
+
 
 local search_filter = ""
 local filtered_plugins = {}
@@ -1350,6 +1358,15 @@ local function GetTrackColorAndTextColor(track)
     end
 end
 
+local function GetTagColorAndTextColor(tag_color)
+    local red, g, b, a = r.ImGui_ColorConvertU32ToDouble4(tag_color)
+    local brightness = (red * 299 + g * 587 + b * 114) / 1000
+    local text_color = brightness > 0.5 
+        and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, 1) 
+        or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, 1)
+    return tag_color, text_color
+end
+
 local function GetBounds(hwnd)
     local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
     return left, top, right-left, bottom-top
@@ -2015,14 +2032,24 @@ local function ShowScreenshotWindow()
         local window_width = r.ImGui_GetWindowWidth(ctx)
         local button_width = 15
         local button_height = 15
+
+        -- Nieuwe toggle knop voor screenshot instellingen
+        r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
+        if r.ImGui_Button(ctx, show_screenshot_settings and "H" or "S", button_width, button_height) then
+            show_screenshot_settings = not show_screenshot_settings
+        end
+
         -- Plaats de cursor in de rechterbovenhoek
         r.ImGui_SetCursorPos(ctx, window_width - button_width - 5, 5)
         if r.ImGui_Button(ctx, "X", button_width, button_height) then
             config.show_screenshot_window = false
             SaveConfig()
         end
+
         r.ImGui_Separator(ctx)
+
         if show_media_browser then
+           
             r.ImGui_PushItemWidth(ctx, -1)
             local changed, new_search_term = r.ImGui_InputText(ctx, "##ProjectSearch", project_search_term)
             if changed then
@@ -2056,6 +2083,7 @@ local function ShowScreenshotWindow()
                 end
             end
         if folders_category and #folders_category > 0 then
+            if show_screenshot_settings then  
             r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
             if r.ImGui_BeginCombo(ctx, "##FolderDropdown", selected_folder or "Select Folder") then
                 if r.ImGui_Selectable(ctx, "No Folder", selected_folder == nil) then
@@ -2112,7 +2140,10 @@ local function ShowScreenshotWindow()
                         GetPluginsForFolder(selected_folder)
                     end
                 end
+              
             r.ImGui_SameLine(ctx)
+            
+            
             local changed, new_value = r.ImGui_Checkbox(ctx, "Global", config.use_global_screenshot_size)
             if changed then
                 config.use_global_screenshot_size = new_value
@@ -2147,6 +2178,7 @@ local function ShowScreenshotWindow()
                         SaveConfig()
                     end
                 end
+            end
             end
         end
         local available_width = r.ImGui_GetContentRegionAvail(ctx)
@@ -3054,27 +3086,29 @@ local function DrawMeter(track)
         local meter_width = window_width - (margin * 2)
         local meter_bar_height = 15
         
+        
         -- Update peak hold waardes
-        local current_time = r.time_precise()
-        local peak_L = r.Track_GetPeakInfo(track, 0)
-        local peak_R = r.Track_GetPeakInfo(track, 1)
-        local db_L = math.max(-60, scaleTodB(peak_L))
-        local db_R = math.max(-60, scaleTodB(peak_R))
+        if track and r.ValidatePtr2(0, track, "MediaTrack*") then
+            local current_time = r.time_precise()
+            local peak_L = r.Track_GetPeakInfo(track, 0)
+            local peak_R = r.Track_GetPeakInfo(track, 1)
+            local db_L = math.max(-60, scaleTodB(peak_L))
+            local db_R = math.max(-60, scaleTodB(peak_R))
         
-        if db_L > peak_hold_L then
-            peak_hold_L = db_L
-            peak_hold_time_L = current_time
-        elseif current_time - peak_hold_time_L > PEAK_HOLD_DURATION then
-            peak_hold_L = db_L
-        end
+            if db_L > peak_hold_L then
+                peak_hold_L = db_L
+                peak_hold_time_L = current_time
+            elseif current_time - peak_hold_time_L > PEAK_HOLD_DURATION then
+                peak_hold_L = db_L
+            end
+            
+            if db_R > peak_hold_R then
+                peak_hold_R = db_R
+                peak_hold_time_R = current_time
+            elseif current_time - peak_hold_time_R > PEAK_HOLD_DURATION then
+                peak_hold_R = db_R
+            end
         
-        if db_R > peak_hold_R then
-            peak_hold_R = db_R
-            peak_hold_time_R = current_time
-        elseif current_time - peak_hold_time_R > PEAK_HOLD_DURATION then
-            peak_hold_R = db_R
-        end
-
         -- Functie om metersegmenten te tekenen
         local function drawMeterSegments(x, y, width, height, db_value)
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -3194,6 +3228,7 @@ local function DrawMeter(track)
         r.ImGui_EndGroup(ctx)
         
         r.ImGui_PopFont(ctx)
+    end
         r.ImGui_EndChild(ctx)
     end
 end
@@ -3797,15 +3832,21 @@ function Main()
     handleDocking() 
     local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
     dock = r.ImGui_GetWindowDockID(ctx)
-    if visible then
-        if config.show_screenshot_window then
+
+    if config.show_screenshot_window then
+        local screenshot_visible, screenshot_open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
+        if screenshot_visible then
             if screenshot_search_results and #screenshot_search_results > 0 then
                 selected_folder = nil
             elseif config.default_folder and selected_folder == nil then
                 selected_folder = config.default_folder
             end
             ShowScreenshotWindow()
+            r.ImGui_End(ctx)
         end
+    end
+    if visible then
+        
         if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
             local progress_text = string.format("Loading %d/%d (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
             r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 0, progress_text)
@@ -4142,9 +4183,10 @@ function Main()
             r.ImGui_PopStyleColor(ctx)
             
             -- tag sectie
-            if TRACK and config.show_tags then
+            if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") and config.show_tags then
                 if r.ImGui_BeginChild(ctx, "TagSection", track_info_width, 45, r.ImGui_WindowFlags_NoScrollbar()) then
                     current_tag_window_height = r.ImGui_GetWindowHeight(ctx) 
+                    
                     if r.ImGui_Button(ctx, "+") then
                         r.ImGui_OpenPopup(ctx, "TagManager")
                     end
@@ -4153,20 +4195,44 @@ function Main()
                     if track_tags[track_guid] and #track_tags[track_guid] > 0 then
                         local available_width = track_info_width - 10
                         local current_line_width = 0
-                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, -4) -- Minimale verticale spacing
+                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, -4)
+                        
                         for i, tag in ipairs(track_tags[track_guid]) do
-                            local tag_width = r.ImGui_CalcTextSize(ctx, tag) +10
+                            local tag_width = r.ImGui_CalcTextSize(ctx, tag) + 10
+                            
                             if current_line_width + tag_width > available_width then
                                 r.ImGui_NewLine(ctx)
                                 current_line_width = 0
                             end
+                            
                             if current_line_width > 0 then
                                 r.ImGui_SameLine(ctx)
                             end
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), config.button_background_color)
-                            if r.ImGui_Button(ctx, tag) then
-                                -- Selecteer alle tracks met deze tag
+                            
+                            -- Style and button rendering
+                            local button_pressed = false
+                            local tag_color = tag_colors[tag] or config.button_background_color
+                            local _, text_color = GetTagColorAndTextColor(tag_color)
+                            if tag_colors[tag] then
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), tag_colors[tag])
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), tag_colors[tag])
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
+                                button_pressed = r.ImGui_Button(ctx, tag)
+                                r.ImGui_PopStyleColor(ctx, 3)
+                            else
+                                button_pressed = r.ImGui_Button(ctx, tag)
+                            end
+                            
+                            -- Handle button click
+                            if button_pressed then
+                                -- Eerst alle tracks deselecteren
                                 local track_count = r.CountTracks(0)
+                                for i = 0, track_count - 1 do
+                                    local tr = r.GetTrack(0, i)
+                                    r.SetTrackSelected(tr, false)
+                                end
+                                
+                                -- Dan de tracks met de gekozen tag selecteren
                                 for i = 0, track_count - 1 do
                                     local tr = r.GetTrack(0, i)
                                     local tr_guid = r.GetTrackGUID(tr)
@@ -4180,15 +4246,68 @@ function Main()
                                     end
                                 end
                             end
+                            
+                            -- Context menu
                             if r.ImGui_IsItemClicked(ctx, 1) then
-                                table.remove(track_tags[track_guid], i)
-                                SaveTags()
+                                r.ImGui_OpenPopup(ctx, "TagOptions_" .. i)
                             end
-                            r.ImGui_PopStyleColor(ctx)
+                            
+                            if r.ImGui_BeginPopup(ctx, "TagOptions_" .. i) then
+                                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 8)
+                                if r.ImGui_MenuItem(ctx, "Remove Tag") then
+                                    local track_guid = r.GetTrackGUID(TRACK)
+                                    if track_tags[track_guid] then
+                                        table.remove(track_tags[track_guid], i)
+                                        SaveTags()
+                                    end
+                                end
+                                
+                                if r.ImGui_MenuItem(ctx, "Set Color") then
+                                    local current_color = tag_colors[tag] or 0xFFFFFFFF
+                                    local ok, new_color = r.GR_SelectColor(current_color)
+                                    if ok then
+                                        local native_color = new_color|0x1000000
+                                        local red, g, b = reaper.ColorFromNative(native_color)
+                                        local color_vec4 = r.ImGui_ColorConvertDouble4ToU32(red/255, g/255, b/255, 1.0)
+                                        tag_colors[tag] = color_vec4
+                                        SaveTags()
+                                    end
+                                end
+                                if r.ImGui_MenuItem(ctx, "Apply Tag Color to Tracks") and tag_colors[tag] then
+                                    local track_count = r.CountTracks(0)
+                                    local imgui_color = tag_colors[tag]
+                                    local red, g, b, a = r.ImGui_ColorConvertU32ToDouble4(imgui_color)
+                                    local native_color = reaper.ColorToNative(math.floor(red*255), math.floor(g*255), math.floor(b*255))|0x1000000
+                                    
+                                    for i = 0, track_count - 1 do
+                                        local tr = r.GetTrack(0, i)
+                                        local tr_guid = r.GetTrackGUID(tr)
+                                        if track_tags[tr_guid] then
+                                            for _, t in ipairs(track_tags[tr_guid]) do
+                                                if t == tag then
+                                                    reaper.SetTrackColor(tr, native_color)
+                                                    break
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                                
+                                
+                                if r.ImGui_MenuItem(ctx, "Remove Color") then
+                                    tag_colors[tag] = nil
+                                    SaveTags()
+                                end
+                                r.ImGui_PopStyleVar(ctx)
+                                r.ImGui_EndPopup(ctx)
+                            end
+                            
                             current_line_width = current_line_width + tag_width
                         end
+                        
                         r.ImGui_PopStyleVar(ctx)
                     end
+                    
                     if r.ImGui_BeginPopup(ctx, "TagManager") then
                         r.ImGui_SetNextWindowSize(ctx, 150, 0)
                         r.ImGui_PushItemWidth(ctx, 110)
@@ -4201,6 +4320,7 @@ function Main()
                             local track_guid = r.GetTrackGUID(TRACK)
                             track_tags[track_guid] = track_tags[track_guid] or {}
                             table.insert(track_tags[track_guid], new_tag_buffer)
+                            available_tags[new_tag_buffer] = true  -- Voeg toe aan available tags
                             SaveTags()
                             new_tag_buffer = ""
                         end
@@ -4212,8 +4332,25 @@ function Main()
                         end
                         r.ImGui_Separator(ctx)
                         r.ImGui_Text(ctx, "Available Tags:")
-                        for tag, _ in pairs(all_tags) do
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), config.button_background_color)
+                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, -4)  -- Add this line
+                        local available_width = select(1, r.ImGui_GetContentRegionAvail(ctx))
+                        local current_line_width = 0
+
+                        for tag, _ in pairs(available_tags) do
+                            local tag_width = r.ImGui_CalcTextSize(ctx, tag) + 10
+                            
+                            if current_line_width + tag_width > available_width then
+                                r.ImGui_NewLine(ctx)
+                                current_line_width = 0
+                            elseif current_line_width > 0 then
+                                r.ImGui_SameLine(ctx)
+                            end
+
+                            local tag_color = tag_colors[tag] or config.button_background_color
+                            local _, text_color = GetTagColorAndTextColor(tag_color)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), tag_colors[tag] or config.button_background_color)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), tag_colors[tag] or config.button_background_color)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                             if r.ImGui_Button(ctx, tag) then
                                 local track_guid = r.GetTrackGUID(TRACK)
                                 track_tags[track_guid] = track_tags[track_guid] or {}
@@ -4222,6 +4359,8 @@ function Main()
                                     SaveTags()
                                 end
                             end
+                            current_line_width = current_line_width + tag_width
+                        
                             if r.ImGui_IsItemClicked(ctx, 1) then 
                                 for guid, track_tag_list in pairs(track_tags) do
                                     for i = #track_tag_list, 1, -1 do
@@ -4232,14 +4371,15 @@ function Main()
                                 end
                                 SaveTags()
                             end
-                            r.ImGui_PopStyleColor(ctx)
+                            r.ImGui_PopStyleColor(ctx, 3)
                             --r.ImGui_SameLine(ctx)
                         end
-                    
+                        r.ImGui_PopStyleVar(ctx)
                         r.ImGui_EndPopup(ctx)
                     end
                     r.ImGui_EndChild(ctx)
                 end
+            
             end
             if not config.hideTopButtons then
                 local button_spacing = 3
