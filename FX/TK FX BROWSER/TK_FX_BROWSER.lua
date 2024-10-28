@@ -1,13 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.6.9
+-- @version 0.7.0
 -- @changelog:
 --[[ 
-        * Bugfixes for when no track is loaded (error message for tags and meter that expect a track)
-        * Loading order of screenshot window and main window changed, which should result in less error messages by making the screenshot window visible/invisible if it is in the same docker as the main window
-        * Tags can be colored and associated tracks can be given the color of the tag
-        * Tags are now completely stored in a separate file, so that when resetting the config, the tag info does not disappear.
-        * Some other small improvements.
+          * Docking mostly solved. It should work in every situation now if all goes well. However, one situation doesn't and that is when you place both the main window and the screenshot window in the same dock via ReaImGui docking. If you then want to dock the screenshot window to the main window in the config, you get an error. Any other scenario will work.
+            If you want to place the windows underneath each other, the best way to do this is to dock the screenshot window somewhere else and then drag it with ctrl drag under the main window in the dock. This way you certainly won't get an error.
+            But placing them underneath each other via ReaImGui Docking is also no problem, as long as you don't press the dock button in config before you have removed the screenshot window from it
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -868,11 +866,32 @@ local function ShowConfigWindow()
             r.ImGui_SetCursorPosX(ctx, column2_width)
             _, config.show_name_in_screenshot_window = r.ImGui_Checkbox(ctx, "Show Names", config.show_name_in_screenshot_window)
             r.ImGui_SameLine(ctx)
+           
             r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.dock_screenshot_window = r.ImGui_Checkbox(ctx, "Dock", config.dock_screenshot_window)
+            local dock_changed, new_dock_value = r.ImGui_Checkbox(ctx, "Dock", config.dock_screenshot_window)
+            if dock_changed then
+                local main_dock_id = r.ImGui_GetWindowDockID(ctx)
+                if main_dock_id == 0 then
+                    config.dock_screenshot_window = new_dock_value
+                    config.show_screenshot_window = true
+                else
+                    config.dock_screenshot_window = false
+                end
+                SaveConfig()
+            end
+            
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column4_width)
-            _, config.dock_screenshot_left = r.ImGui_Checkbox(ctx, "Dock Left", config.dock_screenshot_left)
+            local dock_side_changed, new_dock_side = r.ImGui_Checkbox(ctx, "Dock Left", config.dock_screenshot_left)
+            if dock_side_changed then
+                local main_dock_id = r.ImGui_GetWindowDockID(ctx)
+                if main_dock_id == 0 then
+                    config.dock_screenshot_left = new_dock_side
+                    config.show_screenshot_window = true
+                end
+                SaveConfig()
+            end            
+
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Default Folder:")
@@ -1275,7 +1294,68 @@ local function LoadSearchTexture(file, plugin_name)
     return nil
 end
 
+--[[NIEUWE MANNIER (TEST OM TE KIJKEN OF DIT SNELHEID VERBETERD)
 local function ProcessTextureLoadQueue()
+    local textures_loaded = 0
+    local current_time = r.time_precise()
+    local scroll_y = r.ImGui_GetScrollY(ctx)
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+
+    -- Load new textures based on visibility
+    for file, queue_info in pairs(texture_load_queue) do
+        if textures_loaded >= config.max_textures_per_frame then break end
+        
+        if queue_info.y_pos + queue_info.height >= scroll_y and 
+           queue_info.y_pos <= scroll_y + window_height then
+            
+            if not search_texture_cache[file] then
+                local texture = r.ImGui_CreateImage(file)
+                if texture then
+                    search_texture_cache[file] = texture
+                    texture_last_used[file] = current_time
+                    textures_loaded = textures_loaded + 1
+                    log_to_file("Texture loaded: " .. file)
+                end
+            end
+            texture_load_queue[file] = nil
+        end
+    end
+    -- Verwijder oude textures, maar houd een minimum aantal
+    local cache_size = 0
+    for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
+    
+    if cache_size > config.max_cached_search_textures then
+        local textures_to_remove = {}
+        for file, last_used in pairs(texture_last_used) do
+            if current_time - last_used > config.texture_reload_delay and cache_size > config.min_cached_textures then
+                table.insert(textures_to_remove, file)
+                cache_size = cache_size - 1
+            end
+        end
+        for _, file in ipairs(textures_to_remove) do
+            if r.ImGui_DestroyImage then
+                r.ImGui_DestroyImage(ctx, search_texture_cache[file])
+            else
+                log_to_file("ImGui_DestroyImage not available, texture not destroyed: " .. file)
+            end
+            search_texture_cache[file] = nil
+            texture_last_used[file] = nil
+            log_to_file("Texture removed: " .. file)
+        end
+    end
+    -- Herlaad verwijderde textures indien nodig
+    if cache_size < config.min_cached_textures then
+        for file in pairs(texture_last_used) do
+            if not search_texture_cache[file] then
+                texture_load_queue[file] = current_time
+            end
+        end
+    end
+end]]--
+
+
+-- OUDE MANNIER!!!
+    local function ProcessTextureLoadQueue()
     local textures_loaded = 0
     local current_time = r.time_precise()
     -- Laad nieuwe textures
@@ -1325,7 +1405,7 @@ local function ProcessTextureLoadQueue()
             end
         end
     end
-end
+end  --
 
 local function Lead_Trim_ws(s) return s:match '^%s*(.*)' end
 
@@ -2010,10 +2090,13 @@ local function ShowScreenshotWindow()
     local main_window_height = r.ImGui_GetWindowHeight(ctx)
     local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoFocusOnAppearing()
     if config.dock_screenshot_window then
+        local viewport = r.ImGui_GetMainViewport(ctx)
+        local viewport_pos_x, viewport_pos_y = r.ImGui_Viewport_GetPos(viewport)
+        
         if config.dock_screenshot_left then
-            r.ImGui_SetNextWindowPos(ctx, main_window_pos_x - config.screenshot_window_width - 5, main_window_pos_y, r.ImGui_Cond_Always())
+            r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) - config.screenshot_window_width - 5, main_window_pos_y, r.ImGui_Cond_Always())
         else
-            r.ImGui_SetNextWindowPos(ctx, main_window_pos_x + main_window_width + 5, main_window_pos_y, r.ImGui_Cond_Always())
+            r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) + main_window_width + 5, main_window_pos_y, r.ImGui_Cond_Always())
         end
         r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, FLT_MAX, main_window_height)
     end
@@ -2590,8 +2673,8 @@ local function ShowScreenshotWindow()
         end
     end
     config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
+    return visible 
     end
-    r.ImGui_End(ctx)
 end
 
 local function FilterTracksByTag(tag)
@@ -3829,29 +3912,29 @@ function Main()
     r.ImGui_PushFont(ctx, NormalFont)
     r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
     r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 200, 16384, 16384)   
-    handleDocking() 
-    local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
-    dock = r.ImGui_GetWindowDockID(ctx)
+    handleDocking()
 
+local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
+dock = r.ImGui_GetWindowDockID(ctx)
+
+if visible then
+    local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
+    local main_window_width = r.ImGui_GetWindowWidth(ctx)
+    
     if config.show_screenshot_window then
-        local screenshot_visible, screenshot_open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
+        r.ImGui_PushID(ctx, "ScreenshotWindow")
+        local screenshot_visible = ShowScreenshotWindow()
         if screenshot_visible then
-            if screenshot_search_results and #screenshot_search_results > 0 then
-                selected_folder = nil
-            elseif config.default_folder and selected_folder == nil then
-                selected_folder = config.default_folder
-            end
-            ShowScreenshotWindow()
             r.ImGui_End(ctx)
         end
+        r.ImGui_PopID(ctx)
     end
-    if visible then
-        
-        if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
-            local progress_text = string.format("Loading %d/%d (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
-            r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 0, progress_text)
-        end
-        if TRACK then
+    
+    if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
+        local progress_text = string.format("Loading %d/%d (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
+        r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 0, progress_text)
+    end
+    if TRACK then
             local track_color, text_color = GetTrackColorAndTextColor(TRACK)
             local track_name = GetTrackName(TRACK)
             local track_type = GetTrackType(TRACK)
