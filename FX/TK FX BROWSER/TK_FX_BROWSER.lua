@@ -1,11 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.7.0
+-- @version 0.7.1
 -- @changelog:
 --[[ 
-          * Docking mostly solved. It should work in every situation now if all goes well. However, one situation doesn't and that is when you place both the main window and the screenshot window in the same dock via ReaImGui docking. If you then want to dock the screenshot window to the main window in the config, you get an error. Any other scenario will work.
-            If you want to place the windows underneath each other, the best way to do this is to dock the screenshot window somewhere else and then drag it with ctrl drag under the main window in the dock. This way you certainly won't get an error.
-            But placing them underneath each other via ReaImGui Docking is also no problem, as long as you don't press the dock button in config before you have removed the screenshot window from it
+          * Improved layout for the differend parts of the main window
+          * Hide scrolbar in screenshot window
+          * RMS M and I view in meter (via js: analysis /Loudness meter)
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -15,6 +15,8 @@ package.path            = script_path .. "?.lua;"
 local json              = require("json")
 local screenshot_path   = script_path .. "Screenshots" .. os_separator
 StartBulkScreenshot     = function() end
+local DrawMeterModule = dofile(script_path .. "DrawMeter.lua")
+
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
     local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
@@ -116,8 +118,6 @@ local peak_hold_R = -60
 local peak_hold_time_L = 0
 local peak_hold_time_R = 0
 local PEAK_HOLD_DURATION = 2.0 
--- local peak_hold_color_L = 0xFFFFFFFF  -- Standaard wit
--- local peak_hold_color_R = 0xFFFFFFFF  -- Standaard wit
 -- PROJECTS
 local function GetProjectsDirectory()
     local path = reaper.GetProjectPath("")
@@ -159,7 +159,6 @@ local collapsed_tracks = {}
 local all_tracks_collapsed = false
 local SHOULD_CLOSE_SCRIPT = false
 local IS_COPYING_TO_ALL_TRACKS = false
-
 local function get_safe_name(name)
     return (name or ""):gsub("[^%w%s-]", "_")
 end
@@ -259,6 +258,8 @@ local function SetDefaultConfig()
         hideVolumeSlider = false,
         show_tags = true,
         hideMeter = false,
+        show_screenshot_scrollbar = true
+        
     } 
 end
 local config = SetDefaultConfig()    
@@ -290,7 +291,7 @@ local function ResetConfig()
     config = SetDefaultConfig()
     SaveConfig()
 end
-
+---------------------------------------------------------------------
 local function SaveFavorites()
     local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
     local file = io.open(script_path .. "favorite_plugins.txt", "w")
@@ -344,8 +345,6 @@ local function LoadTags()
     end
 end
 LoadTags()
-
-
 --------------------------------------------------------------------------
 function table.contains(tbl, item)
     for _, value in pairs(tbl) do
@@ -1241,7 +1240,7 @@ local function IsArmed(track)
     end
     return false
 end
--------------
+
 local function AddFXToItem(fx_name)
     local item = r.GetSelectedMediaItem(0, 0)
     if item then
@@ -1294,67 +1293,6 @@ local function LoadSearchTexture(file, plugin_name)
     return nil
 end
 
---[[NIEUWE MANNIER (TEST OM TE KIJKEN OF DIT SNELHEID VERBETERD)
-local function ProcessTextureLoadQueue()
-    local textures_loaded = 0
-    local current_time = r.time_precise()
-    local scroll_y = r.ImGui_GetScrollY(ctx)
-    local window_height = r.ImGui_GetWindowHeight(ctx)
-
-    -- Load new textures based on visibility
-    for file, queue_info in pairs(texture_load_queue) do
-        if textures_loaded >= config.max_textures_per_frame then break end
-        
-        if queue_info.y_pos + queue_info.height >= scroll_y and 
-           queue_info.y_pos <= scroll_y + window_height then
-            
-            if not search_texture_cache[file] then
-                local texture = r.ImGui_CreateImage(file)
-                if texture then
-                    search_texture_cache[file] = texture
-                    texture_last_used[file] = current_time
-                    textures_loaded = textures_loaded + 1
-                    log_to_file("Texture loaded: " .. file)
-                end
-            end
-            texture_load_queue[file] = nil
-        end
-    end
-    -- Verwijder oude textures, maar houd een minimum aantal
-    local cache_size = 0
-    for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
-    
-    if cache_size > config.max_cached_search_textures then
-        local textures_to_remove = {}
-        for file, last_used in pairs(texture_last_used) do
-            if current_time - last_used > config.texture_reload_delay and cache_size > config.min_cached_textures then
-                table.insert(textures_to_remove, file)
-                cache_size = cache_size - 1
-            end
-        end
-        for _, file in ipairs(textures_to_remove) do
-            if r.ImGui_DestroyImage then
-                r.ImGui_DestroyImage(ctx, search_texture_cache[file])
-            else
-                log_to_file("ImGui_DestroyImage not available, texture not destroyed: " .. file)
-            end
-            search_texture_cache[file] = nil
-            texture_last_used[file] = nil
-            log_to_file("Texture removed: " .. file)
-        end
-    end
-    -- Herlaad verwijderde textures indien nodig
-    if cache_size < config.min_cached_textures then
-        for file in pairs(texture_last_used) do
-            if not search_texture_cache[file] then
-                texture_load_queue[file] = current_time
-            end
-        end
-    end
-end]]--
-
-
--- OUDE MANNIER!!!
     local function ProcessTextureLoadQueue()
     local textures_loaded = 0
     local current_time = r.time_precise()
@@ -2101,10 +2039,14 @@ local function ShowScreenshotWindow()
         r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, FLT_MAX, main_window_height)
     end
     r.ImGui_SetNextWindowSize(ctx, config.screenshot_window_width, main_window_height, r.ImGui_Cond_FirstUseEver())
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
+
     local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
     if visible then
-        
-        r.ImGui_PushFont(ctx, LargeFont)
+        r.ImGui_PushFont(ctx, NormalFont)
+        r.ImGui_SetCursorPosY(ctx, 5) -- Voeg 5 pixels padding toe aan de bovenkant
+
         if show_media_browser then
             r.ImGui_Text(ctx, "PROJECTS:")          
         else
@@ -2116,6 +2058,13 @@ local function ShowScreenshotWindow()
         local button_width = 15
         local button_height = 15
 
+        r.ImGui_SetCursorPos(ctx, window_width - button_width * 3 - 15, 5)
+        if r.ImGui_Button(ctx, config.show_screenshot_scrollbar and "B" or "N", button_width, button_height) then
+        config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar
+        SaveConfig()
+        end
+        r.ImGui_SameLine(ctx)
+        
         -- Nieuwe toggle knop voor screenshot instellingen
         r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
         if r.ImGui_Button(ctx, show_screenshot_settings and "H" or "S", button_width, button_height) then
@@ -2673,6 +2622,7 @@ local function ShowScreenshotWindow()
         end
     end
     config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
+    r.ImGui_PopStyleVar(ctx, 2)
     return visible 
     end
 end
@@ -2731,9 +2681,9 @@ local function FilterBox()
     -- Bereken hoogte van alle UI elementen
     local top_buttons_height = config.hideTopButtons and 5 or 30
     local tags_height = config.show_tags and current_tag_window_height or 0
-    local meter_height = config.hideMeter and 0 or 80
+    local meter_height = config.hideMeter and 0 or 90
     local meter_spacing = 5
-    local bottom_buttons_height = config.hideBottomButtons and 0 or 80
+    local bottom_buttons_height = config.hideBottomButtons and 0 or 70
     local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 20
     
     local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
@@ -2794,7 +2744,7 @@ local function FilterBox()
     end
     local filtered_fx = Filter_actions(FILTER)
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local bottom_buttons_height = config.hideBottomButtons and 0 or 80
+    local bottom_buttons_height = config.hideBottomButtons and 0 or 70
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 10
     if #filtered_fx ~= 0 then
         if r.ImGui_BeginChild(ctx, "##popupp", -1, search_results_max_height) then
@@ -3143,179 +3093,6 @@ end
 
 
 
-local function DrawMeter(track)
-    if not track then return end
-    
-    local function scaleTodB(peak)
-        if peak < 0.001 then return -60.0 end
-        return 20 * math.log(peak, 10)
-    end
-    
-    local window_height = r.ImGui_GetWindowHeight(ctx)
-    local bottom_buttons_height = config.hideBottomButtons and 0 or 80
-    local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 20
-    local meter_height = 60
-    local spacing = 5
-    local margin = 5
-    local meter_offset = 5
-    local line_length = 3
-    local peak_text_width = 45
-    
-    local meter_y = window_height - bottom_buttons_height - volume_slider_height - meter_height - spacing
-    r.ImGui_SetCursorPosY(ctx, meter_y)
-    
-    if r.ImGui_BeginChild(ctx, "MeterSection", -1, meter_height) then
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        local meter_width = window_width - (margin * 2)
-        local meter_bar_height = 15
-        
-        
-        -- Update peak hold waardes
-        if track and r.ValidatePtr2(0, track, "MediaTrack*") then
-            local current_time = r.time_precise()
-            local peak_L = r.Track_GetPeakInfo(track, 0)
-            local peak_R = r.Track_GetPeakInfo(track, 1)
-            local db_L = math.max(-60, scaleTodB(peak_L))
-            local db_R = math.max(-60, scaleTodB(peak_R))
-        
-            if db_L > peak_hold_L then
-                peak_hold_L = db_L
-                peak_hold_time_L = current_time
-            elseif current_time - peak_hold_time_L > PEAK_HOLD_DURATION then
-                peak_hold_L = db_L
-            end
-            
-            if db_R > peak_hold_R then
-                peak_hold_R = db_R
-                peak_hold_time_R = current_time
-            elseif current_time - peak_hold_time_R > PEAK_HOLD_DURATION then
-                peak_hold_R = db_R
-            end
-        
-        -- Functie om metersegmenten te tekenen
-        local function drawMeterSegments(x, y, width, height, db_value)
-            local draw_list = r.ImGui_GetWindowDrawList(ctx)
-            
-            -- Bereken posities voor verschillende dB niveaus
-            local pos_minus18 = x + (((-18) + 60) / 60) * width
-            local pos_minus4 = x + (((-4) + 60) / 60) * width
-            local pos_zero = x + ((0 + 60) / 60) * width
-            local current_pos = x + ((db_value + 60) / 60) * width
-            
-            -- Teken groene segment (-60 tot -18)
-            r.ImGui_DrawList_AddRectFilled(draw_list, x, y, math.min(current_pos, pos_minus18), y + height, 0x00FF00FF)
-            
-            -- Teken gele segment (-18 tot -4)
-            if db_value > -18 then
-                r.ImGui_DrawList_AddRectFilled(draw_list, pos_minus18, y, math.min(current_pos, pos_minus4), y + height, 0xFFFF00FF)
-            end
-            
-            -- Teken oranje segment (-4 tot 0)
-            if db_value > -4 then
-                r.ImGui_DrawList_AddRectFilled(draw_list, pos_minus4, y, math.min(current_pos, pos_zero), y + height, 0xFF8C00FF)
-            end
-            
-            -- Teken rode segment (boven 0)
-            if db_value > 0 then
-                r.ImGui_DrawList_AddRectFilled(draw_list, pos_zero, y, current_pos, y + height, 0xFF0000FF)
-            end
-        end
-
-        r.ImGui_PushFont(ctx, TinyFont)
-        
-        -- Linker meter met vaste layout
-        local meter_group_start = r.ImGui_GetCursorPosY(ctx)
-        r.ImGui_BeginGroup(ctx)
-        
-        -- Level tekst met vaste breedte
-        r.ImGui_SetNextItemWidth(ctx, 80)
-        r.ImGui_Text(ctx, string.format("Left: %.1f dB", db_L))
-        if peak_hold_L > -60 then
-            r.ImGui_SameLine(ctx, meter_width - peak_text_width)
-            if peak_hold_L > 0 then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
-            end
-            r.ImGui_Text(ctx, string.format("%.1f", peak_hold_L))
-            if peak_hold_L > 0 then
-                r.ImGui_PopStyleColor(ctx)
-            end
-        end
-        
-        
-        -- Meter tekenen
-        local meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
-        local meter_pos_x = meter_pos_x + meter_offset
-        drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, db_L)
-        r.ImGui_Dummy(ctx, meter_width, meter_bar_height)
-        
-        -- Schaalverdelingen voor linker meter
-        local scale_points = {0, -12, -24, -36, -48, -60}
-        local draw_list = r.ImGui_GetWindowDrawList(ctx)
-        
-        local text_color = r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1)
-        for _, db in ipairs(scale_points) do
-            local x_pos = meter_pos_x + ((db + 60) / 60) * (meter_width - meter_offset)
-            -- Lijntjes met nieuwe kleur
-            r.ImGui_DrawList_AddLine(draw_list, 
-                x_pos, meter_pos_y, 
-                x_pos, meter_pos_y + line_length, 
-                text_color)
-            r.ImGui_DrawList_AddLine(draw_list, 
-                x_pos, meter_pos_y + meter_bar_height - line_length, 
-                x_pos, meter_pos_y + meter_bar_height, 
-                text_color)
-            -- Tekst met nieuwe kleur
-            r.ImGui_DrawList_AddText(draw_list, 
-                x_pos - 8, meter_pos_y + (meter_bar_height - r.ImGui_GetFontSize(ctx))/2, 
-                text_color, tostring(db))
-        end
-        r.ImGui_EndGroup(ctx)
-        
-        -- Rechter meter met vaste layout
-        r.ImGui_BeginGroup(ctx)
-        r.ImGui_SetNextItemWidth(ctx, 80)
-        r.ImGui_Text(ctx, string.format("Right: %.1f dB", db_R))
-        if peak_hold_R > -60 then
-            r.ImGui_SameLine(ctx, meter_width - peak_text_width)
-            if peak_hold_R > 0 then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
-            end
-            r.ImGui_Text(ctx, string.format("%.1f", peak_hold_R))
-            if peak_hold_R > 0 then
-                r.ImGui_PopStyleColor(ctx)
-            end
-        end
-        
-        meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
-        local meter_pos_x = meter_pos_x + meter_offset
-        drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, db_R)
-        r.ImGui_Dummy(ctx, meter_width, meter_bar_height)
-        
-        -- Schaalverdelingen voor rechter meter
-        for _, db in ipairs(scale_points) do
-            local x_pos = meter_pos_x + ((db + 60) / 60) * (meter_width - meter_offset)
-            -- Lijntjes met nieuwe kleur
-            r.ImGui_DrawList_AddLine(draw_list, 
-                x_pos, meter_pos_y, 
-                x_pos, meter_pos_y + line_length, 
-                text_color)
-            r.ImGui_DrawList_AddLine(draw_list, 
-                x_pos, meter_pos_y + meter_bar_height - line_length, 
-                x_pos, meter_pos_y + meter_bar_height, 
-                text_color)
-            -- Tekst met nieuwe kleur
-            r.ImGui_DrawList_AddText(draw_list, 
-                x_pos - 8, meter_pos_y + (meter_bar_height - r.ImGui_GetFontSize(ctx))/2, 
-                text_color, tostring(db))
-        end
-        r.ImGui_EndGroup(ctx)
-        
-        r.ImGui_PopFont(ctx)
-    end
-        r.ImGui_EndChild(ctx)
-    end
-end
-
 
 
 local function CalculateButtonWidths(total_width, num_buttons, spacing)
@@ -3330,7 +3107,7 @@ local function DrawBottomButtons()
     local track_info_width = math.max(window_width - 20, 125)
     local button_spacing = 3
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
-    local buttonHeight = 70
+    local buttonHeight = 65
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight - 20)
     -- volumeslider
     if not config.hideVolumeSlider then
@@ -3444,16 +3221,17 @@ local function DrawBottomButtons()
     end
 end
 
-local BUTTON_HEIGHT = 80
 local function ShowTrackFX()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then
         r.ImGui_Text(ctx, "No track selected")
         return
     end
     r.ImGui_Text(ctx, "FX on Track:")
-    local availWidth, availHeight = r.ImGui_GetContentRegionAvail(ctx)
-    local listHeight = availHeight - BUTTON_HEIGHT
-    if r.ImGui_BeginChild(ctx, "TrackFXList", -1, listHeight) then
+    
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local available_height = window_height - r.ImGui_GetCursorPosY(ctx)
+
+    if r.ImGui_BeginChild(ctx, "TrackFXList", -1, available_height) then
         local fx_count = r.TrackFX_GetCount(TRACK)
         if fx_count > 0 then
             local track_bypassed = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
@@ -3573,9 +3351,11 @@ local function ShowItemFX()
     local take = r.GetActiveTake(item)
     if not take then return end
     r.ImGui_Text(ctx, "FX on Item:")
-    local availWidth, availHeight = r.ImGui_GetContentRegionAvail(ctx)
-    local listHeight = availHeight - BUTTON_HEIGHT
-    if r.ImGui_BeginChild(ctx, "ItemFXList", -1, listHeight) then
+    
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local available_height = window_height - r.ImGui_GetCursorPosY(ctx)
+
+    if r.ImGui_BeginChild(ctx, "ItemFXList", -1, available_height) then
         local fx_count = r.TakeFX_GetCount(take)
         if fx_count > 0 then
             for i = 0, fx_count - 1 do
@@ -3643,15 +3423,23 @@ function Frame()
     local search = FilterBox()
     if search then return end
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local top_buttons_height = config.hideTopButtons and 5 or 30
-    local tags_height = config.show_tags and current_tag_window_height or 0
-    local meter_height = config.hideMeter and 0 or 80
-    local meter_spacing = 5
-    local bottom_buttons_height = config.hideBottomButtons and 0 or 80
-    local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 20
-    
-    local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
-    local pluginlist_max_height = window_height - total_ui_elements - 160
+local menu_items_height = 0
+if config.show_favorites then menu_items_height = menu_items_height + 16 end
+if config.show_all_plugins then menu_items_height = menu_items_height + 16 end
+if config.show_developer then menu_items_height = menu_items_height + 16 end
+if config.show_folders then menu_items_height = menu_items_height + 16 end
+if config.show_fx_chains then menu_items_height = menu_items_height + 16 end
+if config.show_track_templates then menu_items_height = menu_items_height + 16 end
+if config.show_category then menu_items_height = menu_items_height + 16 end
+if config.show_container then menu_items_height = menu_items_height + 16 end
+if config.show_video_processor then menu_items_height = menu_items_height + 16 end
+if config.show_projects then menu_items_height = menu_items_height + 16 end
+if LAST_USED_FX then menu_items_height = menu_items_height + 16 end
+
+local bottom_section_height = (config.hideBottomButtons and 0 or 70) + 
+                            (config.hideVolumeSlider and 0 or 20) + 
+                            (config.hideMeter and 0 or 90)
+local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_section_height - menu_items_height + 10
 
     if config.show_favorites and #favorite_plugins > 0 then
         r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
@@ -3736,21 +3524,22 @@ function Frame()
             end
         end
     r.ImGui_Separator(ctx)
+    
     if ADD_FX_TO_ITEM then
-        if r.ImGui_BeginChild(ctx, "##popup2", -1, pluginlist_max_height) then
-        ShowItemFX()
-        r.ImGui_EndChild(ctx)
+        if r.ImGui_BeginChild(ctx, "##popup2", -1, available_height) then
+            ShowItemFX()
+            r.ImGui_EndChild(ctx)
         end
     else
-        if r.ImGui_BeginChild(ctx, "##popupp3", -1, pluginlist_max_height) then
-        ShowTrackFX()
-        r.ImGui_EndChild(ctx)
+        if r.ImGui_BeginChild(ctx, "##popupp3", -1, available_height) then
+            ShowTrackFX()
+            r.ImGui_EndChild(ctx)
         end
     end
-    if not r.ImGui_IsAnyItemHovered(ctx) then
-        current_hovered_plugin = nil
+        if not r.ImGui_IsAnyItemHovered(ctx) then
+            current_hovered_plugin = nil
+        end
     end
-end
 
 local function get_sws_colors()
     local colors = {}
@@ -3911,16 +3700,60 @@ function Main()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
     r.ImGui_PushFont(ctx, NormalFont)
     r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
-    r.ImGui_SetNextWindowSizeConstraints(ctx, 140, 200, 16384, 16384)   
-    handleDocking()
+    
+-- Bereken hoogte van alle UI elementen
+local top_elements_height = 0
+if not config.hideTopButtons then
+    top_elements_height = top_elements_height + 30  -- top buttons
+end
+top_elements_height = top_elements_height + 50  -- track info header
+if config.show_tags then
+    top_elements_height = top_elements_height + 45  -- tags sectie
+end
 
-local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags)
+-- Menu items hoogte
+local menu_items_height = 0
+if config.show_favorites then menu_items_height = menu_items_height + 16 end
+if config.show_all_plugins then menu_items_height = menu_items_height + 16 end
+if config.show_developer then menu_items_height = menu_items_height + 16 end
+if config.show_folders then menu_items_height = menu_items_height + 16 end
+if config.show_fx_chains then menu_items_height = menu_items_height + 16 end
+if config.show_track_templates then menu_items_height = menu_items_height + 16 end
+if config.show_category then menu_items_height = menu_items_height + 16 end
+if config.show_container then menu_items_height = menu_items_height + 16 end
+if config.show_video_processor then menu_items_height = menu_items_height + 16 end
+if config.show_projects then menu_items_height = menu_items_height + 16 end
+if LAST_USED_FX then menu_items_height = menu_items_height + 16 end
+-------------------------------------------------------------------------
+-- Onderste elementen hoogte
+local bottom_elements_height = 0
+if not config.hideBottomButtons then
+    bottom_elements_height = bottom_elements_height + 70  -- knoppen hoogte
+end
+if not config.hideVolumeSlider then
+    bottom_elements_height = bottom_elements_height + 20  -- volume slider hoogte
+end
+if not config.hideMeter then
+    bottom_elements_height = bottom_elements_height + 90  -- meter hoogte
+end
+-- FX lijst hoogte
+local fx_list_height = 0
+if TRACK then
+    local fx_count = r.TrackFX_GetCount(TRACK)
+    fx_list_height = fx_count * 15 
+end
+-- Totale minimale hoogte
+local min_window_height = top_elements_height + menu_items_height + fx_list_height + bottom_elements_height + 60
+
+r.ImGui_SetNextWindowSizeConstraints(ctx, 140, min_window_height, 16384, 16384)
+----------------------------------------------------------------------------------   
+handleDocking()
+
+local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoScrollbar())
 dock = r.ImGui_GetWindowDockID(ctx)
-
 if visible then
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
-    
     if config.show_screenshot_window then
         r.ImGui_PushID(ctx, "ScreenshotWindow")
         local screenshot_visible = ShowScreenshotWindow()
@@ -3929,11 +3762,11 @@ if visible then
         end
         r.ImGui_PopID(ctx)
     end
-    
     if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
         local progress_text = string.format("Loading %d/%d (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
         r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 0, progress_text)
     end
+    local before_pos = r.ImGui_GetCursorPosY(ctx)
     if TRACK then
             local track_color, text_color = GetTrackColorAndTextColor(TRACK)
             local track_name = GetTrackName(TRACK)
@@ -3943,13 +3776,12 @@ if visible then
             local window_width = r.ImGui_GetWindowWidth(ctx)
             local track_info_width = math.max(window_width - 20, 125)  -- Minimaal 125, of vensterbreedte - 20
             
-            if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50, r.ImGui_WindowFlags_NoScrollbar()) then
+            if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 60) then
                 -- Stel de stijlen voor de knoppen in
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Transparante knop
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
-            
                 -- Voeg de '+' knop toe linksboven
                 r.ImGui_SetCursorPos(ctx, 0, 0)
                 r.ImGui_PushFont(ctx, IconFont)
@@ -3970,7 +3802,6 @@ if visible then
                     ClearScreenshotCache()
                     ShowPluginScreenshot()
                 end
-              
                 -- Herstel de stijlen
                 r.ImGui_PopFont(ctx)
                 r.ImGui_PopStyleColor(ctx, 4)
@@ -4007,7 +3838,6 @@ if visible then
                     if keep_context_menu_open and not pinned_menu_pos_x then
                         pinned_menu_pos_x, pinned_menu_pos_y = r.ImGui_GetWindowPos(ctx)
                     end
-                    
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)                   
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
                     r.ImGui_BeginGroup(ctx)
@@ -4027,8 +3857,6 @@ if visible then
                     end
                     r.ImGui_EndGroup(ctx)
                     r.ImGui_PopStyleVar(ctx)
-                  
-            
                     if not config.hide_default_titlebar_menu_items then
                         if r.ImGui_MenuItem(ctx, "Color Picker") then
                             show_color_picker = true
@@ -4053,7 +3881,6 @@ if visible then
                         if r.ImGui_MenuItem(ctx, "Move Track Down") then
                             r.ReorderSelectedTracks(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") + 1, 0)
                         end
-                        
                         if r.ImGui_MenuItem(ctx, "Go to First Track") then
                             local first_track = r.GetTrack(0, 0)
                             if first_track then r.SetOnlyTrackSelected(first_track) end
@@ -4099,7 +3926,6 @@ if visible then
                         end
                         r.ImGui_Separator(ctx)
                     end
-                
                     for i, script in ipairs(userScripts) do
                         if r.ImGui_MenuItem(ctx, script.name) then
                             local script_id = r.NamedCommandLookup(script.command_id)
@@ -4267,7 +4093,7 @@ if visible then
             
             -- tag sectie
             if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") and config.show_tags then
-                if r.ImGui_BeginChild(ctx, "TagSection", track_info_width, 45, r.ImGui_WindowFlags_NoScrollbar()) then
+                if r.ImGui_BeginChild(ctx, "TagSection", track_info_width, 45) then
                     current_tag_window_height = r.ImGui_GetWindowHeight(ctx) 
                     
                     if r.ImGui_Button(ctx, "+") then
@@ -4516,7 +4342,7 @@ if visible then
             ShowPluginScreenshot() 
         end
         if TRACK and not config.hideMeter then
-            DrawMeter(TRACK)
+            DrawMeterModule.DrawMeter(r, ctx, config, TRACK, TinyFont)
         end
         DrawBottomButtons()
         if show_settings then
@@ -4532,6 +4358,7 @@ if visible then
     r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleVar(ctx, 3)
     r.ImGui_PopStyleColor(ctx, 11)
+    
     if SHOULD_CLOSE_SCRIPT then
         return
     end
