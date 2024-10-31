@@ -53,7 +53,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
             local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
             if fx_name:find("JS: analysis\\loudness_meter") then
                 local lufs_M = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 18)
-                local lufs_I = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 19)
+                local lufs_I = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 20)
                 local lufs_S = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 19)
                 local lufs_LRA = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 21)
                 
