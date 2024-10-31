@@ -162,6 +162,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
             r.ImGui_Text(ctx, string.format("RMS-M: %.1f dB", rms_M))
             local meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
             meter_pos_x = meter_pos_x + meter_offset
+            drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, rms_M, true)
             local scale_points = {0, -12, -24, -36, -48, -60}
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
             local text_color = r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1)
