@@ -1,8 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.7.1
+-- @version 0.7.2:
 -- @changelog:
---[[ 
+--[[      * Added LUFS M-S-I-LRA, RMS-M-I
+          0.7.1:
           * Improved layout for the differend parts of the main window
           * Hide scrolbar in screenshot window
           * RMS M and I view in meter (via js: analysis /Loudness meter)
