@@ -1,8 +1,8 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.7.5:
+-- @version 0.7.6:
 -- @changelog:
---[[      * Just Bugfixes
+--[[      * Just Bugfixes 
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
