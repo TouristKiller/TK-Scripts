@@ -1,8 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.7.6:
+-- @version 0.7.7:
 -- @changelog:
 --[[      * Just Bugfixes 
+          * 3 states of view dropdown, settings, slider of Screenshot Window
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -1983,6 +1984,7 @@ local function ShowScreenshotWindow()
         r.ImGui_SetCursorPosY(ctx, 5) -- Voeg 5 pixels padding toe aan de bovenkant
 
         if show_media_browser then
+            r.ImGui_PopStyleVar(ctx, 2)
             r.ImGui_Text(ctx, "PROJECTS:")          
         else
             r.ImGui_Text(ctx, "SCREENSHOTS: " .. (FILTER or ""))
@@ -2001,10 +2003,29 @@ local function ShowScreenshotWindow()
         r.ImGui_SameLine(ctx)
         
         -- Nieuwe toggle knop voor screenshot instellingen
+        local state_text = {
+            [1] = "1",  -- Alles zichtbaar
+            [2] = "2",  -- Alleen dropdown
+            [3] = "3"   -- Settings verborgen
+        }
+        
         r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
-        if r.ImGui_Button(ctx, show_screenshot_settings and "H" or "S", button_width, button_height) then
-            show_screenshot_settings = not show_screenshot_settings
+        if r.ImGui_Button(ctx, state_text[screenshot_view_state], button_width, button_height) then
+            screenshot_view_state = screenshot_view_state % 3 + 1
+            
+            -- Update de weergave-instellingen op basis van de staat
+            if screenshot_view_state == 1 then
+                show_screenshot_settings = true
+                show_only_dropdown = false
+            elseif screenshot_view_state == 2 then
+                show_screenshot_settings = false
+                show_only_dropdown = true
+            else
+                show_screenshot_settings = false
+                show_only_dropdown = false
+            end
         end
+        
 
         -- Plaats de cursor in de rechterbovenhoek
         r.ImGui_SetCursorPos(ctx, window_width - button_width - 5, 5)
@@ -2016,7 +2037,6 @@ local function ShowScreenshotWindow()
         r.ImGui_Separator(ctx)
 
         if show_media_browser then
-           
             r.ImGui_PushItemWidth(ctx, -1)
             local changed, new_search_term = r.ImGui_InputText(ctx, "##ProjectSearch", project_search_term)
             if changed then
@@ -2050,7 +2070,7 @@ local function ShowScreenshotWindow()
                 end
             end
         if folders_category and #folders_category > 0 then
-            if show_screenshot_settings then  
+            if show_screenshot_settings or show_only_dropdown then  -- Voeg show_only_dropdown toe aan de check 
             r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
             if r.ImGui_BeginCombo(ctx, "##FolderDropdown", selected_folder or "Select Folder") then
                 if r.ImGui_Selectable(ctx, "No Folder", selected_folder == nil) then
@@ -2107,7 +2127,7 @@ local function ShowScreenshotWindow()
                         GetPluginsForFolder(selected_folder)
                     end
                 end
-              
+                if show_screenshot_settings and not show_only_dropdown then  
             r.ImGui_SameLine(ctx)
             
             
@@ -2147,6 +2167,7 @@ local function ShowScreenshotWindow()
                 end
             end
             end
+        end
         end
         local available_width = r.ImGui_GetContentRegionAvail(ctx)
         local display_size
