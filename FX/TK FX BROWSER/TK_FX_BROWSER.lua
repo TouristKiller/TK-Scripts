@@ -1,12 +1,8 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.7.4:
+-- @version 0.7.5:
 -- @changelog:
---[[      * Added LUFS M-S-I-LRA, RMS-M-I
-          0.7.1 /2/3:
-          * Improved layout for the differend parts of the main window
-          * Hide scrolbar in screenshot window
-          * RMS M and I view in meter (via js: analysis /Loudness meter)
+--[[      * Just Bugfixes
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -16,7 +12,8 @@ package.path            = script_path .. "?.lua;"
 local json              = require("json")
 local screenshot_path   = script_path .. "Screenshots" .. os_separator
 StartBulkScreenshot     = function() end
-local DrawMeterModule = dofile(script_path .. "DrawMeter.lua")
+local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
+local TKFXVVars         = dofile(script_path .. "TKFXBVariables.lua")
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
@@ -74,51 +71,15 @@ local TinyFont = r.ImGui_CreateFont('sans-serif', 10)
 r.ImGui_Attach(ctx, TinyFont)
 local IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
 r.ImGui_Attach(ctx, IconFont)
-local MAX_SUBMENU_WIDTH = 160
-local FX_LIST_WIDTH = 280
-local FLT_MAX = 3.402823466e+38
- 
--- GLOBAl
-local show_settings = false
-local SHOW_PREVIEW = true
+
+-- FX LIST
 local TRACK, LAST_USED_FX, FILTER, ADDFX_Sel_Entry
 local FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
 if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
     FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
 end
-local PLUGIN_LIST = GetFXTbl()
-local ADD_FX_TO_ITEM = false
-local old_t = {}
-local favorite_plugins = {}
-local old_filter = ""
-local current_hovered_plugin = nil
-local is_master_track_selected = false
-local copied_plugin = nil
-local last_selected_folder = nil
-local new_search_performed = false
-local folder_changed = false
--- TRACK INFO
-local show_rename_popup = false
-local new_track_name = ""
-local show_color_picker = false
-local current_color = 0
-local picker_color = {0, 0, 0, 1}
-local show_add_script_popup = false
-local userScripts = {}
-local keep_context_menu_open = false
-local pinned_menu_pos_x, pinned_menu_pos_y = nil, nil
-local track_tags = {}
-local new_tag_buffer = ""
-local current_tag_window_height = 70
--- TAGS:
-local tag_colors = {}
-local available_tags = {}
--- METER:
-local peak_hold_L = -60
-local peak_hold_R = -60
-local peak_hold_time_L = 0
-local peak_hold_time_R = 0
-local PEAK_HOLD_DURATION = 2.0 
+local PLUGIN_LIST = GetFXTbl() 
+
 -- PROJECTS
 local function GetProjectsDirectory()
     local path = reaper.GetProjectPath("")
@@ -134,38 +95,10 @@ local PROJECTS_INFO_FILE = PROJECTS_DIR .. "projects_info.txt"
 local projects = {}
 local project_search_term = ""
 local filtered_projects = {}
--- SCREENSHOTS
-START = false
-local is_screenshot_visible = false
-local screenshot_texture = nil
-local screenshot_width, screenshot_height = 0, 0
-local is_bulk_screenshot_running = false
-local STOP_REQUESTED = false
-local screenshot_database = {} 
-local screenshot_search_results = nil
-local update_search_screenshots = false
-local search_texture_cache = {}
-local texture_load_queue = {}
-local texture_last_used = {}
-local screenshot_window_opened = false 
-local show_screenshot_window = false 
-local show_screenshot_settings = true
-local screenshot_window_interactive = false 
-local screenshot_window_display_size = 200
-local selected_folder = nil
-local show_plugin_manager = false
-local last_viewed_folder = nil
-local last_selected_track = nil
-local collapsed_tracks = {}
-local all_tracks_collapsed = false
-local SHOULD_CLOSE_SCRIPT = false
-local IS_COPYING_TO_ALL_TRACKS = false
+
 local function get_safe_name(name)
     return (name or ""):gsub("[^%w%s-]", "_")
 end
--- DOCK
-local dock = 0
-local change_dock = false
 -- LOG
 local log_file_path = script_path .. "screenshot_log.txt"
 local function log_to_file(message)
@@ -2040,11 +1973,12 @@ local function ShowScreenshotWindow()
         r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, FLT_MAX, main_window_height)
     end
     r.ImGui_SetNextWindowSize(ctx, config.screenshot_window_width, main_window_height, r.ImGui_Cond_FirstUseEver())
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
 
     local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
+    
     if visible then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
         r.ImGui_PushFont(ctx, NormalFont)
         r.ImGui_SetCursorPosY(ctx, 5) -- Voeg 5 pixels padding toe aan de bovenkant
 
@@ -2219,7 +2153,7 @@ local function ShowScreenshotWindow()
         if config.use_global_screenshot_size then
             display_size = config.global_screenshot_size
         elseif config.resize_screenshots_with_window then
-            display_size = available_width
+            display_size = available_width - 10
         else
             display_size = selected_folder and (config.folder_specific_sizes[selected_folder] or config.screenshot_window_size) or config.screenshot_window_size
         end
@@ -2280,7 +2214,7 @@ local function ShowScreenshotWindow()
                     if config.use_global_screenshot_size then
                         display_size = config.global_screenshot_size
                     elseif config.resize_screenshots_with_window then
-                        display_size = available_width
+                        display_size = available_width - 10
                     else
                         display_size = selected_folder and (config.folder_specific_sizes[selected_folder] or config.screenshot_window_size) or config.screenshot_window_size
                     end
@@ -2540,7 +2474,7 @@ local function ShowScreenshotWindow()
                 if config.use_global_screenshot_size then
                     display_size = config.global_screenshot_size
                 elseif config.resize_screenshots_with_window then
-                    display_size = available_width
+                    display_size = available_width - 10
                 else
                     display_size = config.screenshot_window_size
                 end
@@ -2621,9 +2555,10 @@ local function ShowScreenshotWindow()
             end
             r.ImGui_EndChild(ctx)
         end
+        r.ImGui_PopStyleVar(ctx, 2)
     end
     config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
-    r.ImGui_PopStyleVar(ctx, 2)
+    
     return visible 
     end
 end
@@ -3739,7 +3674,7 @@ if not config.hideMeter then
 end
 -- FX lijst hoogte
 local fx_list_height = 0
-if TRACK then
+if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
     local fx_count = r.TrackFX_GetCount(TRACK)
     fx_list_height = fx_count * 15 
 end
@@ -4269,20 +4204,55 @@ if visible then
                                     SaveTags()
                                 end
                             end
-                            current_line_width = current_line_width + tag_width
-                        
                             if r.ImGui_IsItemClicked(ctx, 1) then 
-                                for guid, track_tag_list in pairs(track_tags) do
-                                    for i = #track_tag_list, 1, -1 do
-                                        if track_tag_list[i] == tag then
-                                            table.remove(track_tag_list, i)
+                                r.ImGui_OpenPopup(ctx, "tag_context_menu_" .. tag)
+                                selected_tag = tag
+                            end
+                            current_line_width = current_line_width + tag_width
+                            r.ImGui_PopStyleColor(ctx, 3)
+                            if r.ImGui_BeginPopup(ctx, "tag_context_menu_" .. tag) then
+                                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 8)
+                                if r.ImGui_MenuItem(ctx, "Delete") then
+                                    for guid, track_tag_list in pairs(track_tags) do
+                                        for i = #track_tag_list, 1, -1 do
+                                            if track_tag_list[i] == selected_tag then table.remove(track_tag_list, i) end
                                         end
                                     end
+                                    available_tags[selected_tag] = nil
+                                    tag_colors[selected_tag] = nil
+                                    SaveTags()
                                 end
-                                SaveTags()
+                                if r.ImGui_MenuItem(ctx, "Set Color") then
+                                    local current_color = tag_colors[tag] or 0xFFFFFFFF
+                                    local ok, new_color = r.GR_SelectColor(current_color)
+                                    if ok then
+                                        local native_color = new_color|0x1000000
+                                        local red, g, b = reaper.ColorFromNative(native_color)
+                                        local color_vec4 = r.ImGui_ColorConvertDouble4ToU32(red/255, g/255, b/255, 1.0)
+                                        tag_colors[tag] = color_vec4
+                                        SaveTags()
+                                    end
+                                end
+                                if r.ImGui_MenuItem(ctx, "Remove Color") then
+                                    tag_colors[tag] = nil
+                                    SaveTags()
+                                end
+                                if r.ImGui_MenuItem(ctx, "Add to current selected tracks") then
+                                    local track_count = r.CountSelectedTracks(0)
+                                    for i = 0, track_count - 1 do
+                                        local track = r.GetSelectedTrack(0, i)
+                                        local track_guid = r.GetTrackGUID(track)
+                                        track_tags[track_guid] = track_tags[track_guid] or {}
+                                        if not table.contains(track_tags[track_guid], selected_tag) then
+                                            table.insert(track_tags[track_guid], selected_tag)
+                                        end
+                                    end
+                                    SaveTags()
+                                end
+                                
+                                r.ImGui_PopStyleVar(ctx)
+                                r.ImGui_EndPopup(ctx)
                             end
-                            r.ImGui_PopStyleColor(ctx, 3)
-                            --r.ImGui_SameLine(ctx)
                         end
                         r.ImGui_PopStyleVar(ctx)
                         r.ImGui_EndPopup(ctx)
