@@ -65,8 +65,10 @@ IS_COPYING_TO_ALL_TRACKS = false
 dock = 0
 change_dock = false
 
--- DIVERSE
-screenshot_view_state = 1
-show_only_dropdown = false
+-- PROJECT
+preview_volume = 1.0
+show_project_info = false
+current_project_info = nil
+selected_project = nil
 
 

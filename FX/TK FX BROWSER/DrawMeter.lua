@@ -1,29 +1,67 @@
 local M = {}
-local function loadJSLoudnessMeter(r)
+
+function normalizePath(path)
+    local sep = package.config:sub(1,1) 
+    return path:gsub("[/\\]", sep)
+end
+function loadJSLoudnessMeter(r)
     local monitor_fx_count = r.TrackFX_GetRecCount(r.GetMasterTrack(0))
     local js_meter_loaded = false
+    local js_meter_index = -1
+    local meter_name = "JS: analysis" .. package.config:sub(1,1) .. "loudness_meter"
+    
+    -- Check existing meter and find index
     for i = 0, monitor_fx_count - 1 do
         local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
-        if fx_name:find("JS: analysis\\loudness_meter") then
+        if fx_name:find(meter_name) then
             js_meter_loaded = true
+            js_meter_index = i
             break
         end
     end
+    
+    -- Remove duplicate instances
+    if js_meter_loaded then
+        for i = monitor_fx_count - 1, 0, -1 do
+            if i ~= js_meter_index then
+                local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
+                if fx_name:find(meter_name) then
+                    r.TrackFX_Delete(r.GetMasterTrack(0), 0x1000000 + i)
+                end
+            end
+        end
+    end
+    
+    -- Add meter if not exists
     if not js_meter_loaded then
-        local fx_idx = r.TrackFX_AddByName(r.GetMasterTrack(0), "JS: analysis/loudness_meter", true, -1)
-        r.TrackFX_Show(r.GetMasterTrack(0), 0x1000000 + fx_idx, 2)  -- 2 = verberg venster
+        local fx_idx = r.TrackFX_AddByName(r.GetMasterTrack(0), meter_name, true, -1)
+        r.TrackFX_Show(r.GetMasterTrack(0), 0x1000000 + fx_idx, 2)
         r.TrackFX_SetEnabled(r.GetMasterTrack(0), 0x1000000, true)
     end
 end
 
+
+
 function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
     if not TRACK then return end
-    
+    local current_time = r.time_precise()
     -- peak hold
     peak_hold_L = peak_hold_L or -60
     peak_hold_R = peak_hold_R or -60
+    rms_m_hold = rms_m_hold or -60
+    rms_i_hold = rms_i_hold or -60
+    lufs_m_hold = lufs_m_hold or -60
+    lufs_i_hold = lufs_i_hold or -60
+    lufs_s_hold = lufs_s_hold or -60
+    lra_hold = lra_hold or -60
     peak_hold_time_L = peak_hold_time_L or 0
     peak_hold_time_R = peak_hold_time_R or 0
+    rms_m_hold_time = rms_m_hold_time or 0
+    rms_i_hold_time = rms_i_hold_time or 0
+    lufs_m_hold_time = lufs_m_hold_time or 0
+    lufs_i_hold_time = lufs_i_hold_time or 0
+    lufs_s_hold_time = lufs_s_hold_time or 0
+    lra_hold_time = lra_hold_time or 0
     PEAK_HOLD_DURATION = 2.0
 
     local function scaleTodB(peak)
@@ -56,11 +94,12 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                 local lufs_I = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 20)
                 local lufs_S = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 19)
                 local lufs_LRA = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 21)
+                local db_LRA = lufs_LRA * 100  -- Direct vermenigvuldigen met 100 zonder offset
                 
                 local db_M = -100 + (lufs_M * 100)
                 local db_I = -100 + (lufs_I * 100)
                 local db_S = -100 + (lufs_S * 100)
-                local db_LRA = -100 + (lufs_LRA * 100)
+                --local db_LRA = -100 + (lufs_LRA * 100)
                 
                 return db_M, db_I, db_S, db_LRA
             end
@@ -75,7 +114,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
     local meter_height = 80
     local spacing = 2
     local margin = 5
-    local meter_offset = 7
+    local meter_offset = 8
     local line_length = 3
     local peak_text_width = 45
     local meter_y = window_height - bottom_buttons_height - volume_slider_height - meter_height - spacing
@@ -157,9 +196,20 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
         if config.show_rms_meter then
             -- RMS meters
             local rms_M, rms_I = getRMSValues()
+
+            if rms_M > rms_m_hold then
+                rms_m_hold = rms_M
+                rms_m_hold_time = current_time
+            elseif current_time - rms_m_hold_time > PEAK_HOLD_DURATION then
+                rms_m_hold = rms_M
+            end
             -- RMS-M (Momentary)
             r.ImGui_SetNextItemWidth(ctx, 80)
             r.ImGui_Text(ctx, string.format("RMS-M: %.1f dB", rms_M))
+            if rms_m_hold > -60 then
+                r.ImGui_SameLine(ctx, meter_width - peak_text_width)
+                r.ImGui_Text(ctx, string.format("%.1f", rms_m_hold))
+            end
             local meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
             meter_pos_x = meter_pos_x + meter_offset
             drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, rms_M, true)
@@ -175,8 +225,18 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
             r.ImGui_Dummy(ctx, meter_width, meter_bar_height)
             
             -- RMS-I (Integrated)
+            if rms_I > rms_i_hold then
+                rms_i_hold = rms_I
+                rms_i_hold_time = current_time
+            elseif current_time - rms_i_hold_time > PEAK_HOLD_DURATION then
+                rms_i_hold = rms_I
+            end
             r.ImGui_SetNextItemWidth(ctx, 80)
             r.ImGui_Text(ctx, string.format("RMS-I: %.1f dB", rms_I))
+            if rms_i_hold > -60 then
+                r.ImGui_SameLine(ctx, meter_width - peak_text_width)
+                r.ImGui_Text(ctx, string.format("%.1f", rms_i_hold))
+            end
             meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
             meter_pos_x = meter_pos_x + meter_offset
             drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, rms_I, true)
@@ -194,9 +254,19 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
             elseif config.show_lufs_meter then
                 local lufs_M, lufs_I = getLUFSValues()
                 if lufs_M and lufs_I then
+                    if lufs_M > lufs_m_hold then
+                        lufs_m_hold = lufs_M
+                        lufs_m_hold_time = current_time
+                    elseif current_time - lufs_m_hold_time > PEAK_HOLD_DURATION then
+                        lufs_m_hold = lufs_M
+                    end
                     -- LUFS-M (Momentary)
                     r.ImGui_SetNextItemWidth(ctx, 80)
                     r.ImGui_Text(ctx, string.format("LUFS-M: %.1f dB", lufs_M))
+                    if lufs_m_hold > -60 then
+                        r.ImGui_SameLine(ctx, meter_width - peak_text_width)
+                        r.ImGui_Text(ctx, string.format("%.1f", lufs_m_hold))
+                    end
                 local meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
                 meter_pos_x = meter_pos_x + meter_offset
                 drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, lufs_M, true, 0xFF8C00FF)
@@ -212,8 +282,18 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                 r.ImGui_Dummy(ctx, meter_width, meter_bar_height)
                 
                 -- LUFS-I (Integrated)
+                if lufs_I > lufs_i_hold then
+                    lufs_i_hold = lufs_I
+                    lufs_i_hold_time = current_time
+                elseif current_time - lufs_i_hold_time > PEAK_HOLD_DURATION then
+                    lufs_i_hold = lufs_I
+                end
                 r.ImGui_SetNextItemWidth(ctx, 80)
                 r.ImGui_Text(ctx, string.format("LUFS-I: %.1f dB", lufs_I))
+                if lufs_i_hold > -60 then
+                    r.ImGui_SameLine(ctx, meter_width - peak_text_width)
+                    r.ImGui_Text(ctx, string.format("%.1f", lufs_i_hold))
+                end
                 meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
                 meter_pos_x = meter_pos_x + meter_offset
                 drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, lufs_I, true, 0xFF8C00FF)
@@ -229,8 +309,18 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
             local _, _, lufs_S, lufs_LRA = getLUFSValues()
             if lufs_S and lufs_LRA then
                 -- LUFS-S
+                if lufs_S > lufs_s_hold then
+                    lufs_s_hold = lufs_S
+                    lufs_s_hold_time = current_time
+                elseif current_time - lufs_s_hold_time > PEAK_HOLD_DURATION then
+                    lufs_s_hold = lufs_S
+                end
                 r.ImGui_SetNextItemWidth(ctx, 80)
                 r.ImGui_Text(ctx, string.format("LUFS-S: %.1f dB", lufs_S))
+                if lufs_s_hold > -60 then
+                    r.ImGui_SameLine(ctx, meter_width - peak_text_width)
+                    r.ImGui_Text(ctx, string.format("%.1f", lufs_s_hold))
+                end
                 local meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
                 meter_pos_x = meter_pos_x + meter_offset
                 drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, lufs_S, true, 0xFF8C00FF)
@@ -246,13 +336,32 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                 r.ImGui_Dummy(ctx, meter_width, meter_bar_height)
                 
                 -- LRA
+                if lufs_LRA > lra_hold then
+                    lra_hold = lufs_LRA
+                    lra_hold_time = current_time
+                elseif current_time - lra_hold_time > PEAK_HOLD_DURATION then
+                    lra_hold = lufs_LRA
+                end
+                -- LRA
                 r.ImGui_SetNextItemWidth(ctx, 80)
                 r.ImGui_Text(ctx, string.format("LRA: %.1f dB", lufs_LRA))
-                meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
-                meter_pos_x = meter_pos_x + meter_offset
-                drawMeterSegments(meter_pos_x, meter_pos_y, meter_width - meter_offset, meter_bar_height, lufs_LRA, true, 0xFF8C00FF)
-                for _, db in ipairs(scale_points) do
-                    local x_pos = meter_pos_x + ((db + 60) / 60) * (meter_width - meter_offset)
+                if lra_hold > -60 then
+                    r.ImGui_SameLine(ctx, meter_width - peak_text_width)
+                    r.ImGui_Text(ctx, string.format("%.1f", lra_hold))
+                end
+                    local meter_pos_x, meter_pos_y = r.ImGui_GetCursorScreenPos(ctx)
+                    meter_pos_x = meter_pos_x + meter_offset
+
+                    -- Aangepaste meter voor LRA
+                    local current_pos = meter_pos_x + ((lufs_LRA) / 20) * (meter_width - meter_offset)
+                    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+                    r.ImGui_DrawList_AddRectFilled(draw_list, meter_pos_x, meter_pos_y, current_pos, meter_pos_y + meter_bar_height, 0xFF8C00FF)
+
+                    -- Aangepaste schaalverdeling voor LRA
+                    local lra_scale_points = {0, 4, 8, 12, 16, 20}
+                for _, db in ipairs(lra_scale_points) do
+                    local x_pos = meter_pos_x + (db / 20) * (meter_width - meter_offset)
+                    r.ImGui_DrawList_AddRectFilled(draw_list, meter_pos_x, meter_pos_y, current_pos, meter_pos_y + meter_bar_height, 0xFFFF00FF)
                     r.ImGui_DrawList_AddLine(draw_list, x_pos, meter_pos_y, x_pos, meter_pos_y + line_length, text_color)
                     r.ImGui_DrawList_AddLine(draw_list, x_pos, meter_pos_y + meter_bar_height - line_length, x_pos, meter_pos_y + meter_bar_height, text_color)
                     r.ImGui_DrawList_AddText(draw_list, x_pos - 8, meter_pos_y + (meter_bar_height - r.ImGui_GetFontSize(ctx))/2, text_color, tostring(db))
@@ -262,7 +371,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
             else
             -- Peak meters
             if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
-                local current_time = r.time_precise()
+                
                 local peak_L = r.Track_GetPeakInfo(TRACK, 0)
                 local peak_R = r.Track_GetPeakInfo(TRACK, 1)
                 local db_L = math.max(-60, scaleTodB(peak_L))
