@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.7.9:
+-- @version 0.8.0:
 -- @changelog:
 --[[        * Changes is Meter Function
 --          * Added full path and date tot project view
@@ -16,8 +16,7 @@ local screenshot_path   = script_path .. "Screenshots" .. os_separator
 StartBulkScreenshot     = function() end
 local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
--- Aan het begin van je script
-local r = reaper
+
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
@@ -667,7 +666,9 @@ local function ShowConfigWindow()
         r.ImGui_Spacing(ctx)
         r.ImGui_PushFont(ctx, NormalFont)
         r.ImGui_Text(ctx, title)
-        r.ImGui_PopFont(ctx)
+        if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+            r.ImGui_PopFont(ctx)
+        end
         r.ImGui_Separator(ctx)
         r.ImGui_Spacing(ctx)
     end
@@ -685,7 +686,9 @@ local function ShowConfigWindow()
     if visible then
         r.ImGui_PushFont(ctx, LargeFont)
         r.ImGui_Text(ctx, "TK FX BROWSER SETTINGS")
-        r.ImGui_PopFont(ctx)
+        if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+            r.ImGui_PopFont(ctx)
+        end
         r.ImGui_Separator(ctx)
         if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
             if r.ImGui_BeginTabItem(ctx, "GUI & VIEW") then
@@ -2060,7 +2063,9 @@ local function ShowScreenshotWindow()
         else
             r.ImGui_Text(ctx, "SCREENSHOTS: " .. (FILTER or ""))
         end
-        r.ImGui_PopFont(ctx)
+        if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+            r.ImGui_PopFont(ctx)
+        end
         r.ImGui_SameLine(ctx)
         local window_width = r.ImGui_GetWindowWidth(ctx)
         local button_width = 15
@@ -4181,10 +4186,17 @@ function InitializeImGuiContext()
 end
 
 function Main()
+    if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+        InitializeImGuiContext()
+        return r.defer(Main)
+    end
     local currentProjectPath = r.EnumProjects(-1, '')
     if lastProjectPath ~= currentProjectPath then
         InitializeImGuiContext()
         lastProjectPath = currentProjectPath
+        if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+            return r.defer(Main)
+        end
     end
         userScripts = loadUserScripts()
         local prev_track = TRACK
@@ -4297,7 +4309,9 @@ if visible then
                     ShowPluginScreenshot()
                 end
                 -- Herstel de stijlen
-                r.ImGui_PopFont(ctx)
+                if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+                    r.ImGui_PopFont(ctx)
+                end
                 r.ImGui_PopStyleColor(ctx, 4)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_PushFont(ctx, LargeFont)
@@ -4316,7 +4330,9 @@ if visible then
                     new_track_name = track_name
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
-                r.ImGui_PopFont(ctx)
+                if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+                    r.ImGui_PopFont(ctx)
+                end
 
                 r.ImGui_PushFont(ctx, NormalFont)
                 if r.ImGui_IsItemClicked(ctx, 1) then 
@@ -4534,7 +4550,9 @@ if visible then
                     r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndPopup(ctx)
                 end
-                r.ImGui_PopFont(ctx)
+                if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+                    r.ImGui_PopFont(ctx)
+                end
                 r.ImGui_PushFont(ctx, LargeFont)
                 local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
                 local type_pos_x = (window_width - type_text_width) * 0.5
@@ -4578,7 +4596,9 @@ if visible then
                     end
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
-                r.ImGui_PopFont(ctx)
+                if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+                    r.ImGui_PopFont(ctx)
+                end
                 r.ImGui_PopStyleColor(ctx)
                 r.ImGui_EndChild(ctx)
             end
@@ -4865,7 +4885,9 @@ if visible then
             if r.ImGui_Button(ctx, show_settings and "\u{0047}" or "\u{0047}", 20, 20) then
                 show_settings = not show_settings
             end
-            r.ImGui_PopFont(ctx)
+            if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+                r.ImGui_PopFont(ctx)
+            end
         end
         if SHOW_PREVIEW and current_hovered_plugin then 
             ShowPluginScreenshot() 
@@ -4887,7 +4909,9 @@ if visible then
  
        
 
-    r.ImGui_PopFont(ctx)
+        if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+            r.ImGui_PopFont(ctx)
+        end
     r.ImGui_PopStyleVar(ctx, 4)
     r.ImGui_PopStyleColor(ctx, 11)
     
