@@ -65,10 +65,21 @@ IS_COPYING_TO_ALL_TRACKS = false
 dock = 0
 change_dock = false
 
--- PROJECT
+-- PROJECTS
+script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
+project_locations = {}
+new_location = ""
+PROJECTS_INFO_FILE = script_path .. "project_info.txt"
+PROJECTS_DIR = reaper.GetProjectPath() .. "\\"
+projects = {}
+project_search_term = ""
+filtered_projects = {}
 preview_volume = 1.0
 show_project_info = false
 current_project_info = nil
 selected_project = nil
+max_depth = 1  -- Toegevoegd
+
+
 
 

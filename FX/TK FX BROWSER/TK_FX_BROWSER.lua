@@ -1,14 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.7.8:
+-- @version 0.7.9:
 -- @changelog:
---[[      * added master track to current project fx list
-          * More ordering options in search (relevance, alphabetical, type)
-          * Some color changes
-          * Bugfixes
-          * Projects: Make preview, listen to preview, track info, etc..
-          * Changed DrawMeter function 
-          * And lots of other stuff I have forgotten ;o)
+--[[        * Changes is Meter Function
+--          * Added full path and date tot project view
+--          * Did some Bug hunting ;o)
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -19,8 +15,10 @@ local json              = require("json")
 local screenshot_path   = script_path .. "Screenshots" .. os_separator
 StartBulkScreenshot     = function() end
 local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
-local TKFXVVars         = dofile(script_path .. "TKFXBVariables.lua")
-lastProjectPath         = r.EnumProjects(-1, '')
+local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
+-- Aan het begin van je script
+local r = reaper
+
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
     local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
@@ -105,22 +103,6 @@ if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
     FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
 end
 local PLUGIN_LIST = GetFXTbl() 
-
--- PROJECTS
-local function GetProjectsDirectory()
-    local path = reaper.GetProjectPath("")
-    if path ~= "" then
-        path = path:match("(.*[/\\])")
-    else
-        path = reaper.GetResourcePath() .. "/Projects/"
-    end
-    return path
-end
-PROJECTS_DIR = GetProjectsDirectory()
-local PROJECTS_INFO_FILE = PROJECTS_DIR .. "projects_info.txt"
-local projects = {}
-local project_search_term = ""
-local filtered_projects = {}
 
 local function get_safe_name(name)
     return (name or ""):gsub("[^%w%s-]", "_")
@@ -256,6 +238,96 @@ local function ResetConfig()
     SaveConfig()
 end
 ---------------------------------------------------------------------
+local function load_projects_info()
+    local file = io.open(PROJECTS_INFO_FILE, "r")
+    if file then
+        local section = ""
+        for line in file:lines() do
+            if line == "[SETTINGS]" then
+                section = "settings"
+            elseif line == "[LOCATIONS]" then
+                section = "locations"
+            elseif line == "[PROJECTS]" then
+                section = "projects"
+            else
+                if section == "settings" and line:match("^DEPTH|") then
+                    max_depth = tonumber(line:match("^DEPTH|(.*)")) or 2
+                elseif section == "locations" and line:match("^LOC|") then
+                    local location = line:match("^LOC|(.*)")
+                    table.insert(project_locations, location)
+                elseif section == "projects" then
+                    local name, path = line:match("([^|]+)|(.+)")
+                    if name and path then
+                        table.insert(projects, {name = name, path = path})
+                    end
+                end
+            end
+        end
+        file:close()
+    end
+end
+local function get_all_projects()
+    local projects = {}
+    local stack = {{path = PROJECTS_DIR, depth = 0}}
+    -- Verwijder de lokale max_depth declaratie en gebruik de globale max_depth variabele
+    while #stack > 0 do
+        local current = table.remove(stack)
+        local path, depth = current.path, current.depth
+        local i = 0
+        repeat
+            local file = r.EnumerateFiles(path, i)
+            if file then
+                local full_path = path .. file
+                if file:match("%.rpp$") then
+                    local project_name = file:gsub("%.rpp$", "")
+                    table.insert(projects, {
+                        name = project_name,
+                        path = full_path
+                    })
+                end
+            end
+            i = i + 1
+        until not file
+        if depth < max_depth then  -- Gebruik hier de globale max_depth
+            i = 0
+            repeat
+                local subdir = r.EnumerateSubdirectories(path, i)
+                if subdir then
+                    table.insert(stack, {path = path .. subdir .. "\\", depth = depth + 1})
+                end
+                i = i + 1
+            until not subdir
+        end
+    end
+    table.sort(projects, function(a, b) return a.name:lower() < b.name:lower() end)
+    return projects
+end
+
+local function save_projects_info(projects)
+    local file = io.open(PROJECTS_INFO_FILE, "w")
+    if file then
+        file:write("[SETTINGS]\n")
+        file:write("DEPTH|" .. max_depth .. "\n")
+        file:write("[LOCATIONS]\n")
+        for _, location in ipairs(project_locations) do
+            file:write("LOC|" .. location .. "\n")
+        end
+        file:write("[PROJECTS]\n")
+        for _, project in ipairs(projects) do
+            file:write(string.format("%s|%s\n", project.name, project.path))
+        end
+        file:close()
+    end
+end
+
+local function LoadProjects()
+    projects = {}  -- Maak de lijst leeg
+    filtered_projects = {}  -- Maak ook de gefilterde lijst leeg
+    projects = get_all_projects()  -- Laad nieuwe projecten met huidige max_depth
+    filtered_projects = projects
+    save_projects_info(projects)
+end
+
 local function SaveFavorites()
     local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
     local file = io.open(script_path .. "favorite_plugins.txt", "w")
@@ -265,6 +337,10 @@ local function SaveFavorites()
         end
         file:close()
     end
+end
+load_projects_info()
+if #project_locations == 0 then
+    table.insert(project_locations, PROJECTS_DIR)
 end
 
 local function LoadFavorites()
@@ -1867,7 +1943,6 @@ function ShowPluginScreenshot()
     end
 end
 
-
 local function GetCurrentProjectFX()
     local fx_list = {}
     local track_count = reaper.CountTracks(0)
@@ -1891,62 +1966,7 @@ local function GetCurrentProjectFX()
     end
     return fx_list
 end
-------------------------------------------------
-local function get_all_projects()
-    local projects = {}
-    local stack = {{path = PROJECTS_DIR, depth = 0}}
-    local max_depth = 2
-    while #stack > 0 do
-        local current = table.remove(stack)
-        local path, depth = current.path, current.depth
-        local i = 0
-        repeat
-            local file = r.EnumerateFiles(path, i)
-            if file then
-                local full_path = path .. file
-                if file:match("%.rpp$") then
-                    local project_name = file:gsub("%.rpp$", "")
-                    table.insert(projects, {
-                        name = project_name,
-                        path = full_path
-                    })
-                end
-            end
-            i = i + 1
-        until not file
-        if depth < max_depth then
-            i = 0
-            repeat
-                local subdir = r.EnumerateSubdirectories(path, i)
-                if subdir then
-                    table.insert(stack, {path = path .. subdir .. "\\", depth = depth + 1})
-                end
-                i = i + 1
-            until not subdir
-        end
-    end
-    table.sort(projects, function(a, b) return a.name:lower() < b.name:lower() end)
-    return projects
-  end
-    local function open_project(project_path)
-        r.Main_openProject(project_path)
-    end
-    local function save_projects_info(projects)
-        local file = io.open(PROJECTS_INFO_FILE, "w")
-        if file then
-            for _, project in ipairs(projects) do
-                file:write(string.format("%s|%s\n", project.name, project.path))
-            end
-            file:close()
-        end
-    end
-    local function LoadProjects()
-        projects = get_all_projects()
-        filtered_projects = projects
-        save_projects_info(projects)
-    end
 
-------------------------------------------------------
 local function AddPluginToSelectedTracks(plugin_name)
     local track_count = r.CountSelectedTracks(0)
     for i = 0, track_count - 1 do
@@ -2002,9 +2022,6 @@ function CountProjectFolderFiles(project_path)
     return count - 1  -- -1 omdat de eerste tel 0 is
 end
 
-
-
-
 local function ShowScreenshotWindow()
     if not config.show_screenshot_window then return end
     if screenshot_search_results and #screenshot_search_results > 0 then
@@ -2057,7 +2074,6 @@ local function ShowScreenshotWindow()
         r.ImGui_SameLine(ctx)
         
         -- Nieuwe toggle knop voor screenshot instellingen
-        -- Nieuwe toggle knop voor screenshot instellingen
         local state_text = {
             [1] = "1",  -- Alles zichtbaar
             [2] = "2",  -- Alleen dropdown
@@ -2065,24 +2081,22 @@ local function ShowScreenshotWindow()
         }
 
         r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
-if r.ImGui_Button(ctx, state_text[config.screenshot_view_type], button_width, button_height) then
-    config.screenshot_view_type = config.screenshot_view_type % 3 + 1
-    
-    -- Update display settings based on state
-    if config.screenshot_view_type == 1 then
-        config.show_screenshot_settings = true
-        config.show_only_dropdown = false
-    elseif config.screenshot_view_type == 2 then
-        config.show_screenshot_settings = false
-        config.show_only_dropdown = true
-    else
-        config.show_screenshot_settings = false
-        config.show_only_dropdown = false
-    end
-    SaveConfig()
-end
-
-
+        if r.ImGui_Button(ctx, state_text[config.screenshot_view_type], button_width, button_height) then
+            config.screenshot_view_type = config.screenshot_view_type % 3 + 1
+            
+            -- Update display settings based on state
+            if config.screenshot_view_type == 1 then
+                config.show_screenshot_settings = true
+                config.show_only_dropdown = false
+            elseif config.screenshot_view_type == 2 then
+                config.show_screenshot_settings = false
+                config.show_only_dropdown = true
+            else
+                config.show_screenshot_settings = false
+                config.show_only_dropdown = false
+            end
+            SaveConfig()
+        end
 
         r.ImGui_SetCursorPos(ctx, window_width - button_width - 5, 5)
         if r.ImGui_Button(ctx, "X", button_width, button_height) then
@@ -2094,7 +2108,7 @@ end
         r.ImGui_Separator(ctx)
 
         if show_media_browser then
-            r.ImGui_PushItemWidth(ctx, -1)
+            r.ImGui_PushItemWidth(ctx, window_width - 55)
             local changed, new_search_term = r.ImGui_InputTextWithHint(ctx, "##ProjectSearch", "SEARCH PROJECTS", project_search_term)
             if changed then
                 project_search_term = new_search_term
@@ -2106,14 +2120,89 @@ end
                 end
             end
             r.ImGui_PopItemWidth(ctx)
-            local window_height = r.ImGui_GetWindowHeight(ctx)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "D", 20, 20) then
+                show_project_dates = not show_project_dates
+            end
+
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "P", 20, 20) then
+                show_project_paths = not show_project_paths
+            end
+            -- In de UI code:
+            local window_width = r.ImGui_GetWindowWidth(ctx)
+            r.ImGui_PushItemWidth(ctx, window_width - 75) 
+            if r.ImGui_BeginCombo(ctx, "##Project Locations", PROJECTS_DIR) then
+                for i, location in ipairs(project_locations) do
+                    if r.ImGui_Selectable(ctx, location) then
+                        PROJECTS_DIR = location
+                        LoadProjects()
+                    end
+                    
+                    if r.ImGui_IsItemClicked(ctx, 1) then  -- rechtermuisknop
+                        r.ImGui_OpenPopup(ctx, "location_menu_" .. i)
+                    end
+                    
+                    if r.ImGui_BeginPopup(ctx, "location_menu_" .. i) then
+                        if r.ImGui_MenuItem(ctx, "Remove") then
+                            table.remove(project_locations, i)
+                            save_projects_info(projects)
+                            LoadProjects()
+                        end
+                        r.ImGui_EndPopup(ctx)
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_PopItemWidth(ctx)
+
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+", 18, 18) then
+                local rv, path = r.JS_Dialog_BrowseForFolder("Select Project Folder", r.GetProjectPath())
+                if rv and path then
+                    path = path .. "\\"
+                    table.insert(project_locations, path)
+                    save_projects_info(projects)
+                    LoadProjects()
+                end
+            end
             
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 40)
+            if r.ImGui_BeginCombo(ctx, "##depth", tostring(max_depth)) then
+                for i = 0, 4 do
+                    if r.ImGui_Selectable(ctx, tostring(i)) then
+                        max_depth = i
+                        LoadProjects()
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            
+            local window_height = r.ImGui_GetWindowHeight(ctx)
             -- Project List
-            if r.ImGui_BeginChild(ctx, "MediaBrowserList", -1, window_height - 190) then
+            if r.ImGui_BeginChild(ctx, "MediaBrowserList", -1, window_height - 200) then
                 for i, project in ipairs(filtered_projects) do
                     local has_preview = r.file_exists(project.path .. "-PROX")
-                    local display_name = has_preview and project.name .. " [P]" or project.name
+                    local display_name = project.name
+                    
+                    if has_preview then
+                        display_name = display_name .. " [P]"
+                    end
+                    
+                    if show_project_paths then
+                        display_name = display_name .. " - [" .. project.path .. "]"
+                    end
+                    if show_project_dates and reaper.JS_File_Stat then
+                        local retval, _, _, _, datetime = reaper.JS_File_Stat(project.path)
+                        if retval and datetime then
+                            display_name = display_name .. " - [" .. datetime .. "]"
+                        end
+                    end
+                    
                     local is_selected = (selected_project and selected_project.path == project.path)
+                    
                     if r.ImGui_Selectable(ctx, display_name, is_selected) then
                         if has_preview then
                             selected_project = project
@@ -2133,12 +2222,10 @@ end
                             r.ShowMessageBox("No preview available for this project", "Preview", 0)
                         end
                     end
-                    
-            
+                                
                     if r.ImGui_IsItemClicked(ctx, 1) then
                         r.ImGui_OpenPopup(ctx, "ProjectContextMenu_" .. i)
                     end
-                    
                     -- Context Menu
                     if r.ImGui_BeginPopup(ctx, "ProjectContextMenu_" .. i) then
                         if r.ImGui_MenuItem(ctx, "Open Project") then
@@ -2310,7 +2397,7 @@ end
                     SaveConfig()
                 end
                 r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Reset Global") then
+                if r.ImGui_Button(ctx, "Reset") then
                     config.global_screenshot_size = 200
                     display_size = 200
                     SaveConfig()
@@ -2325,7 +2412,7 @@ end
                         SaveConfig()
                     end
                     r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Reset Folder") then
+                    if r.ImGui_Button(ctx, "Reset") then
                         config.folder_specific_sizes[selected_folder] = nil
                         display_size = config.screenshot_window_size
                         SaveConfig()
@@ -2903,7 +2990,7 @@ end
 local function FilterBox()
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local track_info_width = math.max(window_width - 20, 125)
+    local track_info_width = math.max(window_width - 10, 125)
     local x_button_width = 20
     local margin = 3
     local search_width = track_info_width - (x_button_width * 3) - (margin * 3)
@@ -3476,10 +3563,6 @@ local function DrawFavorites()
     end
 end
 
-
-
-
-
 local function CalculateButtonWidths(total_width, num_buttons, spacing)
     local available_width = total_width - (spacing * (num_buttons - 1))
     return available_width / num_buttons
@@ -3489,7 +3572,7 @@ local function DrawBottomButtons()
     if not config.hideBottomButtons then
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local window_width = r.ImGui_GetWindowWidth(ctx)
-    local track_info_width = math.max(window_width - 20, 125)
+    local track_info_width = math.max(window_width - 10, 125)
     local button_spacing = 3
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
     local buttonHeight = 65
@@ -3592,9 +3675,6 @@ r.ImGui_PopStyleColor(ctx)
     if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
         r.ImGui_SetTooltip(ctx, "Show Virtual Keyboard")
     end
-    
-    
-    
 
     -- Derde rij knoppen
     local num_buttons_row3 = 3
@@ -3873,13 +3953,14 @@ function Frame()
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
         if r.ImGui_BeginMenu(ctx, "FAVORITES") then
             DrawFavorites()
             r.ImGui_EndMenu(ctx)
         end
-        r.ImGui_PopStyleVar(ctx, 3)
+        r.ImGui_PopStyleVar(ctx, 4)
         r.ImGui_PopStyleColor(ctx, 2)
     end
     for i = 1, #CAT_TEST do
@@ -3895,6 +3976,7 @@ function Frame()
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
             if r.ImGui_BeginMenu(ctx, CAT_TEST[i].name) then
@@ -3907,7 +3989,7 @@ function Frame()
                  end
                 r.ImGui_EndMenu(ctx)
             end
-            r.ImGui_PopStyleVar(ctx, 3)
+            r.ImGui_PopStyleVar(ctx, 4)
             r.ImGui_PopStyleColor(ctx, 2)
         end
     end
@@ -4124,23 +4206,27 @@ function Main()
         if r.time_precise() % 300 < 1 then
             ClearScreenshotCache(true)
         end
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 2)
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7)
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 3, 3)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1))
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), config.button_background_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), config.button_hover_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Tab(), config.tab_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabHovered(), config.tab_hovered_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.frame_bg_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), config.frame_bg_hover_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), config.frame_bg_active_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
-    r.ImGui_PushFont(ctx, NormalFont)
-    r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
-    
+        if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 2)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 3, 3)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1))
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), config.button_background_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), config.button_hover_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Tab(), config.tab_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabHovered(), config.tab_hovered_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.frame_bg_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), config.frame_bg_hover_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), config.frame_bg_active_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
+        r.ImGui_PushFont(ctx, NormalFont)
+        r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
+        else
+            InitializeImGuiContext()
+        end
 -- FX lijst hoogte berekenen
 local fx_list_height = 0
 if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
@@ -4182,7 +4268,7 @@ if visible then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 4)
             local window_width = r.ImGui_GetWindowWidth(ctx)
-            local track_info_width = math.max(window_width - 20, 125)  -- Minimaal 125, of vensterbreedte - 20
+            local track_info_width = math.max(window_width - 10, 125)  -- Minimaal 125, of vensterbreedte - 20
             
             if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 60) then
                 -- Stel de stijlen voor de knoppen in
@@ -4802,7 +4888,7 @@ if visible then
        
 
     r.ImGui_PopFont(ctx)
-    r.ImGui_PopStyleVar(ctx, 3)
+    r.ImGui_PopStyleVar(ctx, 4)
     r.ImGui_PopStyleColor(ctx, 11)
     
     if SHOULD_CLOSE_SCRIPT then

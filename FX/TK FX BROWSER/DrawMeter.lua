@@ -4,7 +4,7 @@ function normalizePath(path)
     local sep = package.config:sub(1,1) 
     return path:gsub("[/\\]", sep)
 end
-function loadJSLoudnessMeter(r)
+--[[function loadJSLoudnessMeter(r)
     local monitor_fx_count = r.TrackFX_GetRecCount(r.GetMasterTrack(0))
     local js_meter_loaded = false
     local js_meter_index = -1
@@ -38,7 +38,50 @@ function loadJSLoudnessMeter(r)
         r.TrackFX_Show(r.GetMasterTrack(0), 0x1000000 + fx_idx, 2)
         r.TrackFX_SetEnabled(r.GetMasterTrack(0), 0x1000000, true)
     end
+end]]--
+
+function loadJSLoudnessMeter(r)
+    local master = r.GetMasterTrack(0)
+    
+    
+    -- Zoek bestaande meter
+    local monitor_fx_count = r.TrackFX_GetRecCount(master)
+    local meter_found = false
+    
+    -- Check verschillende mogelijke padnamen
+    local meter_names = {
+        "JS: analysis/loudness_meter",
+        "JS: analysis\\loudness_meter",
+        "JS/analysis/loudness_meter",
+        "JS\\analysis\\loudness_meter"
+    }
+    
+    -- Zoek door alle monitoring FX
+    for i = 0, monitor_fx_count - 1 do
+        local _, fx_name = r.TrackFX_GetFXName(master, 0x1000000 + i, "")
+        for _, meter_name in ipairs(meter_names) do
+            if fx_name:find(meter_name) then
+                meter_found = true
+                -- Activeer de meter
+                r.TrackFX_SetEnabled(master, 0x1000000 + i, true)
+                break
+            end
+        end
+    end
+    
+    -- Als niet gevonden, probeer toe te voegen met verschillende padnamen
+    if not meter_found then
+        for _, meter_name in ipairs(meter_names) do
+            local fx_idx = r.TrackFX_AddByName(master, meter_name, true, -1)
+            if fx_idx >= 0 then
+                r.TrackFX_Show(master, 0x1000000 + fx_idx, 2)
+                r.TrackFX_SetEnabled(master, 0x1000000 + fx_idx, true)
+                break
+            end
+        end
+    end
 end
+
 
 
 
@@ -73,7 +116,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
         local monitor_fx_count = r.TrackFX_GetRecCount(r.GetMasterTrack(0))
         for i = 0, monitor_fx_count - 1 do
             local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
-            if fx_name:find("JS: analysis\\loudness_meter") then
+            if fx_name:find("JS: analysis\\loudness_meter") or fx_name:find("JS: analysis/loudness_meter") then
                 local rms_M = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 16)
                 local rms_I = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 17)
                 
@@ -89,7 +132,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
         local monitor_fx_count = r.TrackFX_GetRecCount(r.GetMasterTrack(0))
         for i = 0, monitor_fx_count - 1 do
             local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
-            if fx_name:find("JS: analysis\\loudness_meter") then
+            if fx_name:find("JS: analysis\\loudness_meter") or fx_name:find("JS: analysis/loudness_meter") then
                 local lufs_M = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 18)
                 local lufs_I = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 20)
                 local lufs_S = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 19)
