@@ -1,10 +1,8 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.8.0:
+-- @version 0.8.1:
 -- @changelog:
---[[        * Changes is Meter Function
---          * Added full path and date tot project view
---          * Did some Bug hunting ;o)
+--[[        * BugFix
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -301,7 +299,9 @@ local function get_all_projects()
     table.sort(projects, function(a, b) return a.name:lower() < b.name:lower() end)
     return projects
 end
-
+local function open_project(project_path)
+    r.Main_openProject(project_path)
+end
 local function save_projects_info(projects)
     local file = io.open(PROJECTS_INFO_FILE, "w")
     if file then
@@ -683,6 +683,8 @@ local function ShowConfigWindow()
     r.ImGui_SetNextWindowSize(ctx, window_width, window_height, r.ImGui_Cond_Always())
     r.ImGui_SetNextWindowSizeConstraints(ctx, window_width, window_height, window_width, window_height)
     local visible, open = r.ImGui_Begin(ctx, "Settings", true, window_flags | r.ImGui_WindowFlags_NoResize())
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x666666FF)  -- normale staat
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
     if visible then
         r.ImGui_PushFont(ctx, LargeFont)
         r.ImGui_Text(ctx, "TK FX BROWSER SETTINGS")
@@ -1177,10 +1179,11 @@ local function ShowConfigWindow()
         end
         r.ImGui_EndTabBar(ctx)
         end
+        r.ImGui_PopStyleColor(ctx, 2)
         r.ImGui_End(ctx)
-        end
-        return config_open
     end
+    return config_open
+end
 local function EnsureTrackIconsFolderExists()
     local track_icons_path = script_path .. "TrackIcons" .. os_separator
     if not r.file_exists(track_icons_path) then
@@ -3581,13 +3584,45 @@ local function DrawBottomButtons()
     local button_spacing = 3
     local windowHeight = r.ImGui_GetWindowHeight(ctx)
     local buttonHeight = 65
-    r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight - 20)
+    r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight - 42)
     -- volumeslider
     if not config.hideVolumeSlider then
+        -- Pan en Width sliders naast elkaar
+        local half_width = (track_info_width - button_spacing) / 2
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x666666FF)  -- normale staat
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
+        
+        -- Pan slider
+        r.ImGui_PushItemWidth(ctx, half_width)
+        local pan = r.GetMediaTrackInfo_Value(TRACK, "D_PAN")
+        local pan_changed, new_pan = r.ImGui_SliderDouble(ctx, "##Pan", pan, -1, 1, "Pan: %.2f")
+        if r.ImGui_IsItemClicked(ctx, 1) then  -- rechtsklik
+            r.SetMediaTrackInfo_Value(TRACK, "D_PAN", 0.0)  -- reset naar center
+        end
+        if pan_changed then
+            r.SetMediaTrackInfo_Value(TRACK, "D_PAN", new_pan)
+        end
+
+        -- Width slider
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushItemWidth(ctx, half_width)
+        local width = r.GetMediaTrackInfo_Value(TRACK, "D_WIDTH")
+        local display_width = width * 100
+        local width_changed, new_width = r.ImGui_SliderDouble(ctx, "##Width", display_width, -100, 100, "Width: %.0f%%")
+        if r.ImGui_IsItemClicked(ctx, 1) then  -- rechtsklik
+            r.SetMediaTrackInfo_Value(TRACK, "D_WIDTH", 1.0)  -- reset naar 100%
+        end
+        if width_changed then
+            r.SetMediaTrackInfo_Value(TRACK, "D_WIDTH", new_width / 100)
+        end
+        
+
+        -- volume slider
         local volume = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
         if volume and volume > 0 then
             local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
             r.ImGui_PushItemWidth(ctx, track_info_width)
+            
             local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
     
             if r.ImGui_IsItemHovered(ctx) then
@@ -3605,6 +3640,7 @@ local function DrawBottomButtons()
                 local new_volume = 10^(new_volume_db/20)
                 r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
             end
+            r.ImGui_PopStyleColor(ctx, 2)
             r.ImGui_PopItemWidth(ctx)
         end
     end
@@ -3939,10 +3975,13 @@ end
 local function CalculateBottomSectionHeight(config)
     local height = 0
     if not config.hideBottomButtons then height = height + 70 end
-    if not config.hideVolumeSlider then height = height + 20 end
+    if not config.hideVolumeSlider then
+        height = height + 40
+    end
     if not config.hideMeter then height = height + 90 end
     return height
 end
+
 -----------------------------------------------------------------
 function Frame()
     local search = FilterBox()
