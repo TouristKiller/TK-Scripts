@@ -4,91 +4,122 @@ function normalizePath(path)
     local sep = package.config:sub(1,1) 
     return path:gsub("[/\\]", sep)
 end
---[[function loadJSLoudnessMeter(r)
-    local monitor_fx_count = r.TrackFX_GetRecCount(r.GetMasterTrack(0))
-    local js_meter_loaded = false
-    local js_meter_index = -1
-    local meter_name = "JS: analysis" .. package.config:sub(1,1) .. "loudness_meter"
+
+function findJSLoudnessMeter(r)
+    local master = r.GetMasterTrack(0)
+    local meter_patterns = {
+        "js[%s%-_]?analysis[/\\]loudness_meter",
+        "js.*loudness.*meter",
+        "loudness.*meter"
+    }
     
-    -- Check existing meter and find index
+    local monitor_fx_count = r.TrackFX_GetRecCount(master)
     for i = 0, monitor_fx_count - 1 do
-        local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
-        if fx_name:find(meter_name) then
-            js_meter_loaded = true
-            js_meter_index = i
-            break
-        end
-    end
-    
-    -- Remove duplicate instances
-    if js_meter_loaded then
-        for i = monitor_fx_count - 1, 0, -1 do
-            if i ~= js_meter_index then
-                local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
-                if fx_name:find(meter_name) then
-                    r.TrackFX_Delete(r.GetMasterTrack(0), 0x1000000 + i)
-                end
+        local _, fx_name = r.TrackFX_GetFXName(master, 0x1000000 + i, "")
+        for _, pattern in ipairs(meter_patterns) do
+            if fx_name:lower():match(pattern) then
+                return i
             end
         end
     end
+    return -1
+end
+
+function initializeLoudnessMeter(r)
+    local master = r.GetMasterTrack(0)
+    local meter_idx = findJSLoudnessMeter(r)
     
-    -- Add meter if not exists
-    if not js_meter_loaded then
-        local fx_idx = r.TrackFX_AddByName(r.GetMasterTrack(0), meter_name, true, -1)
-        r.TrackFX_Show(r.GetMasterTrack(0), 0x1000000 + fx_idx, 2)
-        r.TrackFX_SetEnabled(r.GetMasterTrack(0), 0x1000000, true)
+    if meter_idx == -1 then
+        local paths = {
+            "JS: analysis/loudness_meter",
+            "JS/analysis/loudness_meter",
+            "JS: Loudness Meter",
+            "JS: Analysis/Loudness Meter"
+        }
+        
+        for _, path in ipairs(paths) do
+            meter_idx = r.TrackFX_AddByName(master, path, true, -1)
+            if meter_idx >= 0 then break end
+        end
     end
-end]]--
+    
+    if meter_idx >= 0 then
+        r.TrackFX_SetEnabled(master, 0x1000000 + meter_idx, true)
+        r.defer(function() end)
+    end
+    
+    return meter_idx
+end
 
 function loadJSLoudnessMeter(r)
     local master = r.GetMasterTrack(0)
+    local meter_idx = initializeLoudnessMeter(r)
     
-    
-    -- Zoek bestaande meter
-    local monitor_fx_count = r.TrackFX_GetRecCount(master)
-    local meter_found = false
-    
-    -- Check verschillende mogelijke padnamen
-    local meter_names = {
-        "JS: analysis/loudness_meter",
-        "JS: analysis\\loudness_meter",
-        "JS/analysis/loudness_meter",
-        "JS\\analysis\\loudness_meter"
-    }
-    
-    -- Zoek door alle monitoring FX
-    for i = 0, monitor_fx_count - 1 do
-        local _, fx_name = r.TrackFX_GetFXName(master, 0x1000000 + i, "")
-        for _, meter_name in ipairs(meter_names) do
-            if fx_name:find(meter_name) then
-                meter_found = true
-                -- Activeer de meter
-                r.TrackFX_SetEnabled(master, 0x1000000 + i, true)
-                break
-            end
-        end
-    end
-    
-    -- Als niet gevonden, probeer toe te voegen met verschillende padnamen
-    if not meter_found then
-        for _, meter_name in ipairs(meter_names) do
-            local fx_idx = r.TrackFX_AddByName(master, meter_name, true, -1)
-            if fx_idx >= 0 then
-                r.TrackFX_Show(master, 0x1000000 + fx_idx, 2)
-                r.TrackFX_SetEnabled(master, 0x1000000 + fx_idx, true)
-                break
-            end
-        end
+    if meter_idx >= 0 then
+        r.TrackFX_Show(master, 0x1000000 + meter_idx, 2)
     end
 end
 
+function getRMSValues()
+    local meter_idx = findJSLoudnessMeter(r)
+    if meter_idx < 0 then return -100, -100 end
+    
+    local master = r.GetMasterTrack(0)
+    local fx_idx = 0x1000000 + meter_idx
+    
+    -- Vind de juiste parameter indices
+    local param_count = r.TrackFX_GetNumParams(master, fx_idx)
+    local param_indices = {}
+    
+    for i = 0, param_count - 1 do
+        local _, param_name = r.TrackFX_GetParamName(master, fx_idx, i)
+        if param_name:match("RMS%-M") then param_indices[1] = i
+        elseif param_name:match("RMS%-I") then param_indices[2] = i
+        end
+    end
+    
+    local values = {}
+    for i, param_idx in ipairs(param_indices) do
+        local retval, value = r.TrackFX_GetParamNormalized(master, fx_idx, param_idx)
+        values[i] = retval and (-100 + (value * 100)) or -100
+    end
+    
+    return table.unpack(values)
+end
 
-
+function getLUFSValues()
+    local meter_idx = findJSLoudnessMeter(r)
+    if meter_idx < 0 then return -100, -100, -100, -100 end
+    
+    local master = r.GetMasterTrack(0)
+    local fx_idx = 0x1000000 + meter_idx
+    
+    -- Vind de juiste parameter indices
+    local param_count = r.TrackFX_GetNumParams(master, fx_idx)
+    local param_indices = {}
+    
+    for i = 0, param_count - 1 do
+        local _, param_name = r.TrackFX_GetParamName(master, fx_idx, i)
+        if param_name:match("LUFS%-M") then param_indices[1] = i
+        elseif param_name:match("LUFS%-I") then param_indices[2] = i
+        elseif param_name:match("LUFS%-S") then param_indices[3] = i
+        elseif param_name:match("LRA") then param_indices[4] = i
+        end
+    end
+    
+    local values = {}
+    for i, param_idx in ipairs(param_indices) do
+        local retval, value = r.TrackFX_GetParamNormalized(master, fx_idx, param_idx)
+        values[i] = retval and (-100 + (value * 100)) or -100
+    end
+    
+    return table.unpack(values)
+end
 
 function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
     if not TRACK then return end
     local current_time = r.time_precise()
-    -- peak hold
+    
     peak_hold_L = peak_hold_L or -60
     peak_hold_R = peak_hold_R or -60
     rms_m_hold = rms_m_hold or -60
@@ -149,6 +180,9 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
         end
         return -100, -100, -100, -100
     end
+    
+    
+    
     
     
     local window_height = r.ImGui_GetWindowHeight(ctx)

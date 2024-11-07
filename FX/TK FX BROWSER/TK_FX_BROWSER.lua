@@ -1,8 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.8.1:
+-- @version 0.8.2:
 -- @changelog:
---[[        * BugFix
+--[[        * changes in metering
+            * Remove space between screenshots
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -2333,6 +2334,9 @@ local function ShowScreenshotWindow()
         if folders_category and #folders_category > 0 then
             if config.show_screenshot_settings or config.show_only_dropdown then  -- Voeg show_only_dropdown toe aan de check 
             r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
+            local window_width = r.ImGui_GetContentRegionAvail(ctx)
+            local dropdown_width = window_width - 80  
+            r.ImGui_PushItemWidth(ctx, dropdown_width)
             if r.ImGui_BeginCombo(ctx, "##FolderDropdown", selected_folder or "Select Folder") then
                 if r.ImGui_Selectable(ctx, "No Folder", selected_folder == nil) then
                     selected_folder = nil
@@ -2365,6 +2369,7 @@ local function ShowScreenshotWindow()
                 end
                 r.ImGui_EndCombo(ctx)
             end
+            r.ImGui_PopItemWidth(ctx)
                 if r.ImGui_IsItemHovered(ctx) then
                     local wheel_delta = r.ImGui_GetMouseWheel(ctx)
                     if wheel_delta ~= 0 then
@@ -2388,50 +2393,11 @@ local function ShowScreenshotWindow()
                         GetPluginsForFolder(selected_folder)
                     end
                 end
-                if config.show_screenshot_settings and not config.show_only_dropdown then  
-            r.ImGui_SameLine(ctx)
             
-            
-            local changed, new_value = r.ImGui_Checkbox(ctx, "Global", config.use_global_screenshot_size)
-            if changed then
-                config.use_global_screenshot_size = new_value
-                SaveConfig()
             end
-            if config.use_global_screenshot_size then
-                local global_changed, new_global_size = r.ImGui_SliderInt(ctx, "##Global Size", config.global_screenshot_size, 100, 500)
-                if global_changed then
-                    config.global_screenshot_size = new_global_size
-                    display_size = new_global_size
-                    SaveConfig()
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Reset") then
-                    config.global_screenshot_size = 200
-                    display_size = 200
-                    SaveConfig()
-                end
-            else
-                if selected_folder then
-                    local current_size = config.folder_specific_sizes[selected_folder] or config.screenshot_window_size
-                    local changed, new_size = r.ImGui_SliderInt(ctx, "##Folder Size", current_size, 100, 500)
-                    if changed then
-                        config.folder_specific_sizes[selected_folder] = new_size
-                        display_size = new_size
-                        SaveConfig()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Reset") then
-                        config.folder_specific_sizes[selected_folder] = nil
-                        display_size = config.screenshot_window_size
-                        SaveConfig()
-                    end
-                end
-            end
-            end
-        end
         end
         local available_width = r.ImGui_GetContentRegionAvail(ctx)
-        local display_size
+        --local display_size
         if config.use_global_screenshot_size then
             display_size = config.global_screenshot_size
         elseif config.resize_screenshots_with_window then
@@ -2454,6 +2420,84 @@ local function ShowScreenshotWindow()
             
             return display_width, display_height
         end
+
+        if config.screenshot_view_type == 1 then
+            -- Voeg de 'Global' checkbox toe
+            r.ImGui_SameLine(ctx)
+            local changed, new_value = r.ImGui_Checkbox(ctx, "Global", config.use_global_screenshot_size)
+            if changed then
+                config.use_global_screenshot_size = new_value
+                SaveConfig()
+            end
+
+            -- Bereken beschikbare ruimte voor de UI-elementen
+            local window_width = r.ImGui_GetContentRegionAvail(ctx)
+            local button_width = 20  -- Breedte van de Reset-knop
+            -- local checkbox_width = r.ImGui_CalcTextSize(ctx, "Compact") + 20  -- Breedte van checkbox + padding
+            local slider_width = window_width - button_width - 60  -- Extra 20 voor padding
+
+            if config.use_global_screenshot_size then
+                -- Toon de globale grootte-slider, ongeacht 'Auto resize'
+                display_size = config.global_screenshot_size
+
+                r.ImGui_PushItemWidth(ctx, slider_width)
+                local changed, new_size = r.ImGui_SliderInt(ctx, "##Global Size", config.global_screenshot_size, 100, 500)
+                r.ImGui_PopItemWidth(ctx)
+
+                if changed then
+                    config.global_screenshot_size = new_size
+                    display_size = new_size
+                    SaveConfig()
+                end
+
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "R") then
+                    config.global_screenshot_size = 200  -- Standaardwaarde
+                    display_size = 200
+                    SaveConfig()
+                end
+
+            else
+                -- Alleen als 'Auto resize' niet is ingeschakeld, toon de folder-specifieke grootte-slider
+                if not config.resize_screenshots_with_window then
+                    local folder_key = selected_folder or (screenshot_search_results and "SearchResults") or "Default"
+                    local current_size = config.folder_specific_sizes[folder_key] or config.screenshot_window_size
+
+                    -- Stel 'display_size' in op basis van de folder-specifieke instelling
+                    display_size = current_size
+
+                    r.ImGui_PushItemWidth(ctx, slider_width)
+                    local changed, new_size = r.ImGui_SliderInt(ctx, "##Folder Size", current_size, 100, 500)
+                    r.ImGui_PopItemWidth(ctx)
+
+                    if changed then
+                        config.folder_specific_sizes[folder_key] = new_size
+                        display_size = new_size
+                        SaveConfig()
+                    end
+
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "R") then
+                        config.folder_specific_sizes[folder_key] = nil
+                        display_size = config.screenshot_window_size
+                        SaveConfig()
+                    end
+                else
+                    -- Wanneer 'Auto resize' is ingeschakeld, stel 'display_size' automatisch in
+                    display_size = available_width - 10
+                end
+            end
+
+            -- Compact-checkbox (altijd zichtbaar)
+            r.ImGui_SameLine(ctx)
+            local changed, new_value = r.ImGui_Checkbox(ctx, "##Compact", config.compact_screenshots)
+            if changed then
+                config.compact_screenshots = new_value
+                SaveConfig()
+            end
+        end
+
+        
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
             if folder_changed or new_search_performed then
                 r.ImGui_SetScrollY(ctx, 0)
@@ -2494,7 +2538,7 @@ local function ShowScreenshotWindow()
                 end    
                 if selected_folder and selected_folder ~= "Current Project FX" and selected_folder ~= "Current Track FX" then
                     local available_width = r.ImGui_GetContentRegionAvail(ctx)
-                    local display_size
+                    --local display_size
                     if config.use_global_screenshot_size then
                         display_size = config.global_screenshot_size
                     elseif config.resize_screenshots_with_window then
@@ -2573,8 +2617,10 @@ local function ShowScreenshotWindow()
                             end
                         end
                         r.ImGui_EndGroup(ctx)
-                        if column == num_columns - 1 then
-                            r.ImGui_Dummy(ctx, 0, 5)  -- Voeg wat ruimte toe tussen de rijen
+                        if not config.compact_screenshots then
+                            if column == num_columns - 1 then
+                                r.ImGui_Dummy(ctx, 0, 5)  -- Voeg wat ruimte toe tussen de rijen
+                            end
                         end
                     end
                 end
@@ -2848,8 +2894,10 @@ local function ShowScreenshotWindow()
                             r.ImGui_PopItemWidth(ctx)
                             r.ImGui_EndGroup(ctx)
                             
-                            if column == num_columns - 1 then
-                                r.ImGui_Dummy(ctx, 0, 5)
+                            if not config.compact_screenshots then
+                                if column == num_columns - 1 then
+                                    r.ImGui_Dummy(ctx, 0, 5)
+                                end
                             end
                         end
                     end
@@ -2858,13 +2906,13 @@ local function ShowScreenshotWindow()
                 end
             elseif screenshot_search_results and #screenshot_search_results > 0 then
                 local available_width = r.ImGui_GetContentRegionAvail(ctx)
-                local display_size
+                --local display_size
                 if config.use_global_screenshot_size then
                     display_size = config.global_screenshot_size
                 elseif config.resize_screenshots_with_window then
                     display_size = available_width - 10
                 else
-                    display_size = config.screenshot_window_size
+                    display_size = config.folder_specific_sizes["SearchResults"] or config.screenshot_window_size
                 end
                 local num_columns = math.max(1, math.floor(available_width / display_size))
                 local column_width = available_width / num_columns
@@ -2934,8 +2982,8 @@ local function ShowScreenshotWindow()
                     end
                     r.ImGui_EndGroup(ctx)
                     
-                    if column == num_columns - 1 then
-                        r.ImGui_Separator(ctx)
+                    if column == num_columns - 1 and not config.compact_screenshots then
+                        r.ImGui_Dummy(ctx, 0, 5)
                     end
                 end
             else
@@ -3010,7 +3058,7 @@ local function FilterBox()
     local meter_height = config.hideMeter and 0 or 90
     local meter_spacing = 5
     local bottom_buttons_height = config.hideBottomButtons and 0 or 70
-    local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 20
+    local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 40
     
     local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
     local search_results_max_height = window_height - total_ui_elements - 80
@@ -3592,16 +3640,70 @@ local function DrawBottomButtons()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x666666FF)  -- normale staat
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
         
-        -- Pan slider
-        r.ImGui_PushItemWidth(ctx, half_width)
-        local pan = r.GetMediaTrackInfo_Value(TRACK, "D_PAN")
-        local pan_changed, new_pan = r.ImGui_SliderDouble(ctx, "##Pan", pan, -1, 1, "Pan: %.2f")
-        if r.ImGui_IsItemClicked(ctx, 1) then  -- rechtsklik
-            r.SetMediaTrackInfo_Value(TRACK, "D_PAN", 0.0)  -- reset naar center
+-- Pan slider met context menu
+r.ImGui_PushItemWidth(ctx, half_width)
+local pan_mode = r.GetMediaTrackInfo_Value(TRACK, "I_PANMODE")
+
+if pan_mode == 6 then -- Dual Pan mode
+    -- Linker pan slider
+    r.ImGui_PushItemWidth(ctx, half_width/2 - 2)
+    local pan_L = r.GetMediaTrackInfo_Value(TRACK, "D_DUALPANL")
+    local pan_L_changed, new_pan_L = r.ImGui_SliderDouble(ctx, "##PanL", pan_L, -1, 1, "L: %.2f")
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        r.ImGui_OpenPopup(ctx, "PanModeMenu")
+    end
+    
+    if pan_L_changed then
+        r.SetMediaTrackInfo_Value(TRACK, "D_DUALPANL", new_pan_L)
+    end
+    
+    -- Rechter pan slider
+    r.ImGui_SameLine(ctx)
+    r.ImGui_PushItemWidth(ctx, half_width/2 - 2)
+    local pan_R = r.GetMediaTrackInfo_Value(TRACK, "D_DUALPANR")
+    local pan_R_changed, new_pan_R = r.ImGui_SliderDouble(ctx, "##PanR", pan_R, -1, 1, "R: %.2f")
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        r.ImGui_OpenPopup(ctx, "PanModeMenu")
+    end
+    if pan_R_changed then
+        r.SetMediaTrackInfo_Value(TRACK, "D_DUALPANR", new_pan_R)
+    end
+else
+    -- Normale pan slider
+    local pan = r.GetMediaTrackInfo_Value(TRACK, "D_PAN")
+    local pan_changed, new_pan = r.ImGui_SliderDouble(ctx, "##Pan", pan, -1, 1, "Pan: %.2f")
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        r.ImGui_OpenPopup(ctx, "PanModeMenu")
+    end
+    if pan_changed then
+        r.SetMediaTrackInfo_Value(TRACK, "D_PAN", new_pan)
+    end
+end
+
+if r.ImGui_BeginPopup(ctx, "PanModeMenu") then
+    if r.ImGui_MenuItem(ctx, "Reset Pan") then
+        if pan_mode == 6 then
+            r.SetMediaTrackInfo_Value(TRACK, "D_DUALPANL", 0.0)
+            r.SetMediaTrackInfo_Value(TRACK, "D_DUALPANR", 0.0)
+        else
+            r.SetMediaTrackInfo_Value(TRACK, "D_PAN", 0.0)
         end
-        if pan_changed then
-            r.SetMediaTrackInfo_Value(TRACK, "D_PAN", new_pan)
-        end
+    end
+    if r.ImGui_MenuItem(ctx, "Stereo Pan") then
+        r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANSTEREOPAN"), 0)
+    end
+    if r.ImGui_MenuItem(ctx, "Stereo Balance") then
+        r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANBALANCENEW"), 0)
+    end
+    if r.ImGui_MenuItem(ctx, "Dual Pan") then
+        r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANDUALPAN"), 0)
+    end
+    if r.ImGui_MenuItem(ctx, "3x Balance") then
+        r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANBALANCEOLD"), 0)
+    end
+    r.ImGui_EndPopup(ctx)
+end
+
 
         -- Width slider
         r.ImGui_SameLine(ctx)
