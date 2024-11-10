@@ -1,8 +1,8 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.8.4:
+-- @version 0.8.5:
 -- @changelog:
---[[        * Added Item and Track Notes 
+--[[        * Bugfix 
             
 ]]--        
 --------------------------------------------------------------------------
@@ -4500,18 +4500,20 @@ local function removeUserScript(index)
 end
 
 function InitializeImGuiContext()
-    if ctx then
-    ctx = r.ImGui_CreateContext('TK FX Browser')
-    NormalFont = r.ImGui_CreateFont('sans-serif', 12, r.ImGui_FontFlags_Bold())
-    TinyFont = r.ImGui_CreateFont('sans-serif', 10)
-    LargeFont = r.ImGui_CreateFont('sans-serif', 16, r.ImGui_FontFlags_Bold())
-    IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
-    r.ImGui_Attach(ctx, NormalFont)
-    r.ImGui_Attach(ctx, TinyFont)
-    r.ImGui_Attach(ctx, LargeFont)
-    r.ImGui_Attach(ctx, IconFont)
+    if not ctx then
+        ctx = r.ImGui_CreateContext('TK FX Browser')
+        NormalFont = r.ImGui_CreateFont('sans-serif', 12, r.ImGui_FontFlags_Bold())
+        TinyFont = r.ImGui_CreateFont('sans-serif', 10)
+        LargeFont = r.ImGui_CreateFont('sans-serif', 16, r.ImGui_FontFlags_Bold())
+        IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
+        
+        r.ImGui_Attach(ctx, NormalFont)
+        r.ImGui_Attach(ctx, TinyFont)
+        r.ImGui_Attach(ctx, LargeFont)
+        r.ImGui_Attach(ctx, IconFont)
     end
 end
+
 
 function Main()
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
