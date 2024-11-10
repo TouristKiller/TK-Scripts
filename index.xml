@@ -54,7 +54,7 @@
 
   <category name="Tools">
     <reapack name="VigiLiens.lua" type="script" desc="VigiLiens">
-    <version name="0.02" author="TouristKiller" time="2024-10-11T14:00:00Z">
+    <version name="0.2.0" author="TouristKiller" time="2024-10-11T19:40:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/VigiLiens.lua</source>
      <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/json.lua</source>
     </version>
