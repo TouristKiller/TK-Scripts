@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.8.2:
+-- @version 0.8.3:
 -- @changelog:
---[[        * changes in metering
-            * Remove space between screenshots
+--[[        * Added Item and Track Notes 
+            
 ]]--        
 --------------------------------------------------------------------------
 local r                 = reaper
@@ -236,6 +236,18 @@ local function ResetConfig()
     SaveConfig()
 end
 ---------------------------------------------------------------------
+local function EnsureFileExists(filepath)
+    local file = io.open(filepath, "r")
+    if not file then
+        file = io.open(filepath, "w")
+        file:close()
+    else
+        file:close()
+    end
+end
+
+EnsureFileExists(script_path .. "tknotes.txt")
+
 local function load_projects_info()
     local file = io.open(PROJECTS_INFO_FILE, "r")
     if file then
@@ -354,6 +366,34 @@ local function LoadFavorites()
     end
 end
 LoadFavorites()
+
+local function LoadNotes()
+    local notes = {}
+    local file = io.open(script_path .. "tknotes.txt", "r")
+    if file then
+        for line in file:lines() do
+            local guid, note = line:match("([^|]+)|(.+)")
+            if guid and note then
+                notes[guid] = note
+            end
+        end
+        file:close()
+    end
+    return notes
+end
+notes = LoadNotes()
+
+local function SaveNotes()
+    local file = io.open(script_path .. "tknotes.txt", "w")
+    if file then
+        for guid, note in pairs(notes) do
+            file:write(string.format("%s|%s\n", guid, note))
+        end
+        file:close()
+    end
+end
+
+
 
 local function SaveTags()
     local tags_data = {
@@ -3857,12 +3897,15 @@ local function ShowTrackFX()
         r.ImGui_Text(ctx, "No track selected")
         return
     end
-    r.ImGui_Text(ctx, "FX on Track:")
-    
+    local min_height = r.ImGui_GetCursorPosY(ctx)
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx)
-
-    if r.ImGui_BeginChild(ctx, "TrackFXList", -1, available_height) then
+    local notes_section_height = show_notes and notes_height or 0
+    local fx_list_height = available_height - notes_section_height - 25
+    
+    if r.ImGui_BeginChild(ctx, "TrackFXList", -1, fx_list_height) then
+        r.ImGui_Dummy(ctx, 0, 5)
+        r.ImGui_Text(ctx, "FX on Track:")
         local fx_count = r.TrackFX_GetCount(TRACK)
         if fx_count > 0 then
             local track_bypassed = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
@@ -3973,42 +4016,180 @@ local function ShowTrackFX()
             end
         end       
         r.ImGui_EndChild(ctx)
+        end
+        r.ImGui_Separator(ctx)
+        -- Notation:
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
+        if r.ImGui_Selectable(ctx, show_notes and "-" or "+") then
+            show_notes = not show_notes
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, "Track Notes:")
+       
+        local window_width = r.ImGui_GetWindowWidth(ctx)
+        local text_width = r.ImGui_CalcTextSize(ctx, "Save Notes")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, window_width - text_width + 5)
+        if r.ImGui_Selectable(ctx, "  Save", false, r.ImGui_SelectableFlags_None()) then
+            SaveNotes()
+        end
+        r.ImGui_PopStyleColor(ctx, 2)
+        if show_notes then
+        local track_guid = r.GetTrackGUID(TRACK)
+        if not notes[track_guid] then
+            notes[track_guid] = LoadNotes()[track_guid] or ""
+        end
+        
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0xFFFFB366)
+        if r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height) then
+            local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##tracknotes", notes[track_guid], -1, notes_height - 10)
+            if changed then
+                notes[track_guid] = new_note
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        r.ImGui_PopStyleColor(ctx)
+        
     end
 end
-
 local function ShowItemFX()
     local item = r.GetSelectedMediaItem(0, 0)
     if not item then return end
     local take = r.GetActiveTake(item)
     if not take then return end
-    r.ImGui_Text(ctx, "FX on Item:")
-    
+
+    local min_height = r.ImGui_GetCursorPosY(ctx)
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx)
+    local notes_section_height = show_notes and notes_height or 0
+    local fx_list_height = available_height - notes_section_height - 25
 
-    if r.ImGui_BeginChild(ctx, "ItemFXList", -1, available_height) then
+    if r.ImGui_BeginChild(ctx, "ItemFXList", -1, fx_list_height) then
+        r.ImGui_Dummy(ctx, 0, 5)
+        r.ImGui_Text(ctx, "FX on Item:")
         local fx_count = r.TakeFX_GetCount(take)
         if fx_count > 0 then
             for i = 0, fx_count - 1 do
                 local retval, fx_name = r.TakeFX_GetFXName(take, i, "")
                 local is_open = r.TakeFX_GetFloatingWindow(take, i)
-                if r.ImGui_Selectable(ctx, fx_name .. "##itemfx_" .. i) then
+                local is_enabled = r.TakeFX_GetEnabled(take, i)
+                local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"
 
+                r.ImGui_PushID(ctx, i)
+                r.ImGui_BeginGroup(ctx)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
+                if r.ImGui_Button(ctx, "##updown", 13, 13) then
+                    if i > 0 then
+                        r.TakeFX_CopyToTake(take, i, take, i - 1, true)
+                    end
+                    r.ImGui_SetNextWindowFocus(ctx)
+                end
+                if r.ImGui_IsItemHovered(ctx) and config.show_tooltips then
+                    r.ImGui_SetTooltip(ctx, "Left click up / Right click down")
+                end
+                if r.ImGui_IsItemClicked(ctx, 1) and i < fx_count - 1 then
+                    r.TakeFX_CopyToTake(take, i, take, i + 1, true)
+                    r.ImGui_SetNextWindowFocus(ctx)
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
+
+                r.ImGui_SameLine(ctx)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+                r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)
+
+                if not is_enabled then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                end
+
+                if r.ImGui_Button(ctx, display_name, 0, 13) then
                     if is_open then
                         r.TakeFX_Show(take, i, 2)
                     else
                         r.TakeFX_Show(take, i, 3)
                     end
                 end
-                if r.ImGui_IsItemClicked(ctx, 1) then
-                    r.TakeFX_Delete(take, i)
-                    break
+
+                if not is_enabled then
+                    r.ImGui_PopStyleColor(ctx)
                 end
+                r.ImGui_PopStyleColor(ctx, 3)
+
+                if r.ImGui_BeginPopupContextItem(ctx) then
+                    if r.ImGui_MenuItem(ctx, "Delete") then
+                        r.TakeFX_Delete(take, i)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Copy Plugin") then
+                        copied_plugin = {take = take, index = i}
+                    end
+                    if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
+                        if copied_plugin then
+                            local _, orig_name = r.TakeFX_GetFXName(copied_plugin.take, copied_plugin.index, "")
+                            r.TakeFX_AddByName(take, orig_name, -1000)
+                        end
+                    end
+                    if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
+                        r.TakeFX_SetEnabled(take, i, not is_enabled)
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+
+                r.ImGui_EndGroup(ctx)
+                r.ImGui_PopID(ctx)
             end
         else
             r.ImGui_Text(ctx, "No FX on Item")
         end
+
+        if copied_plugin then
+            local is_empty = fx_count == 0
+            local button_text = is_empty and "Paste Plugin" or "Paste Plugin at End"
+            if r.ImGui_Button(ctx, button_text) then
+                local _, orig_name = r.TakeFX_GetFXName(copied_plugin.take, copied_plugin.index, "")
+                local insert_position = is_empty and 0 or fx_count
+                r.TakeFX_CopyToTake(copied_plugin.take, copied_plugin.index, take, insert_position, false)
+            end
+        end
         r.ImGui_EndChild(ctx)
+    end
+
+    r.ImGui_Separator(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
+    if r.ImGui_Selectable(ctx, show_notes and "-" or "+") then
+        show_notes = not show_notes
+    end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_Text(ctx, "Item Notes:")
+
+    local window_width = r.ImGui_GetWindowWidth(ctx)
+    local text_width = r.ImGui_CalcTextSize(ctx, "Save Notes")
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosX(ctx, window_width - text_width + 5)
+    if r.ImGui_Selectable(ctx, "  Save", false, r.ImGui_SelectableFlags_None()) then
+        SaveNotes()
+    end
+    r.ImGui_PopStyleColor(ctx, 2)
+
+    if show_notes then
+        local item_guid = r.BR_GetMediaItemGUID(item)
+        if not notes[item_guid] then
+            notes[item_guid] = LoadNotes()[item_guid] or ""
+        end
+
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x6699FFFF)
+        if r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height) then
+            local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##itemnotes", notes[item_guid], -1, notes_height - 10)
+            if changed then
+                notes[item_guid] = new_note
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        r.ImGui_PopStyleColor(ctx)
     end
 end
 

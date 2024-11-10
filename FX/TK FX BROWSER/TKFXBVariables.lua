@@ -80,6 +80,9 @@ current_project_info = nil
 selected_project = nil
 max_depth = 1  -- Toegevoegd
 
-
+-- NOTES
+notes = {}
+show_notes = true
+notes_height = 100
 
 
