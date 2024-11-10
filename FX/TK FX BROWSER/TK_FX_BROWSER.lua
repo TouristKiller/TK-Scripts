@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.8.3:
+-- @version 0.8.4:
 -- @changelog:
 --[[        * Added Item and Track Notes 
             
@@ -387,11 +387,15 @@ local function SaveNotes()
     local file = io.open(script_path .. "tknotes.txt", "w")
     if file then
         for guid, note in pairs(notes) do
-            file:write(string.format("%s|%s\n", guid, note))
+            if guid and note then
+                file:write(guid .. "|" .. note .. "\n")
+            end
         end
         file:close()
     end
 end
+
+
 
 
 
@@ -4046,6 +4050,7 @@ local function ShowTrackFX()
             local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##tracknotes", notes[track_guid], -1, notes_height - 10)
             if changed then
                 notes[track_guid] = new_note
+                SaveNotes()
             end
             r.ImGui_EndChild(ctx)
         end
@@ -4186,6 +4191,7 @@ local function ShowItemFX()
             local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##itemnotes", notes[item_guid], -1, notes_height - 10)
             if changed then
                 notes[item_guid] = new_note
+                SaveNotes()
             end
             r.ImGui_EndChild(ctx)
         end
