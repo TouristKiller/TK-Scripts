@@ -1,8 +1,19 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.8.5:
+-- @version 0.8.6:
 -- @changelog:
---[[        * Bugfix 
+--[[        * Bugfix (when you remove a track and ad an FX the script would crash)
+            * Bugfix (Only one line of text in Track Notes was saved. now fixed)
+            * Implemented a simple Send /Receive system (not yet pre /post choise)
+            * UI adjustments
+            STILL TODO
+            - Meter functionality (Pre/post Peak)
+            - Expand Send /Reveive functionality (ore, post, etc)
+            - Expand tag functionality
+            - Expand track template functionality
+            - Improve distribution of screenshots in current track and project
+            - Expand project files
+            - Etc......
             
 ]]--        
 --------------------------------------------------------------------------
@@ -145,6 +156,11 @@ local function SetDefaultConfig()
         frame_bg_hover_color = r.ImGui_ColorConvertDouble4ToU32(61/255, 61/255, 61/255, 1),
         frame_bg_active_gray = 71,
         frame_bg_active_color = r.ImGui_ColorConvertDouble4ToU32(71/255, 71/255, 71/255, 1),
+        slider_grab_gray = 136,  
+        slider_grab_color = r.ImGui_ColorConvertDouble4ToU32(136/255, 136/255, 136/255, 1),
+        slider_active_gray = 170,  
+        slider_active_color = r.ImGui_ColorConvertDouble4ToU32(170/255, 170/255, 170/255, 1),
+
         dropdown_bg_gray = 51,
         dropdown_bg_color = r.ImGui_ColorConvertDouble4ToU32(51/255, 51/255, 51/255, 1),
         tab_gray = 71,
@@ -203,7 +219,8 @@ local function SetDefaultConfig()
         sort_alphabetically = false,
         screenshot_view_type = 1,
         show_screenshot_settings = true,
-        show_only_dropdown = false
+        show_only_dropdown = false,
+        create_sends_folder = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -371,11 +388,9 @@ local function LoadNotes()
     local notes = {}
     local file = io.open(script_path .. "tknotes.txt", "r")
     if file then
-        for line in file:lines() do
-            local guid, note = line:match("([^|]+)|(.+)")
-            if guid and note then
-                notes[guid] = note
-            end
+        local content = file:read("*all")
+        for guid, note in content:gmatch("START_NOTE:([^|]+)|(.-)END_NOTE") do
+            notes[guid] = note
         end
         file:close()
     end
@@ -388,16 +403,12 @@ local function SaveNotes()
     if file then
         for guid, note in pairs(notes) do
             if guid and note then
-                file:write(guid .. "|" .. note .. "\n")
+                file:write("START_NOTE:" .. guid .. "|" .. note .. "END_NOTE\n")
             end
         end
         file:close()
     end
 end
-
-
-
-
 
 local function SaveTags()
     local tags_data = {
@@ -719,7 +730,7 @@ local function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 500
+    local window_height = 520
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -873,6 +884,29 @@ local function ShowConfigWindow()
             if changed_tab_hovered then
                 config.tab_hovered_gray = new_tab_hovered_gray
                 config.tab_hovered_color = r.ImGui_ColorConvertDouble4ToU32(new_tab_hovered_gray/255, new_tab_hovered_gray/255, new_tab_hovered_gray/255, 1)
+            end
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Slider Grab")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_slider, new_slider_gray = r.ImGui_SliderInt(ctx, "##Slider Grab", config.slider_grab_gray, 0, 255)
+            if changed_slider then
+                config.slider_grab_gray = new_slider_gray
+                config.slider_grab_color = r.ImGui_ColorConvertDouble4ToU32(new_slider_gray/255, new_slider_gray/255, new_slider_gray/255, 1)
+            end
+            r.ImGui_PopItemWidth(ctx)
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Slider Active")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_slider_active, new_slider_active_gray = r.ImGui_SliderInt(ctx, "##Slider Active", config.slider_active_gray, 0, 255)
+            if changed_slider_active then
+                config.slider_active_gray = new_slider_active_gray
+                config.slider_active_color = r.ImGui_ColorConvertDouble4ToU32(new_slider_active_gray/255, new_slider_active_gray/255, new_slider_active_gray/255, 1)
             end
             r.ImGui_Dummy(ctx, 0, 5)
             NewSection("MAIN WINDOW:")
@@ -1229,6 +1263,9 @@ local function ShowConfigWindow()
     end
     return config_open
 end
+
+
+
 local function EnsureTrackIconsFolderExists()
     local track_icons_path = script_path .. "TrackIcons" .. os_separator
     if not r.file_exists(track_icons_path) then
@@ -1343,7 +1380,7 @@ local function AddFXToItem(fx_name)
 end
 
 local function CreateFXChain()
-    if not TRACK then return end
+    if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local fx_count = r.TrackFX_GetCount(TRACK)
     if fx_count == 0 then return end
     r.SetOnlyTrackSelected(TRACK)
@@ -1645,7 +1682,7 @@ local function CaptureExistingFX(track, fx_index)
     end
 end
 local function CaptureFirstTrackFX()
-    if not TRACK then return end
+    if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     
     local fx_count = r.TrackFX_GetCount(TRACK)
     if fx_count > 0 then
@@ -1915,6 +1952,8 @@ function LoadPluginScreenshot(plugin_name)
     end
 end
 
+
+
 function ShowPluginScreenshot()
     if screenshot_texture and current_hovered_plugin and is_screenshot_visible then
         if r.ImGui_ValidatePtr(screenshot_texture, 'ImGui_Image*') then
@@ -2073,6 +2112,7 @@ function CountProjectFolderFiles(project_path)
     return count - 1  -- -1 omdat de eerste tel 0 is
 end
 
+
 local function ShowScreenshotWindow()
     if not config.show_screenshot_window then return end
     if screenshot_search_results and #screenshot_search_results > 0 then
@@ -2087,14 +2127,27 @@ local function ShowScreenshotWindow()
     if config.dock_screenshot_window then
         local viewport = r.ImGui_GetMainViewport(ctx)
         local viewport_pos_x, viewport_pos_y = r.ImGui_Viewport_GetPos(viewport)
+        local viewport_width = r.ImGui_Viewport_GetWorkSize(viewport)
+        local max_width
         
         if config.dock_screenshot_left then
             r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) - config.screenshot_window_width - 5, main_window_pos_y, r.ImGui_Cond_Always())
+            if show_sends_window then
+                -- Nieuwe berekening voor links gedockt Sends venster
+                local available_space = main_window_pos_x - viewport_pos_x
+                max_width = available_space - 10
+                r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, max_width, main_window_height)
+            else
+                max_width = viewport_width - viewport_pos_x
+                r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, max_width, main_window_height)
+            end
         else
             r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) + main_window_width + 5, main_window_pos_y, r.ImGui_Cond_Always())
+            max_width = main_window_pos_x - viewport_pos_x
+            r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, max_width, main_window_height)
         end
-        r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, FLT_MAX, main_window_height)
     end
+
     r.ImGui_SetNextWindowSize(ctx, config.screenshot_window_width, main_window_height, r.ImGui_Cond_FirstUseEver())
 
     local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
@@ -2103,53 +2156,26 @@ local function ShowScreenshotWindow()
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
         r.ImGui_PushFont(ctx, NormalFont)
-        r.ImGui_SetCursorPosY(ctx, 5) -- Voeg 5 pixels padding toe aan de bovenkant
-
+        r.ImGui_SetCursorPosY(ctx, 5)
+    
         if show_media_browser then
             r.ImGui_PopStyleVar(ctx, 2)
-            r.ImGui_Text(ctx, "PROJECTS:")          
+            r.ImGui_Text(ctx, "PROJECTS:")
+        elseif show_sends_window then
+            r.ImGui_PopStyleVar(ctx, 2)
+            r.ImGui_Text(ctx, "SENDS /RECEIVES:")
         else
             r.ImGui_Text(ctx, "SCREENSHOTS: " .. (FILTER or ""))
         end
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
-        r.ImGui_SameLine(ctx)
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        local button_width = 15
-        local button_height = 15
 
-        r.ImGui_SetCursorPos(ctx, window_width - button_width * 3 - 15, 5)
-        if r.ImGui_Button(ctx, config.show_screenshot_scrollbar and "B" or "N", button_width, button_height) then
-        config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar
-        SaveConfig()
-        end
+        -- ALGEMENE SLUIT KNOP
         r.ImGui_SameLine(ctx)
-        
-        -- Nieuwe toggle knop voor screenshot instellingen
-        local state_text = {
-            [1] = "1",  -- Alles zichtbaar
-            [2] = "2",  -- Alleen dropdown
-            [3] = "3"   -- Settings verborgen
-        }
-
-        r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
-        if r.ImGui_Button(ctx, state_text[config.screenshot_view_type], button_width, button_height) then
-            config.screenshot_view_type = config.screenshot_view_type % 3 + 1
-            
-            -- Update display settings based on state
-            if config.screenshot_view_type == 1 then
-                config.show_screenshot_settings = true
-                config.show_only_dropdown = false
-            elseif config.screenshot_view_type == 2 then
-                config.show_screenshot_settings = false
-                config.show_only_dropdown = true
-            else
-                config.show_screenshot_settings = false
-                config.show_only_dropdown = false
-            end
-            SaveConfig()
-        end
+            local window_width = r.ImGui_GetWindowWidth(ctx)
+            local button_width = 18
+            local button_height = 18
 
         r.ImGui_SetCursorPos(ctx, window_width - button_width - 5, 5)
         if r.ImGui_Button(ctx, "X", button_width, button_height) then
@@ -2157,11 +2183,11 @@ local function ShowScreenshotWindow()
             SaveConfig()
         end
 
-
+        -- PROJECTS GEDEELTE:
         r.ImGui_Separator(ctx)
 
         if show_media_browser then
-            r.ImGui_PushItemWidth(ctx, window_width - 55)
+            r.ImGui_PushItemWidth(ctx, window_width - 52)
             local changed, new_search_term = r.ImGui_InputTextWithHint(ctx, "##ProjectSearch", "SEARCH PROJECTS", project_search_term)
             if changed then
                 project_search_term = new_search_term
@@ -2174,12 +2200,12 @@ local function ShowScreenshotWindow()
             end
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "D", 20, 20) then
+            if r.ImGui_Button(ctx, "D", button_width, button_height) then
                 show_project_dates = not show_project_dates
             end
 
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "P", 20, 20) then
+            if r.ImGui_Button(ctx, "P", button_width, button_height) then
                 show_project_paths = not show_project_paths
             end
             -- In de UI code:
@@ -2358,7 +2384,6 @@ local function ShowScreenshotWindow()
             end
             
             -- Progress Bar
-            
             local rv, position = r.CF_Preview_GetValue(current_preview, "D_POSITION")
             local rv2, length = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
             if position and length then
@@ -2367,7 +2392,238 @@ local function ShowScreenshotWindow()
             end
             
             r.ImGui_PopStyleColor(ctx)         
-        else
+            
+            -- SEND/RECEIVE GEDEELTE:
+            elseif show_sends_window then    
+                -- SENDS SECTIE
+                r.ImGui_Text(ctx, "SENDS")
+                r.ImGui_Separator(ctx)
+                
+                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                    local num_sends = r.GetTrackNumSends(TRACK, 0)
+                    for i = 0, num_sends - 1 do
+                        local send_track = r.GetTrackSendInfo_Value(TRACK, 0, i, "P_DESTTRACK")
+                        if r.ValidatePtr(send_track, "MediaTrack*") then
+                            local _, send_name = r.GetTrackName(send_track)
+                            
+                            r.ImGui_PushID(ctx, "send_" .. i)
+                            local window_width = r.ImGui_GetWindowWidth(ctx)
+                            local section_spacing = 10
+                            local section_width = (window_width - section_spacing) / 2
+            
+                            r.ImGui_PushItemWidth(ctx, section_width - 20)
+                            if r.ImGui_TreeNode(ctx, send_name) then
+                                -- Volume slider
+                                r.ImGui_PushItemWidth(ctx, section_width - 20)
+                                local vol = r.GetTrackSendInfo_Value(TRACK, 0, i, "D_VOL")
+                                local vol_db = 20 * math.log(vol, 10)
+                                local changed, new_vol_db = r.ImGui_SliderDouble(ctx, "Vol", vol_db, -60, 12, "%.1f dB")
+                                if changed then
+                                    local new_vol = math.exp(new_vol_db * math.log(10) / 20)
+                                    r.SetTrackSendInfo_Value(TRACK, 0, i, "D_VOL", new_vol)
+                                end
+            
+                                -- Pan slider
+                                local pan = r.GetTrackSendInfo_Value(TRACK, 0, i, "D_PAN")
+                                local changed_pan, new_pan = r.ImGui_SliderDouble(ctx, "Pan", pan, -1, 1, "%.2f")
+                                if changed_pan then
+                                    r.SetTrackSendInfo_Value(TRACK, 0, i, "D_PAN", new_pan)
+                                end
+                                r.ImGui_PopItemWidth(ctx)
+            
+                                -- Mute/Solo knoppen
+                                local mute = r.GetTrackSendInfo_Value(TRACK, 0, i, "B_MUTE") == 1
+                                local changed_mute, new_mute = r.ImGui_Checkbox(ctx, "Mute", mute)
+                                if changed_mute then
+                                    r.SetTrackSendInfo_Value(TRACK, 0, i, "B_MUTE", new_mute and 1 or 0)
+                                end
+            
+                                -- Delete knop
+                                if r.ImGui_Button(ctx, "Delete Send") then
+                                    r.RemoveTrackSend(TRACK, 0, i)
+                                end
+                                
+                                r.ImGui_TreePop(ctx)
+                            end
+                            r.ImGui_PopID(ctx)
+                        end
+                    end
+            
+                    if r.ImGui_Button(ctx, "New Send") then
+                        r.ImGui_OpenPopup(ctx, "SelectSendDestination")
+                    end
+                    
+                    if r.ImGui_BeginPopup(ctx, "SelectSendDestination") then
+                        r.ImGui_Text(ctx, "Select destination track:")
+                        r.ImGui_Separator(ctx)
+                        
+                        local track_count = r.CountTracks(0)
+                        for i = 0, track_count - 1 do
+                            local dest_track = r.GetTrack(0, i)
+                            if dest_track and dest_track ~= TRACK then
+                                local _, track_name = r.GetTrackName(dest_track)
+                                if r.ImGui_Selectable(ctx, track_name) then
+                                    if config.create_sends_folder then
+                                        -- Zoek bestaande SEND TRACK folder of maak nieuwe
+                                        local folder_idx = -1
+                                        for j = 0, track_count - 1 do
+                                            local track = r.GetTrack(0, j)
+                                            local _, name = r.GetTrackName(track)
+                                            if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                                                folder_idx = j
+                                                break
+                                            end
+                                        end
+                                        
+                                        if folder_idx == -1 then
+                                            -- Maak nieuwe folder
+                                            r.InsertTrackAtIndex(track_count, true)
+                                            local folder_track = r.GetTrack(0, track_count)
+                                            r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
+                                            r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                                            
+                                            -- Verplaats de destination track naar de folder als laatste item
+                                            local last_track_in_folder = nil
+                                            for j = folder_idx + 1, track_count - 1 do
+                                                local track = r.GetTrack(0, j)
+                                                if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
+                                                    last_track_in_folder = track
+                                                end
+                                            end
+                                            if last_track_in_folder then
+                                                r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
+                                            end
+                                            r.SetMediaTrackInfo_Value(dest_track, "I_FOLDERDEPTH", -1)
+                                        end
+                                    end
+                                    
+                                    r.CreateTrackSend(TRACK, dest_track)
+                                    r.ImGui_CloseCurrentPopup(ctx)
+                                end
+                            end
+                        end
+                        r.ImGui_EndPopup(ctx)
+                    end
+                    
+                    if r.ImGui_Checkbox(ctx, "Create sends in folder", config.create_sends_folder) then
+                        config.create_sends_folder = not config.create_sends_folder
+                        SaveConfig()
+                    end
+                    
+                    r.ImGui_Dummy(ctx, 0, 10)  -- Spacing tussen secties
+            
+                    -- RECEIVES SECTIE
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_Text(ctx, "RECEIVES")
+                    r.ImGui_Separator(ctx)
+                    
+                    local num_receives = r.GetTrackNumSends(TRACK, -1)
+                    for i = 0, num_receives - 1 do
+
+                        local src_track = r.GetTrackSendInfo_Value(TRACK, -1, i, "P_SRCTRACK")
+                        if r.ValidatePtr(src_track, "MediaTrack*") then
+                            local _, src_name = r.GetTrackName(src_track)
+                            
+                            r.ImGui_PushID(ctx, "receive_" .. i)
+                            local window_width = r.ImGui_GetWindowWidth(ctx)
+                            local section_spacing = 10
+                            local section_width = (window_width - section_spacing) / 2
+            
+                            r.ImGui_PushItemWidth(ctx, section_width - 20)
+                            if r.ImGui_TreeNode(ctx, src_name) then
+                                -- Volume slider
+                                r.ImGui_PushItemWidth(ctx, section_width - 20)
+                                local vol = r.GetTrackSendInfo_Value(TRACK, -1, i, "D_VOL")
+                                local vol_db = 20 * math.log(vol, 10)
+                                local changed, new_vol_db = r.ImGui_SliderDouble(ctx, "Vol", vol_db, -60, 12, "%.1f dB")
+                                if changed then
+                                    local new_vol = math.exp(new_vol_db * math.log(10) / 20)
+                                    r.SetTrackSendInfo_Value(TRACK, -1, i, "D_VOL", new_vol)
+                                end
+            
+                                -- Pan slider
+                                local pan = r.GetTrackSendInfo_Value(TRACK, -1, i, "D_PAN")
+                                local changed_pan, new_pan = r.ImGui_SliderDouble(ctx, "Pan", pan, -1, 1, "%.2f")
+                                if changed_pan then
+                                    r.SetTrackSendInfo_Value(TRACK, -1, i, "D_PAN", new_pan)
+                                end
+                                r.ImGui_PopItemWidth(ctx)
+            
+                                -- Mute knop
+                                local mute = r.GetTrackSendInfo_Value(TRACK, -1, i, "B_MUTE") == 1
+                                local changed_mute, new_mute = r.ImGui_Checkbox(ctx, "Mute", mute)
+                                if changed_mute then
+                                    r.SetTrackSendInfo_Value(TRACK, -1, i, "B_MUTE", new_mute and 1 or 0)
+                                end
+            
+                                -- Delete knop
+                                if r.ImGui_Button(ctx, "Delete Receive") then
+                                    r.RemoveTrackSend(src_track, 0, r.GetTrackSendInfo_Value(TRACK, -1, i, "P_SRCIDX"))
+                                end
+                                
+                                r.ImGui_TreePop(ctx)
+                            end
+                            r.ImGui_PopID(ctx)
+                        end
+                    end
+                    if r.ImGui_Button(ctx, "New Receive") then
+                        r.ImGui_OpenPopup(ctx, "SelectReceiveSource")
+                    end
+                    
+                    if r.ImGui_BeginPopup(ctx, "SelectReceiveSource") then
+                        r.ImGui_Text(ctx, "Select source track:")
+                        r.ImGui_Separator(ctx)
+                        
+                        local track_count = r.CountTracks(0)
+                        for i = 0, track_count - 1 do
+                            local source_track = r.GetTrack(0, i)
+                            if source_track and source_track ~= TRACK then
+                                local _, track_name = r.GetTrackName(source_track)
+                                if r.ImGui_Selectable(ctx, track_name) then
+                                    r.CreateTrackSend(source_track, TRACK)
+                                    r.ImGui_CloseCurrentPopup(ctx)
+                                end
+                            end
+                        end
+                        r.ImGui_EndPopup(ctx)
+                    end
+                end
+
+            -- SCREENSHOTS GEDEELTE    
+            else
+            r.ImGui_SetCursorPos(ctx, window_width - button_width * 3 - 15, 5)
+            if r.ImGui_Button(ctx, config.show_screenshot_scrollbar and "B" or "N", button_width, button_height) then
+            config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar
+            SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            
+            -- Nieuwe toggle knop voor screenshot instellingen
+            local state_text = {
+                [1] = "1",  -- Alles zichtbaar
+                [2] = "2",  -- Alleen dropdown
+                [3] = "3"   -- Settings verborgen
+            }
+    
+            r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
+            if r.ImGui_Button(ctx, state_text[config.screenshot_view_type], button_width, button_height) then
+                config.screenshot_view_type = config.screenshot_view_type % 3 + 1
+                
+                -- Update display settings based on state
+                if config.screenshot_view_type == 1 then
+                    config.show_screenshot_settings = true
+                    config.show_only_dropdown = false
+                elseif config.screenshot_view_type == 2 then
+                    config.show_screenshot_settings = false
+                    config.show_only_dropdown = true
+                else
+                    config.show_screenshot_settings = false
+                    config.show_only_dropdown = false
+                end
+                SaveConfig()
+            end
+
+
             local folders_category
             for i = 1, #CAT_TEST do
                 if CAT_TEST[i].name == "FOLDERS" then
@@ -2627,11 +2883,13 @@ local function ShowScreenshotWindow()
                                         if r.ImGui_MenuItem(ctx, "Make Screenshot") then
                                             MakeScreenshot(plugin_name, nil, true)
                                         end
-                                        if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                                            AddPluginToSelectedTracks(plugin_name)
-                                        end
-                                        if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                                            AddPluginToAllTracks(plugin_name)
+                                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                            if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                                                AddPluginToSelectedTracks(plugin_name)
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                                                AddPluginToAllTracks(plugin_name)
+                                            end
                                         end
                                         if r.ImGui_MenuItem(ctx, "Add to Favorites") then
                                             AddToFavorites(plugin_name)
@@ -2639,6 +2897,59 @@ local function ShowScreenshotWindow()
                                         if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                                             RemoveFromFavorites(plugin_name)
                                         end
+                                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                            if r.ImGui_MenuItem(ctx, "Add to new track as send") then
+                                                local track_idx = r.CountTracks(0)
+                                                r.InsertTrackAtIndex(track_idx, true)
+                                                local new_track = r.GetTrack(0, track_idx)
+                                                
+                                                if config.create_sends_folder then
+                                                    -- Zoek bestaande SEND TRACK folder of maak nieuwe
+                                                    local folder_idx = -1
+                                                    for i = 0, track_idx - 1 do
+                                                        local track = r.GetTrack(0, i)
+                                                        local _, name = r.GetTrackName(track)
+                                                        if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                                                            folder_idx = i
+                                                            break
+                                                        end
+                                                    end
+                                                    
+                                                    if folder_idx == -1 then
+                                                        -- Maak nieuwe folder
+                                                        r.InsertTrackAtIndex(track_idx, true)
+                                                        local folder_track = r.GetTrack(0, track_idx)
+                                                        r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
+                                                        r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                                                        folder_idx = track_idx
+                                                        track_idx = track_idx + 1
+                                                        new_track = r.GetTrack(0, track_idx)
+                                                    else
+                                                        -- Pas folder depth aan van huidige laatste track in folder
+                                                        local last_track_in_folder
+                                                        for i = folder_idx + 1, track_idx - 1 do
+                                                            local track = r.GetTrack(0, i)
+                                                            if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
+                                                                last_track_in_folder = track
+                                                            end
+                                                        end
+                                                        if last_track_in_folder then
+                                                            r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
+                                                        end
+                                                    end
+                                                    
+                                                    -- Zet nieuwe track als laatste in de folder
+                                                    r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
+                                                end
+                                                
+                                                
+                                                -- Gebruik de juiste plugin identifier voor elk menu
+                                                r.TrackFX_AddByName(new_track, plugin_name, false, -1000)
+                                                r.CreateTrackSend(TRACK, new_track)
+                                                r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name .. " Send", true)
+                                            end
+                                        end
+                                        
                                         if config.hidden_names[plugin_name] then
                                             if r.ImGui_MenuItem(ctx, "Show Name") then
                                                 config.hidden_names[plugin_name] = nil
@@ -2991,11 +3302,13 @@ local function ShowScreenshotWindow()
                                     if r.ImGui_MenuItem(ctx, "Make Screenshot") then
                                         MakeScreenshot(fx.name, nil, true)
                                     end
-                                    if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                                        AddPluginToSelectedTracks(fx.name)
-                                    end
-                                    if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                                        AddPluginToAllTracks(fx.name)
+                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                        if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                                            AddPluginToSelectedTracks(fx.name)
+                                        end
+                                        if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                                            AddPluginToAllTracks(fx.name)
+                                        end
                                     end
                                     if r.ImGui_MenuItem(ctx, "Add to Favorites") then
                                         AddToFavorites(fx.name)
@@ -3003,6 +3316,59 @@ local function ShowScreenshotWindow()
                                     if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                                         RemoveFromFavorites(fx.name)
                                     end
+                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                        if r.ImGui_MenuItem(ctx, "Add to new track as send") then
+                                            local track_idx = r.CountTracks(0)
+                                            r.InsertTrackAtIndex(track_idx, true)
+                                            local new_track = r.GetTrack(0, track_idx)
+                                            
+                                            if config.create_sends_folder then
+                                                -- Zoek bestaande SEND TRACK folder of maak nieuwe
+                                                local folder_idx = -1
+                                                for i = 0, track_idx - 1 do
+                                                    local track = r.GetTrack(0, i)
+                                                    local _, name = r.GetTrackName(track)
+                                                    if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                                                        folder_idx = i
+                                                        break
+                                                    end
+                                                end
+                                                
+                                                if folder_idx == -1 then
+                                                    -- Maak nieuwe folder
+                                                    r.InsertTrackAtIndex(track_idx, true)
+                                                    local folder_track = r.GetTrack(0, track_idx)
+                                                    r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
+                                                    r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                                                    folder_idx = track_idx
+                                                    track_idx = track_idx + 1
+                                                    new_track = r.GetTrack(0, track_idx)
+                                                else
+                                                    -- Pas folder depth aan van huidige laatste track in folder
+                                                    local last_track_in_folder
+                                                    for i = folder_idx + 1, track_idx - 1 do
+                                                        local track = r.GetTrack(0, i)
+                                                        if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
+                                                            last_track_in_folder = track
+                                                        end
+                                                    end
+                                                    if last_track_in_folder then
+                                                        r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
+                                                    end
+                                                end
+                                                
+                                                -- Zet nieuwe track als laatste in de folder
+                                                r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
+                                            end
+                                            
+                                            
+                                            -- Gebruik de juiste plugin identifier voor elk menu
+                                            r.TrackFX_AddByName(new_track, fx.name, false, -1000)
+                                            r.CreateTrackSend(TRACK, new_track)
+                                            r.GetSetMediaTrackInfo_String(new_track, "P_NAME", fx.name .. " Send", true)
+                                        end
+                                    end
+                                    
                                     if config.hidden_names[fx.name] then
                                         if r.ImGui_MenuItem(ctx, "Show Name") then
                                             config.hidden_names[fx.name] = nil
@@ -3283,11 +3649,13 @@ local function FilterBox()
                                 if r.ImGui_MenuItem(ctx, "Make Screenshot") then
                                     MakeScreenshot(plugin.name, nil, true)
                                 end
-                                if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                                    AddPluginToSelectedTracks(plugin.name, false)
-                                end
-                                if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                                    AddPluginToAllTracks(plugin.name, false)
+                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                    if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                                        AddPluginToSelectedTracks(plugin.name, false)
+                                    end
+                                    if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                                        AddPluginToAllTracks(plugin.name, false)
+                                    end
                                 end
                                 if r.ImGui_MenuItem(ctx, "Add to Favorites") then
                                     AddToFavorites(plugin.name)
@@ -3295,6 +3663,58 @@ local function FilterBox()
                                 if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                                     RemoveFromFavorites(plugin.name)
                                 end
+                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                    if r.ImGui_MenuItem(ctx, "Add to new track as send") then
+                                        local track_idx = r.CountTracks(0)
+                                        r.InsertTrackAtIndex(track_idx, true)
+                                        local new_track = r.GetTrack(0, track_idx)
+                                        
+                                        if config.create_sends_folder then
+                                            -- Zoek bestaande SEND TRACK folder of maak nieuwe
+                                            local folder_idx = -1
+                                            for i = 0, track_idx - 1 do
+                                                local track = r.GetTrack(0, i)
+                                                local _, name = r.GetTrackName(track)
+                                                if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                                                    folder_idx = i
+                                                    break
+                                                end
+                                            end
+                                            
+                                            if folder_idx == -1 then
+                                                -- Maak nieuwe folder
+                                                r.InsertTrackAtIndex(track_idx, true)
+                                                local folder_track = r.GetTrack(0, track_idx)
+                                                r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
+                                                r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                                                folder_idx = track_idx
+                                                track_idx = track_idx + 1
+                                                new_track = r.GetTrack(0, track_idx)
+                                            else
+                                                -- Pas folder depth aan van huidige laatste track in folder
+                                                local last_track_in_folder
+                                                for i = folder_idx + 1, track_idx - 1 do
+                                                    local track = r.GetTrack(0, i)
+                                                    if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
+                                                        last_track_in_folder = track
+                                                    end
+                                                end
+                                                if last_track_in_folder then
+                                                    r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
+                                                end
+                                            end
+                                            
+                                            -- Zet nieuwe track als laatste in de folder
+                                            r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
+                                        end
+                                        
+                                        -- Gebruik de juiste plugin identifier voor elk menu
+                                        r.TrackFX_AddByName(new_track, plugin.name, false, -1000)
+                                        r.CreateTrackSend(TRACK, new_track)
+                                        r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin.name .. " Send", true)
+                                    end
+                                end
+                                
                                 if config.hidden_names[plugin.name] then
                                     if r.ImGui_MenuItem(ctx, "Show Name") then
                                         config.hidden_names[plugin.name] = nil
@@ -3344,17 +3764,70 @@ local function FilterBox()
                         if r.ImGui_MenuItem(ctx, "Make Screenshot") then
                             MakeScreenshot(filtered_fx[i].name, nil, true)
                         end
-                        if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                            AddPluginToSelectedTracks(filtered_fx[i].name, false)
-                        end
-                        if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                            AddPluginToAllTracks(filtered_fx[i].name, false)
+                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                            if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                                AddPluginToSelectedTracks(filtered_fx[i].name, false)
+                            end
+                            if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                                AddPluginToAllTracks(filtered_fx[i].name, false)
+                            end
                         end
                         if r.ImGui_MenuItem(ctx, "Add to Favorites") then
                             AddToFavorites(filtered_fx[i].name)
                         end
                         if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                             RemoveFromFavorites(filtered_fx[i].name)
+                        end
+                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                            if r.ImGui_MenuItem(ctx, "Add to new track as send") then
+                                local track_idx = r.CountTracks(0)
+                                r.InsertTrackAtIndex(track_idx, true)
+                                local new_track = r.GetTrack(0, track_idx)
+                                
+                                if config.create_sends_folder then
+                                    -- Zoek bestaande SEND TRACK folder of maak nieuwe
+                                    local folder_idx = -1
+                                    for i = 0, track_idx - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        local _, name = r.GetTrackName(track)
+                                        if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                                            folder_idx = i
+                                            break
+                                        end
+                                    end
+                                    
+                                    if folder_idx == -1 then
+                                        -- Maak nieuwe folder
+                                        r.InsertTrackAtIndex(track_idx, true)
+                                        local folder_track = r.GetTrack(0, track_idx)
+                                        r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
+                                        r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                                        folder_idx = track_idx
+                                        track_idx = track_idx + 1
+                                        new_track = r.GetTrack(0, track_idx)
+                                    else
+                                        -- Pas folder depth aan van huidige laatste track in folder
+                                        local last_track_in_folder
+                                        for i = folder_idx + 1, track_idx - 1 do
+                                            local track = r.GetTrack(0, i)
+                                            if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
+                                                last_track_in_folder = track
+                                            end
+                                        end
+                                        if last_track_in_folder then
+                                            r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
+                                        end
+                                    end
+                                    
+                                    -- Zet nieuwe track als laatste in de folder
+                                    r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
+                                end
+                                
+                                -- Gebruik de juiste plugin identifier voor elk menu
+                                r.TrackFX_AddByName(new_track, filtered_fx[i].name, false, -1000)
+                                r.CreateTrackSend(TRACK, new_track)
+                                r.GetSetMediaTrackInfo_String(new_track, "P_NAME", filtered_fx[i].name .. " Send", true)
+                            end
                         end
                         if config.hidden_names[filtered_fx[i].name] then
                             if r.ImGui_MenuItem(ctx, "Show Name") then
@@ -3544,7 +4017,7 @@ local function DrawItems(tbl, main_cat_name)
                         if ADD_FX_TO_ITEM then
                             AddFXToItem(tbl[i].fx[j])
                         else
-                            if TRACK then
+                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                                 r.TrackFX_AddByName(TRACK, tbl[i].fx[j], false, -1000 - r.TrackFX_GetCount(TRACK))
                             end
                         end
@@ -3566,32 +4039,88 @@ local function DrawItems(tbl, main_cat_name)
                     end
                    
                     if r.ImGui_BeginPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j) then
-                        if r.ImGui_MenuItem(ctx, "Make Screenshot") then
-                            MakeScreenshot(tbl[i].fx[j], nil, true)
-                        end
-                        if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                            AddPluginToSelectedTracks(tbl[i].fx[j], false)
-                        end
-                        if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                            AddPluginToAllTracks(tbl[i].fx[j], false)
-                        end
-                        if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                            AddToFavorites(tbl[i].fx[j])
-                        end
-                        if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                            RemoveFromFavorites(tbl[i].fx[j])
-                        end
-                        if config.hidden_names[tbl[i].fx[j]] then
-                            if r.ImGui_MenuItem(ctx, "Show Name") then
-                                config.hidden_names[tbl[i].fx[j]] = nil
-                                SaveConfig()
+                        
+                            if r.ImGui_MenuItem(ctx, "Make Screenshot") then
+                                MakeScreenshot(tbl[i].fx[j], nil, true)
                             end
-                        else
-                            if r.ImGui_MenuItem(ctx, "Hide Name") then
-                                config.hidden_names[tbl[i].fx[j]] = true
-                                SaveConfig()
+                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                                    AddPluginToSelectedTracks(tbl[i].fx[j], false)
+                                end
+                                if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                                    AddPluginToAllTracks(tbl[i].fx[j], false)
+                                end
                             end
-                        end
+                            if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                                AddToFavorites(tbl[i].fx[j])
+                            end
+                            if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                                RemoveFromFavorites(tbl[i].fx[j])
+                            end
+                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                if r.ImGui_MenuItem(ctx, "Add to new track as send") then
+                                    local track_idx = r.CountTracks(0)
+                                    r.InsertTrackAtIndex(track_idx, true)
+                                    local new_track = r.GetTrack(0, track_idx)
+                                    
+                                    if config.create_sends_folder then
+                                        -- Zoek bestaande SEND TRACK folder of maak nieuwe
+                                        local folder_idx = -1
+                                        for i = 0, track_idx - 1 do
+                                            local track = r.GetTrack(0, i)
+                                            local _, name = r.GetTrackName(track)
+                                            if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                                                folder_idx = i
+                                                break
+                                            end
+                                        end
+                                        
+                                        if folder_idx == -1 then
+                                            -- Maak nieuwe folder
+                                            r.InsertTrackAtIndex(track_idx, true)
+                                            local folder_track = r.GetTrack(0, track_idx)
+                                            r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
+                                            r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                                            folder_idx = track_idx
+                                            track_idx = track_idx + 1
+                                            new_track = r.GetTrack(0, track_idx)
+                                        else
+                                            -- Pas folder depth aan van huidige laatste track in folder
+                                            local last_track_in_folder
+                                            for i = folder_idx + 1, track_idx - 1 do
+                                                local track = r.GetTrack(0, i)
+                                                if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
+                                                    last_track_in_folder = track
+                                                end
+                                            end
+                                            if last_track_in_folder then
+                                                r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
+                                            end
+                                        end
+                                        
+                                        -- Zet nieuwe track als laatste in de folder
+                                        r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
+                                    end
+                                    
+                                    -- Gebruik de juiste plugin identifier voor elk menu
+                                    r.TrackFX_AddByName(new_track, tbl[i].fx[j], false, -1000)
+                                    r.CreateTrackSend(TRACK, new_track)
+                                    r.GetSetMediaTrackInfo_String(new_track, "P_NAME", tbl[i].fx[j] .. " Send", true)
+                                end
+                            end
+                              
+                            if config.hidden_names[tbl[i].fx[j]] then
+                                if r.ImGui_MenuItem(ctx, "Show Name") then
+                                    config.hidden_names[tbl[i].fx[j]] = nil
+                                    SaveConfig()
+                                end
+                            else
+                                if r.ImGui_MenuItem(ctx, "Hide Name") then
+                                    config.hidden_names[tbl[i].fx[j]] = true
+                                    SaveConfig()
+                                end
+                            end
+                    
                         r.ImGui_EndPopup(ctx)
                     end
                 end
@@ -3612,7 +4141,7 @@ end
 local function DrawFavorites()
     for i, fav in ipairs(favorite_plugins) do
         if r.ImGui_Selectable(ctx, fav .. "##favorites_" .. i) then
-            if TRACK then
+            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                 r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
             end
             LAST_USED_FX = fav
@@ -3634,15 +4163,70 @@ local function DrawFavorites()
             if r.ImGui_MenuItem(ctx, "Make Screenshot") then
                 MakeScreenshot(fav, nil, true)
             end
-            if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                AddPluginToSelectedTracks(fav, false)
-            end
-            if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                AddPluginToAllTracks(fav, false)
+            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+                    AddPluginToSelectedTracks(fav, false)
+                end
+                if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+                    AddPluginToAllTracks(fav, false)
+                end
             end
             if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                 RemoveFromFavorites(fav)
             end
+            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                if r.ImGui_MenuItem(ctx, "Add to new track as send") then
+                    local track_idx = r.CountTracks(0)
+                    r.InsertTrackAtIndex(track_idx, true)
+                    local new_track = r.GetTrack(0, track_idx)
+                    
+                    if config.create_sends_folder then
+                        -- Zoek bestaande SEND TRACK folder of maak nieuwe
+                        local folder_idx = -1
+                        for i = 0, track_idx - 1 do
+                            local track = r.GetTrack(0, i)
+                            local _, name = r.GetTrackName(track)
+                            if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                                folder_idx = i
+                                break
+                            end
+                        end
+                        
+                        if folder_idx == -1 then
+                            -- Maak nieuwe folder
+                            r.InsertTrackAtIndex(track_idx, true)
+                            local folder_track = r.GetTrack(0, track_idx)
+                            r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
+                            r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                            folder_idx = track_idx
+                            track_idx = track_idx + 1
+                            new_track = r.GetTrack(0, track_idx)
+                        else
+                            -- Pas folder depth aan van huidige laatste track in folder
+                            local last_track_in_folder
+                            for i = folder_idx + 1, track_idx - 1 do
+                                local track = r.GetTrack(0, i)
+                                if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
+                                    last_track_in_folder = track
+                                end
+                            end
+                            if last_track_in_folder then
+                                r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
+                            end
+                        end
+                        
+                        -- Zet nieuwe track als laatste in de folder
+                        r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
+                    end
+                    
+                    
+                    -- Gebruik de juiste plugin identifier voor elk menu
+                    r.TrackFX_AddByName(new_track, fav, false, -1000)
+                    r.CreateTrackSend(TRACK, new_track)
+                    r.GetSetMediaTrackInfo_String(new_track, "P_NAME", fav .. " Send", true)
+                end
+            end
+            
             if config.hidden_names[fav] then
                 if r.ImGui_MenuItem(ctx, "Show Name") then
                     config.hidden_names[fav] = nil
@@ -3681,8 +4265,10 @@ local function DrawBottomButtons()
     if not config.hideVolumeSlider then
         -- Pan en Width sliders naast elkaar
         local half_width = (track_info_width - button_spacing) / 2
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x666666FF)  -- normale staat
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
+        --r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), config.slider_grab_color)
+        --r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), config.slider_active_color)
+        --r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 4)
+        --r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
         
 -- Pan slider met context menu
 r.ImGui_PushItemWidth(ctx, half_width)
@@ -3786,7 +4372,7 @@ end
                 local new_volume = 10^(new_volume_db/20)
                 r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
             end
-            r.ImGui_PopStyleColor(ctx, 2)
+            --r.ImGui_PopStyleColor(ctx, 4)
             r.ImGui_PopItemWidth(ctx)
         end
     end
@@ -4246,7 +4832,7 @@ local function CalculateTopHeight(config)
 end
 
 local function CalculateMenuHeight(config)
-    local height = 0
+    local height = 16
     if config.show_favorites then height = height + 16 end
     if config.show_all_plugins then height = height + 16 end
     if config.show_developer then height = height + 16 end
@@ -4355,7 +4941,15 @@ function Frame()
                 end
             end
         end
-        if LAST_USED_FX then
+        -- Nieuwe SEND/RECEIVE knop
+        if r.ImGui_Selectable(ctx, "SEND/RECEIVE") then
+            show_sends_window = not show_sends_window
+            show_screenshot_window = true
+            selected_folder = nil
+            ClearScreenshotCache()
+        end
+
+        if LAST_USED_FX and r.ValidatePtr(TRACK, "MediaTrack*") then
             if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
                 r.TrackFX_AddByName(TRACK, LAST_USED_FX, false,
                     -1000 - r.TrackFX_GetCount(TRACK))
@@ -4553,6 +5147,8 @@ function Main()
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 3, 3)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 8)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1))
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), config.button_background_color)
@@ -4562,6 +5158,8 @@ function Main()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.frame_bg_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), config.frame_bg_hover_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), config.frame_bg_active_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), config.slider_grab_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), config.slider_active_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
         r.ImGui_PushFont(ctx, NormalFont)
@@ -4590,6 +5188,7 @@ dock = r.ImGui_GetWindowDockID(ctx)
 if visible then
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
+
     if config.show_screenshot_window then
         r.ImGui_PushID(ctx, "ScreenshotWindow")
         local screenshot_visible = ShowScreenshotWindow()
@@ -4598,6 +5197,12 @@ if visible then
         end
         r.ImGui_PopID(ctx)
     end
+    --[[if config.show_screenshot_window then
+        local screenshot_visible = ShowScreenshotWindow()
+        if screenshot_visible then
+            r.ImGui_End(ctx)
+        end
+    end]]--
     if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
         local progress_text = string.format("Loading %d/%d (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
         r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 0, progress_text)
@@ -4638,10 +5243,12 @@ if visible then
                     ClearScreenshotCache()
                     ShowPluginScreenshot()
                 end
+                
                 -- Herstel de stijlen
                 if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
                     r.ImGui_PopFont(ctx)
                 end
+                
                 r.ImGui_PopStyleColor(ctx, 4)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_PushFont(ctx, LargeFont)
@@ -5242,8 +5849,8 @@ if visible then
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
-    r.ImGui_PopStyleVar(ctx, 4)
-    r.ImGui_PopStyleColor(ctx, 11)
+    r.ImGui_PopStyleVar(ctx, 6)
+    r.ImGui_PopStyleColor(ctx, 13)
     
     if SHOULD_CLOSE_SCRIPT then
         return
