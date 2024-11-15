@@ -1,8 +1,8 @@
 -- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.1.0:
+-- @version 0.1.1:
 -- @changelog:
---[[        * Initial Release
+--[[        * Nothing realy, just some changes under the hood
             
 ]]--        
 --------------------------------------------------------------------------
@@ -11,7 +11,10 @@ local r = reaper
 local sep = package.config:sub(1,1)
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local peakfiles_path = script_path .. "" .. sep
-local ctx = r.ImGui_CreateContext('TK Media Browser')
+-- local ctx = r.ImGui_CreateContext('TK Media Browser')
+local ctx = r.ImGui_CreateContext('TK_MB_' .. reaper.genGuid())
+
+-- local ctx = r.ImGui_CreateContext('TK Media Browser')
 local script_is_open = false
 local font_size = 12
 local normal_font = reaper.ImGui_CreateFont('sans-serif', font_size)
