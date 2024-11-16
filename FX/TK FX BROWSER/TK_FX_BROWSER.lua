@@ -1,15 +1,13 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.8.6:
+-- @version 0.8.7:
 -- @changelog:
---[[        * Bugfix (when you remove a track and ad an FX the script would crash)
-            * Bugfix (Only one line of text in Track Notes was saved. now fixed)
-            * Implemented a simple Send /Receive system (not yet pre /post choise)
-            * UI adjustments
-            STILL TODO
+--[[        * Bugfix (Taking correct screenshot in OSX)
+            * Rightclick Track info menu in color of theme
+            * Added a lot of actions to the tag menu
+            * Expanded Sends /Receive funtionality + Matrix
+            
             - Meter functionality (Pre/post Peak)
-            - Expand Send /Reveive functionality (ore, post, etc)
-            - Expand tag functionality
             - Expand track template functionality
             - Improve distribution of screenshots in current track and project
             - Expand project files
@@ -156,9 +154,9 @@ local function SetDefaultConfig()
         frame_bg_hover_color = r.ImGui_ColorConvertDouble4ToU32(61/255, 61/255, 61/255, 1),
         frame_bg_active_gray = 71,
         frame_bg_active_color = r.ImGui_ColorConvertDouble4ToU32(71/255, 71/255, 71/255, 1),
-        slider_grab_gray = 136,  
+        slider_grab_gray = 136,  -- Waarde 0x88
         slider_grab_color = r.ImGui_ColorConvertDouble4ToU32(136/255, 136/255, 136/255, 1),
-        slider_active_gray = 170,  
+        slider_active_gray = 170,  -- Waarde 0xAA
         slider_active_color = r.ImGui_ColorConvertDouble4ToU32(170/255, 170/255, 170/255, 1),
 
         dropdown_bg_gray = 51,
@@ -398,6 +396,7 @@ local function LoadNotes()
 end
 notes = LoadNotes()
 
+
 local function SaveNotes()
     local file = io.open(script_path .. "tknotes.txt", "w")
     if file then
@@ -409,6 +408,10 @@ local function SaveNotes()
         file:close()
     end
 end
+
+
+
+
 
 local function SaveTags()
     local tags_data = {
@@ -1627,6 +1630,7 @@ local function CaptureScreenshot(plugin_name, fx_index)
             r.JS_LICE_DestroyBitmap(srcBmp)
         else
             -- Voor macOS gebruiken we nog steeds de originele methode
+            h = top - bottom
             ScreenshotOSX(filename, left, top, w, h)
         end
         local file = io.open(filename, "rb")
@@ -2112,6 +2116,105 @@ function CountProjectFolderFiles(project_path)
     return count - 1  -- -1 omdat de eerste tel 0 is
 end
 
+function ShowRoutingMatrix()
+    -- Bereken de maximale breedte voor de legenda
+    local max_name_width = 0
+    local track_count = r.CountTracks(0)
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local _, name = r.GetTrackName(track)
+        local text_width = r.ImGui_CalcTextSize(ctx, i+1 .. ": " .. name)
+        max_name_width = math.max(max_name_width, text_width)
+    end
+
+    local cell_size = 20
+    local header_height = 20
+    local left_margin = 20
+    local legend_width = max_name_width + 20  -- Extra ruimte voor padding
+    local matrix_width = (track_count + 1) * cell_size + left_margin + legend_width
+    local matrix_height = (track_count + 1) * cell_size + header_height
+    
+    if r.ImGui_BeginChild(ctx, "RoutingMatrix", matrix_width, matrix_height) then
+        -- Kolom headers (alleen nummers)
+        for i = 0, track_count - 1 do
+            local x = (i + 1) * cell_size + left_margin
+            local y = 20
+            r.ImGui_SetCursorPos(ctx, x + 5, y)
+            r.ImGui_Text(ctx, tostring(i + 1))
+        end
+        
+        -- Rij headers (alleen nummers)
+        for i = 0, track_count - 1 do
+            local y = (i + 1) * cell_size + header_height
+            r.ImGui_SetCursorPos(ctx, 15, y + 2)
+            r.ImGui_Text(ctx, tostring(i + 1))
+        end
+        
+        -- Matrix cellen
+        for src = 0, track_count - 1 do
+            local src_track = r.GetTrack(0, src)
+            for dst = 0, track_count - 1 do
+                if src ~= dst then
+                    local dst_track = r.GetTrack(0, dst)
+                    local x = (dst + 1) * cell_size + left_margin
+                    local y = (src + 1) * cell_size + header_height
+                    
+                    r.ImGui_SetCursorPos(ctx, x, y)
+                    r.ImGui_PushID(ctx, string.format("cell_%d_%d", src, dst))
+                    
+                    local send_idx = GetSendIndex(src_track, dst_track)
+                    local has_send = send_idx >= 0
+                    
+                    if has_send then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)  -- Rood vlak
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)  -- Lichter rood bij hover
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xCC0000FF)   -- Donkerder rood bij klik
+                        if r.ImGui_Button(ctx, "##send", cell_size-4, cell_size-4) then
+                            r.RemoveTrackSend(src_track, 0, send_idx)
+                        end
+                        r.ImGui_PopStyleColor(ctx, 3)
+                    else
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x333333FF)  -- Donkergrijs vlak
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x666666FF)  
+                        if r.ImGui_Button(ctx, "##empty", cell_size-4, cell_size-4) then
+                            r.CreateTrackSend(src_track, dst_track)
+                        end
+                        r.ImGui_PopStyleColor(ctx, 2)
+                    end
+                    
+                    r.ImGui_PopID(ctx)
+                end
+            end
+        end
+        
+        -- Legenda
+        local legend_x = (track_count + 1) * cell_size + left_margin + 20
+        r.ImGui_SetCursorPos(ctx, legend_x, 20)
+        r.ImGui_Text(ctx, "Track Legend:")
+        for i = 0, track_count - 1 do
+            local track = r.GetTrack(0, i)
+            local _, name = r.GetTrackName(track)
+            r.ImGui_SetCursorPos(ctx, legend_x, 40 + (i * 20))
+            r.ImGui_Text(ctx, string.format("%d: %s", i + 1, name))
+        end
+        
+        r.ImGui_EndChild(ctx)
+    end
+end
+
+
+
+function GetSendIndex(src_track, dst_track)
+    local num_sends = r.GetTrackNumSends(src_track, 0)
+    for i = 0, num_sends - 1 do
+        local dest = r.GetTrackSendInfo_Value(src_track, 0, i, "P_DESTTRACK")
+        if dest == dst_track then
+            return i
+        end
+    end
+    return -1
+end
+
 
 local function ShowScreenshotWindow()
     if not config.show_screenshot_window then return end
@@ -2396,8 +2499,8 @@ local function ShowScreenshotWindow()
             -- SEND/RECEIVE GEDEELTE:
             elseif show_sends_window then    
                 -- SENDS SECTIE
-                r.ImGui_Text(ctx, "SENDS")
-                r.ImGui_Separator(ctx)
+                r.ImGui_Text(ctx, "SENDS:")
+                --r.ImGui_Separator(ctx)
                 
                 if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                     local num_sends = r.GetTrackNumSends(TRACK, 0)
@@ -2408,13 +2511,12 @@ local function ShowScreenshotWindow()
                             
                             r.ImGui_PushID(ctx, "send_" .. i)
                             local window_width = r.ImGui_GetWindowWidth(ctx)
-                            local section_spacing = 10
-                            local section_width = (window_width - section_spacing) / 2
+                            
             
-                            r.ImGui_PushItemWidth(ctx, section_width - 20)
+                            r.ImGui_PushItemWidth(ctx, window_width - 20)
                             if r.ImGui_TreeNode(ctx, send_name) then
                                 -- Volume slider
-                                r.ImGui_PushItemWidth(ctx, section_width - 20)
+                                r.ImGui_PushItemWidth(ctx, window_width - 60)
                                 local vol = r.GetTrackSendInfo_Value(TRACK, 0, i, "D_VOL")
                                 local vol_db = 20 * math.log(vol, 10)
                                 local changed, new_vol_db = r.ImGui_SliderDouble(ctx, "Vol", vol_db, -60, 12, "%.1f dB")
@@ -2437,8 +2539,68 @@ local function ShowScreenshotWindow()
                                 if changed_mute then
                                     r.SetTrackSendInfo_Value(TRACK, 0, i, "B_MUTE", new_mute and 1 or 0)
                                 end
-            
-                                -- Delete knop
+                                r.ImGui_SameLine(ctx)
+                                -- Check of alle andere sends gemute zijn
+                                local all_others_muted = true
+                                local num_sends = r.GetTrackNumSends(TRACK, 0)
+                                for j = 0, num_sends - 1 do
+                                    if j ~= i and r.GetTrackSendInfo_Value(TRACK, 0, j, "B_MUTE") == 0 then
+                                        all_others_muted = false
+                                        break
+                                    end
+                                end
+                                local is_soloed = r.GetTrackSendInfo_Value(TRACK, 0, i, "B_MUTE") == 0 and all_others_muted
+                                local changed_solo, new_solo = r.ImGui_Checkbox(ctx, "Solo", is_soloed)
+                                if changed_solo then
+                                    for j = 0, num_sends - 1 do
+                                        if new_solo then
+                                            -- Als we solo-en, mute alle andere sends
+                                            r.SetTrackSendInfo_Value(TRACK, 0, j, "B_MUTE", j == i and 0 or 1)
+                                        else
+                                            -- Als we unsolo-en, unmute alles
+                                            r.SetTrackSendInfo_Value(TRACK, 0, j, "B_MUTE", 0)
+                                        end
+                                    end
+                                end
+                                r.ImGui_SameLine(ctx)
+                                local phase = r.GetTrackSendInfo_Value(TRACK, 0, i, "B_PHASE") == 1
+                                local changed_phase, new_phase = r.ImGui_Checkbox(ctx, "Phase", phase)
+                                if changed_phase then
+                                    r.SetTrackSendInfo_Value(TRACK, 0, i, "B_PHASE", new_phase and 1 or 0)
+                                end
+                                r.ImGui_SameLine(ctx)
+                                local mono = r.GetTrackSendInfo_Value(TRACK, 0, i, "B_MONO") == 1
+                                local changed_mono, new_mono = r.ImGui_Checkbox(ctx, "Mono", mono)
+                                if changed_mono then
+                                    r.SetTrackSendInfo_Value(TRACK, 0, i, "B_MONO", new_mono and 1 or 0)
+                                end
+                                --r.ImGui_SameLine(ctx)
+                                local current_mode = r.GetTrackSendInfo_Value(TRACK, 0, i, "I_SENDMODE")
+                                local mode_names = {
+                                    "Post-Fader/Post-Pan",  -- mode 0
+                                    "Pre-Fader/Post-FX",    -- mode 3
+                                    "Pre-Fader/Pre-FX"      -- mode 1
+                                }
+                                local mode_values = {0, 3, 1}
+                                local current_idx = 1
+                                for i, value in ipairs(mode_values) do
+                                    if value == current_mode then
+                                        current_idx = i
+                                        break
+                                    end
+                                end
+
+                                r.ImGui_PushItemWidth(ctx, 100)
+                                if r.ImGui_BeginCombo(ctx, "##sendmode" .. i, mode_names[current_idx]) then
+                                    for idx, name in ipairs(mode_names) do
+                                        if r.ImGui_Selectable(ctx, name, current_idx == idx) then
+                                            r.SetTrackSendInfo_Value(TRACK, 0, i, "I_SENDMODE", mode_values[idx])
+                                        end
+                                    end
+                                    r.ImGui_EndCombo(ctx)
+                                end
+                                r.ImGui_PopItemWidth(ctx)
+                                r.ImGui_SameLine(ctx)
                                 if r.ImGui_Button(ctx, "Delete Send") then
                                     r.RemoveTrackSend(TRACK, 0, i)
                                 end
@@ -2514,8 +2676,8 @@ local function ShowScreenshotWindow()
             
                     -- RECEIVES SECTIE
                     r.ImGui_Separator(ctx)
-                    r.ImGui_Text(ctx, "RECEIVES")
-                    r.ImGui_Separator(ctx)
+                    r.ImGui_Text(ctx, "RECEIVES:")
+                    -- r.ImGui_Separator(ctx)
                     
                     local num_receives = r.GetTrackNumSends(TRACK, -1)
                     for i = 0, num_receives - 1 do
@@ -2526,13 +2688,11 @@ local function ShowScreenshotWindow()
                             
                             r.ImGui_PushID(ctx, "receive_" .. i)
                             local window_width = r.ImGui_GetWindowWidth(ctx)
-                            local section_spacing = 10
-                            local section_width = (window_width - section_spacing) / 2
             
-                            r.ImGui_PushItemWidth(ctx, section_width - 20)
+                            r.ImGui_PushItemWidth(ctx, window_width - 20)
                             if r.ImGui_TreeNode(ctx, src_name) then
                                 -- Volume slider
-                                r.ImGui_PushItemWidth(ctx, section_width - 20)
+                                r.ImGui_PushItemWidth(ctx, window_width - 60)
                                 local vol = r.GetTrackSendInfo_Value(TRACK, -1, i, "D_VOL")
                                 local vol_db = 20 * math.log(vol, 10)
                                 local changed, new_vol_db = r.ImGui_SliderDouble(ctx, "Vol", vol_db, -60, 12, "%.1f dB")
@@ -2555,7 +2715,70 @@ local function ShowScreenshotWindow()
                                 if changed_mute then
                                     r.SetTrackSendInfo_Value(TRACK, -1, i, "B_MUTE", new_mute and 1 or 0)
                                 end
-            
+                    
+                                r.ImGui_SameLine(ctx)
+                                -- Check of alle andere receives gemute zijn
+                                local all_others_muted = true
+                                local num_receives = r.GetTrackNumSends(TRACK, -1)
+                                for j = 0, num_receives - 1 do
+                                    if j ~= i and r.GetTrackSendInfo_Value(TRACK, -1, j, "B_MUTE") == 0 then
+                                        all_others_muted = false
+                                        break
+                                    end
+                                end
+                                local is_soloed = r.GetTrackSendInfo_Value(TRACK, -1, i, "B_MUTE") == 0 and all_others_muted
+                                local changed_solo, new_solo = r.ImGui_Checkbox(ctx, "Solo", is_soloed)
+                                if changed_solo then
+                                    for j = 0, num_receives - 1 do
+                                        if new_solo then
+                                            -- Als we solo-en, mute alle andere receives
+                                            r.SetTrackSendInfo_Value(TRACK, -1, j, "B_MUTE", j == i and 0 or 1)
+                                        else
+                                            -- Als we unsolo-en, unmute alles
+                                            r.SetTrackSendInfo_Value(TRACK, -1, j, "B_MUTE", 0)
+                                        end
+                                    end
+                                end
+                                r.ImGui_SameLine(ctx)
+                                local phase = r.GetTrackSendInfo_Value(TRACK, -1, i, "B_PHASE") == 1
+                                local changed_phase, new_phase = r.ImGui_Checkbox(ctx, "Phase", phase)
+                                if changed_phase then
+                                    r.SetTrackSendInfo_Value(TRACK, -1, i, "B_PHASE", new_phase and 1 or 0)
+                                end
+                                r.ImGui_SameLine(ctx)
+                                local mono = r.GetTrackSendInfo_Value(TRACK, -1, i, "B_MONO") == 1
+                                local changed_mono, new_mono = r.ImGui_Checkbox(ctx, "Mono", mono)
+                                if changed_mono then
+                                    r.SetTrackSendInfo_Value(TRACK, -1, i, "B_MONO", new_mono and 1 or 0)
+                                end
+
+                                --r.ImGui_SameLine(ctx)
+                                local current_mode = r.GetTrackSendInfo_Value(TRACK, -1, i, "I_SENDMODE")
+                                local mode_names = {
+                                    "Post-Fader/Post-Pan",  -- mode 0
+                                    "Pre-Fader/Post-FX",    -- mode 3
+                                    "Pre-Fader/Pre-FX"      -- mode 1
+                                }
+                                local mode_values = {0, 3, 1}
+                                local current_idx = 1
+                                for i, value in ipairs(mode_values) do
+                                    if value == current_mode then
+                                        current_idx = i
+                                        break
+                                    end
+                                end
+
+                                r.ImGui_PushItemWidth(ctx, 100)
+                                if r.ImGui_BeginCombo(ctx, "##receivemode" .. i, mode_names[current_idx]) then
+                                    for idx, name in ipairs(mode_names) do
+                                        if r.ImGui_Selectable(ctx, name, current_idx == idx) then
+                                            r.SetTrackSendInfo_Value(TRACK, -1, i, "I_SENDMODE", mode_values[idx])
+                                        end
+                                    end
+                                    r.ImGui_EndCombo(ctx)
+                                end
+                                r.ImGui_PopItemWidth(ctx)
+                                r.ImGui_SameLine(ctx)
                                 -- Delete knop
                                 if r.ImGui_Button(ctx, "Delete Receive") then
                                     r.RemoveTrackSend(src_track, 0, r.GetTrackSendInfo_Value(TRACK, -1, i, "P_SRCIDX"))
@@ -2588,7 +2811,14 @@ local function ShowScreenshotWindow()
                         r.ImGui_EndPopup(ctx)
                     end
                 end
-
+                r.ImGui_Dummy(ctx, 0, 10)  -- Spacing tussen secties
+                r.ImGui_Separator(ctx)
+                if r.ImGui_Button(ctx, "Matrix View") then
+                    show_routing_matrix = not show_routing_matrix
+                end
+                if show_routing_matrix then
+                    ShowRoutingMatrix()
+                end
             -- SCREENSHOTS GEDEELTE    
             else
             r.ImGui_SetCursorPos(ctx, window_width - button_width * 3 - 15, 5)
@@ -5285,8 +5515,13 @@ if visible then
                     if keep_context_menu_open and not pinned_menu_pos_x then
                         pinned_menu_pos_x, pinned_menu_pos_y = r.ImGui_GetWindowPos(ctx)
                     end
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)                   
-                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1))
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), config.button_background_color)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), config.button_hover_color)
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 4, 4)
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 4)
                     r.ImGui_BeginGroup(ctx)
                     if r.ImGui_Button(ctx, keep_context_menu_open and "Close Menu " or "Lock Menu ") then
                         keep_context_menu_open = not keep_context_menu_open
@@ -5303,7 +5538,7 @@ if visible then
                         r.ImGui_CloseCurrentPopup(ctx)
                     end
                     r.ImGui_EndGroup(ctx)
-                    r.ImGui_PopStyleVar(ctx)
+                    --r.ImGui_PopStyleVar(ctx)
                     if not config.hide_default_titlebar_menu_items then
                         if r.ImGui_MenuItem(ctx, "Color Picker") then
                             show_color_picker = true
@@ -5389,7 +5624,8 @@ if visible then
                             r.ImGui_EndPopup(ctx)
                         end
                     end                    
-                    r.ImGui_PopStyleColor(ctx)
+                    r.ImGui_PopStyleVar(ctx, 3)
+                    r.ImGui_PopStyleColor(ctx, 4)
                     r.ImGui_EndPopup(ctx)
                 end                
                 if keep_context_menu_open and not r.ImGui_IsPopupOpen(ctx, "TrackContextMenu") then
@@ -5621,7 +5857,125 @@ if visible then
                                         SaveTags()
                                     end
                                 end
+                                if r.ImGui_MenuItem(ctx, "Hide all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 0)
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 0)
+                                    end
+                                    r.TrackList_AdjustWindows(false)  -- false voor mixer view update
+                                end
                                 
+                                if r.ImGui_MenuItem(ctx, "Show all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
+                                    end
+                                    r.TrackList_AdjustWindows(false)  -- false voor mixer view update
+                                end
+                                if r.ImGui_MenuItem(ctx, "Hide all tracks except with this tag") then
+                                    local tagged_tracks = FilterTracksByTag(tag)
+                                    local track_count = r.CountTracks(0)
+                                    for i = 0, track_count - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        local should_hide = true
+                                        for _, tagged_track in ipairs(tagged_tracks) do
+                                            if track == tagged_track then
+                                                should_hide = false
+                                                break
+                                            end
+                                        end
+                                        if should_hide then
+                                            r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 0)
+                                            r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 0)
+                                        end
+                                    end
+                                    r.TrackList_AdjustWindows(false)
+                                end
+                                
+                                if r.ImGui_MenuItem(ctx, "Show all tracks") then
+                                    local track_count = r.CountTracks(0)
+                                    for i = 0, track_count - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
+                                    end
+                                    r.TrackList_AdjustWindows(false)
+                                end
+                                    -- 1. Select all tracks with this tag
+                                if r.ImGui_MenuItem(ctx, "Select all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    r.Main_OnCommand(40297, 0) -- Unselect all tracks
+                                    for _, track in ipairs(tracks) do
+                                        r.SetTrackSelected(track, true)
+                                    end
+                                end
+                                if r.ImGui_MenuItem(ctx, "Unselect all tracks") then
+                                    r.Main_OnCommand(40297, 0) -- Unselect all tracks
+                                end
+                                -- 3. Move all tracks with this tag to folder
+                                if r.ImGui_MenuItem(ctx, "Move to new folder") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    if #tracks > 0 then
+                                        -- Vind de eerste track positie
+                                        local first_track_idx = math.huge
+                                        for _, track in ipairs(tracks) do
+                                            local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
+                                            first_track_idx = math.min(first_track_idx, track_idx)
+                                        end
+                                        
+                                        -- Maak folder track
+                                        r.InsertTrackAtIndex(first_track_idx, true)
+                                        local folder_track = r.GetTrack(0, first_track_idx)
+                                        r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", tag .. " Folder", true)
+                                        r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                                        
+                                        -- Verplaats tracks naar folder
+                                        for _, track in ipairs(tracks) do
+                                            r.SetMediaTrackInfo_Value(track, "I_FOLDERDEPTH", 0)
+                                        end
+                                        
+                                        -- Laatste track in folder markeren
+                                        r.SetMediaTrackInfo_Value(tracks[#tracks], "I_FOLDERDEPTH", -1)
+                                    end
+                                end
+
+                                -- 5. Mute/Unmute all tracks with this tag
+                                if r.ImGui_MenuItem(ctx, "Mute all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "B_MUTE", 1)
+                                    end
+                                end
+                                if r.ImGui_MenuItem(ctx, "Unmute all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "B_MUTE", 0)
+                                    end
+                                end
+
+                                -- 6. Solo tracks with this tag
+                                if r.ImGui_MenuItem(ctx, "Solo tracks with this tag") then
+                                    local all_tracks = r.CountTracks(0)
+                                    -- Eerst unsolo alle tracks
+                                    for i = 0, all_tracks - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        r.SetMediaTrackInfo_Value(track, "I_SOLO", 0)
+                                    end
+                                    -- Dan solo de tagged tracks
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "I_SOLO", 2) -- 2 = Solo
+                                    end
+                                end
+                                if r.ImGui_MenuItem(ctx, "Unsolo all tracks") then
+                                    local all_tracks = r.CountTracks(0)
+                                    for i = 0, all_tracks - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        r.SetMediaTrackInfo_Value(track, "I_SOLO", 0)
+                                    end
+                                end
                                 if r.ImGui_MenuItem(ctx, "Set Color") then
                                     local current_color = tag_colors[tag] or 0xFFFFFFFF
                                     local ok, new_color = r.GR_SelectColor(current_color)
@@ -5736,6 +6090,126 @@ if visible then
                                     available_tags[selected_tag] = nil
                                     tag_colors[selected_tag] = nil
                                     SaveTags()
+                                end
+                                if r.ImGui_MenuItem(ctx, "Hide all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 0)
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 0)
+                                    end
+                                    r.TrackList_AdjustWindows(false)  -- false voor mixer view update
+                                end
+                                
+                                if r.ImGui_MenuItem(ctx, "Show all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
+                                    end
+                                    r.TrackList_AdjustWindows(false)  -- false voor mixer view update
+                                end
+                                if r.ImGui_MenuItem(ctx, "Hide all tracks except with this tag") then
+                                    local tagged_tracks = FilterTracksByTag(tag)
+                                    local track_count = r.CountTracks(0)
+                                    for i = 0, track_count - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        local should_hide = true
+                                        for _, tagged_track in ipairs(tagged_tracks) do
+                                            if track == tagged_track then
+                                                should_hide = false
+                                                break
+                                            end
+                                        end
+                                        if should_hide then
+                                            r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 0)
+                                            r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 0)
+                                        end
+                                    end
+                                    r.TrackList_AdjustWindows(false)
+                                end
+                                
+                                if r.ImGui_MenuItem(ctx, "Show all tracks") then
+                                    local track_count = r.CountTracks(0)
+                                    for i = 0, track_count - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
+                                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
+                                    end
+                                    r.TrackList_AdjustWindows(false)
+                                end
+                                    -- 1. Select all tracks with this tag
+                                if r.ImGui_MenuItem(ctx, "Select all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    r.Main_OnCommand(40297, 0) -- Unselect all tracks
+                                    for _, track in ipairs(tracks) do
+                                        r.SetTrackSelected(track, true)
+                                    end
+                                end
+                                if r.ImGui_MenuItem(ctx, "Unselect all tracks") then
+                                    r.Main_OnCommand(40297, 0) -- Unselect all tracks
+                                end
+
+                                -- 3. Move all tracks with this tag to folder
+                                if r.ImGui_MenuItem(ctx, "Move to new folder") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    if #tracks > 0 then
+                                        -- Vind de eerste track positie
+                                        local first_track_idx = math.huge
+                                        for _, track in ipairs(tracks) do
+                                            local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
+                                            first_track_idx = math.min(first_track_idx, track_idx)
+                                        end
+                                        
+                                        -- Maak folder track
+                                        r.InsertTrackAtIndex(first_track_idx, true)
+                                        local folder_track = r.GetTrack(0, first_track_idx)
+                                        r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", tag .. " Folder", true)
+                                        r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                                        
+                                        -- Verplaats tracks naar folder
+                                        for _, track in ipairs(tracks) do
+                                            r.SetMediaTrackInfo_Value(track, "I_FOLDERDEPTH", 0)
+                                        end
+                                        
+                                        -- Laatste track in folder markeren
+                                        r.SetMediaTrackInfo_Value(tracks[#tracks], "I_FOLDERDEPTH", -1)
+                                    end
+                                end
+
+                                -- 5. Mute/Unmute all tracks with this tag
+                                if r.ImGui_MenuItem(ctx, "Mute all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "B_MUTE", 1)
+                                    end
+                                end
+                                if r.ImGui_MenuItem(ctx, "Unmute all tracks with this tag") then
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "B_MUTE", 0)
+                                    end
+                                end
+
+                                -- 6. Solo tracks with this tag
+                                if r.ImGui_MenuItem(ctx, "Solo tracks with this tag") then
+                                    local all_tracks = r.CountTracks(0)
+                                    -- Eerst unsolo alle tracks
+                                    for i = 0, all_tracks - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        r.SetMediaTrackInfo_Value(track, "I_SOLO", 0)
+                                    end
+                                    -- Dan solo de tagged tracks
+                                    local tracks = FilterTracksByTag(tag)
+                                    for _, track in ipairs(tracks) do
+                                        r.SetMediaTrackInfo_Value(track, "I_SOLO", 2) -- 2 = Solo
+                                    end
+                                end
+                                if r.ImGui_MenuItem(ctx, "Unsolo all tracks") then
+                                    local all_tracks = r.CountTracks(0)
+                                    for i = 0, all_tracks - 1 do
+                                        local track = r.GetTrack(0, i)
+                                        r.SetMediaTrackInfo_Value(track, "I_SOLO", 0)
+                                    end
                                 end
                                 if r.ImGui_MenuItem(ctx, "Set Color") then
                                     local current_color = tag_colors[tag] or 0xFFFFFFFF
