@@ -181,10 +181,6 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
         return -100, -100, -100, -100
     end
     
-    
-    
-    
-    
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local bottom_buttons_height = config.hideBottomButtons and 0 or 70
     local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 40

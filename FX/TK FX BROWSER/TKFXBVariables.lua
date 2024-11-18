@@ -32,6 +32,7 @@ current_tag_window_height = 70
 -- TAGS
 tag_colors = {}
 available_tags = {}
+hide_mode = 0
 
 -- SCREENSHOTS
 START = false
@@ -84,5 +85,12 @@ max_depth = 1  -- Toegevoegd
 notes = {}
 show_notes = true
 notes_height = 100
+
+-- ACTIONS
+show_categories = true
+show_only_active = false
+
+-- MATRIX
+show_matrix_exclusive = false
 
 
