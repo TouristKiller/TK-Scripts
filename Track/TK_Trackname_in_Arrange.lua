@@ -1,15 +1,16 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.1.1:
+-- @version 0.1.2:
 -- @changelog:
---[[        * Bugfix: Fixed vertical offset for Linux (Sorry, can not test it myself)
-            * Extra layer of transparency for the text background
+--[[        * Yet another layer of transparency 
+            * More vertical offset
+            * Close button for settings
 ]]-- --------------------------------------------------------------------------------       
 
 
 local r = reaper
 local ctx = r.ImGui_CreateContext('Track Names')
-
+local settings_visible = true
 -- Settings
 local settings = {
     show_all_tracks = false,
@@ -88,52 +89,57 @@ function GetTextColor(track)
 end
 
 function ShowSettingsWindow()
-    local window_flags = r.ImGui_WindowFlags_NoTitleBar()
-    r.ImGui_PushFont(ctx, settings_font)
-    
-    local visible, open = r.ImGui_Begin(ctx, 'Track Names Settings', true, window_flags)
-    if visible then
-        local changed
+    if not settings_visible then return end
+        local window_flags = r.ImGui_WindowFlags_NoTitleBar()
+        r.ImGui_PushFont(ctx, settings_font)
         
-        -- Checkboxes
-        changed, settings.show_all_tracks = r.ImGui_Checkbox(ctx, "Show all tracks", settings.show_all_tracks)
-        r.ImGui_SameLine(ctx)
-        changed, settings.show_first_fx = r.ImGui_Checkbox(ctx, "Show first FX", settings.show_first_fx)
-        
-        -- Sliders
-        changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal offset", settings.horizontal_offset, 100, 600)
-        changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical offset", settings.vertical_offset, -100, 100)
-        
-        -- Dropdowns
-        if r.ImGui_BeginCombo(ctx, "Font", fonts[settings.selected_font]) then
-            for i, font_name in ipairs(fonts) do
-                local is_selected = (settings.selected_font == i)
-                if r.ImGui_Selectable(ctx, font_name, is_selected) then
-                    settings.selected_font = i
-                end
+        local visible, open = r.ImGui_Begin(ctx, 'Track Names Settings', true, window_flags)
+        if visible then
+            if r.ImGui_Button(ctx, "X") then
+                settings_visible = false
             end
-            r.ImGui_EndCombo(ctx)
-        end
+            local changed
+            r.ImGui_SameLine(ctx)
+            -- Checkboxes
+            changed, settings.show_all_tracks = r.ImGui_Checkbox(ctx, "Show all", settings.show_all_tracks)
+            r.ImGui_SameLine(ctx)
+            changed, settings.show_first_fx = r.ImGui_Checkbox(ctx, "Show first FX", settings.show_first_fx)
+            
+            -- Sliders
+            changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal offset", settings.horizontal_offset, 100, 600)
+            changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical offset", settings.vertical_offset, -200, 200)
 
-        if r.ImGui_BeginCombo(ctx, "Text color", color_modes[settings.color_mode]) then
-            for i, color_name in ipairs(color_modes) do
-                local is_selected = (settings.color_mode == i)
-                if r.ImGui_Selectable(ctx, color_name, is_selected) then
-                    settings.color_mode = i
+            
+            -- Dropdowns
+            if r.ImGui_BeginCombo(ctx, "Font", fonts[settings.selected_font]) then
+                for i, font_name in ipairs(fonts) do
+                    local is_selected = (settings.selected_font == i)
+                    if r.ImGui_Selectable(ctx, font_name, is_selected) then
+                        settings.selected_font = i
+                    end
                 end
+                r.ImGui_EndCombo(ctx)
             end
-            r.ImGui_EndCombo(ctx)
-        end
 
-        -- Save button
-        if r.ImGui_Button(ctx, "Save Settings") then
-            SaveSettings()
+            if r.ImGui_BeginCombo(ctx, "Text color", color_modes[settings.color_mode]) then
+                for i, color_name in ipairs(color_modes) do
+                    local is_selected = (settings.color_mode == i)
+                    if r.ImGui_Selectable(ctx, color_name, is_selected) then
+                        settings.color_mode = i
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+
+            -- Save button
+            if r.ImGui_Button(ctx, "Save Settings") then
+                SaveSettings()
+            end
+            
+            r.ImGui_End(ctx)
         end
-        
-        r.ImGui_End(ctx)
+        r.ImGui_PopFont(ctx)
     end
-    r.ImGui_PopFont(ctx)
-end
 
 local function getArrangeViewHeight()
     local arrange_hwnd = reaper.JS_Window_FindChildByID(main_hwnd, 1000)
@@ -147,6 +153,9 @@ local function getArrangeViewHeight()
 end
 
 function loop()
+    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_S()) and r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl()) then
+        settings_visible = not settings_visible
+    end
     local flags = r.ImGui_WindowFlags_NoTitleBar() | 
                  r.ImGui_WindowFlags_NoResize() | 
                  r.ImGui_WindowFlags_NoMove() | 
@@ -176,6 +185,8 @@ function loop()
     r.ImGui_PushFont(ctx, font_objects[settings.selected_font])
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x00000000)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x00000000)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0.0)
+    r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
     local visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, flags)
     
     if visible then
@@ -205,17 +216,19 @@ function loop()
                 local text_color = GetTextColor(track)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 
-                local text_y = track_y + (track_height * 0.75)
+                local text_y = track_y + (track_height * 0.5)
                 r.ImGui_SetCursorPos(ctx, settings.horizontal_offset / scale, text_y / scale)
                 r.ImGui_Text(ctx, display_name)
                 
                 r.ImGui_PopStyleColor(ctx)
+                
             end
 
         end
         
         r.ImGui_End(ctx)
     end
+    r.ImGui_PopStyleVar(ctx)
     r.ImGui_PopStyleColor(ctx, 2)
     r.ImGui_PopFont(ctx)
     
