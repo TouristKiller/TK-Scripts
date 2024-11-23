@@ -67,5 +67,13 @@
     </reapack>
  </category>
 
+ <category name="Track">
+    <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
+    <version name="0.1.1" author="TouristKiller" time="2024-11-23T20:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
+    </version>
+    </reapack>
+ </category>
+
 </index>
 
