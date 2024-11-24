@@ -1,10 +1,8 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.1.3:
+-- @version 0.1.4:
 -- @changelog:
---[[        * Added colored track overlay
-            * More robust positioning
-            * No track name if track is made invisible in TCP
+--[[        * More adjustments to positioning of the overlay window
             
 ]]-- --------------------------------------------------------------------------------       
 
@@ -210,21 +208,26 @@ function loop()
                             local b_val = ((color >> 16) & 0xFF) / 255
                             local overlay_color = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.overlay_alpha)
 
-                            if track_y < arrange_height then
+                            if track_y < arrange_height and track_y + track_height > 0 then
+                                local overlay_top = math.max((top + track_y + header_height) / scale, arrange_y / scale)
+                                local overlay_bottom = math.min((top + track_y + track_height + header_height) / scale, (arrange_y + arrange_height) / scale)
+                                
                                 r.ImGui_DrawList_AddRectFilled(draw_list,
                                     left / scale,
-                                    (top + track_y + header_height) / scale,
+                                    overlay_top,
                                     right / scale,
-                                    math.min((top + track_y + track_height + header_height) / scale, arrange_height / scale),
+                                    overlay_bottom,
                                     overlay_color)
                             end
+                            
+                            
                         end
                     end
                     r.ImGui_End(ctx)
                     end
                 end
 
-                r.ImGui_SetNextWindowPos(ctx, arrange_x /2, arrange_y /2)
+                r.ImGui_SetNextWindowPos(ctx, arrange_x / scale, arrange_y / scale)
                 r.ImGui_SetNextWindowSize(ctx, adjusted_width / scale, adjusted_height / scale)                 
                  
                 r.ImGui_PushFont(ctx, font_objects[settings.selected_font])
