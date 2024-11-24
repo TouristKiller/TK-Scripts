@@ -1,8 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.1.4:
+-- @version 0.1.5:
 -- @changelog:
 --[[        * More adjustments to positioning of the overlay window
+            * Added grid invert (for better visibility)
             
 ]]-- --------------------------------------------------------------------------------       
 
@@ -89,6 +90,44 @@ function GetTextColor(track)
     end
 end
 
+function ToggleColors()
+    local grid_white = reaper.GetExtState("TK_GridColors", "IsWhite") == "true"
+    grid_white = not grid_white
+    reaper.SetExtState("TK_GridColors", "IsWhite", tostring(grid_white), true)
+    
+    if grid_white then
+        -- Witte gridlijnen (verticaal)
+        reaper.SetThemeColor("col_gridlines", reaper.ColorToNative(180, 180, 180), 0)
+        reaper.SetThemeColor("col_gridlines2", reaper.ColorToNative(180, 180, 180), 0)
+        reaper.SetThemeColor("col_gridlines3", reaper.ColorToNative(180, 180, 180), 0)
+        -- Lichtgrijze track dividers (horizontaal)
+        reaper.SetThemeColor("col_tr1_divline", reaper.ColorToNative(120, 120, 120), 0)
+        reaper.SetThemeColor("col_tr2_divline", reaper.ColorToNative(120, 120, 120), 0)
+        -- Lichtere achtergronden
+        reaper.SetThemeColor("col_arrangebg", reaper.ColorToNative(45, 45, 45), 0)
+        reaper.SetThemeColor("col_tr1_bg", reaper.ColorToNative(55, 55, 55), 0)
+        reaper.SetThemeColor("col_tr2_bg", reaper.ColorToNative(50, 50, 50), 0)
+        reaper.SetThemeColor("selcol_tr1_bg", reaper.ColorToNative(65, 65, 65), 0)
+        reaper.SetThemeColor("selcol_tr2_bg", reaper.ColorToNative(60, 60, 60), 0)
+    else
+        -- Zwarte gridlijnen (verticaal)
+        reaper.SetThemeColor("col_gridlines", reaper.ColorToNative(0, 0, 0), 0)
+        reaper.SetThemeColor("col_gridlines2", reaper.ColorToNative(0, 0, 0), 0)
+        reaper.SetThemeColor("col_gridlines3", reaper.ColorToNative(0, 0, 0), 0)
+        -- Reset track dividers (horizontaal)
+        reaper.SetThemeColor("col_tr1_divline", -1, 0)
+        reaper.SetThemeColor("col_tr2_divline", -1, 0)
+        -- Reset alle achtergronden naar thema standaard
+        reaper.SetThemeColor("col_arrangebg", -1, 0)
+        reaper.SetThemeColor("col_tr1_bg", -1, 0)
+        reaper.SetThemeColor("col_tr2_bg", -1, 0)
+        reaper.SetThemeColor("selcol_tr1_bg", -1, 0)
+        reaper.SetThemeColor("selcol_tr2_bg", -1, 0)
+    end
+    
+    reaper.UpdateArrange()
+end
+
 function ShowSettingsWindow()
     if not settings_visible then return end
         local window_flags = r.ImGui_WindowFlags_NoTitleBar()
@@ -139,7 +178,12 @@ function ShowSettingsWindow()
             if r.ImGui_Button(ctx, "Save Settings") then
                 SaveSettings()
             end
-            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Invert Grid") then
+                reaper.Undo_BeginBlock()
+                ToggleColors()
+                reaper.Undo_EndBlock("Toggle Grid and Background Colors", -1)
+            end
             r.ImGui_End(ctx)
         end
         r.ImGui_PopFont(ctx)
