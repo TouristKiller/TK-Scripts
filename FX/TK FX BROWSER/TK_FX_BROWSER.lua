@@ -1,12 +1,13 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.8.8:
+-- @version 0.8.9:
 -- @changelog:
---[[        * Action browser added (don't know if its useful... but hey... why not)
-            * Added some tag renaming options
-            * added tag buttons 
-            * added exlusive view for send /receive matrix
+--[[        * Added current project save, save as, save as Template
+            * If You have projects, Sends, Actions window open... clicking the "x" 
+              of the searchbox in mainscreen will bring you back to defauld folder view.
+            * Choose Your Font
 
+              ---------------------TODO-----------------------------------------
             - Meter functionality (Pre/post Peak) -- vooralsnog niet haalbaar
             - Expand track template functionality
             - Improve distribution of screenshots in current track and project
@@ -24,7 +25,8 @@ local screenshot_path   = script_path .. "Screenshots" .. os_separator
 StartBulkScreenshot     = function() end
 local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
-
+local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
+local needs_font_update = false
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
@@ -92,38 +94,8 @@ local categories = {
 }
 
 --------------------------------------------------------------------------
--- GUI
 ctx = r.ImGui_CreateContext('TK FX BROWSER')
-
-function exit()
-    if ctx then
-        if r.ImGui_ValidatePtr(NormalFont, 'ImGui_Resource*') then
-            r.ImGui_Detach(ctx, NormalFont)
-        end
-        if r.ImGui_ValidatePtr(LargeFont, 'ImGui_Resource*') then
-            r.ImGui_Detach(ctx, LargeFont)
-        end
-        if r.ImGui_ValidatePtr(TinyFont, 'ImGui_Resource*') then
-            r.ImGui_Detach(ctx, TinyFont)
-        end
-        if r.ImGui_ValidatePtr(IconFont, 'ImGui_Resource*') then
-            r.ImGui_Detach(ctx, IconFont)
-        end
-    end
-end
-
-reaper.atexit(exit)
-
-local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
-local NormalFont = r.ImGui_CreateFont('sans-serif', 12, r.ImGui_FontFlags_Bold())
-r.ImGui_Attach(ctx, NormalFont)
-local LargeFont = r.ImGui_CreateFont('sans-serif', 16, r.ImGui_FontFlags_Bold())
-r.ImGui_Attach(ctx, LargeFont)
-local TinyFont = r.ImGui_CreateFont('sans-serif', 10)
-r.ImGui_Attach(ctx, TinyFont)
-local IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
-r.ImGui_Attach(ctx, IconFont)
-
+--------------------------------------------------------------------------
 -- FX LIST
 local TRACK, LAST_USED_FX, FILTER, ADDFX_Sel_Entry
 local FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
@@ -241,6 +213,7 @@ local function SetDefaultConfig()
         show_screenshot_settings = true,
         show_only_dropdown = false,
         create_sends_folder = false,
+        selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
     } 
 end
 local config = SetDefaultConfig()    
@@ -272,6 +245,72 @@ local function ResetConfig()
     config = SetDefaultConfig()
     SaveConfig()
 end
+----------------------------------------------------------------------------------
+-- FONTS
+local TKFXfonts = { 
+    "sans-serif",
+    "Arial",
+    "Verdana",
+    "Tahoma",
+    "Times New Roman",
+    "Georgia",
+    "Courier New",
+    "Trebuchet MS",  
+}
+local IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
+r.ImGui_Attach(ctx, IconFont)
+
+function exit()
+    if ctx then
+        if r.ImGui_ValidatePtr(NormalFont, 'ImGui_Resource*') then
+            r.ImGui_Detach(ctx, NormalFont)
+        end
+        if r.ImGui_ValidatePtr(LargeFont, 'ImGui_Resource*') then
+            r.ImGui_Detach(ctx, LargeFont)
+        end
+        if r.ImGui_ValidatePtr(TinyFont, 'ImGui_Resource*') then
+            r.ImGui_Detach(ctx, TinyFont)
+        end
+        if r.ImGui_ValidatePtr(IconFont, 'ImGui_Resource*') then
+            r.ImGui_Detach(ctx, IconFont)
+        end
+    end
+end
+r.atexit(exit)
+
+function UpdateFonts()
+    -- Eerst detachen we de bestaande fonts
+    if r.ImGui_ValidatePtr(NormalFont, 'ImGui_Resource*') then
+        r.ImGui_Detach(ctx, NormalFont)
+    end
+    if r.ImGui_ValidatePtr(LargeFont, 'ImGui_Resource*') then
+        r.ImGui_Detach(ctx, LargeFont)
+    end
+    if r.ImGui_ValidatePtr(TinyFont, 'ImGui_Resource*') then
+        r.ImGui_Detach(ctx, TinyFont)
+    end
+
+    -- Dan maken we nieuwe fonts aan
+    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13, r.ImGui_FontFlags_Bold())
+    TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 10)
+    LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16, r.ImGui_FontFlags_Bold())
+
+    -- En attachen ze weer
+    r.ImGui_Attach(ctx, NormalFont)
+    r.ImGui_Attach(ctx, TinyFont)
+    r.ImGui_Attach(ctx, LargeFont)
+end
+
+-- Maak de fonts aan
+NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13, r.ImGui_FontFlags_Bold())
+LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16, r.ImGui_FontFlags_Bold())
+TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 10)
+
+-- Attach de fonts
+r.ImGui_Attach(ctx, NormalFont)
+r.ImGui_Attach(ctx, LargeFont)
+r.ImGui_Attach(ctx, TinyFont)
+
 ---------------------------------------------------------------------
 local function EnsureFileExists(filepath)
     local file = io.open(filepath, "r")
@@ -751,7 +790,7 @@ local function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 520
+    local window_height = 540
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -1100,6 +1139,22 @@ local function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.resize_screenshots_with_window = r.ImGui_Checkbox(ctx, "Auto Resize Screenshots", config.resize_screenshots_with_window)
+            
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Font:")
+            r.ImGui_SameLine(ctx, 0, 10)
+            if r.ImGui_BeginCombo(ctx, "##Font", TKFXfonts[config.selected_font]) then
+                for i, font_name in ipairs(TKFXfonts) do
+                    local is_selected = (config.selected_font == i)
+                    if r.ImGui_Selectable(ctx, font_name, is_selected) then
+                        config.selected_font = i
+                        needs_font_update = true
+                        SaveConfig()
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            
             -- Bottom Buttons (Save, Cancel, Reset)
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
             r.ImGui_Separator(ctx)
@@ -2493,7 +2548,7 @@ local function ShowScreenshotWindow()
             
             local window_height = r.ImGui_GetWindowHeight(ctx)
             local current_y = r.ImGui_GetCursorPosY(ctx)
-            local footer_height = 140
+            local footer_height = 170
             local available_height = window_height - current_y - footer_height
             -- Project List
             if r.ImGui_BeginChild(ctx, "ProjectsList", -1, available_height) then
@@ -2617,13 +2672,25 @@ local function ShowScreenshotWindow()
                 end
                 r.ImGui_PopItemWidth(ctx)
             end
-            
+            --r.ImGui_SameLine(ctx)
             -- Progress Bar
             local rv, position = r.CF_Preview_GetValue(current_preview, "D_POSITION")
             local rv2, length = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
             if position and length then
                 local progress = position / length
                 r.ImGui_ProgressBar(ctx, progress, -1, 20, string.format("%.1fs/%.1fs", position, length))
+            end
+            r.ImGui_Text(ctx, "Save options for current project:")
+            if r.ImGui_Button(ctx, "Save", 80, 20) then
+                r.Main_OnCommand(40026, 0)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Save As", 80, 20) then
+                r.Main_OnCommand(40022, 0)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Save Template", 80, 20) then
+                r.Main_OnCommand(40394, 0)
             end
             
             r.ImGui_PopStyleColor(ctx)         
@@ -3994,6 +4061,9 @@ local function FilterBox()
         screenshot_search_results = nil
         r.ImGui_SetScrollY(ctx, 0)
         show_screenshot_window = true
+        show_media_browser = false
+        show_sends_window = false
+        show_action_browser = false
         selected_folder = config.default_folder
         ClearScreenshotCache()
         if selected_folder then
@@ -4980,7 +5050,7 @@ local function ShowTrackFX()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
-                if r.ImGui_Button(ctx, "##updown", 13, 13) then
+                if r.ImGui_Button(ctx, "##updown", 14, 14) then
                     if i > 0 then
                         r.TrackFX_CopyToTrack(TRACK, i, TRACK, i - 1, true)
                     end
@@ -5002,7 +5072,7 @@ local function ShowTrackFX()
                 if not is_enabled or track_bypassed then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)  -- Grijze kleur voor gebypaste plugins
                 end               
-                if r.ImGui_Button(ctx, display_name, 0, 13) then
+                if r.ImGui_Button(ctx, display_name, 0, 14) then
                     if is_open then
                         r.TrackFX_Show(TRACK, i, 2)
                     else
@@ -5089,10 +5159,10 @@ local function ShowTrackFX()
         r.ImGui_Text(ctx, "Track Notes:")
        
         local window_width = r.ImGui_GetWindowWidth(ctx)
-        local text_width = r.ImGui_CalcTextSize(ctx, "Save Notes")
+        local text_width = r.ImGui_CalcTextSize(ctx, "Save")
         r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, window_width - text_width + 5)
-        if r.ImGui_Selectable(ctx, "  Save", false, r.ImGui_SelectableFlags_None()) then
+        r.ImGui_SetCursorPosX(ctx, window_width - text_width -5)
+        if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
             SaveNotes()
         end
         r.ImGui_PopStyleColor(ctx, 2)
@@ -5583,23 +5653,27 @@ end
 function InitializeImGuiContext()
     if not ctx then
         ctx = r.ImGui_CreateContext('TK FX Browser')
-        NormalFont = r.ImGui_CreateFont('sans-serif', 12, r.ImGui_FontFlags_Bold())
-        TinyFont = r.ImGui_CreateFont('sans-serif', 10)
-        LargeFont = r.ImGui_CreateFont('sans-serif', 16, r.ImGui_FontFlags_Bold())
-        IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
         
+        NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13, r.ImGui_FontFlags_Bold())
+        TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 10)
+        LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16, r.ImGui_FontFlags_Bold())
+        IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
+       
         r.ImGui_Attach(ctx, NormalFont)
         r.ImGui_Attach(ctx, TinyFont)
         r.ImGui_Attach(ctx, LargeFont)
         r.ImGui_Attach(ctx, IconFont)
     end
 end
-
-
+-----------------------------------------------------------------------------------------
 function Main()
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         InitializeImGuiContext()
         return r.defer(Main)
+    end
+    if needs_font_update then
+        UpdateFonts()
+        needs_font_update = false
     end
     local currentProjectPath = r.EnumProjects(-1, '')
     if lastProjectPath ~= currentProjectPath then
