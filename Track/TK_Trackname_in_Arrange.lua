@@ -1,9 +1,15 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.1.5:
+-- @version 0.1.6:
 -- @changelog:
---[[        * More adjustments to positioning of the overlay window
-            * Added grid invert (for better visibility)
+--[[            
+* If child track is hidden, the track name is not shown
+* Scale adjustments for 100%
+
+
+TODO (for version 0.1.7):
+* Grid adjustments (gamma, Brightness, contrast)
+* Impelement Edgemeal's suggestion for users with tcp on the right
             
 ]]-- --------------------------------------------------------------------------------       
 
@@ -189,6 +195,27 @@ function ShowSettingsWindow()
         r.ImGui_PopFont(ctx)
     end
 
+
+function IsTrackVisible(track)
+    local MIN_TRACK_HEIGHT = 10
+    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
+    
+    if track_height <= MIN_TRACK_HEIGHT then
+        return false
+    end
+    
+    local parent = r.GetParentTrack(track)
+    while parent do
+        local parent_height = r.GetMediaTrackInfo_Value(parent, "I_TCPH")
+        if parent_height <= MIN_TRACK_HEIGHT then
+            return false
+        end
+        parent = r.GetParentTrack(parent)
+    end
+    
+    return true
+end
+
 function GetBounds(hwnd)
     local _, left, top, right, bottom = r.JS_Window_GetRect(hwnd)
     return left, top, right-left, bottom-top
@@ -216,7 +243,11 @@ function loop()
 
                 local left = arrange_x
                 local top = arrange_y
-                local right = arrange_x + arrange_w
+                if scale == 1.0 then
+                    right = arrange_x + (arrange_w * scale)
+                else
+                    right = arrange_x + arrange_w
+                end
 
                 local margin = 20
                 local adjusted_width = arrange_w - margin
@@ -231,7 +262,7 @@ function loop()
                     r.ImGui_WindowFlags_NoSavedSettings()
 
                     r.ImGui_SetNextWindowPos(ctx, 0, 0)
-                    r.ImGui_SetNextWindowSize(ctx, right - left, arrange_height)
+                    r.ImGui_SetNextWindowSize(ctx, right, arrange_height)
                     r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
 
                     local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
@@ -286,9 +317,9 @@ function loop()
                     
                     for i = 0, track_count - 1 do
                         local track = r.GetTrack(0, i)
-                        local is_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
+                        local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
                         
-                        if is_visible then
+                        if track_visible and IsTrackVisible(track) then
                             local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
                             
                             if settings.show_all_tracks or is_folder then
