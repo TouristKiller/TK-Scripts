@@ -1,16 +1,20 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.2.0:
+-- @version 0.2.1:
 -- @changelog:
 --[[            
-* NEW Colored track names implementation (thanx to Vitalker!)
-* NEW Complemetary color mode
-* Labels for track names        
++ Added script stability improvements using pcall error handling
++ Implemented precise timing for window updates
++ Enhanced resize handling and crash prevention
++ Optimized performance during docker resizing
+    
 ]]-- --------------------------------------------------------------------------------       
 
 local r = reaper
 local ctx = r.ImGui_CreateContext('Track Names')
 local settings_visible = false
+local last_update_time = 0
+local update_interval = 0.05  -- 50ms
 
 -- Settings
 local settings = {
@@ -298,27 +302,30 @@ function GetBounds(hwnd)
 end
 
 function loop()
+    local current_time = reaper.time_precise()
     local main_hwnd = r.GetMainHwnd()
     local arrange = r.JS_Window_FindChildByID(main_hwnd, 1000)
     local arrange_x, arrange_y, arrange_w, arrange_height = GetBounds(arrange)
     local scale = r.ImGui_GetWindowDpiScale(ctx)
-    local adjusted_width = arrange_w - 20
-    local adjusted_height = arrange_height 
-    local left = arrange_x
-    local top = arrange_y
-    local bottom
     
-    if scale == 1.0 then
-        right = arrange_x + (adjusted_width * scale)
-        bottom = arrange_y + (adjusted_height * scale)
-    else
-        right = arrange_x + adjusted_width
-        bottom = arrange_y + adjusted_height 
+    local adjusted_width = arrange_w - 20
+    local adjusted_height = arrange_height
+    
+    if current_time - last_update_time >= update_interval then
+        if arrange and arrange_w > 0 and arrange_height > 0 then
+            left = arrange_x
+            top = arrange_y
+            if scale == 1.0 then
+                right = arrange_x + (adjusted_width * scale)
+                bottom = arrange_y + (adjusted_height * scale)
+            else
+                right = arrange_x + adjusted_width
+                bottom = arrange_y + adjusted_height
+            end
+        end
+        last_update_time = current_time
     end
 
-    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_S()) and r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl()) then
-        settings_visible = not settings_visible
-    end
     
     local flags         = r.ImGui_WindowFlags_NoTitleBar() | 
                         r.ImGui_WindowFlags_NoResize() | 
@@ -469,7 +476,7 @@ function loop()
                         end
                     end                    
                     r.ImGui_End(ctx)
-                end               
+                end              
         r.ImGui_PopStyleVar(ctx)
         r.ImGui_PopStyleColor(ctx, 2)
         r.ImGui_PopFont(ctx)    
@@ -477,5 +484,17 @@ function loop()
         r.defer(loop)
     end
 end
-LoadSettings()
-r.defer(loop)
+
+local success = pcall(function()
+    LoadSettings()
+    if settings.custom_colors_enabled then
+        UpdateGridColors()
+        UpdateBackgroundColors()
+    end
+    r.defer(loop)
+end)
+
+if not success then
+    r.ShowConsoleMsg("Script error occurred\n")
+end
+
