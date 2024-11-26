@@ -1,12 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.1.8:
+-- @version 0.2.0:
 -- @changelog:
 --[[            
-+ Added label background feature with opacity control
-+ Added black/white label color options
-+ Added complementary text color mode
-+ Improved text color contrast using HSV color space   
+* NEW Colored track names implementation (thanx to Vitalker!)
+* NEW Complemetary color mode
+* Labels for track names        
 ]]-- --------------------------------------------------------------------------------       
 
 local r = reaper
@@ -330,7 +329,6 @@ function loop()
                         r.ImGui_WindowFlags_NoDecoration() |
                         r.ImGui_WindowFlags_NoNav()
                  
-p
     local button_flags  = r.ImGui_WindowFlags_NoTitleBar() |
                         r.ImGui_WindowFlags_NoResize() |
                         r.ImGui_WindowFlags_NoMove() |
