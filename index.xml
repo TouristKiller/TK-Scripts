@@ -67,13 +67,20 @@
     </reapack>
  </category>
 
- <category name="Track">
+<category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-    <version name="0.1.7" author="TouristKiller" time="2024-11-25T22:45:00Z">
-    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
-    </version>
+        <version name="0.1.8" author="TouristKiller" time="2024-11-26T01:15:00Z">
+            <changelog><![CDATA[
++ Added label background feature with opacity control
++ Added black/white label color options
++ Added complementary text color mode
++ Improved text color contrast using HSV color space
+]]></changelog>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
+        </version>
     </reapack>
- </category>
+</category>
+
 
 </index>
-
+</changelog>
