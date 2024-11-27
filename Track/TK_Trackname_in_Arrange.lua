@@ -1,13 +1,13 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.2.2:
+-- @version 0.2.3:
 -- @changelog:
 --[[            
-+ Added macOS compatibility improvements
-+ Enhanced window sizing calculations for cross-platform support
-+ Optimized track color overlay display for different operating systems
-+ Improved coordinate system handling for macOS users
-(Hopefully, this will address the macOS compatibility issues, but I can't test it myself)
++ Enhanced settings window with fixed dimensions and organized layout
++ Added text opacity control for track names
++ Added disabled states for dependent settings
++ Code Changes for MacOS compatibility (let me know what works and what doesn't)
+
     
 ]]-- --------------------------------------------------------------------------------       
 
@@ -15,13 +15,13 @@ local r = reaper
 local ctx = r.ImGui_CreateContext('Track Names')
 local settings_visible = false
 local last_update_time = 0
-local update_interval = 0.05  -- 50ms
+local update_interval = 0.05 
 
 -- Settings
-
-
 local default_settings = {
-    show_all_tracks = false,
+    text_opacity = 1.0,
+    show_parent_tracks = true,
+    show_child_tracks = false,
     show_first_fx = false,
     horizontal_offset = 100,
     vertical_offset = 0,
@@ -74,7 +74,9 @@ r.ImGui_Attach(ctx, settings_font)
 
 function SaveSettings()
     local section = "TK_TRACKNAMES"
-    r.SetExtState(section, "show_all_tracks", settings.show_all_tracks and "1" or "0", true)
+    r.SetExtState(section, "text_opacity", tostring(settings.text_opacity), true)
+    r.SetExtState(section, "show_parent_tracks", settings.show_parent_tracks and "1" or "0", true)
+    r.SetExtState(section, "show_child_tracks", settings.show_child_tracks and "1" or "0", true)
     r.SetExtState(section, "show_first_fx", settings.show_first_fx and "1" or "0", true)
     r.SetExtState(section, "horizontal_offset", tostring(settings.horizontal_offset), true)
     r.SetExtState(section, "vertical_offset", tostring(settings.vertical_offset), true)
@@ -92,7 +94,9 @@ end
 
 function LoadSettings()
     local section = "TK_TRACKNAMES"
-    settings.show_all_tracks = r.GetExtState(section, "show_all_tracks") == "1"
+    settings.text_opacity = tonumber(r.GetExtState(section, "text_opacity")) or 1.0
+    settings.show_parent_tracks = r.GetExtState(section, "show_parent_tracks") == "1"
+    settings.show_child_tracks = r.GetExtState(section, "show_child_tracks") == "1"
     settings.show_first_fx = r.GetExtState(section, "show_first_fx") == "1"
     settings.horizontal_offset = tonumber(r.GetExtState(section, "horizontal_offset")) or 0
     settings.vertical_offset = tonumber(r.GetExtState(section, "vertical_offset")) or 0
@@ -216,93 +220,119 @@ end
 
 function ShowSettingsWindow()
     if not settings_visible then return end
-        local window_flags = r.ImGui_WindowFlags_NoTitleBar()
-        r.ImGui_PushFont(ctx, settings_font)
-        
-        local visible, open = r.ImGui_Begin(ctx, 'Track Names Settings', true, window_flags)
-        if visible then
-            if r.ImGui_Button(ctx, "X") then
-                settings_visible = false
-            end
-            local changed
-            r.ImGui_SameLine(ctx)
-            -- Checkboxes
-            changed, settings.show_all_tracks = r.ImGui_Checkbox(ctx, "Show all", settings.show_all_tracks)
-            r.ImGui_SameLine(ctx)
-            changed, settings.show_first_fx = r.ImGui_Checkbox(ctx, "first FX", settings.show_first_fx)
-            r.ImGui_SameLine(ctx)
-            changed, settings.show_track_colors = r.ImGui_Checkbox(ctx, "track colors", settings.show_track_colors)
-            r.ImGui_SameLine(ctx)
-            changed, settings.show_label = r.ImGui_Checkbox(ctx, "label", settings.show_label)
-            if settings.show_label then
-                changed, settings.label_alpha = r.ImGui_SliderDouble(ctx, "Label opacity", settings.label_alpha, 0.0, 1.0)
-                if r.ImGui_BeginCombo(ctx, "Label color", settings.label_color_mode == 1 and "Black" or "White") then
-                    if r.ImGui_Selectable(ctx, "Black", settings.label_color_mode == 1) then
-                        settings.label_color_mode = 1
-                    end
-                    if r.ImGui_Selectable(ctx, "White", settings.label_color_mode == 2) then
-                        settings.label_color_mode = 2
-                    end
-                    r.ImGui_EndCombo(ctx)
-                end
-            end
-            if settings.show_track_colors then
-                changed, settings.overlay_alpha = r.ImGui_SliderDouble(ctx, "Color Intensity", settings.overlay_alpha, 0.0, 1.0)
-            end
-            local main_hwnd = r.GetMainHwnd()
-            local arrange = r.JS_Window_FindChildByID(main_hwnd, 1000)
-            local _, _, arrange_w, _ = GetBounds(arrange)
-            changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal offset", settings.horizontal_offset, 0, arrange_w)
-            changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical offset", settings.vertical_offset, -200, 200)
-
-            if r.ImGui_BeginCombo(ctx, "Font", fonts[settings.selected_font]) then
-                for i, font_name in ipairs(fonts) do
-                    local is_selected = (settings.selected_font == i)
-                    if r.ImGui_Selectable(ctx, font_name, is_selected) then
-                        settings.selected_font = i
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end
-
-            if r.ImGui_BeginCombo(ctx, "Text color", color_modes[settings.color_mode]) then
-                for i, color_name in ipairs(color_modes) do
-                    local is_selected = (settings.color_mode == i)
-                    if r.ImGui_Selectable(ctx, color_name, is_selected) then
-                        settings.color_mode = i
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end
-            if settings.custom_colors_enabled then
-                local changed_grid
-                local changed_bg
-                
-                changed_grid, settings.grid_color = r.ImGui_SliderDouble(ctx, "Grid Color", settings.grid_color, 0.0, 1.0)
-                changed_bg, settings.bg_brightness = r.ImGui_SliderDouble(ctx, "Background Brightness", settings.bg_brightness, 0.0, 1.0)
-                
-                if changed_grid then UpdateGridColors() end
-                if changed_bg then UpdateBackgroundColors() end
-            end 
-            
-            if r.ImGui_Button(ctx, settings.custom_colors_enabled and "Reset Colors" or "Enable Custom Colors") then
-                reaper.Undo_BeginBlock()
-                ToggleColors()
-                reaper.Undo_EndBlock("Toggle Custom Grid and Background Colors", -1)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Save Settings") then
-                SaveSettings()
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Reset All Settings") then
-                ResetSettings()
-            end
-            
-            r.ImGui_End(ctx)
+    r.ImGui_SetNextWindowSize(ctx, 400, 320)
+    -- Style aanpassingen
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 6.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 12.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 8.0)
+    -- Donkerdere kleur aanpassingen
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x333333FF)        
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x444444FF) 
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x555555FF)  
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x999999FF)     
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0xAAAAAAFF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), 0x999999FF)      
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x333333FF)         
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x444444FF)  
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x555555FF)   
+    local window_flags = r.ImGui_WindowFlags_NoTitleBar()
+    r.ImGui_PushFont(ctx, settings_font)
+    local visible, open = r.ImGui_Begin(ctx, 'Track Names Settings', true, window_flags)
+    if visible then
+        if r.ImGui_Button(ctx, "X") then
+            settings_visible = false
         end
-        r.ImGui_PopFont(ctx)
+        local changed
+        r.ImGui_SameLine(ctx)
+        changed, settings.show_parent_tracks = r.ImGui_Checkbox(ctx, "Parent", settings.show_parent_tracks)
+        r.ImGui_SameLine(ctx)
+        changed, settings.show_child_tracks = r.ImGui_Checkbox(ctx, "Child", settings.show_child_tracks)
+        r.ImGui_SameLine(ctx)
+        changed, settings.show_first_fx = r.ImGui_Checkbox(ctx, "first FX", settings.show_first_fx)
+        r.ImGui_SameLine(ctx)
+        changed, settings.show_track_colors = r.ImGui_Checkbox(ctx, "track colors", settings.show_track_colors)
+        r.ImGui_SameLine(ctx)
+        changed, settings.show_label = r.ImGui_Checkbox(ctx, "label", settings.show_label)
+        r.ImGui_Separator(ctx)
+        r.ImGui_PushItemWidth(ctx, 250)
+        if not settings.show_track_colors then
+            r.ImGui_BeginDisabled(ctx)
+        end
+        changed, settings.overlay_alpha = r.ImGui_SliderDouble(ctx, "Color Intensity", settings.overlay_alpha, 0.0, 1.0)
+        if not settings.show_track_colors then
+            r.ImGui_EndDisabled(ctx)
+        end
+        if not settings.show_label then
+            r.ImGui_BeginDisabled(ctx)
+        end
+        changed, settings.label_alpha = r.ImGui_SliderDouble(ctx, "Label opacity", settings.label_alpha, 0.0, 1.0)
+        
+        if r.ImGui_BeginCombo(ctx, "Label color", settings.label_color_mode == 1 and "Black" or "White") then
+            if r.ImGui_Selectable(ctx, "Black", settings.label_color_mode == 1) then
+                settings.label_color_mode = 1
+            end
+            if r.ImGui_Selectable(ctx, "White", settings.label_color_mode == 2) then
+                settings.label_color_mode = 2
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        if not settings.show_label then
+            r.ImGui_EndDisabled(ctx)
+        end
+        local main_hwnd = r.GetMainHwnd()
+        local arrange = r.JS_Window_FindChildByID(main_hwnd, 1000)
+        local _, _, arrange_w, _ = GetBounds(arrange)
+        changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal offset", settings.horizontal_offset, 0, arrange_w)
+        changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical offset", settings.vertical_offset, -200, 200)
+        if r.ImGui_BeginCombo(ctx, "Font", fonts[settings.selected_font]) then
+            for i, font_name in ipairs(fonts) do
+                local is_selected = (settings.selected_font == i)
+                if r.ImGui_Selectable(ctx, font_name, is_selected) then
+                    settings.selected_font = i
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_BeginCombo(ctx, "Text color", color_modes[settings.color_mode]) then
+            for i, color_name in ipairs(color_modes) do
+                local is_selected = (settings.color_mode == i)
+                if r.ImGui_Selectable(ctx, color_name, is_selected) then
+                    settings.color_mode = i
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        changed, settings.text_opacity = r.ImGui_SliderDouble(ctx, "Text opacity", settings.text_opacity, 0.0, 1.0)
+        if settings.custom_colors_enabled then
+            changed_grid, settings.grid_color = r.ImGui_SliderDouble(ctx, "Grid Color", settings.grid_color, 0.0, 1.0)
+            changed_bg, settings.bg_brightness = r.ImGui_SliderDouble(ctx, "Bg Brightness", settings.bg_brightness, 0.0, 1.0)
+            
+            if changed_grid then UpdateGridColors() end
+            if changed_bg then UpdateBackgroundColors() end
+        end 
+        r.ImGui_PopItemWidth(ctx)
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, settings.custom_colors_enabled and "Reset Colors" or "Enable Custom Colors") then
+            reaper.Undo_BeginBlock()
+            ToggleColors()
+            reaper.Undo_EndBlock("Toggle Custom Grid and Background Colors", -1)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Reset All Settings") then
+            ResetSettings()
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Save Settings") then
+            SaveSettings()
+        end
+        r.ImGui_End(ctx)
     end
+    r.ImGui_PopFont(ctx)
+    r.ImGui_PopStyleVar(ctx, 5)
+    r.ImGui_PopStyleColor(ctx, 9)
+end
 
 function IsTrackVisible(track)
     local MIN_TRACK_HEIGHT = 10
@@ -328,15 +358,13 @@ function GetBounds(hwnd)
     
     -- Check voor MacOS
     if reaper.GetOS():match("^OSX") then
-        -- Converteer de MacOS coördinaten naar Windows-stijl coördinaten
-        local screen_height = reaper.GetScreenHeight()
+        local screen_height = r.ImGui_GetMainViewport(ctx).WorkSize.y
         top = screen_height - bottom
         bottom = screen_height - top
     end
     
     return left, top, right-left, bottom-top
 end
-
 
 function loop()
     local current_time = reaper.time_precise()
@@ -362,7 +390,6 @@ function loop()
         end
         last_update_time = current_time
     end
-
     
     local flags         = r.ImGui_WindowFlags_NoTitleBar() | 
                         r.ImGui_WindowFlags_NoResize() | 
@@ -471,55 +498,60 @@ function loop()
                         local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
                         
                         if track_visible and IsTrackVisible(track) then
-                            local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+                            local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+                            local is_child = r.GetParentTrack(track) ~= nil
                             
-                            if settings.show_all_tracks or is_folder then
-                                
+                            if (is_parent and settings.show_parent_tracks) or
+                               (is_child and settings.show_child_tracks) or
+                               (not is_parent and not is_child) then
+                               
                                 local _, track_name = r.GetTrackName(track)
                                 local display_name = track_name
-                                
-                                if settings.show_first_fx then
-                                    local fx_count = r.TrackFX_GetCount(track)
-                                    if fx_count > 0 then
-                                        local _, fx_name = r.TrackFX_GetFXName(track, 0, "")
-                                        fx_name = fx_name:gsub("^[^:]+:%s*", "")
-                                        display_name = display_name .. " - " .. fx_name .. ""
-                                    end
-                                end
-                                       
-                                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY")
-                                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
-                                local text_color = GetTextColor(track)
-                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
-                                local scale_offset = -5 * ((scale - 1) / 0.5)
-                                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
-                                local text_y = track_y + (track_height * 0.5) - (18 * 0.5) + settings.vertical_offset + scale_offset
-                                r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
-                                
-
-                                if settings.show_label then
-                                    local text_width = r.ImGui_CalcTextSize(ctx, display_name)
-                                    local label_padding = 10
-                                    local label_color = settings.label_color_mode == 1 
-                                        and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
-                                        or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
-                                    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
                                     
-                                    r.ImGui_DrawList_AddRectFilled(
-                                        draw_list,
-                                        cursor_x - label_padding,
-                                        cursor_y - 1,
-                                        cursor_x + text_width + label_padding,
-                                        cursor_y + 19,
-                                        label_color,
-                                        4.0
-                                    )
-                                end              
-                                r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
-                                r.ImGui_Text(ctx, display_name)
-                                r.ImGui_PopStyleVar(ctx)               
-                                r.ImGui_PopStyleColor(ctx)                            
-                            end
+                                    if settings.show_first_fx then
+                                        local fx_count = r.TrackFX_GetCount(track)
+                                        if fx_count > 0 then
+                                            local _, fx_name = r.TrackFX_GetFXName(track, 0, "")
+                                            fx_name = fx_name:gsub("^[^:]+:%s*", "")
+                                            display_name = display_name .. " - " .. fx_name .. ""
+                                        end
+                                    end
+                                        
+                                    local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY")
+                                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
+                                    local text_color = GetTextColor(track)
+                                    text_color = (text_color & 0xFFFFFF00) | (math.floor(settings.text_opacity * 255))
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
+                                    local scale_offset = -5 * ((scale - 1) / 0.5)
+                                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
+                                    local text_y = track_y + (track_height * 0.5) - (18 * 0.5) + settings.vertical_offset + scale_offset
+                                    r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                                    
+
+                                    if settings.show_label then
+                                        local text_width = r.ImGui_CalcTextSize(ctx, display_name)
+                                        local label_padding = 10
+                                        local label_color = settings.label_color_mode == 1 
+                                            and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
+                                            or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
+                                        local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+                                        
+                                        r.ImGui_DrawList_AddRectFilled(
+                                            draw_list,
+                                            cursor_x - label_padding,
+                                            cursor_y - 1,
+                                            cursor_x + text_width + label_padding,
+                                            cursor_y + 19,
+                                            label_color,
+                                            4.0
+                                        )
+                                    end              
+                                    r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                                    r.ImGui_Text(ctx, display_name)
+                                    r.ImGui_PopStyleVar(ctx)               
+                                    r.ImGui_PopStyleColor(ctx)                            
+                                end
+                        
                         end
                     end                    
                     r.ImGui_End(ctx)
