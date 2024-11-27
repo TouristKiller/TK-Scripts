@@ -69,12 +69,13 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.2.1" author="TouristKiller" time="2024-11-26T02:30:00Z">
+        <version name="0.2.2" author="TouristKiller" time="2024-11-27T20030:00Z">
             <changelog><![CDATA[
-+ Added script stability improvements using pcall error handling
-+ Implemented precise timing for window updates
-+ Enhanced resize handling and crash prevention
-+ Optimized performance during docker resizing
++ Added macOS compatibility improvements
++ Enhanced window sizing calculations for cross-platform support
++ Optimized track color overlay display for different operating systems
++ Improved coordinate system handling for macOS users
+(Hopefully, this will address the macOS compatibility issues, but I can't test it myself)
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
         </version>

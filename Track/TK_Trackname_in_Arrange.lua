@@ -1,12 +1,13 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.2.1:
+-- @version 0.2.2:
 -- @changelog:
 --[[            
-+ Added script stability improvements using pcall error handling
-+ Implemented precise timing for window updates
-+ Enhanced resize handling and crash prevention
-+ Optimized performance during docker resizing
++ Added macOS compatibility improvements
++ Enhanced window sizing calculations for cross-platform support
++ Optimized track color overlay display for different operating systems
++ Improved coordinate system handling for macOS users
+(Hopefully, this will address the macOS compatibility issues, but I can't test it myself)
     
 ]]-- --------------------------------------------------------------------------------       
 
@@ -17,7 +18,9 @@ local last_update_time = 0
 local update_interval = 0.05  -- 50ms
 
 -- Settings
-local settings = {
+
+
+local default_settings = {
     show_all_tracks = false,
     show_first_fx = false,
     horizontal_offset = 100,
@@ -33,6 +36,12 @@ local settings = {
     label_alpha = 0.3,
     label_color_mode = 1
 }
+local settings = {}
+for k, v in pairs(default_settings) do
+    settings[k] = v
+end
+
+
 
 local fonts = {
     "Arial",
@@ -191,6 +200,20 @@ function ToggleColors()
     reaper.UpdateArrange()
 end
 
+function ResetSettings()
+    -- Reset naar default waardes
+    for k, v in pairs(default_settings) do
+        settings[k] = v
+    end
+    
+    -- Reset de custom colors als die aan stonden
+    if settings.custom_colors_enabled then
+        ToggleColors()
+    end
+    
+    SaveSettings()
+end
+
 function ShowSettingsWindow()
     if not settings_visible then return end
         local window_flags = r.ImGui_WindowFlags_NoTitleBar()
@@ -271,6 +294,10 @@ function ShowSettingsWindow()
             if r.ImGui_Button(ctx, "Save Settings") then
                 SaveSettings()
             end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset All Settings") then
+                ResetSettings()
+            end
             
             r.ImGui_End(ctx)
         end
@@ -298,8 +325,18 @@ end
 
 function GetBounds(hwnd)
     local _, left, top, right, bottom = r.JS_Window_GetRect(hwnd)
+    
+    -- Check voor MacOS
+    if reaper.GetOS():match("^OSX") then
+        -- Converteer de MacOS coördinaten naar Windows-stijl coördinaten
+        local screen_height = reaper.GetScreenHeight()
+        top = screen_height - bottom
+        bottom = screen_height - top
+    end
+    
     return left, top, right-left, bottom-top
 end
+
 
 function loop()
     local current_time = reaper.time_precise()
@@ -363,21 +400,29 @@ function loop()
                         end
 
                         if settings.show_track_colors then
-                            local overlay_flags = flags | 
-                            r.ImGui_WindowFlags_NoFocusOnAppearing() |
-                            r.ImGui_WindowFlags_NoDocking() |
-                            r.ImGui_WindowFlags_NoNav() |
-                            r.ImGui_WindowFlags_NoSavedSettings()
-
+                            local overlay_flags = flags |
+                                r.ImGui_WindowFlags_NoFocusOnAppearing() |
+                                r.ImGui_WindowFlags_NoDocking() |
+                                r.ImGui_WindowFlags_NoNav() |
+                                r.ImGui_WindowFlags_NoSavedSettings()
+                        
                             r.ImGui_SetNextWindowPos(ctx, 0, 0)
-                            r.ImGui_SetNextWindowSize(ctx, right, arrange_height + 100)
+                            
+                            -- Window size aanpassing voor macOS
+                            local window_width
+                            if reaper.GetOS():match("^OSX") then
+                                window_width = arrange_w
+                            else
+                                window_width = right
+                            end
+                            r.ImGui_SetNextWindowSize(ctx, window_width, arrange_height + 100)
+                            
                             r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
-
+                            local header_height = r.GetMainHwnd() and 0
                             local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
                             if overlay_visible then
-                            local draw_list = r.ImGui_GetWindowDrawList(ctx)
-                            local track_count = r.CountTracks(0)
-                            local header_height = r.GetMainHwnd() and 0
+                                local draw_list = r.ImGui_GetWindowDrawList(ctx)
+                                local track_count = r.CountTracks(0)
 
                             for i = 0, track_count - 1 do
                                 local track = r.GetTrack(0, i)
@@ -446,9 +491,11 @@ function loop()
                                 local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
                                 local text_color = GetTextColor(track)
                                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
-                                local text_y = track_y + (track_height * 0.5) + settings.vertical_offset
-                                
+                                local scale_offset = -5 * ((scale - 1) / 0.5)
+                                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
+                                local text_y = track_y + (track_height * 0.5) - (18 * 0.5) + settings.vertical_offset + scale_offset
                                 r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                                
 
                                 if settings.show_label then
                                     local text_width = r.ImGui_CalcTextSize(ctx, display_name)
@@ -468,9 +515,9 @@ function loop()
                                         4.0
                                     )
                                 end              
-                                r.ImGui_Text(ctx, display_name)
                                 r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
-                                r.ImGui_Text(ctx, display_name)                            
+                                r.ImGui_Text(ctx, display_name)
+                                r.ImGui_PopStyleVar(ctx)               
                                 r.ImGui_PopStyleColor(ctx)                            
                             end
                         end
