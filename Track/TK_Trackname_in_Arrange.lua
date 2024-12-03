@@ -1,13 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.2.4:
+-- @version 0.2.5:
 -- @changelog:
 --[[            
-+ Settings button is now freely movable
-+ More stability when switching tabs /projects
-
-    
-]]-- --------------------------------------------------------------------------------       
++ Added automatic refresh when switching project tabs
++ 
+]]----------------------------------------------------------------------------------       
 
 local r = reaper
 local ctx = r.ImGui_CreateContext('Track Names')
@@ -381,6 +379,17 @@ function IsTrackVisible(track)
     return true
 end
 
+function DrawTrackIcon(track, x, y)
+    local retval, icon_data = r.GetTrackIcon(track)
+    if retval > 0 and icon_data then
+        local icon_texture = r.ImGui_CreateImage(icon_data)
+        if icon_texture then
+            r.ImGui_DrawList_AddImage(draw_list, icon_texture, x, y, x + 16, y + 16)
+            r.ImGui_Image_Destroy(icon_texture)
+        end
+    end
+end
+
 function GetBounds(hwnd)
     local _, left, top, right, bottom = r.JS_Window_GetRect(hwnd)
     
@@ -408,6 +417,10 @@ function loop()
         r.ImGui_Attach(ctx, settings_font)
     end
     local current_project = reaper.EnumProjects(-1)
+    if current_project ~= last_project then
+        RefreshProjectState()
+        last_project = current_project
+    end
     local track_count = reaper.CountTracks(0)
     
     -- Check voor project wissel of track aantal wijziging
@@ -451,8 +464,7 @@ function loop()
                         r.ImGui_WindowFlags_NoDecoration() | 
                         r.ImGui_WindowFlags_NoFocusOnAppearing() |
                         r.ImGui_WindowFlags_NoDocking() 
-                            
-                    
+                                      
                         r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
                         local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, flags)
                         if button_visible then
@@ -475,7 +487,7 @@ function loop()
                             r.ImGui_WindowFlags_NoInputs() |
                             r.ImGui_WindowFlags_NoMove() | 
                             r.ImGui_WindowFlags_NoSavedSettings() |
-                            r.ImGui_WindowFlags_AlwaysAutoResize()
+                            r.ImGui_WindowFlags_AlwaysAutoResize()           
                        
                             r.ImGui_SetNextWindowPos(ctx, 0, 0)
                             
