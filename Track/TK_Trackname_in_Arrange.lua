@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.2.7:
+-- @version 0.2.8:
 -- @changelog:
 --[[            
 + Added Toggle Settings script

@@ -1,6 +1,6 @@
 -- @description TK_Trackname_Settings_Toggle
 -- @author TouristKiller
--- @version 1.0:
+-- @version 1.1:
 -- @changelog:
 
 local r = reaper
