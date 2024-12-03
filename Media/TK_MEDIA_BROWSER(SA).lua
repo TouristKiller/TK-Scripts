@@ -1,6 +1,6 @@
 -- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.1.4:
+-- @version 0.1.5:
 -- @changelog:
 --[[       
 + Show /Hide almost everything in the GUI            
@@ -718,7 +718,7 @@ local function handle_drag_drop(file_path)
 end
 local function insert_media_on_track(file_path, track, use_original_speed, custom_playrate, custom_pitch)
     if not track then return end
-    
+    generate_peak_file(file_path)
     local ext = file_path:match("%.([^%.]+)$"):lower()
     local file_type = file_types[ext]
     local item = r.AddMediaItemToTrack(track)
