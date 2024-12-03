@@ -1,10 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.2.5:
+-- @version 0.2.6:
 -- @changelog:
 --[[            
-+ Added automatic refresh when switching project tabs
-+ 
++ Added Toggle Settings script
 ]]----------------------------------------------------------------------------------       
 
 local r = reaper
@@ -263,13 +262,16 @@ function ShowSettingsWindow()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x333333FF)         
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x444444FF)  
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x555555FF)   
-    local window_flags = r.ImGui_WindowFlags_NoTitleBar()
+    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoFocusOnAppearing()
+
+
     r.ImGui_PushFont(ctx, settings_font)
     local visible, open = r.ImGui_Begin(ctx, 'Track Names Settings', true, window_flags)
     if visible then
         if r.ImGui_Button(ctx, "X") then
-            settings_visible = false
+            r.SetExtState("TK_TRACKNAMES", "settings_visible", "0", false)
         end
+    
         local changed
         r.ImGui_SameLine(ctx)
         changed, settings.show_parent_tracks = r.ImGui_Checkbox(ctx, "Parent", settings.show_parent_tracks)
@@ -404,6 +406,7 @@ function GetBounds(hwnd)
 end
 
 function loop()
+    settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
         ctx = r.ImGui_CreateContext('Track Names')
         -- Opnieuw initialiseren van fonts
@@ -465,18 +468,7 @@ function loop()
                         r.ImGui_WindowFlags_NoFocusOnAppearing() |
                         r.ImGui_WindowFlags_NoDocking() 
                                       
-                        r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
-                        local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, flags)
-                        if button_visible then
-                            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 10.0)
-                            r.ImGui_PushFont(ctx, settings_font)
-                            if r.ImGui_Button(ctx, "S") then
-                                settings_visible = not settings_visible
-                            end
-                            r.ImGui_PopFont(ctx)
-                            r.ImGui_PopStyleVar(ctx)
-                            r.ImGui_End(ctx)
-                        end
+
 
                         if settings_visible then
                             ShowSettingsWindow()
