@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.2.8:
+-- @version 0.2.9:
 -- @changelog:
 --[[            
-+ Added Toggle Settings script
++ Center Text /labels
 ]]----------------------------------------------------------------------------------       
 
 local r = reaper
@@ -30,7 +30,8 @@ local default_settings = {
     custom_colors_enabled = false,
     show_label = true,
     label_alpha = 0.3,
-    label_color_mode = 1
+    label_color_mode = 1,
+    text_centered = false 
 }
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -245,7 +246,7 @@ end
 
 function ShowSettingsWindow()
     if not settings_visible then return end
-    r.ImGui_SetNextWindowSize(ctx, 400, 320)
+    r.ImGui_SetNextWindowSize(ctx, 460, 310)
     -- Style aanpassingen
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -283,8 +284,10 @@ function ShowSettingsWindow()
         changed, settings.show_track_colors = r.ImGui_Checkbox(ctx, "track colors", settings.show_track_colors)
         r.ImGui_SameLine(ctx)
         changed, settings.show_label = r.ImGui_Checkbox(ctx, "label", settings.show_label)
+        r.ImGui_SameLine(ctx)
+        changed, settings.text_centered = r.ImGui_Checkbox(ctx, "Center", settings.text_centered)
         r.ImGui_Separator(ctx)
-        r.ImGui_PushItemWidth(ctx, 250)
+        r.ImGui_PushItemWidth(ctx, 340)
         if not settings.show_track_colors then
             r.ImGui_BeginDisabled(ctx)
         end
@@ -409,7 +412,6 @@ function loop()
     settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
         ctx = r.ImGui_CreateContext('Track Names')
-        -- Opnieuw initialiseren van fonts
         font_objects = {}
         for _, font_name in ipairs(fonts) do
             local font = r.ImGui_CreateFont(font_name, 18)
@@ -419,6 +421,7 @@ function loop()
         settings_font = r.ImGui_CreateFont('sans-serif', 14)
         r.ImGui_Attach(ctx, settings_font)
     end
+    
     local current_project = reaper.EnumProjects(-1)
     if current_project ~= last_project then
         RefreshProjectState()
@@ -426,7 +429,6 @@ function loop()
     end
     local track_count = reaper.CountTracks(0)
     
-    -- Check voor project wissel of track aantal wijziging
     if current_project ~= last_project or track_count ~= last_track_count then
         RefreshProjectState()
         last_project = current_project
@@ -467,13 +469,7 @@ function loop()
                         r.ImGui_WindowFlags_NoDecoration() | 
                         r.ImGui_WindowFlags_NoFocusOnAppearing() |
                         r.ImGui_WindowFlags_NoDocking() 
-                                      
 
-
-                        if settings_visible then
-                            ShowSettingsWindow()
-                        end
-                    
                         if settings.show_track_colors then
                             local overlay_flags = flags |
                             r.ImGui_WindowFlags_NoInputs() |
@@ -542,7 +538,13 @@ function loop()
                 if visible then
                     local draw_list = r.ImGui_GetWindowDrawList(ctx)
                     local track_count = r.CountTracks(0)
-                    
+                    local max_width = 0
+                    for i = 0, track_count - 1 do
+                        local track = r.GetTrack(0, i)
+                        local _, track_name = r.GetTrackName(track)
+                        local text_width = r.ImGui_CalcTextSize(ctx, track_name)
+                        max_width = math.max(max_width, text_width)
+                    end
                     for i = 0, track_count - 1 do
                         local track = r.GetTrack(0, i)
                         local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
@@ -575,7 +577,14 @@ function loop()
                                 local scale_offset = -5 * ((scale - 1) / 0.5)
                                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
                                 local text_y = track_y + (track_height * 0.5) - (18 * 0.5) + settings.vertical_offset + scale_offset
-                                r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                                if settings.text_centered then
+                                    local current_width = r.ImGui_CalcTextSize(ctx, display_name)
+                                    local offset = (max_width - current_width) / 2
+                                    r.ImGui_SetCursorPos(ctx, settings.horizontal_offset + offset, text_y / scale)
+                                else
+                                    r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                                end
+                                
                 
                                 if settings.show_label then
                                     local text_width = r.ImGui_CalcTextSize(ctx, display_name)
@@ -595,14 +604,17 @@ function loop()
                                         4.0
                                     )
                                 end              
-                                r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                                if settings.text_centered then
+                                    local current_width = r.ImGui_CalcTextSize(ctx, display_name)
+                                    local offset = (max_width - current_width) / 2
+                                    r.ImGui_SetCursorPos(ctx, settings.horizontal_offset + offset, text_y / scale)
+                                else
+                                    r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                                end
+                                
                                 r.ImGui_Text(ctx, display_name)
                                 r.ImGui_PopStyleVar(ctx)              
                                 r.ImGui_PopStyleColor(ctx)
-                                
-
-
-
                             end
                         end
                     end                    
@@ -611,7 +623,9 @@ function loop()
                 r.ImGui_PopStyleVar(ctx)
                 r.ImGui_PopStyleColor(ctx, 2)
                 r.ImGui_PopFont(ctx)
-                
+    if settings_visible then
+        ShowSettingsWindow()
+    end            
     if open then
         r.defer(loop)
     end
@@ -625,7 +639,6 @@ local success = pcall(function()
     end
     r.defer(loop)
 end)
-
 if not success then
     r.ShowConsoleMsg("Script error occurred\n")
 end

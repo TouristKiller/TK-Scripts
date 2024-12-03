@@ -69,9 +69,9 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.2.8" author="TouristKiller" time="2024-12-03T17:00:00Z">
+        <version name="0.2.9" author="TouristKiller" time="2024-12-03T22:05:00Z">
             <changelog><![CDATA[
-+ Added automatic refresh when switching project tabs
++ Center Text /Labels
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
