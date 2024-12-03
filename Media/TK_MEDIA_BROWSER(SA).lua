@@ -1,25 +1,24 @@
 -- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.1.1:
+-- @version 0.1.2:
 -- @changelog:
---[[        * Nothing realy, just some changes under the hood
+--[[        + Improved: Docking
+            + Gui changes
+            + Added: Button to open TK FX BROWSER
             
 ]]--        
 --------------------------------------------------------------------------
-
 local r = reaper
 local sep = package.config:sub(1,1)
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local peakfiles_path = script_path .. "" .. sep
--- local ctx = r.ImGui_CreateContext('TK Media Browser')
-local ctx = r.ImGui_CreateContext('TK_MB_' .. reaper.genGuid())
-
--- local ctx = r.ImGui_CreateContext('TK Media Browser')
-local script_is_open = false
+--local ctx = r.ImGui_CreateContext('TK_MB_' .. reaper.genGuid())
+local ctx = r.ImGui_CreateContext('TK Media Browser')
 local font_size = 12
 local normal_font = reaper.ImGui_CreateFont('sans-serif', font_size)
 r.ImGui_Attach(ctx, normal_font)
-
+dock = 0
+change_dock = false
 local BUTTON_WIDTH = 40
 local locations = {}
 -- local new_location = ""
@@ -56,6 +55,8 @@ local numa_player_installed = false
 local pushed_color = false
 local is_random_pitch_active = false
 local random_pitch_timer = 0
+local random_speed = 10 -- standaard waarde
+local TKFXB_state = false
 -- CF Player
 local use_cf_view = false
 local CF_Preview = nil
@@ -909,24 +910,49 @@ local function draw_file_browser()
     end
 end
 
+local function handleDocking()
+    if change_dock then
+        r.ImGui_SetNextWindowDockID(ctx, ~dock)
+        change_dock = false
+    end
+end
+
 --------------------------------------------------------------------
 -- MAIN LOOP
 local function loop()
-    r.ImGui_PushFont(ctx, normal_font)
+    if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+        ctx = r.ImGui_CreateContext('TK Media Browser')
+        normal_font = r.ImGui_CreateFont('sans-serif', font_size)
+        r.ImGui_Attach(ctx, normal_font)
+     
+    end
+    handleDocking()
     apply_style()
+    r.ImGui_PushFont(ctx, normal_font)
     reaper.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
-    reaper.ImGui_SetNextWindowSizeConstraints(ctx, 140, 280, 16384, 16384)
+    reaper.ImGui_SetNextWindowSizeConstraints(ctx, 140, 285, 16384, 16384)
+    
     local visible, open = r.ImGui_Begin(ctx, 'TK Media Browser', true, r.ImGui_WindowFlags_NoTitleBar())
+    dock = r.ImGui_GetWindowDockID(ctx)
     if visible then
         local total_available_width = reaper.ImGui_GetContentRegionAvail(ctx)
         local spacing = reaper.ImGui_GetStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing())
-        local button_width = (total_available_width - (spacing * (3 - 1))) / 3
-        if r.ImGui_Button(ctx, file_browser_open and "CLOSE" or "OPEN", button_width) then
+        local button_width = (total_available_width - (spacing * (5 - 1))) / 5
+        if r.ImGui_Button(ctx, file_browser_open and "C" or "O", button_width) then
             file_browser_open = not file_browser_open
         end
         reaper.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "L/R", button_width) then
+        if r.ImGui_Button(ctx, browser_position_left and "L" or "R", button_width) then
             browser_position_left = not browser_position_left
+        end
+        reaper.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, TKFXB_state and "FX" or "FX", button_width) then
+            TKFXB_state = not TKFXB_state
+            r.Main_OnCommand(reaper.NamedCommandLookup("_RSf7ad518475afabaca1169de44f70a95c8f933ddc"), 0)
+        end
+        reaper.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "D", button_width) then
+            change_dock = true    
         end
 
         r.ImGui_SameLine(ctx)
@@ -935,7 +961,7 @@ local function loop()
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
-        if reaper.ImGui_Button(ctx, 'QUIT', button_width) then
+        if reaper.ImGui_Button(ctx, 'Q', button_width) then
             open = false
         end
         reaper.ImGui_PopStyleColor(ctx, 3)
@@ -943,7 +969,7 @@ local function loop()
         local spacing = reaper.ImGui_GetStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing())
         local slider_width = total_width - BUTTON_WIDTH - spacing
 
-        local ADD_BUTTON_SIZE = 20
+        local ADD_BUTTON_SIZE = 18
         r.ImGui_SetNextItemWidth(ctx, -ADD_BUTTON_SIZE - spacing)
         if r.ImGui_BeginCombo(ctx, "##Locations", locations[selected_location_index] or "Select...") then
                
@@ -1281,8 +1307,6 @@ local function loop()
                 end
             end
 
-
-            -- Vervang de volume slider code met:
             r.ImGui_PushItemWidth(ctx, slider_width)
             local current_db = linear_to_db(preview_volume) 
             local rv, new_db = r.ImGui_SliderDouble(ctx, "##Volume", current_db, -60, 12, "%.1f dB")
@@ -1349,22 +1373,39 @@ local function loop()
                     end
                 end
             end          
-
             --Pitch slider en random knop
             r.ImGui_PushItemWidth(ctx, slider_width)
+
+            -- Maak de frames kleiner met FramePadding
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 3, 3)
+            -- Onthoud de startpositie voor de random knop
+            local start_pos_y = r.ImGui_GetCursorPosY(ctx)
+
             local rv_pitch, new_pitch = r.ImGui_SliderInt(ctx, "##Pitch", current_pitch, -12, 12, "%d semitones")
-            r.ImGui_PopItemWidth(ctx)
-            
+            local rv_speed, new_speed = r.ImGui_SliderInt(ctx, "##Random Speed", random_speed, 10, 300, "Speed: %d")
+
+            -- Bereken de totale hoogte van beide sliders
+            local total_height = r.ImGui_GetCursorPosY(ctx) - start_pos_y - 3
+
+            -- Positioneer de random knop
             r.ImGui_SameLine(ctx)
-            
-            if r.ImGui_Button(ctx, is_random_pitch_active and "Stop" or "Rand", BUTTON_WIDTH) then
+            r.ImGui_SetCursorPosY(ctx, start_pos_y)
+            if r.ImGui_Button(ctx, is_random_pitch_active and "Stop" or "Rand", BUTTON_WIDTH, total_height) then
                 is_random_pitch_active = not is_random_pitch_active
                 if not is_random_pitch_active then
                     new_pitch = 0
                     rv_pitch = true
                 end
             end
-            
+
+            r.ImGui_PopStyleVar(ctx, 2)
+            r.ImGui_PopItemWidth(ctx)
+
+            -- Update de random speed als de slider wordt aangepast
+            if rv_speed then
+                random_speed = new_speed
+            end
             if rv_pitch or is_random_pitch_active then
                 current_pitch = new_pitch
                 if use_cf_view and CF_Preview then
@@ -1376,7 +1417,7 @@ local function loop()
             
             if is_random_pitch_active then
                 random_pitch_timer = random_pitch_timer + 1
-                if random_pitch_timer >= 10 then
+                if random_pitch_timer >= random_speed then
                     current_pitch = math.random(-12, 12)
                     if use_cf_view and CF_Preview then
                         r.CF_Preview_SetValue(CF_Preview, "D_PITCH", current_pitch)
@@ -1386,9 +1427,10 @@ local function loop()
                     random_pitch_timer = 0
                 end
             end
-        
+
             local window_height = r.ImGui_GetWindowHeight(ctx)
-            r.ImGui_SetCursorPosY(ctx, window_height - 30)  -- 60 pixels van onderkant
+            local play_button_width = (total_available_width - (spacing * (3 - 1))) / 3
+            r.ImGui_SetCursorPosY(ctx, window_height - 30)  
 
             r.ImGui_Separator(ctx)
 
@@ -1396,7 +1438,7 @@ local function loop()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00AA00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00CC00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x008800FF)
-            if r.ImGui_Button(ctx, "|>", button_width) and current_playing_file ~= "" then
+            if r.ImGui_Button(ctx, "|>", play_button_width) and current_playing_file ~= "" then
                 play_media(current_playing_file)
             end
             r.ImGui_PopStyleColor(ctx, 3)
@@ -1406,7 +1448,7 @@ local function loop()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFFA500FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFFB52EFF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xE69400FF)
-            if r.ImGui_Button(ctx, "| |", button_width) then
+            if r.ImGui_Button(ctx, "| |", play_button_width) then
                 pause_playback()
             end
             r.ImGui_PopStyleColor(ctx, 3)
@@ -1416,7 +1458,7 @@ local function loop()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xCC0000FF)
-            if r.ImGui_Button(ctx, "[]", button_width) then
+            if r.ImGui_Button(ctx, "[]", play_button_width) then
                 stop_playback()
             end
             r.ImGui_PopStyleColor(ctx, 3)

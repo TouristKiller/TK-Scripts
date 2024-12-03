@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.9.1:
+-- @version 0.9.2:
 -- @changelog:
 --[[        
 + Improved: All track calls are validated now, so there should be no more crashes because of that
@@ -6072,7 +6072,7 @@ if visible then
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPos(ctx, window_width - 40, 0)
                 if r.ImGui_Button(ctx, "\u{0048}", 20, 20) then
-                    local command_id = r.NamedCommandLookup("_RSe3b4ab816d638434284fc39c2cc190c86f609b95")  -- Vervang dit met de juiste command ID
+                    local command_id = r.NamedCommandLookup("_RS288e3cc7228dd8b05c5cd6394578cc42ca6b4940")  
                     r.Main_OnCommand(command_id, 0)
                 end
                 
