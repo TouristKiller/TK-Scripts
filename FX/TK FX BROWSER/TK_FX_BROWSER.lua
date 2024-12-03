@@ -1,16 +1,18 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.9.0:
+-- @version 0.9.1:
 -- @changelog:
 --[[        
-* More info in log system to better find crashing plugins
-* Send, Projects and actions can be set as defauld folder
-* Menus automaticly close when not hovered   
-* Attempt to implement auto routing for multi out plugins (in the works)
++ Improved: All track calls are validated now, so there should be no more crashes because of that
++ Improved: Menu system for better interaction between hover and context menus
++ Added: Track Template rename/delete functionality
++ Fixed: Menus now properly close on mouse hover while staying open during context menu usage
++ Enhanced: Consistent menu interaction across all main menus (ALL PLUGINS, CATEGORIES, etc.)
+
 
               ---------------------TODO-----------------------------------------
+            - Auto tracks and send /recieve for multi output plugin 
             - Meter functionality (Pre/post Peak) -- vooralsnog niet haalbaar
-            - Expand track template functionality
             - Improve distribution of screenshots in current track and project
             - Expand project files
             - Etc......
@@ -3526,7 +3528,7 @@ local function ShowScreenshotWindow()
                                 if width and height then
                                     local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                     if r.ImGui_ImageButton(ctx, "##"..plugin_name, texture, display_width, display_height) then
-                                        if TRACK then
+                                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                                             r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
                                             if config.close_after_adding_fx then
                                                 SHOULD_CLOSE_SCRIPT = true
@@ -3843,7 +3845,7 @@ local function ShowScreenshotWindow()
 
                                                 if selected_folder == "Current Project FX" then
                                                     local track = r.GetTrack(0, plugin.track_number - 1)
-                                                    if track then
+                                                    if track and r.ValidatePtr(track, "MediaTrack*") then
                                                         local fx_count = r.TrackFX_GetCount(track)
                                                         for j = 0, fx_count - 1 do
                                                             local retval, fx_name = r.TrackFX_GetFXName(track, j, "")
@@ -3861,7 +3863,7 @@ local function ShowScreenshotWindow()
                                                         r.TrackFX_Show(TRACK, fx_index, is_open and 2 or 3)
                                                     end
                                                 else
-                                                    if TRACK then
+                                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                                                         r.TrackFX_AddByName(TRACK, plugin.fx_name, false, -1000 - r.TrackFX_GetCount(TRACK))
                                                         if config.close_after_adding_fx then
                                                             SHOULD_CLOSE_SCRIPT = true
@@ -3984,7 +3986,7 @@ local function ShowScreenshotWindow()
                                 local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                 
                                 if r.ImGui_ImageButton(ctx, "##"..fx.name, texture, display_width, display_height) then
-                                    if TRACK then
+                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                                         r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
                                         if config.close_after_adding_fx then
                                             SHOULD_CLOSE_SCRIPT = true
@@ -4624,7 +4626,7 @@ local function DrawFxChains(tbl, path)
                         end
                     end
                 else
-                    if TRACK then
+                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                         r.TrackFX_AddByName(TRACK, table.concat({ path, os_separator, item, extension }), false,
                             -1000 - r.TrackFX_GetCount(TRACK))
                         if config.close_after_adding_fx then
@@ -4710,11 +4712,50 @@ local function DrawTrackTemplates(tbl, path)
                 local template_str = table.concat({ path, os_separator, tbl[i], extension })
                 LoadTemplate(template_str)
             end
+            
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "TrackTemplateOptions_" .. i)
+            end
+            
+            if r.ImGui_BeginPopup(ctx, "TrackTemplateOptions_" .. i) then
+                if r.ImGui_MenuItem(ctx, "Rename") then
+                    local retval, new_name = r.GetUserInputs("Rename Track Template", 1, "New name:", tbl[i])
+                    if retval then
+                        local resource_path = r.GetResourcePath()
+                        local templates_path = resource_path .. "/TrackTemplates"
+                        local old_path = templates_path .. path .. os_separator .. tbl[i] .. extension
+                        local new_path = templates_path .. path .. os_separator .. new_name .. extension
+                        if os.rename(old_path, new_path) then
+                            tbl[i] = new_name
+                            FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+                            r.ShowMessageBox("Track Template renamed", "Success", 0)
+                        else
+                            r.ShowMessageBox("Could not rename Track Template", "Error", 0)
+                        end
+                    end
+                end
+                
+                if r.ImGui_MenuItem(ctx, "Delete") then
+                    local resource_path = r.GetResourcePath()
+                    local templates_path = resource_path .. "/TrackTemplates"
+                    local file_path = templates_path .. path .. os_separator .. tbl[i] .. extension
+                    if os.remove(file_path) then
+                        table.remove(tbl, i)
+                        FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+                        r.ShowMessageBox("Track Template deleted", "Success", 0)
+                    else
+                        r.ShowMessageBox("Could not delete Track Template", "Error", 0)
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
         end
     end
 end
 
+
 local function DrawItems(tbl, main_cat_name)
+
     if menu_direction_right then
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_SelectableTextAlign(), 1, 0.5)
     end
@@ -4757,10 +4798,11 @@ local function DrawItems(tbl, main_cat_name)
                     end
                     if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
                         r.ImGui_OpenPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j)
+
                     end
                    
                     if r.ImGui_BeginPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j) then
-                        
+
                             if r.ImGui_MenuItem(ctx, "Make Screenshot") then
                                 MakeScreenshot(tbl[i].fx[j], nil, true)
                             end
@@ -4841,16 +4883,17 @@ local function DrawItems(tbl, main_cat_name)
                                     SaveConfig()
                                 end
                             end
-                    
+
+                            
                         r.ImGui_EndPopup(ctx)
                     end
                 end
             end
-            if not r.ImGui_IsWindowHovered(ctx) then
-                is_screenshot_visible = false
-                current_hovered_plugin = nil
+            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                r.ImGui_CloseCurrentPopup(ctx)
             end
             r.ImGui_EndMenu(ctx)
+            
         end
         reaper.ImGui_PopStyleVar(ctx, 2)
         reaper.ImGui_PopStyleColor(ctx)
@@ -4871,13 +4914,17 @@ local function DrawFavorites()
                 SHOULD_CLOSE_SCRIPT = true
             end
         end
+   
         if r.ImGui_IsItemHovered(ctx) then
             if fav ~= current_hovered_plugin then
                 current_hovered_plugin = fav
                 LoadPluginScreenshot(current_hovered_plugin)
             end
             is_screenshot_visible = true
+         
         end
+
+        
         if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
             r.ImGui_OpenPopup(ctx, "FavoritePluginMenu_" .. i)
         end
@@ -5603,9 +5650,10 @@ function Frame()
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+      
         if r.ImGui_BeginMenu(ctx, "FAVORITES") then
             DrawFavorites()
-            if not r.ImGui_IsAnyItemHovered(ctx) then
+            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                 r.ImGui_CloseCurrentPopup(ctx)
             end
             r.ImGui_EndMenu(ctx)
@@ -5629,26 +5677,25 @@ function Frame()
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
-            if r.ImGui_BeginMenu(ctx, CAT_TEST[i].name) then
-                if CAT_TEST[i].name == "FX CHAINS" then
-                    DrawFxChains(CAT_TEST[i].list)
-                    if not r.ImGui_IsAnyItemHovered(ctx) then
-                        r.ImGui_CloseCurrentPopup(ctx)
+         
+                if r.ImGui_BeginMenu(ctx, CAT_TEST[i].name) then
+                    if CAT_TEST[i].name == "FX CHAINS" then
+                        DrawFxChains(CAT_TEST[i].list)
+                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                            r.ImGui_CloseCurrentPopup(ctx)
                         end
-                elseif CAT_TEST[i].name == "TRACK TEMPLATES" then
-                    DrawTrackTemplates(CAT_TEST[i].list)
-                    if not r.ImGui_IsAnyItemHovered(ctx) then
-                        r.ImGui_CloseCurrentPopup(ctx)
+                    elseif CAT_TEST[i].name == "TRACK TEMPLATES" then
+                        DrawTrackTemplates(CAT_TEST[i].list)
+                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                            r.ImGui_CloseCurrentPopup(ctx)
                         end
-                else
-                    DrawItems(CAT_TEST[i].list, CAT_TEST[i].name)
-                    if not r.ImGui_IsAnyItemHovered(ctx) then
-                    r.ImGui_CloseCurrentPopup(ctx)
+                    else
+                        DrawItems(CAT_TEST[i].list, CAT_TEST[i].name)
                     end
-                 end
-                r.ImGui_EndMenu(ctx)
-          
-            end
+                    r.ImGui_EndMenu(ctx)
+                end
+                
+            
             r.ImGui_PopStyleVar(ctx, 4)
             r.ImGui_PopStyleColor(ctx, 2)
         end
@@ -5730,10 +5777,6 @@ function Frame()
                 ClearScreenshotCache()
             end
         end
-        
-        
-        
-        
 
         if LAST_USED_FX and r.ValidatePtr(TRACK, "MediaTrack*") then
             if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
@@ -5997,7 +6040,7 @@ if visible then
         r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 0, progress_text)
     end
     local before_pos = r.ImGui_GetCursorPosY(ctx)
-    if TRACK then
+    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
             local track_color, text_color = GetTrackColorAndTextColor(TRACK)
             local track_name = GetTrackName(TRACK)
             local track_type = GetTrackType(TRACK)
@@ -6025,6 +6068,14 @@ if visible then
                 if r.ImGui_Button(ctx, show_settings and '\u{0047}' or '\u{0047}', 20, 20) then
                     show_settings = not show_settings
                 end
+
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPos(ctx, window_width - 40, 0)
+                if r.ImGui_Button(ctx, "\u{0048}", 20, 20) then
+                    local command_id = r.NamedCommandLookup("_RSe3b4ab816d638434284fc39c2cc190c86f609b95")  -- Vervang dit met de juiste command ID
+                    r.Main_OnCommand(command_id, 0)
+                end
+                
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPos(ctx, window_width - 20, 0)
                 if r.ImGui_Button(ctx, "\u{0045}", 20, 20) then
