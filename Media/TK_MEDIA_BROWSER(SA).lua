@@ -1,11 +1,9 @@
 -- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.1.2:
+-- @version 0.1.4:
 -- @changelog:
---[[        + Improved: Docking
-            + Gui changes
-            + Added: Button to open TK FX BROWSER
-            
+--[[       
++ Show /Hide almost everything in the GUI            
 ]]--        
 --------------------------------------------------------------------------
 local r = reaper
@@ -42,7 +40,6 @@ local current_item_length = 0
 local use_original_speed = true
 local current_playrate = 1.0
 local preview_volume = 1.0
-local show_preview_in_tcp = false
 local mute_preview = false
 local disable_fades = true
 local is_dragging = false
@@ -62,7 +59,17 @@ local use_cf_view = false
 local CF_Preview = nil
 local Play = false
 local PlayPos = 0
+-- Show /hide options
+local show_preview_in_tcp = false
+local show_sliders = true
+local show_oscilloscope = true
+local show_location_section = true
+local show_top_buttons = true
+local show_preview_in_tcp = false
 
+local BASE_HEIGHT = 110  -- Basis hoogte zonder oscilloscoop en sliders
+local OSCILLOSCOPE_HEIGHT = 60
+local SLIDERS_HEIGHT = 78  -- Totale hoogte voor alle sliders
 -- rename
 local right_click_location = nil 
 local rename_popup_open = false 
@@ -72,7 +79,7 @@ local new_name = ""
 local file_browser_open = false
 local browser_position_left = true
 local browser_width = 400 
-local browser_height = 500
+local browser_height = 480
 
 local dark_gray = 0x303030FF
 local hover_gray = 0x606060FF
@@ -178,7 +185,7 @@ local function LoadTexture(path)
     local orig_width = r.JS_LICE_GetWidth(source_image)
     local orig_height = r.JS_LICE_GetHeight(source_image)
     
-    local target_height = 80  -- Vaste hoogte gelijk aan oscilloscoop
+    local target_height = 60  -- Vaste hoogte gelijk aan oscilloscoop
     local target_width = math.floor(target_height * (16/9))  -- Breedte berekend op basis van 16:9
     
     local scaled_image = r.JS_LICE_CreateBitmap(true, target_width, target_height)
@@ -224,7 +231,12 @@ local function save_options()
             preview_volume = preview_volume,
             current_db = current_db,
             remember_last_location = remember_last_location,
-            last_location_index = selected_location_index
+            last_location_index = selected_location_index,
+            show_sliders = show_sliders,
+            show_oscilloscope = show_oscilloscope,
+            show_location_section = show_location_section,
+            show_top_buttons = show_top_buttons,
+            show_progress_bar = show_progress_bar           
         }
         file:write(serialize(options))
         file:close()
@@ -238,6 +250,11 @@ local function load_options()
         local chunk, err = load("return " .. content)
         if chunk then
             local options = chunk()
+            show_location_section = options.show_location_section
+            show_top_buttons = options.show_top_buttons
+            show_progress_bar = options.show_progress_bar
+            show_sliders = options.show_sliders
+            show_oscilloscope = options.show_oscilloscope
             auto_play = options.auto_play
             loop_play = options.loop_play
             use_original_speed = options.use_original_speed
@@ -647,7 +664,7 @@ end
 
 
 local function draw_playback_position()
-    if current_playing_file ~= "" then
+    if show_progress_bar and current_playing_file ~= "" then
         if use_cf_view and CF_Preview then
             local retval, pos = r.CF_Preview_GetValue(CF_Preview, "D_POSITION")
             local retval2, length = r.CF_Preview_GetValue(CF_Preview, "D_LENGTH")
@@ -656,8 +673,8 @@ local function draw_playback_position()
             pos = pos or 0
             length = length or 1  -- Voorkom delen door 0
             
-            local width = r.ImGui_GetContentRegionAvail(ctx) - 5
-            local height = 20
+            local width = r.ImGui_GetContentRegionAvail(ctx) 
+            local height = 15
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
             local x, y = r.ImGui_GetCursorScreenPos(ctx)
             
@@ -669,13 +686,13 @@ local function draw_playback_position()
             local time_text = string.format("%.2f / %.2f", pos, length)
             local m, b, t = position_to_mbt(pos)
             local mbt_text = string.format("%d.%d.%03d", m, b, t)
-            r.ImGui_DrawList_AddText(draw_list, x + 5, y + 5, 0xFFFFFFFF, time_text .. " - " .. mbt_text)
+            r.ImGui_DrawList_AddText(draw_list, x + 5, y + 2, 0xFFFFFFFF, time_text .. " - " .. mbt_text)
             r.ImGui_Dummy(ctx, width, height)
         else
             if current_item_length > 0 then
                 local pos = r.GetPlayPosition()
                 local width = r.ImGui_GetWindowWidth(ctx)
-                local height = 20
+                local height = 15
                 local draw_list = r.ImGui_GetWindowDrawList(ctx)
                 local x, y = r.ImGui_GetCursorScreenPos(ctx)
                 r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, 0x333333FF)
@@ -685,7 +702,7 @@ local function draw_playback_position()
                 local time_text = string.format("%.2f / %.2f", pos, current_item_length)
                 local m, b, t = position_to_mbt(pos)
                 local mbt_text = string.format("%d.%d.%03d", m, b, t)
-                r.ImGui_DrawList_AddText(draw_list, x + 5, y + 5, 0xFFFFFFFF, time_text .. " - " .. mbt_text)
+                r.ImGui_DrawList_AddText(draw_list, x + 5, y + 2, 0xFFFFFFFF, time_text .. " - " .. mbt_text)
                 r.ImGui_Dummy(ctx, width, height)
             end
         end
@@ -820,7 +837,7 @@ local function draw_file_browser()
     
     local browser_x = browser_position_left and (main_pos_x - browser_width) or (main_pos_x + main_width)
     r.ImGui_SetNextWindowPos(ctx, browser_x, main_pos_y)
-    r.ImGui_SetNextWindowSizeConstraints(ctx, 300, 280, 1000, 1000)
+    r.ImGui_SetNextWindowSizeConstraints(ctx, 300, 248, 1000, 1000)
     reaper.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
     
     local window_flags = r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoTitleBar()
@@ -916,6 +933,25 @@ local function handleDocking()
         change_dock = false
     end
 end
+local function calculate_window_height()
+    local total_height = BASE_HEIGHT
+    if not show_progress_bar then
+        total_height = total_height - 15  -- Hoogte van de voortgangsbalk
+    end
+    if not show_location_section then
+        total_height = total_height - 20  -- Pas aan op basis van werkelijke hoogte
+    end
+    if not show_top_buttons then
+        total_height = total_height - 20  -- Pas aan op basis van werkelijke hoogte
+    end
+    if show_oscilloscope then
+        total_height = total_height + OSCILLOSCOPE_HEIGHT
+    end
+    if show_sliders then
+        total_height = total_height + SLIDERS_HEIGHT
+    end
+    return total_height
+end
 
 --------------------------------------------------------------------
 -- MAIN LOOP
@@ -930,120 +966,130 @@ local function loop()
     apply_style()
     r.ImGui_PushFont(ctx, normal_font)
     reaper.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
-    reaper.ImGui_SetNextWindowSizeConstraints(ctx, 140, 285, 16384, 16384)
+    local window_height = calculate_window_height()
+    reaper.ImGui_SetNextWindowSizeConstraints(ctx, 140, window_height, 16384, window_height)
     
-    local visible, open = r.ImGui_Begin(ctx, 'TK Media Browser', true, r.ImGui_WindowFlags_NoTitleBar())
+    local visible, open = r.ImGui_Begin(ctx, 'TK Media Browser', true, 
+    r.ImGui_WindowFlags_NoTitleBar() | 
+    r.ImGui_WindowFlags_NoScrollbar())
     dock = r.ImGui_GetWindowDockID(ctx)
+    if dock ~= 0 then  -- Als het venster gedockt is
+        local current_width = r.ImGui_GetWindowWidth(ctx)
+        r.ImGui_SetWindowSize(ctx, current_width, calculate_window_height())
+    end
     if visible then
-        local total_available_width = reaper.ImGui_GetContentRegionAvail(ctx)
-        local spacing = reaper.ImGui_GetStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing())
-        local button_width = (total_available_width - (spacing * (5 - 1))) / 5
-        if r.ImGui_Button(ctx, file_browser_open and "C" or "O", button_width) then
-            file_browser_open = not file_browser_open
-        end
-        reaper.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, browser_position_left and "L" or "R", button_width) then
-            browser_position_left = not browser_position_left
-        end
-        reaper.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, TKFXB_state and "FX" or "FX", button_width) then
-            TKFXB_state = not TKFXB_state
-            r.Main_OnCommand(reaper.NamedCommandLookup("_RSf7ad518475afabaca1169de44f70a95c8f933ddc"), 0)
-        end
-        reaper.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "D", button_width) then
-            change_dock = true    
+        if show_top_buttons then
+            local total_available_width = reaper.ImGui_GetContentRegionAvail(ctx)
+            local spacing = reaper.ImGui_GetStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing())
+            local button_width = (total_available_width - (spacing * (5 - 1))) / 5
+            if r.ImGui_Button(ctx, file_browser_open and "C" or "O", button_width) then
+                file_browser_open = not file_browser_open
+            end
+            reaper.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, browser_position_left and "L" or "R", button_width) then
+                browser_position_left = not browser_position_left
+            end
+            reaper.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, TKFXB_state and "FX" or "FX", button_width) then
+                TKFXB_state = not TKFXB_state
+                r.Main_OnCommand(reaper.NamedCommandLookup("_RSf7ad518475afabaca1169de44f70a95c8f933ddc"), 0)
+            end
+            reaper.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "D", button_width) then
+                change_dock = true    
+            end
+
+            r.ImGui_SameLine(ctx)
+            local window_width = reaper.ImGui_GetWindowWidth(ctx)
+            reaper.ImGui_SameLine(ctx)
+            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
+            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
+            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
+            if reaper.ImGui_Button(ctx, 'Q', button_width) then
+                open = false
+            end
+            reaper.ImGui_PopStyleColor(ctx, 3)
         end
 
-        r.ImGui_SameLine(ctx)
-        local window_width = reaper.ImGui_GetWindowWidth(ctx)
-        reaper.ImGui_SameLine(ctx)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
-        if reaper.ImGui_Button(ctx, 'Q', button_width) then
-            open = false
-        end
-        reaper.ImGui_PopStyleColor(ctx, 3)
-        local total_width = reaper.ImGui_GetContentRegionAvail(ctx)
-        local spacing = reaper.ImGui_GetStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing())
-        local slider_width = total_width - BUTTON_WIDTH - spacing
+        if show_location_section then
+            local total_width = reaper.ImGui_GetContentRegionAvail(ctx)
+            local spacing = reaper.ImGui_GetStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing())
+            local slider_width = total_width - BUTTON_WIDTH - spacing
 
-        local ADD_BUTTON_SIZE = 18
-        r.ImGui_SetNextItemWidth(ctx, -ADD_BUTTON_SIZE - spacing)
-        if r.ImGui_BeginCombo(ctx, "##Locations", locations[selected_location_index] or "Select...") then
-               
-            for i, location in ipairs(locations) do
-                local is_selected = (i == selected_location_index)
+            local ADD_BUTTON_SIZE = 18
+            r.ImGui_SetNextItemWidth(ctx, -ADD_BUTTON_SIZE - spacing)
+            if r.ImGui_BeginCombo(ctx, "##Locations", locations[selected_location_index] or "Select...") then
+                
+                for i, location in ipairs(locations) do
+                    local is_selected = (i == selected_location_index)
 
-                -- Detecteer rechtermuisklik en sla de locatie op
-                if r.ImGui_Selectable(ctx, location, is_selected, r.ImGui_SelectableFlags_AllowDoubleClick()) then
-                    if r.ImGui_IsMouseClicked(ctx, 1) then
-                        right_click_location = location
-                        r.ImGui_OpenPopup(ctx, "LocationContextMenu")
-                    else
-                        selected_location_index = i
-                        current_location = location
-                        current_files = read_directory_recursive(location)
-                    end
-                end
-        
-                if r.ImGui_BeginPopupContextItem(ctx) then
-                    if r.ImGui_MenuItem(ctx, "Open in Explorer/Finder") then
-                        local full_path = locations[selected_location_index] -- Zorg ervoor dat 'location' het volledige pad bevat
-                        local command
-                        if reaper.GetOS():match("Win") then
-                            -- Gebruik dubbele backslashes voor Windows-paden
-                            full_path = full_path:gsub("/", "\\")
-                            command = string.format('explorer "%s"', full_path)
+                    -- Detecteer rechtermuisklik en sla de locatie op
+                    if r.ImGui_Selectable(ctx, location, is_selected, r.ImGui_SelectableFlags_AllowDoubleClick()) then
+                        if r.ImGui_IsMouseClicked(ctx, 1) then
+                            right_click_location = location
+                            r.ImGui_OpenPopup(ctx, "LocationContextMenu")
                         else
-                            command = string.format('open "%s"', full_path)
+                            selected_location_index = i
+                            current_location = location
+                            current_files = read_directory_recursive(location)
+                        end
+                    end
+            
+                    if r.ImGui_BeginPopupContextItem(ctx) then
+                        if r.ImGui_MenuItem(ctx, "Open in Explorer/Finder") then
+                            local full_path = locations[selected_location_index] -- Zorg ervoor dat 'location' het volledige pad bevat
+                            local command
+                            if reaper.GetOS():match("Win") then
+                                full_path = full_path:gsub("/", "\\")
+                                command = string.format('explorer "%s"', full_path)
+                            else
+                                command = string.format('open "%s"', full_path)
+                            end
+                            
+                            os.execute(command)
                         end
                         
-                        os.execute(command)
-                    end
-                    
-                    if r.ImGui_MenuItem(ctx, "Move Up") and i > 1 then
-                        locations[i], locations[i-1] = locations[i-1], locations[i]
-                        save_locations()
-                    end
-                    
-                    if r.ImGui_MenuItem(ctx, "Move Down") and i < #locations then
-                        locations[i], locations[i+1] = locations[i+1], locations[i]
-                        save_locations()
-                    end
-                    
-                    
-                    if r.ImGui_MenuItem(ctx, "Remove") then
-                        table.remove(locations, i)
-                        save_locations()
-                        if i == selected_location_index then
-                            selected_location_index = 1
-                            current_location = locations[1] or ""
-                            current_files = current_location ~= "" and read_directory_recursive(current_location) or {}
+                        if r.ImGui_MenuItem(ctx, "Move Up") and i > 1 then
+                            locations[i], locations[i-1] = locations[i-1], locations[i]
+                            save_locations()
                         end
+                        
+                        if r.ImGui_MenuItem(ctx, "Move Down") and i < #locations then
+                            locations[i], locations[i+1] = locations[i+1], locations[i]
+                            save_locations()
+                        end
+                        
+                        
+                        if r.ImGui_MenuItem(ctx, "Remove") then
+                            table.remove(locations, i)
+                            save_locations()
+                            if i == selected_location_index then
+                                selected_location_index = 1
+                                current_location = locations[1] or ""
+                                current_files = current_location ~= "" and read_directory_recursive(current_location) or {}
+                            end
+                        end
+                        r.ImGui_EndPopup(ctx)
                     end
-                    r.ImGui_EndPopup(ctx)
                 end
-                
                 if is_selected then
                     r.ImGui_SetItemDefaultFocus(ctx)
                 end
+         
+                r.ImGui_EndCombo(ctx)
             end
-            r.ImGui_EndCombo(ctx)
-        end
-        
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "+", ADD_BUTTON_SIZE, ADD_BUTTON_SIZE) then
-            local retval, folder = r.JS_Dialog_BrowseForFolder(0, "Select Folder", "")
-            if retval and folder ~= "" then
-                if not table.contains(locations, folder) then
-                    table.insert(locations, folder)
-                    save_locations()
+      
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+", ADD_BUTTON_SIZE, ADD_BUTTON_SIZE) then
+                local retval, folder = r.JS_Dialog_BrowseForFolder(0, "Select Folder", "")
+                if retval and folder ~= "" then
+                    if not table.contains(locations, folder) then
+                        table.insert(locations, folder)
+                        save_locations()
+                    end
                 end
             end
-        end
-         
+        end 
         local combo_flags = r.ImGui_ComboFlags_HeightLargest()
 
         r.ImGui_SetNextItemWidth(ctx, -1)
@@ -1226,7 +1272,67 @@ local function loop()
                 end
             end
         
-            -- Preview Track
+            r.ImGui_Text(ctx, "--SHOW/HIDE--")
+            if show_top_buttons then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), check_color)
+                r.ImGui_Text(ctx, "v")
+                r.ImGui_PopStyleColor(ctx)
+                r.ImGui_SameLine(ctx)
+            else
+                r.ImGui_Dummy(ctx, 12, 0)
+                r.ImGui_SameLine(ctx)
+            end
+            if r.ImGui_Selectable(ctx, "Show Top Buttons", show_top_buttons) then
+                show_top_buttons = not show_top_buttons
+            end
+            if show_location_section then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), check_color)
+                r.ImGui_Text(ctx, "v")
+                r.ImGui_PopStyleColor(ctx)
+                r.ImGui_SameLine(ctx)
+            else
+                r.ImGui_Dummy(ctx, 12, 0)
+                r.ImGui_SameLine(ctx)
+            end
+            if r.ImGui_Selectable(ctx, "Show Location Section", show_location_section) then
+                show_location_section = not show_location_section
+            end
+            if show_progress_bar then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), check_color)
+                r.ImGui_Text(ctx, "v")
+                r.ImGui_PopStyleColor(ctx)
+                r.ImGui_SameLine(ctx)
+            else
+                r.ImGui_Dummy(ctx, 12, 0)
+                r.ImGui_SameLine(ctx)
+            end
+            if r.ImGui_Selectable(ctx, "Show Progress Bar", show_progress_bar) then
+                show_progress_bar = not show_progress_bar
+            end
+            if show_sliders then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), check_color)
+                r.ImGui_Text(ctx, "v")
+                r.ImGui_PopStyleColor(ctx)
+                r.ImGui_SameLine(ctx)
+            else
+                r.ImGui_Dummy(ctx, 12, 0)
+                r.ImGui_SameLine(ctx)
+            end
+            if r.ImGui_Selectable(ctx, "Sliders", show_sliders) then
+                show_sliders = not show_sliders
+            end
+            if show_oscilloscope then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), check_color)
+                r.ImGui_Text(ctx, "v")
+                r.ImGui_PopStyleColor(ctx)
+                r.ImGui_SameLine(ctx)
+            else
+                r.ImGui_Dummy(ctx, 12, 0)
+                r.ImGui_SameLine(ctx)
+            end
+            if r.ImGui_Selectable(ctx, "Oscilloscope", show_oscilloscope) then
+                show_oscilloscope = not show_oscilloscope
+            end
             if show_preview_in_tcp then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), check_color)
                 r.ImGui_Text(ctx, "v")
@@ -1243,12 +1349,12 @@ local function loop()
                     r.TrackList_AdjustWindows(false)
                 end
             end
+
         
             r.ImGui_EndCombo(ctx)
         end
-        r.ImGui_Separator(ctx)
         draw_playback_position()
-
+        if show_oscilloscope then
             -- Oscilloscoop/Preview tekenen
             if current_playing_file ~= "" then
                 local ext = current_playing_file:match("%.([^%.]+)$"):lower()
@@ -1260,7 +1366,7 @@ local function loop()
                         local draw_list = r.ImGui_GetWindowDrawList(ctx)
                         local pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
                         local width = r.ImGui_GetContentRegionAvail(ctx)
-                        local height = 80
+                        local height = 60
                         
                         for i, color in ipairs(texture.pixels) do
                             local x = (i-1) % texture.width
@@ -1287,7 +1393,7 @@ local function loop()
                         local draw_list = r.ImGui_GetWindowDrawList(ctx)
                         local pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
                         local width = r.ImGui_GetContentRegionAvail(ctx)
-                        local height = 80
+                        local height = 60
                         r.ImGui_DrawList_AddRect(draw_list, pos_x, pos_y, pos_x + width, pos_y + height, 0x000000FF)
                 
                         if #audio_buffer > 0 then
@@ -1306,7 +1412,11 @@ local function loop()
                     end
                 end
             end
-
+        end
+        if show_sliders then
+            local total_available_width = reaper.ImGui_GetContentRegionAvail(ctx)
+            local spacing = reaper.ImGui_GetStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing())
+            local slider_width = total_available_width - BUTTON_WIDTH - spacing
             r.ImGui_PushItemWidth(ctx, slider_width)
             local current_db = linear_to_db(preview_volume) 
             local rv, new_db = r.ImGui_SliderDouble(ctx, "##Volume", current_db, -60, 12, "%.1f dB")
@@ -1427,14 +1537,19 @@ local function loop()
                     random_pitch_timer = 0
                 end
             end
-
-            local window_height = r.ImGui_GetWindowHeight(ctx)
-            local play_button_width = (total_available_width - (spacing * (3 - 1))) / 3
-            r.ImGui_SetCursorPosY(ctx, window_height - 30)  
-
-            r.ImGui_Separator(ctx)
-
-            -- Play knop
+        end 
+            
+        
+        local window_height = r.ImGui_GetWindowHeight(ctx)
+        local total_available_width = r.ImGui_GetContentRegionAvail(ctx)
+        local spacing_x, _ = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+        local play_button_width = (total_available_width - (spacing_x * (3 - 1))) / 3
+        
+        r.ImGui_SetCursorPosY(ctx, window_height - 25)  
+        r.ImGui_Separator(ctx)
+        
+       
+        -- Play knop
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00AA00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00CC00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x008800FF)
@@ -1443,7 +1558,7 @@ local function loop()
             end
             r.ImGui_PopStyleColor(ctx, 3)
 
-            -- Pause knop
+         -- Pause knop
             r.ImGui_SameLine(ctx)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFFA500FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFFB52EFF)
@@ -1453,7 +1568,7 @@ local function loop()
             end
             r.ImGui_PopStyleColor(ctx, 3)
 
-            -- Stop knop
+        -- Stop knop
             r.ImGui_SameLine(ctx)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)
@@ -1463,14 +1578,11 @@ local function loop()
             end
             r.ImGui_PopStyleColor(ctx, 3)
 
-
-
-            
-            if file_browser_open then
-                draw_file_browser()
-            end
-            remove_style()
-            r.ImGui_End(ctx)
+        if file_browser_open then
+          draw_file_browser()
+        end
+        remove_style()
+        r.ImGui_End(ctx)
 
     end
     
