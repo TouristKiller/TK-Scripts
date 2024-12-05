@@ -1,9 +1,13 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.2.9:
+-- @version 0.3.0:
 -- @changelog:
 --[[            
-+ Center Text /labels
++Added viewport clipping for optimized rendering
++Implemented color caching system
++Added line-based rendering instead of full color bands
++Reduced RT CPU usage for better audio performance
++Added text centering option with persistent settings
 ]]----------------------------------------------------------------------------------       
 
 local r = reaper
@@ -87,6 +91,7 @@ function SaveSettings()
     r.SetExtState(section, "show_label", settings.show_label and "1" or "0", true)
     r.SetExtState(section, "label_alpha", tostring(settings.label_alpha), true)
     r.SetExtState(section, "label_color_mode", tostring(settings.label_color_mode), true)
+    r.SetExtState(section, "text_centered", settings.text_centered and "1" or "0", true)
 end
 
 function LoadSettings()
@@ -107,6 +112,7 @@ function LoadSettings()
     settings.show_label = r.GetExtState(section, "show_label") == "1"
     settings.label_alpha = tonumber(r.GetExtState(section, "label_alpha")) or 0.3
     settings.label_color_mode = tonumber(r.GetExtState(section, "label_color_mode")) or 1
+    settings.text_centered = r.GetExtState(section, "text_centered") == "1"
 end
 
 function cleanup()
@@ -469,17 +475,32 @@ function loop()
                         r.ImGui_WindowFlags_NoDecoration() | 
                         r.ImGui_WindowFlags_NoFocusOnAppearing() |
                         r.ImGui_WindowFlags_NoDocking() 
+                        r.ImGui_WindowFlags_NoMouseInputs() 
 
                         if settings.show_track_colors then
+                            -- Color cache implementatie
+                            local colors_cache = {}
+                            local track_count = r.CountTracks(0)
+                            
+                            for i = 0, track_count - 1 do
+                                local track = r.GetTrack(0, i)
+                                local color = r.GetTrackColor(track)
+                                if color ~= 0 then
+                                    local r_val = (color & 0xFF) / 255
+                                    local g_val = ((color >> 8) & 0xFF) / 255
+                                    local b_val = ((color >> 16) & 0xFF) / 255
+                                    colors_cache[i] = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.overlay_alpha)
+                                end
+                            end
+                        
                             local overlay_flags = flags |
-                            r.ImGui_WindowFlags_NoInputs() |
-                            r.ImGui_WindowFlags_NoMove() | 
-                            r.ImGui_WindowFlags_NoSavedSettings() |
-                            r.ImGui_WindowFlags_AlwaysAutoResize()           
-                       
+                                r.ImGui_WindowFlags_NoInputs() |
+                                r.ImGui_WindowFlags_NoMove() |
+                                r.ImGui_WindowFlags_NoSavedSettings() |
+                                r.ImGui_WindowFlags_AlwaysAutoResize()          
+                        
                             r.ImGui_SetNextWindowPos(ctx, 0, 0)
                             
-                            -- Window size aanpassing voor macOS
                             local window_width
                             if reaper.GetOS():match("^OSX") then
                                 window_width = arrange_w
@@ -491,38 +512,37 @@ function loop()
                             r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
                             local header_height = r.GetMainHwnd() and 0
                             local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
+                            
                             if overlay_visible then
                                 local draw_list = r.ImGui_GetWindowDrawList(ctx)
-                                local track_count = r.CountTracks(0)
-
-                            for i = 0, track_count - 1 do
-                                local track = r.GetTrack(0, i)
-                                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY")
-                                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
                                 
-                                local color = r.GetTrackColor(track)
-                                if color ~= 0 then
-                                    local r_val = (color & 0xFF) / 255
-                                    local g_val = ((color >> 8) & 0xFF) / 255
-                                    local b_val = ((color >> 16) & 0xFF) / 255
-                                    local overlay_color = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.overlay_alpha)
-
-                                    if track_y < arrange_height and track_y + track_height > 0 then
+                                for i = 0, track_count - 1 do
+                                    local track = r.GetTrack(0, i)
+                                    local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY")
+                                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
+                                    
+                                    if colors_cache[i] and track_y < arrange_height and track_y + track_height > 0 then
                                         local overlay_top = math.max((top + track_y + header_height) / scale, arrange_y / scale)
                                         local overlay_bottom = math.min((top + track_y + track_height + header_height) / scale, (arrange_y + arrange_height) / scale)
                                         
-                                        r.ImGui_DrawList_AddRectFilled(draw_list,
-                                            left / scale,
-                                            overlay_top,
-                                            right / scale,
-                                            overlay_bottom,
-                                            overlay_color)
-                                    end    
+                                        local viewport_x, _ = r.ImGui_GetWindowPos(ctx)
+                                        local viewport_min_x = viewport_x
+                                        local viewport_max_x = viewport_min_x + r.ImGui_GetWindowWidth(ctx)
+                                        
+                                        for x = math.max(left, viewport_min_x), math.min(right, viewport_max_x), 1 do
+                                            r.ImGui_DrawList_AddLine(draw_list,
+                                                x / scale,
+                                                overlay_top,
+                                                x / scale,
+                                                overlay_bottom,
+                                                colors_cache[i])
+                                        end
+                                    end
                                 end
+                                r.ImGui_End(ctx)
                             end
-                            r.ImGui_End(ctx)
                         end
-                    end
+                        
             
 
                 local text_flags = flags | r.ImGui_WindowFlags_NoInputs() 
