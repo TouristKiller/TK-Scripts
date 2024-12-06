@@ -1,13 +1,15 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.9.2:
+-- @version 0.9.4:
 -- @changelog:
 --[[        
-+ Improved: All track calls are validated now, so there should be no more crashes because of that
-+ Improved: Menu system for better interaction between hover and context menus
-+ Added: Track Template rename/delete functionality
-+ Fixed: Menus now properly close on mouse hover while staying open during context menu usage
-+ Enhanced: Consistent menu interaction across all main menus (ALL PLUGINS, CATEGORIES, etc.)
++ Bugfix: Docking when main screen is docked left. Also added auto dock detect
++ Bugfix: Smartmarker was broken; fixed again
++ Fixed: No "extra" Scolbars in ScreenshotWindow
++ Added: Change color of Item and Track notes
++ Added: button in projects window to hide Info Panel
+
+
 
 
               ---------------------TODO-----------------------------------------
@@ -230,6 +232,10 @@ local function SetDefaultConfig()
         show_only_dropdown = false,
         create_sends_folder = false,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
+        track_notes_color = track_notes_color or 0xFFFFB366,  -- Default orange
+        item_notes_color = item_notes_color or 0x6699FFFF,    -- Default blue
+        last_used_project_location = last_used_project_location or PROJECTS_DIR,
+        show_project_info = show_project_info or true,
     } 
 end
 local config = SetDefaultConfig()    
@@ -257,6 +263,8 @@ local function LoadConfig()
     end
 end
 LoadConfig()
+PROJECTS_DIR = config.last_used_project_location
+
 local function ResetConfig()
     config = SetDefaultConfig()
     SaveConfig()
@@ -368,9 +376,11 @@ local function load_projects_info()
         file:close()
     end
 end
+
 local function get_all_projects()
     local projects = {}
-    local stack = {{path = PROJECTS_DIR, depth = 0}}
+    local current_project_dir = config.last_used_project_location or PROJECTS_DIR
+    local stack = {{path = current_project_dir, depth = 0}}
     -- Verwijder de lokale max_depth declaratie en gebruik de globale max_depth variabele
     while #stack > 0 do
         local current = table.remove(stack)
@@ -2124,13 +2134,19 @@ function ShowPluginScreenshot()
                 local window_x, window_y = r.ImGui_GetWindowPos(ctx)
                 local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
                 
-                local window_pos_x = mouse_x + 20
-                local window_pos_y = mouse_y + 20
+                local viewport = r.ImGui_GetMainViewport(ctx)
+                local viewport_pos_x = r.ImGui_Viewport_GetPos(viewport)
+                local is_left_docked = (window_x - viewport_pos_x) < 20
                 
-                -- Check voor horizontale ruimte
-                if window_pos_x + display_width > window_x + vp_width then
-                    window_pos_x = mouse_x - display_width - 20
+                -- Bepaal positie op basis van dock status
+                local window_pos_x
+                if is_left_docked then
+                    window_pos_x = mouse_x + 20  -- Toon rechts
+                else
+                    window_pos_x = mouse_x - display_width - 20  -- Toon links
                 end
+                
+                local window_pos_y = mouse_y + 20
                 
                 -- Check voor verticale ruimte
                 if window_pos_y + display_height > window_y + vp_height + 250 then
@@ -2448,7 +2464,17 @@ local function SearchActions(search_term)
     return filteredActions
 end
 
-
+local function CreateSmartMarker(action_id)
+    local cur_pos = reaper.GetCursorPosition()
+    local marker_name = "!" .. action_id
+    local _, num_markers, num_regions = reaper.CountProjectMarkers(0)
+    local new_marker_id = num_markers + num_regions
+    local red_color = reaper.ColorToNative(255, 0, 0)|0x1000000 -- Rood met alpha
+    local result = reaper.AddProjectMarker2(0, false, cur_pos, 0, marker_name, new_marker_id, red_color)
+    if result then
+        reaper.UpdateTimeline()
+    end
+end 
 
 
 local function ShowScreenshotControls()
@@ -2627,33 +2653,41 @@ local function ShowScreenshotWindow()
     elseif config.default_folder and selected_folder == nil then
         selected_folder = config.default_folder
     end
+    
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
     local main_window_height = r.ImGui_GetWindowHeight(ctx)
-    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoFocusOnAppearing()
+    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | 
+                    r.ImGui_WindowFlags_NoFocusOnAppearing() | 
+                    r.ImGui_WindowFlags_NoScrollbar()
+  
     if config.dock_screenshot_window then
         local viewport = r.ImGui_GetMainViewport(ctx)
         local viewport_pos_x, viewport_pos_y = r.ImGui_Viewport_GetPos(viewport)
         local viewport_width = r.ImGui_Viewport_GetWorkSize(viewport)
-        local max_width
+        
+        -- Check dock positie hoofdvenster
+        local is_main_window_left_docked = (main_window_pos_x - viewport_pos_x) < 20
+        local is_main_window_right_docked = (main_window_pos_x + main_window_width) > (viewport_pos_x + viewport_width - 20)
+        
+        -- Forceer tegenovergestelde dock positie
+        if is_main_window_left_docked then
+            config.dock_screenshot_left = false
+        elseif is_main_window_right_docked then
+            config.dock_screenshot_left = true
+        end
         
         if config.dock_screenshot_left then
             r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) - config.screenshot_window_width - 5, main_window_pos_y, r.ImGui_Cond_Always())
-            if show_sends_window then
-                -- Nieuwe berekening voor links gedockt Sends venster
-                local available_space = main_window_pos_x - viewport_pos_x
-                max_width = available_space - 10
-                r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, max_width, main_window_height)
-            else
-                max_width = viewport_width - viewport_pos_x
-                r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, max_width, main_window_height)
-            end
         else
             r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) + main_window_width + 5, main_window_pos_y, r.ImGui_Cond_Always())
-            max_width = main_window_pos_x - viewport_pos_x
-            r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, max_width, main_window_height)
         end
+        
+        r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, FLT_MAX, main_window_height)
     end
+     
+    
+    
 
     r.ImGui_SetNextWindowSize(ctx, config.screenshot_window_width, main_window_height, r.ImGui_Cond_FirstUseEver())
 
@@ -2701,7 +2735,7 @@ local function ShowScreenshotWindow()
             ShowScreenshotControls()
             ShowFolderDropdown()
             r.ImGui_Separator(ctx)
-            r.ImGui_PushItemWidth(ctx, window_width - 52)
+            r.ImGui_PushItemWidth(ctx, window_width - 72)
             local changed, new_search_term = r.ImGui_InputTextWithHint(ctx, "##ProjectSearch", "SEARCH PROJECTS", project_search_term)
             if changed then
                 project_search_term = new_search_term
@@ -2722,6 +2756,10 @@ local function ShowScreenshotWindow()
             if r.ImGui_Button(ctx, "P", button_width, button_height) then
                 show_project_paths = not show_project_paths
             end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "i", button_width, button_height) then
+                show_project_info = not show_project_info
+            end
             -- In de UI code:
             local window_width = r.ImGui_GetWindowWidth(ctx)
             r.ImGui_PushItemWidth(ctx, window_width - 75) 
@@ -2729,6 +2767,8 @@ local function ShowScreenshotWindow()
                 for i, location in ipairs(project_locations) do
                     if r.ImGui_Selectable(ctx, location) then
                         PROJECTS_DIR = location
+                        config.last_used_project_location = location
+                        SaveConfig()
                         LoadProjects()
                     end
                     
@@ -2775,7 +2815,7 @@ local function ShowScreenshotWindow()
             
             local window_height = r.ImGui_GetWindowHeight(ctx)
             local current_y = r.ImGui_GetCursorPosY(ctx)
-            local footer_height = 170
+            local footer_height = show_project_info and 155 or 1
             local available_height = window_height - current_y - footer_height
             -- Project List
             if r.ImGui_BeginChild(ctx, "ProjectsList", -1, available_height) then
@@ -2860,67 +2900,72 @@ local function ShowScreenshotWindow()
                 end
                 r.ImGui_EndChild(ctx)
             end
-            
-            -- Info Panel
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x333333FF)
-            r.ImGui_Separator(ctx)
-            
-            if current_project_info then
-                -- Project Info
-                r.ImGui_Text(ctx, "Project Info:")
+            if show_project_info then
+                -- Info Panel
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x333333FF)
                 r.ImGui_Separator(ctx)
-                r.ImGui_Text(ctx, "Name: " .. current_project_info.name)
-                r.ImGui_Text(ctx, "Length: " .. string.format("%.2f", current_project_info.length) .. " seconds")
-                r.ImGui_Text(ctx, "Size: " .. string.format("%.2f", current_project_info.size/1024/1024) .. " MB")
-                r.ImGui_Text(ctx, "Media files: " .. tostring(current_project_info.folder_files))
                 
-                local is_playing = current_preview and select(2, r.CF_Preview_GetValue(current_preview, "B_PLAY"))
-                if r.ImGui_Button(ctx, is_playing and "Stop" or "Play") then
-                    if is_playing then
-                        r.CF_Preview_StopAll()
-                        current_preview = nil
-                    else
-                        if selected_project then
-                            local source = r.PCM_Source_CreateFromFile(selected_project.path .. "-PROX")
-                            current_preview = r.CF_CreatePreview(source)
-                            r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
-                            r.CF_Preview_Play(current_preview)
+                if current_project_info then
+                    -- Project Info
+                    r.ImGui_Text(ctx, "Project Info:")
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_Text(ctx, "Name: " .. current_project_info.name)
+                    r.ImGui_Text(ctx, "Length: " .. string.format("%.2f", current_project_info.length) .. " seconds")
+                    r.ImGui_Text(ctx, "Size: " .. string.format("%.2f", current_project_info.size/1024/1024) .. " MB")
+                    r.ImGui_Text(ctx, "Media files: " .. tostring(current_project_info.folder_files))
+                    
+                    local is_playing = current_preview and select(2, r.CF_Preview_GetValue(current_preview, "B_PLAY"))
+                    if r.ImGui_Button(ctx, is_playing and "Stop" or "Play") then
+                        if is_playing then
+                            r.CF_Preview_StopAll()
+                            current_preview = nil
+                        else
+                            if selected_project then
+                                local source = r.PCM_Source_CreateFromFile(selected_project.path .. "-PROX")
+                                current_preview = r.CF_CreatePreview(source)
+                                r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
+                                r.CF_Preview_Play(current_preview)
+                            end
                         end
                     end
-                end
-                r.ImGui_SameLine(ctx)
-                r.ImGui_PushItemWidth(ctx, -1)
-                local rv, new_vol = r.ImGui_SliderDouble(ctx, "##Volume", preview_volume or 1.0, 0, 2, "%.1f")
-                if rv then
-                    preview_volume = new_vol
-                    if current_preview then
-                        r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_PushItemWidth(ctx, -1)
+                    local rv, new_vol = r.ImGui_SliderDouble(ctx, "##Volume", preview_volume or 1.0, 0, 2, "%.1f")
+                    if rv then
+                        preview_volume = new_vol
+                        if current_preview then
+                            r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
+                        end
                     end
+                    r.ImGui_PopItemWidth(ctx)
+                end
+            
+                --r.ImGui_SameLine(ctx)
+                -- Progress Bar
+                local rv, position = r.CF_Preview_GetValue(current_preview, "D_POSITION")
+                local rv2, length = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
+                if position and length then
+                    local progress = position / length
+                    r.ImGui_ProgressBar(ctx, progress, -1, 20, string.format("%.1fs/%.1fs", position, length))
+                end
+                r.ImGui_Text(ctx, "Project:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_PushItemWidth(ctx, 75)
+                if r.ImGui_BeginCombo(ctx, "##SaveOptions", "Save") then
+                    if r.ImGui_Selectable(ctx, "Save") then
+                        r.Main_OnCommand(40026, 0)
+                    end
+                    if r.ImGui_Selectable(ctx, "Save As") then
+                        r.Main_OnCommand(40022, 0)
+                    end
+                    if r.ImGui_Selectable(ctx, "Save Template") then
+                        r.Main_OnCommand(40394, 0)
+                    end
+                    r.ImGui_EndCombo(ctx)
                 end
                 r.ImGui_PopItemWidth(ctx)
+                r.ImGui_PopStyleColor(ctx)   
             end
-            --r.ImGui_SameLine(ctx)
-            -- Progress Bar
-            local rv, position = r.CF_Preview_GetValue(current_preview, "D_POSITION")
-            local rv2, length = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
-            if position and length then
-                local progress = position / length
-                r.ImGui_ProgressBar(ctx, progress, -1, 20, string.format("%.1fs/%.1fs", position, length))
-            end
-            r.ImGui_Text(ctx, "Save options for current project:")
-            if r.ImGui_Button(ctx, "Save", 80, 20) then
-                r.Main_OnCommand(40026, 0)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Save As", 80, 20) then
-                r.Main_OnCommand(40022, 0)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Save Template", 80, 20) then
-                r.Main_OnCommand(40394, 0)
-            end
-            
-            r.ImGui_PopStyleColor(ctx)         
     -----------------------------------------------------------------------------------        
             -- SEND/RECEIVE GEDEELTE:
             elseif show_sends_window then
@@ -4700,7 +4745,11 @@ end
 local function DrawTrackTemplates(tbl, path)
     local extension = ".RTrackTemplate"
     path = path or ""
+    local deleted = false
+    
     for i = 1, #tbl do
+        if deleted then break end
+        
         if tbl[i].dir then
             if r.ImGui_BeginMenu(ctx, tbl[i].dir) then
                 local cur_path = table.concat({ path, os_separator, tbl[i].dir })
@@ -4741,6 +4790,7 @@ local function DrawTrackTemplates(tbl, path)
                     local file_path = templates_path .. path .. os_separator .. tbl[i] .. extension
                     if os.remove(file_path) then
                         table.remove(tbl, i)
+                        deleted = true
                         FX_LIST_TEST, CAT_TEST = MakeFXFiles()
                         r.ShowMessageBox("Track Template deleted", "Success", 0)
                     else
@@ -4752,6 +4802,7 @@ local function DrawTrackTemplates(tbl, path)
         end
     end
 end
+
 
 
 local function DrawItems(tbl, main_cat_name)
@@ -5381,39 +5432,61 @@ local function ShowTrackFX()
         -- Notation:
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
-        if r.ImGui_Selectable(ctx, show_notes and "-" or "+") then
+
+        -- Eerst de kleurknop
+        if r.ImGui_ColorButton(ctx, "##notes_color", config.track_notes_color, 0, 13, 13) then
+            r.ImGui_OpenPopup(ctx, "NotesColorPopup")
+        end
+
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Selectable(ctx, show_notes and " - " or " + ") then
             show_notes = not show_notes
         end
+
         r.ImGui_SameLine(ctx)
-        r.ImGui_Text(ctx, "Track Notes:")
-       
+        r.ImGui_Text(ctx, "Notes:")
+
+        -- Save knop rechts uitlijnen
         local window_width = r.ImGui_GetWindowWidth(ctx)
         local text_width = r.ImGui_CalcTextSize(ctx, "Save")
         r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, window_width - text_width -5)
+        r.ImGui_SetCursorPosX(ctx, window_width - text_width - 5)
         if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
             SaveNotes()
         end
-        r.ImGui_PopStyleColor(ctx, 2)
-        if show_notes then
-        local track_guid = r.GetTrackGUID(TRACK)
-        if not notes[track_guid] then
-            notes[track_guid] = LoadNotes()[track_guid] or ""
-        end
-        
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0xFFFFB366)
-        if r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height) then
-            local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##tracknotes", notes[track_guid], -1, notes_height - 10)
+
+        -- Color picker popup
+        if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
+            local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.track_notes_color)
             if changed then
-                notes[track_guid] = new_note
-                SaveNotes()
+                config.track_notes_color = new_color
+                SaveConfig()
             end
-            r.ImGui_EndChild(ctx)
+            r.ImGui_EndPopup(ctx)
         end
-        r.ImGui_PopStyleColor(ctx)
-        
+
+        r.ImGui_PopStyleColor(ctx, 2)
+
+        -- Notes section
+        if show_notes then
+            local track_guid = r.GetTrackGUID(TRACK)
+            if not notes[track_guid] then
+                notes[track_guid] = LoadNotes()[track_guid] or ""
+            end
+
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.track_notes_color)
+            if r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height) then
+                local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##tracknotes", notes[track_guid], -1, notes_height - 10)
+                if changed then
+                    notes[track_guid] = new_note
+                    SaveNotes()
+                end
+                r.ImGui_EndChild(ctx)
+            end
+        r.ImGui_PopStyleColor(ctx)       
     end
 end
+
 local function ShowItemFX()
     local item = r.GetSelectedMediaItem(0, 0)
     if not item then return end
@@ -5519,20 +5592,39 @@ local function ShowItemFX()
     end
 
     r.ImGui_Separator(ctx)
+    -- Notation:
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
-    if r.ImGui_Selectable(ctx, show_notes and "-" or "+") then
+
+    -- Eerst de kleurknop
+    if r.ImGui_ColorButton(ctx, "##notes_color", config.item_notes_color, 0, 13, 13) then
+        r.ImGui_OpenPopup(ctx, "NotesColorPopup")
+    end
+
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Selectable(ctx, show_notes and " - " or " + ") then
         show_notes = not show_notes
     end
-    r.ImGui_SameLine(ctx)
-    r.ImGui_Text(ctx, "Item Notes:")
 
-    local window_width = r.ImGui_GetWindowWidth(ctx)
-    local text_width = r.ImGui_CalcTextSize(ctx, "Save Notes")
     r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosX(ctx, window_width - text_width + 5)
-    if r.ImGui_Selectable(ctx, "  Save", false, r.ImGui_SelectableFlags_None()) then
+    r.ImGui_Text(ctx, "Notes:")
+
+    -- Save knop rechts uitlijnen
+    local window_width = r.ImGui_GetWindowWidth(ctx)
+    local text_width = r.ImGui_CalcTextSize(ctx, "Save")
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosX(ctx, window_width - text_width - 5)
+    if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
         SaveNotes()
+    end
+
+    if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
+        local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.item_notes_color)
+        if changed then
+            config.item_notes_color = new_color
+            SaveConfig()
+        end
+        r.ImGui_EndPopup(ctx)
     end
     r.ImGui_PopStyleColor(ctx, 2)
 
@@ -5542,13 +5634,34 @@ local function ShowItemFX()
             notes[item_guid] = LoadNotes()[item_guid] or ""
         end
 
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x6699FFFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.item_notes_color) 
         if r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height) then
+            -- Rechtsklik check eerst
+            if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "NotesColorPopup")
+            end
+            
+            -- Color picker popup
+            if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
+                local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", is_item and config.item_notes_color or config.track_notes_color)
+                if changed then
+                    if is_item then
+                        config.item_notes_color = new_color
+                    else
+                        config.track_notes_color = new_color
+                    end
+                    SaveConfig()
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+        
+            -- Dan pas de InputTextMultiline
             local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##itemnotes", notes[item_guid], -1, notes_height - 10)
             if changed then
                 notes[item_guid] = new_note
                 SaveNotes()
             end
+        
             r.ImGui_EndChild(ctx)
         end
         r.ImGui_PopStyleColor(ctx)
@@ -5937,6 +6050,7 @@ function InitializeImGuiContext()
         r.ImGui_Attach(ctx, IconFont)
     end
 end
+
 -----------------------------------------------------------------------------------------
 function Main()
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
@@ -6020,7 +6134,6 @@ dock = r.ImGui_GetWindowDockID(ctx)
 if visible then
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
-
     if config.show_screenshot_window then
         r.ImGui_PushID(ctx, "ScreenshotWindow")
         local screenshot_visible = ShowScreenshotWindow()
@@ -6029,12 +6142,6 @@ if visible then
         end
         r.ImGui_PopID(ctx)
     end
-    --[[if config.show_screenshot_window then
-        local screenshot_visible = ShowScreenshotWindow()
-        if screenshot_visible then
-            r.ImGui_End(ctx)
-        end
-    end]]--
     if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
         local progress_text = string.format("Loading %d/%d (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
         r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 0, progress_text)
