@@ -69,9 +69,13 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.3.1" author="TouristKiller" time="2024-12-05T23:05:00Z">
-            <changelog><![CDATA[
-+ Added Parent track name and label
+        <version name="0.3.2" author="TouristKiller" time="2024-12-06T23:05:00Z">
+            <changelog><![CDATA[       
++ Adjusted: Parent label is now on the right side of the track name
++ Added: Bleu button is back !! (Optional in settings)
++ Added: Adjustable text size
++ added: Inherit parent track color for child tracks
++ Adjustment: Slider to correct Arrange (color overlay) Height
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
