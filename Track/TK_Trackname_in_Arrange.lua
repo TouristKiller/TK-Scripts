@@ -1,13 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.3.0:
+-- @version 0.3.1:
 -- @changelog:
 --[[            
-+Added viewport clipping for optimized rendering
-+Implemented color caching system
-+Added line-based rendering instead of full color bands
-+Reduced RT CPU usage for better audio performance
-+Added text centering option with persistent settings
++ Added: Parent label option 
 ]]----------------------------------------------------------------------------------       
 
 local r = reaper
@@ -23,6 +19,7 @@ local default_settings = {
     show_parent_tracks = true,
     show_child_tracks = false,
     show_first_fx = false,
+    show_parent_label = false,
     horizontal_offset = 100,
     vertical_offset = 0,
     selected_font = 1,
@@ -92,6 +89,7 @@ function SaveSettings()
     r.SetExtState(section, "label_alpha", tostring(settings.label_alpha), true)
     r.SetExtState(section, "label_color_mode", tostring(settings.label_color_mode), true)
     r.SetExtState(section, "text_centered", settings.text_centered and "1" or "0", true)
+    r.SetExtState(section, "show_parent_label", settings.show_parent_label and "1" or "0", true)
 end
 
 function LoadSettings()
@@ -113,6 +111,7 @@ function LoadSettings()
     settings.label_alpha = tonumber(r.GetExtState(section, "label_alpha")) or 0.3
     settings.label_color_mode = tonumber(r.GetExtState(section, "label_color_mode")) or 1
     settings.text_centered = r.GetExtState(section, "text_centered") == "1"
+    settings.show_parent_label = r.GetExtState(section, "show_parent_label") == "1"
 end
 
 function cleanup()
@@ -252,7 +251,7 @@ end
 
 function ShowSettingsWindow()
     if not settings_visible then return end
-    r.ImGui_SetNextWindowSize(ctx, 460, 310)
+    r.ImGui_SetNextWindowSize(ctx, 550, 310)
     -- Style aanpassingen
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -285,11 +284,13 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx)
         changed, settings.show_child_tracks = r.ImGui_Checkbox(ctx, "Child", settings.show_child_tracks)
         r.ImGui_SameLine(ctx)
-        changed, settings.show_first_fx = r.ImGui_Checkbox(ctx, "first FX", settings.show_first_fx)
+        changed, settings.show_first_fx = r.ImGui_Checkbox(ctx, "1st FX", settings.show_first_fx)
         r.ImGui_SameLine(ctx)
-        changed, settings.show_track_colors = r.ImGui_Checkbox(ctx, "track colors", settings.show_track_colors)
+        changed, settings.show_parent_label = r.ImGui_Checkbox(ctx, "Parent lbl", settings.show_parent_label)
         r.ImGui_SameLine(ctx)
-        changed, settings.show_label = r.ImGui_Checkbox(ctx, "label", settings.show_label)
+        changed, settings.show_track_colors = r.ImGui_Checkbox(ctx, "Track clrs", settings.show_track_colors)
+        r.ImGui_SameLine(ctx)
+        changed, settings.show_label = r.ImGui_Checkbox(ctx, "Label", settings.show_label)
         r.ImGui_SameLine(ctx)
         changed, settings.text_centered = r.ImGui_Checkbox(ctx, "Center", settings.text_centered)
         r.ImGui_Separator(ctx)
@@ -497,9 +498,17 @@ function loop()
                                 r.ImGui_WindowFlags_NoInputs() |
                                 r.ImGui_WindowFlags_NoMove() |
                                 r.ImGui_WindowFlags_NoSavedSettings() |
-                                r.ImGui_WindowFlags_AlwaysAutoResize()          
-                        
+                                r.ImGui_WindowFlags_AlwaysAutoResize() |
+                                r.ImGui_WindowFlags_NoBackground() 
+                      
+                            
+                            r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
                             r.ImGui_SetNextWindowPos(ctx, 0, 0)
+
+                            local hwnd_arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 1000)
+                            if hwnd_arrange then
+                                r.JS_Window_SetZOrder(hwnd_arrange, "BOTTOM")
+                            end
                             
                             local window_width
                             if reaper.GetOS():match("^OSX") then
@@ -509,7 +518,6 @@ function loop()
                             end
                             r.ImGui_SetNextWindowSize(ctx, window_width, arrange_height + 100)
                             
-                            r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
                             local header_height = r.GetMainHwnd() and 0
                             local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
                             
@@ -597,6 +605,7 @@ function loop()
                                 local scale_offset = -5 * ((scale - 1) / 0.5)
                                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
                                 local text_y = track_y + (track_height * 0.5) - (18 * 0.5) + settings.vertical_offset + scale_offset
+                                -- Bereken eerst de cursor positie
                                 if settings.text_centered then
                                     local current_width = r.ImGui_CalcTextSize(ctx, display_name)
                                     local offset = (max_width - current_width) / 2
@@ -604,15 +613,65 @@ function loop()
                                 else
                                     r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
                                 end
-                                
-                
+
+
+                                if settings.text_centered then
+                                    local current_width = r.ImGui_CalcTextSize(ctx, display_name)
+                                    local offset = (max_width - current_width) / 2
+                                    r.ImGui_SetCursorPos(ctx, settings.horizontal_offset + offset, text_y / scale)
+                                else
+                                    r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                                end
+
+                                local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+
+
+                                if is_child and settings.show_parent_label then
+                                    local parent_track = r.GetParentTrack(track)
+                                    local _, parent_name = r.GetTrackName(parent_track)
+                                    local parent_color = r.GetTrackColor(parent_track)
+                                    
+                                    local parent_text_width = r.ImGui_CalcTextSize(ctx, parent_name)
+                                    local r_val, g_val, b_val = r.ColorFromNative(parent_color)
+                                    local parent_label_color = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, settings.label_alpha)
+                                    
+                                    local label_padding = 10
+                                    local spacing = 15 -- 
+                                    local parent_text_pos = settings.horizontal_offset - (parent_text_width + 25 + spacing)
+                                    
+                                    if settings.text_centered then
+                                        local current_width = r.ImGui_CalcTextSize(ctx, display_name)
+                                        local offset = (max_width - current_width) / 2
+                                        parent_text_pos = parent_text_pos + offset
+                                    end
+                                    
+                                    r.ImGui_DrawList_AddRectFilled(
+                                        draw_list,
+                                        cursor_x - (parent_text_width + 30 + label_padding + spacing),
+                                        cursor_y - 1,
+                                        cursor_x - (5 + spacing),
+                                        cursor_y + 19,
+                                        parent_label_color,
+                                        4.0
+                                    )
+                                    
+                                    local parent_text_color = GetTextColor(parent_track)
+                                    r.ImGui_SetCursorPos(ctx, parent_text_pos, text_y / scale)
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), parent_text_color)
+                                    r.ImGui_Text(ctx, parent_name)
+                                    r.ImGui_PopStyleColor(ctx)
+                                end
+
+
+
+
+                        
                                 if settings.show_label then
                                     local text_width = r.ImGui_CalcTextSize(ctx, display_name)
                                     local label_padding = 10
                                     local label_color = settings.label_color_mode == 1
                                         and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
                                         or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
-                                    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
                                     
                                     r.ImGui_DrawList_AddRectFilled(
                                         draw_list,
@@ -623,7 +682,9 @@ function loop()
                                         label_color,
                                         4.0
                                     )
-                                end              
+                                end
+
+                                -- Zet cursor positie voor tekst
                                 if settings.text_centered then
                                     local current_width = r.ImGui_CalcTextSize(ctx, display_name)
                                     local offset = (max_width - current_width) / 2
@@ -631,6 +692,7 @@ function loop()
                                 else
                                     r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
                                 end
+
                                 
                                 r.ImGui_Text(ctx, display_name)
                                 r.ImGui_PopStyleVar(ctx)              
