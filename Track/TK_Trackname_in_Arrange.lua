@@ -1,13 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.3.2:
+-- @version 0.3.3:
 -- @changelog:
 --[[            
-+ Adjusted: Parent label is now on the right side of the track name
-+ Added: Bleu button is back !! (Optional in settings)
-+ Added: Adjustable text size
-+ added: Inherit parent track color for child tracks
-+ Adjustment: Slider to correct Arrange (color overlay) Height
++ Bugfix: Save Font is working now
++ Removed: Slider to correct Arrange (color overlay) Height
++ Test: Did some tinckering with the overlay height (should be more accurate now)
 
 ]]----------------------------------------------------------------------------------       
 
@@ -42,7 +40,7 @@ local default_settings = {
     show_settings_button = false,
     text_size = 14,
     inherit_parent_color = false,
-    bottom_extension = 0, 
+    --bottom_extension = 0, 
 }
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -83,11 +81,9 @@ function CreateFonts()
     settings_font = r.ImGui_CreateFont('sans-serif', 14)
     r.ImGui_Attach(ctx, settings_font)
 end
-
--- In settings window:
 if old_text_size ~= settings.text_size then
-    CreateFonts()
-end
+CreateFonts()
+end 
 
 
 function SaveSettings()
@@ -111,8 +107,7 @@ function SaveSettings()
     r.SetExtState(section, "text_centered", settings.text_centered and "1" or "0", true)
     r.SetExtState(section, "show_parent_label", settings.show_parent_label and "1" or "0", true)
     r.SetExtState(section, "show_settings_button", settings.show_settings_button and "1" or "0", true)
-    r.SetExtState(section, "text_size", tostring(settings.text_size), true)
-    r.SetExtState(section, "bottom_extension", tostring(settings.bottom_extension), true)
+    r.SetExtState(section, "text_size", tostring(settings.text_size), true)   
 end
 
 function LoadSettings()
@@ -137,7 +132,6 @@ function LoadSettings()
     settings.show_parent_label = r.GetExtState(section, "show_parent_label") == "1"
     settings.show_settings_button = r.GetExtState(section, "show_settings_button") == "1"
     settings.text_size = tonumber(r.GetExtState(section, "text_size")) or 14
-    settings.bottom_extension = tonumber(r.GetExtState(section, "bottom_extension")) or 0
 end
 
 function cleanup()
@@ -284,7 +278,7 @@ end
 
 function ShowSettingsWindow()
     if not settings_visible then return end
-    r.ImGui_SetNextWindowSize(ctx, 480, 380)
+    r.ImGui_SetNextWindowSize(ctx, 450, 355)
     -- Style aanpassingen
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -415,16 +409,12 @@ function ShowSettingsWindow()
                 local is_selected = (settings.text_size == size)
                 if r.ImGui_Selectable(ctx, tostring(size), is_selected) then
                     settings.text_size = size
-                    -- Markeer dat fonts opnieuw moeten worden aangemaakt
                     needs_font_update = true
                 end
             end
             r.ImGui_EndCombo(ctx)
         end
-        
         changed, settings.text_opacity = r.ImGui_SliderDouble(ctx, "Text opacity", settings.text_opacity, 0.0, 1.0)
-        changed, settings.bottom_extension = r.ImGui_SliderInt(ctx, "Bottom extension", settings.bottom_extension, -1000, 500)
-        
         if settings.custom_colors_enabled then
             changed_grid, settings.grid_color = r.ImGui_SliderDouble(ctx, "Grid Color", settings.grid_color, 0.0, 1.0)
             changed_bg, settings.bg_brightness = r.ImGui_SliderDouble(ctx, "Bg Brightness", settings.bg_brightness, 0.0, 1.0)
@@ -521,13 +511,15 @@ function loop()
 
     local current_time = reaper.time_precise()
     local main_hwnd = r.GetMainHwnd()
+    local docker = r.JS_Window_FindChildByID(main_hwnd, 1072)
+    local _, docker_y, _, _ = GetBounds(docker)
     local arrange = r.JS_Window_FindChildByID(main_hwnd, 1000)
     local arrange_x, arrange_y, arrange_w, arrange_height = GetBounds(arrange)
     local scale = r.ImGui_GetWindowDpiScale(ctx)
 
     
     local adjusted_width = arrange_w - 20
-    local adjusted_height = arrange_height
+    local adjusted_height = arrange_height  - 20
     
     if current_time - last_update_time >= update_interval then
         if arrange and arrange_w > 0 and arrange_height > 0 then
@@ -552,7 +544,7 @@ function loop()
                         r.ImGui_WindowFlags_NoBackground() |
                         r.ImGui_WindowFlags_NoDecoration() | 
                         r.ImGui_WindowFlags_NoFocusOnAppearing() |
-                        r.ImGui_WindowFlags_NoDocking() 
+                        r.ImGui_WindowFlags_NoDocking() |
                         r.ImGui_WindowFlags_NoMouseInputs() 
                         
                         if settings.show_settings_button then
@@ -570,8 +562,6 @@ function loop()
                                 r.ImGui_End(ctx)
                             end
                         end
-                        
-                        
 
                         if settings.show_track_colors then
                             -- Color cache implementatie
@@ -581,14 +571,12 @@ function loop()
                             for i = 0, track_count - 1 do
                                 local track = r.GetTrack(0, i)
                                 local color = r.GetTrackColor(track)
-                                
                                 if settings.inherit_parent_color then
                                     local parent = r.GetParentTrack(track)
                                     if parent then
                                         color = r.GetTrackColor(parent)
                                     end
                                 end
-
                                 if color ~= 0 then
                                     local r_val = (color & 0xFF) / 255
                                     local g_val = ((color >> 8) & 0xFF) / 255
@@ -603,15 +591,16 @@ function loop()
                                 r.ImGui_WindowFlags_NoSavedSettings() |
                                 r.ImGui_WindowFlags_AlwaysAutoResize() |
                                 r.ImGui_WindowFlags_NoBackground() 
+
                       
                             
                             r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
                             r.ImGui_SetNextWindowPos(ctx, 0, 0)
 
-                            --[[local hwnd_arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 1000)
+                            local hwnd_arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 1000)
                             if hwnd_arrange then
                                 r.JS_Window_SetZOrder(hwnd_arrange, "BOTTOM")
-                            end]]--
+                            end
                             
                             local window_width
                             if reaper.GetOS():match("^OSX") then
@@ -619,7 +608,9 @@ function loop()
                             else
                                 window_width = right
                             end
-                            r.ImGui_SetNextWindowSize(ctx, window_width, arrange_height + settings.bottom_extension)
+
+
+                            r.ImGui_SetNextWindowSize(ctx, window_width, (arrange_height / scale) + (top / scale) -10)
                             
                             local header_height = r.GetMainHwnd() and 0
                             local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
@@ -707,7 +698,7 @@ function loop()
                                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                                 local scale_offset = -5 * ((scale - 1) / 0.5)
                                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
-                                local text_y = track_y + (track_height * 0.5) - (18 * 0.5) + settings.vertical_offset + scale_offset
+                                local text_y = track_y + (track_height * 0.5) - (settings.text_size * 0.5) + settings.vertical_offset + scale_offset
 
                                 if settings.text_centered then
                                     local current_width = r.ImGui_CalcTextSize(ctx, display_name)
@@ -814,6 +805,7 @@ end
 
 local success = pcall(function()
     LoadSettings()
+    CreateFonts()
     if settings.custom_colors_enabled then
         UpdateGridColors()
         UpdateBackgroundColors()
