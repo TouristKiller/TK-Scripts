@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.3.3:
+-- @version 0.3.4:
 -- @changelog:
 --[[            
 + Bugfix: Save Font is working now
@@ -544,8 +544,8 @@ function loop()
                         r.ImGui_WindowFlags_NoBackground() |
                         r.ImGui_WindowFlags_NoDecoration() | 
                         r.ImGui_WindowFlags_NoFocusOnAppearing() |
-                        r.ImGui_WindowFlags_NoDocking() |
-                        r.ImGui_WindowFlags_NoMouseInputs() 
+                        r.ImGui_WindowFlags_NoDocking() 
+                 
                         
                         if settings.show_settings_button then
                             r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
@@ -590,7 +590,8 @@ function loop()
                                 r.ImGui_WindowFlags_NoMove() |
                                 r.ImGui_WindowFlags_NoSavedSettings() |
                                 r.ImGui_WindowFlags_AlwaysAutoResize() |
-                                r.ImGui_WindowFlags_NoBackground() 
+                                r.ImGui_WindowFlags_NoMouseInputs() 
+ 
 
                       
                             

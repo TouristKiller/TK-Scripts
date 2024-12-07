@@ -69,7 +69,7 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.3.3" author="TouristKiller" time="2024-12-07T03:05:00Z">
+        <version name="0.3.4" author="TouristKiller" time="2024-12-07T03:35:00Z">
             <changelog><![CDATA[       
 + Adjusted: Parent label is now on the right side of the track name
 + Added: Bleu button is back !! (Optional in settings)
