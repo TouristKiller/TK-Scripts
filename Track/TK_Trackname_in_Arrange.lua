@@ -1,12 +1,10 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.3.5:
+-- @version 0.3.6:
 -- @changelog:
 --[[            
-+ Added: Option to overwrite track color with record color when recording (thanx Smandrap)
-+ Changed: Every option can be set seperately for parent and child tracks
-+ Added: In Parent label on child tracks, the parent of parent etc. is shown
-+ Changed: Settings layout
++ Fixed: Track color ovelay will stay in background now (exept when changing font size)
+
 ]]----------------------------------------------------------------------------------       
 
 local r = reaper
@@ -18,6 +16,7 @@ local update_interval = 0.05
 local last_project = nil
 local last_track_count = 0
 local should_show_track = false
+local overlay_enabled = false
 
 local default_settings = {
     text_opacity = 1.0,
@@ -283,7 +282,7 @@ function ShowSettingsWindow()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x333333FF)         
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x444444FF)  
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x555555FF)   
-    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoFocusOnAppearing()
+    local window_flags = r.ImGui_WindowFlags_NoTitleBar() |  r.ImGui_WindowFlags_TopMost()
 
 
     r.ImGui_PushFont(ctx, settings_font)
@@ -550,113 +549,111 @@ function loop()
         last_update_time = current_time
     end
 
-    local flags = 
-        r.ImGui_WindowFlags_NoTitleBar() |
-        r.ImGui_WindowFlags_NoResize() |
-        r.ImGui_WindowFlags_NoNav() |
-        r.ImGui_WindowFlags_NoScrollbar() |
-        r.ImGui_WindowFlags_NoBackground() |
-        r.ImGui_WindowFlags_NoDecoration() |
-        r.ImGui_WindowFlags_NoFocusOnAppearing() |
-        r.ImGui_WindowFlags_NoDocking()
+    local flags =
+    r.ImGui_WindowFlags_NoTitleBar() |
+    r.ImGui_WindowFlags_NoResize() |
+    r.ImGui_WindowFlags_NoNav() |
+    r.ImGui_WindowFlags_NoScrollbar() |
+    r.ImGui_WindowFlags_NoBackground() |
+    r.ImGui_WindowFlags_NoDecoration() |
+    r.ImGui_WindowFlags_NoDocking()
 
-        if settings.show_settings_button then
-            r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
-            local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, flags)
-            if button_visible then
-                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 10.0)
-                r.ImGui_PushFont(ctx, settings_font)
-                if r.ImGui_Button(ctx, "S") then
-                    settings_visible = not settings_visible
-                    r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
-                end
-                r.ImGui_PopFont(ctx)
-                r.ImGui_PopStyleVar(ctx)
-                r.ImGui_End(ctx)
-            end
-        end
-    
-        if settings.show_track_colors then
-            local colors_cache = {}
-            local track_count = r.CountTracks(0)
-            
-            for i = 0, track_count - 1 do
-                local track = r.GetTrack(0, i)
-                local color = r.GetTrackColor(track)
-                if settings.inherit_parent_color then
-                    local parent = r.GetParentTrack(track)
-                    if parent then
-                        color = r.GetTrackColor(parent)
-                    end
-                end
-                if settings.show_record_color and r.GetMediaTrackInfo_Value(track, 'I_RECARM') == 1 and r.GetPlayState() == 5 then
-                    color = 0x0000FF
-                end                                
-                if color ~= 0 then
-                    local r_val = (color & 0xFF) / 255
-                    local g_val = ((color >> 8) & 0xFF) / 255
-                    local b_val = ((color >> 16) & 0xFF) / 255
-                    colors_cache[i] = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.overlay_alpha)
+local overlay_flags = flags |
+    r.ImGui_WindowFlags_NoInputs() |
+    r.ImGui_WindowFlags_NoMove() |
+    r.ImGui_WindowFlags_NoSavedSettings() |
+    r.ImGui_WindowFlags_AlwaysAutoResize() |
+    r.ImGui_WindowFlags_NoMouseInputs() |
+    r.ImGui_WindowFlags_NoFocusOnAppearing()
+
+r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
+r.ImGui_SetNextWindowPos(ctx, 0, 0)
+
+local window_width
+if reaper.GetOS():match("^OSX") then
+    window_width = arrange_w
+else
+    window_width = right
+end
+
+r.ImGui_SetNextWindowSize(ctx, window_width, (arrange_height / scale) + (top / scale) -10)
+
+local header_height = r.GetMainHwnd() and 0
+local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
+
+if overlay_visible then
+    if settings.show_track_colors then
+        local colors_cache = {}
+        local track_count = r.CountTracks(0)
+        
+        for i = 0, track_count - 1 do
+            local track = r.GetTrack(0, i)
+            local color = r.GetTrackColor(track)
+            if settings.inherit_parent_color then
+                local parent = r.GetParentTrack(track)
+                if parent then
+                    color = r.GetTrackColor(parent)
                 end
             end
-            local overlay_flags = flags |
-            r.ImGui_WindowFlags_NoInputs() |
-            r.ImGui_WindowFlags_NoMove() |
-            r.ImGui_WindowFlags_NoSavedSettings() |
-            r.ImGui_WindowFlags_AlwaysAutoResize() |
-            r.ImGui_WindowFlags_NoMouseInputs()
-
-        r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
-        r.ImGui_SetNextWindowPos(ctx, 0, 0)
-
-        local hwnd_arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 1000)
-        if hwnd_arrange then
-            r.JS_Window_SetZOrder(hwnd_arrange, "BOTTOM")
-        end
-        
-        local window_width
-        if reaper.GetOS():match("^OSX") then
-            window_width = arrange_w
-        else
-            window_width = right
+            if settings.show_record_color and r.GetMediaTrackInfo_Value(track, 'I_RECARM') == 1 and r.GetPlayState() == 5 then
+                color = 0x0000FF
+            end                                
+            if color ~= 0 then
+                local r_val = (color & 0xFF) / 255
+                local g_val = ((color >> 8) & 0xFF) / 255
+                local b_val = ((color >> 16) & 0xFF) / 255
+                colors_cache[i] = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.overlay_alpha)
+            end
         end
 
-        r.ImGui_SetNextWindowSize(ctx, window_width, (arrange_height / scale) + (top / scale) -10)
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
         
-        local header_height = r.GetMainHwnd() and 0
-        local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
-  
-        if overlay_visible then
-            local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        for i = 0, track_count - 1 do
+            local track = r.GetTrack(0, i)
+            local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY")
+            local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
             
-            for i = 0, track_count - 1 do
-                local track = r.GetTrack(0, i)
-                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY")
-                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
+            if colors_cache[i] and track_y < arrange_height and track_y + track_height > 0 then
+                local overlay_top = math.max((top + track_y + header_height) / scale, arrange_y / scale)
+                local overlay_bottom = math.min((top + track_y + track_height + header_height) / scale, (arrange_y + arrange_height) / scale)
                 
-                if colors_cache[i] and track_y < arrange_height and track_y + track_height > 0 then
-                    local overlay_top = math.max((top + track_y + header_height) / scale, arrange_y / scale)
-                    local overlay_bottom = math.min((top + track_y + track_height + header_height) / scale, (arrange_y + arrange_height) / scale)
-                    
-                    local viewport_x, _ = r.ImGui_GetWindowPos(ctx)
-                    local viewport_min_x = viewport_x
-                    local viewport_max_x = viewport_min_x + r.ImGui_GetWindowWidth(ctx)
-                    
-                    for x = math.max(left, viewport_min_x), math.min(right, viewport_max_x), 1 do
-                        r.ImGui_DrawList_AddLine(draw_list,
-                            x / scale,
-                            overlay_top,
-                            x / scale,
-                            overlay_bottom,
-                            colors_cache[i])
-                    end
+                local viewport_x, _ = r.ImGui_GetWindowPos(ctx)
+                local viewport_min_x = viewport_x
+                local viewport_max_x = viewport_min_x + r.ImGui_GetWindowWidth(ctx)
+                
+                for x = math.max(left, viewport_min_x), math.min(right, viewport_max_x), 1 do
+                    r.ImGui_DrawList_AddLine(draw_list,
+                        x / scale,
+                        overlay_top,
+                        x / scale,
+                        overlay_bottom,
+                        colors_cache[i])
                 end
             end
+        end
+    end
+    r.ImGui_End(ctx)
+end
+
+
+    if settings.show_settings_button then
+        r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
+        local button_flags = flags | r.ImGui_WindowFlags_TopMost()
+        local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, button_flags)
+        if button_visible then
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 10.0)
+            r.ImGui_PushFont(ctx, settings_font)
+            if r.ImGui_Button(ctx, "S") then
+                settings_visible = not settings_visible
+                r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
+            end
+            r.ImGui_PopFont(ctx)
+            r.ImGui_PopStyleVar(ctx)
             r.ImGui_End(ctx)
         end
     end
 
-    local text_flags = flags | r.ImGui_WindowFlags_NoInputs()
+    local text_flags = flags | r.ImGui_WindowFlags_NoInputs() 
     r.ImGui_SetNextWindowPos(ctx, arrange_x / scale, arrange_y / scale)
     r.ImGui_SetNextWindowSize(ctx, adjusted_width / scale, adjusted_height / scale)                  
     r.ImGui_PushFont(ctx, font_objects[settings.selected_font])

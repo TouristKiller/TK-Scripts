@@ -69,12 +69,9 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.3.5" author="TouristKiller" time="2024-12-08T16:10:00Z">
+        <version name="0.3.6" author="TouristKiller" time="2024-12-08T23:00:00Z">
             <changelog><![CDATA[       
-+ Added: Option to overwrite track color with record color when recording (thanx Smandrap)
-+ Changed: Every option can be set seperately for parent and child tracks
-+ Added: In Parent label on child tracks, the parent of parent etc. is shown
-+ Changed: Settings layout
++ Fixed: Track color ovelay will stay in background now (exept when changing font size)
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
