@@ -1,9 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.3.6:
+-- @version 0.3.7:
 -- @changelog:
 --[[            
-+ Fixed: Track color ovelay will stay in background now (exept when changing font size)
++ Added: Right align for track names and labels
++ Bugfix: Save Inherit parent color setting
++ Added: Show only Parent or Child track color
 
 ]]----------------------------------------------------------------------------------       
 
@@ -41,6 +43,9 @@ local default_settings = {
     show_settings_button = false,
     text_size = 14,
     inherit_parent_color = false,
+    right_align = false,
+    show_parent_colors = true,
+    show_child_colors = true,
 }
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -104,10 +109,14 @@ function SaveSettings()
     r.SetExtState(section, "label_alpha", tostring(settings.label_alpha), true)
     r.SetExtState(section, "label_color_mode", tostring(settings.label_color_mode), true)
     r.SetExtState(section, "text_centered", settings.text_centered and "1" or "0", true)
+    r.SetExtState(section, "right_align", settings.right_align and "1" or "0", true)
     r.SetExtState(section, "show_parent_label", settings.show_parent_label and "1" or "0", true)
     r.SetExtState(section, "show_settings_button", settings.show_settings_button and "1" or "0", true)
     r.SetExtState(section, "text_size", tostring(settings.text_size), true)
     r.SetExtState(section, "show_record_color", settings.show_record_color and "1" or "0", true)
+    r.SetExtState(section, "show_parent_colors", settings.show_parent_colors and "1" or "0", true)
+    r.SetExtState(section, "show_child_colors", settings.show_child_colors and "1" or "0", true)
+    r.SetExtState(section, "inherit_parent_color", settings.inherit_parent_color and "1" or "0", true)
 end
 
 function LoadSettings()
@@ -129,10 +138,14 @@ function LoadSettings()
     settings.label_alpha = tonumber(r.GetExtState(section, "label_alpha")) or 0.3
     settings.label_color_mode = tonumber(r.GetExtState(section, "label_color_mode")) or 1
     settings.text_centered = r.GetExtState(section, "text_centered") == "1"
+    settings.right_align = r.GetExtState(section, "right_align") == "1"
     settings.show_parent_label = r.GetExtState(section, "show_parent_label") == "1"
     settings.show_settings_button = r.GetExtState(section, "show_settings_button") == "1"
     settings.text_size = tonumber(r.GetExtState(section, "text_size")) or 14
     settings.show_record_color = r.GetExtState(section, "show_record_color") == "1"
+    settings.show_parent_colors = r.GetExtState(section, "show_parent_colors") == "1"
+    settings.show_child_colors = r.GetExtState(section, "show_child_colors") == "1"
+    settings.inherit_parent_color = r.GetExtState(section, "inherit_parent_color") == "1"
 end
 
 function cleanup()
@@ -265,7 +278,7 @@ end
 
 function ShowSettingsWindow()
     if not settings_visible then return end
-    r.ImGui_SetNextWindowSize(ctx, 450, 410)
+    r.ImGui_SetNextWindowSize(ctx, 450, 420)
 
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -330,30 +343,37 @@ function ShowSettingsWindow()
             settings.show_parent_label = not settings.show_parent_label
         end
         r.ImGui_SameLine(ctx, column_width)
-        
-        if r.ImGui_RadioButton(ctx, "Track colors", settings.show_track_colors) then
-            settings.show_track_colors = not settings.show_track_colors
-        end
-        r.ImGui_SameLine(ctx, column_width * 2)
-        
-        if r.ImGui_RadioButton(ctx, "Inherit color", settings.inherit_parent_color) then
-            settings.inherit_parent_color = not settings.inherit_parent_color
-        end
-        r.ImGui_SameLine(ctx, column_width * 3)
-        if r.ImGui_RadioButton(ctx, "Record color", settings.show_record_color) then
-            settings.show_record_color = not settings.show_record_color
-        end
-        
-        -- Derde rij
         if r.ImGui_RadioButton(ctx, "Center", settings.text_centered) then
             settings.text_centered = not settings.text_centered
         end
-        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_SameLine(ctx, column_width * 2)
+        if r.ImGui_RadioButton(ctx, "Right align", settings.right_align) then
+            settings.right_align = not settings.right_align
+        end
+        r.ImGui_SameLine(ctx, column_width * 3)
         if r.ImGui_RadioButton(ctx, "Settings button", settings.show_settings_button) then
             settings.show_settings_button = not settings.show_settings_button
         end
-        
-        
+        -- Derde rij
+        if r.ImGui_RadioButton(ctx, "Track colors", settings.show_track_colors) then
+            settings.show_track_colors = not settings.show_track_colors
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        if r.ImGui_RadioButton(ctx, "Parent colors", settings.show_parent_colors) then
+            settings.show_parent_colors = not settings.show_parent_colors
+        end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        if r.ImGui_RadioButton(ctx, "Child colors", settings.show_child_colors) then
+            settings.show_child_colors = not settings.show_child_colors
+        end
+        r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Inherit color", settings.inherit_parent_color) then
+            settings.inherit_parent_color = not settings.inherit_parent_color
+        end
+        -- Vierde rij
+        if r.ImGui_RadioButton(ctx, "Record color", settings.show_record_color) then
+            settings.show_record_color = not settings.show_record_color
+        end
         r.ImGui_PopStyleVar(ctx)
         
                 r.ImGui_Separator(ctx)
@@ -588,25 +608,31 @@ if overlay_visible then
         
         for i = 0, track_count - 1 do
             local track = r.GetTrack(0, i)
-            local color = r.GetTrackColor(track)
-            if settings.inherit_parent_color then
-                local parent = r.GetParentTrack(track)
-                if parent then
-                    color = r.GetTrackColor(parent)
+            local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+            local is_child = r.GetParentTrack(track) ~= nil
+            
+            if (is_parent and settings.show_parent_colors) or (is_child and settings.show_child_colors) then
+                local color = r.GetTrackColor(track)
+                if settings.inherit_parent_color then
+                    local parent = r.GetParentTrack(track)
+                    if parent then
+                        color = r.GetTrackColor(parent)
+                    end
                 end
-            end
-            if settings.show_record_color and r.GetMediaTrackInfo_Value(track, 'I_RECARM') == 1 and r.GetPlayState() == 5 then
-                color = 0x0000FF
-            end                                
-            if color ~= 0 then
-                local r_val = (color & 0xFF) / 255
-                local g_val = ((color >> 8) & 0xFF) / 255
-                local b_val = ((color >> 16) & 0xFF) / 255
-                colors_cache[i] = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.overlay_alpha)
+                if settings.show_record_color and r.GetMediaTrackInfo_Value(track, 'I_RECARM') == 1 and r.GetPlayState() == 5 then
+                    color = 0x0000FF
+                end                                
+                if color ~= 0 then
+                    local r_val = (color & 0xFF) / 255
+                    local g_val = ((color >> 8) & 0xFF) / 255
+                    local b_val = ((color >> 16) & 0xFF) / 255
+                    colors_cache[i] = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.overlay_alpha)
+                end
             end
         end
 
         local draw_list = r.ImGui_GetWindowDrawList(ctx)
+
         
         for i = 0, track_count - 1 do
             local track = r.GetTrack(0, i)
@@ -754,59 +780,56 @@ end
                         local parent_label_color = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, settings.label_alpha)
                         
                         local label_padding = 10
-                        local spacing = 15
+                        local spacing = 25
                         local parent_text_pos = settings.horizontal_offset
+                        local label_x = cursor_x
                         
                         if settings.text_centered then
-                            local offset = (max_width - parent_text_width) / 2
-                            parent_text_pos = settings.horizontal_offset + offset - label_padding
-                        end
-                        
-                        if should_show_name then
-                            parent_text_pos = settings.horizontal_offset + track_text_width + spacing
-                            if settings.text_centered then
+                            if should_show_name then
                                 local current_width = r.ImGui_CalcTextSize(ctx, display_name)
                                 local offset = (max_width - current_width) / 2
-                                parent_text_pos = parent_text_pos + offset
+                                parent_text_pos = settings.horizontal_offset + offset + current_width + spacing
+                                label_x = r.ImGui_GetWindowPos(ctx) + settings.horizontal_offset + offset + current_width + spacing
+                            else
+                                local offset = (max_width - parent_text_width) / 2
+                                parent_text_pos = settings.horizontal_offset + offset
+                                label_x = r.ImGui_GetWindowPos(ctx) + settings.horizontal_offset + offset
                             end
-                        end
-                        
-                        local display_width = r.ImGui_CalcTextSize(ctx, display_name)
-                        
-                        if should_show_name then
-                            r.ImGui_DrawList_AddRectFilled(
-                                draw_list,
-                                cursor_x + display_width + spacing,
-                                cursor_y - 1,
-                                cursor_x + display_width + parent_text_width + (2 * label_padding) + spacing,
-                                cursor_y + settings.text_size + 1,
-                                parent_label_color,
-                                4.0
-                            )
+                        elseif settings.right_align then
+                            local window_width = r.ImGui_GetWindowWidth(ctx)
+                            local right_margin = 20
+                            parent_text_pos = window_width - parent_text_width - right_margin - settings.horizontal_offset
+                            label_x = window_width - parent_text_width - right_margin - settings.horizontal_offset + r.ImGui_GetWindowPos(ctx)
+                            
+                            if should_show_name then
+                                parent_text_pos = parent_text_pos - track_text_width - spacing
+                                label_x = label_x - track_text_width - spacing
+                            end
                         else
-                            local label_width = parent_text_width + (2 * label_padding)
-                            local label_start = cursor_x - label_padding
-                            
-                            if settings.text_centered then
-                                local viewport_x, _ = r.ImGui_GetWindowPos(ctx)
-                                local offset = (max_width - label_width) / 2
-                                label_start = viewport_x + settings.horizontal_offset + offset
-                                parent_text_pos = settings.horizontal_offset + offset + label_padding
+                            if should_show_name then
+                                parent_text_pos = settings.horizontal_offset + track_text_width + spacing
+                                label_x = cursor_x + track_text_width + spacing
+                            else
+                                parent_text_pos = settings.horizontal_offset
+                                label_x = cursor_x
                             end
-                            
-                            r.ImGui_DrawList_AddRectFilled(
-                                draw_list,
-                                label_start,
-                                cursor_y - 1,
-                                label_start + label_width,
-                                cursor_y + settings.text_size + 1,
-                                parent_label_color,
-                                4.0
-                            )
                         end
+                        
+                        
+                        
+                        
+                        r.ImGui_DrawList_AddRectFilled(
+                            draw_list,
+                            label_x - label_padding,
+                            cursor_y - 1,
+                            label_x + parent_text_width + label_padding,
+                            cursor_y + settings.text_size + 1,
+                            parent_label_color,
+                            4.0
+                        )
                         
                         local parent_text_color = GetTextColor(parents[#parents])
-                        r.ImGui_SetCursorPos(ctx, parent_text_pos + (should_show_name and label_padding or 0), text_y / scale)
+                        r.ImGui_SetCursorPos(ctx, parent_text_pos, text_y / scale)
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), parent_text_color)
                         r.ImGui_Text(ctx, combined_name)
                         r.ImGui_PopStyleColor(ctx)
@@ -821,11 +844,21 @@ end
                             and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
                             or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
                         
+                        local label_x = cursor_x
+                        if settings.text_centered then
+                            local offset = (max_width - text_width) / 2
+                            label_x = r.ImGui_GetWindowPos(ctx) + settings.horizontal_offset + offset
+                        elseif settings.right_align then
+                            local window_width = r.ImGui_GetWindowWidth(ctx)
+                            local right_margin = 20
+                            label_x = window_width - text_width - right_margin - settings.horizontal_offset + r.ImGui_GetWindowPos(ctx)
+                        end
+                        
                         r.ImGui_DrawList_AddRectFilled(
                             draw_list,
-                            cursor_x - label_padding,
+                            label_x - label_padding,
                             cursor_y - 1,
-                            cursor_x + text_width + label_padding,
+                            label_x + text_width + label_padding,
                             cursor_y + settings.text_size + 1,
                             label_color,
                             4.0
@@ -838,12 +871,19 @@ end
                             local current_width = r.ImGui_CalcTextSize(ctx, display_name)
                             local offset = (max_width - current_width) / 2
                             r.ImGui_SetCursorPos(ctx, settings.horizontal_offset + offset, text_y / scale)
+                        elseif settings.right_align then
+                            local text_width = r.ImGui_CalcTextSize(ctx, display_name)
+                            local window_width = r.ImGui_GetWindowWidth(ctx)
+                            local right_margin = 20
+                            r.ImGui_SetCursorPos(ctx, window_width - text_width - right_margin - settings.horizontal_offset, text_y / scale)
                         else
                             r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
                         end
                         
                         r.ImGui_Text(ctx, display_name)
                     end
+
+
                     r.ImGui_PopStyleVar(ctx)              
                     r.ImGui_PopStyleColor(ctx)
                 end
