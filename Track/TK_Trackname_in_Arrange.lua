@@ -1,11 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.3.8:
+-- @version 0.3.9:
 -- @changelog:
 --[[            
-+   Added border /frame mode
-+   Added Blend Modes: "Normal","Multiply", "Screen","Overlay","Darken","Lighten","Color Dodge",
-    "Color Burn","Hard Light","Soft Light"
++   Bugfix: Vertical offset in % 
 
 ]]----------------------------------------------------------------------------------       
 
@@ -50,6 +48,8 @@ local default_settings = {
     overlay_style = 1, -- 1 = solid, 2 = frame
     frame_thickness = 2.0,
     blend_mode = 1, -- 1 = normal, 2 = multiply, 3 = screen, 4 = overlay
+    show_track_numbers = false,
+    track_number_style = 1, -- 1 = voor naam, 2 = na naam, 3 = boven naam
 }
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -138,6 +138,8 @@ function SaveSettings()
     r.SetExtState(section, "overlay_style", tostring(settings.overlay_style), true)
     r.SetExtState(section, "frame_thickness", tostring(settings.frame_thickness), true)
     r.SetExtState(section, "blend_mode", tostring(settings.blend_mode), true)
+    r.SetExtState(section, "show_track_numbers", settings.show_track_numbers and "1" or "0", true)
+    r.SetExtState(section, "track_number_style", tostring(settings.track_number_style), true)
 end
 
 function LoadSettings()
@@ -171,6 +173,8 @@ function LoadSettings()
     settings.overlay_style = tonumber(r.GetExtState(section, "overlay_style")) or 1
     settings.frame_thickness = tonumber(r.GetExtState(section, "frame_thickness")) or 2.0
     settings.blend_mode = tonumber(r.GetExtState(section, "blend_mode")) or 1
+    settings.show_track_numbers = r.GetExtState(section, "show_track_numbers") == "1"
+    settings.track_number_style = tonumber(r.GetExtState(section, "track_number_style")) or 1
 end
 
 function cleanup()
@@ -353,7 +357,7 @@ end
 
 function ShowSettingsWindow()
     if not settings_visible then return end
-    r.ImGui_SetNextWindowSize(ctx, 450, 450)
+    r.ImGui_SetNextWindowSize(ctx, 450, 460)
 
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -434,7 +438,7 @@ function ShowSettingsWindow()
             settings.show_track_colors = not settings.show_track_colors
         end
         r.ImGui_SameLine(ctx, column_width)
-        if settings.show_track_colors then
+        --if settings.show_track_colors then
             r.ImGui_SetNextItemWidth(ctx, 100)
             if r.ImGui_BeginCombo(ctx, "##Blend Mode", blend_modes[settings.blend_mode]) then
                 for i, mode in ipairs(blend_modes) do
@@ -444,9 +448,9 @@ function ShowSettingsWindow()
                 end
                 r.ImGui_EndCombo(ctx)
             end
-        end
+        --end
         r.ImGui_SameLine(ctx, column_width * 2)
-        if settings.show_track_colors then
+        --if settings.show_track_colors then
             r.ImGui_SetNextItemWidth(ctx, 100)
             if r.ImGui_BeginCombo(ctx, "##Overlay Style", settings.overlay_style == 1 and "Solid" or "Frame") then
                 if r.ImGui_Selectable(ctx, "Solid", settings.overlay_style == 1) then
@@ -457,7 +461,7 @@ function ShowSettingsWindow()
                 end
                 r.ImGui_EndCombo(ctx)
             end
-        end
+        --end
         r.ImGui_SameLine(ctx, column_width * 3)
         if r.ImGui_RadioButton(ctx, "Normal colors", settings.show_normal_colors) then
             settings.show_normal_colors = not settings.show_normal_colors
@@ -477,6 +481,26 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, column_width * 3)
         if r.ImGui_RadioButton(ctx, "Record color", settings.show_record_color) then
             settings.show_record_color = not settings.show_record_color
+        end
+        -- Vijfde rij
+        if r.ImGui_RadioButton(ctx, "Track Number", settings.show_track_numbers) then
+            settings.show_track_numbers = not settings.show_track_numbers
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        --if settings.show_track_numbers then
+            r.ImGui_SetNextItemWidth(ctx, 100)
+            if r.ImGui_BeginCombo(ctx, "##Number Style", 
+                settings.track_number_style == 1 and "Before Name" or
+                settings.track_number_style == 2 and "After Name" or
+                "Above Name") then
+                if r.ImGui_Selectable(ctx, "Before Name", settings.track_number_style == 1) then
+                    settings.track_number_style = 1
+                end
+                if r.ImGui_Selectable(ctx, "After Name", settings.track_number_style == 2) then
+                    settings.track_number_style = 2
+                end
+                r.ImGui_EndCombo(ctx)
+            --end
         end
 
         r.ImGui_PopStyleVar(ctx)
@@ -515,7 +539,7 @@ function ShowSettingsWindow()
         local arrange = r.JS_Window_FindChildByID(main_hwnd, 1000)
         local _, _, arrange_w, _ = GetBounds(arrange)
         changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal offset", settings.horizontal_offset, 0, arrange_w)
-        changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical offset", settings.vertical_offset, -200, 200)
+        changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical Position(%)", settings.vertical_offset, -50, 50)
         if r.ImGui_BeginCombo(ctx, "Font", fonts[settings.selected_font]) then
             for i, font_name in ipairs(fonts) do
                 local is_selected = (settings.selected_font == i)
@@ -878,12 +902,13 @@ end
                     
                     local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY")
                     local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
+                    local vertical_offset = (track_height * settings.vertical_offset) / 100
                     local text_color = GetTextColor(track, is_child)
                     text_color = (text_color & 0xFFFFFF00) | (math.floor(settings.text_opacity * 255))
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                     local scale_offset = -5 * ((scale - 1) / 0.5)
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
-                    local text_y = track_y + (track_height * 0.5) - (settings.text_size * 0.5) + settings.vertical_offset + scale_offset
+                    local text_y = track_y + (track_height * 0.5) - (settings.text_size * 0.5) + vertical_offset + scale_offset
 
                     if settings.text_centered then
                         local current_width = r.ImGui_CalcTextSize(ctx, display_name)
@@ -915,6 +940,9 @@ end
                         
                         local label_padding = 10
                         local spacing = 25
+                        if settings.show_track_numbers then
+                            spacing = spacing + 20
+                        end
                         local parent_text_pos = settings.horizontal_offset
                         local label_x = cursor_x
                         
@@ -970,52 +998,76 @@ end
                     end
                     
 
-                    -- Label weergave
-                    if settings.show_label and should_show_name then
-                        local text_width = r.ImGui_CalcTextSize(ctx, display_name)
-                        local label_padding = 10
-                        local label_color = settings.label_color_mode == 1
-                            and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
-                            or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
-                        
-                        local label_x = cursor_x
-                        if settings.text_centered then
-                            local offset = (max_width - text_width) / 2
-                            label_x = r.ImGui_GetWindowPos(ctx) + settings.horizontal_offset + offset
-                        elseif settings.right_align then
-                            local window_width = r.ImGui_GetWindowWidth(ctx)
-                            local right_margin = 20
-                            label_x = window_width - text_width - right_margin - settings.horizontal_offset + r.ImGui_GetWindowPos(ctx)
-                        end
-                        
-                        r.ImGui_DrawList_AddRectFilled(
-                            draw_list,
-                            label_x - label_padding,
-                            cursor_y - 1,
-                            label_x + text_width + label_padding,
-                            cursor_y + settings.text_size + 1,
-                            label_color,
-                            4.0
-                        )
-                    end
+-- Label weergave
+if settings.show_label and should_show_name then
+    local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+    local modified_display_name = display_name
+    
+    if settings.show_track_numbers then
+        if settings.track_number_style == 1 then
+            modified_display_name = string.format("%02d. %s", track_number, display_name)  -- %02d voegt leading zero toe
+        elseif settings.track_number_style == 2 then
+            modified_display_name = string.format("%s -%02d", display_name, track_number)  -- %02d voegt leading zero toe
+        end
+    end
 
-                    -- Track naam weergave
-                    if should_show_name then
-                        if settings.text_centered then
-                            local current_width = r.ImGui_CalcTextSize(ctx, display_name)
-                            local offset = (max_width - current_width) / 2
-                            r.ImGui_SetCursorPos(ctx, settings.horizontal_offset + offset, text_y / scale)
-                        elseif settings.right_align then
-                            local text_width = r.ImGui_CalcTextSize(ctx, display_name)
-                            local window_width = r.ImGui_GetWindowWidth(ctx)
-                            local right_margin = 20
-                            r.ImGui_SetCursorPos(ctx, window_width - text_width - right_margin - settings.horizontal_offset, text_y / scale)
-                        else
-                            r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
-                        end
-                        
-                        r.ImGui_Text(ctx, display_name)
-                    end
+    local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
+    local label_padding = 10
+    local label_color = settings.label_color_mode == 1
+        and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
+        or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
+    
+    local label_x = cursor_x
+    if settings.text_centered then
+        local offset = (max_width - text_width) / 2
+        label_x = r.ImGui_GetWindowPos(ctx) + settings.horizontal_offset + offset
+    elseif settings.right_align then
+        local window_width = r.ImGui_GetWindowWidth(ctx)
+        local right_margin = 20
+        label_x = window_width - text_width - right_margin - settings.horizontal_offset + r.ImGui_GetWindowPos(ctx)
+    end
+    
+    r.ImGui_DrawList_AddRectFilled(
+        draw_list,
+        label_x - label_padding,
+        cursor_y - 1,
+        label_x + text_width + label_padding,
+        cursor_y + settings.text_size + 1,
+        label_color,
+        4.0
+    )
+end
+
+-- Track naam weergave
+if should_show_name then
+    local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+    local modified_display_name = display_name
+    
+    if settings.show_track_numbers then
+        if settings.track_number_style == 1 then
+            modified_display_name = string.format("%02d. %s", track_number, display_name)  -- %02d voegt leading zero toe
+        elseif settings.track_number_style == 2 then
+            modified_display_name = string.format("%s -%02d", display_name, track_number)  -- %02d voegt leading zero toe
+        end
+    end
+
+    if settings.text_centered then
+        local current_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
+        local offset = (max_width - current_width) / 2
+        r.ImGui_SetCursorPos(ctx, settings.horizontal_offset + offset, text_y / scale)
+    elseif settings.right_align then
+        local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
+        local window_width = r.ImGui_GetWindowWidth(ctx)
+        local right_margin = 20
+        r.ImGui_SetCursorPos(ctx, window_width - text_width - right_margin - settings.horizontal_offset, text_y / scale)
+    else
+        r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+    end
+    
+    r.ImGui_Text(ctx, modified_display_name)
+end
+
+
 
 
                     r.ImGui_PopStyleVar(ctx)              
