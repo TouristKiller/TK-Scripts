@@ -1,11 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.3.7:
+-- @version 0.3.8:
 -- @changelog:
 --[[            
-+ Added: Right align for track names and labels
-+ Bugfix: Save Inherit parent color setting
-+ Added: Show only Parent or Child track color
++   Added border /frame mode
++   Added Blend Modes: "Normal","Multiply", "Screen","Overlay","Darken","Lighten","Color Dodge",
+    "Color Burn","Hard Light","Soft Light"
 
 ]]----------------------------------------------------------------------------------       
 
@@ -46,11 +46,28 @@ local default_settings = {
     right_align = false,
     show_parent_colors = true,
     show_child_colors = true,
+    show_normal_colors = true,
+    overlay_style = 1, -- 1 = solid, 2 = frame
+    frame_thickness = 2.0,
+    blend_mode = 1, -- 1 = normal, 2 = multiply, 3 = screen, 4 = overlay
 }
 local settings = {}
 for k, v in pairs(default_settings) do
     settings[k] = v
 end
+
+local blend_modes = {
+    "Normal",
+    "Multiply", 
+    "Screen",
+    "Overlay",
+    "Darken",
+    "Lighten",
+    "Color Dodge",
+    "Color Burn",
+    "Hard Light",
+    "Soft Light"
+}
 
 local text_sizes = {8, 10, 12, 14, 16, 18, 20, 24, 28, 32}
 local fonts = {
@@ -116,7 +133,11 @@ function SaveSettings()
     r.SetExtState(section, "show_record_color", settings.show_record_color and "1" or "0", true)
     r.SetExtState(section, "show_parent_colors", settings.show_parent_colors and "1" or "0", true)
     r.SetExtState(section, "show_child_colors", settings.show_child_colors and "1" or "0", true)
+    r.SetExtState(section, "show_normal_colors", settings.show_normal_colors and "1" or "0", true)
     r.SetExtState(section, "inherit_parent_color", settings.inherit_parent_color and "1" or "0", true)
+    r.SetExtState(section, "overlay_style", tostring(settings.overlay_style), true)
+    r.SetExtState(section, "frame_thickness", tostring(settings.frame_thickness), true)
+    r.SetExtState(section, "blend_mode", tostring(settings.blend_mode), true)
 end
 
 function LoadSettings()
@@ -145,7 +166,11 @@ function LoadSettings()
     settings.show_record_color = r.GetExtState(section, "show_record_color") == "1"
     settings.show_parent_colors = r.GetExtState(section, "show_parent_colors") == "1"
     settings.show_child_colors = r.GetExtState(section, "show_child_colors") == "1"
+    settings.show_normal_colors = r.GetExtState(section, "show_normal_colors") == "1"
     settings.inherit_parent_color = r.GetExtState(section, "inherit_parent_color") == "1"
+    settings.overlay_style = tonumber(r.GetExtState(section, "overlay_style")) or 1
+    settings.frame_thickness = tonumber(r.GetExtState(section, "frame_thickness")) or 2.0
+    settings.blend_mode = tonumber(r.GetExtState(section, "blend_mode")) or 1
 end
 
 function cleanup()
@@ -276,9 +301,59 @@ function ResetSettings()
     SaveSettings()
 end
 
+function BlendColor(base, blend, mode)
+    local base_r, base_g, base_b = reaper.ColorFromNative(base)
+    local blend_r, blend_g, blend_b = reaper.ColorFromNative(blend)
+    local result_r, result_g, result_b
+
+    if mode == 1 then -- Normal
+        return blend
+    elseif mode == 2 then -- Multiply
+        result_r = (base_r * blend_r) / 255
+        result_g = (base_g * blend_g) / 255
+        result_b = (base_b * blend_b) / 255
+    elseif mode == 3 then -- Screen
+        result_r = 255 - ((255 - base_r) * (255 - blend_r)) / 255
+        result_g = 255 - ((255 - base_g) * (255 - blend_g)) / 255
+        result_b = 255 - ((255 - base_b) * (255 - blend_b)) / 255
+    elseif mode == 4 then -- Overlay
+        result_r = base_r < 128 and (2 * base_r * blend_r) / 255 or 255 - 2 * ((255 - base_r) * (255 - blend_r)) / 255
+        result_g = base_g < 128 and (2 * base_g * blend_g) / 255 or 255 - 2 * ((255 - base_g) * (255 - blend_g)) / 255
+        result_b = base_b < 128 and (2 * base_b * blend_b) / 255 or 255 - 2 * ((255 - base_b) * (255 - blend_b)) / 255
+    elseif mode == 5 then -- Darken
+        result_r = math.min(base_r, blend_r)
+        result_g = math.min(base_g, blend_g)
+        result_b = math.min(base_b, blend_b)
+    elseif mode == 6 then -- Lighten
+        result_r = math.max(base_r, blend_r)
+        result_g = math.max(base_g, blend_g)
+        result_b = math.max(base_b, blend_b)
+    elseif mode == 7 then -- Color Dodge
+        result_r = base_r == 0 and 0 or math.min(255, (blend_r * 255) / (255 - base_r))
+        result_g = base_g == 0 and 0 or math.min(255, (blend_g * 255) / (255 - base_g))
+        result_b = base_b == 0 and 0 or math.min(255, (blend_b * 255) / (255 - base_b))
+    elseif mode == 8 then -- Color Burn
+        result_r = base_r == 255 and 255 or math.max(0, 255 - (((255 - blend_r) * 255) / base_r))
+        result_g = base_g == 255 and 255 or math.max(0, 255 - (((255 - blend_g) * 255) / base_g))
+        result_b = base_b == 255 and 255 or math.max(0, 255 - (((255 - blend_b) * 255) / base_b))
+    elseif mode == 9 then -- Hard Light
+        result_r = blend_r < 128 and (2 * base_r * blend_r) / 255 or 255 - 2 * ((255 - base_r) * (255 - blend_r)) / 255
+        result_g = blend_g < 128 and (2 * base_g * blend_g) / 255 or 255 - 2 * ((255 - base_g) * (255 - blend_g)) / 255
+        result_b = blend_b < 128 and (2 * base_b * blend_b) / 255 or 255 - 2 * ((255 - base_b) * (255 - blend_b)) / 255
+    elseif mode == 10 then -- Soft Light
+        result_r = blend_r < 128 and base_r - (255 - 2 * blend_r) * base_r * (255 - base_r) / (255 * 255) or base_r + (2 * blend_r - 255) * (math.sqrt(base_r / 255) * 255 - base_r) / 255
+        result_g = blend_g < 128 and base_g - (255 - 2 * blend_g) * base_g * (255 - base_g) / (255 * 255) or base_g + (2 * blend_g - 255) * (math.sqrt(base_g / 255) * 255 - base_g) / 255
+        result_b = blend_b < 128 and base_b - (255 - 2 * blend_b) * base_b * (255 - base_b) / (255 * 255) or base_b + (2 * blend_b - 255) * (math.sqrt(base_b / 255) * 255 - base_b) / 255
+    end
+
+    return reaper.ColorToNative(math.floor(result_r), math.floor(result_g), math.floor(result_b))
+end
+
+
+
 function ShowSettingsWindow()
     if not settings_visible then return end
-    r.ImGui_SetNextWindowSize(ctx, 450, 420)
+    r.ImGui_SetNextWindowSize(ctx, 450, 450)
 
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -359,28 +434,61 @@ function ShowSettingsWindow()
             settings.show_track_colors = not settings.show_track_colors
         end
         r.ImGui_SameLine(ctx, column_width)
+        if settings.show_track_colors then
+            r.ImGui_SetNextItemWidth(ctx, 100)
+            if r.ImGui_BeginCombo(ctx, "##Blend Mode", blend_modes[settings.blend_mode]) then
+                for i, mode in ipairs(blend_modes) do
+                    if r.ImGui_Selectable(ctx, mode, settings.blend_mode == i) then
+                        settings.blend_mode = i
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+        end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        if settings.show_track_colors then
+            r.ImGui_SetNextItemWidth(ctx, 100)
+            if r.ImGui_BeginCombo(ctx, "##Overlay Style", settings.overlay_style == 1 and "Solid" or "Frame") then
+                if r.ImGui_Selectable(ctx, "Solid", settings.overlay_style == 1) then
+                    settings.overlay_style = 1
+                end
+                if r.ImGui_Selectable(ctx, "Frame", settings.overlay_style == 2) then
+                    settings.overlay_style = 2
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+        end
+        r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Normal colors", settings.show_normal_colors) then
+            settings.show_normal_colors = not settings.show_normal_colors
+        end
+        -- Vierde rij
         if r.ImGui_RadioButton(ctx, "Parent colors", settings.show_parent_colors) then
             settings.show_parent_colors = not settings.show_parent_colors
         end
-        r.ImGui_SameLine(ctx, column_width * 2)
+        r.ImGui_SameLine(ctx, column_width)
         if r.ImGui_RadioButton(ctx, "Child colors", settings.show_child_colors) then
             settings.show_child_colors = not settings.show_child_colors
         end
-        r.ImGui_SameLine(ctx, column_width * 3)
+        r.ImGui_SameLine(ctx, column_width * 2)
         if r.ImGui_RadioButton(ctx, "Inherit color", settings.inherit_parent_color) then
             settings.inherit_parent_color = not settings.inherit_parent_color
         end
-        -- Vierde rij
+        r.ImGui_SameLine(ctx, column_width * 3)
         if r.ImGui_RadioButton(ctx, "Record color", settings.show_record_color) then
             settings.show_record_color = not settings.show_record_color
         end
+
         r.ImGui_PopStyleVar(ctx)
-        
-                r.ImGui_Separator(ctx)
+        r.ImGui_Separator(ctx)
+
         -- Sliders
         r.ImGui_PushItemWidth(ctx, 340)
         if not settings.show_track_colors then
             r.ImGui_BeginDisabled(ctx)
+        end
+        if settings.overlay_style == 2 then
+            changed, settings.frame_thickness = r.ImGui_SliderDouble(ctx, "Frame Thickness", settings.frame_thickness, 1.0, 20.0)
         end
         changed, settings.overlay_alpha = r.ImGui_SliderDouble(ctx, "Color Intensity", settings.overlay_alpha, 0.0, 1.0)
         if not settings.show_track_colors then
@@ -611,7 +719,9 @@ if overlay_visible then
             local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
             local is_child = r.GetParentTrack(track) ~= nil
             
-            if (is_parent and settings.show_parent_colors) or (is_child and settings.show_child_colors) then
+            if (is_parent and settings.show_parent_colors) or 
+            (is_child and settings.show_child_colors) or
+            (not is_parent and not is_child and settings.show_normal_colors) then
                 local color = r.GetTrackColor(track)
                 if settings.inherit_parent_color then
                     local parent = r.GetParentTrack(track)
@@ -623,11 +733,21 @@ if overlay_visible then
                     color = 0x0000FF
                 end                                
                 if color ~= 0 then
-                    local r_val = (color & 0xFF) / 255
-                    local g_val = ((color >> 8) & 0xFF) / 255
-                    local b_val = ((color >> 16) & 0xFF) / 255
-                    colors_cache[i] = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.overlay_alpha)
+                    -- Haal achtergrondkleur op
+                    local bg_color = reaper.GetThemeColor("col_arrangebg", 0)
+                    
+                    -- Pas blend mode toe
+                    local blended_color = BlendColor(bg_color, color, settings.blend_mode)
+                    
+                    -- Converteer naar ImGui color met alpha
+                    local blend_r, blend_g, blend_b = reaper.ColorFromNative(blended_color)
+                    colors_cache[i] = reaper.ImGui_ColorConvertDouble4ToU32(
+                        blend_r/255,
+                        blend_g/255, 
+                        blend_b/255,
+                        settings.overlay_alpha)
                 end
+                
             end
         end
 
@@ -647,13 +767,27 @@ if overlay_visible then
                 local viewport_min_x = viewport_x
                 local viewport_max_x = viewport_min_x + r.ImGui_GetWindowWidth(ctx)
                 
-                for x = math.max(left, viewport_min_x), math.min(right, viewport_max_x), 1 do
-                    r.ImGui_DrawList_AddLine(draw_list,
-                        x / scale,
-                        overlay_top,
-                        x / scale,
-                        overlay_bottom,
-                        colors_cache[i])
+                if settings.overlay_style == 1 then
+                    for x = math.max(left, viewport_min_x), math.min(right, viewport_max_x), 1 do
+                        r.ImGui_DrawList_AddLine(draw_list,
+                            x / scale,
+                            overlay_top,
+                            x / scale,
+                            overlay_bottom,
+                            colors_cache[i])
+                    end
+                else
+                    -- Frame drawing
+                    local thickness = settings.frame_thickness
+                    r.ImGui_DrawList_AddRect(draw_list,
+                        left / scale + thickness/2,
+                        overlay_top + thickness/2,
+                        right / scale - thickness/2,
+                        overlay_bottom - thickness/2,
+                        colors_cache[i],
+                        0,
+                        0,
+                        thickness)
                 end
             end
         end
