@@ -1,15 +1,17 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.3.9:
+-- @version 0.4.0:
 -- @changelog:
 --[[            
-+   Bugfix: Vertical offset in % 
++ Added autosave (first implementation, needs some more testing)
++ Added gradient mode (vertical and horizontal)
 
 ]]----------------------------------------------------------------------------------       
 
 local r = reaper
 local ctx = r.ImGui_CreateContext('Track Names')
 
+local script_active = true
 local settings_visible = false
 local last_update_time = 0
 local update_interval = 0.05 
@@ -50,6 +52,11 @@ local default_settings = {
     blend_mode = 1, -- 1 = normal, 2 = multiply, 3 = screen, 4 = overlay
     show_track_numbers = false,
     track_number_style = 1, -- 1 = voor naam, 2 = na naam, 3 = boven naam
+    autosave_enabled = false,
+    gradient_enabled = false,
+    gradient_direction = 1, -- 1 = horizontal, 2 = vertical
+    gradient_start_alpha = 1.0,
+    gradient_end_alpha = 0.0
 }
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -107,6 +114,7 @@ if old_text_size ~= settings.text_size then
 CreateFonts()
 end 
 
+
 function SaveSettings()
     local section = "TK_TRACKNAMES"
     r.SetExtState(section, "text_opacity", tostring(settings.text_opacity), true)
@@ -140,6 +148,11 @@ function SaveSettings()
     r.SetExtState(section, "blend_mode", tostring(settings.blend_mode), true)
     r.SetExtState(section, "show_track_numbers", settings.show_track_numbers and "1" or "0", true)
     r.SetExtState(section, "track_number_style", tostring(settings.track_number_style), true)
+    r.SetExtState(section, "autosave_enabled", settings.autosave_enabled and "1" or "0", true)
+    r.SetExtState(section, "gradient_enabled", settings.gradient_enabled and "1" or "0", true)
+    r.SetExtState(section, "gradient_direction", tostring(settings.gradient_direction), true)
+    r.SetExtState(section, "gradient_start_alpha", tostring(settings.gradient_start_alpha), true)
+    r.SetExtState(section, "gradient_end_alpha", tostring(settings.gradient_end_alpha), true)
 end
 
 function LoadSettings()
@@ -175,22 +188,11 @@ function LoadSettings()
     settings.blend_mode = tonumber(r.GetExtState(section, "blend_mode")) or 1
     settings.show_track_numbers = r.GetExtState(section, "show_track_numbers") == "1"
     settings.track_number_style = tonumber(r.GetExtState(section, "track_number_style")) or 1
-end
-
-function cleanup()
-    reaper.SetThemeColor("col_gridlines", -1, 0)
-    reaper.SetThemeColor("col_gridlines2", -1, 0)
-    reaper.SetThemeColor("col_gridlines3", -1, 0)
-    reaper.SetThemeColor("col_arrangebg", -1, 0)
-    reaper.SetThemeColor("col_tr1_bg", -1, 0)
-    reaper.SetThemeColor("col_tr2_bg", -1, 0)
-    
-    settings.text_opacity = default_settings.text_opacity
-    settings.show_parent_tracks = default_settings.show_parent_tracks
-    settings.show_child_tracks = default_settings.show_child_tracks
-    settings.show_first_fx = default_settings.show_first_fx
-    
-    reaper.UpdateArrange()
+    settings.autosave_enabled = r.GetExtState(section, "autosave_enabled") == "1"
+    settings.gradient_enabled = r.GetExtState(section, "gradient_enabled") == "1"
+    settings.gradient_direction = tonumber(r.GetExtState(section, "gradient_direction")) or 1
+    settings.gradient_start_alpha = tonumber(r.GetExtState(section, "gradient_start_alpha")) or 1.0
+    settings.gradient_end_alpha = tonumber(r.GetExtState(section, "gradient_end_alpha")) or 0.0
 end
 
 function RefreshProjectState()
@@ -357,7 +359,7 @@ end
 
 function ShowSettingsWindow()
     if not settings_visible then return end
-    r.ImGui_SetNextWindowSize(ctx, 450, 460)
+    r.ImGui_SetNextWindowSize(ctx, 450, 520)
 
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -388,6 +390,9 @@ function ShowSettingsWindow()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF6666FF)
         if r.ImGui_Button(ctx, "Close") then
+            if settings.autosave_enabled then
+                SaveSettings()
+            end
             r.SetExtState("TK_TRACKNAMES", "settings_visible", "0", false)
         end
         r.ImGui_PopStyleColor(ctx, 3)
@@ -433,6 +438,28 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Settings button", settings.show_settings_button) then
             settings.show_settings_button = not settings.show_settings_button
         end
+       
+        if r.ImGui_RadioButton(ctx, "Track Number", settings.show_track_numbers) then
+            settings.show_track_numbers = not settings.show_track_numbers
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        --if settings.show_track_numbers then
+            r.ImGui_SetNextItemWidth(ctx, 100)
+            if r.ImGui_BeginCombo(ctx, "##Number Style", 
+                settings.track_number_style == 1 and "Before Name" or
+                settings.track_number_style == 2 and "After Name" or
+                "Above Name") then
+                if r.ImGui_Selectable(ctx, "Before Name", settings.track_number_style == 1) then
+                    settings.track_number_style = 1
+                end
+                if r.ImGui_Selectable(ctx, "After Name", settings.track_number_style == 2) then
+                    settings.track_number_style = 2
+                end
+                r.ImGui_EndCombo(ctx)
+            --end
+        end
+
+        r.ImGui_Separator(ctx)
         -- Derde rij
         if r.ImGui_RadioButton(ctx, "Track colors", settings.show_track_colors) then
             settings.show_track_colors = not settings.show_track_colors
@@ -483,24 +510,21 @@ function ShowSettingsWindow()
             settings.show_record_color = not settings.show_record_color
         end
         -- Vijfde rij
-        if r.ImGui_RadioButton(ctx, "Track Number", settings.show_track_numbers) then
-            settings.show_track_numbers = not settings.show_track_numbers
+        if r.ImGui_RadioButton(ctx, "Gradient", settings.gradient_enabled) then
+            settings.gradient_enabled = not settings.gradient_enabled
         end
+
         r.ImGui_SameLine(ctx, column_width)
-        --if settings.show_track_numbers then
-            r.ImGui_SetNextItemWidth(ctx, 100)
-            if r.ImGui_BeginCombo(ctx, "##Number Style", 
-                settings.track_number_style == 1 and "Before Name" or
-                settings.track_number_style == 2 and "After Name" or
-                "Above Name") then
-                if r.ImGui_Selectable(ctx, "Before Name", settings.track_number_style == 1) then
-                    settings.track_number_style = 1
-                end
-                if r.ImGui_Selectable(ctx, "After Name", settings.track_number_style == 2) then
-                    settings.track_number_style = 2
-                end
-                r.ImGui_EndCombo(ctx)
-            --end
+        r.ImGui_SetNextItemWidth(ctx, 100)
+        if r.ImGui_BeginCombo(ctx, "##Gradient Direction", 
+            settings.gradient_direction == 1 and "Horizontal" or "Vertical") then
+            if r.ImGui_Selectable(ctx, "Horizontal", settings.gradient_direction == 1) then
+                settings.gradient_direction = 1
+            end
+            if r.ImGui_Selectable(ctx, "Vertical", settings.gradient_direction == 2) then
+                settings.gradient_direction = 2
+            end
+            r.ImGui_EndCombo(ctx)
         end
 
         r.ImGui_PopStyleVar(ctx)
@@ -517,6 +541,12 @@ function ShowSettingsWindow()
         changed, settings.overlay_alpha = r.ImGui_SliderDouble(ctx, "Color Intensity", settings.overlay_alpha, 0.0, 1.0)
         if not settings.show_track_colors then
             r.ImGui_EndDisabled(ctx)
+        end
+        if settings.gradient_enabled and settings.overlay_style == 1 then
+            changed, settings.gradient_start_alpha = r.ImGui_SliderDouble(ctx, "Start Gradient", 
+            settings.gradient_start_alpha, 0.0, 1.0)
+            changed, settings.gradient_end_alpha = r.ImGui_SliderDouble(ctx, "End Gradient", 
+            settings.gradient_end_alpha, 0.0, 1.0) 
         end
         if not settings.show_label then
             r.ImGui_BeginDisabled(ctx)
@@ -539,7 +569,7 @@ function ShowSettingsWindow()
         local arrange = r.JS_Window_FindChildByID(main_hwnd, 1000)
         local _, _, arrange_w, _ = GetBounds(arrange)
         changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal offset", settings.horizontal_offset, 0, arrange_w)
-        changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical Position(%)", settings.vertical_offset, -50, 50)
+        changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical offset(%)", settings.vertical_offset, -50, 50)
         if r.ImGui_BeginCombo(ctx, "Font", fonts[settings.selected_font]) then
             for i, font_name in ipairs(fonts) do
                 local is_selected = (settings.selected_font == i)
@@ -575,7 +605,8 @@ function ShowSettingsWindow()
             
             if changed_grid then UpdateGridColors() end
             if changed_bg then UpdateBackgroundColors() end
-        end 
+        end
+
         r.ImGui_PopItemWidth(ctx)
 
         r.ImGui_Separator(ctx)
@@ -591,6 +622,11 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "Save Settings") then
             SaveSettings()
+        end
+        r.ImGui_SameLine(ctx)
+        local changed, new_value = r.ImGui_Checkbox(ctx, "Autosave", settings.autosave_enabled)
+        if changed then
+            settings.autosave_enabled = new_value
         end
         r.ImGui_End(ctx)
     end
@@ -729,7 +765,6 @@ else
 end
 
 r.ImGui_SetNextWindowSize(ctx, window_width, (arrange_height / scale) + (top / scale) -10)
-
 local header_height = r.GetMainHwnd() and 0
 local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
 
@@ -743,7 +778,7 @@ if overlay_visible then
             local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
             local is_child = r.GetParentTrack(track) ~= nil
             
-            if (is_parent and settings.show_parent_colors) or 
+            if (is_parent and settings.show_parent_colors) or
             (is_child and settings.show_child_colors) or
             (not is_parent and not is_child and settings.show_normal_colors) then
                 local color = r.GetTrackColor(track)
@@ -757,26 +792,19 @@ if overlay_visible then
                     color = 0x0000FF
                 end                                
                 if color ~= 0 then
-                    -- Haal achtergrondkleur op
                     local bg_color = reaper.GetThemeColor("col_arrangebg", 0)
-                    
-                    -- Pas blend mode toe
                     local blended_color = BlendColor(bg_color, color, settings.blend_mode)
-                    
-                    -- Converteer naar ImGui color met alpha
                     local blend_r, blend_g, blend_b = reaper.ColorFromNative(blended_color)
                     colors_cache[i] = reaper.ImGui_ColorConvertDouble4ToU32(
                         blend_r/255,
-                        blend_g/255, 
+                        blend_g/255,
                         blend_b/255,
                         settings.overlay_alpha)
                 end
-                
             end
         end
 
         local draw_list = r.ImGui_GetWindowDrawList(ctx)
-
         
         for i = 0, track_count - 1 do
             local track = r.GetTrack(0, i)
@@ -792,13 +820,54 @@ if overlay_visible then
                 local viewport_max_x = viewport_min_x + r.ImGui_GetWindowWidth(ctx)
                 
                 if settings.overlay_style == 1 then
-                    for x = math.max(left, viewport_min_x), math.min(right, viewport_max_x), 1 do
-                        r.ImGui_DrawList_AddLine(draw_list,
-                            x / scale,
-                            overlay_top,
-                            x / scale,
-                            overlay_bottom,
-                            colors_cache[i])
+                    if settings.gradient_enabled then
+                        if settings.gradient_direction == 1 then
+                            -- Horizontal gradient
+                            local width = math.min(right, viewport_max_x) - math.max(left, viewport_min_x)
+                            local alpha_step = (settings.gradient_end_alpha - settings.gradient_start_alpha) / width
+                            local current_alpha = settings.gradient_start_alpha
+                            
+                            for x = math.max(left, viewport_min_x), math.min(right, viewport_max_x), 1 do
+                                local color = colors_cache[i]
+                                local new_alpha = math.floor(current_alpha * 255)
+                                color = (color & 0xFFFFFF00) | new_alpha
+                                r.ImGui_DrawList_AddLine(draw_list,
+                                    x / scale,
+                                    overlay_top,
+                                    x / scale,
+                                    overlay_bottom,
+                                    color)
+                                current_alpha = current_alpha + alpha_step
+                            end
+                        else
+                            -- Vertical gradient
+                            local height = overlay_bottom - overlay_top
+                            local alpha_step = (settings.gradient_end_alpha - settings.gradient_start_alpha) / height
+                            local current_alpha = settings.gradient_start_alpha
+                            
+                            for y = overlay_top, overlay_bottom, 1 do
+                                local color = colors_cache[i]
+                                local new_alpha = math.floor(current_alpha * 255)
+                                color = (color & 0xFFFFFF00) | new_alpha
+                                r.ImGui_DrawList_AddLine(draw_list,
+                                    math.max(left, viewport_min_x) / scale,
+                                    y,
+                                    math.min(right, viewport_max_x) / scale,
+                                    y,
+                                    color)
+                                current_alpha = current_alpha + alpha_step
+                            end
+                        end
+                    else
+                        -- Normal solid overlay
+                        for x = math.max(left, viewport_min_x), math.min(right, viewport_max_x), 1 do
+                            r.ImGui_DrawList_AddLine(draw_list,
+                                x / scale,
+                                overlay_top,
+                                x / scale,
+                                overlay_bottom,
+                                colors_cache[i])
+                        end
                     end
                 else
                     -- Frame drawing
@@ -977,9 +1046,6 @@ end
                             end
                         end
                         
-                        
-                        
-                        
                         r.ImGui_DrawList_AddRectFilled(
                             draw_list,
                             label_x - label_padding,
@@ -998,74 +1064,74 @@ end
                     end
                     
 
--- Label weergave
-if settings.show_label and should_show_name then
-    local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
-    local modified_display_name = display_name
-    
-    if settings.show_track_numbers then
-        if settings.track_number_style == 1 then
-            modified_display_name = string.format("%02d. %s", track_number, display_name)  -- %02d voegt leading zero toe
-        elseif settings.track_number_style == 2 then
-            modified_display_name = string.format("%s -%02d", display_name, track_number)  -- %02d voegt leading zero toe
-        end
-    end
+                    -- Label weergave
+                    if settings.show_label and should_show_name then
+                        local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+                        local modified_display_name = display_name
+                        
+                        if settings.show_track_numbers then
+                            if settings.track_number_style == 1 then
+                                modified_display_name = string.format("%02d. %s", track_number, display_name)  -- %02d voegt leading zero toe
+                            elseif settings.track_number_style == 2 then
+                                modified_display_name = string.format("%s -%02d", display_name, track_number)  -- %02d voegt leading zero toe
+                            end
+                        end
 
-    local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
-    local label_padding = 10
-    local label_color = settings.label_color_mode == 1
-        and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
-        or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
-    
-    local label_x = cursor_x
-    if settings.text_centered then
-        local offset = (max_width - text_width) / 2
-        label_x = r.ImGui_GetWindowPos(ctx) + settings.horizontal_offset + offset
-    elseif settings.right_align then
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        local right_margin = 20
-        label_x = window_width - text_width - right_margin - settings.horizontal_offset + r.ImGui_GetWindowPos(ctx)
-    end
-    
-    r.ImGui_DrawList_AddRectFilled(
-        draw_list,
-        label_x - label_padding,
-        cursor_y - 1,
-        label_x + text_width + label_padding,
-        cursor_y + settings.text_size + 1,
-        label_color,
-        4.0
-    )
-end
+                        local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
+                        local label_padding = 10
+                        local label_color = settings.label_color_mode == 1
+                            and r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
+                            or r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
+                        
+                        local label_x = cursor_x
+                        if settings.text_centered then
+                            local offset = (max_width - text_width) / 2
+                            label_x = r.ImGui_GetWindowPos(ctx) + settings.horizontal_offset + offset
+                        elseif settings.right_align then
+                            local window_width = r.ImGui_GetWindowWidth(ctx)
+                            local right_margin = 20
+                            label_x = window_width - text_width - right_margin - settings.horizontal_offset + r.ImGui_GetWindowPos(ctx)
+                        end
+                        
+                        r.ImGui_DrawList_AddRectFilled(
+                            draw_list,
+                            label_x - label_padding,
+                            cursor_y - 1,
+                            label_x + text_width + label_padding,
+                            cursor_y + settings.text_size + 1,
+                            label_color,
+                            4.0
+                        )
+                    end
 
--- Track naam weergave
-if should_show_name then
-    local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
-    local modified_display_name = display_name
-    
-    if settings.show_track_numbers then
-        if settings.track_number_style == 1 then
-            modified_display_name = string.format("%02d. %s", track_number, display_name)  -- %02d voegt leading zero toe
-        elseif settings.track_number_style == 2 then
-            modified_display_name = string.format("%s -%02d", display_name, track_number)  -- %02d voegt leading zero toe
-        end
-    end
+                    -- Track naam weergave
+                    if should_show_name then
+                        local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+                        local modified_display_name = display_name
+                        
+                        if settings.show_track_numbers then
+                            if settings.track_number_style == 1 then
+                                modified_display_name = string.format("%02d. %s", track_number, display_name)  -- %02d voegt leading zero toe
+                            elseif settings.track_number_style == 2 then
+                                modified_display_name = string.format("%s -%02d", display_name, track_number)  -- %02d voegt leading zero toe
+                            end
+                        end
 
-    if settings.text_centered then
-        local current_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
-        local offset = (max_width - current_width) / 2
-        r.ImGui_SetCursorPos(ctx, settings.horizontal_offset + offset, text_y / scale)
-    elseif settings.right_align then
-        local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        local right_margin = 20
-        r.ImGui_SetCursorPos(ctx, window_width - text_width - right_margin - settings.horizontal_offset, text_y / scale)
-    else
-        r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
-    end
-    
-    r.ImGui_Text(ctx, modified_display_name)
-end
+                        if settings.text_centered then
+                            local current_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
+                            local offset = (max_width - current_width) / 2
+                            r.ImGui_SetCursorPos(ctx, settings.horizontal_offset + offset, text_y / scale)
+                        elseif settings.right_align then
+                            local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
+                            local window_width = r.ImGui_GetWindowWidth(ctx)
+                            local right_margin = 20
+                            r.ImGui_SetCursorPos(ctx, window_width - text_width - right_margin - settings.horizontal_offset, text_y / scale)
+                        else
+                            r.ImGui_SetCursorPos(ctx, settings.horizontal_offset, text_y / scale)
+                        end
+                        
+                        r.ImGui_Text(ctx, modified_display_name)
+                    end
 
 
 
@@ -1091,8 +1157,17 @@ end
         ShowSettingsWindow()
     end            
     if open then
+        script_active = true
         r.defer(loop)
+    else
+        if script_active then  
+            if settings.autosave_enabled then
+                SaveSettings()
+            end
+            script_active = false
+        end
     end
+    
 end
 
 local success = pcall(function()
