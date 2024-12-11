@@ -1,13 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.9.4:
+-- @version 0.9.5:
 -- @changelog:
 --[[        
-+ Bugfix: Docking when main screen is docked left. Also added auto dock detect
-+ Bugfix: Smartmarker was broken; fixed again
-+ Fixed: No "extra" Scolbars in ScreenshotWindow
-+ Added: Change color of Item and Track notes
-+ Added: button in projects window to hide Info Panel
++ Added hide button for main window (Only screenshot window can be shown)
 
 
 
@@ -32,6 +28,9 @@ local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
 local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
 local needs_font_update = false
+
+local hide_main_window = false
+local show_main_window = false
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
@@ -286,6 +285,7 @@ r.ImGui_Attach(ctx, IconFont)
 
 function exit()
     if ctx then
+        
         if r.ImGui_ValidatePtr(NormalFont, 'ImGui_Resource*') then
             r.ImGui_Detach(ctx, NormalFont)
         end
@@ -2481,8 +2481,10 @@ local function ShowScreenshotControls()
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local button_width = 18
     local button_height = 18
+
+
     
-    r.ImGui_SetCursorPos(ctx, window_width - button_width * 3 - 15, 5)
+    r.ImGui_SetCursorPos(ctx, window_width - button_width * 4 - 20, 5)
     if r.ImGui_Button(ctx, config.show_screenshot_scrollbar and "B" or "N", button_width, button_height) then
         config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar
         SaveConfig()
@@ -2494,7 +2496,7 @@ local function ShowScreenshotControls()
         [2] = "2",  -- Alleen dropdown
         [3] = "3"   -- Settings verborgen
     }
-    r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
+    r.ImGui_SetCursorPos(ctx, window_width - button_width * 3 - 15, 5)
     if r.ImGui_Button(ctx, state_text[config.screenshot_view_type], button_width, button_height) then
         config.screenshot_view_type = config.screenshot_view_type % 3 + 1
         
@@ -2510,10 +2512,21 @@ local function ShowScreenshotControls()
         end
         SaveConfig()
     end
+    r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
+    if r.ImGui_Button(ctx, hide_main_window and "S" or "H", button_width, button_height) then
+        if hide_main_window then
+            show_main_window = true
+            hide_main_window = false
+        else
+            hide_main_window = true
+            show_main_window = false
+        end
+    end
 end
 
 local function ShowFolderDropdown()
     if config.screenshot_view_type == 3 then return end
+    
     local folders_category
     for i = 1, #CAT_TEST do
         if CAT_TEST[i].name == "FOLDERS" then
@@ -2683,7 +2696,7 @@ local function ShowScreenshotWindow()
             r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) + main_window_width + 5, main_window_pos_y, r.ImGui_Cond_Always())
         end
         
-        r.ImGui_SetNextWindowSizeConstraints(ctx, 100, main_window_height, FLT_MAX, main_window_height)
+        r.ImGui_SetNextWindowSizeConstraints(ctx, 140, main_window_height, FLT_MAX, main_window_height)
     end
      
     
@@ -6128,6 +6141,18 @@ local min_window_height = CalculateTopHeight(config) + CalculateMenuHeight(confi
 r.ImGui_SetNextWindowSizeConstraints(ctx, 140, min_window_height, 16384, 16384)
 ----------------------------------------------------------------------------------   
 handleDocking()
+
+
+-- In Main():
+if hide_main_window then
+    config.dock_screenshot_window = false
+    r.ImGui_SetNextWindowPos(ctx, -500, -500)
+elseif show_main_window then
+    r.ImGui_SetNextWindowPos(ctx, 100, 100)
+    show_main_window = false
+end
+
+
 local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoScrollbar())
 dock = r.ImGui_GetWindowDockID(ctx)
 
@@ -7326,6 +7351,7 @@ if visible then
     if open then        
         r.defer(Main)
     end
+    
 end
 InitializeImGuiContext()
 Main()
