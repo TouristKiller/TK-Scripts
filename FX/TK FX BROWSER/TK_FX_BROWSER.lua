@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.9.5:
+-- @version 0.9.6:
 -- @changelog:
 --[[        
-+ Added hide button for main window (Only screenshot window can be shown)
++ Changed hide button for main window (Only screenshot window can be shown)
 
 
 
@@ -29,8 +29,6 @@ local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
 local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
 local needs_font_update = false
 
-local hide_main_window = false
-local show_main_window = false
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
@@ -235,6 +233,7 @@ local function SetDefaultConfig()
         item_notes_color = item_notes_color or 0x6699FFFF,    -- Default blue
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
         show_project_info = show_project_info or true,
+        hide_main_window = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -271,14 +270,22 @@ end
 ----------------------------------------------------------------------------------
 -- FONTS
 local TKFXfonts = { 
-    "sans-serif",
     "Arial",
+    "Helvetica",
     "Verdana",
     "Tahoma",
     "Times New Roman",
     "Georgia",
     "Courier New",
-    "Trebuchet MS",  
+    "Trebuchet MS",
+    "Impact",
+    "Roboto",
+    "Open Sans",
+    "Ubuntu",
+    "Segoe UI",
+    "Noto Sans",
+    "Liberation Sans",
+    "DejaVu Sans"
 }
 local IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
 r.ImGui_Attach(ctx, IconFont)
@@ -2513,14 +2520,10 @@ local function ShowScreenshotControls()
         SaveConfig()
     end
     r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
-    if r.ImGui_Button(ctx, hide_main_window and "S" or "H", button_width, button_height) then
-        if hide_main_window then
-            show_main_window = true
-            hide_main_window = false
-        else
-            hide_main_window = true
-            show_main_window = false
-        end
+    if r.ImGui_Button(ctx, config.hide_main_window and "S" or "H", button_width, button_height) then
+        config.hide_main_window = not config.hide_main_window
+       
+        SaveConfig()
     end
 end
 
@@ -6142,16 +6145,12 @@ r.ImGui_SetNextWindowSizeConstraints(ctx, 140, min_window_height, 16384, 16384)
 ----------------------------------------------------------------------------------   
 handleDocking()
 
-
--- In Main():
-if hide_main_window then
+if config.hide_main_window then
     config.dock_screenshot_window = false
-    r.ImGui_SetNextWindowPos(ctx, -500, -500)
-elseif show_main_window then
-    r.ImGui_SetNextWindowPos(ctx, 100, 100)
-    show_main_window = false
+    config.show_screenshot_window = true
+    r.ImGui_SetNextWindowPos(ctx, 10000, 10000)
+    
 end
-
 
 local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoScrollbar())
 dock = r.ImGui_GetWindowDockID(ctx)
