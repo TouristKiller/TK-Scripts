@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.9.7:
+-- @version 0.9.8:
 -- @changelog:
 --[[        
-+ Major overhaul of the Screenshot Window, along with multiple minor improvements
++ Fixed crash that occurred when hovering over plugins with "Show Plugin Name" enabled in settings
 
 
 
@@ -2204,8 +2204,7 @@ function ShowPluginScreenshot()
                            
                         r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
                         r.ImGui_Text(ctx, current_hovered_plugin)
-                        r.ImGui_EndChild(ctx)  -- Sluit ScreenshotSection
-                        --r.ImGui_EndChild(ctx)  -- Sluit MainContainer
+
                     end
                     r.ImGui_End(ctx)
                 end
