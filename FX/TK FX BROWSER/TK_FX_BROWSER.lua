@@ -1,10 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 0.9.8:
+-- @version 0.9.9:
 -- @changelog:
 --[[        
-+ Fixed crash that occurred when hovering over plugins with "Show Plugin Name" enabled in settings
-
++ Changed Browser Panel. Leftclick shows all folder plugins /Rightclick shows individual plugins
 
 
 
@@ -30,6 +29,7 @@ local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags
 local needs_font_update = false
 local selected_plugin = nil
 browser_search_term = ""
+local current_open_folder = nil
 
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
@@ -1884,7 +1884,15 @@ local function GetNextPlugin(current_plugin)
 end
 
 local function MakeScreenshot(plugin_name, callback, is_individual)
+    if not plugin_name then
+        log_to_file("Error: Attempted to make screenshot with nil plugin name")
+        if callback then callback() end
+        return false
+    end
+    
     log_to_file("Starting screenshot process for: " .. plugin_name .. " at " .. os.date("%Y-%m-%d %H:%M:%S"))
+  
+    
     log_to_file("Next Up: " .. GetNextPlugin(plugin_name))
     if CheckPluginCrashHistory(plugin_name) then
         log_to_file("Skipping previously crashed plugin: " .. plugin_name)
@@ -2499,6 +2507,13 @@ end
 
 
 local function ShowPluginContextMenu(plugin_name, menu_id)
+    if type(plugin_name) == "table" then
+        plugin_name = plugin_name.fx_name or plugin_name.name
+    end
+    
+    if not plugin_name or type(plugin_name) ~= "string" then
+        return
+    end
     if r.ImGui_IsItemClicked(ctx, 1) then
         r.ImGui_OpenPopup(ctx, "PluginContextMenu_" .. menu_id)
     end
@@ -2615,6 +2630,82 @@ local function ShowPluginContextMenu(plugin_name, menu_id)
         r.ImGui_EndPopup(ctx)
     end
 end
+
+local function ShowFXContextMenu(plugin, i)
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        --if selected_folder == "Current Project FX" or selected_folder == "Current Track FX" then
+            r.ImGui_OpenPopup(ctx, "FXContextMenu_" .. i)
+        --else
+           -- MakeScreenshot(plugin.fx_name, nil, true)
+        --end
+    end
+
+    if r.ImGui_BeginPopup(ctx, "FXContextMenu_" .. i) then
+        local track = selected_folder == "Current Project FX"
+            and r.GetTrack(0, plugin.track_number - 1)
+            or TRACK
+        local fx_index = selected_folder == "Current Project FX"
+            and (function()
+                local fx_count = r.TrackFX_GetCount(track)
+                for j = 0, fx_count - 1 do
+                    local retval, fx_name = r.TrackFX_GetFXName(track, j, "")
+                    if retval and fx_name == plugin.fx_name then
+                        return j
+                    end
+                end
+            end)()
+            or r.TrackFX_GetByName(TRACK, plugin.fx_name, false)
+
+        if r.ImGui_MenuItem(ctx, "Delete") then
+            r.TrackFX_Delete(track, fx_index)
+            if selected_folder == "Current Track FX" then
+                update_search_screenshots = true
+            end
+        end
+
+        if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
+            IS_COPYING_TO_ALL_TRACKS = true
+            local track_count = r.CountTracks(0)
+            for j = 0, track_count - 1 do
+                local target_track = r.GetTrack(0, j)
+                if target_track ~= track then
+                    r.TrackFX_CopyToTrack(track, fx_index, target_track, r.TrackFX_GetCount(target_track), false)
+                end
+            end
+            IS_COPYING_TO_ALL_TRACKS = false
+        end
+
+        if r.ImGui_MenuItem(ctx, "Copy Plugin") then
+            copied_plugin = {track = track, index = fx_index}
+        end
+
+        if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
+            if copied_plugin then
+                local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
+                r.TrackFX_AddByName(track, orig_name, false, -1000)
+            end
+        end
+
+        local is_enabled = r.TrackFX_GetEnabled(track, fx_index)
+        if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
+            r.TrackFX_SetEnabled(track, fx_index, not is_enabled)
+        end
+
+        local fx_name = plugin.fx_name
+        if table.contains(favorite_plugins, fx_name) then
+            if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                RemoveFromFavorites(fx_name)
+            end
+        else
+            if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                AddToFavorites(fx_name)
+            end
+        end
+
+        r.ImGui_EndPopup(ctx)
+    end
+end
+
 
 local function ShowFolderDropdown()
     if config.screenshot_view_type == 3 then return end
@@ -3006,7 +3097,6 @@ end
 local ITEMS_PER_PAGE = 30
 local function DrawBrowserItems(tbl, main_cat_name)
     for i = 1, #tbl do
-        -- Filter FX list based on search term
         local filtered_fx = {}
         for _, fx in ipairs(tbl[i].fx) do
             if browser_search_term == "" or fx:lower():find(browser_search_term:lower(), 1, true) then
@@ -3014,53 +3104,83 @@ local function DrawBrowserItems(tbl, main_cat_name)
             end
         end
 
-            -- Only show category if it has matching items
-            if #filtered_fx > 0 then
-                local node_open = r.ImGui_TreeNode(ctx, tbl[i].name)
-                local clicked = r.ImGui_IsItemClicked(ctx)
+        if #filtered_fx > 0 then
+            r.ImGui_PushID(ctx, i)
             
-            if clicked then
-                selected_folder = nil
-                tbl[i].current_page = 1
-                local start_idx = 1
-                local end_idx = math.min(ITEMS_PER_PAGE, #tbl[i].fx)
+            r.ImGui_Indent(ctx, 10)
+            local header_text = tbl[i].name
+            r.ImGui_Selectable(ctx, header_text)
+            r.ImGui_Unindent(ctx, 10)
+            
+            if not tbl[i].current_page then tbl[i].current_page = 1 end
+            local total_pages = math.ceil(#filtered_fx / ITEMS_PER_PAGE)
+            
+            if r.ImGui_IsItemClicked(ctx, 0) then
+                selected_folder = tbl[i].name
+                local start_idx = (tbl[i].current_page - 1) * ITEMS_PER_PAGE + 1
+                local end_idx = math.min(start_idx + ITEMS_PER_PAGE - 1, #filtered_fx)
                 
                 screenshot_search_results = {}
                 for j = start_idx, end_idx do
-                    table.insert(screenshot_search_results, {name = tbl[i].fx[j]})
+                    table.insert(screenshot_search_results, {name = filtered_fx[j]})
                 end
                 ClearScreenshotCache()
             end
+            
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                if current_open_folder == i then
+                    tbl[i].is_open = false
+                    current_open_folder = nil
+                else
+                    if current_open_folder then
+                        tbl[current_open_folder].is_open = false
+                    end
+                    tbl[i].is_open = true
+                    current_open_folder = i
+                end
+            end
 
-            if node_open then
-                if not tbl[i].current_page then tbl[i].current_page = 1 end
-                local total_pages = math.ceil(#filtered_fx / ITEMS_PER_PAGE)
+            if total_pages > 1 then
+                r.ImGui_Indent(ctx, 20)
+                if r.ImGui_Button(ctx, "<", 15, 15) then
+                    if tbl[i].current_page > 1 then
+                        tbl[i].current_page = tbl[i].current_page - 1
+                    else
+                        tbl[i].current_page = total_pages
+                    end
+                    local new_start = (tbl[i].current_page - 1) * ITEMS_PER_PAGE + 1
+                    local new_end = math.min(new_start + ITEMS_PER_PAGE - 1, #filtered_fx)
+                    screenshot_search_results = {}
+                    for j = new_start, new_end do
+                        table.insert(screenshot_search_results, {name = filtered_fx[j]})
+                    end
+                    ClearScreenshotCache()
+                end
+                r.ImGui_SameLine(ctx)
+                r.ImGui_Text(ctx, string.format("%d/%d", tbl[i].current_page, total_pages))
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, ">", 15, 15) then
+                    if tbl[i].current_page < total_pages then
+                        tbl[i].current_page = tbl[i].current_page + 1
+                    else
+                        tbl[i].current_page = 1
+                    end
+                    local new_start = (tbl[i].current_page - 1) * ITEMS_PER_PAGE + 1
+                    local new_end = math.min(new_start + ITEMS_PER_PAGE - 1, #filtered_fx)
+                    screenshot_search_results = {}
+                    for j = new_start, new_end do
+                        table.insert(screenshot_search_results, {name = filtered_fx[j]})
+                    end
+                    ClearScreenshotCache()
+                end
+                r.ImGui_Unindent(ctx, 20)
+            end
+
+            
+            if tbl[i].is_open then
+                r.ImGui_Indent(ctx, 20)
                 local start_idx = (tbl[i].current_page - 1) * ITEMS_PER_PAGE + 1
                 local end_idx = math.min(start_idx + ITEMS_PER_PAGE - 1, #filtered_fx)
-
-                -- Update screenshots voor huidige pagina als er geen individueel item is geselecteerd
-                if not selected_individual_item then
-                    screenshot_search_results = {}
-                    for j = start_idx, end_idx do
-                        table.insert(screenshot_search_results, {name = tbl[i].fx[j]})
-                    end
-                end
-
-                if total_pages > 1 then
-                    if r.ImGui_Button(ctx, "<<") and tbl[i].current_page > 1 then
-                        tbl[i].current_page = tbl[i].current_page - 1
-                        selected_individual_item = nil
-                        ClearScreenshotCache()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_Text(ctx, string.format("Page %d/%d", tbl[i].current_page, total_pages))
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, ">>") and tbl[i].current_page < total_pages then
-                        tbl[i].current_page = tbl[i].current_page + 1
-                        selected_individual_item = nil
-                        ClearScreenshotCache()
-                    end
-                end
 
                 for j = start_idx, end_idx do
                     if r.ImGui_Selectable(ctx, filtered_fx[j]) then
@@ -3069,14 +3189,17 @@ local function DrawBrowserItems(tbl, main_cat_name)
                         screenshot_search_results = {{name = filtered_fx[j]}}
                         ClearScreenshotCache()
                     end
-                    -- Rechtermuisklik menu toevoegen
-                    ShowPluginContextMenu(plugin_name, "unique_id_" .. i .. "_" .. j)    
+                    ShowPluginContextMenu(filtered_fx[j], "unique_id_" .. i .. "_" .. j)
                 end
-                r.ImGui_TreePop(ctx)
+                r.ImGui_Unindent(ctx, 20)
             end
+            
+            r.ImGui_PopID(ctx)
         end
     end
 end
+
+
 
 local function ItemMatchesSearch(item_name, search_term)
     search_term = search_term or ""
@@ -3102,123 +3225,174 @@ local function ShowBrowserPanel()
     -- Browserinhoud
     r.ImGui_BeginChild(ctx, "BrowserContent", -1, -1)
 
-        if r.ImGui_TreeNode(ctx, "FAVORITES") then
-            local fav_clicked = r.ImGui_IsItemClicked(ctx)
-            if fav_clicked then
-                selected_folder = "Favorites"
-                show_media_browser = false
-                show_sends_window = false
-                show_action_browser = false
-                screenshot_search_results = {}
-                for _, fav in ipairs(favorite_plugins) do
-                    table.insert(screenshot_search_results, {name = fav})
-                end
-                ClearScreenshotCache()
-            end
-            
-            for i, fav in ipairs(favorite_plugins) do
-                if ItemMatchesSearch(fav, browser_search_term) then     
-                    if r.ImGui_Selectable(ctx, fav) then
-                        selected_folder = nil
-                        screenshot_search_results = {{name = fav}}
-                        ClearScreenshotCache()
-                    end
-                    ShowPluginContextMenu(fav, "favorites_" .. i)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
 
-
-                end
-            end
-            r.ImGui_TreePop(ctx)
+    -- FAVORITES
+    r.ImGui_Selectable(ctx, "FAVORITES")
+    if r.ImGui_IsItemClicked(ctx, 0) then
+        selected_folder = "Favorites"
+        show_media_browser = false
+        show_sends_window = false
+        show_action_browser = false
+        screenshot_search_results = {}
+        for _, fav in ipairs(favorite_plugins) do
+            table.insert(screenshot_search_results, {name = fav})
         end
-        
-        if r.ImGui_TreeNode(ctx, "CURRENT TRACK FX") then
-            local track_clicked = r.ImGui_IsItemClicked(ctx)
-            if track_clicked then
-                selected_folder = "Current Track FX"
-                show_media_browser = false
-                show_sends_window = false
-                show_action_browser = false
-                screenshot_search_results = {}
-                local fx_list = GetCurrentTrackFX()
-                for _, fx in ipairs(fx_list) do
-                    if ItemMatchesSearch(fx.fx_name, browser_search_term) then
-                        table.insert(screenshot_search_results, {name = fx.fx_name})
-                    end
+        ClearScreenshotCache()
+    end
+    
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        favorites_is_open = not favorites_is_open
+    end
+    
+    if favorites_is_open then
+        r.ImGui_Indent(ctx, 10)
+        for i, fav in ipairs(favorite_plugins) do
+            if ItemMatchesSearch(fav, browser_search_term) then    
+                if r.ImGui_Selectable(ctx, fav) then
+                    selected_folder = nil
+                    screenshot_search_results = {{name = fav}}
+                    ClearScreenshotCache()
                 end
-                ClearScreenshotCache()
+                ShowPluginContextMenu(fav, "favorites_" .. i)
             end
-            
-            local current_track_fx = GetCurrentTrackFX()
-            for i, fx in ipairs(current_track_fx) do
-                if ItemMatchesSearch(fx.fx_name, browser_search_term) then
-                    if r.ImGui_Selectable(ctx, fx.fx_name) then
-                        selected_folder = nil
-                        screenshot_search_results = {{name = fx.fx_name}}
-                        ClearScreenshotCache()
-                    end
-                    ShowPluginContextMenu(fav, "current_track_fx_" .. i)
-                end
-            end
-            r.ImGui_TreePop(ctx)
         end
-        
-        if r.ImGui_TreeNode(ctx, "CURRENT PROJECT FX") then
-            local proj_clicked = r.ImGui_IsItemClicked(ctx)
-            if proj_clicked then
-                selected_folder = "Current Project FX"
-                show_media_browser = false
-                show_sends_window = false
-                show_action_browser = false
-                screenshot_search_results = {}
-                local fx_list = GetCurrentProjectFX()
-                for _, fx in ipairs(fx_list) do
-                    if ItemMatchesSearch(fx.fx_name, browser_search_term) then
-                        table.insert(screenshot_search_results, {name = fx.fx_name})
-                    end
-                end
-                ClearScreenshotCache()
+        r.ImGui_Unindent(ctx, 10)
+    end
+    
+    -- CURRENT TRACK FX
+    r.ImGui_Selectable(ctx, "CURRENT TRACK FX")
+    if r.ImGui_IsItemClicked(ctx, 0) then
+        selected_folder = "Current Track FX"
+        show_media_browser = false
+        show_sends_window = false
+        show_action_browser = false
+        screenshot_search_results = {}
+        local fx_list = GetCurrentTrackFX()
+        for _, fx in ipairs(fx_list) do
+            if ItemMatchesSearch(fx.fx_name, browser_search_term) then
+                table.insert(screenshot_search_results, {name = fx.fx_name})
             end
-            
-            local project_fx = GetCurrentProjectFX()
-            for i, fx in ipairs(project_fx) do
-                if ItemMatchesSearch(fx.fx_name, browser_search_term) then
-                    if r.ImGui_Selectable(ctx, fx.fx_name) then
-                        selected_folder = nil
-                        screenshot_search_results = {{name = fx.fx_name}}
-                        ClearScreenshotCache()
-                    end
-                    ShowPluginContextMenu(fav, "project_fx_" .. i)
-                end
-            end
-            r.ImGui_TreePop(ctx)
         end
+        ClearScreenshotCache()
+    end
+    
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        current_track_fx_is_open = not current_track_fx_is_open
+    end
+    
+    if current_track_fx_is_open then
+        r.ImGui_Indent(ctx, 10)
+        local current_track_fx = GetCurrentTrackFX()
+        for i, fx in ipairs(current_track_fx) do
+            if ItemMatchesSearch(fx.fx_name, browser_search_term) then
+                if r.ImGui_Selectable(ctx, fx.fx_name) then
+                    selected_folder = nil
+                    screenshot_search_results = {{name = fx.fx_name}}
+                    ClearScreenshotCache()
+                end
+                ShowFXContextMenu({
+                    fx_name = fx.fx_name,
+                    track_number = fx.track_number
+                }, i)
+            end
+        end
+        r.ImGui_Unindent(ctx, 10)
+    end
+    
+    -- CURRENT PROJECT FX
+    r.ImGui_Selectable(ctx, "CURRENT PROJECT FX")
+    if r.ImGui_IsItemClicked(ctx, 0) then
+        selected_folder = "Current Project FX"
+        show_media_browser = false
+        show_sends_window = false
+        show_action_browser = false
+        screenshot_search_results = {}
+        local fx_list = GetCurrentProjectFX()
+        for _, fx in ipairs(fx_list) do
+            if ItemMatchesSearch(fx.fx_name, browser_search_term) then
+                table.insert(screenshot_search_results, {name = fx.fx_name})
+            end
+        end
+        ClearScreenshotCache()
+    end
+    
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        current_project_fx_is_open = not current_project_fx_is_open
+    end
+    
+    if current_project_fx_is_open then
+        r.ImGui_Indent(ctx, 10)
+        local project_fx = GetCurrentProjectFX()
+        for i, fx in ipairs(project_fx) do
+            if ItemMatchesSearch(fx.fx_name, browser_search_term) then
+                if r.ImGui_Selectable(ctx, fx.fx_name) then
+                    selected_folder = nil
+                    screenshot_search_results = {{name = fx.fx_name}}
+                    ClearScreenshotCache()
+                end
+                ShowFXContextMenu({
+                    fx_name = fx.fx_name,
+                    track_number = fx.track_number
+                }, i)
+            end
+        end
+        r.ImGui_Unindent(ctx, 10)
+    end
+    
+    r.ImGui_PopStyleColor(ctx, 3)
+    r.ImGui_PopStyleVar(ctx)
+    
+    r.ImGui_Separator(ctx)
     
     for i = 1, #CAT_TEST do
         local category_name = CAT_TEST[i].name
         if (category_name == "ALL PLUGINS" and config.show_all_plugins) then
-            if r.ImGui_TreeNode(ctx, "ALL PLUGINS") then
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
+            if r.ImGui_CollapsingHeader(ctx, "ALL PLUGINS") then
                 DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
-                r.ImGui_TreePop(ctx)
             end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx)
         end
         
         if (category_name == "DEVELOPER" and config.show_developer) then
-            if r.ImGui_TreeNode(ctx, "DEVELOPER") then
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
+            if r.ImGui_CollapsingHeader(ctx, "DEVELOPER") then
                 DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
-                r.ImGui_TreePop(ctx)
             end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx)
         end
         
         if (category_name == "CATEGORY" and config.show_category) then
-            if r.ImGui_TreeNode(ctx, "CATEGORY") then
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
+            if r.ImGui_CollapsingHeader(ctx, "CATEGORY") then
                 DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
-             
-                r.ImGui_TreePop(ctx)
             end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx)
         end
         
+        
         if (category_name == "FOLDERS" and config.show_folders) then
-            if r.ImGui_TreeNode(ctx, "FOLDERS") then
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F) 
+            if r.ImGui_CollapsingHeader(ctx, "FOLDERS") then
                 for j = 1, #CAT_TEST[i].list do
                     local show_folder = browser_search_term == ""
                     for k = 1, #CAT_TEST[i].list[j].fx do
@@ -3227,59 +3401,95 @@ local function ShowBrowserPanel()
                             break
                         end
                     end
-                    
+                   
                     if show_folder then
-                        if r.ImGui_TreeNode(ctx, CAT_TEST[i].list[j].name) then
-                            if r.ImGui_IsItemClicked(ctx) then
-                                selected_folder = CAT_TEST[i].list[j].name
-                                selected_plugin = nil
-                                UpdateLastViewedFolder(selected_folder)
-                                screenshot_search_results = nil
-                                show_media_browser = false
-                                show_sends_window = false
-                                show_action_browser = false
-                                ClearScreenshotCache()
-                                GetPluginsForFolder(selected_folder)
+                        r.ImGui_PushID(ctx, j)
+                        r.ImGui_Indent(ctx, 10)
+                        local header_text = CAT_TEST[i].list[j].name
+                        r.ImGui_Selectable(ctx, header_text)
+                        r.ImGui_Unindent(ctx, 10)
+                        
+                        if r.ImGui_IsItemClicked(ctx, 0) then
+                            selected_folder = CAT_TEST[i].list[j].name
+                            selected_plugin = nil
+                            UpdateLastViewedFolder(selected_folder)
+                            screenshot_search_results = nil
+                            show_media_browser = false
+                            show_sends_window = false
+                            show_action_browser = false
+                            ClearScreenshotCache()
+                            GetPluginsForFolder(selected_folder)
+                        end
+                        
+                        if r.ImGui_IsItemClicked(ctx, 1) then
+                            if current_open_folder == j then
+                                CAT_TEST[i].list[j].is_open = false
+                                current_open_folder = nil
+                            else
+                                -- Close previously open folder
+                                if current_open_folder then
+                                    CAT_TEST[i].list[current_open_folder].is_open = false
+                                end
+                                CAT_TEST[i].list[j].is_open = true
+                                current_open_folder = j
                             end
-                            
+                        end
+                        
+                        if CAT_TEST[i].list[j].is_open then
+                            r.ImGui_Indent(ctx, 20)
                             for k = 1, #CAT_TEST[i].list[j].fx do
                                 local plugin_name = CAT_TEST[i].list[j].fx[k]
                                 if plugin_name:lower():find(browser_search_term:lower(), 1, true) then
                                     if r.ImGui_Selectable(ctx, plugin_name) then
                                         selected_plugin = plugin_name
-                                        selected_folder = CAT_TEST[i].list[j].name
+                                        selected_folder = nil  -- Voorkom laden van hele map
+                                        screenshot_search_results = {{name = plugin_name}}
                                         ClearScreenshotCache()
-                                        screenshot_search_results = {
-                                            { name = plugin_name }
-                                        }
                                         LoadPluginScreenshot(plugin_name)
                                     end
                                     ShowPluginContextMenu(plugin_name, "folders_" .. j .. "_" .. k)
                                 end
                             end
-                            r.ImGui_TreePop(ctx)
+                            r.ImGui_Unindent(ctx, 20)
                         end
+                        
+                        r.ImGui_PopID(ctx)
                     end
                 end
-                r.ImGui_TreePop(ctx)
             end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx)
         end
-        
+
         if (category_name == "FX CHAINS" and config.show_fx_chains) then
-            if r.ImGui_TreeNode(ctx, "FX CHAINS") then
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1) 
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
+            if r.ImGui_CollapsingHeader(ctx, "FX CHAINS") then
+                r.ImGui_Indent(ctx, 10)
                 DrawFxChains(CAT_TEST[i].list)
-                r.ImGui_TreePop(ctx)
+                r.ImGui_Unindent(ctx, 10)
             end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx)
         end
         
         if (category_name == "TRACK TEMPLATES" and config.show_track_templates) then
-            if r.ImGui_TreeNode(ctx, "TRACK TEMPLATES") then
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1) 
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
+            if r.ImGui_CollapsingHeader(ctx, "TRACK TEMPLATES") then
+                r.ImGui_Indent(ctx, 10)
                 DrawTrackTemplates(CAT_TEST[i].list)
-                r.ImGui_TreePop(ctx)
+                r.ImGui_Unindent(ctx, 10)
             end
-        end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx)
+        end  
     end
-    
+    r.ImGui_Separator(ctx)
     -- Extra opties
     if config.show_container then
         if r.ImGui_Selectable(ctx, "CONTAINER") then
@@ -3431,8 +3641,12 @@ local function ShowScreenshotWindow()
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
     local main_window_height = r.ImGui_GetWindowHeight(ctx)
-    local total_min_width = 345  -- 200 + 140 + 5 padding
-    local min_width = config.show_browser_panel and total_min_width or 140
+
+    local browser_panel_width = config.show_browser_panel and config.browser_panel_width or 0
+    local screenshot_min_width = 145  -- Minimum width for screenshot section
+    local total_min_width = browser_panel_width + screenshot_min_width + 5  -- Add padding
+
+    local min_width = config.show_browser_panel and total_min_width or screenshot_min_width
     local window_flags = r.ImGui_WindowFlags_NoTitleBar() |
                     r.ImGui_WindowFlags_NoFocusOnAppearing() |
                     r.ImGui_WindowFlags_NoScrollbar()
@@ -4659,71 +4873,7 @@ local function ShowScreenshotWindow()
                                                     end
                                                 end
                                             end                          
-                                            if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
-                                                if selected_folder == "Current Project FX" or selected_folder == "Current Track FX" then
-                                                    r.ImGui_OpenPopup(ctx, "FXContextMenu_" .. i)
-                                                else
-                                                    MakeScreenshot(plugin.fx_name, nil, true)
-                                                end
-                                            end                  
-                                            if r.ImGui_BeginPopup(ctx, "FXContextMenu_" .. i) then
-                                                local track = selected_folder == "Current Project FX" 
-                                                    and r.GetTrack(0, plugin.track_number - 1) 
-                                                    or TRACK
-                                                local fx_index = selected_folder == "Current Project FX"
-                                                    and (function()
-                                                        local fx_count = r.TrackFX_GetCount(track)
-                                                        for j = 0, fx_count - 1 do
-                                                            local retval, fx_name = r.TrackFX_GetFXName(track, j, "")
-                                                            if retval and fx_name == plugin.fx_name then
-                                                                return j
-                                                            end
-                                                        end
-                                                    end)()
-                                                    or r.TrackFX_GetByName(TRACK, plugin.fx_name, false)                            
-                                                if r.ImGui_MenuItem(ctx, "Delete") then
-                                                    r.TrackFX_Delete(track, fx_index)
-                                                    if selected_folder == "Current Track FX" then
-                                                        update_search_screenshots = true
-                                                    end
-                                                end           
-                                                if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
-                                                    IS_COPYING_TO_ALL_TRACKS = true
-                                                    local track_count = r.CountTracks(0)
-                                                    for j = 0, track_count - 1 do
-                                                        local target_track = r.GetTrack(0, j)
-                                                        if target_track ~= track then
-                                                            r.TrackFX_CopyToTrack(track, fx_index, target_track, r.TrackFX_GetCount(target_track), false)
-                                                        end
-                                                    end
-                                                    IS_COPYING_TO_ALL_TRACKS = false
-                                                end                                           
-                                                if r.ImGui_MenuItem(ctx, "Copy Plugin") then
-                                                    copied_plugin = {track = track, index = fx_index}
-                                                end                                           
-                                                if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
-                                                    if copied_plugin then
-                                                        local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
-                                                        r.TrackFX_AddByName(track, orig_name, false, -1000)
-                                                    end
-                                                end                                            
-                                                local is_enabled = r.TrackFX_GetEnabled(track, fx_index)
-                                                if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
-                                                    r.TrackFX_SetEnabled(track, fx_index, not is_enabled)
-                                                end                                            
-                                                local fx_name = plugin.fx_name
-                                                if table.contains(favorite_plugins, fx_name) then
-                                                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                                                        RemoveFromFavorites(fx_name)
-                                                    end
-                                                else
-                                                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                                                        AddToFavorites(fx_name)
-                                                    end
-                                                end
-                                            
-                                                r.ImGui_EndPopup(ctx)
-                                            end
+                                            ShowFXContextMenu(plugin, i)
                                             if config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] then
                                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                                 r.ImGui_Text(ctx, plugin.fx_name)
@@ -4855,7 +5005,34 @@ local function ShowScreenshotWindow()
                                             r.GetSetMediaTrackInfo_String(new_track, "P_NAME", fx.name .. " Send", true)
                                         end
                                     end
-                                    
+                                                                
+                                    if r.ImGui_MenuItem(ctx, "Add with Multi-Output Setup") then
+                                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                            r.TrackFX_AddByName(TRACK, fx.name, false, -1000)
+                                            
+                                            local num_outputs = tonumber(fx.name:match("%((%d+)%s+out%)")) or 0
+                                            local num_receives = math.floor(num_outputs / 2) - 1
+                                            
+                                            r.SetMediaTrackInfo_Value(TRACK, "I_NCHAN", num_outputs)
+                                            
+                                            for k = 1, num_receives do
+                                                local track_idx = r.CountTracks(0)
+                                                r.InsertTrackAtIndex(track_idx, true)
+                                                local new_track = r.GetTrack(0, track_idx)
+                                                
+                                                r.CreateTrackSend(TRACK, new_track)
+                                                local send_idx = r.GetTrackNumSends(TRACK, 0) - 1
+                                                
+                                                r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_SRCCHAN", k*2)
+                                                r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_DSTCHAN", 0)
+                                                r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_SENDMODE", 3)
+                                                r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_MIDIFLAGS", 0)
+                                                
+                                                local output_num = (k * 2) + 1
+                                                r.GetSetMediaTrackInfo_String(new_track, "P_NAME", fx.name .. " Out " .. output_num .. "-" .. (output_num + 1), true)
+                                            end
+                                        end
+                                    end
                                     if config.hidden_names[fx.name] then
                                         if r.ImGui_MenuItem(ctx, "Show Name") then
                                             config.hidden_names[fx.name] = nil
@@ -6734,8 +6911,6 @@ if visible then
         local screenshot_visible = ShowScreenshotWindow()
         if screenshot_visible then
             r.ImGui_EndChild(ctx)  -- Sluit ScreenshotSection
-            --r.ImGui_EndChild(ctx)  -- Sluit MainContainer
-           
             r.ImGui_End(ctx)
         end
         r.ImGui_PopID(ctx)
