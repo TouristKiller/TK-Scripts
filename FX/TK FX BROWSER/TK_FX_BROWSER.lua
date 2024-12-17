@@ -33,49 +33,53 @@ local current_open_folder = nil
 
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
-function ThirdPartyDeps()
-    local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
-    local fx_browser_reapack = '"sexan fx browser parser v7"'
-    local reapack_process
-    local repos = {
-        { name = "Sexan_Scripts",   url = 'https://github.com/GoranKovac/ReaScripts/raw/master/index.xml' }
-    }
-    for i = 1, #repos do
-        local retinfo, url, enabled, autoInstall = r.ReaPack_GetRepositoryInfo(repos[i].name)
-        if not retinfo then
-            retval, error = r.ReaPack_AddSetRepository(repos[i].name, repos[i].url, true, 0)
-            reapack_process = true
-        end
-    end
-    if reapack_process then
-        r.ShowMessageBox("Added Third-Party ReaPack Repositories", "ADDING REPACK REPOSITORIES", 0)
-        r.ReaPack_ProcessQueue(true)
-        reapack_process = nil
-    end
-    if not reapack_process then
-        local deps = {}
-        if not r.ImGui_GetBuiltinPath then
-           deps[#deps + 1] = '"Dear Imgui"'
-        end
-        if r.file_exists(fx_browser) then
-            dofile(fx_browser)
-        else
-            deps[#deps + 1] = fx_browser_reapack
-        end        
-        if #deps ~= 0 then
-            r.ShowMessageBox("Need Additional Packages.\nPlease Install it in next window", "MISSING DEPENDENCIES", 0)
-            r.ReaPack_BrowsePackages(table.concat(deps, " OR "))
-            return true
-        end
-    end
-end
-if ThirdPartyDeps() then return end
-local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
-if r.file_exists(fx_browser) then
-    dofile(fx_browser)
-else
-    error("Sexan FX Browser Parser not found. Please run the script again to install dependencies.")
-end
+-- function ThirdPartyDeps()
+--     local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
+--     local fx_browser_reapack = '"sexan fx browser parser v7"'
+--     local reapack_process
+--     local repos = {
+--         { name = "Sexan_Scripts",   url = 'https://github.com/GoranKovac/ReaScripts/raw/master/index.xml' }
+--     }
+--     for i = 1, #repos do
+--         local retinfo, url, enabled, autoInstall = r.ReaPack_GetRepositoryInfo(repos[i].name)
+--         if not retinfo then
+--             retval, error = r.ReaPack_AddSetRepository(repos[i].name, repos[i].url, true, 0)
+--             reapack_process = true
+--         end
+--     end
+--     if reapack_process then
+--         r.ShowMessageBox("Added Third-Party ReaPack Repositories", "ADDING REPACK REPOSITORIES", 0)
+--         r.ReaPack_ProcessQueue(true)
+--         reapack_process = nil
+--     end
+--     if not reapack_process then
+--         local deps = {}
+--         if not r.ImGui_GetBuiltinPath then
+--            deps[#deps + 1] = '"Dear Imgui"'
+--         end
+--         if r.file_exists(fx_browser) then
+--             dofile(fx_browser)
+--         else
+--             deps[#deps + 1] = fx_browser_reapack
+--         end        
+--         if #deps ~= 0 then
+--             r.ShowMessageBox("Need Additional Packages.\nPlease Install it in next window", "MISSING DEPENDENCIES", 0)
+--             r.ReaPack_BrowsePackages(table.concat(deps, " OR "))
+--             return true
+--         end
+--     end
+-- end
+-- if ThirdPartyDeps() then return end
+-- local fx_browser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
+-- if r.file_exists(fx_browser) then
+--     dofile(fx_browser)
+-- else
+--     error("Sexan FX Browser Parser not found. Please run the script again to install dependencies.")
+-- end
+
+----- USE SEXAN FX BROWSER PARSER V7 
+require("Sexan_FX_Browser")
+
 --------------------------------------------------------------------------
 -- ACTION BROWSER
 local allActions = {}
@@ -102,9 +106,9 @@ ctx = r.ImGui_CreateContext('TK FX BROWSER')
 --------------------------------------------------------------------------
 -- FX LIST
 local TRACK, LAST_USED_FX, FILTER, ADDFX_Sel_Entry
-local FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
-if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
-    FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+local FX_LIST_TEST, CAT_TEST = ReadFXFile()
+if not FX_LIST_TEST or not CAT_TEST then
+    FX_LIST_TEST, CAT_TEST = MakeFXFiles()
 end
 local PLUGIN_LIST = GetFXTbl() 
 
@@ -231,6 +235,7 @@ local function SetDefaultConfig()
         show_only_dropdown = false,
         create_sends_folder = false,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
+        show_notes_widget =  false,
         track_notes_color = track_notes_color or 0xFFFFB366,  -- Default orange
         item_notes_color = item_notes_color or 0x6699FFFF,    -- Default blue
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
@@ -678,7 +683,7 @@ local function ShowPluginManagerTab()
         InitializeFilteredPlugins()
     end
     if r.ImGui_Button(ctx, "Update Plugin List", 110) then
-        FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+        FX_LIST_TEST, CAT_TEST = MakeFXFiles()
     end
     r.ImGui_SameLine(ctx)
     r.ImGui_PushItemWidth(ctx, 120)
@@ -839,7 +844,7 @@ local function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 540
+    local window_height = 620
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -1095,6 +1100,10 @@ local function ShowConfigWindow()
             r.ImGui_SetCursorPosX(ctx, column4_width)
             r.ImGui_SameLine(ctx)
             _, config.hideMeter = r.ImGui_Checkbox(ctx, "Hide Meter", config.hideMeter)
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.show_notes_widget = r.ImGui_Checkbox(ctx, "Show Notation", config.show_notes_widget)
+            r.ImGui_SameLine(ctx)
 
             r.ImGui_Dummy(ctx, 0, 5)
             NewSection("SCREENSHOT WINDOW:")
@@ -6191,47 +6200,50 @@ local function ShowTrackFX()
         end       
         r.ImGui_EndChild(ctx)
         end
-        r.ImGui_Separator(ctx)
-        -- Notation:
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
+        
+        if config.show_notes_widget then
+            r.ImGui_Separator(ctx)
+            -- Notation:
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
 
-        -- Eerst de kleurknop
-        if r.ImGui_ColorButton(ctx, "##notes_color", config.track_notes_color, 0, 13, 13) then
-            r.ImGui_OpenPopup(ctx, "NotesColorPopup")
-        end
-
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Selectable(ctx, show_notes and " - " or " + ") then
-            show_notes = not show_notes
-        end
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_Text(ctx, "Notes:")
-
-        -- Save knop rechts uitlijnen
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        local text_width = r.ImGui_CalcTextSize(ctx, "Save")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, window_width - text_width - 5)
-        if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
-            SaveNotes()
-        end
-
-        -- Color picker popup
-        if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
-            local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.track_notes_color)
-            if changed then
-                config.track_notes_color = new_color
-                SaveConfig()
+            -- Eerst de kleurknop
+            if r.ImGui_ColorButton(ctx, "##notes_color", config.track_notes_color, 0, 13, 13) then
+                r.ImGui_OpenPopup(ctx, "NotesColorPopup")
             end
-            r.ImGui_EndPopup(ctx)
-        end
 
-        r.ImGui_PopStyleColor(ctx, 2)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Selectable(ctx, show_notes and " - " or " + ") then
+                show_notes = not show_notes
+            end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Notes:")
+
+            -- Save knop rechts uitlijnen
+            local window_width = r.ImGui_GetWindowWidth(ctx)
+            local text_width = r.ImGui_CalcTextSize(ctx, "Save")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, window_width - text_width - 5)
+            if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
+                SaveNotes()
+            end
+
+            -- Color picker popup
+            if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
+                local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.track_notes_color)
+                if changed then
+                    config.track_notes_color = new_color
+                    SaveConfig()
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+
+            r.ImGui_PopStyleColor(ctx, 2)
+        
 
         -- Notes section
-        if show_notes then
+            if show_notes then
             local track_guid = r.GetTrackGUID(TRACK)
             if not notes[track_guid] then
                 notes[track_guid] = LoadNotes()[track_guid] or ""
@@ -6246,7 +6258,8 @@ local function ShowTrackFX()
                 end
                 r.ImGui_EndChild(ctx)
             end
-        r.ImGui_PopStyleColor(ctx)       
+            r.ImGui_PopStyleColor(ctx)       
+        end
     end
 end
 
