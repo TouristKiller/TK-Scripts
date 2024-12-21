@@ -1,10 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.4.0:
+-- @version 0.4.1:
 -- @changelog:
 --[[            
-+ Added autosave (first implementation, needs some more testing)
-+ Added gradient mode (vertical and horizontal)
++ Added Button State
++ Added Folder Frame (frames the Folder/child section)
++ Added Truncated Track Names (Chouse 16 /32 caracters)
 
 ]]----------------------------------------------------------------------------------       
 
@@ -19,6 +20,13 @@ local last_project = nil
 local last_track_count = 0
 local should_show_track = false
 local overlay_enabled = false
+
+function SetButtonState(set)
+    local is_new_value, filename, sec, cmd, mode, resolution, val = reaper.get_action_context()
+    reaper.SetToggleCommandState(sec, cmd, set or 0)
+    reaper.RefreshToolbar2(sec, cmd)
+end
+
 
 local default_settings = {
     text_opacity = 1.0,
@@ -56,7 +64,8 @@ local default_settings = {
     gradient_enabled = false,
     gradient_direction = 1, -- 1 = horizontal, 2 = vertical
     gradient_start_alpha = 1.0,
-    gradient_end_alpha = 0.0
+    gradient_end_alpha = 0.0,
+    track_name_length = 1, -- 1 = niet inkorten, 2 = 16 tekens, 3 = 32 tekens
 }
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -115,6 +124,7 @@ CreateFonts()
 end 
 
 
+
 function SaveSettings()
     local section = "TK_TRACKNAMES"
     r.SetExtState(section, "text_opacity", tostring(settings.text_opacity), true)
@@ -153,6 +163,7 @@ function SaveSettings()
     r.SetExtState(section, "gradient_direction", tostring(settings.gradient_direction), true)
     r.SetExtState(section, "gradient_start_alpha", tostring(settings.gradient_start_alpha), true)
     r.SetExtState(section, "gradient_end_alpha", tostring(settings.gradient_end_alpha), true)
+    r.SetExtState(section, "track_name_length", tostring(settings.track_name_length), true)
 end
 
 function LoadSettings()
@@ -193,6 +204,7 @@ function LoadSettings()
     settings.gradient_direction = tonumber(r.GetExtState(section, "gradient_direction")) or 1
     settings.gradient_start_alpha = tonumber(r.GetExtState(section, "gradient_start_alpha")) or 1.0
     settings.gradient_end_alpha = tonumber(r.GetExtState(section, "gradient_end_alpha")) or 0.0
+    settings.track_name_length = tonumber(r.GetExtState(section, "track_name_length")) or 1
 end
 
 function RefreshProjectState()
@@ -458,6 +470,26 @@ function ShowSettingsWindow()
                 r.ImGui_EndCombo(ctx)
             --end
         end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        r.ImGui_Text(ctx, "Name length:")
+        r.ImGui_SameLine(ctx, column_width * 3)
+        r.ImGui_SetNextItemWidth(ctx, 100)
+        if r.ImGui_BeginCombo(ctx, "##Track name length", 
+            settings.track_name_length == 1 and "Full length" or
+            settings.track_name_length == 2 and "Max 16 chars" or
+            "Max 32 chars") then
+            
+            if r.ImGui_Selectable(ctx, "Full length", settings.track_name_length == 1) then
+                settings.track_name_length = 1
+            end
+            if r.ImGui_Selectable(ctx, "Max 16 chars", settings.track_name_length == 2) then
+                settings.track_name_length = 2
+            end
+            if r.ImGui_Selectable(ctx, "Max 32 chars", settings.track_name_length == 3) then
+                settings.track_name_length = 3
+            end
+            r.ImGui_EndCombo(ctx)
+        end
 
         r.ImGui_Separator(ctx)
         -- Derde rij
@@ -479,14 +511,20 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, column_width * 2)
         --if settings.show_track_colors then
             r.ImGui_SetNextItemWidth(ctx, 100)
-            if r.ImGui_BeginCombo(ctx, "##Overlay Style", settings.overlay_style == 1 and "Solid" or "Frame") then
-                if r.ImGui_Selectable(ctx, "Solid", settings.overlay_style == 1) then
-                    settings.overlay_style = 1
-                end
-                if r.ImGui_Selectable(ctx, "Frame", settings.overlay_style == 2) then
-                    settings.overlay_style = 2
-                end
-                r.ImGui_EndCombo(ctx)
+            if r.ImGui_BeginCombo(ctx, "##Overlay Style", 
+            settings.overlay_style == 1 and "Solid" or 
+            settings.overlay_style == 2 and "Frame" or 
+            "Folder Frame") then
+            if r.ImGui_Selectable(ctx, "Solid", settings.overlay_style == 1) then
+                settings.overlay_style = 1
+            end
+            if r.ImGui_Selectable(ctx, "Frame", settings.overlay_style == 2) then
+                settings.overlay_style = 2
+            end
+            if r.ImGui_Selectable(ctx, "Folder Frame", settings.overlay_style == 3) then
+                settings.overlay_style = 3
+            end
+            r.ImGui_EndCombo(ctx)
             end
         --end
         r.ImGui_SameLine(ctx, column_width * 3)
@@ -535,7 +573,7 @@ function ShowSettingsWindow()
         if not settings.show_track_colors then
             r.ImGui_BeginDisabled(ctx)
         end
-        if settings.overlay_style == 2 then
+        if settings.overlay_style == 2 or settings.overlay_style == 3 then
             changed, settings.frame_thickness = r.ImGui_SliderDouble(ctx, "Frame Thickness", settings.frame_thickness, 1.0, 20.0)
         end
         changed, settings.overlay_alpha = r.ImGui_SliderDouble(ctx, "Color Intensity", settings.overlay_alpha, 0.0, 1.0)
@@ -675,6 +713,41 @@ function DrawTrackIcon(track, x, y)
             r.ImGui_Image_Destroy(icon_texture)
         end
     end
+end
+
+function GetFolderBoundaries(track)
+    if not track then return nil end
+    
+    local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+    if folder_depth ~= 1 then return nil end
+    
+    local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
+    local current_depth = 1
+    local end_idx = track_idx
+    local total_tracks = r.CountTracks(0)
+    
+    while current_depth > 0 and end_idx < total_tracks - 1 do
+        end_idx = end_idx + 1
+        local child_track = r.GetTrack(0, end_idx)
+        if not child_track then break end
+        
+        local child_depth = r.GetMediaTrackInfo_Value(child_track, "I_FOLDERDEPTH")
+        current_depth = current_depth + child_depth
+    end
+    
+    return track_idx, end_idx
+end
+
+
+function TruncateTrackName(name, mode)
+    if mode == 1 then
+        return name -- niet inkorten
+    elseif mode == 2 and #name > 16 then
+        return name:sub(1, 13) .. "..."
+    elseif mode == 3 and #name > 32 then
+        return name:sub(1, 29) .. "..."
+    end
+    return name
 end
 
 function GetBounds(hwnd)
@@ -869,7 +942,7 @@ if overlay_visible then
                                 colors_cache[i])
                         end
                     end
-                else
+                elseif settings.overlay_style == 2 then
                     -- Frame drawing
                     local thickness = settings.frame_thickness
                     r.ImGui_DrawList_AddRect(draw_list,
@@ -881,6 +954,30 @@ if overlay_visible then
                         0,
                         0,
                         thickness)
+
+                else -- settings.overlay_style == 3
+                    if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                        local start_idx, end_idx = GetFolderBoundaries(track)
+                        if start_idx and end_idx then
+                            local start_track = r.GetTrack(0, start_idx)
+                            local end_track = r.GetTrack(0, end_idx)
+                                
+                            local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY")
+                            local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY")
+                            local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH")
+                                
+                            local thickness = settings.frame_thickness
+                            r.ImGui_DrawList_AddRect(draw_list,
+                                left / scale + thickness/2,
+                                (top + start_y + header_height) / scale + thickness/2,
+                                right / scale - thickness/2,
+                                (top + end_y + end_height + header_height) / scale - thickness/2,
+                                colors_cache[start_idx],
+                                0,
+                                0,
+                                thickness)
+                        end
+                    end
                 end
             end
         end
@@ -894,7 +991,7 @@ end
         local button_flags = flags | r.ImGui_WindowFlags_TopMost()
         local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, button_flags)
         if button_visible then
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 10.0)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
             r.ImGui_PushFont(ctx, settings_font)
             if r.ImGui_Button(ctx, "S") then
                 settings_visible = not settings_visible
@@ -905,6 +1002,10 @@ end
             r.ImGui_End(ctx)
         end
     end
+
+
+
+
 
     local text_flags = flags | r.ImGui_WindowFlags_NoInputs() 
     r.ImGui_SetNextWindowPos(ctx, arrange_x / scale, arrange_y / scale)
@@ -923,6 +1024,7 @@ end
         for i = 0, track_count - 1 do
             local track = r.GetTrack(0, i)
             local _, track_name = r.GetTrackName(track)
+            
             local text_width = r.ImGui_CalcTextSize(ctx, track_name)
             max_width = math.max(max_width, text_width)
         end
@@ -958,7 +1060,7 @@ end
 
                 if should_show_track then
                     local _, track_name = r.GetTrackName(track)
-                    local display_name = track_name
+                    display_name = TruncateTrackName(track_name, settings.track_name_length)
                     
                     if settings.show_first_fx then
                         local fx_count = r.TrackFX_GetCount(track)
@@ -995,6 +1097,7 @@ end
                         
                         for i = #parents, 1, -1 do
                             local _, parent_name = r.GetTrackName(parents[i])
+                            parent_name = TruncateTrackName(parent_name, settings.track_name_length)
                             if combined_name == "" then
                                 combined_name = parent_name
                             else
@@ -1177,8 +1280,11 @@ local success = pcall(function()
         UpdateGridColors()
         UpdateBackgroundColors()
     end
+    SetButtonState(1)
     r.defer(loop)
 end)
+
+r.atexit(function() SetButtonState(0) end)
 if not success then
     r.ShowConsoleMsg("Script error occurred\n")
 end

@@ -69,10 +69,11 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.4.0" author="TouristKiller" time="2024-12-11T22:30:00Z">
+        <version name="0.4.1" author="TouristKiller" time="2024-12-22T00:30:00Z">
             <changelog><![CDATA[           
-+ Added autosave (first implementation, needs some more testing)
-+ Added gradient mode (vertical and horizontal)
++ Added Button State
++ Added Folder Frame (frames the Folder/child section)
++ Added Truncated Track Names (Chouse 16 /32 caracters)
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
