@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.4.2:
+-- @version 0.4.3:
 -- @changelog:
 --[[            
 + Bugfix: Selection of options works better now
@@ -127,7 +127,7 @@ end
 
 
 function SaveSettings()
-    local section = "TK_TRACKNAMES2"
+    local section = "TK_TRACKNAMES"
     r.SetExtState(section, "text_opacity", tostring(settings.text_opacity), true)
     r.SetExtState(section, "show_parent_tracks", settings.show_parent_tracks and "1" or "0", true)
     r.SetExtState(section, "show_child_tracks", settings.show_child_tracks and "1" or "0", true)
@@ -168,7 +168,7 @@ function SaveSettings()
 end
 
 function LoadSettings()
-    local section = "TK_TRACKNAMES2"
+    local section = "TK_TRACKNAMES"
     settings.text_opacity = tonumber(r.GetExtState(section, "text_opacity")) or 1.0
     settings.show_parent_tracks = r.GetExtState(section, "show_parent_tracks") == "1"
     settings.show_child_tracks = r.GetExtState(section, "show_child_tracks") == "1"
@@ -433,7 +433,7 @@ function ShowSettingsWindow()
             if settings.autosave_enabled then
                 SaveSettings()
             end
-            r.SetExtState("TK_TRACKNAMES2", "settings_visible", "0", false)
+            r.SetExtState("TK_TRACKNAMES", "settings_visible", "0", false)
         end
         r.ImGui_PopStyleColor(ctx, 3)
         r.ImGui_Separator(ctx)        
@@ -805,7 +805,7 @@ end
 
 
 function loop()
-    settings_visible = r.GetExtState("TK_TRACKNAMES2", "settings_visible") == "1"
+    settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
         ctx = r.ImGui_CreateContext('Track Names')
         CreateFonts()
@@ -1038,7 +1038,7 @@ end
             r.ImGui_PushFont(ctx, settings_font)
             if r.ImGui_Button(ctx, "S") then
                 settings_visible = not settings_visible
-                r.SetExtState("TK_TRACKNAMES2", "settings_visible", settings_visible and "1" or "0", false)
+                r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
             end
             r.ImGui_PopFont(ctx)
             r.ImGui_PopStyleVar(ctx)
