@@ -1,11 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.4.1:
+-- @version 0.4.2:
 -- @changelog:
 --[[            
-+ Added Button State
-+ Added Folder Frame (frames the Folder/child section)
-+ Added Truncated Track Names (Chouse 16 /32 caracters)
++ Bugfix: Selection of options works better now
 
 ]]----------------------------------------------------------------------------------       
 
@@ -18,8 +16,10 @@ local last_update_time = 0
 local update_interval = 0.05 
 local last_project = nil
 local last_track_count = 0
-local should_show_track = false
+--local should_show_track = false
 local overlay_enabled = false
+
+
 
 function SetButtonState(set)
     local is_new_value, filename, sec, cmd, mode, resolution, val = reaper.get_action_context()
@@ -66,6 +66,7 @@ local default_settings = {
     gradient_start_alpha = 1.0,
     gradient_end_alpha = 0.0,
     track_name_length = 1, -- 1 = niet inkorten, 2 = 16 tekens, 3 = 32 tekens
+    all_text_enabled = true,
 }
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -104,7 +105,7 @@ local fonts = {
     "Liberation Sans",
     "DejaVu Sans"
 }
-
+-- color voor tekst en label
 local color_modes = {"White", "Black", "Track Color", "Complementary"}
 local font_objects = {}
 local settings_font
@@ -126,7 +127,7 @@ end
 
 
 function SaveSettings()
-    local section = "TK_TRACKNAMES"
+    local section = "TK_TRACKNAMES2"
     r.SetExtState(section, "text_opacity", tostring(settings.text_opacity), true)
     r.SetExtState(section, "show_parent_tracks", settings.show_parent_tracks and "1" or "0", true)
     r.SetExtState(section, "show_child_tracks", settings.show_child_tracks and "1" or "0", true)
@@ -167,7 +168,7 @@ function SaveSettings()
 end
 
 function LoadSettings()
-    local section = "TK_TRACKNAMES"
+    local section = "TK_TRACKNAMES2"
     settings.text_opacity = tonumber(r.GetExtState(section, "text_opacity")) or 1.0
     settings.show_parent_tracks = r.GetExtState(section, "show_parent_tracks") == "1"
     settings.show_child_tracks = r.GetExtState(section, "show_child_tracks") == "1"
@@ -214,6 +215,7 @@ function RefreshProjectState()
         UpdateBackgroundColors()
     end
     reaper.UpdateArrange()
+    last_update_time = 0  -- Force immediate update
 end
 
 function GetTextColor(track, is_child)
@@ -266,6 +268,23 @@ function GetTextColor(track, is_child)
         end
         local r_val, g_val, b_val = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
         return r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
+    end
+end
+
+local function GetLabelColor(track)
+    if settings.label_color_mode == 1 then -- White
+        return r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.label_alpha)
+    elseif settings.label_color_mode == 2 then -- Black
+        return r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
+    elseif settings.label_color_mode == 3 then -- Track Color
+        local r_val, g_val, b_val = r.ColorFromNative(r.GetTrackColor(track))
+        return r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, settings.label_alpha)
+    else -- Complementary
+        local r_val, g_val, b_val = r.ColorFromNative(r.GetTrackColor(track))
+        local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val/255, g_val/255, b_val/255)
+        h = (h + 0.5) % 1.0
+        local r_val, g_val, b_val = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
+        return r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.label_alpha)
     end
 end
 
@@ -367,7 +386,16 @@ function BlendColor(base, blend, mode)
     return reaper.ColorToNative(math.floor(result_r), math.floor(result_g), math.floor(result_b))
 end
 
-
+function CheckNeedsUpdate()
+    return not (settings.show_child_tracks or 
+                settings.show_parent_tracks or 
+                settings.show_parent_label)
+end
+function CheckTrackColorUpdate()
+    return not (settings.show_parent_colors or 
+                settings.show_child_colors or 
+                settings.show_normal_colors)
+end
 
 function ShowSettingsWindow()
     if not settings_visible then return end
@@ -405,7 +433,7 @@ function ShowSettingsWindow()
             if settings.autosave_enabled then
                 SaveSettings()
             end
-            r.SetExtState("TK_TRACKNAMES", "settings_visible", "0", false)
+            r.SetExtState("TK_TRACKNAMES2", "settings_visible", "0", false)
         end
         r.ImGui_PopStyleColor(ctx, 3)
         r.ImGui_Separator(ctx)        
@@ -414,14 +442,15 @@ function ShowSettingsWindow()
         local column_width = r.ImGui_GetWindowWidth(ctx) / 4
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
         
-        -- Eerste rij
         if r.ImGui_RadioButton(ctx, "Parent", settings.show_parent_tracks) then
             settings.show_parent_tracks = not settings.show_parent_tracks
+            needs_font_update = CheckNeedsUpdate()
         end
         r.ImGui_SameLine(ctx, column_width)
         
-        if r.ImGui_RadioButton(ctx, "Child", settings.show_child_tracks) then
+        if r.ImGui_RadioButton(ctx, "Normal/ Child", settings.show_child_tracks) then
             settings.show_child_tracks = not settings.show_child_tracks
+            needs_font_update = CheckNeedsUpdate()
         end
         r.ImGui_SameLine(ctx, column_width * 2)
         
@@ -434,9 +463,9 @@ function ShowSettingsWindow()
             settings.show_label = not settings.show_label
         end
         
-        -- Tweede rij
         if r.ImGui_RadioButton(ctx, "Parent label", settings.show_parent_label) then
             settings.show_parent_label = not settings.show_parent_label
+            needs_font_update = CheckNeedsUpdate()
         end
         r.ImGui_SameLine(ctx, column_width)
         if r.ImGui_RadioButton(ctx, "Center", settings.text_centered) then
@@ -495,6 +524,7 @@ function ShowSettingsWindow()
         -- Derde rij
         if r.ImGui_RadioButton(ctx, "Track colors", settings.show_track_colors) then
             settings.show_track_colors = not settings.show_track_colors
+            needs_font_update = true
         end
         r.ImGui_SameLine(ctx, column_width)
         --if settings.show_track_colors then
@@ -530,14 +560,17 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, column_width * 3)
         if r.ImGui_RadioButton(ctx, "Normal colors", settings.show_normal_colors) then
             settings.show_normal_colors = not settings.show_normal_colors
+            needs_font_update = CheckTrackColorUpdate()
         end
         -- Vierde rij
         if r.ImGui_RadioButton(ctx, "Parent colors", settings.show_parent_colors) then
             settings.show_parent_colors = not settings.show_parent_colors
+            needs_font_update = CheckTrackColorUpdate()
         end
         r.ImGui_SameLine(ctx, column_width)
         if r.ImGui_RadioButton(ctx, "Child colors", settings.show_child_colors) then
             settings.show_child_colors = not settings.show_child_colors
+            needs_font_update = CheckTrackColorUpdate()
         end
         r.ImGui_SameLine(ctx, column_width * 2)
         if r.ImGui_RadioButton(ctx, "Inherit color", settings.inherit_parent_color) then
@@ -591,12 +624,11 @@ function ShowSettingsWindow()
         end
         changed, settings.label_alpha = r.ImGui_SliderDouble(ctx, "Label opacity", settings.label_alpha, 0.0, 1.0)
         
-        if r.ImGui_BeginCombo(ctx, "Label color", settings.label_color_mode == 1 and "Black" or "White") then
-            if r.ImGui_Selectable(ctx, "Black", settings.label_color_mode == 1) then
-                settings.label_color_mode = 1
-            end
-            if r.ImGui_Selectable(ctx, "White", settings.label_color_mode == 2) then
-                settings.label_color_mode = 2
+        if r.ImGui_BeginCombo(ctx, "Label color", color_modes[settings.label_color_mode]) then
+            for i, color_name in ipairs(color_modes) do
+                if r.ImGui_Selectable(ctx, color_name, settings.label_color_mode == i) then
+                    settings.label_color_mode = i
+                end
             end
             r.ImGui_EndCombo(ctx)
         end
@@ -763,8 +795,17 @@ function GetBounds(hwnd)
     return left, top, right-left, bottom-top
 end
 
+function ResetRenderContext()
+    ctx = r.ImGui_CreateContext('Track Names')
+    r.ImGui_Attach(ctx, settings_font)
+    for _, font in ipairs(font_objects) do
+        r.ImGui_Attach(ctx, font)
+    end
+end
+
+
 function loop()
-    settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
+    settings_visible = r.GetExtState("TK_TRACKNAMES2", "settings_visible") == "1"
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
         ctx = r.ImGui_CreateContext('Track Names')
         CreateFonts()
@@ -819,30 +860,31 @@ function loop()
     r.ImGui_WindowFlags_NoDecoration() |
     r.ImGui_WindowFlags_NoDocking()
 
-local overlay_flags = flags |
-    r.ImGui_WindowFlags_NoInputs() |
-    r.ImGui_WindowFlags_NoMove() |
-    r.ImGui_WindowFlags_NoSavedSettings() |
-    r.ImGui_WindowFlags_AlwaysAutoResize() |
-    r.ImGui_WindowFlags_NoMouseInputs() |
-    r.ImGui_WindowFlags_NoFocusOnAppearing()
-
-r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
-r.ImGui_SetNextWindowPos(ctx, 0, 0)
-
-local window_width
-if reaper.GetOS():match("^OSX") then
+    local window_width
+    if reaper.GetOS():match("^OSX") then
     window_width = arrange_w
-else
+    else
     window_width = right
-end
+    end
 
-r.ImGui_SetNextWindowSize(ctx, window_width, (arrange_height / scale) + (top / scale) -10)
-local header_height = r.GetMainHwnd() and 0
-local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
+if settings.show_track_colors then    
+    local overlay_flags = flags |
+        r.ImGui_WindowFlags_NoInputs() |
+        r.ImGui_WindowFlags_NoMove() |
+        r.ImGui_WindowFlags_NoSavedSettings() |
+        r.ImGui_WindowFlags_AlwaysAutoResize() |
+        r.ImGui_WindowFlags_NoMouseInputs() |
+        r.ImGui_WindowFlags_NoFocusOnAppearing()
 
-if overlay_visible then
-    if settings.show_track_colors then
+    r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
+    r.ImGui_SetNextWindowPos(ctx, 0, 0)
+
+    r.ImGui_SetNextWindowSize(ctx, window_width, (arrange_height / scale) + (top / scale) -10)
+    local header_height = r.GetMainHwnd() and 0
+    local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
+
+    if overlay_visible then
+    
         local colors_cache = {}
         local track_count = r.CountTracks(0)
         
@@ -981,6 +1023,7 @@ if overlay_visible then
                 end
             end
         end
+       
     end
     r.ImGui_End(ctx)
 end
@@ -995,7 +1038,7 @@ end
             r.ImGui_PushFont(ctx, settings_font)
             if r.ImGui_Button(ctx, "S") then
                 settings_visible = not settings_visible
-                r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
+                r.SetExtState("TK_TRACKNAMES2", "settings_visible", settings_visible and "1" or "0", false)
             end
             r.ImGui_PopFont(ctx)
             r.ImGui_PopStyleVar(ctx)
@@ -1036,10 +1079,10 @@ end
             if track_visible and IsTrackVisible(track) then
                 local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
                 local is_child = r.GetParentTrack(track) ~= nil
-                
-                -- Nieuwe logica voor track weergave
                 local should_show_track = false
                 local should_show_name = false
+
+
 
                 -- Parent tracks
                 if settings.show_parent_tracks and is_parent then
@@ -1057,8 +1100,11 @@ end
                 if settings.show_parent_label and is_child then
                     should_show_track = true
                 end
+           
+
 
                 if should_show_track then
+                   
                     local _, track_name = r.GetTrackName(track)
                     display_name = TruncateTrackName(track_name, settings.track_name_length)
                     
@@ -1195,7 +1241,7 @@ end
                             local right_margin = 20
                             label_x = window_width - text_width - right_margin - settings.horizontal_offset + r.ImGui_GetWindowPos(ctx)
                         end
-                        
+                        local label_color = GetLabelColor(track)
                         r.ImGui_DrawList_AddRectFilled(
                             draw_list,
                             label_x - label_padding,
