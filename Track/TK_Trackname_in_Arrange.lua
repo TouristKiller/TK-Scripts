@@ -1,11 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.4.6
+-- @version 0.4.7
 -- @changelog 
 --[[
-+ Integrated Sexan's positioning system for improved accuracy
-+ Added Record, Solo and Mute visualization
-+ Some other things ;o)
++ Added Folder Border
 ]]--
 
 local r = reaper
@@ -85,8 +83,10 @@ local default_settings = {
     gradient_end_alpha = 0.0,
     track_name_length = 1,
     all_text_enabled = true,
-}
-
+    folder_border = false, 
+    border_thickness = 2.0,
+    border_opacity = 1.0,
+} 
 local settings = {}
 for k, v in pairs(default_settings) do
     settings[k] = v
@@ -233,6 +233,9 @@ function SaveSettings()
     r.SetExtState(section, "track_name_length", tostring(settings.track_name_length), true)
     r.SetExtState(section, "button_x", tostring(settings.button_x), true)
     r.SetExtState(section, "button_y", tostring(settings.button_y), true)
+    r.SetExtState(section, "folder_border", settings.folder_border and "1" or "0", true)
+    r.SetExtState(section, "border_thickness", tostring(settings.border_thickness), true)
+    r.SetExtState(section, "border_opacity", tostring(settings.border_opacity), true)
 end
 
 function LoadSettings()
@@ -276,6 +279,9 @@ function LoadSettings()
     settings.track_name_length = tonumber(r.GetExtState(section, "track_name_length")) or 1
     settings.button_x = tonumber(r.GetExtState("TK_TRACKNAMES", "button_x")) or 100
     settings.button_y = tonumber(r.GetExtState("TK_TRACKNAMES", "button_y")) or 20
+    settings.folder_border = r.GetExtState(section, "folder_border") == "1"
+    settings.border_thickness = tonumber(r.GetExtState(section, "border_thickness")) or 2.0
+    settings.border_opacity = tonumber(r.GetExtState(section, "border_opacity")) or 1.0
 end
 function RefreshProjectState()
     LoadSettings()
@@ -638,6 +644,11 @@ function ShowSettingsWindow()
                     r.ImGui_EndCombo(ctx)
                 end
             end
+            r.ImGui_SameLine(ctx, column_width * 3)
+            if r.ImGui_RadioButton(ctx, "Folder Borders", settings.folder_border) then
+                settings.folder_border = not settings.folder_border
+            end
+            
         end
         r.ImGui_PopStyleVar(ctx)
 
@@ -646,32 +657,36 @@ function ShowSettingsWindow()
         -- Set consistent width for all controls
         r.ImGui_PushItemWidth(ctx, 340)
         if settings.show_track_colors then
-            -- Track colors section with proper disable states
-            if not settings.show_track_colors then
-                r.ImGui_BeginDisabled(ctx)
+                -- Track colors section
+            if settings.folder_border and settings.show_parent_colors and settings.overlay_style == 1 then
+                changed, settings.border_thickness = r.ImGui_SliderDouble(ctx, "Border Thickness", settings.border_thickness, 1, 20.0)
+                changed, settings.border_opacity = r.ImGui_SliderDouble(ctx, "Border Opacity", settings.border_opacity, 0.0, 1.0)
             end
-
-            -- Frame and overlay controls
+          
+            -- Frame thickness for frame styles
             if settings.overlay_style == 2 or settings.overlay_style == 3 then
                 changed, settings.frame_thickness = r.ImGui_SliderDouble(ctx, "Frame Thickness", settings.frame_thickness, 1.0, 20.0)
             end
+        
+            -- Color intensity for non-gradient or frame styles
             if not settings.gradient_enabled or settings.overlay_style == 2 or settings.overlay_style == 3 then
                 changed, settings.overlay_alpha = r.ImGui_SliderDouble(ctx, "Color Intensity", settings.overlay_alpha, 0.0, 1.0)
             end
-            if not settings.show_track_colors then
-                r.ImGui_EndDisabled(ctx)
-            end
-
-            -- Gradient controls
+        
+            -- Gradient controls for solid style only
             if settings.gradient_enabled and settings.overlay_style == 1 then
-                changed, settings.gradient_start_alpha = r.ImGui_SliderDouble(ctx, "Start Gradient", settings.gradient_start_alpha, 0.0, 1.0)
-                changed, settings.gradient_end_alpha = r.ImGui_SliderDouble(ctx, "End Gradient", settings.gradient_end_alpha, 0.0, 1.0)
+                changed, settings.gradient_start_alpha = r.ImGui_SliderDouble(ctx, "Start Gradient", 
+                    settings.gradient_start_alpha, 0.0, 1.0)
+                changed, settings.gradient_end_alpha = r.ImGui_SliderDouble(ctx, "End Gradient", 
+                    settings.gradient_end_alpha, 0.0, 1.0)
             end
         end
-        -- Label controls with disable state
+        
+        -- Label controls
         if not settings.show_label then
             r.ImGui_BeginDisabled(ctx)
         end
+        
 
         changed, settings.label_alpha = r.ImGui_SliderDouble(ctx, "Label opacity", settings.label_alpha, 0.0, 1.0)
         
@@ -987,9 +1002,11 @@ function loop()
         
         local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
         if overlay_visible then
+            local folder_borders = {}
             local colors_cache = {}
             local track_count = r.CountTracks(0)
             local WX, WY = r.ImGui_GetWindowPos(ctx)
+            local draw_list = r.ImGui_GetWindowDrawList(ctx)
 
 
             -- Build colors cache
@@ -999,9 +1016,9 @@ function loop()
                 local is_child = r.GetParentTrack(track) ~= nil
                 
                 if (is_parent and settings.show_parent_colors) or
-                   (is_child and settings.show_child_colors) or
-                   (not is_parent and not is_child and settings.show_normal_colors) then
-                    
+                (is_child and settings.show_child_colors) or
+                (not is_parent and not is_child and settings.show_normal_colors) then
+                
                     local color = r.GetTrackColor(track)
                     if settings.inherit_parent_color then
                         local parent = r.GetParentTrack(track)
@@ -1018,15 +1035,26 @@ function loop()
                         local bg_color = reaper.GetThemeColor("col_arrangebg", 0)
                         local blended_color = BlendColor(bg_color, color, settings.blend_mode)
                         local blend_r, blend_g, blend_b = reaper.ColorFromNative(blended_color)
+                        
+                        -- Store main color
                         colors_cache[i] = reaper.ImGui_ColorConvertDouble4ToU32(
-                            blend_r/255, blend_g/255, blend_b/255,  -- CORRECT
+                            blend_r/255, blend_g/255, blend_b/255,
                             settings.overlay_alpha)
+                        
+                        -- Add border color for child tracks
+                        if settings.folder_border and is_parent then
+                            local r_val, g_val, b_val = r.ColorFromNative(color)
+                            r_val = math.floor(r_val * 0.7)
+                            g_val = math.floor(g_val * 0.7)
+                            b_val = math.floor(b_val * 0.7)
+                            colors_cache[i .. "_border"] = reaper.ImGui_ColorConvertDouble4ToU32(
+                                r_val/255, g_val/255, b_val/255,
+                                settings.border_opacity) 
+                        end
                     end
                 end
             end
 
-            local draw_list = r.ImGui_GetWindowDrawList(ctx)
-            
             -- Render track overlays
             for i = 0, track_count - 1 do
                 local track = r.GetTrack(0, i)
@@ -1086,6 +1114,18 @@ function loop()
                                 colors_cache[i]
                             )
                         end
+                        if settings.folder_border and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                            local start_idx, end_idx = GetFolderBoundaries(track)
+                            if start_idx and end_idx then
+                                table.insert(folder_borders, {
+                                    start_idx = start_idx,
+                                    end_idx = end_idx,
+                                    color = colors_cache[i .. "_border"]
+                                })
+                            end
+                        end
+                    
+
                     elseif settings.overlay_style == 2 then
                         -- Frame
                         r.ImGui_DrawList_AddRect(
@@ -1126,35 +1166,62 @@ function loop()
                     end
                 end
             end
+            -- de borders tekenen
+            for _, border in ipairs(folder_borders or {}) do
+                if border and border.start_idx and border.end_idx then
+                    local start_track = r.GetTrack(0, border.start_idx)
+                    if start_track then
+                        local start_track = r.GetTrack(0, border.start_idx)
+                        local end_track = r.GetTrack(0, border.end_idx)
+                        local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") / 2
+                        local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") / 2
+                        local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") / 2
+                        
+                        r.ImGui_DrawList_AddRect(
+                            draw_list,
+                            LEFT + settings.border_thickness/2,
+                            WY + start_y + settings.border_thickness/2,
+                            RIGHT - scroll_size - settings.border_thickness/2,
+                            WY + end_y + end_height - settings.border_thickness/2,
+                            border.color,
+                            0,
+                            0,
+                            settings.border_thickness
+                        )
+            
+                    end
+                end
+            end
         end
         r.ImGui_End(ctx)
     end
+
     -- Settings button
-if settings.show_settings_button then
-    r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
-    r.ImGui_SetNextWindowPos(ctx, settings.button_x, settings.button_y, r.ImGui_Cond_Once())
-    
-    local button_flags = r.ImGui_WindowFlags_NoTitleBar() | 
-                        r.ImGui_WindowFlags_TopMost() |
-                        r.ImGui_WindowFlags_NoResize() |
-                        r.ImGui_WindowFlags_AlwaysAutoResize()
-    
-    local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, button_flags)
-    if button_visible then
-        -- Update positie in settings
-        settings.button_x, settings.button_y = r.ImGui_GetWindowPos(ctx)
+    if settings.show_settings_button then
+        r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
+        r.ImGui_SetNextWindowPos(ctx, settings.button_x, settings.button_y, r.ImGui_Cond_Once())
         
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
-        r.ImGui_PushFont(ctx, settings_font)
-        if r.ImGui_Button(ctx, "S") then
-            settings_visible = not settings_visible
-            r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
+        local button_flags = r.ImGui_WindowFlags_NoTitleBar() | 
+                            r.ImGui_WindowFlags_TopMost() |
+                            r.ImGui_WindowFlags_NoResize() |
+                            r.ImGui_WindowFlags_AlwaysAutoResize()
+        
+        local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, button_flags)
+        if button_visible then
+            -- Update positie in settings
+            settings.button_x, settings.button_y = r.ImGui_GetWindowPos(ctx)
+            
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
+            r.ImGui_PushFont(ctx, settings_font)
+            if r.ImGui_Button(ctx, "S") then
+                settings_visible = not settings_visible
+                r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
+            end
+            r.ImGui_PopFont(ctx)
+            r.ImGui_PopStyleVar(ctx)
+            r.ImGui_End(ctx)
         end
-        r.ImGui_PopFont(ctx)
-        r.ImGui_PopStyleVar(ctx)
-        r.ImGui_End(ctx)
     end
-end
 
     -- Main track names window
     local text_flags = flags | r.ImGui_WindowFlags_NoInputs() 
