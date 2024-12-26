@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.4.5
+-- @version 0.4.6
 -- @changelog 
 --[[
 + Integrated Sexan's positioning system for improved accuracy
@@ -566,7 +566,7 @@ function ShowSettingsWindow()
         if settings.show_track_colors then
             r.ImGui_SameLine(ctx, column_width)
             r.ImGui_SetNextItemWidth(ctx, 100)
-            if r.IGui_BeginCombo(ctx, "##Blend Mode", blend_modes[settings.blend_mode]) then
+            if r.ImGui_BeginCombo(ctx, "##Blend Mode", blend_modes[settings.blend_mode]) then
                 for i, mode in ipairs(blend_modes) do
                     if r.ImGui_Selectable(ctx, mode, settings.blend_mode == i) then
                         settings.blend_mode = i
