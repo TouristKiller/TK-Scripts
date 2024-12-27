@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.4.7
+-- @version 0.4.8
 -- @changelog 
 --[[
-+ Added Folder Border
++ Added: Set Scaling Manualy
 ]]--
 
 local r = reaper
@@ -31,7 +31,8 @@ local OLD_VAL = 0
 local main = r.GetMainHwnd()
 local arrange = r.JS_Window_FindChildByID(main, 0x3E8)
 
--- Sexan's DrawOverArrange function for precise positioning
+
+
 local function DrawOverArrange()
     local _, DPI_RPR = r.get_config_var_string("uiscale")
     scroll_size = 15 * DPI_RPR
@@ -86,6 +87,7 @@ local default_settings = {
     folder_border = false, 
     border_thickness = 2.0,
     border_opacity = 1.0,
+    manual_scaling = 1.0,
 } 
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -236,6 +238,7 @@ function SaveSettings()
     r.SetExtState(section, "folder_border", settings.folder_border and "1" or "0", true)
     r.SetExtState(section, "border_thickness", tostring(settings.border_thickness), true)
     r.SetExtState(section, "border_opacity", tostring(settings.border_opacity), true)
+    r.SetExtState(section, "manual_scaling", tostring(settings.manual_scaling), true)
 end
 
 function LoadSettings()
@@ -282,6 +285,7 @@ function LoadSettings()
     settings.folder_border = r.GetExtState(section, "folder_border") == "1"
     settings.border_thickness = tonumber(r.GetExtState(section, "border_thickness")) or 2.0
     settings.border_opacity = tonumber(r.GetExtState(section, "border_opacity")) or 1.0
+    settings.manual_scaling = tonumber(r.GetExtState(section, "manual_scaling")) or 1.0
 end
 function RefreshProjectState()
     LoadSettings()
@@ -455,6 +459,19 @@ function ShowSettingsWindow()
     if visible then
         -- Header met titel en sluitknop
         r.ImGui_Text(ctx, "TK Track ReaDecorator Settings")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 100)
+        if r.ImGui_BeginCombo(ctx, "Set Scaling", string.format("%.0f%%", settings.manual_scaling * 100)) then
+            local scaling_options = {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0}
+            for _, scale in ipairs(scaling_options) do
+                if r.ImGui_Selectable(ctx, string.format("%.0f%%", scale * 100), settings.manual_scaling == scale) then
+                    settings.manual_scaling = scale
+                    SaveSettings()  -- Alleen opslaan bij wijziging
+                    needs_font_update = CheckNeedsUpdate()
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
         r.ImGui_SameLine(ctx)
         local window_width = r.ImGui_GetWindowWidth(ctx)
         r.ImGui_SetCursorPosX(ctx, window_width - 45)
@@ -789,7 +806,7 @@ end
 
 function IsTrackVisible(track)
     local MIN_TRACK_HEIGHT = 10
-    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH")
+    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / settings.manual_scaling
     
     if track_height <= MIN_TRACK_HEIGHT then
         return false
@@ -797,7 +814,7 @@ function IsTrackVisible(track)
     
     local parent = r.GetParentTrack(track)
     while parent do
-        local parent_height = r.GetMediaTrackInfo_Value(parent, "I_TCPH")
+        local parent_height = r.GetMediaTrackInfo_Value(parent, "I_TCPH") / settings.manual_scaling
         if parent_height <= MIN_TRACK_HEIGHT then
             return false
         end
@@ -940,9 +957,9 @@ function RenderFolderFrameOverlay(draw_list, track, color)
             local start_track = r.GetTrack(0, start_idx)
             local end_track = r.GetTrack(0, end_idx)
             
-            local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /2
-            local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /2
-            local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /2
+            local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /settings.manual_scaling
+            local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /settings.manual_scaling
+            local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /settings.manual_scaling
             
             r.ImGui_DrawList_AddRect(
                 draw_list,
@@ -1058,8 +1075,8 @@ function loop()
             -- Render track overlays
             for i = 0, track_count - 1 do
                 local track = r.GetTrack(0, i)
-                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / 2
-                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / 2
+                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /settings.manual_scaling
+                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /settings.manual_scaling
                 
                 if colors_cache[i] and track_y < (BOT - TOP) - scroll_size and track_y + track_height > 0 then
                     if settings.overlay_style == 1 then
@@ -1146,9 +1163,9 @@ function loop()
                             if start_idx and end_idx then
                                 local start_track = r.GetTrack(0, start_idx)
                                 local end_track = r.GetTrack(0, end_idx)
-                                local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") / 2
-                                local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") / 2
-                                local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") / 2
+                                local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /settings.manual_scaling
+                                local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /settings.manual_scaling
+                                local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /settings.manual_scaling
                                 
                                 r.ImGui_DrawList_AddRect(
                                     draw_list,
@@ -1173,9 +1190,9 @@ function loop()
                     if start_track then
                         local start_track = r.GetTrack(0, border.start_idx)
                         local end_track = r.GetTrack(0, border.end_idx)
-                        local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") / 2
-                        local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") / 2
-                        local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") / 2
+                        local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /settings.manual_scaling
+                        local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /settings.manual_scaling
+                        local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /settings.manual_scaling
                         
                         r.ImGui_DrawList_AddRect(
                             draw_list,
@@ -1284,8 +1301,8 @@ function loop()
                         end
                     end
 
-                    local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / 2
-                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / 2
+                    local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /settings.manual_scaling
+                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /settings.manual_scaling
                     local vertical_offset = (track_height * settings.vertical_offset) / 100
                     local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5) + vertical_offset
 

@@ -69,9 +69,9 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.4.7" author="TouristKiller" time="2024-12-27T01:00:00Z">
+        <version name="0.4.8" author="TouristKiller" time="2024-12-27T18:30:00Z">
             <changelog><![CDATA[           
-+ Added Folder Border
++ Added: Set Scaling Manualy
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
