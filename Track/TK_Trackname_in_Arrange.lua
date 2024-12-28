@@ -1,12 +1,16 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.4.8
+-- @version 0.4.9
 -- @changelog 
 --[[
-+ Added: Set Scaling Manualy
++ Added: Preset system
++ vastly improved saving and loading time
 ]]--
 
 local r = reaper
+local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
+local preset_path = script_path .. "TK_Trackname_Presets/"
+local json = dofile(script_path .. "json.lua")
 package.path = r.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
 local im = require 'imgui' '0.9.3'
 local ctx = im.CreateContext('Track Names')
@@ -30,7 +34,6 @@ local OLD_VAL = 0
 -- Window setup using Sexan's method
 local main = r.GetMainHwnd()
 local arrange = r.JS_Window_FindChildByID(main, 0x3E8)
-
 
 
 local function DrawOverArrange()
@@ -95,8 +98,8 @@ for k, v in pairs(default_settings) do
 end
 -- Font configuration
 local blend_modes = {
-    "Normal", "Multiply", "Screen", "Overlay", "Darken",
-    "Lighten", "Color Dodge", "Color Burn", "Hard Light", "Soft Light"
+    " Normal", " Multiply", " Screen", " Overlay", " Darken",
+    " Lighten", " Color Dodge", " Color Burn", " Hard Light", " Soft Light"
 }
 
 local text_sizes = {8, 10, 12, 14, 16, 18, 20, 24, 28, 32}
@@ -194,99 +197,127 @@ function GetLabelColor(track)
         return r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.label_alpha)
     end
 end
+
 function SaveSettings()
     local section = "TK_TRACKNAMES"
-    r.SetExtState(section, "text_opacity", tostring(settings.text_opacity), true)
-    r.SetExtState(section, "show_parent_tracks", settings.show_parent_tracks and "1" or "0", true)
-    r.SetExtState(section, "show_child_tracks", settings.show_child_tracks and "1" or "0", true)
-    r.SetExtState(section, "show_first_fx", settings.show_first_fx and "1" or "0", true)
-    r.SetExtState(section, "show_parent_label", settings.show_parent_label and "1" or "0", true)
-    r.SetExtState(section, "horizontal_offset", tostring(settings.horizontal_offset), true)
-    r.SetExtState(section, "vertical_offset", tostring(settings.vertical_offset), true)
-    r.SetExtState(section, "selected_font", tostring(settings.selected_font), true)
-    r.SetExtState(section, "color_mode", tostring(settings.color_mode), true)
-    r.SetExtState(section, "overlay_alpha", tostring(settings.overlay_alpha), true)
-    r.SetExtState(section, "show_track_colors", settings.show_track_colors and "1" or "0", true)
-    r.SetExtState(section, "grid_color", tostring(settings.grid_color), true)
-    r.SetExtState(section, "bg_brightness", tostring(settings.bg_brightness), true)
-    r.SetExtState(section, "custom_colors_enabled", settings.custom_colors_enabled and "1" or "0", true)
-    r.SetExtState(section, "show_label", settings.show_label and "1" or "0", true)
-    r.SetExtState(section, "label_alpha", tostring(settings.label_alpha), true)
-    r.SetExtState(section, "label_color_mode", tostring(settings.label_color_mode), true)
-    r.SetExtState(section, "text_centered", settings.text_centered and "1" or "0", true)
-    r.SetExtState(section, "right_align", settings.right_align and "1" or "0", true)
-    r.SetExtState(section, "show_settings_button", settings.show_settings_button and "1" or "0", true)
-    r.SetExtState(section, "text_size", tostring(settings.text_size), true)
-    r.SetExtState(section, "show_record_color", settings.show_record_color and "1" or "0", true)
-    r.SetExtState(section, "show_parent_colors", settings.show_parent_colors and "1" or "0", true)
-    r.SetExtState(section, "show_child_colors", settings.show_child_colors and "1" or "0", true)
-    r.SetExtState(section, "show_normal_colors", settings.show_normal_colors and "1" or "0", true)
-    r.SetExtState(section, "inherit_parent_color", settings.inherit_parent_color and "1" or "0", true)
-    r.SetExtState(section, "overlay_style", tostring(settings.overlay_style), true)
-    r.SetExtState(section, "frame_thickness", tostring(settings.frame_thickness), true)
-    r.SetExtState(section, "blend_mode", tostring(settings.blend_mode), true)
-    r.SetExtState(section, "show_track_numbers", settings.show_track_numbers and "1" or "0", true)
-    r.SetExtState(section, "track_number_style", tostring(settings.track_number_style), true)
-    r.SetExtState(section, "autosave_enabled", settings.autosave_enabled and "1" or "0", true)
-    r.SetExtState(section, "gradient_enabled", settings.gradient_enabled and "1" or "0", true)
-    r.SetExtState(section, "gradient_direction", tostring(settings.gradient_direction), true)
-    r.SetExtState(section, "gradient_start_alpha", tostring(settings.gradient_start_alpha), true)
-    r.SetExtState(section, "gradient_end_alpha", tostring(settings.gradient_end_alpha), true)
-    r.SetExtState(section, "track_name_length", tostring(settings.track_name_length), true)
-    r.SetExtState(section, "button_x", tostring(settings.button_x), true)
-    r.SetExtState(section, "button_y", tostring(settings.button_y), true)
-    r.SetExtState(section, "folder_border", settings.folder_border and "1" or "0", true)
-    r.SetExtState(section, "border_thickness", tostring(settings.border_thickness), true)
-    r.SetExtState(section, "border_opacity", tostring(settings.border_opacity), true)
-    r.SetExtState(section, "manual_scaling", tostring(settings.manual_scaling), true)
+    local settings_json = json.encode(settings)
+    r.SetExtState(section, "settings", settings_json, true)
 end
 
 function LoadSettings()
     local section = "TK_TRACKNAMES"
-    settings.text_opacity = tonumber(r.GetExtState(section, "text_opacity")) or 1.0
-    settings.show_parent_tracks = r.GetExtState(section, "show_parent_tracks") == "1"
-    settings.show_child_tracks = r.GetExtState(section, "show_child_tracks") == "1"
-    settings.show_first_fx = r.GetExtState(section, "show_first_fx") == "1"
-    settings.show_parent_label = r.GetExtState(section, "show_parent_label") == "1"
-    settings.horizontal_offset = tonumber(r.GetExtState(section, "horizontal_offset")) or 0
-    settings.vertical_offset = tonumber(r.GetExtState(section, "vertical_offset")) or 0
-    settings.selected_font = tonumber(r.GetExtState(section, "selected_font")) or 1
-    settings.color_mode = tonumber(r.GetExtState(section, "color_mode")) or 1
-    settings.overlay_alpha = tonumber(r.GetExtState(section, "overlay_alpha")) or 0.1
-    settings.show_track_colors = r.GetExtState(section, "show_track_colors") == "1"
-    settings.grid_color = tonumber(r.GetExtState(section, "grid_color")) or 0.0
-    settings.bg_brightness = tonumber(r.GetExtState(section, "bg_brightness")) or 0.2
-    settings.custom_colors_enabled = r.GetExtState(section, "custom_colors_enabled") == "1"
-    settings.show_label = r.GetExtState(section, "show_label") == "1"
-    settings.label_alpha = tonumber(r.GetExtState(section, "label_alpha")) or 0.3
-    settings.label_color_mode = tonumber(r.GetExtState(section, "label_color_mode")) or 1
-    settings.text_centered = r.GetExtState(section, "text_centered") == "1"
-    settings.right_align = r.GetExtState(section, "right_align") == "1"
-    settings.show_settings_button = r.GetExtState(section, "show_settings_button") == "1"
-    settings.text_size = tonumber(r.GetExtState(section, "text_size")) or 14
-    settings.show_record_color = r.GetExtState(section, "show_record_color") == "1"
-    settings.show_parent_colors = r.GetExtState(section, "show_parent_colors") == "1"
-    settings.show_child_colors = r.GetExtState(section, "show_child_colors") == "1"
-    settings.show_normal_colors = r.GetExtState(section, "show_normal_colors") == "1"
-    settings.inherit_parent_color = r.GetExtState(section, "inherit_parent_color") == "1"
-    settings.overlay_style = tonumber(r.GetExtState(section, "overlay_style")) or 1
-    settings.frame_thickness = tonumber(r.GetExtState(section, "frame_thickness")) or 2.0
-    settings.blend_mode = tonumber(r.GetExtState(section, "blend_mode")) or 1
-    settings.show_track_numbers = r.GetExtState(section, "show_track_numbers") == "1"
-    settings.track_number_style = tonumber(r.GetExtState(section, "track_number_style")) or 1
-    settings.autosave_enabled = r.GetExtState(section, "autosave_enabled") == "1"
-    settings.gradient_enabled = r.GetExtState(section, "gradient_enabled") == "1"
-    settings.gradient_direction = tonumber(r.GetExtState(section, "gradient_direction")) or 1
-    settings.gradient_start_alpha = tonumber(r.GetExtState(section, "gradient_start_alpha")) or 1.0
-    settings.gradient_end_alpha = tonumber(r.GetExtState(section, "gradient_end_alpha")) or 0.0
-    settings.track_name_length = tonumber(r.GetExtState(section, "track_name_length")) or 1
-    settings.button_x = tonumber(r.GetExtState("TK_TRACKNAMES", "button_x")) or 100
-    settings.button_y = tonumber(r.GetExtState("TK_TRACKNAMES", "button_y")) or 20
-    settings.folder_border = r.GetExtState(section, "folder_border") == "1"
-    settings.border_thickness = tonumber(r.GetExtState(section, "border_thickness")) or 2.0
-    settings.border_opacity = tonumber(r.GetExtState(section, "border_opacity")) or 1.0
-    settings.manual_scaling = tonumber(r.GetExtState(section, "manual_scaling")) or 1.0
+    local settings_json = r.GetExtState(section, "settings")
+    if settings_json ~= "" then
+        local old_text_size = settings.text_size
+        local loaded_settings = json.decode(settings_json)
+        for k, v in pairs(loaded_settings) do
+            settings[k] = v
+        end
+        if old_text_size ~= settings.text_size then
+            needs_font_update = true
+        end
+    end
 end
+
+-- Preset functies
+function SavePreset(name)
+    local preset_data = {
+        text_opacity = settings.text_opacity,
+        show_parent_tracks = settings.show_parent_tracks,
+        show_child_tracks = settings.show_child_tracks,
+        show_first_fx = settings.show_first_fx,
+        show_parent_label = settings.show_parent_label,
+        horizontal_offset = settings.horizontal_offset,
+        vertical_offset = settings.vertical_offset,
+        selected_font = settings.selected_font,
+        color_mode = settings.color_mode,
+        overlay_alpha = settings.overlay_alpha,
+        show_track_colors = settings.show_track_colors,
+        grid_color = settings.grid_color,
+        bg_brightness = settings.bg_brightness,
+        custom_colors_enabled = settings.custom_colors_enabled,
+        show_label = settings.show_label,
+        label_alpha = settings.label_alpha,
+        label_color_mode = settings.label_color_mode,
+        text_centered = settings.text_centered,
+        right_align = settings.right_align,
+        show_settings_button = settings.show_settings_button,
+        text_size = settings.text_size,
+        show_record_color = settings.show_record_color,
+        show_parent_colors = settings.show_parent_colors,
+        show_child_colors = settings.show_child_colors,
+        show_normal_colors = settings.show_normal_colors,
+        inherit_parent_color = settings.inherit_parent_color,
+        overlay_style = settings.overlay_style,
+        frame_thickness = settings.frame_thickness,
+        blend_mode = settings.blend_mode,
+        show_track_numbers = settings.show_track_numbers,
+        track_number_style = settings.track_number_style,
+        autosave_enabled = settings.autosave_enabled,
+        gradient_enabled = settings.gradient_enabled,
+        gradient_direction = settings.gradient_direction,
+        gradient_start_alpha = settings.gradient_start_alpha,
+        gradient_end_alpha = settings.gradient_end_alpha,
+        track_name_length = settings.track_name_length,
+        button_x = settings.button_x,
+        button_y = settings.button_y,
+        folder_border = settings.folder_border,
+        border_thickness = settings.border_thickness,
+        border_opacity = settings.border_opacity,
+        manual_scaling = settings.manual_scaling
+    }
+    
+    -- Create directory if it doesn't exist
+    r.RecursiveCreateDirectory(preset_path, 0)
+    
+    -- Save preset using script-relative path
+    local file = io.open(preset_path .. name .. '.json', 'w')
+    if file then
+        file:write(json.encode(preset_data))
+        file:close()
+    end
+end
+
+
+function LoadPreset(name)
+    -- Use script-relative path for loading presets
+    local file = io.open(preset_path .. name .. '.json', 'r')
+    if file then
+        local content = file:read('*all')
+        file:close()
+        local old_text_size = settings.text_size
+        local preset_data = json.decode(content)
+        
+        for key, value in pairs(preset_data) do
+            settings[key] = value
+        end
+        
+        if old_text_size ~= settings.text_size then
+            needs_font_update = true
+        end
+        SaveSettings()
+    end
+end
+
+function GetPresetList()
+    local presets = {}
+    
+    -- Use script-relative path for enumerating presets
+    local idx = 0
+    local filename = r.EnumerateFiles(preset_path, idx)
+    
+    while filename do
+        if filename:match('%.json$') then
+            presets[#presets + 1] = filename:gsub('%.json$', '')
+        end
+        idx = idx + 1
+        filename = r.EnumerateFiles(preset_path, idx)
+    end
+    
+    return presets
+end
+
+
 function RefreshProjectState()
     LoadSettings()
     if settings.custom_colors_enabled then
@@ -420,6 +451,7 @@ function GetFolderBoundaries(track)
     return track_idx, end_idx
 end
 
+
 function ShowSettingsWindow()
     if not settings_visible then return end
     
@@ -457,23 +489,12 @@ function ShowSettingsWindow()
     local visible, open = r.ImGui_Begin(ctx, 'Track Names Settings', true, window_flags)
     
     if visible then
+        local window_width = r.ImGui_GetWindowWidth(ctx)
         -- Header met titel en sluitknop
         r.ImGui_Text(ctx, "TK Track ReaDecorator Settings")
+
         r.ImGui_SameLine(ctx)
-        r.ImGui_SetNextItemWidth(ctx, 100)
-        if r.ImGui_BeginCombo(ctx, "Set Scaling", string.format("%.0f%%", settings.manual_scaling * 100)) then
-            local scaling_options = {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0}
-            for _, scale in ipairs(scaling_options) do
-                if r.ImGui_Selectable(ctx, string.format("%.0f%%", scale * 100), settings.manual_scaling == scale) then
-                    settings.manual_scaling = scale
-                    SaveSettings()  -- Alleen opslaan bij wijziging
-                    needs_font_update = CheckNeedsUpdate()
-                end
-            end
-            r.ImGui_EndCombo(ctx)
-        end
-        r.ImGui_SameLine(ctx)
-        local window_width = r.ImGui_GetWindowWidth(ctx)
+        
         r.ImGui_SetCursorPosX(ctx, window_width - 45)
         
         -- Rode sluitknop
@@ -487,8 +508,56 @@ function ShowSettingsWindow()
             r.SetExtState("TK_TRACKNAMES", "settings_visible", "0", false)
         end
         r.ImGui_PopStyleColor(ctx, 3)
+       
         r.ImGui_Separator(ctx)
+        -- PRESETS
+        if r.ImGui_Button(ctx, "Save Preset" , 100) then
+            -- Toon popup voor preset naam
+            r.ImGui_OpenPopup(ctx, "Save Preset##popup")
+        end
+        r.ImGui_SameLine(ctx)
+        local presets = GetPresetList()
+        r.ImGui_SetNextItemWidth(ctx, 100)
+        if r.ImGui_BeginCombo(ctx, "##Load Preset", "Select Preset") then
+            for _, preset_name in ipairs(presets) do
+                if r.ImGui_Selectable(ctx, preset_name) then
+                    LoadPreset(preset_name)
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 100)
+        if r.ImGui_BeginCombo(ctx, "##scaling", string.format("%.0f%%", settings.manual_scaling * 100)) then
+            r.ImGui_Text(ctx, "Set Scaling")  -- Eerste regel in dropdown
+            r.ImGui_Separator(ctx)            -- Visuele scheiding
+            local scaling_options = {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0}
+            for _, scale in ipairs(scaling_options) do
+                if r.ImGui_Selectable(ctx, string.format("%.0f%%", scale * 100), settings.manual_scaling == scale) then
+                    settings.manual_scaling = scale
+                    SaveSettings()
+                    needs_font_update = CheckNeedsUpdate()
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
 
+        -- Save Preset popup
+        if r.ImGui_BeginPopup(ctx, "Save Preset##popup") then
+            r.ImGui_Text(ctx, "Enter preset name:")
+            local changed, new_name = r.ImGui_InputText(ctx, "##preset_name", preset_name)
+            if changed then preset_name = new_name end
+            
+            if r.ImGui_Button(ctx, "Save") then
+                if preset_name ~= "" then
+                    SavePreset(preset_name)
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+
+        r.ImGui_Separator(ctx)
         local changed
         -- Radio buttons layout met 4 kolommen
         local column_width = r.ImGui_GetWindowWidth(ctx) / 4
@@ -546,13 +615,13 @@ function ShowSettingsWindow()
         
         r.ImGui_SetNextItemWidth(ctx, 100)
         if r.ImGui_BeginCombo(ctx, "##Number Style", 
-            settings.track_number_style == 1 and "Before Name" or
-            settings.track_number_style == 2 and "After Name" or
+            settings.track_number_style == 1 and " Before Name" or
+            settings.track_number_style == 2 and " After Name" or
             "Above Name") then
-            if r.ImGui_Selectable(ctx, "Before Name", settings.track_number_style == 1) then
+            if r.ImGui_Selectable(ctx, " Before Name", settings.track_number_style == 1) then
                 settings.track_number_style = 1
             end
-            if r.ImGui_Selectable(ctx, "After Name", settings.track_number_style == 2) then
+            if r.ImGui_Selectable(ctx, " After Name", settings.track_number_style == 2) then
                 settings.track_number_style = 2
             end
             r.ImGui_EndCombo(ctx)
@@ -564,17 +633,17 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, column_width * 3)
         r.ImGui_SetNextItemWidth(ctx, 100)
         if r.ImGui_BeginCombo(ctx, "##Track name length", 
-            settings.track_name_length == 1 and "Full length" or
-            settings.track_name_length == 2 and "Max 16 chars" or
-            "Max 32 chars") then
+            settings.track_name_length == 1 and " Full length" or
+            settings.track_name_length == 2 and " Max 16 chars" or
+            " Max 32 chars") then
             
-            if r.ImGui_Selectable(ctx, "Full length", settings.track_name_length == 1) then
+            if r.ImGui_Selectable(ctx, " Full length", settings.track_name_length == 1) then
                 settings.track_name_length = 1
             end
-            if r.ImGui_Selectable(ctx, "Max 16 chars", settings.track_name_length == 2) then
+            if r.ImGui_Selectable(ctx, " Max 16 chars", settings.track_name_length == 2) then
                 settings.track_name_length = 2
             end
-            if r.ImGui_Selectable(ctx, "Max 32 chars", settings.track_name_length == 3) then
+            if r.ImGui_Selectable(ctx, " Max 32 chars", settings.track_name_length == 3) then
                 settings.track_name_length = 3
             end
             r.ImGui_EndCombo(ctx)
@@ -603,16 +672,16 @@ function ShowSettingsWindow()
             
                 r.ImGui_SetNextItemWidth(ctx, 100)
                 if r.ImGui_BeginCombo(ctx, "##Overlay Style", 
-                settings.overlay_style == 1 and "Solid" or 
-                settings.overlay_style == 2 and "Frame" or 
+                settings.overlay_style == 1 and " Solid" or 
+                settings.overlay_style == 2 and " Frame" or 
                 "Folder Frame") then
-                if r.ImGui_Selectable(ctx, "Solid", settings.overlay_style == 1) then
+                if r.ImGui_Selectable(ctx, " Solid", settings.overlay_style == 1) then
                     settings.overlay_style = 1
                 end
-                if r.ImGui_Selectable(ctx, "Frame", settings.overlay_style == 2) then
+                if r.ImGui_Selectable(ctx, " Frame", settings.overlay_style == 2) then
                     settings.overlay_style = 2
                 end
-                if r.ImGui_Selectable(ctx, "Folder Frame", settings.overlay_style == 3) then
+                if r.ImGui_Selectable(ctx, " Folder Frame", settings.overlay_style == 3) then
                     settings.overlay_style = 3
                 end
                 r.ImGui_EndCombo(ctx)
@@ -651,19 +720,21 @@ function ShowSettingsWindow()
                 r.ImGui_SameLine(ctx, column_width)
                 r.ImGui_SetNextItemWidth(ctx, 100)
                 if r.ImGui_BeginCombo(ctx, "##Gradient Direction", 
-                    settings.gradient_direction == 1 and "Horizontal" or "Vertical") then
-                    if r.ImGui_Selectable(ctx, "Horizontal", settings.gradient_direction == 1) then
+                    settings.gradient_direction == 1 and " Horizontal" or " Vertical") then
+                    if r.ImGui_Selectable(ctx, " Horizontal", settings.gradient_direction == 1) then
                         settings.gradient_direction = 1
                     end
-                    if r.ImGui_Selectable(ctx, "Vertical", settings.gradient_direction == 2) then
+                    if r.ImGui_Selectable(ctx, " Vertical", settings.gradient_direction == 2) then
                         settings.gradient_direction = 2
                     end
                     r.ImGui_EndCombo(ctx)
                 end
             end
-            r.ImGui_SameLine(ctx, column_width * 3)
-            if r.ImGui_RadioButton(ctx, "Folder Borders", settings.folder_border) then
-                settings.folder_border = not settings.folder_border
+            if settings.folder_border and settings.show_parent_colors and settings.overlay_style == 1 then
+                r.ImGui_SameLine(ctx, column_width * 3)
+                if r.ImGui_RadioButton(ctx, "Folder Borders", settings.folder_border) then
+                    settings.folder_border = not settings.folder_border
+                end
             end
             
         end
@@ -775,20 +846,21 @@ function ShowSettingsWindow()
 
         -- Bottom buttons
         r.ImGui_Separator(ctx)
-        if r.ImGui_Button(ctx, settings.custom_colors_enabled and "Reset Colors" or "Enable Custom Colors") then
+        if r.ImGui_Button(ctx, settings.custom_colors_enabled and "Reset Colors" or "Custom Colors", 100) then
             reaper.Undo_BeginBlock()
             ToggleColors()
             reaper.Undo_EndBlock("Toggle Custom Grid and Background Colors", -1)
         end
         r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Reset All Settings") then
+        if r.ImGui_Button(ctx, "Reset Settings", 100) then
             ResetSettings()
         end
         r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Save Settings") then
+        if r.ImGui_Button(ctx, "Save Settings", 100) then
             SaveSettings()
         end
         r.ImGui_SameLine(ctx)
+
         local changed, new_value = r.ImGui_Checkbox(ctx, "Autosave", settings.autosave_enabled)
         if changed then
             settings.autosave_enabled = new_value
