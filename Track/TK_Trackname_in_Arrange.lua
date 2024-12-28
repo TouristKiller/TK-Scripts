@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.4.9
+-- @version 0.5.0
 -- @changelog 
 --[[
 + Added: Preset system
@@ -730,7 +730,7 @@ function ShowSettingsWindow()
                     r.ImGui_EndCombo(ctx)
                 end
             end
-            if settings.folder_border and settings.show_parent_colors and settings.overlay_style == 1 then
+            if settings.show_parent_colors and settings.overlay_style == 1 then
                 r.ImGui_SameLine(ctx, column_width * 3)
                 if r.ImGui_RadioButton(ctx, "Folder Borders", settings.folder_border) then
                     settings.folder_border = not settings.folder_border
