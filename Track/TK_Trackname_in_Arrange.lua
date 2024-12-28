@@ -1,19 +1,18 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.5.0
+-- @version 0.5.1
 -- @changelog 
 --[[
-+ Added: Preset system
-+ vastly improved saving and loading time
++ Removed: Manual scaling! (Thanx OLSHALOM!!)
 ]]--
 
-local r = reaper
-local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
-local preset_path = script_path .. "TK_Trackname_Presets/"
-local json = dofile(script_path .. "json.lua")
-package.path = r.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
-local im = require 'imgui' '0.9.3'
-local ctx = im.CreateContext('Track Names')
+local r             = reaper
+local script_path   = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
+local preset_path   = script_path .. "TK_Trackname_Presets/"
+local json          = dofile(script_path .. "json.lua")
+package.path        = r.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
+local im            = require 'imgui' '0.9.3'
+local ctx           = im.CreateContext('Track Names')
 
 -- Script state variables
 local script_active = true
@@ -24,6 +23,7 @@ local last_project = nil
 local last_track_count = 0
 local overlay_enabled = false
 local needs_font_update = false
+local ImGuiScale_saved -- OLSHALOM
 
 -- Sexan's positioning system
 local LEFT, TOP, RIGHT, BOT = 0, 0, 0, 0
@@ -34,7 +34,6 @@ local OLD_VAL = 0
 -- Window setup using Sexan's method
 local main = r.GetMainHwnd()
 local arrange = r.JS_Window_FindChildByID(main, 0x3E8)
-
 
 local function DrawOverArrange()
     local _, DPI_RPR = r.get_config_var_string("uiscale")
@@ -47,7 +46,6 @@ local function DrawOverArrange()
     end
 end
 
--- Original TK Trackname settings structure
 local default_settings = {
     text_opacity = 1.0,
     show_parent_tracks = true,
@@ -90,13 +88,13 @@ local default_settings = {
     folder_border = false, 
     border_thickness = 2.0,
     border_opacity = 1.0,
-    manual_scaling = 1.0,
+    manual_scaling, -- OLSHALOM
 } 
 local settings = {}
 for k, v in pairs(default_settings) do
     settings[k] = v
 end
--- Font configuration
+
 local blend_modes = {
     " Normal", " Multiply", " Screen", " Overlay", " Darken",
     " Lighten", " Color Dodge", " Color Burn", " Hard Light", " Soft Light"
@@ -135,7 +133,6 @@ function GetTextColor(track, is_child)
             track = parent_track
         end
     end
-
 
     if settings.color_mode == 1 then
         return 0xFFFFFFFF
@@ -200,7 +197,16 @@ end
 
 function SaveSettings()
     local section = "TK_TRACKNAMES"
-    local settings_json = json.encode(settings)
+    
+    -- Maak een kopie van de settings zonder manual_scaling
+    local settings_to_save = {}
+    for k, v in pairs(settings) do
+        if k ~= "manual_scaling" then
+            settings_to_save[k] = v
+        end
+    end
+    
+    local settings_json = json.encode(settings_to_save)
     r.SetExtState(section, "settings", settings_json, true)
 end
 
@@ -221,56 +227,16 @@ end
 
 -- Preset functies
 function SavePreset(name)
-    local preset_data = {
-        text_opacity = settings.text_opacity,
-        show_parent_tracks = settings.show_parent_tracks,
-        show_child_tracks = settings.show_child_tracks,
-        show_first_fx = settings.show_first_fx,
-        show_parent_label = settings.show_parent_label,
-        horizontal_offset = settings.horizontal_offset,
-        vertical_offset = settings.vertical_offset,
-        selected_font = settings.selected_font,
-        color_mode = settings.color_mode,
-        overlay_alpha = settings.overlay_alpha,
-        show_track_colors = settings.show_track_colors,
-        grid_color = settings.grid_color,
-        bg_brightness = settings.bg_brightness,
-        custom_colors_enabled = settings.custom_colors_enabled,
-        show_label = settings.show_label,
-        label_alpha = settings.label_alpha,
-        label_color_mode = settings.label_color_mode,
-        text_centered = settings.text_centered,
-        right_align = settings.right_align,
-        show_settings_button = settings.show_settings_button,
-        text_size = settings.text_size,
-        show_record_color = settings.show_record_color,
-        show_parent_colors = settings.show_parent_colors,
-        show_child_colors = settings.show_child_colors,
-        show_normal_colors = settings.show_normal_colors,
-        inherit_parent_color = settings.inherit_parent_color,
-        overlay_style = settings.overlay_style,
-        frame_thickness = settings.frame_thickness,
-        blend_mode = settings.blend_mode,
-        show_track_numbers = settings.show_track_numbers,
-        track_number_style = settings.track_number_style,
-        autosave_enabled = settings.autosave_enabled,
-        gradient_enabled = settings.gradient_enabled,
-        gradient_direction = settings.gradient_direction,
-        gradient_start_alpha = settings.gradient_start_alpha,
-        gradient_end_alpha = settings.gradient_end_alpha,
-        track_name_length = settings.track_name_length,
-        button_x = settings.button_x,
-        button_y = settings.button_y,
-        folder_border = settings.folder_border,
-        border_thickness = settings.border_thickness,
-        border_opacity = settings.border_opacity,
-        manual_scaling = settings.manual_scaling
-    }
+    -- Maak een kopie van preset_data zonder manual_scaling
+    local preset_data = {}
+    for k, v in pairs(settings) do
+        if k ~= "manual_scaling" then
+            preset_data[k] = v
+        end
+    end
     
     -- Create directory if it doesn't exist
     r.RecursiveCreateDirectory(preset_path, 0)
-    
-    -- Save preset using script-relative path
     local file = io.open(preset_path .. name .. '.json', 'w')
     if file then
         file:write(json.encode(preset_data))
@@ -278,9 +244,7 @@ function SavePreset(name)
     end
 end
 
-
 function LoadPreset(name)
-    -- Use script-relative path for loading presets
     local file = io.open(preset_path .. name .. '.json', 'r')
     if file then
         local content = file:read('*all')
@@ -301,8 +265,6 @@ end
 
 function GetPresetList()
     local presets = {}
-    
-    -- Use script-relative path for enumerating presets
     local idx = 0
     local filename = r.EnumerateFiles(preset_path, idx)
     
@@ -316,7 +278,6 @@ function GetPresetList()
     
     return presets
 end
-
 
 function RefreshProjectState()
     LoadSettings()
@@ -452,18 +413,18 @@ function GetFolderBoundaries(track)
 end
 
 
+-- In de ShowSettingsWindow functie:
 function ShowSettingsWindow()
     if not settings_visible then return end
     
     -- Use Sexan's positioning
     local _, DPI_RPR = r.get_config_var_string("uiscale")
-    local window_x = LEFT + (RIGHT - LEFT - 450) / 2  -- Center horizontally
+    local window_x = LEFT + (RIGHT - LEFT - 460) / 2  -- Center horizontally
     local window_y = TOP + (BOT - TOP - 520) / 2      -- Center vertically
     
     r.ImGui_SetNextWindowPos(ctx, window_x, window_y, r.ImGui_Cond_FirstUseEver())
-    -- r.ImGui_SetNextWindowSize(ctx, 450, 520)
-    r.ImGui_SetNextWindowSize(ctx, 450, -1)
-
+    r.ImGui_SetNextWindowSize(ctx, 460, -1)
+    
     -- Style setup
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -489,15 +450,15 @@ function ShowSettingsWindow()
     local visible, open = r.ImGui_Begin(ctx, 'Track Names Settings', true, window_flags)
     
     if visible then
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        -- Header met titel en sluitknop
         r.ImGui_Text(ctx, "TK Track ReaDecorator Settings")
+        local window_width = r.ImGui_GetWindowWidth(ctx)
+        
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, window_width - 200)
+        r.ImGui_Text(ctx, string.format("Scaling: %.0f%%", settings.manual_scaling * 100))
 
         r.ImGui_SameLine(ctx)
-        
-        r.ImGui_SetCursorPosX(ctx, window_width - 45)
-        
-        -- Rode sluitknop
+        r.ImGui_SetCursorPosX(ctx, window_width - 50)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF6666FF)
@@ -508,11 +469,10 @@ function ShowSettingsWindow()
             r.SetExtState("TK_TRACKNAMES", "settings_visible", "0", false)
         end
         r.ImGui_PopStyleColor(ctx, 3)
-       
         r.ImGui_Separator(ctx)
+
         -- PRESETS
         if r.ImGui_Button(ctx, "Save Preset" , 100) then
-            -- Toon popup voor preset naam
             r.ImGui_OpenPopup(ctx, "Save Preset##popup")
         end
         r.ImGui_SameLine(ctx)
@@ -522,21 +482,6 @@ function ShowSettingsWindow()
             for _, preset_name in ipairs(presets) do
                 if r.ImGui_Selectable(ctx, preset_name) then
                     LoadPreset(preset_name)
-                end
-            end
-            r.ImGui_EndCombo(ctx)
-        end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetNextItemWidth(ctx, 100)
-        if r.ImGui_BeginCombo(ctx, "##scaling", string.format("%.0f%%", settings.manual_scaling * 100)) then
-            r.ImGui_Text(ctx, "Set Scaling")  -- Eerste regel in dropdown
-            r.ImGui_Separator(ctx)            -- Visuele scheiding
-            local scaling_options = {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0}
-            for _, scale in ipairs(scaling_options) do
-                if r.ImGui_Selectable(ctx, string.format("%.0f%%", scale * 100), settings.manual_scaling == scale) then
-                    settings.manual_scaling = scale
-                    SaveSettings()
-                    needs_font_update = CheckNeedsUpdate()
                 end
             end
             r.ImGui_EndCombo(ctx)
@@ -1047,11 +992,29 @@ function RenderFolderFrameOverlay(draw_list, track, color)
         end
     end
 end
+
+-- Scaling by OLSHALOM!
+function SetWindowScale(ImGuiScale)
+    local OS = reaper.GetOS()
+    if OS:find("Win") then
+        settings.manual_scaling = ImGuiScale  -- Voor Windows
+    else
+        settings.manual_scaling = 1
+    end
+end
+
 function loop()
     settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
         ctx = r.ImGui_CreateContext('Track Names')
         CreateFonts()
+    end
+
+    -- Set window scale (OLSHALOM)
+    local ImGuiScale = reaper.ImGui_GetWindowDpiScale(ctx)
+    if ImGuiScale ~= ImGuiScale_saved then
+      SetWindowScale(ImGuiScale)
+      ImGuiScale_saved = ImGuiScale
     end
 
     -- Project state checks
@@ -1583,9 +1546,10 @@ function loop()
         needs_font_update = false
     end
 
+
     if settings_visible then
         ShowSettingsWindow()
-    end            
+    end      
     
     if open then
         script_active = true
