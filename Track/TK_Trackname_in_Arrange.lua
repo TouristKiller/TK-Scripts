@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.5.1
+-- @version 0.5.2
 -- @changelog 
 --[[
-+ Removed: Manual scaling! (Thanx OLSHALOM!!)
++ Bugfix Error when opening settings button
 ]]--
 
 local r             = reaper
@@ -88,6 +88,8 @@ local default_settings = {
     folder_border = false, 
     border_thickness = 2.0,
     border_opacity = 1.0,
+    button_x = 100, 
+    button_y = 100, 
     manual_scaling, -- OLSHALOM
 } 
 local settings = {}

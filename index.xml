@@ -69,7 +69,7 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.5.1" author="TouristKiller" time="2024-12-28T19:10:00Z">
+        <version name="0.5.2" author="TouristKiller" time="2024-12-28T21:00:00Z">
             <changelog><![CDATA[           
 + Removed: Manual scaling! (Thanx OLSHALOM!!)
 ]]></changelog>
