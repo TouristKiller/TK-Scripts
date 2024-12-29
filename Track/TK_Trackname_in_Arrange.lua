@@ -1,9 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.5.2
+-- @version 0.5.3
 -- @changelog 
 --[[
-+ Bugfix Error when opening settings button
++ Added: Track Border
++ added: Folder and Track border all sides can be set separately
++ Fix: Hopfully fixed win 7 compatibility (no more black screen)
 ]]--
 
 local r             = reaper
@@ -24,6 +26,9 @@ local last_track_count = 0
 local overlay_enabled = false
 local needs_font_update = false
 local ImGuiScale_saved -- OLSHALOM
+local screen_scale -- OLSHALOM
+local is_windows_7 = r.GetOS():match('Win') and not r.GetOS():match('Win[8-9]') and not r.GetOS():match('Win1')
+local bg_alpha = is_windows_7 and 0.1 or 0.0
 
 -- Sexan's positioning system
 local LEFT, TOP, RIGHT, BOT = 0, 0, 0, 0
@@ -85,12 +90,20 @@ local default_settings = {
     gradient_end_alpha = 0.0,
     track_name_length = 1,
     all_text_enabled = true,
-    folder_border = false, 
+    folder_border = false,
+    folder_border_left = true,
+    folder_border_right = true,
+    folder_border_top = true,
+    folder_border_bottom = true,
+    track_border = false,
+    track_border_left = true,
+    track_border_right = true,
+    track_border_top = true,
+    track_border_bottom = true,
     border_thickness = 2.0,
     border_opacity = 1.0,
     button_x = 100, 
     button_y = 100, 
-    manual_scaling, -- OLSHALOM
 } 
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -199,16 +212,8 @@ end
 
 function SaveSettings()
     local section = "TK_TRACKNAMES"
-    
-    -- Maak een kopie van de settings zonder manual_scaling
-    local settings_to_save = {}
-    for k, v in pairs(settings) do
-        if k ~= "manual_scaling" then
-            settings_to_save[k] = v
-        end
-    end
-    
-    local settings_json = json.encode(settings_to_save)
+    -- Direct de settings opslaan zonder filtering
+    local settings_json = json.encode(settings)
     r.SetExtState(section, "settings", settings_json, true)
 end
 
@@ -457,7 +462,7 @@ function ShowSettingsWindow()
         
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, window_width - 200)
-        r.ImGui_Text(ctx, string.format("Scaling: %.0f%%", settings.manual_scaling * 100))
+        r.ImGui_Text(ctx, string.format("Scaling: %.0f%%", screen_scale * 100))
 
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, window_width - 50)
@@ -617,13 +622,13 @@ function ShowSettingsWindow()
         
             r.ImGui_SameLine(ctx, column_width * 2)
             
-                r.ImGui_SetNextItemWidth(ctx, 100)
-                if r.ImGui_BeginCombo(ctx, "##Overlay Style", 
+            r.ImGui_SetNextItemWidth(ctx, 100)
+             if r.ImGui_BeginCombo(ctx, "##Overlay Style", 
                 settings.overlay_style == 1 and " Solid" or 
                 settings.overlay_style == 2 and " Frame" or 
                 "Folder Frame") then
                 if r.ImGui_Selectable(ctx, " Solid", settings.overlay_style == 1) then
-                    settings.overlay_style = 1
+                        settings.overlay_style = 1
                 end
                 if r.ImGui_Selectable(ctx, " Frame", settings.overlay_style == 2) then
                     settings.overlay_style = 2
@@ -631,14 +636,14 @@ function ShowSettingsWindow()
                 if r.ImGui_Selectable(ctx, " Folder Frame", settings.overlay_style == 3) then
                     settings.overlay_style = 3
                 end
-                r.ImGui_EndCombo(ctx)
-                end
-        
-            r.ImGui_SameLine(ctx, column_width * 3)
-            if r.ImGui_RadioButton(ctx, "Normal colors", settings.show_normal_colors) then
-                settings.show_normal_colors = not settings.show_normal_colors
-                needs_font_update = CheckTrackColorUpdate()
+            r.ImGui_EndCombo(ctx)
             end
+            
+            r.ImGui_SameLine(ctx, column_width * 3)
+            if r.ImGui_RadioButton(ctx, "Inherit color", settings.inherit_parent_color) then
+                settings.inherit_parent_color = not settings.inherit_parent_color
+            end    
+        
             -- Vierde rij
             if r.ImGui_RadioButton(ctx, "Parent colors", settings.show_parent_colors) then
                 settings.show_parent_colors = not settings.show_parent_colors
@@ -650,8 +655,9 @@ function ShowSettingsWindow()
                 needs_font_update = CheckTrackColorUpdate()
             end
             r.ImGui_SameLine(ctx, column_width * 2)
-            if r.ImGui_RadioButton(ctx, "Inherit color", settings.inherit_parent_color) then
-                settings.inherit_parent_color = not settings.inherit_parent_color
+            if r.ImGui_RadioButton(ctx, "Normal colors", settings.show_normal_colors) then
+                settings.show_normal_colors = not settings.show_normal_colors
+                needs_font_update = CheckTrackColorUpdate()
             end
             r.ImGui_SameLine(ctx, column_width * 3)
             if r.ImGui_RadioButton(ctx, "Record color", settings.show_record_color) then
@@ -678,26 +684,107 @@ function ShowSettingsWindow()
                 end
             end
             if settings.show_parent_colors and settings.overlay_style == 1 then
-                r.ImGui_SameLine(ctx, column_width * 3)
                 if r.ImGui_RadioButton(ctx, "Folder Borders", settings.folder_border) then
                     settings.folder_border = not settings.folder_border
                 end
-            end
+                if settings.folder_border then
+                    r.ImGui_SameLine(ctx, column_width)  
+                    if r.ImGui_RadioButton(ctx, "All##folder",
+                        settings.folder_border_left and
+                        settings.folder_border_right and
+                        settings.folder_border_top and
+                        settings.folder_border_bottom) then
+                        local new_state = not (settings.folder_border_left and
+                                             settings.folder_border_right and
+                                             settings.folder_border_top and
+                                             settings.folder_border_bottom)
+                        settings.folder_border_left = new_state
+                        settings.folder_border_right = new_state
+                        settings.folder_border_top = new_state
+                        settings.folder_border_bottom = new_state
+                    end
             
-        end
-        r.ImGui_PopStyleVar(ctx)
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_RadioButton(ctx, "Left##folder", settings.folder_border_left) then
+                        settings.folder_border_left = not settings.folder_border_left
+                    end
+            
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_RadioButton(ctx, "Right##folder", settings.folder_border_right) then
+                        settings.folder_border_right = not settings.folder_border_right
+                    end
+            
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_RadioButton(ctx, "Top##folder", settings.folder_border_top) then
+                        settings.folder_border_top = not settings.folder_border_top
+                    end
+            
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_RadioButton(ctx, "Bottom##folder", settings.folder_border_bottom) then
+                        settings.folder_border_bottom = not settings.folder_border_bottom
+                    end
+                end
+            end
+            -- Na de folder border settings
+            if settings.show_normal_colors and settings.overlay_style == 1 then
+                if r.ImGui_RadioButton(ctx, "Track Borders ", settings.track_border) then
+                    settings.track_border = not settings.track_border
+                end
 
+                if settings.track_border then
+                    r.ImGui_SameLine(ctx, column_width)
+                    if r.ImGui_RadioButton(ctx, "All##track",
+                        settings.track_border_left and
+                        settings.track_border_right and
+                        settings.track_border_top and
+                        settings.track_border_bottom) then
+                        local new_state = not (settings.track_border_left and
+                                            settings.track_border_right and
+                                            settings.track_border_top and
+                                            settings.track_border_bottom)
+                        settings.track_border_left = new_state
+                        settings.track_border_right = new_state
+                        settings.track_border_top = new_state
+                        settings.track_border_bottom = new_state
+                    end
+
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_RadioButton(ctx, "Left##track", settings.track_border_left) then
+                        settings.track_border_left = not settings.track_border_left
+                    end
+
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_RadioButton(ctx, "Right##track", settings.track_border_right) then
+                        settings.track_border_right = not settings.track_border_right
+                    end
+
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_RadioButton(ctx, "Top##track", settings.track_border_top) then
+                        settings.track_border_top = not settings.track_border_top
+                    end
+
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_RadioButton(ctx, "Bottom##track", settings.track_border_bottom) then
+                        settings.track_border_bottom = not settings.track_border_bottom
+                    end
+                end
+            end
+        end  
+        r.ImGui_PopStyleVar(ctx)
         r.ImGui_Separator(ctx)
+            
 
         -- Set consistent width for all controls
         r.ImGui_PushItemWidth(ctx, 340)
         if settings.show_track_colors then
                 -- Track colors section
-            if settings.folder_border and settings.show_parent_colors and settings.overlay_style == 1 then
+            -- Gecombineerde border controls
+            if (settings.folder_border and settings.show_parent_colors and settings.overlay_style == 1) or 
+            (settings.track_border and settings.show_normal_colors and settings.overlay_style == 1) then
                 changed, settings.border_thickness = r.ImGui_SliderDouble(ctx, "Border Thickness", settings.border_thickness, 1, 20.0)
                 changed, settings.border_opacity = r.ImGui_SliderDouble(ctx, "Border Opacity", settings.border_opacity, 0.0, 1.0)
             end
-          
+                    
             -- Frame thickness for frame styles
             if settings.overlay_style == 2 or settings.overlay_style == 3 then
                 changed, settings.frame_thickness = r.ImGui_SliderDouble(ctx, "Frame Thickness", settings.frame_thickness, 1.0, 20.0)
@@ -825,7 +912,7 @@ end
 
 function IsTrackVisible(track)
     local MIN_TRACK_HEIGHT = 10
-    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / settings.manual_scaling
+    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
     
     if track_height <= MIN_TRACK_HEIGHT then
         return false
@@ -833,7 +920,7 @@ function IsTrackVisible(track)
     
     local parent = r.GetParentTrack(track)
     while parent do
-        local parent_height = r.GetMediaTrackInfo_Value(parent, "I_TCPH") / settings.manual_scaling
+        local parent_height = r.GetMediaTrackInfo_Value(parent, "I_TCPH") / screen_scale
         if parent_height <= MIN_TRACK_HEIGHT then
             return false
         end
@@ -976,9 +1063,9 @@ function RenderFolderFrameOverlay(draw_list, track, color)
             local start_track = r.GetTrack(0, start_idx)
             local end_track = r.GetTrack(0, end_idx)
             
-            local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /settings.manual_scaling
-            local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /settings.manual_scaling
-            local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /settings.manual_scaling
+            local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /screen_scale
+            local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
+            local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
             
             r.ImGui_DrawList_AddRect(
                 draw_list,
@@ -995,13 +1082,26 @@ function RenderFolderFrameOverlay(draw_list, track, color)
     end
 end
 
+function DrawFolderBorderLine(draw_list, x1, y1, x2, y2, color, thickness)
+    r.ImGui_DrawList_AddLine(
+        draw_list,
+        x1,
+        y1,
+        x2,
+        y2,
+        color,
+        thickness
+    )
+end
+
+
 -- Scaling by OLSHALOM!
 function SetWindowScale(ImGuiScale)
     local OS = reaper.GetOS()
     if OS:find("Win") then
-        settings.manual_scaling = ImGuiScale  -- Voor Windows
+        screen_scale = ImGuiScale  -- Voor Windows
     else
-        settings.manual_scaling = 1
+        screen_scale = 1
     end
 end
 
@@ -1031,14 +1131,17 @@ function loop()
     -- Sexan's positioning implementation
     DrawOverArrange()
     
-    local flags = 
-        r.ImGui_WindowFlags_NoTitleBar() |
-        r.ImGui_WindowFlags_NoResize() |
-        r.ImGui_WindowFlags_NoNav() |
-        r.ImGui_WindowFlags_NoScrollbar() |
-        r.ImGui_WindowFlags_NoBackground() |
-        r.ImGui_WindowFlags_NoDecoration() |
-        r.ImGui_WindowFlags_NoDocking()
+    local flags = r.ImGui_WindowFlags_NoTitleBar() |
+                r.ImGui_WindowFlags_NoResize() |
+                r.ImGui_WindowFlags_NoNav() |
+                r.ImGui_WindowFlags_NoScrollbar() |
+                r.ImGui_WindowFlags_NoDecoration() |
+                r.ImGui_WindowFlags_NoDocking()
+
+    -- NoBackground flag alleen toevoegen voor moderne Windows versies
+    if not is_windows_7 then
+        flags = flags | r.ImGui_WindowFlags_NoBackground()
+    end
 
     -- Track colors overlay window
     if settings.show_track_colors then    
@@ -1050,17 +1153,19 @@ function loop()
             r.ImGui_WindowFlags_NoMouseInputs() |
             r.ImGui_WindowFlags_NoFocusOnAppearing()
 
-        r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
+            r.ImGui_SetNextWindowBgAlpha(ctx, bg_alpha)
         r.ImGui_SetNextWindowPos(ctx, LEFT, TOP)
         r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
         
         local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
         if overlay_visible then
             local folder_borders = {}
+            local track_borders = {}
             local colors_cache = {}
             local track_count = r.CountTracks(0)
             local WX, WY = r.ImGui_GetWindowPos(ctx)
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
+
 
 
             -- Build colors cache
@@ -1107,13 +1212,44 @@ function loop()
                         end
                     end
                 end
+                if (not is_parent and not is_child and settings.show_normal_colors) then
+                    local color = r.GetTrackColor(track)
+                    
+                    if color ~= 0 then
+                        local bg_color = reaper.GetThemeColor("col_arrangebg", 0)
+                        local blended_color = BlendColor(bg_color, color, settings.blend_mode)
+                        local blend_r, blend_g, blend_b = reaper.ColorFromNative(blended_color)
+                        
+                        -- Store main color
+                        colors_cache[i] = reaper.ImGui_ColorConvertDouble4ToU32(
+                            blend_r/255, blend_g/255, blend_b/255,
+                            settings.overlay_alpha)
+                        
+                        -- Add border color for normal tracks
+                        if settings.track_border then
+                            local r_val, g_val, b_val = r.ColorFromNative(color)
+                            r_val = math.floor(r_val * 0.7)
+                            g_val = math.floor(g_val * 0.7)
+                            b_val = math.floor(b_val * 0.7)
+                            
+                            table.insert(track_borders, {
+                                track = track,
+                                y_pos = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale,
+                                height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale,
+                                color = reaper.ImGui_ColorConvertDouble4ToU32(
+                                    r_val/255, g_val/255, b_val/255,
+                                    settings.border_opacity)
+                            })
+                        end
+                    end
+                end
             end
 
             -- Render track overlays
             for i = 0, track_count - 1 do
                 local track = r.GetTrack(0, i)
-                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /settings.manual_scaling
-                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /settings.manual_scaling
+                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
+                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
                 
                 if colors_cache[i] and track_y < (BOT - TOP) - scroll_size and track_y + track_height > 0 then
                     if settings.overlay_style == 1 then
@@ -1178,8 +1314,9 @@ function loop()
                                 })
                             end
                         end
-                    
 
+                        
+                
                     elseif settings.overlay_style == 2 then
                         -- Frame
                         r.ImGui_DrawList_AddRect(
@@ -1200,9 +1337,9 @@ function loop()
                             if start_idx and end_idx then
                                 local start_track = r.GetTrack(0, start_idx)
                                 local end_track = r.GetTrack(0, end_idx)
-                                local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /settings.manual_scaling
-                                local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /settings.manual_scaling
-                                local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /settings.manual_scaling
+                                local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /screen_scale
+                                local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
+                                local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
                                 
                                 r.ImGui_DrawList_AddRect(
                                     draw_list,
@@ -1220,30 +1357,161 @@ function loop()
                     end
                 end
             end
-            -- de borders tekenen
             for _, border in ipairs(folder_borders or {}) do
                 if border and border.start_idx and border.end_idx then
                     local start_track = r.GetTrack(0, border.start_idx)
                     if start_track then
-                        local start_track = r.GetTrack(0, border.start_idx)
                         local end_track = r.GetTrack(0, border.end_idx)
-                        local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /settings.manual_scaling
-                        local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /settings.manual_scaling
-                        local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /settings.manual_scaling
+                        local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /screen_scale
+                        local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
+                        local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
                         
-                        r.ImGui_DrawList_AddRect(
-                            draw_list,
-                            LEFT + settings.border_thickness/2,
-                            WY + start_y + settings.border_thickness/2,
-                            RIGHT - scroll_size - settings.border_thickness/2,
-                            WY + end_y + end_height - settings.border_thickness/2,
-                            border.color,
-                            0,
-                            0,
-                            settings.border_thickness
-                        )
-            
+                        -- Teken alleen de geselecteerde borders
+                        if settings.folder_border_left or settings.folder_border_right or 
+                        settings.folder_border_top or settings.folder_border_bottom then
+                            
+                            if settings.folder_border_left and settings.folder_border_right and 
+                            settings.folder_border_top and settings.folder_border_bottom then
+                                -- Als alle borders aan staan, gebruik AddRect voor efficiëntie
+                                r.ImGui_DrawList_AddRect(
+                                    draw_list,
+                                    LEFT + settings.border_thickness/2,
+                                    WY + start_y + settings.border_thickness/2,
+                                    RIGHT - scroll_size - settings.border_thickness/2,
+                                    WY + end_y + end_height - settings.border_thickness/2,
+                                    border.color,
+                                    0,
+                                    0,
+                                    settings.border_thickness
+                                )
+                            else
+                                -- Basis rechthoek coördinaten (voor correcte positionering)
+                                local rect_left = LEFT + settings.border_thickness/2
+                                local rect_right = RIGHT - scroll_size - settings.border_thickness/2
+                                local rect_top = WY + start_y + settings.border_thickness/2
+                                local rect_bottom = WY + end_y + end_height - settings.border_thickness/2
+
+                                -- Lijn coördinaten (voor volledige lengte)
+                                local line_left = LEFT
+                                local line_right = RIGHT - scroll_size
+                                local line_top = WY + start_y
+                                local line_bottom = WY + end_y + end_height
+
+                                -- Voor verticale lijnen (links en rechts)
+                                if settings.folder_border_left then
+                                    r.ImGui_DrawList_AddLine(
+                                        draw_list,
+                                        rect_left,
+                                        line_top,
+                                        rect_left,
+                                        line_bottom,
+                                        border.color,
+                                        settings.border_thickness
+                                    )
+                                end
+
+                                if settings.folder_border_right then
+                                    r.ImGui_DrawList_AddLine(
+                                        draw_list,
+                                        rect_right,
+                                        line_top,
+                                        rect_right,
+                                        line_bottom,
+                                        border.color,
+                                        settings.border_thickness
+                                    )
+                                end
+
+                                -- Voor horizontale lijnen (boven en onder)
+                                if settings.folder_border_top then
+                                    r.ImGui_DrawList_AddLine(
+                                        draw_list,
+                                        line_left,
+                                        rect_top,
+                                        line_right,
+                                        rect_top,
+                                        border.color,
+                                        settings.border_thickness
+                                    )
+                                end
+
+                                if settings.folder_border_bottom then
+                                    r.ImGui_DrawList_AddLine(
+                                        draw_list,
+                                        line_left,
+                                        rect_bottom,
+                                        line_right,
+                                        rect_bottom,
+                                        border.color,
+                                        settings.border_thickness
+                                    )
+                                end
+                            end
+                        end
                     end
+                end
+            end
+            -- Na de folder borders rendering
+            for _, border in ipairs(track_borders or {}) do
+                -- Basis rechthoek coördinaten
+                local rect_left = LEFT + settings.border_thickness/2
+                local rect_right = RIGHT - scroll_size - settings.border_thickness/2
+                local rect_top = WY + border.y_pos + settings.border_thickness/2
+                local rect_bottom = WY + border.y_pos + border.height - settings.border_thickness/2
+
+                -- Lijn coördinaten
+                local line_left = LEFT
+                local line_right = RIGHT - scroll_size
+                local line_top = WY + border.y_pos
+                local line_bottom = WY + border.y_pos + border.height
+
+                -- Teken de borders
+                if settings.track_border_left then
+                    r.ImGui_DrawList_AddLine(
+                        draw_list,
+                        rect_left,
+                        line_top,
+                        rect_left,
+                        line_bottom,
+                        border.color,
+                        settings.border_thickness
+                    )
+                end
+
+                if settings.track_border_right then
+                    r.ImGui_DrawList_AddLine(
+                        draw_list,
+                        rect_right,
+                        line_top,
+                        rect_right,
+                        line_bottom,
+                        border.color,
+                        settings.border_thickness
+                    )
+                end
+
+                if settings.track_border_top then
+                    r.ImGui_DrawList_AddLine(
+                        draw_list,
+                        line_left,
+                        rect_top,
+                        line_right,
+                        rect_top,
+                        border.color,
+                        settings.border_thickness
+                    )
+                end
+
+                if settings.track_border_bottom then
+                    r.ImGui_DrawList_AddLine(
+                        draw_list,
+                        line_left,
+                        rect_bottom,
+                        line_right,
+                        rect_bottom,
+                        border.color,
+                        settings.border_thickness
+                    )
                 end
             end
         end
@@ -1252,7 +1520,7 @@ function loop()
 
     -- Settings button
     if settings.show_settings_button then
-        r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
+        r.ImGui_SetNextWindowBgAlpha(ctx, bg_alpha)
         r.ImGui_SetNextWindowPos(ctx, settings.button_x, settings.button_y, r.ImGui_Cond_Once())
         
         local button_flags = r.ImGui_WindowFlags_NoTitleBar() | 
@@ -1285,7 +1553,7 @@ function loop()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x00000000)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x00000000)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0.0)
-    r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
+    r.ImGui_SetNextWindowBgAlpha(ctx, bg_alpha)
     
     local visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, text_flags)
     if visible then
@@ -1338,8 +1606,8 @@ function loop()
                         end
                     end
 
-                    local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /settings.manual_scaling
-                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /settings.manual_scaling
+                    local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
+                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
                     local vertical_offset = (track_height * settings.vertical_offset) / 100
                     local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5) + vertical_offset
 
