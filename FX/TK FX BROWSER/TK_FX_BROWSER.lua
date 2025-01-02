@@ -1,12 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.0.1:
+-- @version 1.0.2:
 -- @changelog:
 --[[        
-+ Added: Masonry layout
-+ Added: choise to view big folders as pages or not (if nog then lazy loading)
-+ Fix: The script remembers if notes was opened or closed.
-+ A lot of Bugfixing because of the implementation of Browser Panel and Masonry view
++ Added Show/ hide Notes in settings
++ Minor bug fix single screenshot MacOS
 
 
 
@@ -113,7 +111,6 @@ local FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
 if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
     FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
 end
-local PLUGIN_LIST = GetFXTbl() 
 
 local function get_safe_name(name)
     return (name or ""):gsub("[^%w%s-]", "_")
@@ -239,6 +236,7 @@ local function SetDefaultConfig()
         create_sends_folder = false,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
         show_notes = true,
+        show_notes_widget =  false,
         track_notes_color = track_notes_color or 0xFFFFB366,  -- Default orange
         item_notes_color = item_notes_color or 0x6699FFFF,    -- Default blue
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
@@ -851,7 +849,7 @@ local function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 540
+    local window_height = 560
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -1099,15 +1097,19 @@ local function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
+          
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
+            _, config.show_tags = r.ImGui_Checkbox(ctx, "Show Tags", config.show_tags)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.show_notes_widget = r.ImGui_Checkbox(ctx, "Show Notes", config.show_notes_widget)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.show_tags = r.ImGui_Checkbox(ctx, "Show Tags", config.show_tags)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
             r.ImGui_SameLine(ctx)
             _, config.hideMeter = r.ImGui_Checkbox(ctx, "Hide Meter", config.hideMeter)
-
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
+        
             r.ImGui_Dummy(ctx, 0, 5)
             NewSection("SCREENSHOT WINDOW:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -1830,6 +1832,7 @@ local function CaptureExistingFX(track, fx_index)
                 r.JS_GDI_ReleaseDC(hwnd, srcDC)
                 r.JS_LICE_DestroyBitmap(destBmp)
             else
+                h = top - bottom -- Oval (feedback vragen of dit werkt?)
                 ScreenshotOSX(filename, left, top, w, h)
             end
             
@@ -6565,64 +6568,67 @@ local function ShowTrackFX()
         end       
         r.ImGui_EndChild(ctx)
         end
-        r.ImGui_Separator(ctx)
+
         -- Notation:
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
+        if config.show_notes_widget then
+            r.ImGui_Separator(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
 
-        -- Eerst de kleurknop
-        if r.ImGui_ColorButton(ctx, "##notes_color", config.track_notes_color, 0, 13, 13) then
-            r.ImGui_OpenPopup(ctx, "NotesColorPopup")
-        end
+            -- Eerst de kleurknop
+            if r.ImGui_ColorButton(ctx, "##notes_color", config.track_notes_color, 0, 13, 13) then
+                r.ImGui_OpenPopup(ctx, "NotesColorPopup")
+            end
 
-        r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx)
 
-        if r.ImGui_Selectable(ctx, config.show_notes and " - " or " + ") then
-            config.show_notes = not config.show_notes
-            SaveConfig()
-        end
-
-        r.ImGui_SameLine(ctx)
-        r.ImGui_Text(ctx, "Notes:")
-
-        -- Save knop rechts uitlijnen
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        local text_width = r.ImGui_CalcTextSize(ctx, "Save")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, window_width - text_width - 5)
-        if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
-            SaveNotes()
-        end
-
-        -- Color picker popup
-        if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
-            local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.track_notes_color)
-            if changed then
-                config.track_notes_color = new_color
+            if r.ImGui_Selectable(ctx, config.show_notes and " - " or " + ") then
+                config.show_notes = not config.show_notes
                 SaveConfig()
             end
-            r.ImGui_EndPopup(ctx)
-        end
 
-        r.ImGui_PopStyleColor(ctx, 2)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Notes:")
 
-        -- Notes section
-        if config.show_notes then
-            local track_guid = r.GetTrackGUID(TRACK)
-            if not notes[track_guid] then
-                notes[track_guid] = LoadNotes()[track_guid] or ""
+            -- Save knop rechts uitlijnen
+            local window_width = r.ImGui_GetWindowWidth(ctx)
+            local text_width = r.ImGui_CalcTextSize(ctx, "Save")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, window_width - text_width - 5)
+            if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
+                SaveNotes()
             end
 
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.track_notes_color)
-            if r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height) then
-                local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##tracknotes", notes[track_guid], -1, notes_height - 10)
+            -- Color picker popup
+            if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
+                local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.track_notes_color)
                 if changed then
-                    notes[track_guid] = new_note
-                    SaveNotes()
+                    config.track_notes_color = new_color
+                    SaveConfig()
                 end
-                r.ImGui_EndChild(ctx)
+                r.ImGui_EndPopup(ctx)
             end
-        r.ImGui_PopStyleColor(ctx)       
+
+            r.ImGui_PopStyleColor(ctx, 2)
+
+            -- Notes section
+            if config.show_notes then
+                local track_guid = r.GetTrackGUID(TRACK)
+                if not notes[track_guid] then
+                    notes[track_guid] = LoadNotes()[track_guid] or ""
+                end
+
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.track_notes_color)
+                if r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height) then
+                    local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##tracknotes", notes[track_guid], -1, notes_height - 10)
+                    if changed then
+                        notes[track_guid] = new_note
+                        SaveNotes()
+                    end
+                    r.ImGui_EndChild(ctx)
+                end
+            r.ImGui_PopStyleColor(ctx)       
+        end
     end
 end
 
