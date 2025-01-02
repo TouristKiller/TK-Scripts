@@ -69,11 +69,11 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.5.3" author="TouristKiller" time="2024-12-29T16:00:00Z">
+        <version name="0.5.4" author="TouristKiller" time="2024-01-02T20:30:00Z">
             <changelog><![CDATA[           
-+ Added: Track Border
-+ added: Folder and Track border all sides can be set separately
-+ Fix: Hopfully fixed win 7 compatibility (no more black screen)
++ Improvment: Better performance
++ Fix: If Script is exited the theme colors are restored
++ Fix: Folder Border stays visible when parant folder is scrolled out of view
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>

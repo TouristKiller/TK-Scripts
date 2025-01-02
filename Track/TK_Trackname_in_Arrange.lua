@@ -1,11 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.5.3
+-- @version 0.5.4
 -- @changelog 
 --[[
-+ Added: Track Border
-+ added: Folder and Track border all sides can be set separately
-+ Fix: Hopfully fixed win 7 compatibility (no more black screen)
++ Improvment: Better performance
++ Fix: If Script is exited the theme colors are restored
++ Fix: Folder Border stays visible when parant folder is scrolled out of view
 ]]--
 
 local r             = reaper
@@ -27,8 +27,24 @@ local overlay_enabled = false
 local needs_font_update = false
 local ImGuiScale_saved -- OLSHALOM
 local screen_scale -- OLSHALOM
-local is_windows_7 = r.GetOS():match('Win') and not r.GetOS():match('Win[8-9]') and not r.GetOS():match('Win1')
-local bg_alpha = is_windows_7 and 0.1 or 0.0
+
+local folder_borders = {}
+local track_borders = {}
+local colors_cache = {}
+local color_cache = {}
+local cached_bg_color = nil
+function UpdateBgColorCache()
+    cached_bg_color = reaper.GetThemeColor("col_arrangebg", 0)
+end
+
+function GetCachedColor(native_color, alpha)
+    local cache_key = native_color .. "_" .. alpha
+    if not color_cache[cache_key] then
+        local r, g, b = reaper.ColorFromNative(native_color)
+        color_cache[cache_key] = reaper.ImGui_ColorConvertDouble4ToU32(r/255, g/255, b/255, alpha)
+    end
+    return color_cache[cache_key]
+end
 
 -- Sexan's positioning system
 local LEFT, TOP, RIGHT, BOT = 0, 0, 0, 0
@@ -43,11 +59,14 @@ local arrange = r.JS_Window_FindChildByID(main, 0x3E8)
 local function DrawOverArrange()
     local _, DPI_RPR = r.get_config_var_string("uiscale")
     scroll_size = 15 * DPI_RPR
-    _, LEFT, TOP, RIGHT, BOT = r.JS_Window_GetRect(arrange)
-    if TOP + BOT + LEFT + RIGHT ~= OLD_VAL then
-        LEFT, TOP = im.PointConvertNative(ctx, LEFT, TOP)
-        RIGHT, BOT = im.PointConvertNative(ctx, RIGHT, BOT)
-        OLD_VAL = TOP + BOT + LEFT + RIGHT
+    
+    local _, orig_LEFT, orig_TOP, orig_RIGHT, orig_BOT = r.JS_Window_GetRect(arrange)
+    local current_val = orig_TOP + orig_BOT + orig_LEFT + orig_RIGHT
+    
+    if current_val ~= OLD_VAL then
+        OLD_VAL = current_val
+        LEFT, TOP = im.PointConvertNative(ctx, orig_LEFT, orig_TOP)
+        RIGHT, BOT = im.PointConvertNative(ctx, orig_RIGHT, orig_BOT)
     end
 end
 
@@ -104,6 +123,8 @@ local default_settings = {
     border_opacity = 1.0,
     button_x = 100, 
     button_y = 100, 
+    gradient_start_alpha_cached = 0,
+    gradient_end_alpha_cached = 0
 } 
 local settings = {}
 for k, v in pairs(default_settings) do
@@ -154,44 +175,21 @@ function GetTextColor(track, is_child)
     elseif settings.color_mode == 2 then
         return 0x000000FF
     elseif settings.color_mode == 3 then
-        local r_val, g_val, b_val = r.ColorFromNative(r.GetTrackColor(track))
-        local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val, g_val, b_val)
-        
-        if h > 0 and s > 0 and v > 0 then
-            if v/255 > 0.8 then
-                v = v - 0.2*255
-            else
-                v = v + 0.2*255
-            end
-            
-            if s > 0.9 then
-                s = s - 0.1
-            else
-                s = s + 0.1
-            end
-        end
-        
-        local r_val, g_val, b_val = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
-        return r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
+        return GetCachedColor(r.GetTrackColor(track), 1.0)
     else
-        local r_val, g_val, b_val = r.ColorFromNative(r.GetTrackColor(track))
-        local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val, g_val, b_val)
-        h = (h + 0.5) % 1.0
-        
-        if v/255 > 0.8 then
-            v = v - 0.2*255
-        else
-            v = v + 0.2*255
+        local track_color = r.GetTrackColor(track)
+        local cache_key = "complementary_" .. track_color
+        if not color_cache[cache_key] then
+            local r_val, g_val, b_val = r.ColorFromNative(track_color)
+            local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val, g_val, b_val)
+            h = (h + 0.5) % 1.0
+            local r_val, g_val, b_val = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
+            color_cache[cache_key] = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
         end
-        if s > 0.9 then
-            s = s - 0.1
-        else
-            s = s + 0.1
-        end
-        local r_val, g_val, b_val = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
-        return r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
+        return color_cache[cache_key]
     end
 end
+
 
 function GetLabelColor(track)
     if settings.label_color_mode == 1 then
@@ -199,15 +197,24 @@ function GetLabelColor(track)
     elseif settings.label_color_mode == 2 then
         return r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, settings.label_alpha)
     elseif settings.label_color_mode == 3 then
-        local r_val, g_val, b_val = r.ColorFromNative(r.GetTrackColor(track))
-        return r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, settings.label_alpha)
+        return GetCachedColor(r.GetTrackColor(track), settings.label_alpha)
     else
-        local r_val, g_val, b_val = r.ColorFromNative(r.GetTrackColor(track))
-        local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val/255, g_val/255, b_val/255)
-        h = (h + 0.5) % 1.0
-        local r_val, g_val, b_val = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
-        return r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.label_alpha)
+        local track_color = r.GetTrackColor(track)
+        local cache_key = "label_complementary_" .. track_color .. "_" .. settings.label_alpha
+        if not color_cache[cache_key] then
+            local r_val, g_val, b_val = r.ColorFromNative(track_color)
+            local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val/255, g_val/255, b_val/255)
+            h = (h + 0.5) % 1.0
+            local r_val, g_val, b_val = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
+            color_cache[cache_key] = r.ImGui_ColorConvertDouble4ToU32(r_val, g_val, b_val, settings.label_alpha)
+        end
+        return color_cache[cache_key]
     end
+end
+
+function UpdateGradientAlphaCache()
+    settings.gradient_start_alpha_cached = (settings.gradient_start_alpha//0.00392156862745098)
+    settings.gradient_end_alpha_cached = (settings.gradient_end_alpha//0.00392156862745098)
 end
 
 function SaveSettings()
@@ -229,6 +236,7 @@ function LoadSettings()
         if old_text_size ~= settings.text_size then
             needs_font_update = true
         end
+        UpdateGradientAlphaCache()
     end
 end
 
@@ -250,6 +258,8 @@ function SavePreset(name)
         file:close()
     end
 end
+
+
 
 function LoadPreset(name)
     local file = io.open(preset_path .. name .. '.json', 'r')
@@ -286,16 +296,6 @@ function GetPresetList()
     return presets
 end
 
-function RefreshProjectState()
-    LoadSettings()
-    if settings.custom_colors_enabled then
-        UpdateGridColors()
-        UpdateBackgroundColors()
-    end
-    reaper.UpdateArrange()
-    last_update_time = 0
-end
-
 function UpdateGridColors()
     local grid_value = math.floor(settings.grid_color * 255)
     reaper.SetThemeColor("col_gridlines", reaper.ColorToNative(grid_value, grid_value, grid_value), 0)
@@ -307,13 +307,27 @@ function UpdateGridColors()
 end
 
 function UpdateBackgroundColors()
-    local bg_value = math.floor(settings.bg_brightness * 128)
+    local MIN_BG_VALUE = 13  -- Minimale waarde om correcte kleurberekeningen te garanderen
+    local bg_value = math.max(math.floor(settings.bg_brightness * 128), MIN_BG_VALUE)
+    
     reaper.SetThemeColor("col_arrangebg", reaper.ColorToNative(bg_value, bg_value, bg_value), 0)
     reaper.SetThemeColor("col_tr1_bg", reaper.ColorToNative(bg_value + 10, bg_value + 10, bg_value + 10), 0)
     reaper.SetThemeColor("col_tr2_bg", reaper.ColorToNative(bg_value + 5, bg_value + 5, bg_value + 5), 0)
     reaper.SetThemeColor("selcol_tr1_bg", reaper.ColorToNative(bg_value + 20, bg_value + 20, bg_value + 20), 0)
     reaper.SetThemeColor("selcol_tr2_bg", reaper.ColorToNative(bg_value + 15, bg_value + 15, bg_value + 15), 0)
     reaper.UpdateArrange()
+end
+
+
+function RefreshProjectState()
+    LoadSettings()
+    UpdateBgColorCache() -- Reset de cache
+    if settings.custom_colors_enabled then
+        UpdateGridColors()
+        UpdateBackgroundColors()
+    end
+    reaper.UpdateArrange()
+    last_update_time = 0
 end
 
 function ToggleColors()
@@ -347,6 +361,11 @@ function ResetSettings()
 end
 
 function BlendColor(base, blend, mode)
+    local cache_key = "blend_" .. base .. "_" .. blend .. "_" .. mode
+    if color_cache[cache_key] then
+        return color_cache[cache_key]
+    end
+
     local base_r, base_g, base_b = reaper.ColorFromNative(base)
     local blend_r, blend_g, blend_b = reaper.ColorFromNative(blend)
     local result_r, result_g, result_b
@@ -391,7 +410,9 @@ function BlendColor(base, blend, mode)
         result_b = blend_b < 128 and base_b - (255 - 2 * blend_b) * base_b * (255 - base_b) / (255 * 255) or base_b + (2 * blend_b - 255) * (math.sqrt(base_b / 255) * 255 - base_b) / 255
     end
 
-    return reaper.ColorToNative(math.floor(result_r), math.floor(result_g), math.floor(result_b))
+    local result = reaper.ColorToNative(math.floor(result_r), math.floor(result_g), math.floor(result_b))
+    color_cache[cache_key] = result
+    return result
 end
 
 
@@ -797,10 +818,11 @@ function ShowSettingsWindow()
         
             -- Gradient controls for solid style only
             if settings.gradient_enabled and settings.overlay_style == 1 then
-                changed, settings.gradient_start_alpha = r.ImGui_SliderDouble(ctx, "Start Gradient", 
-                    settings.gradient_start_alpha, 0.0, 1.0)
-                changed, settings.gradient_end_alpha = r.ImGui_SliderDouble(ctx, "End Gradient", 
-                    settings.gradient_end_alpha, 0.0, 1.0)
+                changed, settings.gradient_start_alpha = r.ImGui_SliderDouble(ctx, "Start Gradient", settings.gradient_start_alpha, 0.0, 1.0)
+                if changed then UpdateGradientAlphaCache() end
+                
+                changed, settings.gradient_end_alpha = r.ImGui_SliderDouble(ctx, "End Gradient", settings.gradient_end_alpha, 0.0, 1.0)
+                if changed then UpdateGradientAlphaCache() end
             end
         end
         
@@ -989,66 +1011,52 @@ function ResetRenderContext()
     end
 end
 
-function RenderSolidOverlay(draw_list, track_y, track_height, color)
+function RenderSolidOverlay(draw_list, track_y, track_height, color, window_y)
     r.ImGui_DrawList_AddRectFilled(
         draw_list,
         LEFT,
-        WY + track_y,
+        window_y + track_y,
         RIGHT - scroll_size,
-        WY + track_y + track_height,
+        window_y + track_y + track_height,
         color
     )
 end
 
-function RenderGradientOverlay(draw_list, track_y, track_height, color)
+function RenderGradientOverlay(draw_list, track_y, track_height, color, window_y)    
     if settings.gradient_direction == 1 then
-        -- Horizontal gradient
-        local width = RIGHT - LEFT - scroll_size
-        local alpha_step = (settings.gradient_end_alpha - settings.gradient_start_alpha) / width
-        local current_alpha = settings.gradient_start_alpha
-        
-        for x = LEFT, RIGHT - scroll_size, 1 do
-            local new_alpha = math.floor(current_alpha * 255)
-            local gradient_color = (color & 0xFFFFFF00) | new_alpha
-            r.ImGui_DrawList_AddLine(
-                draw_list,
-                x,
-                WY + track_y,
-                x,
-                WY + track_y + track_height,
-                gradient_color
-            )
-            current_alpha = current_alpha + alpha_step
-        end
+        r.ImGui_DrawList_AddRectFilledMultiColor(
+            draw_list,
+            LEFT,
+            window_y + track_y,
+            RIGHT - scroll_size,
+            window_y + track_y + track_height,
+            (color & 0xFFFFFF00) | settings.gradient_start_alpha_cached,
+            (color & 0xFFFFFF00) | settings.gradient_end_alpha_cached,
+            (color & 0xFFFFFF00) | settings.gradient_end_alpha_cached,
+            (color & 0xFFFFFF00) | settings.gradient_start_alpha_cached
+        )
     else
-        -- Vertical gradient
-        local height = track_height
-        local alpha_step = (settings.gradient_end_alpha - settings.gradient_start_alpha) / height
-        local current_alpha = settings.gradient_start_alpha
-        
-        for y = track_y, track_y + track_height, 1 do
-            local new_alpha = math.floor(current_alpha * 255)
-            local gradient_color = (color & 0xFFFFFF00) | new_alpha
-            r.ImGui_DrawList_AddLine(
-                draw_list,
-                LEFT,
-                WY + y,
-                RIGHT - scroll_size,
-                WY + y,
-                gradient_color
-            )
-            current_alpha = current_alpha + alpha_step
-        end
+        r.ImGui_DrawList_AddRectFilledMultiColor(
+            draw_list,
+            LEFT,
+            window_y + track_y,
+            RIGHT - scroll_size,
+            window_y + track_y + track_height,
+            (color & 0xFFFFFF00) | settings.gradient_start_alpha_cached,
+            (color & 0xFFFFFF00) | settings.gradient_start_alpha_cached,
+            (color & 0xFFFFFF00) | settings.gradient_end_alpha_cached,
+            (color & 0xFFFFFF00) | settings.gradient_end_alpha_cached
+        )
     end
 end
 
-function RenderFrameOverlay(draw_list, track_y, track_height, color)
+function RenderFrameOverlay(draw_list, track_y, track_height, color, window_y)
     r.ImGui_DrawList_AddRect(
         draw_list,
         LEFT + settings.frame_thickness/2,
-        WY + track_y + settings.frame_thickness/2,
+        window_y + track_y + settings.frame_thickness/2,
         RIGHT - scroll_size - settings.frame_thickness/2,
-        WY + track_y + track_height - settings.frame_thickness/2,
+        window_y + track_y + track_height - settings.frame_thickness/2,
         color,
         0,
         0,
@@ -1056,7 +1064,7 @@ function RenderFrameOverlay(draw_list, track_y, track_height, color)
     )
 end
 
-function RenderFolderFrameOverlay(draw_list, track, color)
+function RenderFolderFrameOverlay(draw_list, track, color, window_y)
     if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
         local start_idx, end_idx = GetFolderBoundaries(track)
         if start_idx and end_idx then
@@ -1070,9 +1078,9 @@ function RenderFolderFrameOverlay(draw_list, track, color)
             r.ImGui_DrawList_AddRect(
                 draw_list,
                 LEFT + settings.frame_thickness/2,
-                WY + start_y + settings.frame_thickness/2,
+                window_y + start_y + settings.frame_thickness/2,
                 RIGHT - scroll_size - settings.frame_thickness/2,
-                WY + end_y + end_height - settings.frame_thickness/2,
+                window_y + end_y + end_height - settings.frame_thickness/2,
                 color,
                 0,
                 0,
@@ -1082,7 +1090,7 @@ function RenderFolderFrameOverlay(draw_list, track, color)
     end
 end
 
-function DrawFolderBorderLine(draw_list, x1, y1, x2, y2, color, thickness)
+function DrawFolderBorderLine(draw_list, x1, y1, x2, y2, color, thickness, window_y)
     r.ImGui_DrawList_AddLine(
         draw_list,
         x1,
@@ -1091,6 +1099,148 @@ function DrawFolderBorderLine(draw_list, x1, y1, x2, y2, color, thickness)
         y2,
         color,
         thickness
+    )
+end
+
+
+function RenderFolderBorders(draw_list, track_count, window_y)
+    if not settings.folder_border then return end
+    
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+        local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
+        local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
+        
+        if depth == 1 then
+            local track_color = r.GetTrackColor(track)
+            local darker_color = GetDarkerColor(track_color)
+            local border_color = GetCachedColor(darker_color, settings.border_opacity)
+            
+            if settings.folder_border_top then
+                DrawFolderBorderLine(
+                    draw_list, 
+                    LEFT, 
+                    window_y + track_y + settings.border_thickness/2, 
+                    RIGHT - scroll_size, 
+                    window_y + track_y + settings.border_thickness/2, 
+                    border_color, 
+                    settings.border_thickness, 
+                    window_y
+                )
+            end
+            if settings.folder_border_left then
+                DrawFolderBorderLine(
+                    draw_list, 
+                    LEFT + settings.border_thickness/2, 
+                    window_y + track_y, 
+                    LEFT + settings.border_thickness/2, 
+                    window_y + track_y + track_height, 
+                    border_color, 
+                    settings.border_thickness, 
+                    window_y
+                )
+            end
+            if settings.folder_border_right then
+                DrawFolderBorderLine(
+                    draw_list, 
+                    RIGHT - scroll_size - settings.border_thickness/2, 
+                    window_y + track_y, 
+                    RIGHT - scroll_size - settings.border_thickness/2, 
+                    window_y + track_y + track_height, 
+                    border_color, 
+                    settings.border_thickness, 
+                    window_y
+                )
+            end
+        elseif r.GetParentTrack(track) then
+            local parent = r.GetParentTrack(track)
+            local track_color = r.GetTrackColor(parent)
+            local darker_color = GetDarkerColor(track_color)
+            local border_color = GetCachedColor(darker_color, settings.border_opacity)
+            
+            if settings.folder_border_left then
+                DrawFolderBorderLine(
+                    draw_list, 
+                    LEFT + settings.border_thickness/2, 
+                    window_y + track_y, 
+                    LEFT + settings.border_thickness/2, 
+                    window_y + track_y + track_height, 
+                    border_color, 
+                    settings.border_thickness, 
+                    window_y
+                )
+            end
+            if settings.folder_border_right then
+                DrawFolderBorderLine(
+                    draw_list, 
+                    RIGHT - scroll_size - settings.border_thickness/2, 
+                    window_y + track_y, 
+                    RIGHT - scroll_size - settings.border_thickness/2, 
+                    window_y + track_y + track_height, 
+                    border_color, 
+                    settings.border_thickness, 
+                    window_y
+                )
+            end
+            
+            -- Check voor laatste child
+            local next_track = r.GetTrack(0, i + 1)
+            if next_track then
+                local next_depth = r.GetMediaTrackInfo_Value(next_track, "I_FOLDERDEPTH")
+                if next_depth >= 0 then
+                    -- Bottom border alleen voor de laatste child
+                    if settings.folder_border_bottom and (next_depth == 0 or next_depth == 1) then
+                        DrawFolderBorderLine(
+                            draw_list, 
+                            LEFT, 
+                            window_y + track_y + track_height - settings.border_thickness/2, 
+                            RIGHT - scroll_size, 
+                            window_y + track_y + track_height - settings.border_thickness/2, 
+                            border_color, 
+                            settings.border_thickness, 
+                            window_y
+                        )
+                    end
+                end
+            end
+        end
+    end
+end
+
+
+function RenderTrackBorders(draw_list, track_borders, window_y)
+    for _, border in ipairs(track_borders or {}) do
+        local rect_left = LEFT + settings.border_thickness/2
+        local rect_right = RIGHT - scroll_size - settings.border_thickness/2
+        local rect_top = window_y + border.y_pos + settings.border_thickness/2
+        local rect_bottom = window_y + border.y_pos + border.height - settings.border_thickness/2
+        local line_left = LEFT
+        local line_right = RIGHT - scroll_size
+        local line_top = window_y + border.y_pos
+        local line_bottom = window_y + border.y_pos + border.height
+
+        if settings.track_border_left then
+            DrawFolderBorderLine(draw_list, rect_left, line_top, rect_left, line_bottom, border.color, settings.border_thickness, window_y)
+        end
+        if settings.track_border_right then
+            DrawFolderBorderLine(draw_list, rect_right, line_top, rect_right, line_bottom, border.color, settings.border_thickness, window_y)
+        end
+        if settings.track_border_top then
+            DrawFolderBorderLine(draw_list, line_left, rect_top, line_right, rect_top, border.color, settings.border_thickness, window_y)
+        end
+        if settings.track_border_bottom then
+            DrawFolderBorderLine(draw_list, line_left, rect_bottom, line_right, rect_bottom, border.color, settings.border_thickness, window_y)
+        end
+    end
+end
+
+function GetDarkerColor(color)
+    local r_val, g_val, b_val = r.ColorFromNative(color)
+    return r.ColorToNative(
+        (r_val * 0.7)//1,
+        (g_val * 0.7)//1,
+        (b_val * 0.7)//1
     )
 end
 
@@ -1112,14 +1262,12 @@ function loop()
         CreateFonts()
     end
 
-    -- Set window scale (OLSHALOM)
     local ImGuiScale = reaper.ImGui_GetWindowDpiScale(ctx)
     if ImGuiScale ~= ImGuiScale_saved then
       SetWindowScale(ImGuiScale)
       ImGuiScale_saved = ImGuiScale
     end
 
-    -- Project state checks
     local current_project = reaper.EnumProjects(-1)
     local track_count = reaper.CountTracks(0)
     if current_project ~= last_project or track_count ~= last_track_count then
@@ -1128,7 +1276,6 @@ function loop()
         last_track_count = track_count
     end
 
-    -- Sexan's positioning implementation
     DrawOverArrange()
     
     local flags = r.ImGui_WindowFlags_NoTitleBar() |
@@ -1136,433 +1283,41 @@ function loop()
                 r.ImGui_WindowFlags_NoNav() |
                 r.ImGui_WindowFlags_NoScrollbar() |
                 r.ImGui_WindowFlags_NoDecoration() |
-                r.ImGui_WindowFlags_NoDocking()
+                r.ImGui_WindowFlags_NoDocking() | 
+                r.ImGui_WindowFlags_NoBackground()
 
-    -- NoBackground flag alleen toevoegen voor moderne Windows versies
-    if not is_windows_7 then
-        flags = flags | r.ImGui_WindowFlags_NoBackground()
-    end
+    local window_flags = flags | 
+                        r.ImGui_WindowFlags_NoInputs() |
+                        r.ImGui_WindowFlags_NoMove() |
+                        r.ImGui_WindowFlags_NoSavedSettings() |
+                        r.ImGui_WindowFlags_AlwaysAutoResize() |
+                        r.ImGui_WindowFlags_NoMouseInputs() |
+                        r.ImGui_WindowFlags_NoFocusOnAppearing()
 
-    -- Track colors overlay window
-    if settings.show_track_colors then    
-        local overlay_flags = flags |
-            r.ImGui_WindowFlags_NoInputs() |
-            r.ImGui_WindowFlags_NoMove() |
-            r.ImGui_WindowFlags_NoSavedSettings() |
-            r.ImGui_WindowFlags_AlwaysAutoResize() |
-            r.ImGui_WindowFlags_NoMouseInputs() |
-            r.ImGui_WindowFlags_NoFocusOnAppearing()
-
-            r.ImGui_SetNextWindowBgAlpha(ctx, bg_alpha)
-        r.ImGui_SetNextWindowPos(ctx, LEFT, TOP)
-        r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
-        
-        local overlay_visible, _ = r.ImGui_Begin(ctx, 'Track Overlay', true, overlay_flags)
-        if overlay_visible then
-            local folder_borders = {}
-            local track_borders = {}
-            local colors_cache = {}
-            local track_count = r.CountTracks(0)
-            local WX, WY = r.ImGui_GetWindowPos(ctx)
-            local draw_list = r.ImGui_GetWindowDrawList(ctx)
-
-
-
-            -- Build colors cache
-            for i = 0, track_count - 1 do
-                local track = r.GetTrack(0, i)
-                local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
-                local is_child = r.GetParentTrack(track) ~= nil
-                
-                if (is_parent and settings.show_parent_colors) or
-                (is_child and settings.show_child_colors) or
-                (not is_parent and not is_child and settings.show_normal_colors) then
-                
-                    local color = r.GetTrackColor(track)
-                    if settings.inherit_parent_color then
-                        local parent = r.GetParentTrack(track)
-                        if parent then
-                            color = r.GetTrackColor(parent)
-                        end
-                    end
-                    
-                    if settings.show_record_color and r.GetMediaTrackInfo_Value(track, 'I_RECARM') == 1 and r.GetPlayState() == 5 then
-                        color = 0x0000FF
-                    end
-                    
-                    if color ~= 0 then
-                        local bg_color = reaper.GetThemeColor("col_arrangebg", 0)
-                        local blended_color = BlendColor(bg_color, color, settings.blend_mode)
-                        local blend_r, blend_g, blend_b = reaper.ColorFromNative(blended_color)
-                        
-                        -- Store main color
-                        colors_cache[i] = reaper.ImGui_ColorConvertDouble4ToU32(
-                            blend_r/255, blend_g/255, blend_b/255,
-                            settings.overlay_alpha)
-                        
-                        -- Add border color for child tracks
-                        if settings.folder_border and is_parent then
-                            local r_val, g_val, b_val = r.ColorFromNative(color)
-                            r_val = math.floor(r_val * 0.7)
-                            g_val = math.floor(g_val * 0.7)
-                            b_val = math.floor(b_val * 0.7)
-                            colors_cache[i .. "_border"] = reaper.ImGui_ColorConvertDouble4ToU32(
-                                r_val/255, g_val/255, b_val/255,
-                                settings.border_opacity) 
-                        end
-                    end
-                end
-                if (not is_parent and not is_child and settings.show_normal_colors) then
-                    local color = r.GetTrackColor(track)
-                    
-                    if color ~= 0 then
-                        local bg_color = reaper.GetThemeColor("col_arrangebg", 0)
-                        local blended_color = BlendColor(bg_color, color, settings.blend_mode)
-                        local blend_r, blend_g, blend_b = reaper.ColorFromNative(blended_color)
-                        
-                        -- Store main color
-                        colors_cache[i] = reaper.ImGui_ColorConvertDouble4ToU32(
-                            blend_r/255, blend_g/255, blend_b/255,
-                            settings.overlay_alpha)
-                        
-                        -- Add border color for normal tracks
-                        if settings.track_border then
-                            local r_val, g_val, b_val = r.ColorFromNative(color)
-                            r_val = math.floor(r_val * 0.7)
-                            g_val = math.floor(g_val * 0.7)
-                            b_val = math.floor(b_val * 0.7)
-                            
-                            table.insert(track_borders, {
-                                track = track,
-                                y_pos = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale,
-                                height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale,
-                                color = reaper.ImGui_ColorConvertDouble4ToU32(
-                                    r_val/255, g_val/255, b_val/255,
-                                    settings.border_opacity)
-                            })
-                        end
-                    end
-                end
-            end
-
-            -- Render track overlays
-            for i = 0, track_count - 1 do
-                local track = r.GetTrack(0, i)
-                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
-                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
-                
-                if colors_cache[i] and track_y < (BOT - TOP) - scroll_size and track_y + track_height > 0 then
-                    if settings.overlay_style == 1 then
-                        if settings.gradient_enabled then
-                            if settings.gradient_direction == 1 then
-                                -- Horizontal gradient
-                                local width = RIGHT - LEFT - scroll_size
-                                local alpha_step = (settings.gradient_end_alpha - settings.gradient_start_alpha) / width
-                                local current_alpha = settings.gradient_start_alpha
-                                
-                                for x = LEFT, RIGHT - scroll_size, 1 do
-                                    local new_alpha = math.floor(current_alpha * 255)
-                                    local gradient_color = (colors_cache[i] & 0xFFFFFF00) | new_alpha
-                                    r.ImGui_DrawList_AddLine(
-                                        draw_list,
-                                        x,
-                                        WY + track_y,
-                                        x,
-                                        WY + track_y + track_height,
-                                        gradient_color
-                                    )
-                                    current_alpha = current_alpha + alpha_step
-                                end
-                            else
-                                -- Vertical gradient
-                                local height = track_height
-                                local alpha_step = (settings.gradient_end_alpha - settings.gradient_start_alpha) / height
-                                local current_alpha = settings.gradient_start_alpha
-                                
-                                for y = track_y, track_y + track_height, 1 do
-                                    local new_alpha = math.floor(current_alpha * 255)
-                                    local gradient_color = (colors_cache[i] & 0xFFFFFF00) | new_alpha
-                                    r.ImGui_DrawList_AddLine(
-                                        draw_list,
-                                        LEFT,
-                                        WY + y,
-                                        RIGHT - scroll_size,
-                                        WY + y,
-                                        gradient_color
-                                    )
-                                    current_alpha = current_alpha + alpha_step
-                                end
-                            end
-                        else
-                            -- Solid fill
-                            r.ImGui_DrawList_AddRectFilled(
-                                draw_list,
-                                LEFT,
-                                WY + track_y,
-                                RIGHT - scroll_size,
-                                WY + track_y + track_height,
-                                colors_cache[i]
-                            )
-                        end
-                        if settings.folder_border and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                            local start_idx, end_idx = GetFolderBoundaries(track)
-                            if start_idx and end_idx then
-                                table.insert(folder_borders, {
-                                    start_idx = start_idx,
-                                    end_idx = end_idx,
-                                    color = colors_cache[i .. "_border"]
-                                })
-                            end
-                        end
-
-                        
-                
-                    elseif settings.overlay_style == 2 then
-                        -- Frame
-                        r.ImGui_DrawList_AddRect(
-                            draw_list,
-                            LEFT + settings.frame_thickness/2,
-                            WY + track_y + settings.frame_thickness/2,
-                            RIGHT - scroll_size - settings.frame_thickness/2,
-                            WY + track_y + track_height - settings.frame_thickness/2,
-                            colors_cache[i],
-                            0,
-                            0,
-                            settings.frame_thickness
-                        )
-                    elseif settings.overlay_style == 3 then
-                        -- Folder frame
-                        if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                            local start_idx, end_idx = GetFolderBoundaries(track)
-                            if start_idx and end_idx then
-                                local start_track = r.GetTrack(0, start_idx)
-                                local end_track = r.GetTrack(0, end_idx)
-                                local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /screen_scale
-                                local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
-                                local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
-                                
-                                r.ImGui_DrawList_AddRect(
-                                    draw_list,
-                                    LEFT + settings.frame_thickness/2,
-                                    WY + start_y + settings.frame_thickness/2,
-                                    RIGHT - scroll_size - settings.frame_thickness/2,
-                                    WY + end_y + end_height - settings.frame_thickness/2,
-                                    colors_cache[i],
-                                    0,
-                                    0,
-                                    settings.frame_thickness
-                                )
-                            end
-                        end
-                    end
-                end
-            end
-            for _, border in ipairs(folder_borders or {}) do
-                if border and border.start_idx and border.end_idx then
-                    local start_track = r.GetTrack(0, border.start_idx)
-                    if start_track then
-                        local end_track = r.GetTrack(0, border.end_idx)
-                        local start_y = r.GetMediaTrackInfo_Value(start_track, "I_TCPY") /screen_scale
-                        local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
-                        local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
-                        
-                        -- Teken alleen de geselecteerde borders
-                        if settings.folder_border_left or settings.folder_border_right or 
-                        settings.folder_border_top or settings.folder_border_bottom then
-                            
-                            if settings.folder_border_left and settings.folder_border_right and 
-                            settings.folder_border_top and settings.folder_border_bottom then
-                                -- Als alle borders aan staan, gebruik AddRect voor efficiëntie
-                                r.ImGui_DrawList_AddRect(
-                                    draw_list,
-                                    LEFT + settings.border_thickness/2,
-                                    WY + start_y + settings.border_thickness/2,
-                                    RIGHT - scroll_size - settings.border_thickness/2,
-                                    WY + end_y + end_height - settings.border_thickness/2,
-                                    border.color,
-                                    0,
-                                    0,
-                                    settings.border_thickness
-                                )
-                            else
-                                -- Basis rechthoek coördinaten (voor correcte positionering)
-                                local rect_left = LEFT + settings.border_thickness/2
-                                local rect_right = RIGHT - scroll_size - settings.border_thickness/2
-                                local rect_top = WY + start_y + settings.border_thickness/2
-                                local rect_bottom = WY + end_y + end_height - settings.border_thickness/2
-
-                                -- Lijn coördinaten (voor volledige lengte)
-                                local line_left = LEFT
-                                local line_right = RIGHT - scroll_size
-                                local line_top = WY + start_y
-                                local line_bottom = WY + end_y + end_height
-
-                                -- Voor verticale lijnen (links en rechts)
-                                if settings.folder_border_left then
-                                    r.ImGui_DrawList_AddLine(
-                                        draw_list,
-                                        rect_left,
-                                        line_top,
-                                        rect_left,
-                                        line_bottom,
-                                        border.color,
-                                        settings.border_thickness
-                                    )
-                                end
-
-                                if settings.folder_border_right then
-                                    r.ImGui_DrawList_AddLine(
-                                        draw_list,
-                                        rect_right,
-                                        line_top,
-                                        rect_right,
-                                        line_bottom,
-                                        border.color,
-                                        settings.border_thickness
-                                    )
-                                end
-
-                                -- Voor horizontale lijnen (boven en onder)
-                                if settings.folder_border_top then
-                                    r.ImGui_DrawList_AddLine(
-                                        draw_list,
-                                        line_left,
-                                        rect_top,
-                                        line_right,
-                                        rect_top,
-                                        border.color,
-                                        settings.border_thickness
-                                    )
-                                end
-
-                                if settings.folder_border_bottom then
-                                    r.ImGui_DrawList_AddLine(
-                                        draw_list,
-                                        line_left,
-                                        rect_bottom,
-                                        line_right,
-                                        rect_bottom,
-                                        border.color,
-                                        settings.border_thickness
-                                    )
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-            -- Na de folder borders rendering
-            for _, border in ipairs(track_borders or {}) do
-                -- Basis rechthoek coördinaten
-                local rect_left = LEFT + settings.border_thickness/2
-                local rect_right = RIGHT - scroll_size - settings.border_thickness/2
-                local rect_top = WY + border.y_pos + settings.border_thickness/2
-                local rect_bottom = WY + border.y_pos + border.height - settings.border_thickness/2
-
-                -- Lijn coördinaten
-                local line_left = LEFT
-                local line_right = RIGHT - scroll_size
-                local line_top = WY + border.y_pos
-                local line_bottom = WY + border.y_pos + border.height
-
-                -- Teken de borders
-                if settings.track_border_left then
-                    r.ImGui_DrawList_AddLine(
-                        draw_list,
-                        rect_left,
-                        line_top,
-                        rect_left,
-                        line_bottom,
-                        border.color,
-                        settings.border_thickness
-                    )
-                end
-
-                if settings.track_border_right then
-                    r.ImGui_DrawList_AddLine(
-                        draw_list,
-                        rect_right,
-                        line_top,
-                        rect_right,
-                        line_bottom,
-                        border.color,
-                        settings.border_thickness
-                    )
-                end
-
-                if settings.track_border_top then
-                    r.ImGui_DrawList_AddLine(
-                        draw_list,
-                        line_left,
-                        rect_top,
-                        line_right,
-                        rect_top,
-                        border.color,
-                        settings.border_thickness
-                    )
-                end
-
-                if settings.track_border_bottom then
-                    r.ImGui_DrawList_AddLine(
-                        draw_list,
-                        line_left,
-                        rect_bottom,
-                        line_right,
-                        rect_bottom,
-                        border.color,
-                        settings.border_thickness
-                    )
-                end
-            end
-        end
-        r.ImGui_End(ctx)
-    end
-
-    -- Settings button
-    if settings.show_settings_button then
-        r.ImGui_SetNextWindowBgAlpha(ctx, bg_alpha)
-        r.ImGui_SetNextWindowPos(ctx, settings.button_x, settings.button_y, r.ImGui_Cond_Once())
-        
-        local button_flags = r.ImGui_WindowFlags_NoTitleBar() | 
-                            r.ImGui_WindowFlags_TopMost() |
-                            r.ImGui_WindowFlags_NoResize() |
-                            r.ImGui_WindowFlags_AlwaysAutoResize()
-        
-        local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, button_flags)
-        if button_visible then
-            -- Update positie in settings
-            settings.button_x, settings.button_y = r.ImGui_GetWindowPos(ctx)
-            
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
-            r.ImGui_PushFont(ctx, settings_font)
-            if r.ImGui_Button(ctx, "S") then
-                settings_visible = not settings_visible
-                r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
-            end
-            r.ImGui_PopFont(ctx)
-            r.ImGui_PopStyleVar(ctx)
-            r.ImGui_End(ctx)
-        end
-    end
-
-    -- Main track names window
-    local text_flags = flags | r.ImGui_WindowFlags_NoInputs() 
     r.ImGui_SetNextWindowPos(ctx, LEFT, TOP)
     r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
+    
     r.ImGui_PushFont(ctx, font_objects[settings.selected_font])
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x00000000)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x00000000)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0.0)
-    r.ImGui_SetNextWindowBgAlpha(ctx, bg_alpha)
-    
-    local visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, text_flags)
+
+    local visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, window_flags)
     if visible then
         local draw_list = r.ImGui_GetWindowDrawList(ctx)
         local WX, WY = r.ImGui_GetWindowPos(ctx)
-        local track_count = r.CountTracks(0)
         local max_width = 0
 
-        -- Calculate maximum text width for centering
+        -- Reset tables
+        for k in pairs(folder_borders) do folder_borders[k] = nil end
+        for k in pairs(track_borders) do track_borders[k] = nil end
+        for k in pairs(colors_cache) do colors_cache[k] = nil end
+
+        if not cached_bg_color then
+            UpdateBgColorCache()
+        end
+
+        -- Calculate max_width for text centering
         for i = 0, track_count - 1 do
             local track = r.GetTrack(0, i)
             local _, track_name = r.GetTrackName(track)
@@ -1570,14 +1325,81 @@ function loop()
             max_width = math.max(max_width, text_width)
         end
 
-        -- Main track rendering loop
+        -- Main track processing loop
         for i = 0, track_count - 1 do
             local track = r.GetTrack(0, i)
             local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
             
             if track_visible and IsTrackVisible(track) then
+                -- Get all track properties at once
+                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
+                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
                 local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
                 local is_child = r.GetParentTrack(track) ~= nil
+                local track_color = r.GetTrackColor(track)
+                local is_armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
+                local is_muted = r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
+                local is_soloed = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
+                local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+                -- Track overlay processing
+                if settings.show_track_colors and
+                   ((is_parent and settings.show_parent_colors) or
+                    (is_child and settings.show_child_colors) or
+                    (not is_parent and not is_child and settings.show_normal_colors)) then
+                    
+                    if settings.inherit_parent_color then
+                        local parent = r.GetParentTrack(track)
+                        if parent then
+                            track_color = r.GetTrackColor(parent)
+                        end
+                    end
+
+                    if settings.show_record_color and is_armed and r.GetPlayState() == 5 then
+                        track_color = 0x0000FF
+                    end
+
+                    if track_color ~= 0 then
+                        local blended_color = BlendColor(cached_bg_color, track_color, settings.blend_mode)
+                        colors_cache[i] = GetCachedColor(blended_color, settings.overlay_alpha)
+
+                        if track_y < (BOT - TOP) - scroll_size and track_y + track_height > 0 then
+                            if settings.overlay_style == 1 then
+                                if settings.gradient_enabled then
+                                    RenderGradientOverlay(draw_list, track_y, track_height, colors_cache[i], WY)
+                                else
+                                    RenderSolidOverlay(draw_list, track_y, track_height, colors_cache[i], WY)
+                                end
+
+                                -- Border processing
+                                if settings.folder_border and is_parent then
+                                    local darker_color = GetDarkerColor(track_color)
+                                    colors_cache[i .. "_border"] = GetCachedColor(darker_color, settings.border_opacity)
+                                    local start_idx, end_idx = GetFolderBoundaries(track)
+                                    if start_idx and end_idx then
+                                        table.insert(folder_borders, {
+                                            start_idx = start_idx,
+                                            end_idx = end_idx,
+                                            color = colors_cache[i .. "_border"]
+                                        })
+                                    end
+                                elseif settings.track_border and not is_parent and not is_child then
+                                    table.insert(track_borders, {
+                                        track = track,
+                                        y_pos = track_y,
+                                        height = track_height,
+                                        color = GetCachedColor(blended_color, settings.border_opacity)
+                                    })
+                                end
+                            elseif settings.overlay_style == 2 then
+                                RenderFrameOverlay(draw_list, track_y, track_height, colors_cache[i], WY)
+                            elseif settings.overlay_style == 3 then
+                                RenderFolderFrameOverlay(draw_list, track, colors_cache[i], WY)
+                            end
+                        end
+                    end
+                end
+
+                -- Track name processing
                 local should_show_track = false
                 local should_show_name = false
 
@@ -1606,17 +1428,14 @@ function loop()
                         end
                     end
 
-                    local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
-                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
                     local vertical_offset = (track_height * settings.vertical_offset) / 100
                     local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5) + vertical_offset
 
-                    -- Parent label rendering
+                    -- Parent label processing
                     if is_child and settings.show_parent_label then
                         local parents = GetAllParentTracks(track)
                         if #parents > 0 then
                             local combined_name = ""
-                            -- Loop van laatste naar eerste parent (diepste naar hoogste niveau)
                             for i = #parents, 1, -1 do
                                 local _, parent_name = r.GetTrackName(parents[i])
                                 parent_name = TruncateTrackName(parent_name, settings.track_name_length)
@@ -1625,20 +1444,15 @@ function loop()
 
                             local parent_text_width = r.ImGui_CalcTextSize(ctx, combined_name)
                             local track_text_width = r.ImGui_CalcTextSize(ctx, display_name)
-
-                    
                             local parent_text_pos = WX + settings.horizontal_offset
                             local label_x = parent_text_pos
                             
-                            -- Definieer een constante basis spacing
                             local BASE_SPACING = 20
                             local NUMBER_SPACING = 20
-
-                            local TEXT_SIZE_FACTOR = settings.text_size  -- Voeg tekstgrootte toe aan basis spacing
+                            local TEXT_SIZE_FACTOR = settings.text_size
 
                             if settings.text_centered then
                                 if should_show_name then
-                                    -- Bereken totale spacing inclusief tekstgrootte factor
                                     local total_spacing = BASE_SPACING + TEXT_SIZE_FACTOR
                                     if settings.show_track_numbers then
                                         total_spacing = total_spacing + NUMBER_SPACING /2
@@ -1665,7 +1479,7 @@ function loop()
                                     parent_text_pos = parent_text_pos - track_text_width - total_spacing
                                     label_x = parent_text_pos
                                 end
-                            else -- left align
+                            else
                                 if should_show_name then
                                     local total_spacing = BASE_SPACING + TEXT_SIZE_FACTOR
                                     if settings.show_track_numbers then
@@ -1676,7 +1490,6 @@ function loop()
                                     label_x = parent_text_pos
                                 end
                             end
-
 
                             if settings.show_label then
                                 local parent_color = r.GetTrackColor(parents[#parents])
@@ -1710,7 +1523,6 @@ function loop()
 
                     -- Track name rendering
                     if should_show_name then
-                        local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
                         local modified_display_name = display_name
                         
                         if settings.show_track_numbers then
@@ -1731,7 +1543,6 @@ function loop()
                             text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
                         end
 
-                        -- Label background
                         if settings.show_label then
                             local label_color = GetLabelColor(track)
                             r.ImGui_DrawList_AddRectFilled(
@@ -1745,39 +1556,25 @@ function loop()
                             )
                         end
 
-                        -- Track name text
                         local text_color = GetTextColor(track, is_child)
                         text_color = (text_color & 0xFFFFFF00) | (math.floor(settings.text_opacity * 255))
-                        -- Eerst de normale tracknaam renderen
                         r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, modified_display_name)
                         
-                        -- Check track states
-                        local is_armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
-                        local is_muted = r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
-                        local is_soloed = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
-                        
+                        -- Track state indicators
                         local dot_size = 4
                         local dot_spacing = 1
                         local total_dots_height = (dot_size * 3) + (dot_spacing * 2)
-                        
-                        -- Bereken het verticale middelpunt van de track
                         local track_center = text_y + (settings.text_size / 2)
-                        
-                        -- Bereken de start y-positie voor de dots zodat ze gecentreerd zijn
                         local dots_start_y = track_center - (total_dots_height / 2)
-                        
-                        -- Bereken x positie voor dots
-                        local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
                         local dot_x = text_x + text_width + 5
                     
-                        -- Teken de dots op gecentreerde posities
                         if is_armed then
                             r.ImGui_DrawList_AddCircleFilled(
                                 draw_list,
                                 dot_x,
-                                dots_start_y + dot_size/2,  -- Bovenste dot
+                                dots_start_y + dot_size/2,
                                 dot_size/2,
-                                0xFF0000FF  -- Rood
+                                0xFF0000FF
                             )
                         end
                         
@@ -1785,9 +1582,9 @@ function loop()
                             r.ImGui_DrawList_AddCircleFilled(
                                 draw_list,
                                 dot_x,
-                                dots_start_y + dot_size + dot_spacing + dot_size/2,  -- Middelste dot
+                                dots_start_y + dot_size + dot_spacing + dot_size/2,
                                 dot_size/2,
-                                0x0000FFFF  -- Blauw
+                                0x0000FFFF
                             )
                         end
                         
@@ -1795,20 +1592,52 @@ function loop()
                             r.ImGui_DrawList_AddCircleFilled(
                                 draw_list,
                                 dot_x,
-                                dots_start_y + (dot_size * 2) + (dot_spacing * 2) + dot_size/2,  -- Onderste dot
+                                dots_start_y + (dot_size * 2) + (dot_spacing * 2) + dot_size/2,
                                 dot_size/2,
-                                0xFF8C00FF  -- Oranje
+                                0xFF8C00FF
                             )
                         end
                     end
                 end
             end
         end
+
+        RenderFolderBorders(draw_list, track_count, WY)
+        RenderTrackBorders(draw_list, track_borders, WY)
+
         r.ImGui_End(ctx)
     end
+
     r.ImGui_PopStyleVar(ctx)
     r.ImGui_PopStyleColor(ctx, 2)
     r.ImGui_PopFont(ctx)
+
+    if settings.show_settings_button then
+        r.ImGui_SetNextWindowPos(ctx, settings.button_x, settings.button_y, r.ImGui_Cond_Once())
+        local button_flags = r.ImGui_WindowFlags_NoTitleBar() | 
+                            r.ImGui_WindowFlags_TopMost() |
+                            r.ImGui_WindowFlags_NoResize() |
+                            r.ImGui_WindowFlags_AlwaysAutoResize()
+        
+        local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, button_flags)
+        if button_visible then
+            settings.button_x, settings.button_y = r.ImGui_GetWindowPos(ctx)
+            
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
+            r.ImGui_PushFont(ctx, settings_font)
+            if r.ImGui_Button(ctx, "S") then
+                settings_visible = not settings_visible
+                r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
+            end
+            r.ImGui_PopFont(ctx)
+            r.ImGui_PopStyleVar(ctx)
+            r.ImGui_End(ctx)
+        end
+    end
+
+    if settings_visible then
+        ShowSettingsWindow()
+    end
 
     if needs_font_update then
         ctx = r.ImGui_CreateContext('Track Names')
@@ -1816,16 +1645,11 @@ function loop()
         needs_font_update = false
     end
 
-
-    if settings_visible then
-        ShowSettingsWindow()
-    end      
-    
     if open then
         script_active = true
         r.defer(loop)
     else
-        if script_active then  
+        if script_active then
             if settings.autosave_enabled then
                 SaveSettings()
             end
@@ -1837,6 +1661,11 @@ end
 
 -- Script initialization and cleanup
 local success = pcall(function()
+    -- Reset alle caches bij opstarten
+    color_cache = {}
+    colors_cache = {}
+    cached_bg_color = nil
+    
     LoadSettings()
     CreateFonts()
     if settings.custom_colors_enabled then
@@ -1852,7 +1681,22 @@ r.atexit(function()
     if settings.autosave_enabled then
         SaveSettings()
     end
+    
+    -- Reset alle theme colors naar standaard (-1)
+    r.SetThemeColor("col_gridlines", -1, 0)
+    r.SetThemeColor("col_gridlines2", -1, 0)
+    r.SetThemeColor("col_gridlines3", -1, 0)
+    r.SetThemeColor("col_arrangebg", -1, 0)
+    r.SetThemeColor("col_tr1_bg", -1, 0)
+    r.SetThemeColor("col_tr2_bg", -1, 0)
+    r.SetThemeColor("col_seltr1_bg", -1, 0)
+    r.SetThemeColor("col_seltr2_bg", -1, 0)
+    r.SetThemeColor("col_tr1_divline", -1, 0)
+    r.SetThemeColor("col_tr2_divline", -1, 0)
+    
+    r.UpdateArrange()
 end)
+
 
 if not success then
     r.ShowConsoleMsg("Script error occurred\n")
