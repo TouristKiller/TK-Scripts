@@ -1,10 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.0.2:
+-- @version 1.0.3:
 -- @changelog:
 --[[        
-+ Added Show/ hide Notes in settings
-+ Minor bug fix single screenshot MacOS
++ FIX: PLUGIN_LIST
 
 
 
@@ -111,6 +110,7 @@ local FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
 if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
     FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
 end
+local PLUGIN_LIST = GetFXTbl()
 
 local function get_safe_name(name)
     return (name or ""):gsub("[^%w%s-]", "_")
