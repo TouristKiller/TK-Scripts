@@ -69,9 +69,15 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.6.1" author="TouristKiller" time="2024-01-05T06:30:00Z">
+        <version name="0.6.2" author="TouristKiller" time="2024-01-05T19:00:00Z">
             <changelog><![CDATA[           
-+ Pffff..... a lot of things..... just look and see ;o)
+- Optimized envelope rendering using I_WNDH 
+- Improved record mode detection 
+- Fixed color handling for cross-platform compatibility
+- Removed redundant AlwaysAutoResize flag 
+- Optimized window positioning code
+- Fixed envelope visibility when track is out of view
+- Improved memory usage for envelope rendering
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>

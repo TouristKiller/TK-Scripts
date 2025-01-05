@@ -1,9 +1,15 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.6.1
+-- @version 0.6.2
 -- @changelog 
 --[[
-+ Pffff..... a lot of things..... just look and see ;o)
+- Optimized envelope rendering using I_WNDH 
+- Improved record mode detection 
+- Fixed color handling for cross-platform compatibility
+- Removed redundant AlwaysAutoResize flag 
+- Optimized window positioning code
+- Fixed envelope visibility when track is out of view
+- Improved memory usage for envelope rendering
 ]]--
 
 local r                  = reaper
@@ -39,7 +45,7 @@ local window_flags       = flags |
                            r.ImGui_WindowFlags_NoInputs() |
                            r.ImGui_WindowFlags_NoMove() |
                            r.ImGui_WindowFlags_NoSavedSettings() |
-                           r.ImGui_WindowFlags_AlwaysAutoResize() |
+                           -- r.ImGui_WindowFlags_AlwaysAutoResize() |
                            r.ImGui_WindowFlags_NoMouseInputs() |
                            r.ImGui_WindowFlags_NoFocusOnAppearing()
 
@@ -78,6 +84,8 @@ local function DrawOverArrange()
         LEFT, TOP = im.PointConvertNative(ctx, orig_LEFT, orig_TOP)
         RIGHT, BOT = im.PointConvertNative(ctx, orig_RIGHT, orig_BOT)
     end
+    r.ImGui_SetNextWindowPos(ctx, LEFT, TOP)
+    r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
 end
 
 local default_settings = {
@@ -928,6 +936,14 @@ function IsTrackVisible(track)
     return true
 end
 
+-- Thanx Smandrap
+local function IsRecording(track)
+    if r.GetMediaTrackInfo_Value(track, "I_RECARM") == 0 then return false end
+    if r.GetMediaTrackInfo_Value(track, "I_RECINPUT") < 0 then return false end
+    if r.GetMediaTrackInfo_Value(track, "I_RECMODE") == 2 then return false end
+    return true
+end
+
 function GetAllParentTracks(track)
     local parents = {}
     local current = track
@@ -999,24 +1015,21 @@ function RenderSolidOverlay(draw_list, track, track_y, track_height, color, wind
         color
     )
     
-    if settings.show_envelope_colors then
-        local env_count = r.CountTrackEnvelopes(track)
-        if env_count > 0 then
-            local total_height = 0
-            for i = 0, env_count - 1 do
-                total_height = total_height + r.GetEnvelopeInfo_Value(r.GetTrackEnvelope(track, i), "I_TCPH") / screen_scale
-            end
-            
-            local env_color = (color & 0xFFFFFF00) | ((settings.envelope_color_intensity * settings.overlay_alpha * 255)//1)
-            r.ImGui_DrawList_AddRectFilled(
-                draw_list,
-                LEFT,
-                window_y + track_y + track_height,
-                RIGHT - scroll_size,
-                window_y + track_y + track_height + total_height,
-                env_color
-            )
-        end
+    -- Envelope overlay
+    local track_env_cnt = r.CountTrackEnvelopes(track)
+    if track_env_cnt > 0 and settings.show_envelope_colors then
+        local env_y = track_y + track_height
+        local env_height = (r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale) - track_height
+        local env_color = (color & 0xFFFFFF00) | ((settings.envelope_color_intensity * settings.overlay_alpha * 255)//1)
+        
+        r.ImGui_DrawList_AddRectFilled(
+            draw_list,
+            LEFT,
+            window_y + env_y,
+            RIGHT - scroll_size,
+            window_y + env_y + env_height,
+            env_color
+        )
     end
 end
 
@@ -1043,6 +1056,8 @@ function RenderGradientRect(draw_list, x1, y1, x2, y2, color, intensity)
     end
 end
 
+
+    
 function RenderGradientOverlay(draw_list, track, track_y, track_height, color, window_y)    
     -- Track gradient
     RenderGradientRect(
@@ -1054,24 +1069,21 @@ function RenderGradientOverlay(draw_list, track, track_y, track_height, color, w
         color
     )
     
-    if settings.show_envelope_colors then
-        local env_count = r.CountTrackEnvelopes(track)
-        if env_count > 0 then
-            local total_env_height = 0
-            for i = 0, env_count - 1 do
-                total_env_height = total_env_height + r.GetEnvelopeInfo_Value(r.GetTrackEnvelope(track, i), "I_TCPH") / screen_scale
-            end
-            
-            RenderGradientRect(
-                draw_list,
-                LEFT,
-                window_y + track_y + track_height,
-                RIGHT - scroll_size,
-                window_y + track_y + track_height + total_env_height,
-                color,
-                settings.envelope_color_intensity
-            )
-        end
+    -- Envelope gradient
+    local track_env_cnt = r.CountTrackEnvelopes(track)
+    if track_env_cnt > 0 and settings.show_envelope_colors then
+        local env_y = track_y + track_height
+        local env_height = (r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale) - track_height
+        
+        RenderGradientRect(
+            draw_list,
+            LEFT,
+            window_y + env_y,
+            RIGHT - scroll_size,
+            window_y + env_y + env_height,
+            color,
+            settings.envelope_color_intensity
+        )
     end
 end
 
@@ -1246,8 +1258,7 @@ function loop()
 
     DrawOverArrange()
 
-    r.ImGui_SetNextWindowPos(ctx, LEFT, TOP)
-    r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
+    
     
     r.ImGui_PushFont(ctx, font_objects[settings.selected_font])
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x00000000)
@@ -1312,9 +1323,8 @@ function loop()
                                 end
                             end
                             
-
-                        if settings.show_record_color and is_armed and r.GetPlayState() == 5 then
-                            track_color = 0x0000FF
+                        if settings.show_record_color and IsRecording(track) and r.GetPlayState() == 5 then
+                            track_color = r.ColorToNative(255, 0, 0)  -- Rood voor alle systemen
                         end
 
                         if track_color ~= 0 then
