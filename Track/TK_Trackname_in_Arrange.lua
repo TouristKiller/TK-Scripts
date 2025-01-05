@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.6.0
+-- @version 0.6.1
 -- @changelog 
 --[[
 + Pffff..... a lot of things..... just look and see ;o)
@@ -1317,15 +1317,28 @@ function loop()
                             track_color = 0x0000FF
                         end
 
-                        if track_color ~= 0 and track_y < (BOT - TOP) - scroll_size and track_y + track_height > 0 then
-                            local blended_color = BlendColor(cached_bg_color, track_color, settings.blend_mode)
-                            local color = GetCachedColor(blended_color, settings.overlay_alpha)
-                            if settings.gradient_enabled then
-                                RenderGradientOverlay(draw_list, track, track_y, track_height, color, WY)
-                            else
-                                RenderSolidOverlay(draw_list, track, track_y, track_height, color, WY)
+                        if track_color ~= 0 then
+                            local total_height = track_height
+                            local env_count = r.CountTrackEnvelopes(track)
+                            
+                            if env_count > 0 then
+                                for i = 0, env_count - 1 do
+                                    total_height = total_height + r.GetEnvelopeInfo_Value(r.GetTrackEnvelope(track, i), "I_TCPH") / screen_scale
+                                end
+                            end
+                            
+                            if track_y < (BOT - TOP) - scroll_size or (track_y + total_height) > 0 then
+                                local blended_color = BlendColor(cached_bg_color, track_color, settings.blend_mode)
+                                local color = GetCachedColor(blended_color, settings.overlay_alpha)
+                                
+                                if settings.gradient_enabled then
+                                    RenderGradientOverlay(draw_list, track, track_y, track_height, color, WY)
+                                else
+                                    RenderSolidOverlay(draw_list, track, track_y, track_height, color, WY)
+                                end
                             end
                         end
+                        
                     end
 
                     if settings.folder_border and (is_parent or is_child) then
