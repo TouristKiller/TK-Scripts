@@ -1,15 +1,10 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.6.2
+-- @version 0.6.3
 -- @changelog 
 --[[
-- Optimized envelope rendering using I_WNDH 
-- Improved record mode detection 
-- Fixed color handling for cross-platform compatibility
-- Removed redundant AlwaysAutoResize flag 
-- Optimized window positioning code
-- Fixed envelope visibility when track is out of view
-- Improved memory usage for envelope rendering
+- Bugfix: Script turns Grid Divide off when enabbled when custom color is enabled.
+- Bugfix: After turing off the script the selected track color is restored correctly.
 ]]--
 
 local r                  = reaper
@@ -29,6 +24,7 @@ local overlay_enabled    = false
 local needs_font_update  = false
 local ImGuiScale_saved  -- OLSHALOM
 local screen_scale      -- OLSHALOM
+local grid_divide_state = 0
 
 local color_cache        = {}
 local cached_bg_color    = nil
@@ -319,8 +315,9 @@ function UpdateGridColors()
 end
 
 function UpdateBackgroundColors()
-    local MIN_BG_VALUE = 13  -- Minimale waarde om correcte kleurberekeningen te garanderen
+    local MIN_BG_VALUE = 13
     local bg_value = math.max((settings.bg_brightness * 128)//1, MIN_BG_VALUE)
+    
     reaper.SetThemeColor("col_arrangebg", reaper.ColorToNative(bg_value, bg_value, bg_value), 0)
     reaper.SetThemeColor("col_tr1_bg", reaper.ColorToNative(bg_value + 10, bg_value + 10, bg_value + 10), 0)
     reaper.SetThemeColor("col_tr2_bg", reaper.ColorToNative(bg_value + 5, bg_value + 5, bg_value + 5), 0)
@@ -342,9 +339,16 @@ end
 function ToggleColors()
     settings.custom_colors_enabled = not settings.custom_colors_enabled
     if settings.custom_colors_enabled then
+        -- Store current grid divide state
+        grid_divide_state = r.GetToggleCommandState(42331)
+        if grid_divide_state == 1 then
+            -- Turn off grid divide if it's on
+            r.Main_OnCommand(42331, 0)
+        end
         UpdateGridColors()
         UpdateBackgroundColors()
     else
+        -- Reset colors
         reaper.SetThemeColor("col_gridlines", -1, 0)
         reaper.SetThemeColor("col_gridlines2", -1, 0)
         reaper.SetThemeColor("col_gridlines3", -1, 0)
@@ -355,6 +359,11 @@ function ToggleColors()
         reaper.SetThemeColor("selcol_tr2_bg", -1, 0)
         reaper.SetThemeColor("col_tr1_divline", -1, 0)
         reaper.SetThemeColor("col_tr2_divline", -1, 0)
+        
+        -- Restore grid divide state if it was on
+        if grid_divide_state == 1 then
+            r.Main_OnCommand(42331, 0)
+        end
     end
     reaper.UpdateArrange()
 end
@@ -1255,6 +1264,12 @@ function loop()
         last_project = current_project
         last_track_count = track_count
     end
+    if settings.custom_colors_enabled then
+        local current_grid_divide = r.GetToggleCommandState(42331)
+        if current_grid_divide == 1 then
+            r.Main_OnCommand(42331, 0)
+        end
+    end
 
     DrawOverArrange()
 
@@ -1632,6 +1647,10 @@ local success = pcall(function()
     LoadSettings()
     CreateFonts()
     if settings.custom_colors_enabled then
+        grid_divide_state = r.GetToggleCommandState(42331)
+        if grid_divide_state == 1 then
+            r.Main_OnCommand(42331, 0)
+        end
         UpdateGridColors()
         UpdateBackgroundColors()
     end
@@ -1639,25 +1658,35 @@ local success = pcall(function()
     r.defer(loop)
 end)
 
+
 r.atexit(function() 
     SetButtonState(0) 
     if settings.autosave_enabled then
         SaveSettings()
     end
-    -- Reset alle theme colors naar standaard (-1)
+    
+    -- Reset ALL theme colors
     r.SetThemeColor("col_gridlines", -1, 0)
     r.SetThemeColor("col_gridlines2", -1, 0)
     r.SetThemeColor("col_gridlines3", -1, 0)
     r.SetThemeColor("col_arrangebg", -1, 0)
     r.SetThemeColor("col_tr1_bg", -1, 0)
     r.SetThemeColor("col_tr2_bg", -1, 0)
-    r.SetThemeColor("col_seltr1_bg", -1, 0)
-    r.SetThemeColor("col_seltr2_bg", -1, 0)
+    r.SetThemeColor("selcol_tr1_bg", -1, 0)
+    r.SetThemeColor("selcol_tr2_bg", -1, 0)
     r.SetThemeColor("col_tr1_divline", -1, 0)
     r.SetThemeColor("col_tr2_divline", -1, 0)
     
+    -- Restore grid divide if it was on
+    if grid_divide_state == 1 then
+        r.Main_OnCommand(42331, 0)
+    end
+    
     r.UpdateArrange()
+    r.TrackList_AdjustWindows(false)
 end)
+
+
 
 if not success then
     r.ShowConsoleMsg("Script error occurred\n")
