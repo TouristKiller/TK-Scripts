@@ -69,11 +69,9 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.5.4" author="TouristKiller" time="2024-01-02T20:30:00Z">
+        <version name="0.6.0" author="TouristKiller" time="2024-01-05T04:30:00Z">
             <changelog><![CDATA[           
-+ Improvment: Better performance
-+ Fix: If Script is exited the theme colors are restored
-+ Fix: Folder Border stays visible when parant folder is scrolled out of view
++ Pffff..... a lot of things..... just look and see ;o)
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
