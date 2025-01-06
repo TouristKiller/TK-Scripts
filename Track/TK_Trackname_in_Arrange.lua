@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.6.4
+-- @version 0.6.5
 -- @changelog 
 --[[
 - Bugfix: Text and label are now always above borders
@@ -30,7 +30,7 @@ local color_cache        = {}
 local cached_bg_color    = nil
 
 -- Alleen om te testen {;o)
-l--[[local profiler = dofile(reaper.GetResourcePath() .. '/Scripts/ReaTeam Scripts/Development/cfillion_Lua profiler.lua')
+--[[local profiler = dofile(reaper.GetResourcePath() .. '/Scripts/ReaTeam Scripts/Development/cfillion_Lua profiler.lua')
 reaper.defer = profiler.defer]]--
 
 local flags              = r.ImGui_WindowFlags_NoTitleBar() |
