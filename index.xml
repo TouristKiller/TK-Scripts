@@ -69,10 +69,10 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.6.3" author="TouristKiller" time="2024-01-05T23:00:00Z">
+        <version name="0.6.4" author="TouristKiller" time="2024-01-07T00:00:00Z">
             <changelog><![CDATA[           
-- Bugfix: Script turns Grid Divide off when enabbled when custom color is enabled.
-- Bugfix: After turing off the script the selected track color is restored correctly.
+- Bugfix: Text and label are now always above borders
+- Some under the hood stuff ;o) 
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>

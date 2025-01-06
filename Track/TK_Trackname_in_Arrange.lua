@@ -1,10 +1,10 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.6.3
+-- @version 0.6.4
 -- @changelog 
 --[[
-- Bugfix: Script turns Grid Divide off when enabbled when custom color is enabled.
-- Bugfix: After turing off the script the selected track color is restored correctly.
+- Bugfix: Text and label are now always above borders
+- Some under the hood stuff ;o) 
 ]]--
 
 local r                  = reaper
@@ -22,12 +22,16 @@ local last_project       = nil
 local last_track_count   = 0
 local overlay_enabled    = false
 local needs_font_update  = false
-local ImGuiScale_saved  -- OLSHALOM
-local screen_scale      -- OLSHALOM
+local ImGuiScale_saved   = nil
+local screen_scale       = nil
 local grid_divide_state = 0
 
 local color_cache        = {}
 local cached_bg_color    = nil
+
+-- Alleen om te testen {;o)
+l--[[local profiler = dofile(reaper.GetResourcePath() .. '/Scripts/ReaTeam Scripts/Development/cfillion_Lua profiler.lua')
+reaper.defer = profiler.defer]]--
 
 local flags              = r.ImGui_WindowFlags_NoTitleBar() |
                            r.ImGui_WindowFlags_NoResize() |
@@ -1014,9 +1018,9 @@ function ResetRenderContext()
 end
 
 function RenderSolidOverlay(draw_list, track, track_y, track_height, color, window_y)
-    -- Track overlay
+    local background_draw_list = r.ImGui_GetBackgroundDrawList(ctx)
     r.ImGui_DrawList_AddRectFilled(
-        draw_list,
+        background_draw_list,
         LEFT,
         window_y + track_y,
         RIGHT - scroll_size,
@@ -1068,9 +1072,9 @@ end
 
     
 function RenderGradientOverlay(draw_list, track, track_y, track_height, color, window_y)    
-    -- Track gradient
+    local background_draw_list = r.ImGui_GetBackgroundDrawList(ctx)
     RenderGradientRect(
-        draw_list,
+        background_draw_list,
         LEFT,
         window_y + track_y,
         RIGHT - scroll_size,
@@ -1096,17 +1100,13 @@ function RenderGradientOverlay(draw_list, track, track_y, track_height, color, w
     end
 end
 
-function DrawFolderBorderLine(draw_list, x1, y1, x2, y2, color, thickness)
-    local foreground_draw_list = r.ImGui_GetForegroundDrawList(ctx)
-    r.ImGui_DrawList_AddLine(
-        foreground_draw_list,
-        x1,
-        y1,
-        x2,
-        y2,
-        color,
-        thickness
-    )
+function DrawFolderBorderLine(draw_list,x1,y1,x2,y2,color,thickness)
+    --local foreground_draw_list = r.ImGui_GetForegroundDrawList(ctx)
+    r.ImGui_DrawList_AddLine(draw_list,x1,y1,x2,y2,color,thickness)
+end
+
+function DrawTrackBorderLine(draw_list,x1,y1,x2,y2,color,thickness)
+    r.ImGui_DrawList_AddLine(draw_list,x1, y1, x2, y2,color,thickness)
 end
 
 function DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
@@ -1176,7 +1176,7 @@ end
 
 function DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
     if settings.track_border_left then
-        DrawFolderBorderLine(
+        DrawTrackBorderLine(
             draw_list,
             LEFT + settings.border_thickness/2,
             WY + track_y,
@@ -1188,7 +1188,7 @@ function DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
     end
     
     if settings.track_border_right then
-        DrawFolderBorderLine(
+        DrawTrackBorderLine(
             draw_list,
             RIGHT - scroll_size - settings.border_thickness/2,
             WY + track_y,
@@ -1200,7 +1200,7 @@ function DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
     end
     
     if settings.track_border_top then
-        DrawFolderBorderLine(
+        DrawTrackBorderLine(
             draw_list,
             LEFT,
             WY + track_y + settings.border_thickness/2,
@@ -1212,7 +1212,7 @@ function DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
     end
     
     if settings.track_border_bottom then
-        DrawFolderBorderLine(
+        DrawTrackBorderLine(
             draw_list,
             LEFT,
             WY + track_y + track_height - settings.border_thickness/2,
@@ -1243,18 +1243,15 @@ function SetWindowScale(ImGuiScale)
         screen_scale = 1
     end
 end
-
+--[[profiler.attachToWorld()
+profiler.run()
+profiler.start()]]--
 function loop()
+
     settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
         ctx = r.ImGui_CreateContext('Track Names')
         CreateFonts()
-    end
-
-    local ImGuiScale = reaper.ImGui_GetWindowDpiScale(ctx)
-    if ImGuiScale ~= ImGuiScale_saved then
-      SetWindowScale(ImGuiScale)
-      ImGuiScale_saved = ImGuiScale
     end
 
     local current_project = reaper.EnumProjects(-1)
@@ -1272,10 +1269,15 @@ function loop()
     end
 
     DrawOverArrange()
-
-    
-    
     r.ImGui_PushFont(ctx, font_objects[settings.selected_font])
+    -- Later in code (1.48% vs 0.01% minimal impact on total cost)
+    local ImGuiScale = reaper.ImGui_GetWindowDpiScale(ctx)
+    if ImGuiScale ~= ImGuiScale_saved then
+      SetWindowScale(ImGuiScale)
+      ImGuiScale_saved = ImGuiScale
+    end
+
+
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x00000000)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x00000000)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0.0)
