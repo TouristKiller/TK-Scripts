@@ -1,11 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.6.8
+-- @version 0.6.9
 -- @changelog 
 --[[
-+ Added: Darker Parent - sets parent folder (only first, not nested) to solid full intensety
-+ Added: Info Line 
-+ Small UI teaks
++ Overlay stay's visible when only parent is hidden
 ]]--
 
 local r                  = reaper
@@ -25,7 +23,7 @@ local overlay_enabled    = false
 local needs_font_update  = false
 local ImGuiScale_saved   = nil
 local screen_scale       = nil
-local grid_divide_state = 0
+local grid_divide_state  = 0
 
 local color_cache        = {}
 local cached_bg_color    = nil
@@ -924,7 +922,7 @@ function ShowSettingsWindow()
     r.ImGui_PopStyleColor(ctx, 9)
 end
 
-function IsTrackVisible(track)
+--[[function IsTrackVisible(track)
     local MIN_TRACK_HEIGHT = 10
     local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
     
@@ -941,7 +939,14 @@ function IsTrackVisible(track)
         parent = r.GetParentTrack(parent)
     end
     return true
+end]]--
+
+function IsTrackVisible(track)
+    local MIN_TRACK_HEIGHT = 10
+    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+    return track_height > MIN_TRACK_HEIGHT
 end
+
 
 -- Thanx Smandrap
 local function IsRecording(track)
