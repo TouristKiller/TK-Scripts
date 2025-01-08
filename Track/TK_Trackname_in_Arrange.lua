@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.6.9
+-- @version 0.7.0
 -- @changelog 
 --[[
-+ Overlay stay's visible when only parent is hidden
++ Child tracks overlay stay's visible when only parent is hidden
 ]]--
 
 local r                  = reaper
@@ -1117,8 +1117,8 @@ function DrawTrackBorderLine(draw_list,x1,y1,x2,y2,color,thickness)
 end
 
 function DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
-    if r.GetParentTrack(track) then return end
-    
+   -- if r.GetParentTrack(track) then return end
+    if track_height == 0 then return end
     local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
     if depth == 1 then
         local start_idx, end_idx = GetFolderBoundaries(track)
@@ -1180,56 +1180,80 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
     end
 end
 
+function DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
+    local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+    if depth == 1 then
+        local start_idx, end_idx = GetFolderBoundaries(track)
+        if start_idx and end_idx then
+            -- Check voor zichtbare child tracks
+            local has_visible_children = false
+            for i = start_idx + 1, end_idx do
+                local child = r.GetTrack(0, i)
+                local child_height = r.GetMediaTrackInfo_Value(child, "I_TCPH") / screen_scale
+                if child_height > 0 then
+                    has_visible_children = true
+                    break
+                end
+            end
+            
+            if has_visible_children then
+                local end_track = r.GetTrack(0, end_idx)
+                local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
+                local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
+                local total_height = (end_y + end_height) - track_y
+                
+                if settings.folder_border_top then
+                    DrawFolderBorderLine(
+                        draw_list,
+                        LEFT,
+                        WY + track_y + settings.border_thickness/2,
+                        RIGHT - scroll_size,
+                        WY + track_y + settings.border_thickness/2,
+                        border_color,
+                        settings.border_thickness
+                    )
+                end
 
-function DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
-    if settings.track_border_left then
-        DrawTrackBorderLine(
-            draw_list,
-            LEFT + settings.border_thickness/2,
-            WY + track_y,
-            LEFT + settings.border_thickness/2,
-            WY + track_y + track_height,
-            border_color,
-            settings.border_thickness
-        )
-    end
-    
-    if settings.track_border_right then
-        DrawTrackBorderLine(
-            draw_list,
-            RIGHT - scroll_size - settings.border_thickness/2,
-            WY + track_y,
-            RIGHT - scroll_size - settings.border_thickness/2,
-            WY + track_y + track_height,
-            border_color,
-            settings.border_thickness
-        )
-    end
-    
-    if settings.track_border_top then
-        DrawTrackBorderLine(
-            draw_list,
-            LEFT,
-            WY + track_y + settings.border_thickness/2,
-            RIGHT - scroll_size,
-            WY + track_y + settings.border_thickness/2,
-            border_color,
-            settings.border_thickness
-        )
-    end
-    
-    if settings.track_border_bottom then
-        DrawTrackBorderLine(
-            draw_list,
-            LEFT,
-            WY + track_y + track_height - settings.border_thickness/2,
-            RIGHT - scroll_size,
-            WY + track_y + track_height - settings.border_thickness/2,
-            border_color,
-            settings.border_thickness
-        )
+                if settings.folder_border_left then
+                    DrawFolderBorderLine(
+                        draw_list,
+                        LEFT + settings.border_thickness/2,
+                        WY + track_y,
+                        LEFT + settings.border_thickness/2,
+                        WY + track_y + total_height,
+                        border_color,
+                        settings.border_thickness
+                    )
+                end
+                
+                if settings.folder_border_right then
+                    DrawFolderBorderLine(
+                        draw_list,
+                        RIGHT - scroll_size - settings.border_thickness/2,
+                        WY + track_y,
+                        RIGHT - scroll_size - settings.border_thickness/2,
+                        WY + track_y + total_height,
+                        border_color,
+                        settings.border_thickness
+                    )
+                end
+                
+                if settings.folder_border_bottom then
+                    DrawFolderBorderLine(
+                        draw_list,
+                        LEFT,
+                        WY + track_y + total_height - settings.border_thickness/2,
+                        RIGHT - scroll_size,
+                        WY + track_y + total_height - settings.border_thickness/2,
+                        border_color,
+                        settings.border_thickness
+                    )
+                end
+            end
+        end
     end
 end
+
 
 function GetDarkerColor(color)
     local r_val, g_val, b_val = r.ColorFromNative(color)
@@ -1365,55 +1389,66 @@ function loop()
         -- Main track processing loop
         for i = 0, track_count - 1 do
             local track = r.GetTrack(0, i)
-            local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
+            local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
+            local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
+            local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+            local is_child = r.GetParentTrack(track) ~= nil
+            local track_color = r.GetTrackColor(track)
             
+            -- Folder borders altijd tekenen als de optie aan staat
+            if settings.show_track_colors and settings.folder_border and (is_parent or is_child) then
+                if is_child then
+                    track_color = r.GetTrackColor(r.GetParentTrack(track))
+                end
+                local darker_color = GetDarkerColor(track_color)
+                local border_color = GetCachedColor(darker_color, settings.border_opacity)
+                DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
+            end
+            
+            -- Normale track rendering alleen voor zichtbare tracks
+            local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
             if track_visible and IsTrackVisible(track) then
-                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
-                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
-                local is_parent = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
-                local is_child = r.GetParentTrack(track) ~= nil
-                local track_color = r.GetTrackColor(track)
                 local is_armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
                 local is_muted = r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
                 local is_soloed = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
                 local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
-
+        
                 local text_width = r.ImGui_CalcTextSize(ctx, track_name)
                 max_width = math.max(max_width, text_width)
-
-                -- Track colors and borders
+        
+                -- Track colors
                 if settings.show_track_colors then
                     if ((is_parent and settings.show_parent_colors) or
                         (is_child and settings.show_child_colors) or
                         (not is_parent and not is_child and settings.show_normal_colors)) then
                         
-                            if settings.deep_inherit_color then
-                                local current = track
-                                local main_parent = nil
-                                while r.GetParentTrack(current) do
-                                    current = r.GetParentTrack(current)
-                                    if not r.GetParentTrack(current) then
-                                        main_parent = current
-                                    end
-                                end
-                                if main_parent then
-                                    track_color = r.GetTrackColor(main_parent)
-                                end
-                            elseif settings.inherit_parent_color then
-                                local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
-                                local parent = r.GetParentTrack(track)
-                                
-                                if depth ~= 1 then
-                                    if parent then
-                                        track_color = r.GetTrackColor(parent)
-                                    end
+                        if settings.deep_inherit_color then
+                            local current = track
+                            local main_parent = nil
+                            while r.GetParentTrack(current) do
+                                current = r.GetParentTrack(current)
+                                if not r.GetParentTrack(current) then
+                                    main_parent = current
                                 end
                             end
+                            if main_parent then
+                                track_color = r.GetTrackColor(main_parent)
+                            end
+                        elseif settings.inherit_parent_color then
+                            local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+                            local parent = r.GetParentTrack(track)
                             
-                        if settings.show_record_color and IsRecording(track) and r.GetPlayState() == 5 then
-                            track_color = r.ColorToNative(255, 0, 0)  -- Rood voor alle systemen
+                            if depth ~= 1 then
+                                if parent then
+                                    track_color = r.GetTrackColor(parent)
+                                end
+                            end
                         end
-
+                        
+                        if settings.show_record_color and IsRecording(track) and r.GetPlayState() == 5 then
+                            track_color = r.ColorToNative(255, 0, 0)
+                        end
+        
                         if track_color ~= 0 then
                             local total_height = track_height
                             local env_count = r.CountTrackEnvelopes(track)
@@ -1441,19 +1476,7 @@ function loop()
                                     RenderSolidOverlay(draw_list, track, track_y, track_height, color, WY)
                                 end
                             end
-                            
                         end
-                                             
-                    end
-
-                    if settings.folder_border and (is_parent or is_child) then
-                        local track_color = r.GetTrackColor(track)
-                        if is_child then
-                            track_color = r.GetTrackColor(r.GetParentTrack(track))
-                        end
-                        local darker_color = GetDarkerColor(track_color)
-                        local border_color = GetCachedColor(darker_color, settings.border_opacity)
-                        DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
                     end
                     
                     if settings.track_border and not is_parent and not is_child and track_color ~= 0 then
@@ -1461,8 +1484,8 @@ function loop()
                         local border_color = GetCachedColor(blended_color, settings.border_opacity)
                         DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
                     end
-                    
                 end
+        
 
                 -- Track name processing
                 local should_show_track = false
