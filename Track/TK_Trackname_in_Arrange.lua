@@ -1,9 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.7.0
+-- @version 0.7.1
 -- @changelog 
 --[[
-+ Child tracks overlay stay's visible when only parent is hidden
++ Fixed: Info line
++ Added: gradual inherit
++ Buxfix: Track border color repair
 ]]--
 
 local r                  = reaper
@@ -150,6 +152,7 @@ local default_settings = {
     darker_parent_tracks           = false,
     parent_darkness                = 0.7,
     show_info_line                 = false,
+    color_gradient_enabled         = false,
 }
 
 local settings = {}
@@ -667,22 +670,28 @@ function ShowSettingsWindow()
                 end
                 r.ImGui_EndCombo(ctx)
             end
-            
             r.ImGui_SameLine(ctx, column_width * 2)
-            if r.ImGui_RadioButton(ctx, "Inherit color", settings.inherit_parent_color) then
-                settings.inherit_parent_color = not settings.inherit_parent_color
-                if settings.inherit_parent_color then
-                    settings.deep_inherit_color = false
+            if settings.overlay_style == 1 then
+                if r.ImGui_RadioButton(ctx, "Gradient", settings.gradient_enabled) then
+                    settings.gradient_enabled = not settings.gradient_enabled
                 end
-            end 
-            r.ImGui_SameLine(ctx, column_width * 3)
-            if r.ImGui_RadioButton(ctx, "Deep Inherit", settings.deep_inherit_color) then
-                settings.deep_inherit_color = not settings.deep_inherit_color
-                if settings.deep_inherit_color then
-                    settings.inherit_parent_color = false
+            end
+            if settings.gradient_enabled and settings.overlay_style == 1 then
+                r.ImGui_SameLine(ctx, column_width * 3)
+                r.ImGui_SetNextItemWidth(ctx, 100)
+                if r.ImGui_BeginCombo(ctx, "##Gradient Direction", 
+                    settings.gradient_direction == 1 and " Horizontal" or " Vertical") then
+                    if r.ImGui_Selectable(ctx, " Horizontal", settings.gradient_direction == 1) then
+                        settings.gradient_direction = 1
+                    end
+                    if r.ImGui_Selectable(ctx, " Vertical", settings.gradient_direction == 2) then
+                        settings.gradient_direction = 2
+                    end
+                    r.ImGui_EndCombo(ctx)
                 end
-            end  
-        
+            end
+            
+
             -- Vierde rij
             if r.ImGui_RadioButton(ctx, "Parent colors", settings.show_parent_colors) then
                 settings.show_parent_colors = not settings.show_parent_colors
@@ -711,25 +720,26 @@ function ShowSettingsWindow()
                 settings.show_record_color = not settings.show_record_color
             end
             r.ImGui_SameLine(ctx, column_width * 2)
-            if settings.overlay_style == 1 then
-                if r.ImGui_RadioButton(ctx, "Gradient", settings.gradient_enabled) then
-                    settings.gradient_enabled = not settings.gradient_enabled
+            if r.ImGui_RadioButton(ctx, "Inherit", settings.inherit_parent_color) then
+                settings.inherit_parent_color = not settings.inherit_parent_color
+                if settings.inherit_parent_color then
+                    settings.deep_inherit_color = false
                 end
-            end
-            if settings.gradient_enabled and settings.overlay_style == 1 then
-                r.ImGui_SameLine(ctx, column_width * 3)
-                r.ImGui_SetNextItemWidth(ctx, 100)
-                if r.ImGui_BeginCombo(ctx, "##Gradient Direction", 
-                    settings.gradient_direction == 1 and " Horizontal" or " Vertical") then
-                    if r.ImGui_Selectable(ctx, " Horizontal", settings.gradient_direction == 1) then
-                        settings.gradient_direction = 1
-                    end
-                    if r.ImGui_Selectable(ctx, " Vertical", settings.gradient_direction == 2) then
-                        settings.gradient_direction = 2
-                    end
-                    r.ImGui_EndCombo(ctx)
+            end 
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_RadioButton(ctx, "Deep", settings.deep_inherit_color) then
+                settings.deep_inherit_color = not settings.deep_inherit_color
+                if settings.deep_inherit_color then
+                    settings.inherit_parent_color = false
                 end
-            end
+            end  
+            r.ImGui_SameLine(ctx, column_width * 3)
+            if settings.show_track_colors then
+                if r.ImGui_RadioButton(ctx, "Gradual", settings.color_gradient_enabled) then
+                    settings.color_gradient_enabled = not settings.color_gradient_enabled
+                end
+            end 
+
             if settings.overlay_style == 1 then
                 if r.ImGui_RadioButton(ctx, "Folder Borders", settings.folder_border) then
                     settings.folder_border = not settings.folder_border
@@ -787,10 +797,9 @@ function ShowSettingsWindow()
                         
                         r.ImGui_EndCombo(ctx)
                     end
-                end
-                
-                
+                end    
             end
+      
         end  
         r.ImGui_PopStyleVar(ctx)
         r.ImGui_Separator(ctx)
@@ -1116,67 +1125,53 @@ function DrawTrackBorderLine(draw_list,x1,y1,x2,y2,color,thickness)
     r.ImGui_DrawList_AddLine(draw_list,x1, y1, x2, y2,color,thickness)
 end
 
-function DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
-   -- if r.GetParentTrack(track) then return end
-    if track_height == 0 then return end
-    local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
-    if depth == 1 then
-        local start_idx, end_idx = GetFolderBoundaries(track)
-        if start_idx and end_idx then
-            local end_track = r.GetTrack(0, end_idx)
-            local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
-            local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
-            local total_height = (end_y + end_height) - track_y
-            
-            -- Draw the complete frame
-            if settings.folder_border_top then
-                DrawFolderBorderLine(
-                    draw_list,
-                    LEFT,
-                    WY + track_y + settings.border_thickness/2,
-                    RIGHT - scroll_size,
-                    WY + track_y + settings.border_thickness/2,
-                    border_color,
-                    settings.border_thickness
-                )
-            end
-
-            if settings.folder_border_left then
-                DrawFolderBorderLine(
-                    draw_list,
-                    LEFT + settings.border_thickness/2,
-                    WY + track_y,
-                    LEFT + settings.border_thickness/2,
-                    WY + track_y + total_height,
-                    border_color,
-                    settings.border_thickness
-                )
-            end
-            
-            if settings.folder_border_right then
-                DrawFolderBorderLine(
-                    draw_list,
-                    RIGHT - scroll_size - settings.border_thickness/2,
-                    WY + track_y,
-                    RIGHT - scroll_size - settings.border_thickness/2,
-                    WY + track_y + total_height,
-                    border_color,
-                    settings.border_thickness
-                )
-            end
-            
-            if settings.folder_border_bottom then
-                DrawFolderBorderLine(
-                    draw_list,
-                    LEFT,
-                    WY + track_y + total_height - settings.border_thickness/2,
-                    RIGHT - scroll_size,
-                    WY + track_y + total_height - settings.border_thickness/2,
-                    border_color,
-                    settings.border_thickness
-                )
-            end
-        end
+function DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
+    if settings.track_border_left then
+        DrawTrackBorderLine(
+            draw_list,
+            LEFT + settings.border_thickness/2,
+            WY + track_y,
+            LEFT + settings.border_thickness/2,
+            WY + track_y + track_height,
+            border_color,
+            settings.border_thickness
+        )
+    end
+    
+    if settings.track_border_right then
+        DrawTrackBorderLine(
+            draw_list,
+            RIGHT - scroll_size - settings.border_thickness/2,
+            WY + track_y,
+            RIGHT - scroll_size - settings.border_thickness/2,
+            WY + track_y + track_height,
+            border_color,
+            settings.border_thickness
+        )
+    end
+    
+    if settings.track_border_top then
+        DrawTrackBorderLine(
+            draw_list,
+            LEFT,
+            WY + track_y + settings.border_thickness/2,
+            RIGHT - scroll_size,
+            WY + track_y + settings.border_thickness/2,
+            border_color,
+            settings.border_thickness
+        )
+    end
+    
+    if settings.track_border_bottom then
+        DrawTrackBorderLine(
+            draw_list,
+            LEFT,
+            WY + track_y + track_height - settings.border_thickness/2,
+            RIGHT - scroll_size,
+            WY + track_y + track_height - settings.border_thickness/2,
+            border_color,
+            settings.border_thickness
+        )
     end
 end
 
@@ -1202,6 +1197,7 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                 local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
                 local total_height = (end_y + end_height) - track_y
                 
+                -- Teken de borders
                 if settings.folder_border_top then
                     DrawFolderBorderLine(
                         draw_list,
@@ -1264,68 +1260,59 @@ function GetDarkerColor(color)
     )
 end
 
-function GetFolderInfo(track)
-    local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
-    local folder_depth = 1
-    local child_count = 0
-    local total_fx = 0
-    local total_sends = 0
-    local total_receives = 0
-    local total_envelopes = 0
-    local armed_tracks = 0
-    local muted_tracks = 0
-    local soloed_tracks = 0
-    local total_items = 0
-    local has_automation = false
-    local current_idx = track_idx
-    
-    -- Tel parent track mee
-    total_fx = total_fx + r.TrackFX_GetCount(track)
-    total_sends = total_sends + r.GetTrackNumSends(track, 0)
-    total_receives = total_receives + r.GetTrackNumSends(track, -1)
-    total_envelopes = total_envelopes + r.CountTrackEnvelopes(track)
-    total_items = total_items + r.GetTrackNumMediaItems(track)
-    
-    -- Check automation op parent
-    for i = 0, r.CountTrackEnvelopes(track) - 1 do
-        local env = r.GetTrackEnvelope(track, i)
-        if r.CountEnvelopePoints(env) > 0 then
-            has_automation = true
-            break
-        end
-    end
-    
-    while folder_depth > 0 and current_idx < r.CountTracks(0) - 1 do
-        current_idx = current_idx + 1
-        local child = r.GetTrack(0, current_idx)
-        local depth = r.GetMediaTrackInfo_Value(child, "I_FOLDERDEPTH")
-        folder_depth = folder_depth + depth
-        
-        if folder_depth > 0 then
-            child_count = child_count + 1
-            total_fx = total_fx + r.TrackFX_GetCount(child)
-            total_sends = total_sends + r.GetTrackNumSends(child, 0)
-            total_receives = total_receives + r.GetTrackNumSends(child, -1)
-            total_envelopes = total_envelopes + r.CountTrackEnvelopes(child)
-            total_items = total_items + r.GetTrackNumMediaItems(child)
-            
-            if r.GetMediaTrackInfo_Value(child, "I_RECARM") == 1 then armed_tracks = armed_tracks + 1 end
-            if r.GetMediaTrackInfo_Value(child, "B_MUTE") == 1 then muted_tracks = muted_tracks + 1 end
-            if r.GetMediaTrackInfo_Value(child, "I_SOLO") > 0 then soloed_tracks = soloed_tracks + 1 end
-            
-            -- Check automation op child tracks
-            for i = 0, r.CountTrackEnvelopes(child) - 1 do
-                local env = r.GetTrackEnvelope(child, i)
-                if r.CountEnvelopePoints(env) > 0 then
-                    has_automation = true
-                    break
-                end
-            end
-        end
-    end
+function GetLighterColor(color, step, total_steps)
+    local red, g, b = reaper.ColorFromNative(color)
+    local h, s, v = reaper.ImGui_ColorConvertRGBtoHSV(red/255, g/255, b/255)
+    local v_step = (1.0 - v) / (total_steps * 0.5)  
+    local s_step = (s * 0.8) / total_steps         
+    v = v + (v_step * step)
+    s = s - (s_step * step)
+    v = math.min(v, 1.0)
+    s = math.max(s, 0.0)
+    local red, g, b = reaper.ImGui_ColorConvertHSVtoRGB(h, s, v)
+    return reaper.ColorToNative(
+        math.floor(red * 255 + 0.5),
+        math.floor(g * 255 + 0.5),
+        math.floor(b * 255 + 0.5)
+    )
+end
 
-    return string.format("Tracks: %d | FX: %d | Sends/Rec: %d | Env: %d | Items: %d | %s | Rec: %d | Mute: %d | Solo: %d", 
-        child_count, total_fx, total_sends + total_receives, total_envelopes, total_items, has_automation and "Auto" or "No Auto", armed_tracks, muted_tracks, soloed_tracks)
+function GetFolderInfo(track)
+    local totals = {
+        fx = r.TrackFX_GetCount(track),
+        sends = r.GetTrackNumSends(track, 0),
+        receives = r.GetTrackNumSends(track, -1),
+        envelopes = r.CountTrackEnvelopes(track),
+        items = r.GetTrackNumMediaItems(track),
+        armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1 and 1 or 0,
+        muted = r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1 and 1 or 0,
+        soloed = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0 and 1 or 0,
+        tracks = 1,
+        folder_tracks = 0
+    }
+    
+    local idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
+    local depth = 1
+    
+    while depth > 0 and idx < r.CountTracks(0) - 1 do
+        local child = r.GetTrack(0, idx + 1)
+        depth = depth + r.GetMediaTrackInfo_Value(child, "I_FOLDERDEPTH")
+        totals.tracks = totals.tracks + 1
+        totals.folder_tracks = totals.folder_tracks + 1
+        totals.fx = totals.fx + r.TrackFX_GetCount(child)
+        totals.sends = totals.sends + r.GetTrackNumSends(child, 0)
+        totals.receives = totals.receives + r.GetTrackNumSends(child, -1)
+        totals.envelopes = totals.envelopes + r.CountTrackEnvelopes(child)
+        totals.items = totals.items + r.GetTrackNumMediaItems(child)
+        totals.armed = totals.armed + (r.GetMediaTrackInfo_Value(child, "I_RECARM") == 1 and 1 or 0)
+        totals.muted = totals.muted + (r.GetMediaTrackInfo_Value(child, "B_MUTE") == 1 and 1 or 0)
+        totals.soloed = totals.soloed + (r.GetMediaTrackInfo_Value(child, "I_SOLO") > 0 and 1 or 0)
+        idx = idx + 1
+    end
+    
+    return string.format("Total Tracks: %d(%d) | FX: %d | Sends/Rec: %d | Env: %d | Items: %d | %s | Rec: %d | Mute: %d | Solo: %d",
+        totals.tracks, totals.folder_tracks, totals.fx, totals.sends + totals.receives, totals.envelopes, totals.items,
+        has_automation and "Auto" or "No Auto", totals.armed, totals.muted, totals.soloed)
 end
 
 -- Scaling by OLSHALOM!
@@ -1397,14 +1384,18 @@ function loop()
             
             -- Folder borders altijd tekenen als de optie aan staat
             if settings.show_track_colors and settings.folder_border and (is_parent or is_child) then
+                local border_base_color = r.GetTrackColor(track)
                 if is_child then
-                    track_color = r.GetTrackColor(r.GetParentTrack(track))
+                    local parent = r.GetParentTrack(track)
+                    if parent then
+                        border_base_color = r.GetTrackColor(parent)
+                    end
                 end
-                local darker_color = GetDarkerColor(track_color)
+                local darker_color = GetDarkerColor(border_base_color)
                 local border_color = GetCachedColor(darker_color, settings.border_opacity)
                 DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
             end
-            
+              
             -- Normale track rendering alleen voor zichtbare tracks
             local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
             if track_visible and IsTrackVisible(track) then
@@ -1422,9 +1413,13 @@ function loop()
                         (is_child and settings.show_child_colors) or
                         (not is_parent and not is_child and settings.show_normal_colors)) then
                         
+                        local base_color = track_color
+                        local main_parent = nil
+                        
+                        -- Deep inherit logica
                         if settings.deep_inherit_color then
+                            -- Deep inherit + gradient logica blijft als hoogste prioriteit
                             local current = track
-                            local main_parent = nil
                             while r.GetParentTrack(current) do
                                 current = r.GetParentTrack(current)
                                 if not r.GetParentTrack(current) then
@@ -1432,16 +1427,48 @@ function loop()
                                 end
                             end
                             if main_parent then
-                                track_color = r.GetTrackColor(main_parent)
-                            end
-                        elseif settings.inherit_parent_color then
-                            local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
-                            local parent = r.GetParentTrack(track)
-                            
-                            if depth ~= 1 then
-                                if parent then
-                                    track_color = r.GetTrackColor(parent)
+                                base_color = r.GetTrackColor(main_parent)
+                                
+                                if settings.color_gradient_enabled then
+                                    local main_parent_idx = r.GetMediaTrackInfo_Value(main_parent, "IP_TRACKNUMBER") - 1
+                                    local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
+                                    local position = track_idx - main_parent_idx
+                                    track_color = GetLighterColor(base_color, position, 5)
+                                else
+                                    track_color = base_color
                                 end
+                            end
+                        elseif settings.color_gradient_enabled and not is_parent then
+                            -- Gradient krijgt nu voorrang op normal inherit
+                            local parent = r.GetParentTrack(track)
+                            if parent then
+                                base_color = r.GetTrackColor(parent)
+                                if base_color == 0 then base_color = track_color end
+                                
+                                local track_position = 0
+                                local parent_idx = r.GetMediaTrackInfo_Value(parent, "IP_TRACKNUMBER") - 1
+                                local current_idx = parent_idx
+                                local current_depth = 0
+                                
+                                while current_depth >= 0 and current_idx < r.CountTracks(0) do
+                                    local current_track = r.GetTrack(0, current_idx)
+                                    local depth = r.GetMediaTrackInfo_Value(current_track, "I_FOLDERDEPTH")
+                                    
+                                    if current_track == track then
+                                        track_color = GetLighterColor(base_color, track_position, 5)
+                                        break
+                                    end
+                                    
+                                    current_depth = current_depth + depth
+                                    track_position = track_position + 1
+                                    current_idx = current_idx + 1
+                                end
+                            end
+                        elseif settings.inherit_parent_color and not is_parent then
+                            -- Normal inherit heeft nu laagste prioriteit
+                            local parent = r.GetParentTrack(track)
+                            if parent then
+                                track_color = r.GetTrackColor(parent)
                             end
                         end
                         
@@ -1485,7 +1512,6 @@ function loop()
                         DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
                     end
                 end
-        
 
                 -- Track name processing
                 local should_show_track = false

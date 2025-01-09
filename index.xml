@@ -69,9 +69,11 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.7.0" author="TouristKiller" time="2024-01-08T01:30:00Z">
+        <version name="0.7.1" author="TouristKiller" time="2024-01-09T04:30:00Z">
             <changelog><![CDATA[           
-+ Overlay stay's visible when only parent is hidden
++ Fixed: Info line
++ Added: gradual inherit
++ Buxfix: Track border color repair
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
