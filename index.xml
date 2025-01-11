@@ -67,6 +67,18 @@
     </reapack>
  </category>
 
+  <category name="Midi">
+    <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
+    <version name="0.1.0" author="TouristKiller" time="2024-01-11T1:10:00Z">
+                <changelog><![CDATA[           
++ First Reapack Release for testing 
+]]></changelog>
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
+    <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>
+    </version>
+    </reapack>
+ </category>
+
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
         <version name="0.7.1" author="TouristKiller" time="2024-01-09T04:30:00Z">
