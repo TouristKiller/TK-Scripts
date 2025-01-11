@@ -1,9 +1,9 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.1.0:
+-- @version 0.1.1:
 -- @changelog:
 --[[        
-+ First Reapack Release for testing          
++ Added Find for quick finding chords in the voicings list        
 ]]--   
 -- I am a drummer..... dont kill me if I mess up the guitar stuff ;o)
 ------------------------------------------------------------------------
@@ -23,6 +23,8 @@ local chord_fingers = {}
 
 local show_sequence = false
 local show_chord = true
+local status_message = ""
+local status_color = 0xFFFFFFFF 
 
 local tunings = {
     ["Standard (EADGBE)"] = {64,59,55,50,45,40},
@@ -600,7 +602,8 @@ function DrawChordboard(ctx,startX,startY,width,height)
         end
     end
     DrawFingerLegend(ctx, startX + width + 50, startY + 30)
-    if chord_name and chord_name ~= "(?)" then
+
+    if chord_name and chord_name ~= "(?)" or status_message ~= "" then
         local legend_height = 25 * 4
         local chord_info_y = startY + 20 + legend_height + 20
         local info_x = startX + width + 50
@@ -610,13 +613,13 @@ function DrawChordboard(ctx,startX,startY,width,height)
         local is_barre = IsBarre(chord_shape)
         local chord_type = is_barre and "Barre Chord: " or "Chord: "
         
-        r.ImGui_DrawList_AddRectFilled(draw_list, 
+        r.ImGui_DrawList_AddRectFilled(draw_list,
             info_x - box_padding,
             chord_info_y - box_padding,
             info_x + box_width,
             chord_info_y + box_height,
             0x1A1A1AFF)
-            
+        
         r.ImGui_DrawList_AddRect(draw_list,
             info_x - box_padding,
             chord_info_y - box_padding,
@@ -624,10 +627,15 @@ function DrawChordboard(ctx,startX,startY,width,height)
             chord_info_y + box_height,
             0x333333FF)
         
-        r.ImGui_DrawList_AddText(draw_list, info_x, chord_info_y, 0xFFFFFFFF, chord_type)
-        r.ImGui_DrawList_AddText(draw_list, info_x, chord_info_y + 20, 0xFFFFFFFF, chord_name)
+        if status_message ~= "" then
+            r.ImGui_DrawList_AddText(draw_list, info_x, chord_info_y, status_color, status_message)
+            status_message = ""  -- Reset after display
+        else
+            r.ImGui_DrawList_AddText(draw_list, info_x, chord_info_y, 0xFFFFFFFF, chord_type)
+            r.ImGui_DrawList_AddText(draw_list, info_x, chord_info_y + 20, 0xFFFFFFFF, chord_name)
+        end
     end
-end
+end    
 
 
 
@@ -770,8 +778,10 @@ function MainLoop()
         r.ImGui_Separator(ctx)
         r.ImGui_Spacing(ctx)
         if show_sequence then
-            r.ImGui_Text(ctx,"Enter sequence (format: 1-2-6-9-0-3):")
-            _,input_sequence=r.ImGui_InputText(ctx,"##sequence",input_sequence)
+            r.ImGui_Text(ctx,"Enter sequence:")
+            r.ImGui_PushItemWidth(ctx, 255) 
+            local _, new_sequence = r.ImGui_InputTextWithHint(ctx, "##sequence", "1-2-6-9-0-3", input_sequence)
+            input_sequence = new_sequence
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "X##clearseq") then
                 input_sequence = ""
@@ -780,7 +790,7 @@ function MainLoop()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x0099DDFF)        -- Lichtblauw voor normale staat
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00BBFFFF) -- Iets lichtere tint voor hover
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x0077AAFF)
-            if r.ImGui_Button(ctx,"Insert Sequence")then
+            if r.ImGui_Button(ctx,"Insert")then
                 local item,take,note_length=CreateMIDIItem()
                 if take then InsertSequence(take,input_sequence,note_length)end
             end
@@ -791,18 +801,47 @@ function MainLoop()
         end  
         if show_chord then    
             r.ImGui_Spacing(ctx)
-            r.ImGui_Text(ctx,"Enter chord (format: 1 3 3 2 1 1 or X X X 2 1 1):")
-            local _, new_input = r.ImGui_InputText(ctx,"##chord",input_chord)
+            r.ImGui_Text(ctx, "Chord:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 100)  
+            local _, new_input = r.ImGui_InputTextWithHint(ctx, "##chord", "X 3 2 0 1 0", input_chord)
             input_chord = FilterChordInput(new_input)
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "X##clearchord") then
                 input_chord = ""
             end
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Find:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 50) 
+            r.ImGui_PushItemWidth(ctx, 50)
+            _, quick_chord_input = r.ImGui_InputTextWithHint(ctx, "##quickchord", "AMaj7", quick_chord_input or "")
+            if quick_chord_input and quick_chord_input ~= "" then
+                local found = false
+                for voicing, chord in pairs(voicings) do
+                    if chord:lower() == quick_chord_input:lower() then
+                        input_chord = voicing
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    status_message = "Chord not found"
+                    status_color = 0xFF0000FF  
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "X##clearquick") then
+                quick_chord_input = ""
+            end
+            
             r.ImGui_SameLine(ctx)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x0099DDFF)        
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00BBFFFF) 
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00BBFFFF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x0077AAFF)  
-            if r.ImGui_Button(ctx,"Insert Chord") then
+            
+            if r.ImGui_Button(ctx, "Insert") then  
                 local frets = {}
                 for fret in input_chord:gmatch("%S+") do
                     table.insert(frets, fret)
@@ -816,6 +855,8 @@ function MainLoop()
                     r.ImGui_TextColored(ctx, 0xFF0000FF, "Input must contain exactly 6 positions")
                 end
             end
+        
+        
             r.ImGui_PopStyleColor(ctx, 3)
             DrawChordboard(ctx,10,r.ImGui_GetCursorPosY(ctx)+20,120,120)
             r.ImGui_Dummy(ctx,0,325)

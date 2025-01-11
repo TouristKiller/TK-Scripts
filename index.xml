@@ -69,9 +69,10 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.1.0" author="TouristKiller" time="2024-01-11T1:10:00Z">
+    <version name="0.1.1" author="TouristKiller" time="2024-01-11T03:25:00Z">
                 <changelog><![CDATA[           
-+ First Reapack Release for testing 
++ First Reapack Release for testing (0.1.0)
++ Added Find for quick finding chords in the voicings list (0.1.1)
 ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
     <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>
