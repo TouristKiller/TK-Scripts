@@ -1,11 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.7.1
+-- @version 0.7.2
 -- @changelog 
 --[[
-+ Fixed: Info line
-+ Added: gradual inherit
-+ Buxfix: Track border color repair
++ Added Dark Parent Toggle script (assign a shortcut to it)
 ]]--
 
 local r                  = reaper
@@ -52,6 +50,8 @@ local window_flags       = flags |
 local settings_flags     = r.ImGui_WindowFlags_NoTitleBar() | 
                            r.ImGui_WindowFlags_TopMost() |
                            r.ImGui_WindowFlags_NoResize() 
+
+
 
 
 function UpdateBgColorCache()
@@ -1329,6 +1329,11 @@ end
 profiler.run()
 profiler.start()]]--
 function loop()
+    if r.GetExtState("TK_TRACKNAMES", "reload_settings") == "1" then
+        LoadSettings()
+        r.SetExtState("TK_TRACKNAMES", "reload_settings", "0", false)
+    end
+    
 
     settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
@@ -1788,6 +1793,8 @@ local success = pcall(function()
     
     LoadSettings()
     CreateFonts()
+
+   
     if settings.custom_colors_enabled then
         grid_divide_state = r.GetToggleCommandState(42331)
         if grid_divide_state == 1 then
