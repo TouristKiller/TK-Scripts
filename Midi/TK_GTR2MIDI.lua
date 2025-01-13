@@ -1,6 +1,6 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.1.2:
+-- @version 0.1.3:
 -- @changelog:
 --[[        
 + Added: Close button and Esc close script

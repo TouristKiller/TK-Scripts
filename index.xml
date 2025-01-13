@@ -69,7 +69,7 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.1.2" author="TouristKiller" time="2024-01-13T12:05:00Z">
+    <version name="0.1.3" author="TouristKiller" time="2024-01-13T12:25:00Z">
                 <changelog><![CDATA[           
 + Added: Close button and Esc close script
 + Added: Voicing selection dropdown (CDE or DoReMi)
