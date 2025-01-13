@@ -69,13 +69,16 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.1.1" author="TouristKiller" time="2024-01-11T03:25:00Z">
+    <version name="0.1.2" author="TouristKiller" time="2024-01-13T12:05:00Z">
                 <changelog><![CDATA[           
-+ First Reapack Release for testing (0.1.0)
-+ Added Find for quick finding chords in the voicings list (0.1.1)
++ Added: Close button and Esc close script
++ Added: Voicing selection dropdown (CDE or DoReMi)
++ Added: vertical and horizontal view for Chordboard
++ Added: Add sequence or chord to existing MIDI item
 ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
     <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>
+    <source file="ChordVoicings_DoReMi.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings_DoReMi.txt</source>
     </version>
     </reapack>
  </category>
