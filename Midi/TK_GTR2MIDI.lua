@@ -1,6 +1,6 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.1.3:
+-- @version 0.1.4:
 -- @changelog:
 --[[        
 + Added: Close button and Esc close script
@@ -621,70 +621,52 @@ function DrawChordboard(ctx,startX,startY,width,height)
         HandleFretboardClick(ctx,startX-winX,startY-winY,width,height,true,true)
     end
 
-    -- Get chord name and fingers
     local chord_shape = input_chord
     local chord_name = DetermineChordName(chord_shape)
     local fingers = chord_fingers[chord_shape] or DetermineFingerPositions(chord_shape)
     local finger_idx = 1
-
-    -- Draw selected positions with finger colors
-    for string_num=1,num_strings do
-        local fret=string.match(input_chord,string.rep("%S+%s",string_num-1)..("(%S+)"))
-        if fret and fret~="X" then
+    for string_num = 1, num_strings do
+        local fret = string.match(input_chord, string.rep("%S+%s", string_num-1)..("(%S+)"))
+        if fret then
+            local x, y
             if chord_board_horizontal then
-                -- Bereken de y-positie met omgekeerde string_num voor correcte volgorde
-                local y = startY + ((6-string_num) * string_spacing)
-                if fret == "0" then
-                    r.ImGui_DrawList_AddCircleFilled(draw_list, startX, y, 6, 0xFFFFFFFF)
-                    r.ImGui_DrawList_AddCircle(draw_list, startX, y, 6, 0x000000FF)
-                else
-                    local fret_num = tonumber(fret)
-                    if fret_num then
-                        local x = startX + (fret_num * fret_spacing) - (fret_spacing/2)
-                        local finger = fingers[finger_idx]
-                        local color = finger_colors[finger] or 0xFFFFFFFF
-                        r.ImGui_DrawList_AddCircleFilled(draw_list, x, y, 6, color)
-                        r.ImGui_DrawList_AddCircle(draw_list, x, y, 6, 0xFFFFFFFF)
-                        if finger then
-                            r.ImGui_DrawList_AddText(draw_list, x-3, y-6, 0x000000FF, tostring(finger))
-                        end
-                    end
-                end
+                y = startY + ((6-string_num) * string_spacing)
+                x = startX
             else
-                local x=startX+(string_num-1)*string_spacing
-                if fret == "0" then
-                    r.ImGui_DrawList_AddCircleFilled(draw_list,x,startY,6,0xFFFFFFFF)
-                    r.ImGui_DrawList_AddCircle(draw_list,x,startY,6,0x000000FF)
-                else
-                    local fret_num=tonumber(fret)
-                    if fret_num then
-                        local y=startY+(fret_num*fret_spacing)-(fret_spacing/2)
-                        local finger = fingers[finger_idx]
-                        local color = finger_colors[finger] or 0xFFFFFFFF
-                        r.ImGui_DrawList_AddCircleFilled(draw_list,x,y,6,color)
-                        r.ImGui_DrawList_AddCircle(draw_list,x,y,6,0xFFFFFFFF)
-                        if finger then
-                            r.ImGui_DrawList_AddText(draw_list,x-3,y-6,0x000000FF,tostring(finger))
-                        end
+                x = startX + (string_num-1) * string_spacing
+                y = startY
+            end
+    
+            if fret == "X" then
+                local size = 4
+                r.ImGui_DrawList_AddLine(draw_list, x-size, y-size, x+size, y+size, 0xFFFFFFFF)
+                r.ImGui_DrawList_AddLine(draw_list, x-size, y+size, x+size, y-size, 0xFFFFFFFF)
+                finger_idx = finger_idx + 1
+            elseif fret == "0" then
+                r.ImGui_DrawList_AddCircleFilled(draw_list, x, y, 6, 0xFFFFFFFF)
+                r.ImGui_DrawList_AddCircle(draw_list, x, y, 6, 0x000000FF)
+                finger_idx = finger_idx + 1
+            else
+                local fret_num = tonumber(fret)
+                if fret_num then
+                    if chord_board_horizontal then
+                        x = startX + (fret_num * fret_spacing) - (fret_spacing/2)
+                    else
+                        y = startY + (fret_num * fret_spacing) - (fret_spacing/2)
                     end
+                    local finger = fingers[finger_idx]
+                    local color = finger_colors[finger] or 0xFFFFFFFF
+                    r.ImGui_DrawList_AddCircleFilled(draw_list, x, y, 6, color)
+                    r.ImGui_DrawList_AddCircle(draw_list, x, y, 6, 0xFFFFFFFF)
+                    if finger then
+                        r.ImGui_DrawList_AddText(draw_list, x-3, y-6, 0x000000FF, tostring(finger))
+                    end
+                    finger_idx = finger_idx + 1
                 end
             end
-            finger_idx = finger_idx + 1
-        elseif fret == "X" then
-            if chord_board_horizontal then
-                local y=startY+(string_num-1)*string_spacing
-                local size = 4
-                r.ImGui_DrawList_AddLine(draw_list,startX-size,y-size,startX+size,y+size,0xFFFFFFFF)
-                r.ImGui_DrawList_AddLine(draw_list,startX-size,y+size,startX+size,y-size,0xFFFFFFFF)
-            else
-                local x=startX+(string_num-1)*string_spacing
-                local size = 4
-                r.ImGui_DrawList_AddLine(draw_list,x-size,startY-size,x+size,startY+size,0xFFFFFFFF)
-                r.ImGui_DrawList_AddLine(draw_list,x-size,startY+size,x+size,startY-size,0xFFFFFFFF)
-            end
-            finger_idx = finger_idx + 1
         end
     end
+    
 
     if IsBarre(chord_shape) then
         local barre_fret = nil
