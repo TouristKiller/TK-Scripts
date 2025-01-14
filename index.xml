@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <index version="1" name="TK Scripts">
+<metadata>
+    <description><![CDATA[
+# TK Scripts
+A collection of scripts for REAPER
+
+## Scripts included:
+- TK SMART
+- TK FX BROWSER
+- TK MEDIA BROWSER
+- TK GTR2MIDI
+- Various utility scripts for envelopes, tracks and media
+
+    ]]></description>
+  </metadata>
  
  <category name="Envelopes">
     <reapack name="TK_CopyAllEnvelopes.lua" type="script" desc="Copy all envelopes">
