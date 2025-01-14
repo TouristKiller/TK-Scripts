@@ -69,7 +69,7 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.1.5" author="TouristKiller" time="2024-01-15T00:25:00Z">
+    <version name="0.1.6" author="TouristKiller" time="2024-01-15T00:35:00Z">
                 <changelog><![CDATA[           
 + Bugfix: Os specific path separator
 ]]></changelog>

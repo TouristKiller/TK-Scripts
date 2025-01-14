@@ -1,6 +1,6 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.1.5:
+-- @version 0.1.6:
 -- @changelog:
 --[[        
 + Bugfix: Os specific path separator
@@ -56,7 +56,7 @@ local function GTR2MIDI_esc_key()
     return false
 end
 
-function LoadVoicings(
+function LoadVoicings()
     local separator = package.config:sub(1,1)  -- Gets OS-specific path separator
     local script_path = debug.getinfo(1,'S').source:match("@(.*)" .. separator)
     local file = io.open(script_path .. separator .. selected_voicing_file, "r")
