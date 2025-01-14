@@ -1,12 +1,9 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.1.4:
+-- @version 0.1.5:
 -- @changelog:
 --[[        
-+ Added: Close button and Esc close script
-+ Added: Voicing selection dropdown (CDE or DoReMi)
-+ Added: vertical and horizontal view for Chordboard
-+ Added: Add sequence or chord to existing MIDI item
++ Bugfix: Os specific path separator
 ]]--   
 -- I am a drummer..... dont kill me if I mess up the guitar stuff ;o)
 ------------------------------------------------------------------------
@@ -59,9 +56,10 @@ local function GTR2MIDI_esc_key()
     return false
 end
 
-function LoadVoicings()
-    local script_path = debug.getinfo(1,'S').source:match("@(.*)\\")
-    local file = io.open(script_path .. "\\" .. selected_voicing_file, "r")
+function LoadVoicings(
+    local separator = package.config:sub(1,1)  -- Gets OS-specific path separator
+    local script_path = debug.getinfo(1,'S').source:match("@(.*)" .. separator)
+    local file = io.open(script_path .. separator .. selected_voicing_file, "r")
     if file then
         for line in file:lines() do
             if not line:match("^#") and line:match("|") then
