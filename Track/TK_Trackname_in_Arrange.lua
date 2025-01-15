@@ -1,9 +1,10 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.7.2
+-- @version 0.7.5
 -- @changelog 
 --[[
-+ Added Dark Parent Toggle script (assign a shortcut to it)
++ Added Nested option to Make Nested Parents Darker 
++ Added opacity voor darker parent tracks
 ]]--
 
 local r                  = reaper
@@ -151,6 +152,8 @@ local default_settings = {
     gradient_end_alpha_cached      = 0,
     darker_parent_tracks           = false,
     parent_darkness                = 0.7,
+    darker_parent_opacity          = 1.0,
+    nested_parents_darker          = false,
     show_info_line                 = false,
     color_gradient_enabled         = false,
 }
@@ -693,30 +696,39 @@ function ShowSettingsWindow()
             
 
             -- Vierde rij
-            if r.ImGui_RadioButton(ctx, "Parent colors", settings.show_parent_colors) then
+            local column_width = r.ImGui_GetWindowWidth(ctx) / 5
+            if r.ImGui_RadioButton(ctx, "Parent", settings.show_parent_colors) then
                 settings.show_parent_colors = not settings.show_parent_colors
                 needs_font_update = CheckTrackColorUpdate()
             end
             r.ImGui_SameLine(ctx, column_width)
-            if r.ImGui_RadioButton(ctx, "Child colors", settings.show_child_colors) then
+            if r.ImGui_RadioButton(ctx, "Child", settings.show_child_colors) then
                 settings.show_child_colors = not settings.show_child_colors
                 needs_font_update = CheckTrackColorUpdate()
             end
             r.ImGui_SameLine(ctx, column_width * 2)
-            if r.ImGui_RadioButton(ctx, "Normal colors", settings.show_normal_colors) then
+            if r.ImGui_RadioButton(ctx, "Normal", settings.show_normal_colors) then
                 settings.show_normal_colors = not settings.show_normal_colors
                 needs_font_update = CheckTrackColorUpdate()
             end
             r.ImGui_SameLine(ctx, column_width * 3)
-            if r.ImGui_RadioButton(ctx, "Darker Parents", settings.darker_parent_tracks) then
+            if r.ImGui_RadioButton(ctx, "Dark Parent", settings.darker_parent_tracks) then
                 settings.darker_parent_tracks = not settings.darker_parent_tracks
             end
+            r.ImGui_SameLine(ctx, column_width * 4)
+            --if settings.darker_parent_tracks then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_RadioButton(ctx, "Nested", settings.nested_parents_darker) then
+                    settings.nested_parents_darker = not settings.nested_parents_darker
+                end
+            --end
+            
             -- Vijfde rij
-            if r.ImGui_RadioButton(ctx, "Env Colors", settings.show_envelope_colors) then
+            if r.ImGui_RadioButton(ctx, "Env Color", settings.show_envelope_colors) then
                 settings.show_envelope_colors = not settings.show_envelope_colors
             end
             r.ImGui_SameLine(ctx, column_width)
-            if r.ImGui_RadioButton(ctx, "Record color", settings.show_record_color) then
+            if r.ImGui_RadioButton(ctx, "Rec color", settings.show_record_color) then
                 settings.show_record_color = not settings.show_record_color
             end
             r.ImGui_SameLine(ctx, column_width * 2)
@@ -726,20 +738,20 @@ function ShowSettingsWindow()
                     settings.deep_inherit_color = false
                 end
             end 
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, column_width * 3)
             if r.ImGui_RadioButton(ctx, "Deep", settings.deep_inherit_color) then
                 settings.deep_inherit_color = not settings.deep_inherit_color
                 if settings.deep_inherit_color then
                     settings.inherit_parent_color = false
                 end
             end  
-            r.ImGui_SameLine(ctx, column_width * 3)
+            r.ImGui_SameLine(ctx, column_width * 4)
             if settings.show_track_colors then
                 if r.ImGui_RadioButton(ctx, "Gradual", settings.color_gradient_enabled) then
                     settings.color_gradient_enabled = not settings.color_gradient_enabled
                 end
             end 
-
+            local column_width = r.ImGui_GetWindowWidth(ctx) / 4
             if settings.overlay_style == 1 then
                 if r.ImGui_RadioButton(ctx, "Folder Borders", settings.folder_border) then
                     settings.folder_border = not settings.folder_border
@@ -808,6 +820,7 @@ function ShowSettingsWindow()
         if settings.show_track_colors then
             if settings.darker_parent_tracks then
                 changed, settings.parent_darkness = r.ImGui_SliderDouble(ctx, "Parent Darkness", settings.parent_darkness, 0.1, 1.0)
+                changed, settings.darker_parent_opacity = r.ImGui_SliderDouble(ctx, "Parent Opacity", settings.darker_parent_opacity, 0.0, 1.0)
             end
             if (settings.folder_border and settings.show_parent_colors and settings.overlay_style == 1) or 
             (settings.track_border and settings.show_normal_colors and settings.overlay_style == 1) then
@@ -1080,7 +1093,8 @@ end
 function RenderGradientOverlay(draw_list, track, track_y, track_height, color, window_y, is_parent)    
     local background_draw_list = r.ImGui_GetBackgroundDrawList(ctx)
     
-    if is_parent and settings.darker_parent_tracks and not r.GetParentTrack(track) then
+    if is_parent and settings.darker_parent_tracks and 
+       (not r.GetParentTrack(track) or settings.nested_parents_darker) then
         r.ImGui_DrawList_AddRectFilled(
             background_draw_list,
             LEFT,
@@ -1495,12 +1509,13 @@ function loop()
                                 local blended_color = BlendColor(cached_bg_color, track_color, settings.blend_mode)
                                 local color
                                 
-                                if is_parent and settings.darker_parent_tracks and not r.GetParentTrack(track) then
-                                    local darker_color = GetDarkerColor(blended_color)
-                                    color = GetCachedColor(darker_color, 1.0)
-                                else
-                                    color = GetCachedColor(blended_color, settings.overlay_alpha)
-                                end
+                                if is_parent and settings.darker_parent_tracks and 
+                                (not r.GetParentTrack(track) or settings.nested_parents_darker) then
+                                 local darker_color = GetDarkerColor(blended_color)
+                                 color = GetCachedColor(darker_color, settings.darker_parent_opacity)
+                                 else
+                                 color = GetCachedColor(blended_color, settings.overlay_alpha)
+                                 end
                                 
                                 if settings.gradient_enabled then
                                     RenderGradientOverlay(draw_list, track, track_y, track_height, color, WY, is_parent)
