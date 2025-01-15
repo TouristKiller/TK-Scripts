@@ -1,20 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <index version="1" name="TK Scripts">
-<metadata>
-    <description><![CDATA[
-# TK Scripts
-A collection of scripts for REAPER
 
-## Scripts included:
-- TK SMART
-- TK FX BROWSER
-- TK MEDIA BROWSER
-- TK GTR2MIDI
-- Various utility scripts for envelopes, tracks and media
-
-    ]]></description>
-  </metadata>
- 
  <category name="Envelopes">
     <reapack name="TK_CopyAllEnvelopes.lua" type="script" desc="Copy all envelopes">
     <version name="1.0" author="TouristKiller" time="2024-09-13T12:00:00Z">
@@ -107,6 +93,20 @@ A collection of scripts for REAPER
         </version>
     </reapack>
 </category>
+<metadata>
+    <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 TK Scripts - Een verzameling utility scripts voor REAPER\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Scripts:\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 - TK SMART: Smart actions en markers browser\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 - TK FX BROWSER: Geavanceerd FX management\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 - TK GTR2MIDI: Gitaar naar MIDI converter\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 - Diverse utility scripts voor envelopes, tracks en media\par}
+}
+]]></description>
+</metadata>
 
 
 </index>
