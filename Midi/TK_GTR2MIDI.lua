@@ -1,9 +1,12 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.1.6:
+-- @version 0.1.7:
 -- @changelog:
 --[[        
-+ Bugfix: Os specific path separator
++ Added: items wil be inserted with the correct time signature length
++ Added: Custom tunings can be saved and deleted (also makes empty ChordVoicings files)
++ Improved chord visualization: Red dots for manual input, colored dots with finger positions only for known chords from ChordVoicings list
+
 ]]--   
 -- I am a drummer..... dont kill me if I mess up the guitar stuff ;o)
 ------------------------------------------------------------------------
@@ -12,17 +15,31 @@ local ctx = r.ImGui_CreateContext('TK_GTR2MIDI')
 local font = r.ImGui_CreateFont('Arial', 12)
 r.ImGui_Attach(ctx, font)
 
+local window_flags = r.ImGui_WindowFlags_NoTitleBar()|
+r.ImGui_WindowFlags_NoResize()|
+r.ImGui_WindowFlags_NoScrollbar()|
+r.ImGui_WindowFlags_AlwaysAutoResize()
+
+local separator = package.config:sub(1,1)  -- Gets OS-specific path separator
+local script_path = debug.getinfo(1,'S').source:match("@(.*)" .. separator)
+
 local input_sequence = ""
 local input_chord = ""
 local selected_duration = "4"
 local selected_string = 1
 local base_notes = {64,59,55,50,45,40}
 local string_names = {"E (High)","B","G","D","A","E (Low)"}
+local custom_notes = {64,59,55,50,45,40} 
+local custom_tuning_name = ""
+
 local voicings = {}
 local selected_voicing_file = r.GetExtState("TK_GTR2MIDI", "selected_voicing_file")
 if selected_voicing_file == "" then
     selected_voicing_file = "ChordVoicings.txt"
 end
+
+local show_custom_tuning_window = false
+
 local chord_fingers = {}
 local chord_board_horizontal = false
 local insert_in_existing = false
@@ -39,6 +56,7 @@ local tunings = {
     ["Open D (DADF#AD)"] = {62,57,54,50,45,38},
     ["DADGAD"] = {62,57,55,50,45,38}
 }
+
 local selected_tuning = "Standard (EADGBE)"
 base_notes = tunings[selected_tuning]
 
@@ -49,6 +67,12 @@ local finger_colors = {
     [4] = 0xF5811FFF  
 }
 
+local function GetCurrentTimeSig()
+    local timepos = reaper.GetCursorPosition()
+    local timesig_num, timesig_denom = reaper.TimeMap_GetTimeSigAtTime(0, timepos)
+    return timesig_num, timesig_denom
+end
+
 local function GTR2MIDI_esc_key() 
     if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
         return true
@@ -56,9 +80,21 @@ local function GTR2MIDI_esc_key()
     return false
 end
 
+function GetAvailableVoicingFiles()
+    local voicing_files = {}
+    local path = script_path .. separator
+    local i = 0
+    repeat
+        local file = r.EnumerateFiles(path, i)
+        if file and file:match("^ChordVoicings.*%.txt$") then
+            table.insert(voicing_files, file)
+        end
+        i = i + 1
+    until not file
+    return voicing_files
+end
+
 function LoadVoicings()
-    local separator = package.config:sub(1,1)  -- Gets OS-specific path separator
-    local script_path = debug.getinfo(1,'S').source:match("@(.*)" .. separator)
     local file = io.open(script_path .. separator .. selected_voicing_file, "r")
     if file then
         for line in file:lines() do
@@ -98,36 +134,197 @@ function DetermineChordName(chord_shape)
     return voicings[voicing] or "(?)"
 end
 
+local function normalizeChordName(chord)
+    local base, variation = chord:match("^(.-)%s*(%(.+%))$")
+    if base and variation then
+        base = base:lower():gsub("%s+", "")
+        base = base:gsub("sus%s*(%d)", "sus%1")
+        base = base:gsub("add%s*(%d)", "add%1")
+        return base .. " " .. variation
+    else
+        local normalized = chord:lower():gsub("%s+", "")
+        normalized = normalized:gsub("sus%s*(%d)", "sus%1")
+        normalized = normalized:gsub("add%s*(%d)", "add%1")
+        return normalized
+    end
+end
+
+function SaveCustomTunings(tunings)
+    local file = io.open(script_path .. separator .. "CustomTunings.txt", "w")
+    if file then
+        for name, notes in pairs(tunings) do
+            if type(notes) == "table" then  
+                file:write(name .. "|" .. table.concat(notes, " ") .. "\n")
+            end
+        end
+        file:close()
+    end
+end
+
+function LoadCustomTunings()
+    local custom_tunings = {}
+    local file = io.open(script_path .. separator .. "CustomTunings.txt", "r")
+    if file then
+        for line in file:lines() do
+            local name, notes = line:match("(.+)|(.+)")
+            if name and notes then
+                local note_table = {}
+                for note in notes:gmatch("%d+") do
+                    table.insert(note_table, tonumber(note))
+                end
+                custom_tunings[name] = note_table
+                tunings[name] = note_table  
+            end
+        end
+        file:close()
+    end
+    return custom_tunings
+end
+
+local custom_tunings = LoadCustomTunings()
+
+
+function DeleteCustomTuning(tuning_name)
+    if custom_tunings[tuning_name] then
+        custom_tunings[tuning_name] = nil
+        tunings[tuning_name] = nil
+        SaveCustomTunings(custom_tunings)
+
+        local voicing_filename = "ChordVoicings_" .. tuning_name .. ".txt"
+        os.remove(script_path .. separator .. voicing_filename)
+
+        if selected_tuning == tuning_name then
+            selected_tuning = "Standard (EADGBE)"
+            base_notes = tunings[selected_tuning]
+        end
+    end
+end
+
+function ShowCustomTuningWindow()
+    r.ImGui_PushFont(ctx, font)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x000000FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x1A1A1AFF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x333333FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x404040FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x1A1A1AFF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x333333FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x404040FF)
+
+    
+    local visible, opened = r.ImGui_Begin(ctx, "Custom Tuning Editor", true, window_flags)
+    if visible then
+     
+        local changed, new_name = r.ImGui_InputText(ctx, "Tuning Name", selected_tuning)
+        if changed then
+            custom_tuning_name = new_name
+        end
+        
+        if tunings[selected_tuning] then
+            custom_notes = {table.unpack(tunings[selected_tuning])}
+        end
+        
+        r.ImGui_Text(ctx, "String tunings:")
+        for i=1,6 do
+            r.ImGui_PushItemWidth(ctx, 60)
+            local current_note = GetNoteName(custom_notes[i])
+            if r.ImGui_BeginCombo(ctx, "String " .. i, current_note) then
+                for note = 40,64 do  -- Bereik van E2 tot E4
+                    local note_name = GetNoteName(note)
+                    if r.ImGui_Selectable(ctx, note_name, note == custom_notes[i]) then
+                        custom_notes[i] = note
+                        tunings[selected_tuning][i] = note  
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+        end
+        
+    
+        if r.ImGui_Button(ctx, "Save Tuning") and custom_tuning_name ~= "" then
+            custom_tunings[custom_tuning_name] = {table.unpack(custom_notes)}
+            tunings[custom_tuning_name] = {table.unpack(custom_notes)}
+            SaveCustomTunings(custom_tunings)
+        
+            local voicing_filename = "ChordVoicings_" .. custom_tuning_name .. ".txt"
+            local file = io.open(script_path .. separator .. voicing_filename, "w")
+            if file then
+                file:write("# Chord voicings for " .. custom_tuning_name .. " tuning\n")
+                file:write("# Format: FRET_POSITIONS | CHORD_NAME | FINGER_POSITIONS\n")
+                file:write("# Example: 0 2 2 1 0 0 | Em | 0 2 3 1 0 0\n")
+                file:close()
+            end
+            
+            show_custom_tuning_window = false
+        end
+        
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Delete Tuning") then
+            if selected_tuning ~= "Standard (EADGBE)" and 
+            selected_tuning ~= "Drop D (DADGBE)" and
+            selected_tuning ~= "Open G (DGDGBD)" and
+            selected_tuning ~= "Open D (DADF#AD)" and
+            selected_tuning ~= "DADGAD" then
+                DeleteCustomTuning(selected_tuning)
+                show_custom_tuning_window = false
+            end
+        end
+
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel") then
+            show_custom_tuning_window = false
+        end
+
+        r.ImGui_End(ctx)
+    end
+    r.ImGui_PopStyleColor(ctx, 7)
+    r.ImGui_PopStyleVar(ctx, 2)
+    r.ImGui_PopFont(ctx)
+    
+    if not opened then
+        show_custom_tuning_window = false
+    end
+end
+
+
 function CreateMIDIItem(insert_type)
     local track = r.GetSelectedTrack(0,0)
     if not track then return end
+    
     local existing_item, existing_take = GetSelectedMIDIItem()
-    if existing_item and insert_in_existing then
-        local cursor_pos = r.GetCursorPosition()
-        local ppq = 960
-        local beats = 4/tonumber(selected_duration)
-        local item_end = cursor_pos + beats/2
-        r.SetEditCurPos(item_end, true, true)
-        return existing_item, existing_take, ppq*beats
-    end
     local cursor_pos = r.GetCursorPosition()
     local ppq = 960
-    local beats = 4/tonumber(selected_duration)
+    local timesig_num, timesig_denom = r.TimeMap_GetTimeSigAtTime(0, cursor_pos)
+    
+    local beats = (timesig_num * 4) / timesig_denom
+    local duration_factor = (4 / tonumber(selected_duration)) / 4
+    local note_length = ppq * beats * duration_factor
+    
+    if existing_item and insert_in_existing then
+        local item_end = cursor_pos + (beats * duration_factor) / 2
+        r.SetEditCurPos(item_end, true, true)
+        return existing_item, existing_take, note_length
+    end
+
     local note_count = 0
     for _ in input_sequence:gmatch("([^-]+)") do 
         note_count = note_count + 1 
     end
-    local single_note_length = beats/2
+    
     local item_length
     if insert_type == "sequence" then
-        item_length = single_note_length * note_count
+        item_length = ((beats * duration_factor) * note_count) / 2
     else
-        item_length = beats/2
+        item_length = (beats * duration_factor) / 2
     end
+    
     local item = r.CreateNewMIDIItemInProj(track, cursor_pos, cursor_pos + item_length)
     local take = r.GetActiveTake(item)
     r.SetEditCurPos(cursor_pos + item_length, true, true)
-    return item, take, ppq*beats
+    
+    return item, take, note_length
 end
 
 function GetSelectedMIDIItem()
@@ -165,7 +362,6 @@ function DetermineFingerPositions(chord_shape)
         else
             local fret_num = tonumber(fret)
             if not fret_finger_map[fret_num] then
-                -- Bepaal vinger op basis van afstand tot laagste fret
                 local finger = 1 + (fret_num - lowest_playing_fret)
                 if finger > 4 then finger = 4 end
                 fret_finger_map[fret_num] = finger
@@ -621,7 +817,7 @@ function DrawChordboard(ctx,startX,startY,width,height)
 
     local chord_shape = input_chord
     local chord_name = DetermineChordName(chord_shape)
-    local fingers = chord_fingers[chord_shape] or DetermineFingerPositions(chord_shape)
+    local fingers = chord_fingers[chord_shape] --or DetermineFingerPositions(chord_shape)
     local finger_idx = 1
     for string_num = 1, num_strings do
         local fret = string.match(input_chord, string.rep("%S+%s", string_num-1)..("(%S+)"))
@@ -652,13 +848,20 @@ function DrawChordboard(ctx,startX,startY,width,height)
                     else
                         y = startY + (fret_num * fret_spacing) - (fret_spacing/2)
                     end
-                    local finger = fingers[finger_idx]
-                    local color = finger_colors[finger] or 0xFFFFFFFF
-                    r.ImGui_DrawList_AddCircleFilled(draw_list, x, y, 6, color)
-                    r.ImGui_DrawList_AddCircle(draw_list, x, y, 6, 0xFFFFFFFF)
-                    if finger then
-                        r.ImGui_DrawList_AddText(draw_list, x-3, y-6, 0x000000FF, tostring(finger))
+                    
+                    if fingers then
+                        -- Teken met vingerzetting kleuren
+                        local finger = fingers[finger_idx]
+                        local color = finger_colors[finger] or 0xFFFFFFFF
+                        r.ImGui_DrawList_AddCircleFilled(draw_list, x, y, 6, color)
+                        if finger then
+                            r.ImGui_DrawList_AddText(draw_list, x-3, y-6, 0x000000FF, tostring(finger))
+                        end
+                    else
+                        -- Teken rode bolletjes zonder vingerzetting
+                        r.ImGui_DrawList_AddCircleFilled(draw_list, x, y, 6, 0xFF0000FF)
                     end
+                    r.ImGui_DrawList_AddCircle(draw_list, x, y, 6, 0xFFFFFFFF)
                     finger_idx = finger_idx + 1
                 end
             end
@@ -796,11 +999,7 @@ function DrawChordboard(ctx,startX,startY,width,height)
 end
 
 function MainLoop()
-    local window_flags = r.ImGui_WindowFlags_NoTitleBar()|
-                        r.ImGui_WindowFlags_NoResize()|
-                        r.ImGui_WindowFlags_NoScrollbar()|
-                        r.ImGui_WindowFlags_AlwaysAutoResize()
-    r.ImGui_PushStyleVar(ctx,r.ImGui_StyleVar_WindowRounding(),12.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(),12.0)
     local min_width = 360  
     if show_sequence then
         min_width = math.max(min_width, 360)
@@ -809,7 +1008,7 @@ function MainLoop()
         min_width = math.max(min_width, 360)
     end
     r.ImGui_SetNextWindowSizeConstraints(ctx, min_width, 0, min_width, 2000)
-    local visible,open=r.ImGui_Begin(ctx,'Guitar MIDI Input',true,window_flags)
+    local visible,open=r.ImGui_Begin(ctx,'Guitar MIDI Input', true, window_flags)
 
     if GTR2MIDI_esc_key() then
         open = false
@@ -953,15 +1152,16 @@ function MainLoop()
             r.ImGui_EndCombo(ctx)
         end
         r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Custom Tunings") then
+            show_custom_tuning_window = true
+        end
+        --r.ImGui_SameLine(ctx)
         r.ImGui_Text(ctx, "Voicings:")
         r.ImGui_SameLine(ctx)
         r.ImGui_PushItemWidth(ctx, 120)
         if r.ImGui_BeginCombo(ctx, "##voicings", selected_voicing_file) then
-            local voicing_options = {
-                "ChordVoicings.txt",
-                "ChordVoicings_DoReMi.txt"
-            }
-            for _, filename in ipairs(voicing_options) do
+            local voicing_files = GetAvailableVoicingFiles()
+            for _, filename in ipairs(voicing_files) do
                 if r.ImGui_Selectable(ctx, filename, selected_voicing_file == filename) then
                     selected_voicing_file = filename
                     voicings = {}
@@ -972,6 +1172,8 @@ function MainLoop()
             end
             r.ImGui_EndCombo(ctx)
         end
+        
+        r.ImGui_SameLine(ctx)
         _, insert_in_existing = r.ImGui_Checkbox(ctx, "Insert in selected MIDI item", insert_in_existing)
         r.ImGui_Spacing(ctx)
         r.ImGui_Separator(ctx)
@@ -1038,8 +1240,9 @@ function MainLoop()
             _, quick_chord_input = r.ImGui_InputTextWithHint(ctx, "##quickchord", "AMaj7", quick_chord_input or "")
             if quick_chord_input and quick_chord_input ~= "" then
                 local found = false
+                local normalized_input = normalizeChordName(quick_chord_input)
                 for voicing, chord in pairs(voicings) do
-                    if chord:lower() == quick_chord_input:lower() then
+                    if normalizeChordName(chord) == normalized_input then
                         input_chord = voicing
                         found = true
                         break
@@ -1090,6 +1293,11 @@ function MainLoop()
         r.ImGui_PopStyleVar(ctx,2)
         r.ImGui_PopStyleColor(ctx,7)
         r.ImGui_PopFont(ctx)
+
+        if show_custom_tuning_window then
+            ShowCustomTuningWindow()
+        end
+        
         r.ImGui_End(ctx)
     end
     if open then r.defer(MainLoop) end
