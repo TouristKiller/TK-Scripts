@@ -97,7 +97,7 @@
 
 <category name="Track">
     <reapack name="TK_Set_SelectedItem_to_View_or_Shape.lua" type="script" desc="TK Set SelectedItem to View or Shape">
-        <version name="0.1.0" author="TouristKiller" time="2024-01-17T23:30:00Z">
+        <version name="0.1.1" author="TouristKiller" time="2024-01-17T23:55:00Z">
             <changelog><![CDATA[           
 + Initial Release on ReaPack
 ]]></changelog>

@@ -7,7 +7,7 @@
 ]]--
 
 local r = reaper
-local command_id = '_RS48f979c3a2b8e8cb0a38169fe7081950b9297182'
+local command_id = '_RS6383ea80b0ecb1b561c701a6d5c2de6d551760b6'
 local last_track_guid = nil
 
 function GetTrackSettings(track)
