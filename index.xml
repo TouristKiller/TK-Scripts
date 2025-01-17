@@ -69,12 +69,10 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.1.7" author="TouristKiller" time="2024-01-16T23:35:00Z">
-                <changelog><![CDATA[           
-+ Added: items wil be inserted with the correct time signature length
-+ Added: Custom tunings can be saved and deleted (also makes empty ChordVoicings files)
-+ Improved chord visualization: Red dots for manual input, colored dots with finger positions only for known chords from ChordVoicings list
-]]></changelog>
+    <version name="0.1.8" author="TouristKiller" time="2024-01-17T14:35:00Z">
+      <changelog><![CDATA[           
+   + Bugfix: Transpose als wordks when there is chord input in te "Find" field. 
+   ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
     <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>
     <source file="ChordVoicings_DoReMi.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings_DoReMi.txt</source>

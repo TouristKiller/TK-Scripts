@@ -1,11 +1,9 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.1.7:
+-- @version 0.1.8:
 -- @changelog:
 --[[        
-+ Added: items wil be inserted with the correct time signature length
-+ Added: Custom tunings can be saved and deleted (also makes empty ChordVoicings files)
-+ Improved chord visualization: Red dots for manual input, colored dots with finger positions only for known chords from ChordVoicings list
++ Bugfix: Transpose als wordks when there is chord input in te "Find" field. 
 
 ]]--   
 -- I am a drummer..... dont kill me if I mess up the guitar stuff ;o)
@@ -48,6 +46,13 @@ local show_sequence = false
 local show_chord = true
 local status_message = ""
 local status_color = 0xFFFFFFFF 
+
+local transpose_modes = {
+    ["Semi"] = 1,
+    ["Whole"] = 2
+}
+
+local selected_transpose_mode = "Semi"
 
 local tunings = {
     ["Standard (EADGBE)"] = {64,59,55,50,45,40},
@@ -147,6 +152,69 @@ local function normalizeChordName(chord)
         normalized = normalized:gsub("add%s*(%d)", "add%1")
         return normalized
     end
+end
+
+function GetMidiNote(string_num, fret)
+    if fret == "X" then return nil end
+    local base_note = base_notes[7-string_num]
+    return base_note + tonumber(fret)
+end
+
+function FindFretForNote(string_num, target_note)
+    local base_note = base_notes[7-string_num]
+    local fret = target_note - base_note
+    if fret >= 0 and fret <= 24 then
+        return tostring(fret)
+    end
+    return "X"
+end
+
+function TransposeChord(interval, direction)
+    local new_chord = {}
+    local string_num = 1
+    
+    -- Verzamel huidige MIDI noten
+    local current_notes = {}
+    for fret in input_chord:gmatch("%S+") do
+        local note = GetMidiNote(string_num, fret)
+        if note then
+            current_notes[string_num] = note
+        end
+        string_num = string_num + 1
+    end
+    string_num = 1
+    for fret in input_chord:gmatch("%S+") do
+        if fret == "X" then
+            table.insert(new_chord, "X")
+        else
+            local current_note = current_notes[string_num]
+            local target_note = current_note + (interval * direction)
+            local new_fret = FindFretForNote(string_num, target_note)
+            table.insert(new_chord, new_fret)
+        end
+        string_num = string_num + 1
+    end
+    
+    return table.concat(new_chord, " ")
+end
+function TransposeSequence(interval, direction)
+    local new_seq = {}
+    local base_note = base_notes[selected_string]
+    
+    for note in input_sequence:gmatch("([^-]+)") do
+        if note ~= "0" then
+            local current_note = base_note + tonumber(note)
+            local target_note = current_note + (interval * direction)
+            local new_fret = target_note - base_note
+            if new_fret >= 0 and new_fret <= 24 then
+                table.insert(new_seq, tostring(new_fret))
+            end
+        else
+            table.insert(new_seq, "0")
+        end
+    end
+    
+    return table.concat(new_seq, "-")
 end
 
 function SaveCustomTunings(tunings)
@@ -751,13 +819,11 @@ function DrawChordboard(ctx,startX,startY,width,height)
     -- Draw strings
     for i=0,num_strings-1 do
         if chord_board_horizontal then
-            -- Gebruik dezelfde logica als het Fretboard
             local y = startY + (i * string_spacing)
             r.ImGui_DrawList_AddLine(draw_list, startX, y, startX+width, y, 0xFFFFFFFF)
             local note_name = GetNoteName(base_notes[i+1])
             r.ImGui_DrawList_AddText(draw_list, startX-25, y-6, 0xFFFFFFFF, note_name)
         else
-            -- Bestaande verticale weergave blijft hetzelfde
             local x = startX + (i * string_spacing)
             r.ImGui_DrawList_AddLine(draw_list, x, startY, x, startY+height, 0xFFFFFFFF)
             local note_name = GetNoteName(base_notes[num_strings-i])
@@ -868,7 +934,6 @@ function DrawChordboard(ctx,startX,startY,width,height)
         end
     end
     
-
     if IsBarre(chord_shape) then
         local barre_fret = nil
         local start_string = nil
@@ -1092,51 +1157,32 @@ function MainLoop()
             if r.ImGui_Button(ctx,"1/16")then selected_duration="16"end
         end
         r.ImGui_SameLine(ctx)
-        r.ImGui_Text(ctx,"Transpose:")
+        r.ImGui_Text(ctx,"Trans:")
         r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx,"-1")then
-            local new_seq={}
-            for note in input_sequence:gmatch("([^-]+)")do
-                local n=tonumber(note)
-                if n>0 then
-                    table.insert(new_seq,tostring(n-1))
-                else
-                    table.insert(new_seq,"0")
+        r.ImGui_PushItemWidth(ctx, 48)
+        if r.ImGui_BeginCombo(ctx,"##transpose",selected_transpose_mode) then
+            for mode,_ in pairs(transpose_modes) do
+                if r.ImGui_Selectable(ctx,mode,selected_transpose_mode==mode) then
+                    selected_transpose_mode = mode
                 end
             end
-            input_sequence=table.concat(new_seq,"-")
-            local new_chord={}
-            for fret in input_chord:gmatch("%S+")do
-                if fret~="X"then
-                    local n=tonumber(fret)
-                    if n>0 then
-                        table.insert(new_chord,tostring(n-1))
-                    else
-                        table.insert(new_chord,"0")
-                    end
-                else
-                    table.insert(new_chord,"X")
-                end
-            end
-            input_chord=table.concat(new_chord," ")
+            r.ImGui_EndCombo(ctx)
         end
         r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx,"+1")then
-            local new_seq={}
-            for note in input_sequence:gmatch("([^-]+)")do
-                table.insert(new_seq,tostring(tonumber(note)+1))
-            end
-            input_sequence=table.concat(new_seq,"-")
-            local new_chord={}
-            for fret in input_chord:gmatch("%S+")do
-                if fret~="X"then
-                    table.insert(new_chord,tostring(tonumber(fret)+1))
-                else
-                    table.insert(new_chord,"X")
-                end
-            end
-            input_chord=table.concat(new_chord," ")
+        if r.ImGui_Button(ctx,"-") then
+            quick_chord_input = ""
+            local steps = transpose_modes[selected_transpose_mode]
+            input_sequence = TransposeSequence(steps, -1)
+            input_chord = TransposeChord(steps, -1)
         end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx,"+") then
+            quick_chord_input = ""
+            local steps = transpose_modes[selected_transpose_mode]
+            input_sequence = TransposeSequence(steps, 1)
+            input_chord = TransposeChord(steps, 1)
+        end
+        
 
         --r.ImGui_Spacing(ctx)
         r.ImGui_Text(ctx,"Tuning:")
