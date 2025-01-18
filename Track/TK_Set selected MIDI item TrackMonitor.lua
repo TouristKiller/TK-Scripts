@@ -1,5 +1,5 @@
 local r = reaper
-local command_id = '_RS6383ea80b0ecb1b561c701a6d5c2de6d551760b6'
+local command_id = '_RS231d1c7ada18452cc5a01af085103cf4e269fbf4'
 local last_track_guid = nil
 
 function GetTrackSettings(track)
