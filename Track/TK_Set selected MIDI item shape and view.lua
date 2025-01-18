@@ -1,6 +1,6 @@
 -- @description TK_Set selected MIDI item shape and view
 -- @author TouristKiller
--- @version 0.1.5
+-- @version 0.1.6
 -- @changelog 
 --[[
 + Initial release on ReaPack
