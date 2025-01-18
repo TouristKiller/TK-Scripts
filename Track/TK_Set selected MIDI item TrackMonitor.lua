@@ -1,11 +1,3 @@
--- @description TK_Set_SelectedItem_TrackMonitor
--- @author TouristKiller
--- @version 0.1.2
--- @changelog 
---[[
-+ Initial release on ReaPack
-]]--
-
 local r = reaper
 local command_id = '_RS6383ea80b0ecb1b561c701a6d5c2de6d551760b6'
 local last_track_guid = nil
