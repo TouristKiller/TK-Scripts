@@ -96,13 +96,13 @@
 </category>
 
 <category name="Track">
-    <reapack name="TK_Set_SelectedItem_to_View_or_Shape.lua" type="script" desc="TK Set SelectedItem to View or Shape">
-        <version name="0.1.1" author="TouristKiller" time="2024-01-17T23:55:00Z">
+    <reapack name="TK_Set selected MIDI item shape and view.lua" type="script" desc="TK Set selected MIDI item Shape and view">
+        <version name="0.1.2" author="TouristKiller" time="2024-01-18T15:55:00Z">
             <changelog><![CDATA[           
-+ Initial Release on ReaPack
++ Reapack Fix and name change
 ]]></changelog>
-            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Set_SelectedItem_to_View_or_Shape.lua</source>
-            <source main="main" file="TK_Set_SelectedItem_TrackMonitor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Set_SelectedItem_TrackMonitor.lua</source>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Set%20selected%20MIDI%20item%20shape%20and%20view.lua</source>
+            <source main="main" file="TK_Set selected MIDI item TrackMonitor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Set%20selected%20MIDI%20item%20TrackMonitor.lua</source>
         </version>
     </reapack>
 </category>

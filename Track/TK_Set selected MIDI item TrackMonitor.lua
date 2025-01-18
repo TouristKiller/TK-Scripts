@@ -1,6 +1,6 @@
 -- @description TK_Set_SelectedItem_TrackMonitor
 -- @author TouristKiller
--- @version 0.1.0
+-- @version 0.1.2
 -- @changelog 
 --[[
 + Initial release on ReaPack
