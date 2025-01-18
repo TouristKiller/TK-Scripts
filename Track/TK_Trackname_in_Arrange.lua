@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.7.5
+-- @version 0.7.6
 -- @changelog 
 --[[
 + Added Nested option to Make Nested Parents Darker 

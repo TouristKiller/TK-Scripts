@@ -1,6 +1,6 @@
 -- @description TK_Set_SelectedItem_to_View_or_Shape
 -- @author TouristKiller
--- @version 0.1.3
+-- @version 0.1.4
 -- @changelog 
 --[[
 + Initial release on ReaPack
