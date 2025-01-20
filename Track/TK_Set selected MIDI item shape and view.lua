@@ -1,29 +1,51 @@
 -- @description TK_Set selected MIDI item shape and view
 -- @author TouristKiller
--- @version 0.1.6
+-- @version 0.1.7
 -- @changelog 
 --[[
-+ Initial release on ReaPack
++ UI Remake 
++ Added grid settings per track
 ]]--
-
-local r = reaper
-local ctx = r.ImGui_CreateContext('Note Shape Selector')
-local font = r.ImGui_CreateFont('Arial', 12)
+---------------------------------------------------------
+local r                     = reaper
+local ctx                   = r.ImGui_CreateContext('Note Shape Selector')
+local font                  = r.ImGui_CreateFont('Arial', 14)
 r.ImGui_Attach(ctx, font)
 
-local selected_shape = 0
-local selected_view = 0
+local window_flags          = r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoTitleBar()
+local WINDOW_WIDTH          = 300
+local column_width          = WINDOW_WIDTH / 2
+
+local selected_shape        = 0
+local selected_view         = 0
+local selected_grid         = 0
+
 local shapes = {
     {name = "Normal", cmd = 40449},
     {name = "Diamond", cmd = 40450},
     {name = "Triangle", cmd = 40448}
 }
+
 local views = {
     {name = "Named Notes", cmd = 40043},
     {name = "Piano Roll", cmd = 40042},
     {name = "Notation", cmd = 40954}
 }
 
+local grid_options = {
+    {name = "1/32", cmd = 40190},
+    {name = "1/16 T", cmd = 40191},
+    {name = "1/16", cmd = 40192},
+    {name = "1/8 T", cmd = 40193},
+    {name = "1/8", cmd = 40197},
+    {name = "1/4 T", cmd = 40199},
+    {name = "1/4", cmd = 40201},
+    {name = "1/2", cmd = 40203},
+    {name = "1", cmd = 40204},
+    {name = "2", cmd = 40205}
+}
+
+---------------------------------------------------------
 local function SaveTrackView(track, cmd)
     local guid = r.GetTrackGUID(track)
     local key = "TrackView_" .. guid
@@ -60,44 +82,152 @@ local function ProcessItems(cmd, isView)
     r.SetExtState("TKMonitor", "LastTrackGUID", "", false)
 end
 
+local function ResetAllSettings()
+    local processed_tracks = {}
+    
+    local num_selected_tracks = r.CountSelectedTracks(0)
+    if num_selected_tracks > 0 then
+        for i = 0, num_selected_tracks-1 do
+            local track = r.GetSelectedTrack(0, i)
+            local track_guid = r.GetTrackGUID(track)
+            processed_tracks[track_guid] = track
+        end
+    end
+    
+    if next(processed_tracks) == nil then
+        local num_items = r.CountSelectedMediaItems(0)
+        for i = 0, num_items-1 do
+            local item = r.GetSelectedMediaItem(0, i)
+            local track = r.GetMediaItem_Track(item)
+            local track_guid = r.GetTrackGUID(track)
+            processed_tracks[track_guid] = track
+        end
+    end
+    
+    for guid, track in pairs(processed_tracks) do
+        r.GetSetMediaTrackInfo_String(track, "P_EXT:TKVIEW", "40042", true)
+        r.GetSetMediaTrackInfo_String(track, "P_EXT:TKSHAPE", "40449", true)
+        
+        local item_count = r.GetTrackNumMediaItems(track)
+        for i = 0, item_count-1 do
+            local item = r.GetTrackMediaItem(track, i)
+            if r.GetMediaItemInfo_Value(item, "B_MUTE") == 0 then
+                r.SetMediaItemSelected(item, true)
+            end
+        end
+    end
+    
+    ProcessItems(40042, true)   -- Piano Roll
+    ProcessItems(40449, false)  -- Normal shape
+    ProcessItems(40192, false)  -- 1/16 grid
+    
+    selected_shape = 0
+    selected_view = 1
+    selected_grid = 2
+end
+
+---------------------------------------------------------
 local function loop()
     r.ImGui_PushFont(ctx, font)
-    local visible, open = r.ImGui_Begin(ctx, 'Note Shape Selector', true, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar())
+    
+    -- Style setup
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 6.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 12.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 8.0)
+
+     -- Colors setup
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x111111D9)  -- D9 = 85% opaque
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x333333FF)        
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x444444FF)
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x555555FF)  
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x999999FF)     
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0xAAAAAAFF)
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), 0x999999FF)      
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x333333FF)         
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x444444FF)  
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x555555FF)        
+
+    local visible, open = r.ImGui_Begin(ctx, 'Note Shape Selector', true, window_flags)
+
     if visible then
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 5.0)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x000000FF)
+    r.ImGui_SetWindowSize(ctx, WINDOW_WIDTH, 0, r.ImGui_Cond_Always())
+
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
+        r.ImGui_Text(ctx, "TK")
+        r.ImGui_PopStyleColor(ctx)
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, "MIDI ITEM SHAPE AND VIEW")
+        r.ImGui_Separator(ctx)
+
+
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, WINDOW_WIDTH - 25)
+        r.ImGui_SetCursorPosY(ctx, 6)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF6666FF)
         
-        r.ImGui_Text(ctx, 'Select shape:')
-        for i, shape in ipairs(shapes) do
-            if r.ImGui_RadioButton(ctx, shape.name, selected_shape == i-1) then
-                selected_shape = i-1
+        if r.ImGui_Button(ctx, "##close", 14, 14) then
+            open = false
+        end
+        r.ImGui_PopStyleColor(ctx, 3)   
+---------------------------------------------------------
+        r.ImGui_Text(ctx, 'Select shape (per item):')
+        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_Text(ctx, 'Select view (per track):')
+        for i = 1, math.max(#shapes, #views) do
+
+            if i <= #shapes then
+                if r.ImGui_RadioButton(ctx, shapes[i].name, selected_shape == i-1) then
+                    selected_shape = i-1
+                end
+            end      
+
+            if i <= #views then
+                r.ImGui_SameLine(ctx, column_width)
+                if r.ImGui_RadioButton(ctx, views[i].name, selected_view == i-1) then
+                    selected_view = i-1
+                end
             end
         end
-        r.ImGui_Text(ctx, '\nSelect view:')
-        for i, view in ipairs(views) do
-            if r.ImGui_RadioButton(ctx, view.name, selected_view == i-1) then
-                selected_view = i-1
-            end
-        end
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x0000FFFF)
-        if r.ImGui_Button(ctx, 'Apply Shape') then
+        
+        if r.ImGui_Button(ctx, 'Apply Shape', column_width-15) then
             ProcessItems(shapes[selected_shape + 1].cmd, false)
         end
         r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, 'Apply View') then
+        if r.ImGui_Button(ctx, 'Apply View', column_width-15) then
             ProcessItems(views[selected_view + 1].cmd, true)
         end
-        r.ImGui_PopStyleColor(ctx)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
-        if r.ImGui_Button(ctx, 'X') then
-            open = false
+        
+        r.ImGui_Text(ctx, '\nSelect grid (per track):')
+        for i = 1, 5 do
+            if r.ImGui_RadioButton(ctx, grid_options[i].name, selected_grid == i-1) then
+                selected_grid = i-1
+            end
+            r.ImGui_SameLine(ctx, column_width)
+            if r.ImGui_RadioButton(ctx, grid_options[i+5].name, selected_grid == (i+5)-1) then
+                selected_grid = (i+5)-1
+            end
         end
-        r.ImGui_PopStyleColor(ctx)
-        r.ImGui_PopStyleVar(ctx)
-        r.ImGui_PopStyleColor(ctx)
+
+        if r.ImGui_Button(ctx, 'Apply Grid', column_width-15) then
+            ProcessItems(grid_options[selected_grid + 1].cmd, false)
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF8C00FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF9933FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFFAD66FF)
+        if r.ImGui_Button(ctx, 'Reset All (per track)', column_width-15) then
+            ResetAllSettings()
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
         r.ImGui_End(ctx)
     end
+---------------------------------------------------------
+    r.ImGui_PopStyleColor(ctx, 10) 
+    r.ImGui_PopStyleVar(ctx,5)     
     r.ImGui_PopFont(ctx)
     if open then
         r.defer(loop)
