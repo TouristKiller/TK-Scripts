@@ -1,10 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.0
+-- @version 0.8.1
 -- @changelog 
 --[[
-+ Added separate settings for track en selected track brightness
-+ UI Remake + some functional improvements
++ Restored Blend modes (color burn, color dodge, hard light, soft light, etc)
++ Choices are not hidden, but disabled
++ Added Envelope names
 ]]--
 
 local r                  = reaper
@@ -160,6 +161,8 @@ local default_settings = {
     bg_brightness_tr2 = 0.2,
     sel_brightness_tr1 = 0.3,  
     sel_brightness_tr2 = 0.3,
+    show_envelope_names = false,
+    envelope_text_opacity = 0.8,
 }
 
 local settings = {}
@@ -191,7 +194,7 @@ function CreateFonts()
         table.insert(font_objects, font)
         r.ImGui_Attach(ctx, font)
     end
-    settings_font = r.ImGui_CreateFont('sans-serif', 14)
+    settings_font = r.ImGui_CreateFont('Arial', 14)
     r.ImGui_Attach(ctx, settings_font)
 end
 if old_text_size ~= settings.text_size then
@@ -405,59 +408,91 @@ function ResetSettings()
     SaveSettings()
 end
 
-function BlendColor(base, blend, mode)
+function BlendColor(track, blend, mode)
+    -- Bepaal eerst of het een even of oneven track is
+    local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+    local is_selected = r.IsTrackSelected(track)
+    
+    -- Kies de juiste achtergrondkleur
+    local base
+    if is_selected then
+        base = track_number % 2 == 0 
+            and r.ColorToNative((settings.sel_brightness_tr2 * 255)//1, (settings.sel_brightness_tr2 * 255)//1, (settings.sel_brightness_tr2 * 255)//1)
+            or r.ColorToNative((settings.sel_brightness_tr1 * 255)//1, (settings.sel_brightness_tr1 * 255)//1, (settings.sel_brightness_tr1 * 255)//1)
+    else
+        base = track_number % 2 == 0 
+            and r.ColorToNative((settings.bg_brightness_tr2 * 255)//1, (settings.bg_brightness_tr2 * 255)//1, (settings.bg_brightness_tr2 * 255)//1)
+            or r.ColorToNative((settings.bg_brightness_tr1 * 255)//1, (settings.bg_brightness_tr1 * 255)//1, (settings.bg_brightness_tr1 * 255)//1)
+    end
+
     local cache_key = "blend_" .. base .. "_" .. blend .. "_" .. mode
     if color_cache[cache_key] then return color_cache[cache_key] end
 
     local base_r, base_g, base_b = reaper.ColorFromNative(base)
     local blend_r, blend_g, blend_b = reaper.ColorFromNative(blend)
     local result_r, result_g, result_b
-
-    if mode == 1 then return blend end -- Normal
-    local div = 0.00392156862745098
     
-    if mode == 2 then -- Multiply
-        result_r = base_r * blend_r * div
-        result_g = base_g * blend_g * div
-        result_b = base_b * blend_b * div
+    -- Hulpfuncties voor nauwkeurigere berekeningen
+    local function normalize(value) return value / 255.0 end
+    local function denormalize(value) return math.floor(value * 255 + 0.5) end
+    local function clamp(value) return math.max(0, math.min(255, value)) end
+
+    -- Genormaliseerde waarden
+    local nb_r, nb_g, nb_b = normalize(base_r), normalize(base_g), normalize(base_b)
+    local nbl_r, nbl_g, nbl_b = normalize(blend_r), normalize(blend_g), normalize(blend_b)
+
+    if mode == 1 then -- Normal
+        return blend
+    elseif mode == 2 then -- Multiply
+        result_r = denormalize(nb_r * nbl_r)
+        result_g = denormalize(nb_g * nbl_g)
+        result_b = denormalize(nb_b * nbl_b)
     elseif mode == 3 then -- Screen
-        result_r = 255 - (255 - base_r) * (255 - blend_r) * div
-        result_g = 255 - (255 - base_g) * (255 - blend_g) * div
-        result_b = 255 - (255 - base_b) * (255 - blend_b) * div
+        result_r = denormalize(1 - (1 - nb_r) * (1 - nbl_r))
+        result_g = denormalize(1 - (1 - nb_g) * (1 - nbl_g))
+        result_b = denormalize(1 - (1 - nb_b) * (1 - nbl_b))
     elseif mode == 4 then -- Overlay
-        result_r = base_r < 128 and (2 * base_r * blend_r * div) or (255 - 2 * (255 - base_r) * (255 - blend_r) * div)
-        result_g = base_g < 128 and (2 * base_g * blend_g * div) or (255 - 2 * (255 - base_g) * (255 - blend_g) * div)
-        result_b = base_b < 128 and (2 * base_b * blend_b * div) or (255 - 2 * (255 - base_b) * (255 - blend_b) * div)
+        result_r = denormalize(nb_r < 0.5 and (2 * nb_r * nbl_r) or (1 - 2 * (1 - nb_r) * (1 - nbl_r)))
+        result_g = denormalize(nb_g < 0.5 and (2 * nb_g * nbl_g) or (1 - 2 * (1 - nb_g) * (1 - nbl_g)))
+        result_b = denormalize(nb_b < 0.5 and (2 * nb_b * nbl_b) or (1 - 2 * (1 - nb_b) * (1 - nbl_b)))
     elseif mode == 5 then -- Darken
-        result_r = math.min(base_r, blend_r)
-        result_g = math.min(base_g, blend_g)
-        result_b = math.min(base_b, blend_b)
+        result_r = denormalize(math.min(nb_r, nbl_r))
+        result_g = denormalize(math.min(nb_g, nbl_g))
+        result_b = denormalize(math.min(nb_b, nbl_b))
     elseif mode == 6 then -- Lighten
-        result_r = math.max(base_r, blend_r)
-        result_g = math.max(base_g, blend_g)
-        result_b = math.max(base_b, blend_b)
+        result_r = denormalize(math.max(nb_r, nbl_r))
+        result_g = denormalize(math.max(nb_g, nbl_g))
+        result_b = denormalize(math.max(nb_b, nbl_b))
     elseif mode == 7 then -- Color Dodge
-        result_r = base_r == 0 and 0 or math.min(255, (blend_r * 255) / (255 - base_r))
-        result_g = base_g == 0 and 0 or math.min(255, (blend_g * 255) / (255 - base_g))
-        result_b = base_b == 0 and 0 or math.min(255, (blend_b * 255) / (255 - base_b))
+        result_r = denormalize(nb_r == 0 and 0 or nbl_r == 1 and 1 or math.min(1, nb_r / (1 - nbl_r)))
+        result_g = denormalize(nb_g == 0 and 0 or nbl_g == 1 and 1 or math.min(1, nb_g / (1 - nbl_g)))
+        result_b = denormalize(nb_b == 0 and 0 or nbl_b == 1 and 1 or math.min(1, nb_b / (1 - nbl_b)))
     elseif mode == 8 then -- Color Burn
-        result_r = base_r == 255 and 255 or math.max(0, 255 - (255 - blend_r) * 255 / base_r)
-        result_g = base_g == 255 and 255 or math.max(0, 255 - (255 - blend_g) * 255 / base_g)
-        result_b = base_b == 255 and 255 or math.max(0, 255 - (255 - blend_b) * 255 / base_b)
+        result_r = denormalize(nb_r == 1 and 1 or nbl_r == 0 and 0 or 1 - math.min(1, (1 - nb_r) / nbl_r))
+        result_g = denormalize(nb_g == 1 and 1 or nbl_g == 0 and 0 or 1 - math.min(1, (1 - nb_g) / nbl_g))
+        result_b = denormalize(nb_b == 1 and 1 or nbl_b == 0 and 0 or 1 - math.min(1, (1 - nb_b) / nbl_b))
     elseif mode == 9 then -- Hard Light
-        result_r = blend_r < 128 and (2 * base_r * blend_r * div) or (255 - 2 * (255 - base_r) * (255 - blend_r) * div)
-        result_g = blend_g < 128 and (2 * base_g * blend_g * div) or (255 - 2 * (255 - base_g) * (255 - blend_g) * div)
-        result_b = blend_b < 128 and (2 * base_b * blend_b * div) or (255 - 2 * (255 - base_b) * (255 - blend_b) * div)
-    else -- Soft Light (mode == 10)
-        result_r = blend_r < 128 and base_r - (255 - 2 * blend_r) * base_r * (255 - base_r) * div * div or base_r + (2 * blend_r - 255) * (math.sqrt(base_r/255) * 255 - base_r) * div
-        result_g = blend_g < 128 and base_g - (255 - 2 * blend_g) * base_g * (255 - base_g) * div * div or base_g + (2 * blend_g - 255) * (math.sqrt(base_g/255) * 255 - base_g) * div
-        result_b = blend_b < 128 and base_b - (255 - 2 * blend_b) * base_b * (255 - base_b) * div * div or base_b + (2 * blend_b - 255) * (math.sqrt(base_b/255) * 255 - base_b) * div
+        result_r = denormalize(nbl_r < 0.5 and (2 * nb_r * nbl_r) or (1 - 2 * (1 - nb_r) * (1 - nbl_r)))
+        result_g = denormalize(nbl_g < 0.5 and (2 * nb_g * nbl_g) or (1 - 2 * (1 - nb_g) * (1 - nbl_g)))
+        result_b = denormalize(nbl_b < 0.5 and (2 * nb_b * nbl_b) or (1 - 2 * (1 - nb_b) * (1 - nbl_b)))
+    elseif mode == 10 then -- Soft Light
+        local function softlight(a, b)
+            if b < 0.5 then
+                return 2 * a * b + a * a * (1 - 2 * b)
+            else
+                return 2 * a * (1 - b) + math.sqrt(a) * (2 * b - 1)
+            end
+        end
+        result_r = denormalize(softlight(nb_r, nbl_r))
+        result_g = denormalize(softlight(nb_g, nbl_g))
+        result_b = denormalize(softlight(nb_b, nbl_b))
     end
 
-    local result = reaper.ColorToNative((result_r//1), (result_g//1), (result_b//1))
+    local result = reaper.ColorToNative(clamp(result_r), clamp(result_g), clamp(result_b))
     color_cache[cache_key] = result
     return result
 end
+
 
 function GetFolderBoundaries(track)
     if not track then return nil end
@@ -642,6 +677,7 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Track #", settings.show_track_numbers) then
             settings.show_track_numbers = not settings.show_track_numbers
         end
+        r.ImGui_BeginDisabled(ctx, not settings.show_track_numbers)
         r.ImGui_SameLine(ctx, column_width)
         r.ImGui_SetNextItemWidth(ctx, 90)
         if r.ImGui_BeginCombo(ctx, "##Number Style", 
@@ -656,6 +692,9 @@ function ShowSettingsWindow()
             end
             r.ImGui_EndCombo(ctx)
         end
+        r.ImGui_EndDisabled(ctx)
+
+
         r.ImGui_SameLine(ctx, column_width * 2)
         r.ImGui_Text(ctx, "Name length:")
         r.ImGui_SameLine(ctx, column_width * 3)
@@ -673,6 +712,10 @@ function ShowSettingsWindow()
                 settings.track_name_length = 3
             end
             r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx, column_width * 4)
+        if r.ImGui_RadioButton(ctx, "Env Names", settings.show_envelope_names) then
+            settings.show_envelope_names = not settings.show_envelope_names
         end
         r.ImGui_Dummy(ctx, 0, 2)
         r.ImGui_Separator(ctx)
@@ -693,12 +736,10 @@ function ShowSettingsWindow()
                 r.ImGui_EndCombo(ctx)
             end
             r.ImGui_SameLine(ctx, column_width * 2)
-            if settings.overlay_style == 1 then
-                if r.ImGui_RadioButton(ctx, "Gradient:", settings.gradient_enabled) then
-                    settings.gradient_enabled = not settings.gradient_enabled
-                end
+            if r.ImGui_RadioButton(ctx, "Gradient:", settings.gradient_enabled) then
+                settings.gradient_enabled = not settings.gradient_enabled
             end
-            if settings.gradient_enabled and settings.overlay_style == 1 then
+            r.ImGui_BeginDisabled(ctx, not settings.gradient_enabled)
                 r.ImGui_SameLine(ctx, column_width * 3)
                 r.ImGui_SetNextItemWidth(ctx, 90)
                 if r.ImGui_BeginCombo(ctx, "##Gradient Direction", 
@@ -711,7 +752,8 @@ function ShowSettingsWindow()
                     end
                     r.ImGui_EndCombo(ctx)
                 end
-            end
+            r.ImGui_EndDisabled(ctx)
+
             if r.ImGui_RadioButton(ctx, "Parent Color", settings.show_parent_colors) then
                 settings.show_parent_colors = not settings.show_parent_colors
                 needs_font_update = CheckTrackColorUpdate()
@@ -760,40 +802,39 @@ function ShowSettingsWindow()
                 if r.ImGui_RadioButton(ctx, "Gradual", settings.color_gradient_enabled) then
                     settings.color_gradient_enabled = not settings.color_gradient_enabled
                 end
-            end 
-            if settings.overlay_style == 1 then
-                if r.ImGui_RadioButton(ctx, "F Borders:", settings.folder_border) then
-                    settings.folder_border = not settings.folder_border
-                end
-                if settings.folder_border then
-                    r.ImGui_SameLine(ctx, column_width)
-                    r.ImGui_SetNextItemWidth(ctx, 90)
-                    if r.ImGui_BeginCombo(ctx, "##Folder Border Options", " Sel Borders") then
-                        local clicked, new_state = r.ImGui_Checkbox(ctx, "All Borders", 
-                            settings.folder_border_left and
-                            settings.folder_border_right and
-                            settings.folder_border_top and
-                            settings.folder_border_bottom)
-                        if clicked then
-                            settings.folder_border_left = new_state
-                            settings.folder_border_right = new_state
-                            settings.folder_border_top = new_state
-                            settings.folder_border_bottom = new_state
-                        end
+            end
+            if r.ImGui_RadioButton(ctx, "F Borders:", settings.folder_border) then
+                settings.folder_border = not settings.folder_border
+            end
+            r.ImGui_BeginDisabled(ctx, not settings.folder_border)
+                r.ImGui_SameLine(ctx, column_width)
+                r.ImGui_SetNextItemWidth(ctx, 90)
+                if r.ImGui_BeginCombo(ctx, "##Folder Border Options", " Sel Borders") then
+                    local clicked, new_state = r.ImGui_Checkbox(ctx, "All Borders", 
+                        settings.folder_border_left and
+                        settings.folder_border_right and
+                        settings.folder_border_top and
+                        settings.folder_border_bottom)
+                    if clicked then
+                        settings.folder_border_left = new_state
+                        settings.folder_border_right = new_state
+                        settings.folder_border_top = new_state
+                        settings.folder_border_bottom = new_state
+                    end
                         clicked, settings.folder_border_left = r.ImGui_Checkbox(ctx, "Left Border", settings.folder_border_left)
                         clicked, settings.folder_border_right = r.ImGui_Checkbox(ctx, "Right Border", settings.folder_border_right)
                         clicked, settings.folder_border_top = r.ImGui_Checkbox(ctx, "Top Border", settings.folder_border_top)
                         clicked, settings.folder_border_bottom = r.ImGui_Checkbox(ctx, "Bottom Border", settings.folder_border_bottom)
                         r.ImGui_EndCombo(ctx)
-                    end
-                end
-            end
-            if settings.overlay_style == 1 then
+                 end
+            r.ImGui_EndDisabled(ctx)
+
+
                 r.ImGui_SameLine(ctx, column_width * 2)
                 if r.ImGui_RadioButton(ctx, "T Borders:", settings.track_border) then
                     settings.track_border = not settings.track_border
                 end
-                if settings.track_border then 
+                r.ImGui_BeginDisabled(ctx, not settings.track_border)
                     r.ImGui_SameLine(ctx, column_width * 3)
                     r.ImGui_SetNextItemWidth(ctx, 90)
                     if r.ImGui_BeginCombo(ctx, "##Track Border Options", " Sel Borders") then
@@ -814,11 +855,10 @@ function ShowSettingsWindow()
                         clicked, settings.track_border_top = r.ImGui_Checkbox(ctx, "Top Border", settings.track_border_top)
                         clicked, settings.track_border_bottom = r.ImGui_Checkbox(ctx, "Bottom Border", settings.track_border_bottom)
                         
-                        r.ImGui_EndCombo(ctx)
+                    r.ImGui_EndCombo(ctx)
                     end
-                end    
-            end
-        end  
+                r.ImGui_EndDisabled(ctx)   
+            end  
         r.ImGui_PopStyleVar(ctx)
         r.ImGui_Dummy(ctx, 0, 2)
         r.ImGui_Separator(ctx)
@@ -826,10 +866,10 @@ function ShowSettingsWindow()
         local Slider_Collumn_2 = 270 
         r.ImGui_PushItemWidth(ctx, 140)
         if settings.show_track_colors then
-            if not settings.gradient_enabled or settings.overlay_style == 2 or settings.overlay_style == 3 then    
+            if not settings.gradient_enabled then    
                 changed, settings.overlay_alpha = r.ImGui_SliderDouble(ctx, "Color Intensity", settings.overlay_alpha, 0.0, 1.0)
             end
-            if settings.gradient_enabled and settings.overlay_style == 1 then
+            if settings.gradient_enabled then
                 changed, settings.gradient_start_alpha = r.ImGui_SliderDouble(ctx, "Start Gradient", settings.gradient_start_alpha, 0.0, 1.0)
                 if changed then UpdateGradientAlphaCache() end
                 r.ImGui_SameLine(ctx)
@@ -846,14 +886,17 @@ function ShowSettingsWindow()
                 changed, settings.envelope_color_intensity = r.ImGui_SliderDouble(ctx, "Env Intensity", settings.envelope_color_intensity, 0.0, 1.0)
                 end
             end
+            r.ImGui_SameLine(ctx)
+r.ImGui_SetNextItemWidth(ctx, 90)
+changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "Env Text Opacity", settings.envelope_text_opacity, 0.0, 1.0)
             if settings.darker_parent_tracks then
                 changed, settings.parent_darkness = r.ImGui_SliderDouble(ctx, "Parent Darkness", settings.parent_darkness, 0.1, 1.0)
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
                 changed, settings.darker_parent_opacity = r.ImGui_SliderDouble(ctx, "Parent Opacity", settings.darker_parent_opacity, 0.0, 1.0)
             end
-            if (settings.folder_border and settings.show_parent_colors and settings.overlay_style == 1) or 
-            (settings.track_border and settings.show_normal_colors and settings.overlay_style == 1) then    
+            if (settings.folder_border and settings.show_parent_colors) or 
+            (settings.track_border and settings.show_normal_colors) then    
                 changed, settings.border_thickness = r.ImGui_SliderDouble(ctx, "Border Thickness", settings.border_thickness, 1, 20.0)
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
@@ -1243,7 +1286,6 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
     end
 end
 
-
 function GetDarkerColor(color)
     local r_val, g_val, b_val = r.ColorFromNative(color)
     return r.ColorToNative(
@@ -1484,7 +1526,7 @@ function loop()
                             end
                             
                             if track_y < (BOT - TOP) - scroll_size or (track_y + total_height) > 0 then
-                                local blended_color = BlendColor(cached_bg_color, track_color, settings.blend_mode)
+                                local blended_color = BlendColor(track, track_color, settings.blend_mode)
                                 local color
                                 
                                 if is_parent and settings.darker_parent_tracks and 
@@ -1505,7 +1547,8 @@ function loop()
                     end
                     
                     if settings.track_border and not is_parent and not is_child and track_color ~= 0 then
-                        local blended_color = BlendColor(cached_bg_color, track_color, settings.blend_mode)
+                        local blended_color = BlendColor(track, track_color, settings.blend_mode)
+
                         local border_color = GetCachedColor(blended_color, settings.border_opacity)
                         DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
                     end
@@ -1686,6 +1729,7 @@ function loop()
                             
                             r.ImGui_DrawList_AddText(draw_list, info_text_x, text_y, text_color, info_text)
                         end
+
                         -- Track state indicators
                         local dot_size = 4
                         local dot_spacing = 1
@@ -1725,6 +1769,34 @@ function loop()
                         end
                     end
                 end
+                if settings.show_envelope_names then
+                    local env_count = r.CountTrackEnvelopes(track)
+                    for i = 0, env_count - 1 do
+                        local env = r.GetTrackEnvelope(track, i)
+                        local env_height = r.GetEnvelopeInfo_Value(env, "I_TCPH") / screen_scale
+                        local env_y = r.GetEnvelopeInfo_Value(env, "I_TCPY") / screen_scale
+                        local in_lane = r.GetEnvelopeInfo_Value(env, "I_TCPH_USED") > 0
+                        
+                        if in_lane then
+                            local retval, env_name = r.GetEnvelopeName(env)
+                            local text_width = r.ImGui_CalcTextSize(ctx, env_name)
+                            local env_text_x = WX + settings.horizontal_offset
+                            if settings.text_centered then
+                                local offset = (max_width - text_width) / 2
+                                env_text_x = WX + settings.horizontal_offset + offset
+                            elseif settings.right_align then
+                                env_text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
+                            end
+                            
+                            local absolute_env_y = track_y + env_y
+                            local text_y = WY + absolute_env_y + (env_height/2) - (settings.text_size/2)
+                            
+                            local env_color = GetTextColor(track, is_child)
+                            env_color = (env_color & 0xFFFFFF00) | ((settings.envelope_text_opacity * 255)//1)
+                            r.ImGui_DrawList_AddText(draw_list, env_text_x, text_y, env_color, env_name)
+                        end
+                    end
+                end 
             end
         end
         r.ImGui_End(ctx)
