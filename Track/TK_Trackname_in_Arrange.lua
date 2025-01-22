@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.1
+-- @version 0.8.2
 -- @changelog 
 --[[
 + Restored Blend modes (color burn, color dodge, hard light, soft light, etc)
@@ -886,15 +886,22 @@ function ShowSettingsWindow()
                 changed, settings.envelope_color_intensity = r.ImGui_SliderDouble(ctx, "Env Intensity", settings.envelope_color_intensity, 0.0, 1.0)
                 end
             end
-            r.ImGui_SameLine(ctx)
-r.ImGui_SetNextItemWidth(ctx, 90)
-changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "Env Text Opacity", settings.envelope_text_opacity, 0.0, 1.0)
+            
+            r.ImGui_SetNextItemWidth(ctx, 140)
+            if settings.gradient_enabled then
+            r.ImGui_SameLine(ctx)    
+            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+            changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "Env Text Opacity", settings.envelope_text_opacity, 0.0, 1.0)
+            else
+            changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "Env Text Opacity", settings.envelope_text_opacity, 0.0, 1.0)   
+            end
             if settings.darker_parent_tracks then
                 changed, settings.parent_darkness = r.ImGui_SliderDouble(ctx, "Parent Darkness", settings.parent_darkness, 0.1, 1.0)
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
                 changed, settings.darker_parent_opacity = r.ImGui_SliderDouble(ctx, "Parent Opacity", settings.darker_parent_opacity, 0.0, 1.0)
             end
+            
             if (settings.folder_border and settings.show_parent_colors) or 
             (settings.track_border and settings.show_normal_colors) then    
                 changed, settings.border_thickness = r.ImGui_SliderDouble(ctx, "Border Thickness", settings.border_thickness, 1, 20.0)
