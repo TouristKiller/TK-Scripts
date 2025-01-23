@@ -1,11 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.2
+-- @version 0.8.3
 -- @changelog 
 --[[
-+ Restored Blend modes (color burn, color dodge, hard light, soft light, etc)
-+ Choices are not hidden, but disabled
-+ Added Envelope names
++ Radiobuttons to turn off Grid and Arrange Bg (sets defauld theme colors if turned off)
 ]]--
 
 local r                  = reaper
@@ -95,74 +93,76 @@ local function DrawOverArrange()
     r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
 end
 
-local default_settings = {
+local default_settings              = {
     text_opacity                    = 1.0,
-    show_parent_tracks             = true,
-    show_child_tracks              = false,
-    show_first_fx                  = false,
-    show_parent_label              = false,
-    show_record_color              = true,
-    horizontal_offset              = 100,
-    vertical_offset                = 0,
-    selected_font                  = 1,
-    color_mode                     = 1,
-    overlay_alpha                  = 0.1,
-    show_track_colors              = true,
-    grid_color                     = 0.0,
-    bg_brightness                  = 0.2,
-    envelope_color_intensity       = 1.0,
-    custom_colors_enabled          = false,
-    show_label                     = true,
-    label_alpha                    = 0.3,
-    label_color_mode               = 1,
-    text_centered                  = false,
-    show_settings_button           = false,
-    text_size                      = 14,
-    inherit_parent_color           = false,
-    deep_inherit_color             = false,
-    right_align                    = false,
-    show_parent_colors             = true,
-    show_child_colors              = true,
-    show_normal_colors             = true,
-    show_envelope_colors           = true,
-    blend_mode                     = 1,
-    show_track_numbers             = false,
-    track_number_style             = 1,
-    autosave_enabled               = false,
-    gradient_enabled               = false,
-    gradient_direction             = 1,
-    gradient_start_alpha           = 1.0,
-    gradient_end_alpha             = 0.0,
-    track_name_length              = 1,
-    all_text_enabled               = true,
-    folder_border                  = false,
-    folder_border_left             = true,
-    folder_border_right            = true,
-    folder_border_top              = true,
-    folder_border_bottom           = true,
-    track_border                   = false,
-    track_border_left              = true,
-    track_border_right             = true,
-    track_border_top               = true,
-    track_border_bottom            = true,
-    border_thickness               = 2.0,
-    border_opacity                 = 1.0,
-    button_x                       = 100,
-    button_y                       = 100,
-    gradient_start_alpha_cached    = 0,
-    gradient_end_alpha_cached      = 0,
-    darker_parent_tracks           = false,
-    parent_darkness                = 0.7,
-    darker_parent_opacity          = 1.0,
-    nested_parents_darker          = false,
-    show_info_line                 = false,
-    color_gradient_enabled         = false,
-    bg_brightness_tr1 = 0.2,
-    bg_brightness_tr2 = 0.2,
-    sel_brightness_tr1 = 0.3,  
-    sel_brightness_tr2 = 0.3,
-    show_envelope_names = false,
-    envelope_text_opacity = 0.8,
+    show_parent_tracks              = true,
+    show_child_tracks               = false,
+    show_first_fx                   = false,
+    show_parent_label               = false,
+    show_record_color               = true,
+    horizontal_offset               = 100,
+    vertical_offset                 = 0,
+    selected_font                   = 1,
+    color_mode                      = 1,
+    overlay_alpha                   = 0.1,
+    show_track_colors               = true,
+    grid_color                      = 0.0,
+    bg_brightness                   = 0.2,
+    envelope_color_intensity        = 1.0,
+    custom_colors_enabled           = false,
+    show_label                      = true,
+    label_alpha                     = 0.3,
+    label_color_mode                = 1,
+    text_centered                   = false,
+    show_settings_button            = false,
+    text_size                       = 14,
+    inherit_parent_color            = false,
+    deep_inherit_color              = false,
+    right_align                     = false,
+    show_parent_colors              = true,
+    show_child_colors               = true,
+    show_normal_colors              = true,
+    show_envelope_colors            = true,
+    blend_mode                      = 1,
+    show_track_numbers              = false,
+    track_number_style              = 1,
+    autosave_enabled                = false,
+    gradient_enabled                = false,
+    gradient_direction              = 1,
+    gradient_start_alpha            = 1.0,
+    gradient_end_alpha              = 0.0,
+    track_name_length               = 1,
+    all_text_enabled                = true,
+    folder_border                   = false,
+    folder_border_left              = true,
+    folder_border_right             = true,
+    folder_border_top               = true,
+    folder_border_bottom            = true,
+    track_border                    = false,
+    track_border_left               = true,
+    track_border_right              = true,
+    track_border_top                = true,
+    track_border_bottom             = true,
+    border_thickness                = 2.0,
+    border_opacity                  = 1.0,
+    button_x                        = 100,
+    button_y                        = 100,
+    gradient_start_alpha_cached     = 0,
+    gradient_end_alpha_cached       = 0,
+    darker_parent_tracks            = false,
+    parent_darkness                 = 0.7,
+    darker_parent_opacity           = 1.0,
+    nested_parents_darker           = false,
+    show_info_line                  = false,
+    color_gradient_enabled          = false,
+    bg_brightness_tr1               = 0.2,
+    bg_brightness_tr2               = 0.2,
+    sel_brightness_tr1              = 0.3,  
+    sel_brightness_tr2              = 0.3,
+    show_envelope_names             = false,
+    envelope_text_opacity           = 0.8,
+    grid_color_enabled              = true,
+    bg_brightness_enabled           = true,
 }
 
 local settings = {}
@@ -306,7 +306,8 @@ function LoadPreset(name)
         
         if settings.custom_colors_enabled then
             UpdateGridColors()    -- Direct updaten van grid kleuren
-            UpdateBackgroundColors() -- Direct updaten van achtergrond kleuren
+            UpdateArrangeBG()
+    	    UpdateTrackColors() -- Direct updaten van achtergrond kleuren
         end
         
         if old_text_size ~= settings.text_size then
@@ -333,6 +334,14 @@ function GetPresetList()
 end
 
 function UpdateGridColors()
+    if not settings.grid_color_enabled then
+        reaper.SetThemeColor("col_gridlines", -1, 0)
+        reaper.SetThemeColor("col_gridlines2", -1, 0)
+        reaper.SetThemeColor("col_gridlines3", -1, 0)
+        reaper.SetThemeColor("col_tr1_divline", -1, 0)
+        reaper.SetThemeColor("col_tr2_divline", -1, 0)
+        return
+    end
     local grid_value = (settings.grid_color * 255)//1
     reaper.SetThemeColor("col_gridlines", reaper.ColorToNative(grid_value, grid_value, grid_value), 0)
     reaper.SetThemeColor("col_gridlines2", reaper.ColorToNative(grid_value, grid_value, grid_value), 0)
@@ -342,15 +351,24 @@ function UpdateGridColors()
     reaper.UpdateArrange()
 end
 
-function UpdateBackgroundColors()
+function UpdateArrangeBG()
+    if not settings.bg_brightness_enabled then
+        reaper.SetThemeColor("col_arrangebg", -1, 0)
+    else
+        local MIN_BG_VALUE = 13
+        local bg_value = math.max((settings.bg_brightness * 255)//1, MIN_BG_VALUE)
+        reaper.SetThemeColor("col_arrangebg", reaper.ColorToNative(bg_value, bg_value, bg_value), 0)
+    end
+    reaper.UpdateArrange()
+end
+
+function UpdateTrackColors()
     local MIN_BG_VALUE = 13
-    local bg_value = math.max((settings.bg_brightness * 255)//1, MIN_BG_VALUE)
     local bg_value_tr1 = math.max((settings.bg_brightness_tr1 * 255)//1, MIN_BG_VALUE)
     local bg_value_tr2 = math.max((settings.bg_brightness_tr2 * 255)//1, MIN_BG_VALUE)
     local sel_value_tr1 = math.max((settings.sel_brightness_tr1 * 255)//1, MIN_BG_VALUE)
     local sel_value_tr2 = math.max((settings.sel_brightness_tr2 * 255)//1, MIN_BG_VALUE)
     
-    reaper.SetThemeColor("col_arrangebg", reaper.ColorToNative(bg_value, bg_value, bg_value), 0)
     reaper.SetThemeColor("col_tr1_bg", reaper.ColorToNative(bg_value_tr1, bg_value_tr1, bg_value_tr1), 0)
     reaper.SetThemeColor("col_tr2_bg", reaper.ColorToNative(bg_value_tr2, bg_value_tr2, bg_value_tr2), 0)
     reaper.SetThemeColor("selcol_tr1_bg", reaper.ColorToNative(sel_value_tr1, sel_value_tr1, sel_value_tr1), 0)
@@ -358,11 +376,15 @@ function UpdateBackgroundColors()
     reaper.UpdateArrange()
 end
 
+
+
 function RefreshProjectState()
     UpdateBgColorCache()
     if settings.custom_colors_enabled then
         UpdateGridColors()
-        UpdateBackgroundColors()
+        UpdateArrangeBG()
+        UpdateTrackColors()
+        
     end
     reaper.UpdateArrange()
     last_update_time = 0
@@ -376,7 +398,8 @@ function ToggleColors()
             r.Main_OnCommand(42331, 0)
         end
         UpdateGridColors()
-        UpdateBackgroundColors()
+        UpdateArrangeBG()
+        UpdateTrackColors()
     else
         -- Reset colors
         reaper.SetThemeColor("col_gridlines", -1, 0)
@@ -964,11 +987,46 @@ function ShowSettingsWindow()
             r.ImGui_Dummy(ctx, 0, 2)
             r.ImGui_Separator(ctx)
             r.ImGui_Dummy(ctx, 0, 2)
+        
+            r.ImGui_BeginDisabled(ctx, not settings.grid_color_enabled)
+            r.ImGui_SetNextItemWidth(ctx, 110)
             changed_grid, settings.grid_color = r.ImGui_SliderDouble(ctx, "Grid Color", settings.grid_color, 0.0, 1.0)
+            r.ImGui_EndDisabled(ctx)
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_RadioButton(ctx, "Grid##toggle", settings.grid_color_enabled) then
+                settings.grid_color_enabled = not settings.grid_color_enabled
+                if not settings.grid_color_enabled then
+                    r.SetThemeColor("col_gridlines", -1, 0)
+                    r.SetThemeColor("col_gridlines2", -1, 0)
+                    r.SetThemeColor("col_gridlines3", -1, 0)
+                    r.SetThemeColor("col_tr1_divline", -1, 0)
+                    r.SetThemeColor("col_tr2_divline", -1, 0)
+                    r.UpdateArrange()
+                else
+                    UpdateGridColors()
+                end
+            end
+            
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+            r.ImGui_BeginDisabled(ctx, not settings.bg_brightness_enabled)
+            r.ImGui_SetNextItemWidth(ctx, 110)
             changed_bg, settings.bg_brightness = r.ImGui_SliderDouble(ctx, "Bg Brightness", settings.bg_brightness, 0.0, 1.0)
+            r.ImGui_EndDisabled(ctx)
             
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_RadioButton(ctx, "BG##toggle", settings.bg_brightness_enabled) then
+                settings.bg_brightness_enabled = not settings.bg_brightness_enabled
+                if not settings.bg_brightness_enabled then
+                    r.SetThemeColor("col_arrangebg", -1, 0)
+                    r.UpdateArrange()
+                else
+                    UpdateArrangeBG()
+                end
+            end
+            
+            -- Track brightness controls - nu onafhankelijk van BG status
             changed_bg_tr1, settings.bg_brightness_tr1 = r.ImGui_SliderDouble(ctx, "Track (odd) ", settings.bg_brightness_tr1, 0.0, 1.0)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
@@ -979,14 +1037,24 @@ function ShowSettingsWindow()
             r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
             changed_sel_tr2, settings.sel_brightness_tr2 = r.ImGui_SliderDouble(ctx, "Sel Track (even)", settings.sel_brightness_tr2, 0.0, 1.0)
             
-            if changed_grid then UpdateGridColors() end
-            if changed_bg or changed_bg_tr1 or changed_bg_tr2 or 
-            changed_sel_tr1 or changed_sel_tr2 then 
-                UpdateBackgroundColors() 
+            -- Update logica gesplitst voor onafhankelijke controle
+            if changed_grid and settings.grid_color_enabled then
+                UpdateGridColors()
             end
-        end                                                                                                                                             
-        r.ImGui_PopItemWidth(ctx) -- sluit korte sliders
+            
+            if changed_bg and settings.bg_brightness_enabled then
+                UpdateArrangeBG()
+            end
+            
+            -- Track colors update onafhankelijk van BG status
+            if changed_bg_tr1 or changed_bg_tr2 or changed_sel_tr1 or changed_sel_tr2 then
+                UpdateTrackColors()
+            end
+        end
+        
+        r.ImGui_PopItemWidth(ctx)
         r.ImGui_End(ctx)
+        
     end
     r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleVar(ctx, 5)
@@ -1859,6 +1927,7 @@ function loop()
 end
 
 -- Script initialization and cleanup
+-- In de initialisatie code
 local success = pcall(function()
     color_cache = {}
     cached_bg_color = nil
@@ -1866,18 +1935,38 @@ local success = pcall(function()
     LoadSettings()
     CreateFonts()
 
-   
     if settings.custom_colors_enabled then
         grid_divide_state = r.GetToggleCommandState(42331)
         if grid_divide_state == 1 then
             r.Main_OnCommand(42331, 0)
         end
-        UpdateGridColors()
-        UpdateBackgroundColors()
+
+        -- Alleen als Grid radio button aan staat
+        if settings.grid_color_enabled then
+            UpdateGridColors()
+        else
+            -- Gebruik standaard theme grid kleur
+            r.SetThemeColor("col_gridlines", -1, 0)
+            r.SetThemeColor("col_gridlines2", -1, 0)
+            r.SetThemeColor("col_gridlines3", -1, 0)
+            r.SetThemeColor("col_tr1_divline", -1, 0)
+            r.SetThemeColor("col_tr2_divline", -1, 0)
+        end
+
+        -- Alleen als BG radio button aan staat
+        if settings.bg_brightness_enabled then
+            UpdateArrangeBG()
+        UpdateTrackColors()
+        else
+            -- Gebruik standaard theme achtergrond kleur
+            r.SetThemeColor("col_arrangebg", -1, 0)
+        end
     end
+
     SetButtonState(1)
     r.defer(loop)
 end)
+
 
 
 r.atexit(function() 
