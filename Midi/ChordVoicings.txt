@@ -1,7 +1,7 @@
 # Add more chords and variations here if you need…
 
 # C chords
-X 3 2 0 1 0|C|0 3 2 0 1 0
+X 3 2 0 1 0|C|0 3 2 0 1 0 
 X 3 1 0 1 3|Cm|0 3 1 0 2 4
 X 3 2 3 1 0|C7|0 3 2 4 1 0
 X X 2 4 1 3|CMaj7|0 0 2 4 1 3
@@ -64,47 +64,47 @@ X 2 4 4 5 2|Bsus4|0 1 2 3 4 1
 7 6 4 6 4 X|Badd9|4 2 1 3 1 0
 
 # Alternative Voicings
-# C voicings
-X 3 5 5 5 3|C (Var2)|0 1 2 3 4 1
-X X 5 5 5 8|C (Var3)|0 0 1 1 1 4
-8 10 10 9 8 8|C (Var4)|1 3 4 2 1 1 
-X X 10 12 13 12|C (Var5)|0 0 1 2 4 3
+#C voicings
+X 3 5 5 5 3|C V2|0 1 2 3 4 1
+X X 5 5 5 8|C V3|0 0 1 1 1 4
+8 10 10 9 8 8|C V4|1 3 4 2 1 1
+X X 10 12 13 12|C V5|0 0 1 2 4 3
 
-# D voicings
-X 5 4 3 3 2|D (Var2)|0 4 3 1 2 1
-X 5 7 7 7 5|D (Var3)|0 1 2 3 4 1
-X X 7 7 7 10|D (Var4)|0 0 1 1 1 4
-10 12 12 11 10 10|D (Var5)|1 3 4 2 1 1
+#D voicings
+X 5 4 3 3 2|D V2|0 4 3 1 2 1
+X 5 7 7 7 5|D V3|0 1 2 3 4 1
+X X 7 7 7 10|D V4|0 0 1 1 1 4
+10 12 12 11 10 10|D V5|1 3 4 2 1 1
 
-# E voicings
-X X 2 4 5 4|E (Var2)|0 0 1 2 4 3
-X 7 6 4 2 4|E (Var3)|0 4 3 1 2 1
-X 7 9 9 9 7|E (Var4)|0 1 2 3 4 1
-X X 9 9 9 12|E (Var5)|0 0 1 1 1 4
+#E voicings
+X X 2 4 5 4|E V2|0 0 1 2 4 3
+X 7 6 4 2 4|E V3|0 4 3 1 2 1
+X 7 9 9 9 7|E V4|0 1 2 3 4 1
+X X 9 9 9 12|E V5|0 0 1 1 1 4
 
-# F voicings
-X X 3 2 1 1|F (Var2)|0 0 4 3 1 2
-X X 3 5 6 3|F (Var3)|0 0 1 2 4 3
-X 8 7 5 6 5|F (Var4)|0 4 3 1 2 1
-X 8 10 10 10 8|F (Var5)|0 1 2 3 4 1
-X X 10 10 10 13|F (Var6)|0 0 1 1 1 4
+#F voicings
+X X 3 2 1 1|F V2|0 0 4 3 1 2
+X X 3 5 6 3|F V3|0 0 1 2 4 3
+X 8 7 5 6 5|F V4|0 4 3 1 2 1
+X 8 10 10 10 8|F V5|0 1 2 3 4 1
+X X 10 10 10 13|F V6|0 0 1 1 1 4
 
-# G voicings
-3 5 5 4 3 3|G (Var2)|1 3 4 2 1 1
-X X 5 7 8 7|G (Var3)|0 0 1 2 4 3
-X 10 9 7 8 7|G (Var4)|0 4 3 1 2 1
-X 10 12 12 12 10|G (Var5)|0 1 2 3 4 1
+#G voicings
+3 5 5 4 3 3|G V2|1 3 4 2 1 1
+X X 5 7 8 7|G V3|0 0 1 2 4 3
+X 10 9 7 8 7|G V4|0 4 3 1 2 1
+X 10 12 12 12 10|G V5|0 1 2 3 4 1
 
-# A voicings
-X X 2 2 2 5|A (Var2)|0 0 1 1 1 4
-5 7 7 6 5 5|A (Var3)|1 3 4 2 1 1
-X X 7 9 10 9|A (Var4)|0 0 1 2 4 3
-X 12 11 9 10 9|A (Var5)|0 4 3 1 2 1
+#A voicings
+X X 2 2 2 5|A V2|0 0 1 1 1 4
+5 7 7 6 5 5|A V3|1 3 4 2 1 1
+X X 7 9 10 9|A V4|0 0 1 2 4 3
+X 12 11 9 10 9|A V5|0 4 3 1 2 1
 
-# B voicings
-X X 4 4 4 7|B (Var2)|0 0 1 1 1 4
-7 9 9 8 7 7|B (Var3)|1 3 4 2 1 1
-X X 9 11 12 11|B (Var4)|0 0 1 2 4 3
+#B voicings
+X X 4 4 4 7|B V2|0 0 1 1 1 4
+7 9 9 8 7 7|B V3|1 3 4 2 1 1
+X X 9 11 12 11|B V4|0 0 1 2 4 3
 
 # Extended chords (9, 11, 13 /First Var)
 X 3 2 3 3 3|C9|0 2 1 3 3 3
@@ -153,4 +153,43 @@ X X 3 2 2 1|Faug|0 0 4 2 3 1
 X 0 3 2 2 1|Aaug|0 0 4 2 3 1
 7 6 5 0 0 X|Baug|3 2 1 0 0 0
 
+# E CHORD VARIATIONS (SID)
+#Open Position Variations:
+0 2 1 1 0 0|EMaj7 V2|0 3 1 2 0 0 – Variation with additional bass tone. En nog veel meer tatutatutautatuatuaut atuauta atuatua 
+0 2 4 1 0 0|EMaj7 V3|0 2 4 1 0 0 – Emaj7 with extended voicing.
+0 2 2 4 4 4|EMaj7 V16|0 1 1 2 3 4 – Emaj7 with extended voicing.
+#Barre Chords:
+X 7 6 8 9 0|EMaj7 V4|0 1 2 4 3 0 – Barre chord in the Amaj7 shape.
+12 X 13 13 12 X|EMaj7 V5|1 0 2 3 1 0 – Upper-neck barre chord variation.
+X 7 9 8 9 X|EMaj7 V6|0 1 3 2 4 0 – Jazzy voicing with root on the A string.
+#Triad Voicings:
+X X 1 4 4 4|EMaj7 V7|0 0 1 4 4 4 – Compact voicing on the higher strings.
+X 7 6 4 4 4|EMaj7 V8|0 3 2 1 1 1 – Lower triad voicing with a strong bass.
+X X 9 9 9 11|EMaj7 V9|0 0 1 1 1 3 – Spread voicing for a shimmering tone.
+#Spread Voicings:
+X 7 6 8 9 X|EMaj7 V10|0 1 2 3 4 0 – Spread barre voicing.
+12 11 9 9 0 0|EMaj7 V11|4 3 1 1 0 0 – Ringing open strings for added color.
+X X 13 13 12 11|EMaj7 V12|0 0 3 4 2 1 – Upper-neck compact voicing.
+#With Bass Variations:
+0 7 6 8 9 0|EMaj7 V13|0 2 1 3 4 0 – Emaj7 with extended bass.
+12 14 13 13 X X|EMaj7 V14|1 3 2 4 0 0 – Upper-neck barre with a strong bass.
+X 7 9 8 9 7|EMaj7 V15|0 1 3 2 4 1 – Root on A string with full voicing.
 
+#Open Position Variations:
+0 2 0 1 0 0|E7 V1|0 2 0 1 0 0 – Standard open E7.
+0 2 2 1 3 0|E7 V2|0 2 3 1 4 0 – E7 with an added D on the B string.
+0 2 0 1 3 0|E7 V3|0 2 0 1 4 0 – E7 with a G note on the B string.
+#Barre Chords:
+12 14 12 13 12 12|E7 V4|1 3 1 2 1 1 – Barre chord in the E7 shape.
+X 7 9 7 9 7|E7 V5|0 1 3 1 4 1 – Root on A string with full voicing.
+X 7 6 7 9 X|E7 V6|0 2 1 3 4 0 – Extended voicing with added high tones.
+#Triad Voicings:
+X X 2 1 3 0|E7 V7|0 0 2 1 4 0 – Compact triad on the higher strings.
+X X 9 9 9 10|E7 V8|0 0 1 2 3 4 – Spread voicing with a high D note.
+#Spread Voicings:
+0 2 2 4 3 4|E7 V9|0 1 1 3 2 4 – E7 with a high G# note.
+12 X 12 13 12 X|E7 V10|1 0 1 2 1 0 – Upper neck barre variation.
+X 7 9 7 9 X|E7 V11|0 1 3 1 4 0 – Open-spread voicing.
+#With Bass Variations:
+12 11 12 13 X X|E7 V12|2 1 3 4 0 0 – Compact upper neck voicing.
+0 7 6 7 5 X|E7 V13|0 3 2 4 1 0 – With a high E note on the B string.

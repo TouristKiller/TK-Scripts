@@ -1,10 +1,11 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.1.9:
+-- @version 0.2.0:
 -- @changelog:
 --[[        
-+ Bugfix: Transpose als wordks when there is chord input in te "Find" field. 
-
++ Small UI change (to match the rest of the TK-Scripts)
++ Addes some Chords in the standard ChordVoicings (not DoReMi version)
++ for standard chord input do'nt use Var but V (example CMaj7 V2)
 ]]--   
 -- I am a drummer..... dont kill me if I mess up the guitar stuff ;o)
 ------------------------------------------------------------------------
@@ -1092,23 +1093,33 @@ function MainLoop()
         
         -- Bereken de positie voor de sluitknop
         local window_width = r.ImGui_GetWindowWidth(ctx)
-        r.ImGui_Text(ctx,"TK GTR2MIDI")
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
+        r.ImGui_SetCursorPosY(ctx, 8)
+        r.ImGui_Text(ctx, "TK")
+        r.ImGui_PopStyleColor(ctx)
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, "GTR2MIDI")
         r.ImGui_SameLine(ctx)
         r.ImGui_Dummy(ctx,5,0)
         
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, 5)
         _,show_sequence = r.ImGui_Checkbox(ctx,"Sequence",show_sequence)
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, 5)
         _,show_chord = r.ImGui_Checkbox(ctx,"Chord",show_chord)
+        
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, 5)
         _, chord_board_horizontal = r.ImGui_Checkbox(ctx, "Horizontal", chord_board_horizontal)
 
         r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, window_width - 30)
+        r.ImGui_SetCursorPosY(ctx, 7)
+        r.ImGui_SetCursorPosX(ctx, window_width - 23)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xCC0000FF)
-        if r.ImGui_Button(ctx, "X##close", 20, 20) then
+        if r.ImGui_Button(ctx, "##close", 14, 14) then
             open = false
         end
         r.ImGui_PopStyleColor(ctx, 3)

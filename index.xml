@@ -69,9 +69,12 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.1.9" author="TouristKiller" time="2025-01-18T16:10:00Z">
+    <version name="0.2.0" author="TouristKiller" time="2025-01-23T19:10:00Z">
       <changelog><![CDATA[           
-   + Bugfix: Transpose als wordks when there is chord input in te "Find" field. 
+--[[
++ Small UI change (to match the rest of the TK-Scripts)
++ Addes some Chords in the standard ChordVoicings (not DoReMi version)
++ for standard chord input do'nt use Var but V (example CMaj7 V2)
    ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
     <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>
