@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.4
+-- @version 0.8.5
 -- @changelog 
 --[[
-+ Added settings for Master Track (made a start at least)
++ Bugfix: No Master Color overlay when Mater Track is not shown
 ]]--
 
 local r                  = reaper
@@ -28,7 +28,6 @@ local grid_divide_state  = 0
 local color_cache        = {}
 local cached_bg_color    = nil
 
--- Alleen om te testen {;o)
 --[[local profiler = dofile(reaper.GetResourcePath() .. '/Scripts/ReaTeam Scripts/Development/cfillion_Lua profiler.lua')
 reaper.defer = profiler.defer]]--
 
@@ -1488,8 +1487,8 @@ end
 
 --[[profiler.attachToWorld()
 profiler.run()
-profiler.start()]]--
-function loop()
+profiler.start()
+function loop()]]--
     if r.GetExtState("TK_TRACKNAMES", "reload_settings") == "1" then
         LoadSettings()
         r.SetExtState("TK_TRACKNAMES", "reload_settings", "0", false)
@@ -1549,53 +1548,55 @@ function loop()
             local is_master = (i == -1)
 
             if is_master then
+                local master_visible = r.GetMasterTrackVisibility()
                 local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
                 local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
-                
-                if settings.show_track_colors and settings.use_custom_master_color then
-                    if settings.master_gradient_enabled then
-                        -- Converteer de alpha waardes naar de juiste schaal (0-255)
-                        local start_alpha = (settings.master_gradient_start_alpha * 255)//1
-                        local end_alpha = (settings.master_gradient_end_alpha * 255)//1
-                        
-                        -- Pas beide alpha waardes toe op de master kleur
-                        local start_color = (settings.master_track_color & 0xFFFFFF00) | start_alpha
-                        local end_color = (settings.master_track_color & 0xFFFFFF00) | end_alpha
-                        
-                        -- Render de gradient met beide kleuren
-                        r.ImGui_DrawList_AddRectFilledMultiColor(
-                            draw_list, 
-                            LEFT, 
-                            WY + track_y,
-                            RIGHT - scroll_size,
-                            WY + track_y + track_height,
-                            start_color,
-                            settings.gradient_direction == 1 and end_color or start_color,
-                            settings.gradient_direction == 1 and end_color or start_color,
-                            start_color
-                        )
-                    else
-                        local red, green, blue, _ = r.ImGui_ColorConvertU32ToDouble4(settings.master_track_color)
-                        local color_with_alpha = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, settings.master_overlay_alpha)
-                        RenderSolidOverlay(draw_list, track, track_y, track_height, color_with_alpha, WY)
+                if master_visible == 1 then
+                    if settings.show_track_colors and settings.use_custom_master_color then
+                        if settings.master_gradient_enabled then
+                            -- Converteer de alpha waardes naar de juiste schaal (0-255)
+                            local start_alpha = (settings.master_gradient_start_alpha * 255)//1
+                            local end_alpha = (settings.master_gradient_end_alpha * 255)//1
+                            
+                            -- Pas beide alpha waardes toe op de master kleur
+                            local start_color = (settings.master_track_color & 0xFFFFFF00) | start_alpha
+                            local end_color = (settings.master_track_color & 0xFFFFFF00) | end_alpha
+                            
+                            -- Render de gradient met beide kleuren
+                            r.ImGui_DrawList_AddRectFilledMultiColor(
+                                draw_list, 
+                                LEFT, 
+                                WY + track_y,
+                                RIGHT - scroll_size,
+                                WY + track_y + track_height,
+                                start_color,
+                                settings.gradient_direction == 1 and end_color or start_color,
+                                settings.gradient_direction == 1 and end_color or start_color,
+                                start_color
+                            )
+                        else
+                            local red, green, blue, _ = r.ImGui_ColorConvertU32ToDouble4(settings.master_track_color)
+                            local color_with_alpha = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, settings.master_overlay_alpha)
+                            RenderSolidOverlay(draw_list, track, track_y, track_height, color_with_alpha, WY)
+                        end
                     end
+                    local text = "MASTER"
+                    local text_width = r.ImGui_CalcTextSize(ctx, text)
+                    local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5)
+                    local text_x = WX + settings.horizontal_offset
+                    
+                    if settings.text_centered then
+                        local offset = (max_width - text_width) / 2
+                        text_x = WX + settings.horizontal_offset + offset
+                    elseif settings.right_align then
+                        text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
+                    end
+                    
+                    local text_color = GetTextColor(track)
+                    text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
+                
+                    r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
                 end
-                local text = "MASTER"
-                local text_width = r.ImGui_CalcTextSize(ctx, text)
-                local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5)
-                local text_x = WX + settings.horizontal_offset
-                
-                if settings.text_centered then
-                    local offset = (max_width - text_width) / 2
-                    text_x = WX + settings.horizontal_offset + offset
-                elseif settings.right_align then
-                    text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
-                end
-                
-                local text_color = GetTextColor(track)
-                text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
-                
-                r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
             else
             
              
