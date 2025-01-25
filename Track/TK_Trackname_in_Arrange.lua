@@ -1487,8 +1487,8 @@ end
 
 --[[profiler.attachToWorld()
 profiler.run()
-profiler.start()
-function loop()]]--
+profiler.start()]]--
+function loop()
     if r.GetExtState("TK_TRACKNAMES", "reload_settings") == "1" then
         LoadSettings()
         r.SetExtState("TK_TRACKNAMES", "reload_settings", "0", false)
