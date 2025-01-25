@@ -85,9 +85,9 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.8.5" author="TouristKiller" time="2025-01-25T17:47:00Z">
+        <version name="0.8.6" author="TouristKiller" time="2025-01-25T22:30:00Z">
             <changelog><![CDATA[           
-+ Bugfix: No Master Color overlay when Mater Track is not shown
++ Added hide tekst /label for selected track(s)
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>

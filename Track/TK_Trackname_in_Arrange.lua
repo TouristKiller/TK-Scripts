@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.5
+-- @version 0.8.6
 -- @changelog 
 --[[
-+ Bugfix: No Master Color overlay when Mater Track is not shown
++ Added hide tekst /label for selected track(s)
 ]]--
 
 local r                  = reaper
@@ -153,7 +153,8 @@ local default_settings              = {
     master_overlay_alpha            = 1.0,  
     master_gradient_enabled         = true,  
     master_gradient_start_alpha     = 1.0,
-    master_gradient_end_alpha       = 0.0
+    master_gradient_end_alpha       = 0.0,
+    text_hover_hide                 = false,
 }
 
 local settings = {}
@@ -527,6 +528,11 @@ function BlendColor(track, blend, mode)
     return result
 end
 
+function GetReaperMousePosition()
+    local x, y = reaper.GetMousePosition()
+    x, y = reaper.JS_Window_ScreenToClient(arrange, x, y)
+    return x, y
+end
 
 function GetFolderBoundaries(track)
     if not track then return nil end
@@ -674,6 +680,7 @@ function ShowSettingsWindow()
         end
         r.ImGui_Separator(ctx)
         r.ImGui_Dummy(ctx, 0, 2)
+      
         local changed
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
         if r.ImGui_RadioButton(ctx, "Parent Track", settings.show_parent_tracks) then
@@ -761,6 +768,9 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, column_width * 4)
         if r.ImGui_RadioButton(ctx, "Env Names", settings.show_envelope_names) then
             settings.show_envelope_names = not settings.show_envelope_names
+        end
+        if r.ImGui_RadioButton(ctx, "Hide text for selected tracks", settings.text_hover_hide) then
+            settings.text_hover_hide = not settings.text_hover_hide
         end
         r.ImGui_Dummy(ctx, 0, 2)
         r.ImGui_Separator(ctx)
@@ -1485,6 +1495,10 @@ function SetWindowScale(ImGuiScale)
     end
 end
 
+function ShouldHideTrackElements(track)
+    return settings.text_hover_hide and r.IsTrackSelected(track)
+end
+
 --[[profiler.attachToWorld()
 profiler.run()
 profiler.start()]]--
@@ -1755,6 +1769,11 @@ function loop()
                         should_show_track = true
                     end
 
+                    if settings.text_hover_hide and r.IsTrackSelected(track) then
+                        should_show_track = false
+                        should_show_name = false
+                    end
+
                     if should_show_track then
                         local _, track_name = r.GetTrackName(track)
                         local display_name = TruncateTrackName(track_name, settings.track_name_length)
@@ -1875,7 +1894,7 @@ function loop()
                             
                             local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
                             local text_x = WX + settings.horizontal_offset
-                        
+                                    
                             if settings.text_centered then
                                 local offset = (max_width - text_width) / 2
                                 text_x = WX + settings.horizontal_offset + offset
@@ -1899,6 +1918,7 @@ function loop()
                             local text_color = GetTextColor(track, is_child)
                             text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
                             r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, modified_display_name)
+
                             
                             -- Info line na de track naam
                             if settings.show_info_line and not r.GetParentTrack(track) then
@@ -1991,6 +2011,7 @@ function loop()
     r.ImGui_PopStyleColor(ctx, 2)
     r.ImGui_PopFont(ctx)
 
+
     if settings.show_settings_button then
         r.ImGui_SetNextWindowPos(ctx, settings.button_x, settings.button_y, r.ImGui_Cond_Once())
         local button_flags = r.ImGui_WindowFlags_NoTitleBar() | 
@@ -2002,7 +2023,7 @@ function loop()
         if button_visible then
             settings.button_x, settings.button_y = r.ImGui_GetWindowPos(ctx)
             
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
+             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
             r.ImGui_PushFont(ctx, settings_font)
             if r.ImGui_Button(ctx, "S") then
                 settings_visible = not settings_visible
