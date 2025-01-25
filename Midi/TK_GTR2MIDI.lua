@@ -1,61 +1,56 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.2.0:
+-- @version 0.2.1:
 -- @changelog:
 --[[        
-+ Small UI change (to match the rest of the TK-Scripts)
-+ Addes some Chords in the standard ChordVoicings (not DoReMi version)
-+ for standard chord input do'nt use Var but V (example CMaj7 V2)
++ Pin window (always on top)
 ]]--   
 -- I am a drummer..... dont kill me if I mess up the guitar stuff ;o)
 ------------------------------------------------------------------------
-local r = reaper
-local ctx = r.ImGui_CreateContext('TK_GTR2MIDI')
-local font = r.ImGui_CreateFont('Arial', 12)
+local r                         = reaper
+local ctx                       = r.ImGui_CreateContext('TK_GTR2MIDI')
+local font                      = r.ImGui_CreateFont('Arial', 12)
 r.ImGui_Attach(ctx, font)
 
-local window_flags = r.ImGui_WindowFlags_NoTitleBar()|
-r.ImGui_WindowFlags_NoResize()|
-r.ImGui_WindowFlags_NoScrollbar()|
-r.ImGui_WindowFlags_AlwaysAutoResize()
+local is_pinned                 = false
 
-local separator = package.config:sub(1,1)  -- Gets OS-specific path separator
-local script_path = debug.getinfo(1,'S').source:match("@(.*)" .. separator)
+local separator                 = package.config:sub(1,1)  -- Gets OS-specific path separator
+local script_path               = debug.getinfo(1,'S').source:match("@(.*)" .. separator)
 
-local input_sequence = ""
-local input_chord = ""
-local selected_duration = "4"
-local selected_string = 1
-local base_notes = {64,59,55,50,45,40}
-local string_names = {"E (High)","B","G","D","A","E (Low)"}
-local custom_notes = {64,59,55,50,45,40} 
-local custom_tuning_name = ""
+local input_sequence            = ""
+local input_chord               = ""
+local selected_duration         = "4"
+local selected_string           = 1
+local base_notes                = {64,59,55,50,45,40}
+local string_names              = {"E (High)","B","G","D","A","E (Low)"}
+local custom_notes              = {64,59,55,50,45,40} 
+local custom_tuning_name        = ""
 
 local voicings = {}
-local selected_voicing_file = r.GetExtState("TK_GTR2MIDI", "selected_voicing_file")
-if selected_voicing_file == "" then
-    selected_voicing_file = "ChordVoicings.txt"
+local selected_voicing_file     = r.GetExtState("TK_GTR2MIDI", "selected_voicing_file")
+if selected_voicing_file        == "" then
+    selected_voicing_file       = "ChordVoicings.txt"
 end
 
 local show_custom_tuning_window = false
 
-local chord_fingers = {}
-local chord_board_horizontal = false
-local insert_in_existing = false
+local chord_fingers             = {}
+local chord_board_horizontal    = false
+local insert_in_existing        = false
 
-local show_sequence = false
-local show_chord = true
-local status_message = ""
-local status_color = 0xFFFFFFFF 
+local show_sequence             = false
+local show_chord                = true
+local status_message            = ""
+local status_color              = 0xFFFFFFFF 
 
-local transpose_modes = {
+local transpose_modes           = {
     ["Semi"] = 1,
     ["Whole"] = 2
 }
 
-local selected_transpose_mode = "Semi"
+local selected_transpose_mode   = "Semi"
 
-local tunings = {
+local tunings                   = {
     ["Standard (EADGBE)"] = {64,59,55,50,45,40},
     ["Drop D (DADGBE)"] = {64,59,55,50,45,38},
     ["Open G (DGDGBD)"] = {62,59,55,50,43,38},
@@ -63,16 +58,16 @@ local tunings = {
     ["DADGAD"] = {62,57,55,50,45,38}
 }
 
-local selected_tuning = "Standard (EADGBE)"
+local selected_tuning           = "Standard (EADGBE)"
 base_notes = tunings[selected_tuning]
 
-local finger_colors = {
+local finger_colors             = {
     [1] = 0xEF0038FF, 
     [2] = 0x38B549FF,  
     [3] = 0x0099DDFF,  
     [4] = 0xF5811FFF  
 }
-
+------------------------------------------------------------------------
 local function GetCurrentTimeSig()
     local timepos = reaper.GetCursorPosition()
     local timesig_num, timesig_denom = reaper.TimeMap_GetTimeSigAtTime(0, timepos)
@@ -1073,6 +1068,14 @@ function MainLoop()
     if show_chord then
         min_width = math.max(min_width, 360)
     end
+    
+    local window_flags              = r.ImGui_WindowFlags_NoTitleBar()|
+    r.ImGui_WindowFlags_NoResize()|
+    r.ImGui_WindowFlags_NoScrollbar()|
+    r.ImGui_WindowFlags_AlwaysAutoResize()
+    if is_pinned then
+        window_flags = window_flags | r.ImGui_WindowFlags_TopMost()
+    end
     r.ImGui_SetNextWindowSizeConstraints(ctx, min_width, 0, min_width, 2000)
     local visible,open=r.ImGui_Begin(ctx,'Guitar MIDI Input', true, window_flags)
 
@@ -1112,7 +1115,17 @@ function MainLoop()
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosY(ctx, 5)
         _, chord_board_horizontal = r.ImGui_Checkbox(ctx, "Horizontal", chord_board_horizontal)
-
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, 7)
+        r.ImGui_SetCursorPosX(ctx, window_width - 40)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_pinned and 0x00FF00FF or 0x808080FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), is_pinned and 0x00FF33FF or 0x999999FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), is_pinned and 0x00CC00FF or 0x666666FF)
+        if r.ImGui_Button(ctx, "##pin", 14, 14) then
+            is_pinned = not is_pinned
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosY(ctx, 7)
         r.ImGui_SetCursorPosX(ctx, window_width - 23)
