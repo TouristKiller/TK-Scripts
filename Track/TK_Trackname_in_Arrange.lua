@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.6
+-- @version 0.8.8
 -- @changelog 
 --[[
 + Added hide tekst /label for selected track(s)
