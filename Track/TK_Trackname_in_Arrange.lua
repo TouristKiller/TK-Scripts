@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.7
+-- @version 0.8.6
 -- @changelog 
 --[[
 + Added hide tekst /label for selected track(s)
@@ -1902,7 +1902,7 @@ function loop()
                         end
 
                         -- Track name rendering
-                        if should_show_name and not IsMouseOverTrack(track_y, track_height, 0) then
+                        if should_show_name then
                             local modified_display_name = display_name
                             
                             if settings.show_track_numbers then
