@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.6
+-- @version 0.8.7
 -- @changelog 
 --[[
 + Added hide tekst /label for selected track(s)
@@ -155,6 +155,7 @@ local default_settings              = {
     master_gradient_start_alpha     = 1.0,
     master_gradient_end_alpha       = 0.0,
     text_hover_hide                 = false,
+    text_hover_enabled              = false,
 }
 
 local settings = {}
@@ -772,6 +773,11 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Hide text for selected tracks", settings.text_hover_hide) then
             settings.text_hover_hide = not settings.text_hover_hide
         end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        if r.ImGui_RadioButton(ctx, "Hide text on hover", settings.text_hover_enabled) then
+            settings.text_hover_enabled = not settings.text_hover_enabled
+        end
+
         r.ImGui_Dummy(ctx, 0, 2)
         r.ImGui_Separator(ctx)
         r.ImGui_Dummy(ctx, 0, 2)
@@ -1499,6 +1505,20 @@ function ShouldHideTrackElements(track)
     return settings.text_hover_hide and r.IsTrackSelected(track)
 end
 
+
+function IsMouseOverTrack(track_y, track_height, WY)
+    local x, y = r.GetMousePosition()
+    local window = r.JS_Window_FromPoint(x, y)
+    
+    if window and r.JS_Window_GetTitle(window) == "trackview" then
+        x, y = r.JS_Window_ScreenToClient(arrange, x, y)
+        y = y / screen_scale
+        return y >= track_y and y <= track_y + track_height
+    end
+    return false
+end
+
+
 --[[profiler.attachToWorld()
 profiler.run()
 profiler.start()]]--
@@ -1769,9 +1789,10 @@ function loop()
                         should_show_track = true
                     end
 
-                    if settings.text_hover_hide and r.IsTrackSelected(track) then
-                        should_show_track = false
-                        should_show_name = false
+                    if (settings.text_hover_enabled and IsMouseOverTrack(track_y, track_height, WY)) or
+                    (settings.text_hover_hide and r.IsTrackSelected(track)) then
+                     should_show_track = false
+                     should_show_name = false
                     end
 
                     if should_show_track then
@@ -1791,7 +1812,7 @@ function loop()
                         local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5) + vertical_offset
 
                         -- Parent label processing
-                        if is_child and settings.show_parent_label then
+                        if is_child and settings.show_parent_label and not IsMouseOverTrack(track_y, track_height, 0) then
                             local parents = GetAllParentTracks(track)
                             if #parents > 0 then
                                 local combined_name = ""
@@ -1850,7 +1871,7 @@ function loop()
                                     end
                                 end
 
-                                if settings.show_label then
+                                if settings.show_label and not IsMouseOverTrack(track_y, track_height, WY) then
                                     local parent_color = r.GetTrackColor(parents[#parents])
                                     local r_val, g_val, b_val = r.ColorFromNative(parent_color)
                                     local parent_label_color = r.ImGui_ColorConvertDouble4ToU32(
@@ -1881,7 +1902,7 @@ function loop()
                         end
 
                         -- Track name rendering
-                        if should_show_name then
+                        if should_show_name and not IsMouseOverTrack(track_y, track_height, 0) then
                             local modified_display_name = display_name
                             
                             if settings.show_track_numbers then
@@ -1902,7 +1923,7 @@ function loop()
                                 text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
                             end
                         
-                            if settings.show_label then
+                            if settings.show_label and not IsMouseOverTrack(track_y, track_height, WY) then
                                 local label_color = GetLabelColor(track)
                                 r.ImGui_DrawList_AddRectFilled(
                                     draw_list,
