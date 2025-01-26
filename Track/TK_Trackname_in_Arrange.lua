@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.8
+-- @version 0.8.9
 -- @changelog 
 --[[
-+ Added hide tekst /label for selected track(s)
++ Bugfix: Added hide tekst /label for selected track(s) and hover
 ]]--
 
 local r                  = reaper
@@ -1812,7 +1812,7 @@ function loop()
                         local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5) + vertical_offset
 
                         -- Parent label processing
-                        if is_child and settings.show_parent_label and not IsMouseOverTrack(track_y, track_height, 0) then
+                        if is_child and settings.show_parent_label then
                             local parents = GetAllParentTracks(track)
                             if #parents > 0 then
                                 local combined_name = ""
@@ -1871,7 +1871,7 @@ function loop()
                                     end
                                 end
 
-                                if settings.show_label and not IsMouseOverTrack(track_y, track_height, WY) then
+                                if settings.show_label then
                                     local parent_color = r.GetTrackColor(parents[#parents])
                                     local r_val, g_val, b_val = r.ColorFromNative(parent_color)
                                     local parent_label_color = r.ImGui_ColorConvertDouble4ToU32(
@@ -1923,7 +1923,7 @@ function loop()
                                 text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
                             end
                         
-                            if settings.show_label and not IsMouseOverTrack(track_y, track_height, WY) then
+                            if settings.show_label then
                                 local label_color = GetLabelColor(track)
                                 r.ImGui_DrawList_AddRectFilled(
                                     draw_list,
