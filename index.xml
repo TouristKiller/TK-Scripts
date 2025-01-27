@@ -93,8 +93,18 @@
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/json.lua</source>
         </version>
     </reapack>
-</category>
 
+    <reapack name="TK_Set selected MIDI item shape and view.lua" type="script" desc="TK_Set selected MIDI item shape and view">
+        <version name="0.2.1" author="TouristKiller" time="2025-01-27T12:00:00Z">
+            <changelog><![CDATA[           
++ Removed toggle script. 
++ Start stop monitor from settings window
++ If set to menu butten it wil show if monitor is active or not
+]]></changelog>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Set%20selected%20MIDI%20item%20shape%20and%20view.lua</source>
+        </version>
+    </reapack>
+</category>
 
 <metadata>
     <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}}
