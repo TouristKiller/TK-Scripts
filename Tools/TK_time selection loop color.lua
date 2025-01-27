@@ -1,5 +1,5 @@
 -- @description TK_time selection loop color
--- @version 1.2
+-- @version 1.3
 -- @author TouristKiller
 -- @about
 --   # if script is enabled, you can switch the time selection and arrange within that time selection color when the loop function is turned on or off.

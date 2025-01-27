@@ -1,3 +1,4 @@
+-- Setup 1.0
 local script_name = "TK_time selection loop color.lua"
 local resource_path = reaper.GetResourcePath()
 local script_path = resource_path .. "/Scripts/TK-Scripts/Tools/" .. script_name
