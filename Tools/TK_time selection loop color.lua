@@ -1,13 +1,14 @@
 -- @description TK_time selection loop color
--- @version 1.3
+-- @version 1.6
 -- @author TouristKiller
 -- @about
 --   # if script is enabled, you can switch the time selection and arrange within that time selection color when the loop function is turned on or off.
 -- @changelog
 --    Toggle button state added
 --    ExtState color configuration added
+--    Color configuration dialog added (separate script)
 
-local function GetColors()
+function GetColors()
   local loop_color = tonumber(reaper.GetExtState("TK_time selection loop color", "loop_color")) or 0x0000FF
   local default_color = tonumber(reaper.GetExtState("TK_time selection loop color", "default_color")) or 0xFFFFFF
   return loop_color, default_color
