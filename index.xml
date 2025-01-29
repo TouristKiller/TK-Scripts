@@ -70,10 +70,13 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.2.1" author="TouristKiller" time="2025-01-25T23:10:00Z">
+    <version name="0.2.5" author="TouristKiller" time="2025-01-29T01:45:00Z">
       <changelog><![CDATA[           
 --[[
-+ Added a "pin" button to set window always on top
++ Implemented ImGui Wrapper
++ Added XL view mode
++ Added Move GUI Window only via logo
++ GUI improvements
    ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
     <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>
