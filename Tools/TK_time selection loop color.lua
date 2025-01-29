@@ -1,12 +1,13 @@
 -- @description TK_time selection loop color
--- @version 1.6
+-- @version 1.7
 -- @author TouristKiller
 -- @about
 --   # if script is enabled, you can switch the time selection and arrange within that time selection color when the loop function is turned on or off.
 -- @changelog
---    Toggle button state added
---    ExtState color configuration added
---    Color configuration dialog added (separate script)
+--  Atexit function reverts color to theme default
+
+local original_bgsel = reaper.GetThemeColor("col_tl_bgsel", 0)
+local original_bgsel2 = reaper.GetThemeColor("col_tl_bgsel2", 0)
 
 function GetColors()
   local loop_color = tonumber(reaper.GetExtState("TK_time selection loop color", "loop_color")) or 0x0000FF
@@ -30,6 +31,13 @@ function SetupColors()
           SaveColors(tonumber(loop_col, 16), tonumber(default_col, 16))
       end
   end
+end
+
+function RestoreThemeColors()
+  reaper.SetThemeColor("col_tl_bgsel", original_bgsel, 0)
+  reaper.SetThemeColor("col_tl_bgsel2", original_bgsel2, 0)
+  reaper.UpdateArrange()
+  reaper.UpdateTimeline()
 end
 
 function SetButtonState(set)
@@ -78,5 +86,8 @@ if reaper.GetExtState("TK_time selection loop color", "CALL_SETUP") == "1" then
 else
   SetButtonState(1)
   Main()
-  reaper.atexit(SetButtonState)
+  reaper.atexit(function()
+      SetButtonState()
+      RestoreThemeColors()
+  end)
 end
