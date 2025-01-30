@@ -1,8 +1,13 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.2.9
+-- @version 0.3.0
 -- @changelog
 --[[ 
+0.3.0
++ Lefty view
++ Mirror view
++ Optical string thickness
+
 0.2.9
 +   Leftclick on existing fret position will remove it (Chord mode)
 +   Rightclick on existing fret position will remove only 1 instance 
@@ -61,7 +66,7 @@ local base_notes                = {64,59,55,50,45,40}
 local string_names              = {"E (High)","B","G","D","A","E (Low)"}
 local custom_notes              = {64,59,55,50,45,40}
 local custom_tuning_name        = ""
-
+local string_thicknesses        = {3.0, 2.5, 2.0, 1.5, 1.0, 0.5}
 -- Voicing configuration
 local voicings                  = {}
 local selected_voicing_file     = r.GetExtState("TK_GTR2MIDI", "selected_voicing_file")
@@ -78,6 +83,8 @@ local show_sequence             = false
 local show_chord                = true
 local status_message            = ""
 local status_color              = 0xFFFFFFFF
+local is_left_handed            = false
+local is_mirror_mode            = false
 
 -- Transpose configuration
 local transpose_modes           = {
@@ -574,6 +581,19 @@ local function IsMouseOverCircle(mouse_x, mouse_y, circle_x, circle_y, radius)
     return distance <= hit_radius
 end
 
+function GetFretForString(chord, string_num, is_left_handed)
+    local frets = {}
+    for fret in chord:gmatch("%S+") do
+        table.insert(frets, fret)
+    end
+    
+    if is_left_handed then
+        return frets[7-string_num]  -- Omgekeerde volgorde voor linkshandig
+    else
+        return frets[string_num]    -- Normale volgorde voor rechtshandig
+    end
+end
+
 
 function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
     local mouseX,mouseY=ImGui.GetMousePos(ctx)
@@ -581,6 +601,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
     local num_strings=6
     local num_frets=12
     local string_spacing, fret_spacing
+    
     if isChord and chord_board_horizontal then
         string_spacing = height/(num_strings-1)
         fret_spacing = width/num_frets
@@ -588,6 +609,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
         string_spacing = isChord and width/(num_strings-1) or height/(num_strings-1)
         fret_spacing = isChord and height/num_frets or width/num_frets
     end
+    
     mouseX=mouseX-(winX+startX)
     mouseY=mouseY-(winY+startY)
 
@@ -597,10 +619,22 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
     if isChord then
         if chord_board_horizontal then
             for string_num=0,num_strings-1 do
-                local actual_string = 5 - string_num
-                local circle_y=string_num*string_spacing
+                local actual_string
+                if is_left_handed then
+                    actual_string = string_num
+                else
+                    actual_string = 5 - string_num
+                end
                 
-                local circle_x=0
+                local circle_y=string_num*string_spacing
+                local circle_x
+                
+                if is_mirror_mode then
+                    circle_x = width
+                else
+                    circle_x = 0
+                end
+                
                 local distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
                 if distance<=hit_radius then
                     local frets={"X","X","X","X","X","X"}
@@ -624,16 +658,30 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                 end
         
                 for fret=1,num_frets do
-                    circle_x=(fret*fret_spacing)-(fret_spacing/2)
-                    distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
+                    local fret_position
+                    if is_mirror_mode then
+                        fret_position = width - (fret*fret_spacing) + (fret_spacing/2)
+                    else
+                        fret_position = (fret*fret_spacing) - (fret_spacing/2)
+                    end
+                    
+                    distance=math.sqrt((mouseX-fret_position)^2+(mouseY-circle_y)^2)
                     if distance<=hit_radius then
-                        HandleChordSelection(actual_string, fret, rightClick)
+                        if is_mirror_mode then
+                            local mirror_fret = math.floor((width - mouseX) / fret_spacing) + 1
+                            if mirror_fret >= 1 and mirror_fret <= num_frets then
+                                HandleChordSelection(actual_string, mirror_fret, rightClick)
+                            end
+                        else
+                            HandleChordSelection(actual_string, fret, rightClick)
+                        end
                         return true
                     end
                 end
             end
         else
             for string_num=0,num_strings-1 do
+                local actual_string = is_left_handed and (5 - string_num) or string_num
                 local circle_x=string_num*string_spacing
                 
                 local circle_y=0
@@ -647,12 +695,12 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                     end
                     
                     if rightClick then
-                        frets[string_num+1] = "X"
+                        frets[actual_string+1] = "X"
                     else
-                        if frets[string_num+1] == "0" then
-                            frets[string_num+1] = "X"
+                        if frets[actual_string+1] == "0" then
+                            frets[actual_string+1] = "X"
                         else
-                            frets[string_num+1] = "0"
+                            frets[actual_string+1] = "0"
                         end
                     end
                     input_chord=table.concat(frets," ")
@@ -663,7 +711,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                     circle_y=(fret*fret_spacing)-(fret_spacing/2)
                     distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
                     if distance<=hit_radius then
-                        HandleChordSelection(string_num, fret, rightClick)
+                        HandleChordSelection(actual_string, fret, rightClick)
                         return true
                     end
                 end
@@ -671,8 +719,10 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
         end
     else
         for string_num=0,num_strings-1 do
+            local actual_string = is_left_handed and string_num or (num_strings - 1 - string_num)
             local circle_y=string_num*string_spacing
-            local circle_x=0
+            local circle_x = is_mirror_mode and width or 0
+            
             local distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
             if distance<=hit_radius then
                 if rightClick then
@@ -690,39 +740,52 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                         input_sequence=input_sequence.."-0"
                     end
                 end
-                selected_string=string_num+1
+                selected_string=actual_string+1
                 return true
             end
+            
             for fret=1,num_frets do
-                circle_x=(fret*fret_spacing)-(fret_spacing/2)
-                distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
+                local fret_position
+                if is_mirror_mode then
+                    fret_position = width - (fret*fret_spacing) + (fret_spacing/2)
+                else
+                    fret_position = (fret*fret_spacing) - (fret_spacing/2)
+                end
+                
+                distance=math.sqrt((mouseX-fret_position)^2+(mouseY-circle_y)^2)
                 if distance<=hit_radius then
                     if rightClick then
                         local notes = {}
                         local removed_one = false
                         for note in input_sequence:gmatch("([^-]+)") do
                             if tonumber(note) == fret and not removed_one then
-                                removed_one = true  -- Sla deze ene over
+                                removed_one = true
                             else
                                 table.insert(notes, note)
                             end
                         end
                         input_sequence = table.concat(notes, "-")
                     else
-                        if input_sequence == "" then
-                            input_sequence = tostring(fret)
-                        else
-                            input_sequence = input_sequence.."-"..tostring(fret)
+                        local mirror_fret = is_mirror_mode and math.floor((width - mouseX) / fret_spacing) + 1 or fret
+                        if mirror_fret >= 1 and mirror_fret <= num_frets then
+                            if input_sequence == "" then
+                                input_sequence = tostring(mirror_fret)
+                            else
+                                input_sequence = input_sequence.."-"..tostring(mirror_fret)
+                            end
                         end
                     end
-                    selected_string=string_num+1
+                    selected_string=actual_string+1
                     return true
                 end
             end
         end
+        
     end
     return false
 end
+
+
 
 function DrawFretMarkers(draw_list, startX, startY, spacing, orientation)
     local fret_markers = {3,5,7,9,12}
@@ -775,26 +838,43 @@ function DrawFretboard(ctx,startX,startY,width,height)
     local fret_spacing = width/num_frets
     
     DrawFretMarkers(draw_list, startX, startY, fret_spacing, "horizontal")
-    
+ 
+    -- Teken snaren met dikte
     for i=0,num_strings-1 do
-        local y = startY+(i*string_spacing)
-        ImGui.DrawList_AddLine(draw_list,startX,y,startX+width,y,0xFFFFFFFF)
+        local string_thickness = string_thicknesses[i+1]
+        local y
+        if is_left_handed then
+            y = startY + (i * string_spacing)
+        else
+            y = startY + ((num_strings - 1 - i) * string_spacing)
+        end
+        ImGui.DrawList_AddLine(draw_list,startX,y,startX+width,y,0xFFFFFFFF,string_thickness)
         local note_name = GetNoteName(base_notes[i+1])
         ImGui.DrawList_AddText(draw_list,startX-25,y-6,0xFFFFFFFF,note_name)
     end
+
     
-    -- Draw frets and numbers
+    -- Teken frets en nummers
     for i=0,num_frets do
-        local x = startX+(i*fret_spacing)
-        local fret_number_y_offset = is_xl_mode and 12 or 10
+        local x
+        if is_mirror_mode then
+            x = startX + width - (i*fret_spacing)
+        else
+            x = startX + (i*fret_spacing)
+        end
         
         if i == 0 then
-            ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,5.0)
-            ImGui.DrawList_AddText(draw_list,x-3,startY+height+fret_number_y_offset,0xFFFFFFFF,"0")
+            ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,4.0)
+            ImGui.DrawList_AddText(draw_list,x-3,startY+height+10,0xFFFFFFFF,"0")
         else
             ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,1.0)
-            local text_x = x - (fret_spacing/2) - 3
-            ImGui.DrawList_AddText(draw_list,text_x,startY+height+fret_number_y_offset,0xFFFFFFFF,tostring(i))
+            local text_x
+            if is_mirror_mode then
+                text_x = x + (fret_spacing/2) - 3
+            else
+                text_x = x - (fret_spacing/2) - 3
+            end
+            ImGui.DrawList_AddText(draw_list,text_x,startY+height+10,0xFFFFFFFF,tostring(i))
         end
     end
     
@@ -828,19 +908,32 @@ function DrawFretboard(ctx,startX,startY,width,height)
         HandleFretboardClick(ctx,startX-win_x,startY-win_y,width,height,false,true)
     end
 
-    -- Draw selected notes
+    -- Teken geselecteerde noten
     local notes = input_sequence:gmatch("([^-]+)")
     local string_idx = selected_string-1
     for fret in notes do
         local fret_num = tonumber(fret)
         if fret_num then
             local note_x
-            if fret_num == 0 then
-                note_x = startX
+            if is_mirror_mode then
+                if fret_num == 0 then
+                    note_x = startX + width
+                else
+                    note_x = startX + width - (fret_num*fret_spacing) + (fret_spacing/2)
+                end
             else
-                note_x = startX+(fret_num*fret_spacing)-(fret_spacing/2)
+                if fret_num == 0 then
+                    note_x = startX
+                else
+                    note_x = startX + (fret_num*fret_spacing) - (fret_spacing/2)
+                end
             end
-            local note_y = startY+(string_idx*string_spacing)
+            local note_y
+            if is_left_handed then
+                note_y = startY + (string_idx*string_spacing)
+            else
+                note_y = startY + ((num_strings - 1 - string_idx)*string_spacing)
+            end
             ImGui.DrawList_AddCircleFilled(draw_list, note_x, note_y, circle_radius + 1, 0xFF0000FF)
         end
     end
@@ -888,10 +981,11 @@ function DrawChordboard(ctx,startX,startY,width,height)
     local win_x, win_y = ImGui.GetWindowPos(ctx)
     mouse_x = mouse_x - win_x
     mouse_y = mouse_y - win_y
+    
     if chord_board_horizontal then
         startX = win_x + startX + 20
     else
-        startX = win_x + startX + 15 
+        startX = win_x + startX + 15
     end
     startY = win_y+startY
     local num_strings = 6
@@ -913,23 +1007,42 @@ function DrawChordboard(ctx,startX,startY,width,height)
 
     -- Draw strings
     for i=0,num_strings-1 do
+        local string_thickness = string_thicknesses[i+1]
+        
         if chord_board_horizontal then
-            local y = startY + (i * string_spacing)
-            ImGui.DrawList_AddLine(draw_list, startX, y, startX+width, y, 0xFFFFFFFF)
-            local note_name = GetNoteName(base_notes[i+1])
+            local y
+            if is_left_handed then
+                y = startY + (i * string_spacing)
+            else
+                y = startY + ((num_strings - 1 - i) * string_spacing)
+            end
+            ImGui.DrawList_AddLine(draw_list, startX, y, startX+width, y, 0xFFFFFFFF, string_thickness)
+            local note_name = GetNoteName(base_notes[num_strings-i])
             ImGui.DrawList_AddText(draw_list, startX-25, y-6, 0xFFFFFFFF, note_name)
-        else
-            local x = startX + (i * string_spacing)
+        else  
+            local x
+            if is_left_handed then
+                x = startX + ((num_strings - 1 - i) * string_spacing)
+            else
+                x = startX + (i * string_spacing)
+            end
+            
             local text_y_offset = is_xl_mode and -30 or -20
-            ImGui.DrawList_AddLine(draw_list, x, startY, x, startY+height, 0xFFFFFFFF)
+            ImGui.DrawList_AddLine(draw_list, x, startY, x, startY+height, 0xFFFFFFFF, string_thickness)
             local note_name = GetNoteName(base_notes[num_strings-i])
             ImGui.DrawList_AddText(draw_list, x-5, startY + text_y_offset, 0xFFFFFFFF, note_name)
         end
     end
+
     -- Draw frets and numbers
     for i=0,num_frets do
         if chord_board_horizontal then
-            local x = startX+(i*fret_spacing)
+            local x
+            if is_mirror_mode then
+                x = startX + width - (i*fret_spacing)
+            else
+                x = startX+(i*fret_spacing)
+            end
             local fret_number_y_offset = is_xl_mode and 12 or 10
             
             if i == 0 then
@@ -937,7 +1050,12 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 ImGui.DrawList_AddText(draw_list,x-3,startY+height+fret_number_y_offset,0xFFFFFFFF,"0")
             else
                 ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,1.0)
-                local text_x = x - (fret_spacing/2) - 3
+                local text_x
+                if is_mirror_mode then
+                    text_x = x + (fret_spacing/2) - 3
+                else
+                    text_x = x - (fret_spacing/2) - 3
+                end
                 ImGui.DrawList_AddText(draw_list,text_x,startY+height+fret_number_y_offset,0xFFFFFFFF,tostring(i))
             end
         else
@@ -957,10 +1075,24 @@ function DrawChordboard(ctx,startX,startY,width,height)
     for string_num=0,num_strings-1 do
         for fret=0,num_frets do
             if chord_board_horizontal then
-                local y = startY+(string_num*string_spacing)
-                local x = startX+(fret*fret_spacing)
-                if fret > 0 then
-                    x = x-(fret_spacing/2)
+                local y
+                if is_left_handed then
+                    y = startY + (string_num * string_spacing)
+                else
+                    y = startY + ((num_strings - 1 - string_num) * string_spacing)
+                end
+                
+                local x
+                if is_mirror_mode then
+                    x = startX + width - (fret*fret_spacing)
+                    if fret > 0 then
+                        x = x + (fret_spacing/2)
+                    end
+                else
+                    x = startX + (fret*fret_spacing)
+                    if fret > 0 then
+                        x = x - (fret_spacing/2)
+                    end
                 end
                 
                 local adjusted_mouse_x = mouse_x + win_x
@@ -971,7 +1103,12 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 
                 ImGui.DrawList_AddCircle(draw_list, x, y, circle_radius, 0x80808080)
             else
-                local x = startX+(string_num*string_spacing)
+                local x
+                if is_left_handed then
+                    x = startX + ((num_strings - 1 - string_num) * string_spacing)
+                else
+                    x = startX + (string_num * string_spacing)
+                end
                 local y = startY+(fret*fret_spacing)
                 if fret > 0 then
                     y = y-(fret_spacing/2)
@@ -997,17 +1134,18 @@ function DrawChordboard(ctx,startX,startY,width,height)
     local chord_shape = input_chord
     local chord_name = DetermineChordName(chord_shape)
     local fingers = chord_fingers[chord_shape]
-
-    local chord_shape = input_chord
-    local chord_name = DetermineChordName(chord_shape)
-    local fingers = chord_fingers[chord_shape]
     local finger_idx = 1
+
+    -- Draw barre chords and finger positions
     for string_num = 1, num_strings do
+        local display_string_num = is_left_handed and (num_strings - string_num + 1) or string_num
+
         if string_num == 1 and IsBarre(chord_shape) then
             local barre_fret = nil
             local start_string = nil
             local end_string = nil
             local fret_positions = {}
+            
             for fret in chord_shape:gmatch("%S+") do
                 table.insert(fret_positions, fret)
             end
@@ -1024,15 +1162,27 @@ function DrawChordboard(ctx,startX,startY,width,height)
                     end
                 end
             end
-        
+            
             if barre_fret and start_string and end_string then
                 local barre_color = finger_colors[1]
-                local circle_size = is_xl_mode and 9 or 6  -- Gebruik dezelfde maat als de noot cirkels
+                local circle_size = is_xl_mode and 9 or 6
                 
                 if chord_board_horizontal then
-                    local start_y = startY + ((num_strings-start_string) * string_spacing)
-                    local end_y = startY + ((num_strings-end_string) * string_spacing)
-                    local x = startX + (barre_fret * fret_spacing) - (fret_spacing/2)
+                    local start_y, end_y
+                    if is_left_handed then
+                        start_y = startY + ((num_strings - end_string) * string_spacing)
+                        end_y = startY + ((num_strings - start_string) * string_spacing)
+                    else
+                        start_y = startY + ((num_strings-start_string) * string_spacing)
+                        end_y = startY + ((num_strings-end_string) * string_spacing)
+                    end
+                    
+                    local x
+                    if is_mirror_mode then
+                        x = startX + width - (barre_fret * fret_spacing) + (fret_spacing/2)
+                    else
+                        x = startX + (barre_fret * fret_spacing) - (fret_spacing/2)
+                    end
                     
                     ImGui.DrawList_AddRectFilled(
                         draw_list,
@@ -1051,8 +1201,14 @@ function DrawChordboard(ctx,startX,startY,width,height)
                         1.0
                     )
                 else
-                    local start_x = startX + (start_string-1)*string_spacing
-                    local end_x = startX + (end_string-1)*string_spacing
+                    local start_x, end_x
+                    if is_left_handed then
+                        start_x = startX + (num_strings - end_string) * string_spacing
+                        end_x = startX + (num_strings - start_string) * string_spacing
+                    else
+                        start_x = startX + (start_string-1) * string_spacing
+                        end_x = startX + (end_string-1) * string_spacing
+                    end
                     local y = startY + (barre_fret*fret_spacing) - (fret_spacing/2)
                     
                     ImGui.DrawList_AddRectFilled(
@@ -1074,18 +1230,30 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 end
             end    
         end
-        
-        local fret = string.match(input_chord, string.rep("%S+%s", string_num-1)..("(%S+)"))
+
+        local fret = GetFretForString(input_chord, display_string_num, is_left_handed)
         if fret then
             local x, y
             if chord_board_horizontal then
-                y = startY + ((6-string_num) * string_spacing)
+                if is_left_handed then
+                    y = startY + ((string_num-1) * string_spacing)
+                else
+                    y = startY + ((6-string_num) * string_spacing)
+                end
                 x = startX
+                if is_mirror_mode then
+                    x = startX + width  -- Verplaatst de 0 en X markers naar de rechterkant
+                end
             else
-                x = startX + (string_num-1) * string_spacing
+                if is_left_handed then
+                    x = startX + (num_strings - string_num) * string_spacing
+                else
+                    x = startX + (string_num-1) * string_spacing
+                end
                 y = startY
             end
-    
+            
+
             if fret == "X" then
                 local size = is_xl_mode and 6 or 4
                 ImGui.DrawList_AddLine(draw_list, x-size, y-size, x+size, y+size, 0xFFFFFFFF)
@@ -1101,61 +1269,14 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 if fret_num then
                     if chord_board_horizontal then
                         x = startX + (fret_num * fret_spacing) - (fret_spacing/2)
-                    else
-                        y = startY + (fret_num * fret_spacing) - (fret_spacing/2)
-                    end
-                    
-                    local circle_size = is_xl_mode and 9 or 6
-                    if fingers then
-                        local finger = fingers[finger_idx]
-                        local color = finger_colors[finger] or 0xFFFFFFFF
-                        ImGui.DrawList_AddCircleFilled(draw_list, x, y, circle_size, color)
-                        if finger then
-                            local text_offset = is_xl_mode and 4 or 3
-                            ImGui.DrawList_AddText(draw_list, x-text_offset, y-text_offset*2, 0x000000FF, tostring(finger))
+                        if is_mirror_mode then
+                            x = startX + width - (x - startX)  -- Spiegelt de x-positie rond het midden
                         end
                     else
-                        ImGui.DrawList_AddCircleFilled(draw_list, x, y, circle_size, 0xFF0000FF)
-                    end
-                    ImGui.DrawList_AddCircle(draw_list, x, y, circle_size, 0xFFFFFFFF)
-                    finger_idx = finger_idx + 1
-                end
-            end    
-        
-        end
-    end
-
-    local finger_idx = 1
-    for string_num = 1, num_strings do
-        local fret = string.match(input_chord, string.rep("%S+%s", string_num-1)..("(%S+)"))
-        if fret then
-            local x, y
-            if chord_board_horizontal then
-                y = startY + ((6-string_num) * string_spacing)
-                x = startX
-            else
-                x = startX + (string_num-1) * string_spacing
-                y = startY
-            end
-    
-            if fret == "X" then
-                local size = is_xl_mode and 6 or 4
-                ImGui.DrawList_AddLine(draw_list, x-size, y-size, x+size, y+size, 0xFFFFFFFF)
-                ImGui.DrawList_AddLine(draw_list, x-size, y+size, x+size, y-size, 0xFFFFFFFF)
-                finger_idx = finger_idx + 1
-            elseif fret == "0" then
-                local circle_size = is_xl_mode and 9 or 6
-                ImGui.DrawList_AddCircleFilled(draw_list, x, y, circle_size, 0xFFFFFFFF)
-                ImGui.DrawList_AddCircle(draw_list, x, y, circle_size, 0x000000FF)
-                finger_idx = finger_idx + 1
-            else
-                local fret_num = tonumber(fret)
-                if fret_num then
-                    if chord_board_horizontal then
-                        x = startX + (fret_num * fret_spacing) - (fret_spacing/2)
-                    else
                         y = startY + (fret_num * fret_spacing) - (fret_spacing/2)
                     end
+                
+                
                     
                     local circle_size = is_xl_mode and 9 or 6
                     if fingers then
@@ -1177,11 +1298,11 @@ function DrawChordboard(ctx,startX,startY,width,height)
     end
 
     if chord_board_horizontal then
-        local bottom_y = startY + height + 60 
+        local bottom_y = startY + height + 60
         DrawFingerLegend(ctx, startX, bottom_y)
         
         if chord_name and chord_name ~= "(?)" or status_message ~= "" then
-            local info_x = startX + 185 
+            local info_x = startX + 185
             local info_y = bottom_y    
             local box_padding = 10
             local box_width = 120
@@ -1207,6 +1328,7 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 ImGui.DrawList_AddText(draw_list, info_x, info_y, status_color, status_message)
                 status_message = ""
             else
+                ImGui.DrawList_AddText(draw_list, info_x, info_y, 0xFFFFFFFF, chord_type)
                 ImGui.DrawList_AddText(draw_list, info_x, info_y, 0xFFFFFFFF, chord_type)
                 ImGui.DrawList_AddText(draw_list, info_x, info_y + 20, 0xFFFFFFFF, chord_name)
             end
@@ -1248,6 +1370,8 @@ function DrawChordboard(ctx,startX,startY,width,height)
         end
     end
 end
+
+
 
 ------------------------------------------------------------------------
 function MainLoop()
@@ -1305,52 +1429,7 @@ function MainLoop()
         ImGui.SameLine(ctx)
         ImGui.Dummy(ctx, 5, 0)
         
-        ImGui.SameLine(ctx)
-        ImGui.SetCursorPosY(ctx, 5)
-        local seq_changed, new_show_sequence = ImGui.Checkbox(ctx, "Sequence", show_sequence)
-        if seq_changed then
-            show_sequence = new_show_sequence
-            r.SetExtState("TK_GTR2MIDI", "show_sequence", tostring(show_sequence), true)
-            if new_show_sequence then
-                show_chord = false
-                r.SetExtState("TK_GTR2MIDI", "show_chord", "false", true)
-            end
-        end
-        
-        ImGui.SameLine(ctx)
-        ImGui.SetCursorPosY(ctx, 5)
-        local chord_changed, new_show_chord = ImGui.Checkbox(ctx, "Chord", show_chord)
-        if chord_changed then
-            show_chord = new_show_chord
-            r.SetExtState("TK_GTR2MIDI", "show_chord", tostring(show_chord), true)
-            if new_show_chord then
-                show_sequence = false
-                r.SetExtState("TK_GTR2MIDI", "show_sequence", "false", true)
-            end
-        end
-        
-        ImGui.SameLine(ctx)
-        ImGui.SetCursorPosY(ctx, 5)
-        if show_chord then
-            local changed, new_horizontal = ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
-            if changed then
-                chord_board_horizontal = new_horizontal
-                r.SetExtState("TK_GTR2MIDI", "chord_board_horizontal", tostring(new_horizontal), true)
-            end
-        else
-            ImGui.PushStyleVar(ctx, ImGui.StyleVar_Alpha, 0.5)
-            ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
-            ImGui.PopStyleVar(ctx)
-        end
-
-        ImGui.SameLine(ctx)
-        ImGui.SetCursorPosY(ctx, 5)
-        local xl_changed, new_xl_mode = ImGui.Checkbox(ctx, "XL", is_xl_mode)
-        if xl_changed then
-            is_xl_mode = new_xl_mode
-            r.SetExtState("TK_GTR2MIDI", "is_xl_mode", tostring(is_xl_mode), true)
-            font = is_xl_mode and font_large or font_small
-        end
+       
       
         -- NoMove button (geel)
         ImGui.SameLine(ctx)
@@ -1387,6 +1466,62 @@ function MainLoop()
             open = false
         end
         ImGui.PopStyleColor(ctx, 3)
+
+        ImGui.Separator(ctx)
+        local seq_changed, new_show_sequence = ImGui.Checkbox(ctx, "Sequence", show_sequence)
+        if seq_changed then
+            show_sequence = new_show_sequence
+            r.SetExtState("TK_GTR2MIDI", "show_sequence", tostring(show_sequence), true)
+            if new_show_sequence then
+                show_chord = false
+                r.SetExtState("TK_GTR2MIDI", "show_chord", "false", true)
+            end
+        end
+        
+        ImGui.SameLine(ctx)
+        local chord_changed, new_show_chord = ImGui.Checkbox(ctx, "Chord", show_chord)
+        if chord_changed then
+            show_chord = new_show_chord
+            r.SetExtState("TK_GTR2MIDI", "show_chord", tostring(show_chord), true)
+            if new_show_chord then
+                show_sequence = false
+                r.SetExtState("TK_GTR2MIDI", "show_sequence", "false", true)
+            end
+        end
+        
+        ImGui.SameLine(ctx)
+        if show_chord then
+            local changed, new_horizontal = ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
+            if changed then
+                chord_board_horizontal = new_horizontal
+                r.SetExtState("TK_GTR2MIDI", "chord_board_horizontal", tostring(new_horizontal), true)
+            end
+        else
+            ImGui.PushStyleVar(ctx, ImGui.StyleVar_Alpha, 0.5)
+            ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
+            ImGui.PopStyleVar(ctx)
+        end
+        ImGui.SameLine(ctx)
+        local left_changed, new_left_handed = ImGui.Checkbox(ctx, "Left Hand", is_left_handed)
+        if left_changed then
+            is_left_handed = new_left_handed
+            r.SetExtState("TK_GTR2MIDI", "is_left_handed", tostring(new_left_handed), true)
+        end
+        ImGui.SameLine(ctx)
+        local mirror_changed, new_mirror_mode = ImGui.Checkbox(ctx, "Mirror", is_mirror_mode)
+        if mirror_changed then
+            is_mirror_mode = new_mirror_mode
+            r.SetExtState("TK_GTR2MIDI", "is_mirror_mode", tostring(new_mirror_mode), true)
+        end
+
+        ImGui.SameLine(ctx)
+        local xl_changed, new_xl_mode = ImGui.Checkbox(ctx, "XL", is_xl_mode)
+        if xl_changed then
+            is_xl_mode = new_xl_mode
+            r.SetExtState("TK_GTR2MIDI", "is_xl_mode", tostring(is_xl_mode), true)
+            font = is_xl_mode and font_large or font_small
+        end
+
         ImGui.Separator(ctx)
         if show_sequence or show_chord then
             ImGui.Text(ctx, "Duration:")
