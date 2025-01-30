@@ -1,8 +1,12 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.2.6
+-- @version 0.2.7
 -- @changelog
---[[        
+--[[ 
+0.2.7
++ Added Lock GUI window button
+
+0.2.6       
 + Persitant settings (Chord, Sequence, Horizontal, XL mode)
 + Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
 + Added highlight for Fret Circels
@@ -36,6 +40,7 @@ ImGui.SetConfigVar(ctx, ImGui.ConfigVar_WindowsMoveFromTitleBarOnly, 1)
 
 -- Core variables
 local is_pinned                 = false
+local is_nomove                 = false
 local is_xl_mode                = false
 local separator                 = package.config:sub(1,1)
 local script_path               = debug.getinfo(1,'S').source:match("@(.*)" .. separator)
@@ -1220,10 +1225,15 @@ function MainLoop()
     ImGui.WindowFlags_NoTitleBar |
     ImGui.WindowFlags_NoResize |
     ImGui.WindowFlags_NoScrollbar |
-    ImGui.WindowFlags_AlwaysAutoResize --| ImGui.WindowFlags_NoMove  
+    ImGui.WindowFlags_AlwaysAutoResize
+    
     if is_pinned then
         window_flags = window_flags | ImGui.WindowFlags_TopMost
     end
+    if is_nomove then
+        window_flags = window_flags | ImGui.WindowFlags_NoMove
+    end
+
     ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowRounding, 12.0)
     ImGui.SetNextWindowSizeConstraints(ctx, min_width, 0, min_width, 2000)
     local visible, open = ImGui.Begin(ctx, 'Guitar MIDI Input', true, window_flags)
@@ -1303,12 +1313,23 @@ function MainLoop()
             r.SetExtState("TK_GTR2MIDI", "is_xl_mode", tostring(is_xl_mode), true)
             font = is_xl_mode and font_large or font_small
         end
+      
+        -- NoMove button (geel)
+        ImGui.SameLine(ctx)
+        ImGui.SetCursorPosY(ctx, 7)
+        ImGui.SetCursorPosX(ctx, window_width - 57)
+        ImGui.PushStyleColor(ctx, ImGui.Col_Button, is_nomove and 0xFFFF00FF or 0x808080FF)
+        ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered, is_nomove and 0xFFFF33FF or 0x999999FF)
+        ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive, is_nomove and 0xFFCC00FF or 0x666666FF)
+        if ImGui.Button(ctx, "##nomove", 14, 14) then
+            is_nomove = not is_nomove
+        end
+        ImGui.PopStyleColor(ctx, 3)
 
+        -- Pin button
         ImGui.SameLine(ctx)
         ImGui.SetCursorPosY(ctx, 7)
         ImGui.SetCursorPosX(ctx, window_width - 40)
-        
-        -- Pin button
         ImGui.PushStyleColor(ctx, ImGui.Col_Button, is_pinned and 0x00FF00FF or 0x808080FF)
         ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered, is_pinned and 0x00FF33FF or 0x999999FF)
         ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive, is_pinned and 0x00CC00FF or 0x666666FF)

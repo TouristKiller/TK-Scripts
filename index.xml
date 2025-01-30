@@ -70,9 +70,13 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.2.6" author="TouristKiller" time="2025-01-30T03:15:00Z">
+    <version name="0.2.7" author="TouristKiller" time="2025-01-30T04:00:00Z">
       <changelog><![CDATA[           
 --[[
+0.2.7
++ Added Lock GUI window button
+
+0.2.6
 + Persitant settings (Chord, Sequence, Horizontal, XL mode)
 + Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
 + Added highlight for Fret Circels
