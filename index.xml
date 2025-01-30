@@ -70,19 +70,24 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.2.8" author="TouristKiller" time="2025-01-30T04:10:00Z">
+    <version name="0.2.9" author="TouristKiller" time="2025-01-30T15:37:00Z">
       <changelog><![CDATA[           
 --[[
-0.2.8
-+ Added Lock GUI window button
+0.2.9
++   Leftclick on existing fret position will remove it (Chord mode)
++   Rightclick on existing fret position will remove only 1 instance 
+    of the position and not all (Sequence mode)
 
-0.2.6
-+ Persitant settings (Chord, Sequence, Horizontal, XL mode)
-+ Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
-+ Added highlight for Fret Circels
-+ New whay of showing barre chords
-+ Bigger click area to select fret positions
-+ Small UI Improvements
+0.2.8
++   Added Lock GUI window button
+
+0.2.6       
++   Persitant settings (Chord, Sequence, Horizontal, XL mode)
++   Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
++   Added highlight for Fret Circels
++   New whay of showing barre chords
++   Bigger click area to select fret positions
++   Small UI Improvements
    ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
     <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>

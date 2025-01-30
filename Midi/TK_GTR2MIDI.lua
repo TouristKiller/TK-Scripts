@@ -1,18 +1,23 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.2.8
+-- @version 0.2.9
 -- @changelog
 --[[ 
+0.2.9
++   Leftclick on existing fret position will remove it (Chord mode)
++   Rightclick on existing fret position will remove only 1 instance 
+    of the position and not all (Sequence mode)
+
 0.2.8
-+ Added Lock GUI window button
++   Added Lock GUI window button
 
 0.2.6       
-+ Persitant settings (Chord, Sequence, Horizontal, XL mode)
-+ Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
-+ Added highlight for Fret Circels
-+ New whay of showing barre chords
-+ Bigger click area to select fret positions
-+ Small UI Improvements
++   Persitant settings (Chord, Sequence, Horizontal, XL mode)
++   Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
++   Added highlight for Fret Circels
++   New whay of showing barre chords
++   Bigger click area to select fret positions
++   Small UI Improvements
 ]]--   
 ------------------------------------------------------------------------
 local r                         = reaper
@@ -543,9 +548,20 @@ function HandleChordSelection(string_num, fret, rightClick)
         frets[i]=existing_fret
         i=i+1
     end
-    frets[string_num+1]=rightClick and "X" or tostring(fret)
+    
+    if rightClick then
+        frets[string_num+1] = "X"
+    else
+        if frets[string_num+1] == tostring(fret) then
+            frets[string_num+1] = "X"
+        else
+            frets[string_num+1] = tostring(fret)
+        end
+    end
+    
     input_chord=table.concat(frets," ")
 end
+
 
 function FilterChordInput(input)
     local filtered = input:gsub("[^X0-9%s]", "")
@@ -593,10 +609,20 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                         frets[i]=existing_fret
                         i=i+1
                     end
-                    frets[actual_string+1]=rightClick and "X" or "0"
+                    
+                    if rightClick then
+                        frets[actual_string+1] = "X"
+                    else
+                        if frets[actual_string+1] == "0" then
+                            frets[actual_string+1] = "X"
+                        else
+                            frets[actual_string+1] = "0"
+                        end
+                    end
                     input_chord=table.concat(frets," ")
                     return true
                 end
+        
                 for fret=1,num_frets do
                     circle_x=(fret*fret_spacing)-(fret_spacing/2)
                     distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
@@ -619,11 +645,20 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                         frets[i]=existing_fret
                         i=i+1
                     end
-                    frets[string_num+1]=rightClick and "X" or "0"
+                    
+                    if rightClick then
+                        frets[string_num+1] = "X"
+                    else
+                        if frets[string_num+1] == "0" then
+                            frets[string_num+1] = "X"
+                        else
+                            frets[string_num+1] = "0"
+                        end
+                    end
                     input_chord=table.concat(frets," ")
                     return true
                 end
-                
+        
                 for fret=1,num_frets do
                     circle_y=(fret*fret_spacing)-(fret_spacing/2)
                     distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
@@ -663,18 +698,21 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                 distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
                 if distance<=hit_radius then
                     if rightClick then
-                        local notes={}
+                        local notes = {}
+                        local removed_one = false
                         for note in input_sequence:gmatch("([^-]+)") do
-                            if tonumber(note) ~= fret then
-                                table.insert(notes,note)
+                            if tonumber(note) == fret and not removed_one then
+                                removed_one = true  -- Sla deze ene over
+                            else
+                                table.insert(notes, note)
                             end
                         end
-                        input_sequence=table.concat(notes,"-")
+                        input_sequence = table.concat(notes, "-")
                     else
-                        if input_sequence=="" then
-                            input_sequence=tostring(fret)
+                        if input_sequence == "" then
+                            input_sequence = tostring(fret)
                         else
-                            input_sequence=input_sequence.."-"..tostring(fret)
+                            input_sequence = input_sequence.."-"..tostring(fret)
                         end
                     end
                     selected_string=string_num+1
