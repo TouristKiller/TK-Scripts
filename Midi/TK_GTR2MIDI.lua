@@ -1,12 +1,14 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.2.5
+-- @version 0.2.6
 -- @changelog
 --[[        
-+ Implemented ImGui Wrapper
-+ Added XL view mode
-+ Added Move GUI Window only via logo
-+ GUI improvements
++ Persitant settings (Chord, Sequence, Horizontal, XL mode)
++ Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
++ Added highlight for Fret Circels
++ New whay of showing barre chords
++ Bigger click area to select fret positions
++ Small UI Improvements
 ]]--   
 ------------------------------------------------------------------------
 local r                         = reaper
@@ -22,6 +24,7 @@ else
     return r.MB('This script requires ReaImGui extension 0.9+','',0)
 end
 
+
 -- ImGui initialization
 local ctx                       = ImGui.CreateContext('TK_GTR2MIDI')
 local font_small                = ImGui.CreateFont('Arial', 12)
@@ -29,6 +32,7 @@ local font_large                = ImGui.CreateFont('Arial', 16)
 local font                      = font_small 
 ImGui.Attach(ctx, font_small)
 ImGui.Attach(ctx, font_large)
+ImGui.SetConfigVar(ctx, ImGui.ConfigVar_WindowsMoveFromTitleBarOnly, 1)
 
 -- Core variables
 local is_pinned                 = false
@@ -92,6 +96,13 @@ local finger_colors             = {
     [3]                         = 0x0099DDFF,
     [4]                         = 0xF5811FFF
 }
+
+-- Laad opgeslagen instellingen
+show_sequence                   = r.GetExtState("TK_GTR2MIDI", "show_sequence") == "true" 
+show_chord                      = r.GetExtState("TK_GTR2MIDI", "show_chord") == "true"
+chord_board_horizontal          = r.GetExtState("TK_GTR2MIDI", "chord_board_horizontal") == "true"
+local is_xl_mode                = r.GetExtState("TK_GTR2MIDI", "is_xl_mode") == "true"
+local font                      = is_xl_mode and font_large or font_small
 ------------------------------------------------------------------------
 local function GetCurrentTimeSig()
     local timepos = r.GetCursorPosition()
@@ -536,6 +547,13 @@ function FilterChordInput(input)
     return filtered
 end
 
+local function IsMouseOverCircle(mouse_x, mouse_y, circle_x, circle_y, radius)
+    local hit_radius = radius * 2  
+    local distance = math.sqrt((mouse_x - circle_x)^2 + (mouse_y - circle_y)^2)
+    return distance <= hit_radius
+end
+
+
 function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
     local mouseX,mouseY=ImGui.GetMousePos(ctx)
     local winX,winY=ImGui.GetWindowPos(ctx)
@@ -551,6 +569,10 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
     end
     mouseX=mouseX-(winX+startX)
     mouseY=mouseY-(winY+startY)
+
+    local circle_size = is_xl_mode and 9 or 6
+    local hit_radius = circle_size * 2
+
     if isChord then
         if chord_board_horizontal then
             for string_num=0,num_strings-1 do
@@ -559,7 +581,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                 
                 local circle_x=0
                 local distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
-                if distance<=5 then
+                if distance<=hit_radius then
                     local frets={"X","X","X","X","X","X"}
                     local i=1
                     for existing_fret in input_chord:gmatch("%S+") do
@@ -573,7 +595,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                 for fret=1,num_frets do
                     circle_x=(fret*fret_spacing)-(fret_spacing/2)
                     distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
-                    if distance<=5 then
+                    if distance<=hit_radius then
                         HandleChordSelection(actual_string, fret, rightClick)
                         return true
                     end
@@ -585,7 +607,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                 
                 local circle_y=0
                 local distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
-                if distance<=5 then
+                if distance<=hit_radius then
                     local frets={"X","X","X","X","X","X"}
                     local i=1
                     for existing_fret in input_chord:gmatch("%S+") do
@@ -600,7 +622,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                 for fret=1,num_frets do
                     circle_y=(fret*fret_spacing)-(fret_spacing/2)
                     distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
-                    if distance<=5 then
+                    if distance<=hit_radius then
                         HandleChordSelection(string_num, fret, rightClick)
                         return true
                     end
@@ -612,7 +634,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
             local circle_y=string_num*string_spacing
             local circle_x=0
             local distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
-            if distance<=5 then
+            if distance<=hit_radius then
                 if rightClick then
                     local notes={}
                     for note in input_sequence:gmatch("([^-]+)") do
@@ -634,7 +656,7 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
             for fret=1,num_frets do
                 circle_x=(fret*fret_spacing)-(fret_spacing/2)
                 distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
-                if distance<=5 then
+                if distance<=hit_radius then
                     if rightClick then
                         local notes={}
                         for note in input_sequence:gmatch("([^-]+)") do
@@ -661,39 +683,49 @@ end
 
 function DrawFretMarkers(draw_list, startX, startY, spacing, orientation)
     local fret_markers = {3,5,7,9,12}
+    local marker_radius = is_xl_mode and 5 or 4
+    local marker_color = 0xFFFF0033  
+    
     local marker_pos
     if orientation == "vertical" then
-        marker_pos = startX + (spacing * 3) - (spacing/2)
+        marker_pos = startX + (spacing * 2.4)  
     else
-        marker_pos = startY + (spacing * 3) - (spacing/2)
+        marker_pos = startY + (spacing * 2.4) 
     end
+    
     for _, fret in ipairs(fret_markers) do
         local pos
         if orientation == "vertical" then
             pos = startY + (fret*spacing) - (spacing/2)
             if fret == 12 then
-                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos-4, 3, 0xFFFFFFFF)
-                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos+4, 3, 0xFFFFFFFF)
+                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos-6, marker_radius, marker_color)
+                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos+6, marker_radius, marker_color)
             else
-                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos, 3, 0xFFFFFFFF)
+                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos, marker_radius, marker_color)
             end
         else
             pos = startX + (fret*spacing) - (spacing/2)
             if fret == 12 then
-                ImGui.DrawList_AddCircleFilled(draw_list, pos-4, marker_pos, 3, 0xFFFFFFFF)
-                ImGui.DrawList_AddCircleFilled(draw_list, pos+4, marker_pos, 3, 0xFFFFFFFF)
+                ImGui.DrawList_AddCircleFilled(draw_list, pos-6, marker_pos, marker_radius, marker_color)
+                ImGui.DrawList_AddCircleFilled(draw_list, pos+6, marker_pos, marker_radius, marker_color)
             else
-                ImGui.DrawList_AddCircleFilled(draw_list, pos, marker_pos, 3, 0xFFFFFFFF)
+                ImGui.DrawList_AddCircleFilled(draw_list, pos, marker_pos, marker_radius, marker_color)
             end
         end
     end
 end
 
+
 function DrawFretboard(ctx,startX,startY,width,height)
     local draw_list = ImGui.GetWindowDrawList(ctx)
-    local winX,winY = ImGui.GetWindowPos(ctx)
-    startX = winX+startX
-    startY = winY+startY
+    local mouse_x, mouse_y = ImGui.GetMousePos(ctx)
+    local win_x, win_y = ImGui.GetWindowPos(ctx)
+    
+    mouse_x = mouse_x - win_x
+    mouse_y = mouse_y - win_y
+    
+    startX = win_x + startX
+    startY = win_y + startY
     local num_strings = 6
     local num_frets = 12
     local string_spacing = height/(num_strings-1)
@@ -711,31 +743,46 @@ function DrawFretboard(ctx,startX,startY,width,height)
     -- Draw frets and numbers
     for i=0,num_frets do
         local x = startX+(i*fret_spacing)
+        local fret_number_y_offset = is_xl_mode and 12 or 10
+        
         if i == 0 then
             ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,5.0)
-            ImGui.DrawList_AddText(draw_list,x-3,startY+height+5,0xFFFFFFFF,"0")
+            ImGui.DrawList_AddText(draw_list,x-3,startY+height+fret_number_y_offset,0xFFFFFFFF,"0")
         else
             ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,1.0)
             local text_x = x - (fret_spacing/2) - 3
-            ImGui.DrawList_AddText(draw_list,text_x,startY+height+5,0xFFFFFFFF,tostring(i))
+            ImGui.DrawList_AddText(draw_list,text_x,startY+height+fret_number_y_offset,0xFFFFFFFF,tostring(i))
         end
     end
-    local circle_radius = is_xl_mode and 8 or 5
+    
+    local circle_radius = is_xl_mode and 9 or 6
+
     for string_num=0,num_strings-1 do
         local circle_y = startY+(string_num*string_spacing)
         local circle_x = startX
+        
+        local adjusted_mouse_x = mouse_x + win_x
+        local adjusted_mouse_y = mouse_y + win_y
+
+        if IsMouseOverCircle(adjusted_mouse_x, adjusted_mouse_y, circle_x, circle_y, circle_radius) then
+            ImGui.DrawList_AddCircleFilled(draw_list, circle_x, circle_y, circle_radius, 0x3FFFFFFF)
+        end
         ImGui.DrawList_AddCircle(draw_list, circle_x, circle_y, circle_radius, 0x80808080)
         
         for fret=1,num_frets do
             circle_x = startX+(fret*fret_spacing)-(fret_spacing/2)
+            if IsMouseOverCircle(adjusted_mouse_x, adjusted_mouse_y, circle_x, circle_y, circle_radius) then
+                ImGui.DrawList_AddCircleFilled(draw_list, circle_x, circle_y, circle_radius, 0x3FFFFFFF)
+            end
             ImGui.DrawList_AddCircle(draw_list, circle_x, circle_y, circle_radius, 0x80808080)
         end
     end
+    
 
     if ImGui.IsMouseClicked(ctx,0) then
-        HandleFretboardClick(ctx,startX-winX,startY-winY,width,height,false,false)
+        HandleFretboardClick(ctx,startX-win_x,startY-win_y,width,height,false,false)
     elseif ImGui.IsMouseClicked(ctx,1) then
-        HandleFretboardClick(ctx,startX-winX,startY-winY,width,height,false,true)
+        HandleFretboardClick(ctx,startX-win_x,startY-win_y,width,height,false,true)
     end
 
     -- Draw selected notes
@@ -794,13 +841,16 @@ end
 
 function DrawChordboard(ctx,startX,startY,width,height)
     local draw_list = ImGui.GetWindowDrawList(ctx)
-    local winX,winY = ImGui.GetWindowPos(ctx)
+    local mouse_x, mouse_y = ImGui.GetMousePos(ctx)
+    local win_x, win_y = ImGui.GetWindowPos(ctx)
+    mouse_x = mouse_x - win_x
+    mouse_y = mouse_y - win_y
     if chord_board_horizontal then
-        startX = winX + startX + 20
+        startX = win_x + startX + 20
     else
-        startX = winX + startX + 15 
+        startX = win_x + startX + 15 
     end
-    startY = winY+startY
+    startY = win_y+startY
     local num_strings = 6
     local num_frets = 12
 
@@ -827,21 +877,25 @@ function DrawChordboard(ctx,startX,startY,width,height)
             ImGui.DrawList_AddText(draw_list, startX-25, y-6, 0xFFFFFFFF, note_name)
         else
             local x = startX + (i * string_spacing)
+            local text_y_offset = is_xl_mode and -30 or -20
             ImGui.DrawList_AddLine(draw_list, x, startY, x, startY+height, 0xFFFFFFFF)
             local note_name = GetNoteName(base_notes[num_strings-i])
-            ImGui.DrawList_AddText(draw_list, x-5, startY-20, 0xFFFFFFFF, note_name)
+            ImGui.DrawList_AddText(draw_list, x-5, startY + text_y_offset, 0xFFFFFFFF, note_name)
         end
     end
     -- Draw frets and numbers
     for i=0,num_frets do
         if chord_board_horizontal then
             local x = startX+(i*fret_spacing)
+            local fret_number_y_offset = is_xl_mode and 12 or 10
+            
             if i == 0 then
                 ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,4.0)
-                ImGui.DrawList_AddText(draw_list,x-3,startY+height+5,0xFFFFFFFF,"0")
+                ImGui.DrawList_AddText(draw_list,x-3,startY+height+fret_number_y_offset,0xFFFFFFFF,"0")
             else
                 ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,1.0)
-                ImGui.DrawList_AddText(draw_list,x-15,startY+height+5,0xFFFFFFFF,tostring(i))
+                local text_x = x - (fret_spacing/2) - 3
+                ImGui.DrawList_AddText(draw_list,text_x,startY+height+fret_number_y_offset,0xFFFFFFFF,tostring(i))
             end
         else
             local y = startY+(i*fret_spacing)
@@ -856,7 +910,7 @@ function DrawChordboard(ctx,startX,startY,width,height)
     end
 
     -- Draw empty circles
-    local circle_radius = is_xl_mode and 8 or 5
+    local circle_radius = is_xl_mode and 9 or 6
     for string_num=0,num_strings-1 do
         for fret=0,num_frets do
             if chord_board_horizontal then
@@ -865,6 +919,13 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 if fret > 0 then
                     x = x-(fret_spacing/2)
                 end
+                
+                local adjusted_mouse_x = mouse_x + win_x
+                local adjusted_mouse_y = mouse_y + win_y
+                if IsMouseOverCircle(adjusted_mouse_x, adjusted_mouse_y, x, y, circle_radius) then
+                    ImGui.DrawList_AddCircleFilled(draw_list, x, y, circle_radius, 0x3FFFFFFF)
+                end
+                
                 ImGui.DrawList_AddCircle(draw_list, x, y, circle_radius, 0x80808080)
             else
                 local x = startX+(string_num*string_spacing)
@@ -872,19 +933,155 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 if fret > 0 then
                     y = y-(fret_spacing/2)
                 end
+
+                local adjusted_mouse_x = mouse_x + win_x
+                local adjusted_mouse_y = mouse_y + win_y
+                if IsMouseOverCircle(adjusted_mouse_x, adjusted_mouse_y, x, y, circle_radius) then
+                    ImGui.DrawList_AddCircleFilled(draw_list, x, y, circle_radius, 0x3FFFFFFF)
+                end
+                
                 ImGui.DrawList_AddCircle(draw_list, x, y, circle_radius, 0x80808080)
             end
         end
     end
 
     if ImGui.IsMouseClicked(ctx,0) then
-        HandleFretboardClick(ctx,startX-winX,startY-winY,width,height,true,false)
+        HandleFretboardClick(ctx,startX-win_x,startY-win_y,width,height,true,false)
     elseif ImGui.IsMouseClicked(ctx,1) then
-        HandleFretboardClick(ctx,startX-winX,startY-winY,width,height,true,true)
+        HandleFretboardClick(ctx,startX-win_x,startY-win_y,width,height,true,true)
     end
+    
     local chord_shape = input_chord
     local chord_name = DetermineChordName(chord_shape)
     local fingers = chord_fingers[chord_shape]
+
+    local chord_shape = input_chord
+    local chord_name = DetermineChordName(chord_shape)
+    local fingers = chord_fingers[chord_shape]
+    local finger_idx = 1
+    for string_num = 1, num_strings do
+        if string_num == 1 and IsBarre(chord_shape) then
+            local barre_fret = nil
+            local start_string = nil
+            local end_string = nil
+            local fret_positions = {}
+            for fret in chord_shape:gmatch("%S+") do
+                table.insert(fret_positions, fret)
+            end
+            
+            for i, finger in ipairs(fingers) do
+                if finger == 1 then
+                    local fret = tonumber(fret_positions[i])
+                    if fret then
+                        barre_fret = fret
+                        if not start_string then
+                            start_string = i
+                        end
+                        end_string = i
+                    end
+                end
+            end
+        
+            if barre_fret and start_string and end_string then
+                local barre_color = finger_colors[1]
+                local circle_size = is_xl_mode and 9 or 6  -- Gebruik dezelfde maat als de noot cirkels
+                
+                if chord_board_horizontal then
+                    local start_y = startY + ((num_strings-start_string) * string_spacing)
+                    local end_y = startY + ((num_strings-end_string) * string_spacing)
+                    local x = startX + (barre_fret * fret_spacing) - (fret_spacing/2)
+                    
+                    ImGui.DrawList_AddRectFilled(
+                        draw_list,
+                        x - circle_size * 0.8, start_y,
+                        x + circle_size * 0.8, end_y,
+                        barre_color
+                    )
+                    
+                    ImGui.DrawList_AddRect(
+                        draw_list,
+                        x - circle_size * 0.8, start_y,
+                        x + circle_size * 0.8, end_y,
+                        0xFFFFFFFF,
+                        0.0,
+                        0,
+                        1.0
+                    )
+                else
+                    local start_x = startX + (start_string-1)*string_spacing
+                    local end_x = startX + (end_string-1)*string_spacing
+                    local y = startY + (barre_fret*fret_spacing) - (fret_spacing/2)
+                    
+                    ImGui.DrawList_AddRectFilled(
+                        draw_list,
+                        start_x, y - circle_size * 0.8,
+                        end_x, y + circle_size * 0.8,
+                        barre_color
+                    )
+                    
+                    ImGui.DrawList_AddRect(
+                        draw_list,
+                        start_x, y - circle_size * 0.8,
+                        end_x, y + circle_size * 0.8,
+                        0xFFFFFFFF,
+                        0.0,
+                        0,
+                        1.0
+                    )
+                end
+            end    
+        end
+        
+        local fret = string.match(input_chord, string.rep("%S+%s", string_num-1)..("(%S+)"))
+        if fret then
+            local x, y
+            if chord_board_horizontal then
+                y = startY + ((6-string_num) * string_spacing)
+                x = startX
+            else
+                x = startX + (string_num-1) * string_spacing
+                y = startY
+            end
+    
+            if fret == "X" then
+                local size = is_xl_mode and 6 or 4
+                ImGui.DrawList_AddLine(draw_list, x-size, y-size, x+size, y+size, 0xFFFFFFFF)
+                ImGui.DrawList_AddLine(draw_list, x-size, y+size, x+size, y-size, 0xFFFFFFFF)
+                finger_idx = finger_idx + 1
+            elseif fret == "0" then
+                local circle_size = is_xl_mode and 9 or 6
+                ImGui.DrawList_AddCircleFilled(draw_list, x, y, circle_size, 0xFFFFFFFF)
+                ImGui.DrawList_AddCircle(draw_list, x, y, circle_size, 0x000000FF)
+                finger_idx = finger_idx + 1
+            else
+                local fret_num = tonumber(fret)
+                if fret_num then
+                    if chord_board_horizontal then
+                        x = startX + (fret_num * fret_spacing) - (fret_spacing/2)
+                    else
+                        y = startY + (fret_num * fret_spacing) - (fret_spacing/2)
+                    end
+                    
+                    local circle_size = is_xl_mode and 9 or 6
+                    if fingers then
+                        local finger = fingers[finger_idx]
+                        local color = finger_colors[finger] or 0xFFFFFFFF
+                        ImGui.DrawList_AddCircleFilled(draw_list, x, y, circle_size, color)
+                        if finger then
+                            local text_offset = is_xl_mode and 4 or 3
+                            ImGui.DrawList_AddText(draw_list, x-text_offset, y-text_offset*2, 0x000000FF, tostring(finger))
+                        end
+                    else
+                        ImGui.DrawList_AddCircleFilled(draw_list, x, y, circle_size, 0xFF0000FF)
+                    end
+                    ImGui.DrawList_AddCircle(draw_list, x, y, circle_size, 0xFFFFFFFF)
+                    finger_idx = finger_idx + 1
+                end
+            end    
+        
+        end
+    end
+
     local finger_idx = 1
     for string_num = 1, num_strings do
         local fret = string.match(input_chord, string.rep("%S+%s", string_num-1)..("(%S+)"))
@@ -932,61 +1129,7 @@ function DrawChordboard(ctx,startX,startY,width,height)
                     ImGui.DrawList_AddCircle(draw_list, x, y, circle_size, 0xFFFFFFFF)
                     finger_idx = finger_idx + 1
                 end
-            end
-            
-        end
-    end
-    if IsBarre(chord_shape) then
-        local barre_fret = nil
-        local start_string = nil
-        local end_string = nil
-        local fret_positions = {}
-        for fret in chord_shape:gmatch("%S+") do
-            table.insert(fret_positions, fret)
-        end
-        for i, finger in ipairs(fingers) do
-            if finger == 1 then
-                local fret = tonumber(fret_positions[i])
-                if fret then
-                    barre_fret = fret
-                    if not start_string then
-                        start_string = i
-                    end
-                    end_string = i
-                end
-            end
-        end
-        if barre_fret and start_string and end_string then
-            if chord_board_horizontal then
-                local start_y = startY + ((num_strings-start_string) * string_spacing)
-                local end_y = startY + ((num_strings-end_string) * string_spacing)
-                local x = startX + (barre_fret * fret_spacing) - (fret_spacing/2)
-                local control_x = x - 10  
-                
-                ImGui.DrawList_AddBezierCubic(
-                    draw_list,
-                    x, start_y,           
-                    control_x, start_y,   
-                    control_x, end_y,     
-                    x, end_y,           
-                    0xFFFFFFFF,         
-                    2.0              
-                )
-            else
-                local start_x = startX + (start_string-1)*string_spacing
-                local end_x = startX + (end_string-1)*string_spacing
-                local y = startY + (barre_fret*fret_spacing) - (fret_spacing/2)
-                local control_y = y - 10
-                ImGui.DrawList_AddBezierCubic(
-                    draw_list,
-                    start_x, y,
-                    start_x, control_y,
-                    end_x, control_y,
-                    end_x, y,
-                    0xFFFFFFFF,
-                    2.0
-                )
-            end
+            end    
         end
     end
 
@@ -1065,7 +1208,6 @@ end
 
 ------------------------------------------------------------------------
 function MainLoop()
-    ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowRounding, 12.0)
     local min_width = is_xl_mode and 500 or 400  
     if show_sequence then
         min_width = math.max(min_width, is_xl_mode and 500 or 400)
@@ -1078,11 +1220,11 @@ function MainLoop()
     ImGui.WindowFlags_NoTitleBar |
     ImGui.WindowFlags_NoResize |
     ImGui.WindowFlags_NoScrollbar |
-    ImGui.WindowFlags_AlwaysAutoResize |
-    ImGui.WindowFlags_NoMove  
+    ImGui.WindowFlags_AlwaysAutoResize --| ImGui.WindowFlags_NoMove  
     if is_pinned then
         window_flags = window_flags | ImGui.WindowFlags_TopMost
     end
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowRounding, 12.0)
     ImGui.SetNextWindowSizeConstraints(ctx, min_width, 0, min_width, 2000)
     local visible, open = ImGui.Begin(ctx, 'Guitar MIDI Input', true, window_flags)
 
@@ -1091,6 +1233,7 @@ function MainLoop()
     end
 
     if visible then
+        
         ImGui.PushFont(ctx, font)
         ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg, 0x000000FF)
         ImGui.PushStyleColor(ctx, ImGui.Col_Button, 0x1A1A1AFF)
@@ -1099,6 +1242,7 @@ function MainLoop()
         ImGui.PushStyleColor(ctx, ImGui.Col_FrameBg, 0x1A1A1AFF)
         ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgHovered, 0x333333FF)
         ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgActive, 0x404040FF)
+        
         ImGui.PushStyleVar(ctx, ImGui.StyleVar_FrameRounding, 6.0)
         
         -- Header controls
@@ -1106,27 +1250,10 @@ function MainLoop()
  
         ImGui.PushStyleColor(ctx, ImGui.Col_Text, 0xFF0000FF)
         ImGui.SetCursorPosY(ctx, 8)
-
-        ImGui.BeginGroup(ctx)
-        local drag_width = is_xl_mode and 85 or 65  
-        local drag_height = is_xl_mode and 20 or 18  
-        ImGui.InvisibleButton(ctx, "drag_area", drag_width, drag_height)
-        if ImGui.IsItemHovered(ctx) then
-            ImGui.SetMouseCursor(ctx, ImGui.MouseCursor_ResizeAll)
-        end
-        if ImGui.IsItemActive(ctx) then
-            local drag_x, drag_y = ImGui.GetMouseDragDelta(ctx, 0, 0.0, 0.0)
-            local win_x, win_y = ImGui.GetWindowPos(ctx)
-            ImGui.SetWindowPos(ctx, win_x + drag_x, win_y + drag_y)
-            ImGui.ResetMouseDragDelta(ctx)
-        end
-
-        ImGui.SetCursorPosY(ctx, 8)
         ImGui.Text(ctx, "TK")
         ImGui.PopStyleColor(ctx)
         ImGui.SameLine(ctx)
         ImGui.Text(ctx, "GTR2MIDI")
-        ImGui.EndGroup(ctx)
         ImGui.SameLine(ctx)
         ImGui.Dummy(ctx, 5, 0)
         
@@ -1135,8 +1262,10 @@ function MainLoop()
         local seq_changed, new_show_sequence = ImGui.Checkbox(ctx, "Sequence", show_sequence)
         if seq_changed then
             show_sequence = new_show_sequence
+            r.SetExtState("TK_GTR2MIDI", "show_sequence", tostring(show_sequence), true)
             if new_show_sequence then
                 show_chord = false
+                r.SetExtState("TK_GTR2MIDI", "show_chord", "false", true)
             end
         end
         
@@ -1145,18 +1274,24 @@ function MainLoop()
         local chord_changed, new_show_chord = ImGui.Checkbox(ctx, "Chord", show_chord)
         if chord_changed then
             show_chord = new_show_chord
+            r.SetExtState("TK_GTR2MIDI", "show_chord", tostring(show_chord), true)
             if new_show_chord then
                 show_sequence = false
+                r.SetExtState("TK_GTR2MIDI", "show_sequence", "false", true)
             end
         end
         
         ImGui.SameLine(ctx)
         ImGui.SetCursorPosY(ctx, 5)
         if show_chord then
-            _, chord_board_horizontal = ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
+            local changed, new_horizontal = ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
+            if changed then
+                chord_board_horizontal = new_horizontal
+                r.SetExtState("TK_GTR2MIDI", "chord_board_horizontal", tostring(new_horizontal), true)
+            end
         else
             ImGui.PushStyleVar(ctx, ImGui.StyleVar_Alpha, 0.5)
-            ImGui.Checkbox(ctx, "Horizontal", false)
+            ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
             ImGui.PopStyleVar(ctx)
         end
 
@@ -1165,9 +1300,10 @@ function MainLoop()
         local xl_changed, new_xl_mode = ImGui.Checkbox(ctx, "XL", is_xl_mode)
         if xl_changed then
             is_xl_mode = new_xl_mode
+            r.SetExtState("TK_GTR2MIDI", "is_xl_mode", tostring(is_xl_mode), true)
             font = is_xl_mode and font_large or font_small
         end
-        
+
         ImGui.SameLine(ctx)
         ImGui.SetCursorPosY(ctx, 7)
         ImGui.SetCursorPosX(ctx, window_width - 40)
@@ -1428,12 +1564,13 @@ function MainLoop()
             end
             ImGui.PopStyleColor(ctx, 3)
             local board_size = is_xl_mode and 180 or 120
-            DrawChordboard(ctx, 10, ImGui.GetCursorPosY(ctx)+20, board_size, board_size)
+            local y_offset = (is_xl_mode and not chord_board_horizontal) and 30 or 20
+            DrawChordboard(ctx, 10, ImGui.GetCursorPosY(ctx) + y_offset, board_size, board_size)
             local dummy_height
             if chord_board_horizontal then
                 dummy_height = is_xl_mode and 385 or 325
             else
-                dummy_height = is_xl_mode and 485 or 325  -- Grotere hoogte voor verticale weergave in XL
+                dummy_height = is_xl_mode and 485 or 325  
             end
             ImGui.Dummy(ctx, 0, dummy_height)
         end

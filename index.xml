@@ -70,13 +70,15 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.2.5" author="TouristKiller" time="2025-01-29T01:45:00Z">
+    <version name="0.2.6" author="TouristKiller" time="2025-01-30T03:15:00Z">
       <changelog><![CDATA[           
 --[[
-+ Implemented ImGui Wrapper
-+ Added XL view mode
-+ Added Move GUI Window only via logo
-+ GUI improvements
++ Persitant settings (Chord, Sequence, Horizontal, XL mode)
++ Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
++ Added highlight for Fret Circels
++ New whay of showing barre chords
++ Bigger click area to select fret positions
++ Small UI Improvements
    ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
     <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>
