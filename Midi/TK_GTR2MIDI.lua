@@ -1,9 +1,9 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.2.7
+-- @version 0.2.8
 -- @changelog
 --[[ 
-0.2.7
+0.2.8
 + Added Lock GUI window button
 
 0.2.6       
@@ -1213,12 +1213,12 @@ end
 
 ------------------------------------------------------------------------
 function MainLoop()
-    local min_width = is_xl_mode and 500 or 400  
+    local min_width = is_xl_mode and 510 or 420  
     if show_sequence then
-        min_width = math.max(min_width, is_xl_mode and 500 or 400)
+        min_width = math.max(min_width, is_xl_mode and 510 or 420)
     end
     if show_chord then
-        min_width = math.max(min_width, is_xl_mode and 500 or 400)
+        min_width = math.max(min_width, is_xl_mode and 510 or 420)
     end
 
     local window_flags = 
