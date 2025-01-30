@@ -70,7 +70,7 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.3.0" author="TouristKiller" time="2025-01-31T00:15:00Z">
+    <version name="0.3.1" author="TouristKiller" time="2025-01-31T00:55:00Z">
       <changelog><![CDATA[           
 --[[
 0.3.0

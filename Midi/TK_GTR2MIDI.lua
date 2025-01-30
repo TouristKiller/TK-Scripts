@@ -1,6 +1,6 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.3.0
+-- @version 0.3.1
 -- @changelog
 --[[ 
 0.3.0
@@ -1523,6 +1523,18 @@ function MainLoop()
         end
 
         ImGui.Separator(ctx)
+        local Scaling_XL = 1.3
+        local base_button_width = 30
+        local base_combo_width = 58
+        local base_tuning_width = 160
+        local base_transpose_button = 18
+
+        -- Scale values based on XL mode
+        local button_width = is_xl_mode and (base_button_width * Scaling_XL) or base_button_width
+        local combo_width = is_xl_mode and (base_combo_width * Scaling_XL) or base_combo_width
+        local tuning_width = is_xl_mode and (base_tuning_width * Scaling_XL) or base_tuning_width
+        local transpose_button_size = is_xl_mode and (base_transpose_button * Scaling_XL) or base_transpose_button
+
         if show_sequence or show_chord then
             ImGui.Text(ctx, "Duration:")
             ImGui.SameLine(ctx)
@@ -1531,53 +1543,53 @@ function MainLoop()
             -- Duration buttons
             if selected_duration == "1" then
                 ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/1") then selected_duration = "1" end
+                if ImGui.Button(ctx, "1/1", button_width) then selected_duration = "1" end
                 ImGui.PopStyleColor(ctx)
             else
-                if ImGui.Button(ctx, "1/1") then selected_duration = "1" end
+                if ImGui.Button(ctx, "1/1", button_width) then selected_duration = "1" end
             end
             
             ImGui.SameLine(ctx)
             if selected_duration == "2" then
                 ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/2") then selected_duration = "2" end
+                if ImGui.Button(ctx, "1/2", button_width) then selected_duration = "2" end
                 ImGui.PopStyleColor(ctx)
             else
-                if ImGui.Button(ctx, "1/2") then selected_duration = "2" end
+                if ImGui.Button(ctx, "1/2", button_width) then selected_duration = "2" end
             end
             
             ImGui.SameLine(ctx)
             if selected_duration == "4" then
                 ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/4") then selected_duration = "4" end
+                if ImGui.Button(ctx, "1/4", button_width) then selected_duration = "4" end
                 ImGui.PopStyleColor(ctx)
             else
-                if ImGui.Button(ctx, "1/4") then selected_duration = "4" end
+                if ImGui.Button(ctx, "1/4", button_width) then selected_duration = "4" end
             end
             
             ImGui.SameLine(ctx)
             if selected_duration == "8" then
                 ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/8") then selected_duration = "8" end
+                if ImGui.Button(ctx, "1/8", button_width) then selected_duration = "8" end
                 ImGui.PopStyleColor(ctx)
             else
-                if ImGui.Button(ctx, "1/8") then selected_duration = "8" end
+                if ImGui.Button(ctx, "1/8", button_width) then selected_duration = "8" end
             end
             
             ImGui.SameLine(ctx)
             if selected_duration == "16" then
                 ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/16") then selected_duration = "16" end
+                if ImGui.Button(ctx, "1/16", button_width) then selected_duration = "16" end
                 ImGui.PopStyleColor(ctx)
             else
-                if ImGui.Button(ctx, "1/16") then selected_duration = "16" end
+                if ImGui.Button(ctx, "1/16", button_width) then selected_duration = "16" end
             end
 
             -- Transpose controls
             ImGui.SameLine(ctx)
             ImGui.Text(ctx, "Trans:")
             ImGui.SameLine(ctx)
-            ImGui.PushItemWidth(ctx, 60)
+            ImGui.PushItemWidth(ctx, combo_width)
             if ImGui.BeginCombo(ctx, "##transpose", selected_transpose_mode) then
                 for mode, _ in pairs(transpose_modes) do
                     if ImGui.Selectable(ctx, mode, selected_transpose_mode == mode) then
@@ -1588,7 +1600,7 @@ function MainLoop()
             end
             
             ImGui.SameLine(ctx)
-            if ImGui.Button(ctx, "-", 18, 18) then
+            if ImGui.Button(ctx, "-", transpose_button_size, transpose_button_size) then
                 quick_chord_input = ""
                 local steps = transpose_modes[selected_transpose_mode]
                 input_sequence = TransposeSequence(steps, -1)
@@ -1596,15 +1608,16 @@ function MainLoop()
             end
             
             ImGui.SameLine(ctx)
-            if ImGui.Button(ctx, "+", 18, 18) then
+            if ImGui.Button(ctx, "+", transpose_button_size, transpose_button_size) then
                 quick_chord_input = ""
                 local steps = transpose_modes[selected_transpose_mode]
                 input_sequence = TransposeSequence(steps, 1)
                 input_chord = TransposeChord(steps, 1)
             end
-            ImGui.Text(ctx, "Tuning: ")
+
+            ImGui.Text(ctx, "Tuning:  ")
             ImGui.SameLine(ctx)
-            ImGui.PushItemWidth(ctx, 150)
+            ImGui.PushItemWidth(ctx, tuning_width)
             if ImGui.BeginCombo(ctx, "##tuning", selected_tuning) then
                 for tuning_name, _ in pairs(tunings) do
                     if ImGui.Selectable(ctx, tuning_name, selected_tuning == tuning_name) then
@@ -1616,13 +1629,13 @@ function MainLoop()
             end
             
             ImGui.SameLine(ctx)
-            if ImGui.Button(ctx, "Custom Tunings") then
+            if ImGui.Button(ctx, "Custom Tunings", tuning_width) then
                 show_custom_tuning_window = true
             end
             
-            ImGui.Text(ctx, "Voicing:")
+            ImGui.Text(ctx, "Voicing: ")
             ImGui.SameLine(ctx)
-            ImGui.PushItemWidth(ctx, 150)
+            ImGui.PushItemWidth(ctx, tuning_width)
             if ImGui.BeginCombo(ctx, "##voicings", selected_voicing_file) then
                 local voicing_files = GetAvailableVoicingFiles()
                 for _, filename in ipairs(voicing_files) do
@@ -1630,13 +1643,13 @@ function MainLoop()
                         selected_voicing_file = filename
                         voicings = {}
                         chord_fingers = {}
-                        LoadVoicings() 
+                        LoadVoicings()
                         r.SetExtState("TK_GTR2MIDI", "selected_voicing_file", selected_voicing_file, true)
                     end
                 end
                 ImGui.EndCombo(ctx)
             end
-        
+
             ImGui.SameLine(ctx)
             _, insert_in_existing = ImGui.Checkbox(ctx, "Insert in selected MIDI item", insert_in_existing)
             ImGui.Spacing(ctx)
