@@ -46,7 +46,7 @@
 
  <category name="Tools">
     <reapack name="TK_time selection loop color.lua" type="script" desc="TK_time selection loop color">
-    <version name="1.7" author="TouristKiller" time="2025-01-29T02:20:00Z">
+    <version name="2.0" author="TouristKiller" time="2025-01-31T03:45:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_time%20selection%20loop%20color.lua</source>
      <source main="main" file="TK_time selection loop color_setup.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_time%20selection%20loop%20color_setup.lua</source>
     </version>
