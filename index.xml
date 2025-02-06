@@ -17,7 +17,7 @@
 
  <category name="TK SMART">
     <reapack name="TK_SMART.lua" type="script" desc="TK SMART">
-    <version name="0.1.5" author="TouristKiller" time="2024-10-25T16:00:00Z">
+    <version name="0.2.0" author="TouristKiller" time="2025-02-06T21:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK_SMART.lua</source>
     <source file="TK_Action_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK_Action_Browser.lua</source>
     <source file="TK_Learn_Browser(MR).lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20SMART/TK_Learn_Browser(MR).lua</source>

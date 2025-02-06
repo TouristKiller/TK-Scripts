@@ -1,109 +1,130 @@
---[[WWWWWWWWWWWWMMMMMMMMMMMMMMMWWWWMMMMMMMMMMMMWWMMWWWWMMMWNNXXXNWMWWWMMMWWWWWWWWMMMMMMMWWWWWWWWWWWW
-WWWWWWWWWWWWWWWWMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMWWWXOoc,'...',:lx0NMMWMMMMMMMMMMMMMMMWWWWWWWWWWWW
-WWWWWWWWWWWWWMMMMTK SMARTMMMMMMMMMMMMMMMMMMMMMMMMMMNkc.             .;dXMMMMMMMMMMMMMMMMMMMWWWWWWWWW
-WWWWWWWWWWWMMMMMWWMMMMMMMWWMMWMMMMMMMMMMMMMMMMMMWOl;                   'xNMMMMMMWMMMWWMMWMMWWMMWWWWW
-WWWWWWWWMMMMMMMWWWMMMMMMMMWWMMMMWMMMMMMMMMMMMMMNo.      ,cc,     .:c;.   :KWWWMMMMWWMWMMMWWWWWWMWMMM
-WWWWWWWWMMMMMMMWWWMMMMMMMMWWWMMWWMMWMMWWMMMMMMNo.     .oNWWNo.  ;KMMWO'   :XMWWWMMWWWWWWWWWWWMWWWMMM
-WWWWWWWWMMMMMMMWWWMMMMMMWNXKKXWWMMMMMMMMMMMMMMk.      .oNWWNo.  ;KMMWO'    oWWMWKxc;,,;cxKWWWWWWMMMM
-WWWWWWWWMMMMMMMMWWMMWWNkc'....,cdKWWKkollokKWWc         ,cc;.    .cl:.     ,KW0c.        ,OWWMWWMMMM
-MMMMMMMMMMMMMMMWMMWWWKc          .:;.      .:d,          .'.......'.       'ko.       .:oxKWWWWWWMMM
-MMMMMMMMMMMMMMMMWWMMXc                                   .lO000000d.       ..        ,OWWWMWWWMWWMMM
-MMMMMMMMMMMMMMMWMMWMk.                                     'codol,.                 ,KMWWMMWWMWWMMMM
-MMMMMMMMMMMMMMMMMMMMx.                                                             ,OWWWMMMWMMWWMMMM
-MMMMMMMMMMMMMMMMMMWWk.  ;dooooooooooooooooooodoooooc.  .cdooo'          ;ooooo:. .lKWMMMWMMMMMMWWMMM
-MMMMMMMMMMMMMMMMMMWMX; .xWWMMWWWWMMWMWWMMMMMMWWMNkc,   ,0WWMWc        'xNMWWXx. ;kNWWMWMMMMMMMMWWMMM
-MMMMMMMMMMMMMMMMMMMWWx..oXKXXXKKKKKKKNWMWWWXKXKO:.     ,KMWWWc      .lKWWWWO;..xNWWMMMWMMMMMMMMWWMMM
-MMMMMMMMMMMMMMMMMMWMMNo'';;;;;;;'....lNMWMK:....       ,KWWMWc     ;OWWWWKl..lKWMWWMMMMMMMMMMMMWMMMM
-MMMMMMMMMMMMMMMMMMMMMMWXKKKKKKKK:    :NMWMK,           ,KWWMWc   .xNWMMNx'.,OWMWMMMMMMMMMMMMMWWWMMMM
-MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMWc    :NMWMK,           ,KMMMWc .cKMMMW0:..dNWWMMMMMMMMMMMMMMMWWWMMMM
-MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMWc    :NMWMK,           ,KMWMWl,OWWWMXo. '0WMWWWMMMMMMMMMMMMMMWWWMMMM
-MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMNc    :NMWMK,           ,KMMMWXXWMMNk'   .:KWWWWWMMMMMMMMMMMMMWWMMMMM
-MMMMMMMMMMMMMMMMMMMMMMWMMWMMMWMNc    :NMWMK,           ,KMMWMMMMMWd.      .xNWWWMMMMMMMMMMMMWWMMMMMM
-MMMMMMMMMMMMMMMMMMMWMMWWMMWMMWMWc    :NMWMK,           ,KWWMMMMMMWKc.       ;OWWMMMMMMMMMMMMWWMMMMMM
-MMMMMMMMMMMMMMMWWMWNX0O0XWMMMMMWc    :NMWMK,           ,KWMMMNXNWWWWk,       .oXWMMMMMMMMMMMWWMMMMMM
-MMMMMMMMMMMMMMMMWOl;;::c:cxXMWMNc    :NMWMK,           ,KMMMWd.;OWMMMXo.       ,kWMMMMMMMMMMMMMMMMMM
-MMMMMMMWWWMMMMMNd..o0KNN0x,:KWMWc    :NMWMK,           ,KMWMWc  .oXMMMW0;       .lXMWWMMMMMMMMMWWMMM
-MMMMMMMWMMWWMMWx..dW0d0OxXO'cNMWc    :NMWMK,           ,KMWMWc    ,kWMMMNx.       'kNMWWMMMMMMMWWMMM
-MMMMMMMMMMMWMMWo .kMWNOOWWNc'0MWc    :NMWMK,           ,KMWMWc     .cKWMMMK:       .:KWWMMMMMMMWWMMM
-MWMMWWMMMMMWMMWl  oWWWNNWMMk'cNWc    :NMWMK,           ,KMWMWc       'dNMMMNk,       .dNMMWWWWWWMMMM
-WWWMWWMWWWWWWMX:  .xNMWWWMMWk;:x;    :NMMMK,           ,KMMMWl         ;OWMMWKl.       :0WWWMWWWMMMM
-WWWMMWWWWMWWWKc.   .:kXWMMMMWXxc,.   :NMMMK,           ,KMMMWc          .oXMWWWO;       .dXWMWWWWMMM
-WWWWMMWKxxdo:.        .;cloooollc,.  .loloc.           .coool'            ,loollc.        ,dxkXWWMMM
-WWWWMWW0ddddddddooddoddddddddddddddoodddddddddddddddddddddddddddddddodoooddddddddddddddddodddxKWWMMM
-                                version 0.1.5 (alpha pre-release)                       
-                                        date: 2024-10-25                                 
-                                     author: TouristKiller                              
-                         Special thanks to Dax for the idea and inspiration                                                         
+-- @description TK Script Template for ReaScript with TK GUI
+-- @author TouristKiller
+-- @version 2.0.0
+-- @changelog
+--[[
++ Implemented TK SCRIPT TEMPLATE (UI TEMPLATE)
++ Improved performance
++ A Lot of under the hood stuff ;o)
+]]--
+----------------------------------------------------------------------------
+local r = reaper
+local ok, err = pcall(function()
 
-CHANGELOG (start from 0.1.1):
-0.1.5 2024-10-25:
-- Added Custom Buttons (7)
+local ImGui
+if r.APIExists('ImGui_GetBuiltinPath') then
+    if not r.ImGui_GetBuiltinPath then
+        return r.MB('This script requires ReaImGui extension','',0)
+    end
+    package.path = r.ImGui_GetBuiltinPath() .. '/?.lua'
+    ImGui = require 'imgui' '0.9'
+else
+    return r.MB('This script requires ReaImGui extension 0.9+','',0)
+end
 
-0.1.4 2024-10-23:
-- Play Regions and Markers (+select next one in line)
-- Removed Logo
-- Single rightclick for changing name, time and open /close project timeline
+local ctx = ImGui.CreateContext('TK SMART')
+local SCRIPT_NAME = "TK_SMART"
 
-0.1.3 2024-09-11:
-- Small fixes
-- Hide minimap on double click on the project timeline
-- buttons to clear item name
-- Checkbox for Region Render Matrix
-- bezig met selectie van markers en regions methode
+window_open = true
+local current_dims = nil
 
-0.1.2 2024-09-10:
-- Addad a button for the LEARN BROWSER (content about markers and regions)
-- Added a button to open DDP manager (if not installed it shows a button to download it)
-- added a button to move all markers and regions to position of edit cursor (inspired by MPL)
-- And some more buttons
-- Added a progresbar to see duration of a region (inspired by X-Raym)
-- Changed logo to white (more easy on the eyes ;o] )
+local push_style_color = ImGui.PushStyleColor
+local pop_style_color = ImGui.PopStyleColor
+local push_style_var = ImGui.PushStyleVar
+local pop_style_var = ImGui.PopStyleVar
+local push_font = ImGui.PushFont
+local pop_font = ImGui.PopFont
+local same_line = ImGui.SameLine
+local get_window_width = ImGui.GetWindowWidth
+local get_window_height = ImGui.GetWindowHeight
+local get_window_pos = ImGui.GetWindowPos
+local get_window_draw_list = ImGui.GetWindowDrawList
+local push_item_width = ImGui.PushItemWidth
+local pop_item_width = ImGui.PopItemWidth
+local sepa_rator = ImGui.Separator
 
-0.1.1 2024-09-09: 
-- Fixed bug with renumber buttons
-- Added button to open autocolor and a button to toggle autocolor active
-- Small UI changes (placements)
-- Cleaned up the code
+local BASE_WINDOW_FLAGS = ImGui.WindowFlags_NoTitleBar |
+                         ImGui.WindowFlags_NoScrollbar --|
 
-Known issues:
-- Esc works only when the window is focused
-- Invisible items somtimes are not persistent
-- Cant empty the name input field (only when you add a space)
-- Invisible items are not editeble (Persenoly I am fine with this)
+local BASE_SETTINGS_FLAGS = ImGui.WindowFlags_NoTitleBar |
+                           ImGui.WindowFlags_NoResize |
+                           ImGui.WindowFlags_NoScrollbar |
+                           ImGui.WindowFlags_AlwaysAutoResize
 
-Things to Do:
-- Optimaliseren
-- Making Invisible items more persistent, even after closing Reaper
-- More Linux and MacOS support (Cant test this :o( )
-- More action buttons   
-- And lots more stuff!! ;o)
---------------------------------------------------------------------------------------------------]]
+local cached_colors = {
+bg_color = nil,
+text_color = nil,
+accent_color = nil,
+hover_color = nil,
+active_color = nil,
+slider_color = nil,
+slider_active_color = nil
+}                 
 
--- LETS GOOOOOO!
-local reaper = reaper
-local ctx = reaper.ImGui_CreateContext('Marker and Region Manager')
-local arial_font = reaper.ImGui_CreateFont('Arial', 12)
-reaper.ImGui_Attach(ctx, arial_font)
+local BASE_DIMENSIONS = {
+    WINDOW_WIDTH = 640,
+    WINDOW_HEIGHT = 300,
+    BUTTON_HEIGHT = 30,
+    TITLE_BUTTON_SIZE = 14,
+    TITLE_PADDING = 8,
+    SETTINGS_WIDTH = 250,
+    FONT_SIZE = 12,
+    TITLE_FONT = 14
+}
 
+local function getScaledDimensions(scale)
+    local current_dims = {}
+    for key, value in pairs(BASE_DIMENSIONS) do
+        current_dims[key] = math.floor(value * scale)
+    end
+    return current_dims
+end
+local SCALE_STEPS = {0.75, 0.85, 1.0, 1.25, 1.5, 1.75, 2.0}
+local scale_labels = {}
+for _, v in ipairs(SCALE_STEPS) do
+    scale_labels[#scale_labels + 1] = string.format("%.2fx", v)
+end
+local combo_items = table.concat(scale_labels, '|') .. '|'
 
--- Bepaal het pad naar de huidige script directory
+local fonts = {}
+for _, scale in ipairs(SCALE_STEPS) do
+    local size = math.floor(BASE_DIMENSIONS.FONT_SIZE * scale)
+    fonts[scale] = ImGui.CreateFont('Arial', size)
+    ImGui.Attach(ctx, fonts[scale])
+end
+local title_fonts = {}
+for _, scale in ipairs(SCALE_STEPS) do
+    local size = math.floor(BASE_DIMENSIONS.TITLE_FONT * scale)
+    title_fonts[scale] = ImGui.CreateFont('Arial', size, ImGui.FontFlags_Bold)
+    ImGui.Attach(ctx, title_fonts[scale])
+end
+
+local function SetDefaultSettings()
+    return {
+        is_pinned = false,
+        is_nomove = false,
+        settings_is_pinned = false,
+        settings_is_nomove = false,
+        show_settings = false,
+        save_on_close = true,
+        scale_factor = 1.0,
+        window_opacity = 1,
+        show_tooltips = true,
+        window_bg_color = 0.1,
+        text_color = 1.0,
+        accent_color = 0.6,
+        slider_color = 0.7
+    }
+end
+local settings = {}
+-----------------------------------------------------------------------------
+-- SMART variables
 local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
-
--- Voeg de script directory toe aan het Lua pad
 package.path = package.path .. ";" .. script_path .. "?.lua"
-
--- Laad de JSON module
 local json = require("json")
 
--- Definieer de paden voor project en globale presets
 local project_path = reaper.GetProjectPath("")
 local global_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/presets/"
-
--- Nieuwe variabelen voor het preset systeem
---local save_preset_globally = false 
---local selectedFile = 0
-
--- Laad de 'save_preset_globally' instelling
 local retval, value = reaper.GetProjExtState(0, "TK_SMART", "save_preset_globally")
 if retval == 1 then
     save_preset_globally = (value == "true")
@@ -111,12 +132,7 @@ else
     save_preset_globally = false
 end
 
--- Variabelen voor TK SMART LOGO
-local logo_texture = nil
-local logo_width, logo_height = 0, 0
-local logo_loaded = false
-
--- Globale variabelen voor het bijhouden van bewerkingsstatus
+-- Editing variables
 local editing_id = nil
 local editing_name = nil
 
@@ -129,56 +145,505 @@ local current_project = nil
 local project_items = {}
 local invisible_items = {}
 
--- Variabele voor het selecteren van markers en regions
+-- Selection variables
 local selected_items = {}
 local item_names = {}
 
 local show_weblink_browser = false
 local show_minimap = true
 
--- Variabelen voor afspelen van Regions&Markers
+-- Play variables
 local currently_playing_region = nil
 local next_region_to_play = nil
 local currently_playing_marker = nil
 local next_marker_to_play = nil
 
-
--- Variabelen voor de bottem sectie
-local show_rgn_playlist_checkbox = false
+-- State variables bovenaan het script
+local show_region_manager = false
+local show_region_playlist = false 
+local show_region_matrix = false
 local show_as_gridlines = false
-local show_region_marker_manager = false
-local show_region_matrix_visible = false
 
--- Overige variabelen
-local update_interval = 0.03 -- Update elke 30ms
-local last_update_time = 0
+-- Cache command IDs
+local COMMANDS = {
+    PLAYLIST = r.NamedCommandLookup("_S&M_SHOW_RGN_PLAYLIST"),
+    MATRIX = 41888,
+    MANAGER = 40326,
+    GRIDLINES = 42328
+}
 
----------------------------------------------------------------------------------
--- OVERIGE FUNTIES
---Funtie om te controleren of de escape key is ingedrukt
-local function check_esc_key() 
-    if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
-        return true
+local CACHE_CONFIG = {
+    FILES = {
+        interval = 1.0, 
+        last_update = 0
+    },
+    MARKERS = {
+        interval = 0.1, 
+        last_update = 0
+    }
+}
+
+-- Cache containers
+local cached_files = {
+    project = {},
+    global = {},
+    project_hash = 0,
+    global_hash = 0
+}
+
+local cached_markers = {
+    items = {},
+    project_key = nil
+}
+-----------------------------------------------------------------------------
+
+--UI Funcions
+local function SaveSaveOnCloseSetting()
+    r.SetExtState(SCRIPT_NAME, "save_on_close", tostring(settings.save_on_close), true)
+end
+
+local function LoadSaveOnCloseSetting()
+    local value = r.GetExtState(SCRIPT_NAME, "save_on_close")
+    if value ~= "" then
+        settings.save_on_close = value == "true"
     end
-    return false
 end
 
--- Funtie voor het bepalen van de hoogte voor het child venster
-local function calculate_available_height(ctx)
-    local window_height = reaper.ImGui_GetWindowHeight(ctx)
-    local cursor_pos_y = reaper.ImGui_GetCursorPosY(ctx)
-    local bottom_section_height = 57 -- Pas dit aan op basis van de werkelijke hoogte van je onderste sectie
-    return window_height - cursor_pos_y - bottom_section_height
+local function SaveSettings()
+    local serialized_settings = ""
+    for key, value in pairs(settings) do
+        serialized_settings = serialized_settings .. key .. "=" .. tostring(value) .. ";"
+    end
+    r.SetExtState(SCRIPT_NAME, "settings", serialized_settings, true)
 end
-  
 
----------------------------------------------------------------------------------
--- FUNCTIONS VOOR MARKERS EN REGIONS
+local function LoadSettings()
+    local serialized_settings = r.GetExtState(SCRIPT_NAME, "settings")
+    settings = SetDefaultSettings()
 
--- Functie om een unieke project key te genereren
+    if serialized_settings and serialized_settings ~= "" then
+        for key_value in string.gmatch(serialized_settings, "([^;]+)") do
+            local key, value = string.match(key_value, "([^=]+)=(.+)")
+            if key and value then
+                if value == "true" then
+                    settings[key] = true
+                elseif value == "false" then
+                    settings[key] = false
+                else
+                    settings[key] = tonumber(value) or value
+                end
+            end
+        end
+    end
+    for key, value in pairs(settings) do
+        print(key, value)
+    end
+end
+
+local function UpdateCachedColors()
+    cached_colors.bg_color = ImGui.ColorConvertDouble4ToU32(settings.window_bg_color,settings.window_bg_color,settings.window_bg_color,settings.window_opacity)
+    cached_colors.text_color = ImGui.ColorConvertDouble4ToU32(settings.text_color,settings.text_color,settings.text_color,1.0)
+    cached_colors.accent_color = ImGui.ColorConvertDouble4ToU32(settings.accent_color,settings.accent_color,settings.accent_color,1.0)
+    cached_colors.hover_color = ImGui.ColorConvertDouble4ToU32(math.min(settings.accent_color + 0.1, 1.0),math.min(settings.accent_color + 0.1, 1.0),math.min(settings.accent_color + 0.1, 1.0),1.0) 
+    cached_colors.active_color = ImGui.ColorConvertDouble4ToU32(math.min(settings.accent_color + 0.2, 1.0),math.min(settings.accent_color + 0.2, 1.0),math.min(settings.accent_color + 0.2, 1.0),1.0) 
+    cached_colors.slider_color = ImGui.ColorConvertDouble4ToU32(settings.slider_color,settings.slider_color,settings.slider_color,1.0)
+    cached_colors.slider_active_color = ImGui.ColorConvertDouble4ToU32(math.min(settings.slider_color + 0.2, 1.0),math.min(settings.slider_color + 0.2, 1.0),math.min(settings.slider_color + 0.2, 1.0),1.0)
+end
+
+LoadSettings()
+LoadSaveOnCloseSetting()
+UpdateCachedColors()
+
+-----------------------------------------------------------------------------
+-- Profiler setup
+--[[local profiler = dofile(reaper.GetResourcePath() .. '/Scripts/ReaTeam Scripts/Development/cfillion_Lua profiler.lua')
+reaper.defer = profiler.defer
+profiler.attachToWorld()
+profiler.run()
+profiler.start()]]--
+-----------------------------------------------------------------------------
+
+local function ShowTooltip(text)
+  if settings.show_tooltips and ImGui.IsItemHovered(ctx) then
+      ImGui.BeginTooltip(ctx)
+      ImGui.Text(ctx, text)
+      ImGui.EndTooltip(ctx)
+  end
+end
+
+-- Styles en Colors
+local function SetTKStyle()
+    if settings_changed then
+        UpdateCachedColors()
+    end
+
+    -- Style vars
+    push_style_var(ctx, ImGui.StyleVar_WindowRounding, 8.0)
+    push_style_var(ctx, ImGui.StyleVar_FrameRounding, 6.0)
+    push_style_var(ctx, ImGui.StyleVar_PopupRounding, 6.0)
+    push_style_var(ctx, ImGui.StyleVar_GrabRounding, 12.0)
+    push_style_var(ctx, ImGui.StyleVar_GrabMinSize, 8.0)
+
+    -- Colors
+    push_style_color(ctx, ImGui.Col_WindowBg, cached_colors.bg_color)
+    push_style_color(ctx, ImGui.Col_Text, cached_colors.text_color)
+    push_style_color(ctx, ImGui.Col_FrameBg, cached_colors.accent_color)
+    push_style_color(ctx, ImGui.Col_FrameBgHovered, cached_colors.hover_color)
+    push_style_color(ctx, ImGui.Col_FrameBgActive, cached_colors.active_color)
+    push_style_color(ctx, ImGui.Col_SliderGrab, cached_colors.slider_color)
+    push_style_color(ctx, ImGui.Col_SliderGrabActive, cached_colors.slider_active_color)
+    push_style_color(ctx, ImGui.Col_Button, cached_colors.accent_color)
+    push_style_color(ctx, ImGui.Col_ButtonHovered, cached_colors.hover_color)
+    push_style_color(ctx, ImGui.Col_ButtonActive, cached_colors.active_color)
+    push_style_color(ctx, ImGui.Col_CheckMark, cached_colors.slider_color)
+    push_style_color(ctx, ImGui.Col_PopupBg, cached_colors.bg_color)
+    push_style_color(ctx, ImGui.Col_Header, cached_colors.accent_color)
+    push_style_color(ctx, ImGui.Col_HeaderHovered, cached_colors.hover_color)
+    push_style_color(ctx, ImGui.Col_HeaderActive, cached_colors.active_color)
+    push_style_color(ctx, ImGui.Col_TableBorderStrong, cached_colors.accent_color)
+    push_style_color(ctx, ImGui.Col_TableBorderLight, cached_colors.accent_color)
+    push_style_color(ctx, ImGui.Col_TableHeaderBg, cached_colors.accent_color)
+    push_style_color(ctx, ImGui.Col_Tab, cached_colors.accent_color)
+    push_style_color(ctx, ImGui.Col_TabHovered, cached_colors.hover_color)
+    push_style_color(ctx, ImGui.Col_TabActive, cached_colors.hover_color)
+    push_style_color(ctx, ImGui.Col_TabUnfocused, cached_colors.accent_color)
+    push_style_color(ctx, ImGui.Col_TabUnfocusedActive, cached_colors.active_color)
+    push_style_color(ctx, ImGui.Col_Separator, 0x4D4D4DFF)
+end
+
+local function TKScaleSettings()
+    local settings_flags = BASE_SETTINGS_FLAGS
+    if settings_is_pinned then  -- Gebruik de lokale variabele
+        settings_flags = settings_flags | ImGui.WindowFlags_TopMost
+    end
+    if settings_is_nomove then  -- Gebruik de lokale variabele
+        settings_flags = settings_flags | ImGui.WindowFlags_NoMove
+    end
+
+    ImGui.SetNextWindowSize(ctx, current_dims.SETTINGS_WIDTH, 0)
+    SetTKStyle()
+
+    local settings_visible, settings_open = ImGui.Begin(ctx, 'Settings', true, settings_flags)
+    
+    if settings_visible then
+        -- Title section with buttons
+        local window_width = get_window_width(ctx)
+        local window_pos_x, window_pos_y = get_window_pos(ctx)
+        local draw_list = get_window_draw_list(ctx)
+
+        -- Title with TK
+        push_font(ctx, title_fonts[settings.scale_factor])
+        push_style_color(ctx, ImGui.Col_Text, 0xFF0000FF)
+        ImGui.SetCursorPosY(ctx, current_dims.TITLE_PADDING - 2)
+        ImGui.Text(ctx, "TK")
+        pop_style_color (ctx)
+        same_line(ctx)
+        ImGui.Text(ctx, "UI SETTINGS")
+
+        -- Button configuration
+        local button_size = current_dims.TITLE_BUTTON_SIZE
+        local spacing = button_size * 0.5
+        local margin = button_size * 0.5
+        local current_x = window_width - margin - button_size
+        local thickness = math.max(1.5, button_size/10)
+        local radius = (button_size/2) * 0.7
+
+        -- Common button Y position
+        local button_y = current_dims.TITLE_PADDING
+        local center_y = window_pos_y + current_dims.TITLE_PADDING + (button_size/3.75)
+
+        -- NoMove button (Yellow)
+        local yellow_color = 0xFFFF00FF
+        ImGui.SetCursorPosX(ctx, current_x)
+        ImGui.SetCursorPosY(ctx, button_y)
+        local center_x = window_pos_x + current_x + (button_size/2)
+        local clicked_nomove = ImGui.InvisibleButton(ctx, "##nomove_settings", button_size, button_size)
+        local is_hovered = ImGui.IsItemHovered(ctx)
+        ShowTooltip("Lock Window Position")
+        if settings_is_nomove then
+            ImGui.DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, yellow_color)
+        else
+            ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius, yellow_color, 0, thickness - 2)
+        end
+        if is_hovered then
+            ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius * 1.1, yellow_color, 0, thickness)
+        end
+        if clicked_nomove then settings_is_nomove = not settings_is_nomove end
+        current_x = current_x - spacing - button_size
+
+        -- Pin button (Green)
+        local green_color = 0x00FF00FF
+        ImGui.SetCursorPosX(ctx, current_x)
+        ImGui.SetCursorPosY(ctx, button_y)
+        center_x = window_pos_x + current_x + (button_size/2)
+        local clicked_pin = ImGui.InvisibleButton(ctx, "##pin_settings", button_size, button_size)
+        is_hovered = ImGui.IsItemHovered(ctx)
+        ShowTooltip("Keep Window On Top")
+        if settings_is_pinned then
+            ImGui.DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, green_color)
+        else
+            ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius, green_color, 0, thickness - 2)
+        end
+        if is_hovered then
+            ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius * 1.1, green_color, 0, thickness)
+        end
+        if clicked_pin then settings_is_pinned = not settings_is_pinned end
+        current_x = current_x - spacing - button_size
+
+        -- Settings button (Blue)
+        local blue_color = 0x0000FFFF
+        ImGui.SetCursorPosX(ctx, current_x)
+        ImGui.SetCursorPosY(ctx, button_y)
+        center_x = window_pos_x + current_x + (button_size/2)
+        local clicked_settings = ImGui.InvisibleButton(ctx, "##settings_close", button_size, button_size)
+        is_hovered = ImGui.IsItemHovered(ctx)
+        ShowTooltip("Close Settings")
+        if show_settings then
+            ImGui.DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, blue_color)
+        else
+            ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius, blue_color, 0, thickness - 2)
+        end
+        if is_hovered then
+            ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius * 1.1, blue_color, 0, thickness)
+        end
+        if clicked_settings then show_settings = false end
+
+        pop_font(ctx)
+
+        -- Bottom separator line
+        local line_color = 0x4D4D4DFF
+        ImGui.DrawList_AddLine(draw_list,
+            window_pos_x,
+            window_pos_y + (25 * settings.scale_factor),
+            window_pos_x + window_width,
+            window_pos_y + (25 * settings.scale_factor),
+            line_color,
+            line_thickness
+        )
+
+        ImGui.Dummy(ctx, 0, 5 * settings.scale_factor)
+
+        -- Calculate control width
+        local content_width = ImGui.GetContentRegionAvail(ctx)
+        local margin = 1 * settings.scale_factor
+        local control_width = content_width - margin
+
+        -- Interface Scaling Combo
+        ImGui.Text(ctx, 'Interface Scaling:')
+        local current_label = string.format("%.2fx", settings.scale_factor)
+        ImGui.PushItemWidth(ctx, control_width)
+        if ImGui.BeginCombo(ctx, "##scale", current_label) then
+            for i, scale in ipairs(SCALE_STEPS) do
+                local is_selected = (scale == settings.scale_factor)
+                local label = string.format("%.2fx", scale)
+                
+                if ImGui.Selectable(ctx, label, is_selected) then
+                    settings.scale_factor = scale  -- Update de scale_factor in de settings tabel
+                    scale_factor = scale
+                    settings_changed = true
+                end
+                if is_selected then
+                    ImGui.SetItemDefaultFocus(ctx)
+                end
+            end
+            ImGui.EndCombo(ctx)
+        end
+
+        -- Opacity Slider
+        ImGui.Spacing(ctx)
+        ImGui.Text(ctx, 'Transparency')
+        local opacity_changed, new_opacity = ImGui.SliderDouble(ctx, "##opacity", settings.window_opacity, 0.0, 1.0, "%.2f")
+        if opacity_changed and settings.window_opacity ~= new_opacity then
+            settings.window_opacity = new_opacity
+            settings_changed = true
+        end
+
+        -- BG Color Slider
+        ImGui.Spacing(ctx)
+        ImGui.Text(ctx, 'Background Color')
+        local bg_changed, new_bg_color = ImGui.SliderDouble(ctx, "##bgcolor", settings.window_bg_color, 0.0, 1.0, "%.2f")
+        if bg_changed and settings.window_bg_color ~= new_bg_color then
+            settings.window_bg_color = new_bg_color
+            settings_changed = true
+        end
+
+        -- Text Color Slider
+        ImGui.Spacing(ctx)
+        ImGui.Text(ctx, 'Text Color')
+        local text_changed, new_text_color = ImGui.SliderDouble(ctx, "##textcolor", settings.text_color, 0.0, 1.0, "%.2f")
+        if text_changed and settings.text_color ~= new_text_color then
+            settings.text_color = new_text_color
+            settings_changed = true
+        end
+
+        -- Accent Color Slider
+        ImGui.Spacing(ctx)
+        ImGui.Text(ctx, 'Accent Color')
+        local accent_changed, new_accent_color = ImGui.SliderDouble(ctx, "##accentcolor", settings.accent_color, 0.0, 1.0, "%.2f")
+        if accent_changed and settings.accent_color ~= new_accent_color then
+            settings.accent_color = new_accent_color
+            settings_changed = true
+        end
+
+        -- Slider Color Slider
+        ImGui.Spacing(ctx)
+        ImGui.Text(ctx, 'Slider Color')
+        local slider_changed, new_slider_color = ImGui.SliderDouble(ctx, "##slidercolor", settings.slider_color, 0.0, 1.0, "%.2f")
+        if slider_changed and settings.slider_color ~= new_slider_color then
+            settings.slider_color = new_slider_color
+            settings_changed = true
+        end
+
+        ImGui.PopItemWidth(ctx)
+
+        -- Tooltip Checkbox
+        ImGui.Spacing(ctx)
+        local tooltip_changed, new_tooltip_state = ImGui.Checkbox(ctx, "Show Tooltips", settings.show_tooltips)
+        if tooltip_changed then
+            settings.show_tooltips = new_tooltip_state
+            settings_changed = true
+        end
+
+        same_line(ctx)
+        local save_changed, new_save_state = ImGui.Checkbox(ctx, "Save on Close", settings.save_on_close)
+        if save_changed then
+            settings.save_on_close = new_save_state
+            settings_changed = true
+            SaveSaveOnCloseSetting()
+        end
+        ShowTooltip("Automatically save settings when closing the script.")
+        
+
+
+        pop_style_color (ctx, 24)
+        pop_style_var(ctx, 5)
+        ImGui.End(ctx)
+    end
+
+    if not settings_open then
+        show_settings = false
+    end
+end
+
+local function TKTitleBar()
+    local window_width = get_window_width(ctx)
+    local draw_list = get_window_draw_list(ctx)
+    local window_pos_x, window_pos_y = get_window_pos(ctx)
+
+    -- Title section
+    push_font(ctx, title_fonts[settings.scale_factor])
+    push_style_color(ctx, ImGui.Col_Text, 0xFF0000FF)
+    ImGui.SetCursorPosY(ctx, current_dims.TITLE_PADDING - 2 * settings.scale_factor)
+    ImGui.Text(ctx, "TK")
+    pop_style_color (ctx)
+    same_line(ctx)
+    ImGui.Text(ctx, "SMART")
+    pop_font(ctx)
+    
+    -- Button configuration
+    local button_size = current_dims.TITLE_BUTTON_SIZE
+    local spacing = button_size * 0.5
+    local margin = button_size * 0.5
+    local current_x = window_width - margin - button_size
+    local thickness = math.max(1.5, button_size/10) * settings.scale_factor
+    local radius = (button_size/2) * 0.7
+
+    -- Button colors
+    local red_color = 0xFF0000FF
+    local green_color = 0x00FF00FF
+    local yellow_color = 0xFFFF00FF
+    local blue_color = 0x0000FFFF
+
+    -- Common button Y position
+    local button_y = current_dims.TITLE_PADDING
+    local center_y = window_pos_y + current_dims.TITLE_PADDING + (button_size/3.75)
+
+    -- Close button (Red)
+    ImGui.SetCursorPosX(ctx, current_x)
+    ImGui.SetCursorPosY(ctx, button_y)
+    local center_x = window_pos_x + current_x + (button_size/2)
+    local clicked_close = ImGui.InvisibleButton(ctx, "##close", button_size, button_size)
+    local is_hovered = ImGui.IsItemHovered(ctx)
+    ShowTooltip("Close Window")
+    ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius, red_color, 0, thickness - 2)
+    if is_hovered then
+        ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius * 1.1, red_color, 0, thickness)
+    end
+    if clicked_close then window_open = false end
+    current_x = current_x - spacing - button_size
+
+    -- Pin button (Green)
+    ImGui.SetCursorPosX(ctx, current_x)
+    ImGui.SetCursorPosY(ctx, button_y)
+    center_x = window_pos_x + current_x + (button_size/2)
+    local clicked_pin = ImGui.InvisibleButton(ctx, "##pin", button_size, button_size)
+    is_hovered = ImGui.IsItemHovered(ctx)
+    ShowTooltip("Keep Window On Top")
+    if is_pinned then
+        ImGui.DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, green_color)
+    else
+        ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius, green_color, 0, thickness - 2)
+    end
+    if is_hovered then
+        ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius * 1.1, green_color, 0, thickness)
+    end
+    if clicked_pin then is_pinned = not is_pinned end
+    current_x = current_x - spacing - button_size
+
+    -- NoMove button (Yellow)
+    ImGui.SetCursorPosX(ctx, current_x)
+    ImGui.SetCursorPosY(ctx, button_y)
+    center_x = window_pos_x + current_x + (button_size/2)
+    local clicked_nomove = ImGui.InvisibleButton(ctx, "##nomove", button_size, button_size)
+    is_hovered = ImGui.IsItemHovered(ctx)
+    ShowTooltip("Lock Window Position")
+    if is_nomove then
+        ImGui.DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, yellow_color)
+    else
+        ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius, yellow_color, 0, thickness - 2)
+    end
+    if is_hovered then
+        ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius * 1.1, yellow_color, 0, thickness)
+    end
+    if clicked_nomove then is_nomove = not is_nomove end
+    current_x = current_x - spacing - button_size
+
+    -- Settings button (Blue)
+    ImGui.SetCursorPosX(ctx, current_x)
+    ImGui.SetCursorPosY(ctx, button_y)
+    center_x = window_pos_x + current_x + (button_size/2)
+    local clicked_settings = ImGui.InvisibleButton(ctx, "##settings", button_size, button_size)
+    is_hovered = ImGui.IsItemHovered(ctx)
+    ShowTooltip("Open UI Settings")
+    if show_settings then
+        ImGui.DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, blue_color)
+    else
+        ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius, blue_color, 0, thickness - 2)
+    end
+    if is_hovered then
+        ImGui.DrawList_AddCircle(draw_list, center_x, center_y, radius * 1.1, blue_color, 0, thickness)
+    end
+    if clicked_settings then show_settings = not show_settings end
+    
+    -- Bottom separator line
+    local line_color = 0x4D4D4DFF
+    ImGui.DrawList_AddLine(draw_list,
+        window_pos_x,
+        window_pos_y + (25 * settings.scale_factor),
+        window_pos_x + window_width,
+        window_pos_y + (25 * settings.scale_factor),
+        line_color,
+        line_thickness
+    )
+
+    ImGui.Dummy(ctx, 0, 5 * settings.scale_factor)
+end
+-----------------------------------------------------------------------------
+-- SMART Functions:
+
 local function get_project_key()
-    local proj = reaper.EnumProjects(-1)
-    local retval, project_path = reaper.GetProjectPath("")
+    local proj = r.EnumProjects(-1)
+    local retval, project_path = r.GetProjectPath("")
     if retval and project_path and project_path ~= "" then
         return tostring(proj) .. "_" .. project_path
     else
@@ -186,191 +651,11 @@ local function get_project_key()
     end
 end
 
--- Functie om het pad van het onzichtbare items bestand te krijgen
-local function get_invisible_items_file_path()
-    local resource_path = reaper.GetResourcePath()
-    return resource_path .. "/Scripts/MarkerRegionInvisibleItems.json"
-end
-
--- Functie om het bestaan van het JSON-bestand te garanderen
-local function ensure_json_file_exists()
-    local file_path = get_invisible_items_file_path()
-    local file = io.open(file_path, "r")
-    if not file then
-        file = io.open(file_path, "w")
-        if file then
-            file:write("[]")  -- Schrijf een lege JSON array
-            file:close()
-        else
-            reaper.ShowMessageBox("Kan het bestand voor onzichtbare items niet aanmaken.", "Fout", 0)
-        end
-    else
-        file:close()
-    end
-end
-ensure_json_file_exists()
--- Functie om onzichtbare items op te slaan
-local function save_invisible_items()
-    local file_path = get_invisible_items_file_path()
-    local file = io.open(file_path, "w")
-    if file then
-        file:write(json.encode(invisible_items))
-        file:close()
-    else
-        reaper.ShowMessageBox("Kan onzichtbare items niet opslaan.", "Fout", 0)
-    end
-end
-
--- Functie om onzichtbare items te laden
-local function load_invisible_items()
-    local file_path = get_invisible_items_file_path()
-    local file = io.open(file_path, "r")
-    if file then
-        local content = file:read("*all")
-        file:close()
-        invisible_items = json.decode(content) or {}
-    else
-        invisible_items = {}
-    end
-end
-load_invisible_items()
-local function save_visibility_to_project()
-    local project_key = get_project_key()
-    local items = project_items[project_key] or {}
-    local visibility_data = {}
-    for _, item in ipairs(items) do
-        visibility_data[tostring(item.index) .. (item.isRegion and "R" or "M")] = item.visible
-    end
-    local serialized = json.encode(visibility_data)
-    reaper.SetProjExtState(0, "MarkerRegionManager", "VisibilityState", serialized)
-end
-
-local function load_visibility_from_project()
-    local retval, serialized = reaper.GetProjExtState(0, "MarkerRegionManager", "VisibilityState")
-    if retval == 1 then
-        local success, visibility_data = pcall(json.decode, serialized)
-        if success and type(visibility_data) == "table" then
-            return visibility_data
-        end
-    end
-    return {}
-end
-
-local update_interval = 0.5 -- Update elke 500ms
-local last_update_time = 0
-local cached_items = {}
-
-local function get_markers_and_regions()
-    local current_time = reaper.time_precise()
-    local current_project_key = get_project_key()
-    local visibility_data = load_visibility_from_project()
-
-    -- Controleer of er updates zijn sinds de laatste keer
-    if current_time - last_update_time < update_interval and #cached_items > 0 then
-        return cached_items
-    end
-
-    local _, num_markers, num_regions = reaper.CountProjectMarkers(0)
-    local new_items = {}
-
-    for i = 0, num_markers + num_regions - 1 do
-        local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = reaper.EnumProjectMarkers3(0, i)
-        local visibility_key = tostring(markrgnindexnumber) .. (isrgn and "R" or "M")
-        local item = {
-            name = name or (isrgn and 'Region ' or 'Marker ') .. markrgnindexnumber,
-            pos = pos,
-            rgnend = rgnend,
-            color = color,
-            index = markrgnindexnumber,
-            isRegion = isrgn,
-            visible = visibility_data[visibility_key] ~= false,
-            project_key = current_project_key
-        }
-        table.insert(new_items, item)
-    end
-
-    -- Voeg onzichtbare items toe
-    for _, invisible_item in ipairs(invisible_items) do
-        if invisible_item.project_key == current_project_key then
-            local visibility_key = tostring(invisible_item.index) .. (invisible_item.isRegion and "R" or "M")
-            if visibility_data[visibility_key] ~= true then
-                table.insert(new_items, invisible_item)
-            end
-        end
-    end
-
-    -- Sorteer items
-    table.sort(new_items, function(a, b)
-        if a.pos == b.pos then
-            return a.index < b.index
-        end
-        return a.pos < b.pos
-    end)
-
-    project_items[current_project_key] = new_items
-    cached_items = new_items
-    last_update_time = current_time
-
-    return new_items
-end
-
-local function set_item_visibility(item, visible)
-    item.visible = visible
-    if visible then
-        if item.isRegion then
-            reaper.AddProjectMarker2(0, true, item.pos, item.rgnend, item.name, item.index, item.color)
-        else
-            reaper.AddProjectMarker2(0, false, item.pos, 0, item.name, item.index, item.color)
-        end
-        -- Verwijder het item uit de onzichtbare items lijst
-        for i, inv_item in ipairs(invisible_items) do
-            if inv_item.index == item.index and inv_item.isRegion == item.isRegion and inv_item.project_key == get_project_key() then
-                table.remove(invisible_items, i)
-                break
-            end
-        end
-    else
-        reaper.DeleteProjectMarker(0, item.index, item.isRegion)
-        -- Voeg het item toe aan de onzichtbare items lijst
-        table.insert(invisible_items, item)
-    end
-    reaper.UpdateTimeline()
-    save_invisible_items()
-    save_visibility_to_project()
-end
-
-local function update_all_items_visibility(new_visibility, item_type)
-    local visibility_changed = false
-    local current_project_key = get_project_key()
-    
-    for _, item in ipairs(project_items[current_project_key] or {}) do
-        if (item_type == "markers" and not item.isRegion) or (item_type == "regions" and item.isRegion) then
-            if item.visible ~= new_visibility then
-                set_item_visibility(item, new_visibility)
-                visibility_changed = true
-            end
-        end
-    end
-    
-    if visibility_changed then
-        reaper.UpdateTimeline()
-        save_invisible_items()
-        save_visibility_to_project()
-    end
-end
-
-
-------------------------------------------------------------------------------------------------
--- FUNTIES OM ITEMS IN TABEL TE BEWERKEN
--- Functie om tijd te formatteren met MBT
 local function format_time_and_mbt(seconds)
     local minutes = math.floor(seconds / 60)
     local remaining_seconds = seconds % 60
     local time_str = string.format("%d:%05.2f", minutes, remaining_seconds)
-    
-    local mbt_str = reaper.format_timestr_pos(seconds, "", 2):match("(%d+%.%d+%.%d+)")
-    
-    -- Converteer de laatste drie cijfers (ticks) naar twee cijfers
+    local mbt_str = r.format_timestr_pos(seconds, "", 2):match("(%d+%.%d+%.%d+)")
     local measure, beat, ticks = mbt_str:match("(%d+)%.(%d+)%.(%d%d%d)")
     if measure and beat and ticks then
         ticks = math.floor(tonumber(ticks) / 10)
@@ -385,21 +670,14 @@ local function mbt_to_seconds(mbt_string)
     if measure and beat and ticks then
         measure = tonumber(measure)
         beat = tonumber(beat)
-        ticks = tonumber(ticks)
-
-        -- Converteer ticks van twee naar drie cijfers
-        ticks = ticks * 10
-
-        -- Converteer MBT naar een tijdnotatie die REAPER begrijpt
-        local time_str = string.format("%d.%d.%03d", measure, beat, ticks)
+        ticks = tonumber(ticks) * 10
         
-        -- Gebruik REAPER's ingebouwde functie om deze notatie om te zetten naar seconden
-        return reaper.parse_timestr_pos(time_str, 2)
+        local time_str = string.format("%d.%d.%03d", measure, beat, ticks)
+        return r.parse_timestr_pos(time_str, 2)
     end
     return nil
 end
 
--- Functie om tijd te formatteren en te bewerken
 local function edit_time(ctx, item, is_end_time)
     local time = is_end_time and item.rgnend or item.pos
     local time_str = format_time_and_mbt(time)
@@ -408,108 +686,246 @@ local function edit_time(ctx, item, is_end_time)
     local edited_times_key = is_end_time and edited_end_times or edited_times
     
     if _G[edit_key] == item.index then
-        local current_mbt = edited_times_key[item.index] or reaper.format_timestr_pos(time, "", 2):match("(%d+%.%d+%.%d+)")
-        -- Converteer de laatste drie cijfers (ticks) naar twee cijfers voor weergave
+        local current_mbt = edited_times_key[item.index] or r.format_timestr_pos(time, "", 2):match("(%d+%.%d+%.%d+)")
         local measure, beat, ticks = current_mbt:match("(%d+)%.(%d+)%.(%d%d%d)")
         if measure and beat and ticks then
             ticks = math.floor(tonumber(ticks) / 10)
             current_mbt = string.format("%s.%s.%02d", measure, beat, ticks)
         end
-        
-        local changed, new_time_str = reaper.ImGui_InputText(ctx, label .. item.index, current_mbt, reaper.ImGui_InputTextFlags_AutoSelectAll() | reaper.ImGui_InputTextFlags_EnterReturnsTrue())
-        
+        local flags = ImGui.InputTextFlags_AutoSelectAll | ImGui.InputTextFlags_EnterReturnsTrue
+        local changed, new_time_str = ImGui.InputText(ctx, label .. item.index, current_mbt, flags)
         if changed then
             edited_times_key[item.index] = new_time_str
         end
-
-        if reaper.ImGui_IsItemDeactivatedAfterEdit(ctx) or (changed and reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Enter())) then
+        if ImGui.IsItemDeactivatedAfterEdit(ctx) or (changed and ImGui.IsKeyPressed(ctx, ImGui.Key_Enter)) then
             local new_time = mbt_to_seconds(edited_times_key[item.index])
             if new_time then
                 if is_end_time then
                     item.rgnend = new_time
-                    reaper.SetProjectMarker3(0, item.index, true, item.pos, new_time, item.name, item.color)
+                    r.SetProjectMarker3(0, item.index, true, item.pos, new_time, item.name, item.color)
                 else
                     item.pos = new_time
-                    reaper.SetProjectMarker3(0, item.index, item.isRegion, new_time, item.rgnend or 0, item.name, item.color)
+                    r.SetProjectMarker3(0, item.index, item.isRegion, new_time, item.rgnend or 0, item.name, item.color)
                 end
-                reaper.UpdateTimeline()
-                reaper.UpdateArrange()
-                reaper.Undo_OnStateChange("Update " .. (is_end_time and "region end" or "marker/region start") .. " position")
+                r.UpdateTimeline()
+                r.UpdateArrange()
+                r.Undo_OnStateChange("Update " .. (is_end_time and "region end" or "marker/region start") .. " position")
             end
             _G[edit_key] = nil
             edited_times_key[item.index] = nil
-        end
-        
-        if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
+        end        
+        if ImGui.IsKeyPressed(ctx, ImGui.Key_Escape) then
             _G[edit_key] = nil
             edited_times_key[item.index] = nil
         end
     else
-        if reaper.ImGui_Selectable(ctx, time_str, false) then
+        if ImGui.Selectable(ctx, time_str, false) then
             _G[edit_key] = item.index
         end
     end
 end
 
--- Functie om een item te verwijderen
-local function delete_item(item)
-    if item.visible then
-        reaper.DeleteProjectMarker(0, item.index, item.isRegion)
-        reaper.UpdateTimeline()
+local function get_invisible_items_file_path()
+    local resource_path = r.GetResourcePath()
+    return resource_path .. "/Scripts/MarkerRegionInvisibleItems.json"
+end
+
+local function save_invisible_items()
+    local file_path = get_invisible_items_file_path()
+    local file = io.open(file_path, "w")
+    if file then
+        file:write(json.encode(invisible_items))
+        file:close()
+    else
+        r.ShowMessageBox("Kan onzichtbare items niet opslaan.", "Fout", 0)
     end
+end
+
+local function load_invisible_items()
+    local file_path = get_invisible_items_file_path()
+    local file = io.open(file_path, "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        invisible_items = json.decode(content) or {}
+    else
+        invisible_items = {}
+    end
+end
+load_invisible_items()
+
+local function save_visibility_to_project()
     local project_key = get_project_key()
-    for i, list_item in ipairs(project_items[project_key]) do
-        if list_item.index == item.index and list_item.isRegion == item.isRegion then
-            table.remove(project_items[project_key], i)
-            break
-        end
+    local items = project_items[project_key] or {}
+    local visibility_data = {}
+    
+    for _, item in ipairs(items) do
+        visibility_data[tostring(item.index) .. (item.isRegion and "R" or "M")] = item.visible
     end
-    for i, inv_item in ipairs(invisible_items) do
-        if inv_item.index == item.index and inv_item.isRegion == item.isRegion and inv_item.project_key == project_key then
-            table.remove(invisible_items, i)
-            break
-        end
-    end
-    save_invisible_items()
+    
+    local serialized = json.encode(visibility_data)
+    r.SetProjExtState(0, SCRIPT_NAME, "VisibilityState", serialized)
 end
 
--- Hulpfunctie om onzichtbare items bij te werken
-local function update_invisible_item(item, old_id, new_id)
+local function load_visibility_from_project()
+    local retval, serialized = r.GetProjExtState(0, SCRIPT_NAME, "VisibilityState")
+    if retval == 1 then
+        local success, visibility_data = pcall(json.decode, serialized)
+        if success and type(visibility_data) == "table" then
+            return visibility_data
+        end
+    end
+    return {}
+end
+
+
+local function get_markers_and_regions()
+    local current_time = r.time_precise()
     local current_project_key = get_project_key()
-    
-    -- Update in project_items
-    for _, proj_item in ipairs(project_items[current_project_key]) do
-        if proj_item.index == old_id and proj_item.isRegion == item.isRegion then
-            proj_item.index = new_id
-            break
+
+    if current_time - CACHE_CONFIG.MARKERS.last_update < CACHE_CONFIG.MARKERS.interval 
+       and #cached_markers.items > 0 
+       and cached_markers.project_key == current_project_key then
+        return cached_markers.items
+    end
+
+    local visibility_data = load_visibility_from_project()
+    local _, num_markers, num_regions = r.CountProjectMarkers(0)
+    local new_items = {}
+
+    for i = 0, num_markers + num_regions - 1 do
+        local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
+        local visibility_key = tostring(markrgnindexnumber) .. (isrgn and "R" or "M")
+        local item = {
+            name = name or (isrgn and 'Region ' or 'Marker ') .. markrgnindexnumber,
+            pos = pos,
+            rgnend = rgnend,
+            color = color,
+            index = markrgnindexnumber,
+            isRegion = isrgn,
+            visible = visibility_data[visibility_key] ~= false,
+            project_key = current_project_key
+        }
+        table.insert(new_items, item)
+    end
+
+    for _, invisible_item in ipairs(invisible_items) do
+        if invisible_item.project_key == current_project_key then
+            local visibility_key = tostring(invisible_item.index) .. (invisible_item.isRegion and "R" or "M")
+            if visibility_data[visibility_key] ~= true then
+                table.insert(new_items, invisible_item)
+            end
         end
     end
 
-    -- Update in invisible_items
-    for _, inv_item in ipairs(invisible_items) do
-        if inv_item.index == old_id and inv_item.isRegion == item.isRegion and inv_item.project_key == current_project_key then
-            inv_item.index = new_id
-            break
+    table.sort(new_items, function(a, b)
+        if a.pos == b.pos then
+            return a.index < b.index
+        end
+        return a.pos < b.pos
+    end)
+
+    project_items[current_project_key] = new_items
+    cached_markers.items = new_items
+    cached_markers.project_key = current_project_key
+    CACHE_CONFIG.MARKERS.last_update = current_time
+
+    return new_items
+end
+
+local function set_item_visibility(item, visible)
+    item.visible = visible
+    if visible then
+        if item.isRegion then
+            r.AddProjectMarker2(0, true, item.pos, item.rgnend, item.name, item.index, item.color)
+        else
+            r.AddProjectMarker2(0, false, item.pos, 0, item.name, item.index, item.color)
+        end
+        for i, inv_item in ipairs(invisible_items) do
+            if inv_item.index == item.index and inv_item.isRegion == item.isRegion and inv_item.project_key == get_project_key() then
+                table.remove(invisible_items, i)
+                break
+            end
+        end
+    else
+        r.DeleteProjectMarker(0, item.index, item.isRegion)
+        table.insert(invisible_items, item)
+    end
+    r.UpdateTimeline()
+    save_invisible_items()
+    save_visibility_to_project()
+end
+
+local function snap_to_grid(time)
+    local _, division = r.GetSetProjectGrid(0, false)
+    return math.floor(time / (division * 2) + 0.5) * (division * 2)
+end
+
+local function draw_timeline_minimap(ctx, items)
+    local width, height = ImGui.GetContentRegionAvail(ctx)
+    local project_length = r.GetProjectLength(0)
+    local draw_list = ImGui.GetWindowDrawList(ctx)
+    local pos_x, pos_y = ImGui.GetCursorScreenPos(ctx)
+    local right_margin = 0
+    local time_label_height = 13 * settings.scale_factor
+    
+    ImGui.DrawList_AddRectFilled(draw_list, pos_x, pos_y, pos_x + width - right_margin, pos_y + height - time_label_height, cached_colors.bg_color)
+    
+    local num_markers = 8
+    for i = 0, num_markers do
+        local proportion = i / num_markers
+        local time = proportion * project_length
+        local beat_time = r.TimeMap2_timeToQN(0, time)
+        local nearest_measure = math.floor(beat_time / 4) * 4
+        local nearest_measure_time = r.TimeMap2_QNToTime(0, nearest_measure)
+        local x = pos_x + (nearest_measure_time / project_length) * (width - right_margin)
+        local mbt = r.format_timestr_pos(nearest_measure_time, "", 1):match("(%d+%.1)")
+        
+        ImGui.DrawList_AddLine(draw_list, x, pos_y, x, pos_y + height - time_label_height, cached_colors.accent_color, 1)
+        ImGui.DrawList_AddText(draw_list, x, pos_y + height - time_label_height, cached_colors.text_color, mbt)
+    end
+    
+    for _, item in ipairs(items) do
+        if item.visible then
+            local x = pos_x + ((item.pos / project_length) * (width - right_margin))
+            local r, g, b = r.ColorFromNative(item.color)
+            local color = ImGui.ColorConvertDouble4ToU32(r/255, g/255, b/255, 1)
+
+            if item.isRegion then
+                local end_x = pos_x + ((item.rgnend / project_length) * (width - right_margin))
+                ImGui.DrawList_AddRectFilled(draw_list, x, pos_y, end_x, pos_y + height - time_label_height, color)
+            else
+                ImGui.DrawList_AddLine(draw_list, x, pos_y, x, pos_y + height - time_label_height, color, 2)
+            end
+        end
+    end
+    
+    local cursor_pos = r.GetCursorPosition()
+    local cursor_x = pos_x + ((cursor_pos / project_length) * (width - right_margin))
+    ImGui.DrawList_AddLine(draw_list, cursor_x, pos_y, cursor_x, pos_y + height - time_label_height, cached_colors.text_color, 2)
+    
+    ImGui.InvisibleButton(ctx, "timeline", width, height)
+    if ImGui.IsItemHovered(ctx) then
+        if ImGui.IsMouseClicked(ctx, 0) then
+            local mouse_x = ImGui.GetMousePos(ctx)
+            local new_pos = ((mouse_x - pos_x) / (width - right_margin)) * project_length
+            local snapped_pos = snap_to_grid(new_pos)
+            r.SetEditCurPos(snapped_pos, true, true)
         end
     end
 end
 
--- funtie voor het aanpassen van de ID van een item (en kleur weergave)
 local function display_colored_id(ctx, item, i, items)
-    local r, g, b = reaper.ColorFromNative(item.color)
-    local color = reaper.ImGui_ColorConvertDouble4ToU32(r/255, g/255, b/255, 0.7)
-    
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), color)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xFFFFFFFF)
-    
-    reaper.ImGui_PushItemWidth(ctx, 30)
+    local red, g, b = r.ColorFromNative(item.color)
+    local color = ImGui.ColorConvertDouble4ToU32(red/255, g/255, b/255, 0.7)
+    push_style_color(ctx, ImGui.Col_FrameBg, color)
+    push_style_color(ctx, ImGui.Col_Text, 0xFFFFFFFF)
+    push_item_width(ctx, 30 * settings.scale_factor)
     local display_value = editing_id == i and "" or tostring(item.index)
-    local changed, new_id_str = reaper.ImGui_InputText(ctx, "##id" .. i, display_value, reaper.ImGui_InputTextFlags_AutoSelectAll())
-    
-    if reaper.ImGui_IsItemClicked(ctx) and reaper.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    local changed, new_id_str = ImGui.InputText(ctx, "##id" .. i, display_value, ImGui.InputTextFlags_AutoSelectAll)
+    if ImGui.IsItemClicked(ctx) and ImGui.IsMouseDoubleClicked(ctx, 0) then
         editing_id = i
     end
-    
     if editing_id == i then
         if changed then
             local new_id = tonumber(new_id_str)
@@ -524,45 +940,38 @@ local function display_colored_id(ctx, item, i, items)
                 if not id_exists then
                     local old_id = item.index
                     item.index = new_id
-
                     if item.visible then
-                        -- Voor zichtbare items, update REAPER
-                        reaper.DeleteProjectMarker(0, old_id, item.isRegion)
+                        r.DeleteProjectMarker(0, old_id, item.isRegion)
                         if item.isRegion then
-                            reaper.AddProjectMarker2(0, true, item.pos, item.rgnend, item.name, new_id, item.color)
+                            r.AddProjectMarker2(0, true, item.pos, item.rgnend, item.name, new_id, item.color)
                         else
-                            reaper.AddProjectMarker2(0, false, item.pos, 0, item.name, new_id, item.color)
+                            r.AddProjectMarker2(0, false, item.pos, 0, item.name, new_id, item.color)
                         end
                     else
-                        -- Voor onzichtbare items, update alleen de interne datastructuren
                         update_invisible_item(item, old_id, new_id)
                     end
-
-                    reaper.UpdateTimeline()
+                    r.UpdateTimeline()
                     save_invisible_items()
                     save_visibility_to_project()
                 end
             end
         end
-        if reaper.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+        if ImGui.IsItemDeactivatedAfterEdit(ctx) then
             editing_id = nil
         end
-    end
-    
-    reaper.ImGui_PopItemWidth(ctx)
-    reaper.ImGui_PopStyleColor(ctx, 2)
+    end    
+    pop_item_width(ctx)
+    pop_style_color(ctx, 2)
 end
 
-
--- Functie om kleur te bewerken
 local function get_sws_colors()
     local colors = {}
-    local reaper_resource_path = reaper.GetResourcePath()
+    local reaper_resource_path = r.GetResourcePath()
     local color_dir = reaper_resource_path .. "/Color/"
-  
+
     local function read_color_file(filename)
         local file_path = color_dir .. filename
-        if reaper.file_exists(file_path) then
+        if r.file_exists(file_path) then
             for line in io.lines(file_path) do
                 local k, v = string.match(line, "^(custcolor%d+)=(%d+)$")
                 if k and v then
@@ -571,24 +980,23 @@ local function get_sws_colors()
             end
         end
     end
-  
     local i = 0
-    local file = reaper.EnumerateFiles(color_dir, i)
+    local file = r.EnumerateFiles(color_dir, i)
     while file do
         if string.match(file, "%.SWSColor$") then
             read_color_file(file)
-            break  
+            break
         end
         i = i + 1
-        file = reaper.EnumerateFiles(color_dir, i)
+        file = r.EnumerateFiles(color_dir, i)
     end
-  
-    return colors, #colors > 0 
+    return colors, #colors > 0
 end
 
 local function edit_color(item, i)
     local sws_colors, has_sws_colors = get_sws_colors()
-    if reaper.ImGui_Button(ctx, "Color##" .. tostring(i)) then
+    
+    if ImGui.Button(ctx, "Color##" .. tostring(i)) then
         if has_sws_colors then
             if active_color_picker == i then
                 active_color_picker = nil
@@ -596,81 +1004,951 @@ local function edit_color(item, i)
                 active_color_picker = i
             end
         else
-            local r, g, b = reaper.ColorFromNative(item.color)
-            local retval, new_color = reaper.GR_SelectColor(item.color)
+            local r, g, b = r.ColorFromNative(item.color)
+            local retval, new_color = r.GR_SelectColor(item.color)
             if retval then
                 local native_color = new_color|0x1000000
                 if item.isRegion then
-                    reaper.SetProjectMarker3(0, item.index, true, item.pos, item.rgnend, item.name, native_color)
+                    r.SetProjectMarker3(0, item.index, true, item.pos, item.rgnend, item.name, native_color)
                 else
-                    reaper.SetProjectMarker3(0, item.index, false, item.pos, 0, item.name, native_color)
+                    r.SetProjectMarker3(0, item.index, false, item.pos, 0, item.name, native_color)
                 end
                 item.color = native_color
-                reaper.UpdateTimeline()
+                r.UpdateTimeline()
             end
         end
     end
-
     if active_color_picker == i then
-        local pos_x, pos_y = reaper.ImGui_GetItemRectMax(ctx)
-        reaper.ImGui_SetNextWindowPos(ctx, pos_x, pos_y, reaper.ImGui_Cond_Always())
-        reaper.ImGui_SetNextWindowSize(ctx, 200, 200, reaper.ImGui_Cond_FirstUseEver())
-        local window_flags = reaper.ImGui_WindowFlags_NoTitleBar() | reaper.ImGui_WindowFlags_NoMove() | reaper.ImGui_WindowFlags_NoResize() | reaper.ImGui_WindowFlags_AlwaysAutoResize()
-        local visible, open = reaper.ImGui_Begin(ctx, "Color Picker##" .. tostring(i), true, window_flags)
-
+        local pos_x, pos_y = ImGui.GetItemRectMax(ctx)
+        ImGui.SetNextWindowPos(ctx, pos_x, pos_y, ImGui.Cond_Always)
+        ImGui.SetNextWindowSize(ctx, 200 * settings.scale_factor, 200 * settings.scale_factor, ImGui.Cond_FirstUseEver)
+        
+        local window_flags = ImGui.WindowFlags_NoTitleBar | 
+                           ImGui.WindowFlags_NoMove | 
+                           ImGui.WindowFlags_NoResize | 
+                           ImGui.WindowFlags_AlwaysAutoResize
+        
+        local visible, open = ImGui.Begin(ctx, "Color Picker##" .. tostring(i), true, window_flags)
         if visible then
             local columns = 8
             local color_count = #sws_colors
             local rows = math.max(1, math.ceil(color_count / columns))
 
             for row = 1, rows do
-                reaper.ImGui_PushID(ctx, row)
+                ImGui.PushID(ctx, row)
                 for col = 1, columns do
                     local color_index = (row - 1) * columns + col
                     if color_index <= color_count then
                         local color = sws_colors[color_index]
-                        local r, g, b = reaper.ColorFromNative(color)
-                        local color_vec4 = reaper.ImGui_ColorConvertDouble4ToU32(r/255, g/255, b/255, 1.0)
-                        if reaper.ImGui_ColorButton(ctx, "##SWSColor" .. color_index, color_vec4) then
-                            local native_color = reaper.ColorToNative(r, g, b)|0x1000000
+                        local red, g, b = r.ColorFromNative(color)
+                        local color_vec4 = ImGui.ColorConvertDouble4ToU32(red/255, g/255, b/255, 1.0)
+                        
+                        if ImGui.ColorButton(ctx, "##SWSColor" .. color_index, color_vec4) then
+                            local native_color = r.ColorToNative(red, g, b)|0x1000000
                             if item.isRegion then
-                                reaper.SetProjectMarker3(0, item.index, true, item.pos, item.rgnend, item.name, native_color)
+                                r.SetProjectMarker3(0, item.index, true, item.pos, item.rgnend, item.name, native_color)
                             else
-                                reaper.SetProjectMarker3(0, item.index, false, item.pos, 0, item.name, native_color)
+                                r.SetProjectMarker3(0, item.index, false, item.pos, 0, item.name, native_color)
                             end
                             item.color = native_color
-                            reaper.UpdateTimeline()
+                            r.UpdateTimeline()
                             active_color_picker = nil
                         end
-                        if col < columns then reaper.ImGui_SameLine(ctx) end
+                        if col < columns then ImGui.SameLine(ctx) end
                     end
                 end
-                reaper.ImGui_PopID(ctx)
+                ImGui.PopID(ctx)
             end
-
-            reaper.ImGui_End(ctx)
+            ImGui.End(ctx)
         end
-
         if not open then
             active_color_picker = nil
         end
     end
 end
 
--- Hulpfunctie om tijd te parseren (eenvoudige implementatie, kan worden uitgebreid)
-local function parse_time(time_str)
-    local minutes, seconds = time_str:match("(%d+):([%d%.]+)")
-    if minutes and seconds then
-        return tonumber(minutes) * 60 + tonumber(seconds)
+local function find_next_marker_position(current_pos)
+    local items = get_markers_and_regions()
+    local next_pos = nil
+    for _, item in ipairs(items) do
+        if not item.isRegion and item.visible and item.pos > current_pos then
+            if not next_pos or item.pos < next_pos then
+                next_pos = item.pos
+            end
+        end
+    end
+    if not next_pos then
+        local project_end = r.GetProjectLength()
+        local num_items = r.CountMediaItems(0)
+        for i = 0, num_items - 1 do
+            local item = r.GetMediaItem(0, i)
+            local item_end = r.GetMediaItemInfo_Value(item, "D_POSITION") + 
+                           r.GetMediaItemInfo_Value(item, "D_LENGTH")
+            project_end = math.max(project_end, item_end)
+        end
+        next_pos = project_end
+    end    
+    return next_pos
+end
+
+local function play_marker(marker)
+    if marker and marker.visible then
+        marker.end_time = find_next_marker_position(marker.pos)        
+        if marker.end_time > marker.pos then
+            r.SetEditCurPos(marker.pos, true, false)
+            r.GetSet_LoopTimeRange(true, false, marker.pos, marker.end_time, false)
+            r.OnPlayButton()
+            currently_playing_marker = marker
+            r.UpdateTimeline()
+        end
+    end
+end
+
+local function handle_marker_playback()
+    if currently_playing_marker then
+        local play_state = r.GetPlayState()
+        local play_position = r.GetPlayPosition()
+        
+        if play_state == 0 or (play_position >= currently_playing_marker.end_time and 
+           play_position > currently_playing_marker.pos + 0.1) then
+            currently_playing_marker = nil
+            if next_marker_to_play then
+                play_marker(next_marker_to_play)
+                next_marker_to_play = nil
+            end
+            r.UpdateTimeline()
+        end
+    end
+end
+
+local function update_item_name(item, new_name)
+    item.name = new_name
+
+    if item.visible then
+        r.SetProjectMarker3(0, item.index, item.isRegion, item.pos, item.rgnend or 0, new_name, item.color)
+        r.UpdateTimeline()
+    end
+
+    local key = item.index .. (item.isRegion and "R" or "M")
+    item_names[key] = new_name
+    save_visibility_to_project()
+end
+
+local function get_next_available_index(is_region)
+    local current_project_key = get_project_key()
+    local max_index = 0
+    local items = project_items[current_project_key] or {}    
+    for _, item in ipairs(items) do
+        if item.visible and item.isRegion == is_region and item.index > max_index then
+            max_index = item.index
+        end
+    end
+    return max_index + 1
+end
+
+local function toggle_marker_region(item, items)
+    if item.isRegion then
+        r.DeleteProjectMarker(0, item.index, true)
+        local new_index = get_next_available_index(items, false)
+        r.AddProjectMarker2(0, false, item.pos, 0, item.name, new_index, item.color)
+        item.isRegion = false
+        item.rgnend = nil
+        item.index = new_index
+    else
+        r.DeleteProjectMarker(0, item.index, false)
+        local rgnend = find_next_marker_position(item.pos)
+        local new_index = get_next_available_index(items, true)
+        r.AddProjectMarker2(0, true, item.pos, rgnend, item.name, new_index, item.color)
+        item.isRegion = true
+        item.rgnend = rgnend
+        item.index = new_index
+    end
+    r.UpdateTimeline()
+end
+
+local function clear_item_name(item)
+    item.name = ""
+    item_names[item.index .. (item.isRegion and "R" or "M")] = ""
+    local flags = 1  
+    r.SetProjectMarker4(0, item.index, item.isRegion, item.pos, item.rgnend or 0, "", item.color, flags)
+    r.UpdateTimeline()
+end
+
+local function delete_item(item)
+    if item.visible then
+        r.DeleteProjectMarker(0, item.index, item.isRegion)
+        r.UpdateTimeline()
+    end
+    local project_key = get_project_key()
+    for i, list_item in ipairs(project_items[project_key]) do
+        if list_item.index == item.index and list_item.isRegion == item.isRegion then
+            table.remove(project_items[project_key], i)
+            break
+        end
+    end
+    for i, inv_item in ipairs(invisible_items) do
+        if inv_item.index == item.index and 
+           inv_item.isRegion == item.isRegion and 
+           inv_item.project_key == project_key then
+            table.remove(invisible_items, i)
+            break
+        end
+    end
+    save_invisible_items()
+    save_visibility_to_project()
+end
+
+local function draw_marker_table(ctx, items)
+    local table_flags = ImGui.TableFlags_Borders
+    if ImGui.BeginTable(ctx, "MarkersTable", 9, table_flags) then
+        local col_flags_fixed = ImGui.TableColumnFlags_WidthFixed
+        
+        ImGui.TableSetupColumn(ctx, "##Visible", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "ID", col_flags_fixed, 30 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Play", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Name", ImGui.TableColumnFlags_WidthStretch)
+        ImGui.TableSetupColumn(ctx, "Time", col_flags_fixed, 75 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Color", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Convert", col_flags_fixed, 55 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Del", col_flags_fixed, 15 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Sel", col_flags_fixed, 15 * settings.scale_factor)
+        ImGui.TableHeadersRow(ctx)
+
+        ImGui.TableSetColumnIndex(ctx, 0)
+        local x, y = ImGui.GetCursorScreenPos(ctx)
+        local draw_list = ImGui.GetWindowDrawList(ctx)
+        local text_width = ImGui.CalcTextSize(ctx, "Visible")
+        local cell_width = 35 * settings.scale_factor
+        local cell_height = ImGui.GetTextLineHeight(ctx)
+        
+        ImGui.DrawList_AddText(draw_list, x + (cell_width - text_width) / 2, y, cached_colors.text_color, "Visible")
+        if ImGui.InvisibleButton(ctx, "##VisibleHeaderMarkers", cell_width, cell_height) then
+            local all_markers_visible = true
+            for _, item in ipairs(project_items[get_project_key()] or {}) do
+                if not item.isRegion then
+                    all_markers_visible = all_markers_visible and item.visible
+                end
+            end
+            update_all_items_visibility(not all_markers_visible, "markers")
+        end
+
+        for i, item in ipairs(items) do
+            if not item.isRegion then
+                ImGui.TableNextRow(ctx)
+                ImGui.TableSetColumnIndex(ctx, 0)
+                local changed, new_visible = ImGui.Checkbox(ctx, "##visible" .. i, item.visible)
+                if changed then
+                    set_item_visibility(item, new_visible)
+                end
+                ImGui.TableSetColumnIndex(ctx, 1)
+                display_colored_id(ctx, item, i, items)
+                ImGui.TableSetColumnIndex(ctx, 2)
+                local button_text = "Play"
+                local button_color = cached_colors.accent_color
+                if currently_playing_marker and currently_playing_marker.index == item.index then
+                    if next_marker_to_play and next_marker_to_play.index == item.index then
+                        button_color = ImGui.ColorConvertDouble4ToU32(1, 0.55, 0, 1)
+                        button_text = "Next"
+                    else
+                        button_color = ImGui.ColorConvertDouble4ToU32(1, 0, 0, 1)
+                        button_text = "Play"
+                    end
+                elseif next_marker_to_play and next_marker_to_play.index == item.index then
+                    button_color = ImGui.ColorConvertDouble4ToU32(1, 0.55, 0, 1)
+                    button_text = "Next"
+                end
+                push_style_color(ctx, ImGui.Col_Button, button_color)
+                if ImGui.Button(ctx, button_text .. "##" .. i) then
+                    if currently_playing_marker then
+                        next_marker_to_play = item
+                    else
+                        play_marker(item)
+                    end
+                end
+                if ImGui.IsItemClicked(ctx, 1) then
+                    if currently_playing_marker and currently_playing_marker.index == item.index then
+                        r.OnStopButton()
+                        currently_playing_marker = nil
+                        next_marker_to_play = nil
+                        r.UpdateTimeline()
+                    end
+                end
+                pop_style_color(ctx)
+
+                ImGui.TableSetColumnIndex(ctx, 3)
+                if ImGui.Button(ctx, "X##clear_name" .. i) then
+                    clear_item_name(item)
+                end
+                ImGui.SameLine(ctx)
+
+                local display_name = item.name ~= "" and item.name or ""
+                if editing_name == i then
+                    local changed, new_name = ImGui.InputText(ctx, "##name" .. i, item.name)
+                    if changed then
+                        update_item_name(item, new_name)
+                    end
+                    if ImGui.IsItemDeactivatedAfterEdit(ctx) then
+                        editing_name = nil
+                    end
+                else
+                    if ImGui.Selectable(ctx, display_name, false) then
+                        editing_name = i
+                    end
+                end
+                ImGui.TableSetColumnIndex(ctx, 4)
+                edit_time(ctx, item, false)
+
+                ImGui.TableSetColumnIndex(ctx, 5)
+                edit_color(item, i)
+
+                ImGui.TableSetColumnIndex(ctx, 6)
+                if ImGui.Button(ctx, "To Region##" .. i) then
+                    toggle_marker_region(item, items)
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 7)
+                if ImGui.Button(ctx, "X##" .. i) then
+                    delete_item(item)
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 8)
+                if ImGui.Button(ctx, ">##nav" .. i) then
+                    r.SetEditCurPos(item.pos, true, false)
+                    r.UpdateTimeline()
+                end
+            end
+        end
+        ImGui.EndTable(ctx)
+    end
+end
+
+local function play_region(region)
+    if region and region.visible then
+        r.SetEditCurPos(region.pos, true, false)
+        r.GetSet_LoopTimeRange(true, false, region.pos, region.rgnend, false)
+        r.OnPlayButton()
+        currently_playing_region = region
+        r.UpdateTimeline()
+    end
+end
+
+local function handle_region_playback()
+    if currently_playing_region then
+        local play_state = r.GetPlayState()
+        local play_position = r.GetPlayPosition()
+        if play_state == 0 or (play_position >= (currently_playing_region.rgnend - 0.01) and 
+           play_position > currently_playing_region.pos + 0.1) then
+            currently_playing_region = nil
+            if next_region_to_play then
+                play_region(next_region_to_play)
+                next_region_to_play = nil
+            end
+            r.UpdateTimeline()
+        end
+    end
+end
+
+local function draw_region_table(ctx, items)
+    local table_flags = ImGui.TableFlags_Borders
+    if ImGui.BeginTable(ctx, "RegionsTable", 10, table_flags) then
+        local col_flags_fixed = ImGui.TableColumnFlags_WidthFixed
+        local col_flags_stretch = ImGui.TableColumnFlags_WidthStretch
+        
+        ImGui.TableSetupColumn(ctx, "##Visible", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "ID", col_flags_fixed, 30 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Play", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Name", col_flags_stretch)
+        ImGui.TableSetupColumn(ctx, "Start", col_flags_fixed, 75 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "End", col_flags_fixed, 75 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Color", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Convert", col_flags_fixed, 55 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Del", col_flags_fixed, 15 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Sel", col_flags_fixed, 15 * settings.scale_factor)
+        ImGui.TableHeadersRow(ctx)
+
+        for i, item in ipairs(items) do
+            if item.isRegion then
+                ImGui.TableNextRow(ctx)
+                
+                ImGui.TableSetColumnIndex(ctx, 0)
+                local changed, new_visible = ImGui.Checkbox(ctx, "##visible" .. i, item.visible)
+                if changed then
+                    set_item_visibility(item, new_visible)
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 1)
+                display_colored_id(ctx, item, i, items)
+
+                ImGui.TableSetColumnIndex(ctx, 2)
+                local button_text = "Play"
+                local button_color = cached_colors.accent_color
+
+                if currently_playing_region and currently_playing_region.index == item.index then
+                    if next_region_to_play and next_region_to_play.index == item.index then
+                        button_color = ImGui.ColorConvertDouble4ToU32(1, 0.55, 0, 1)
+                        button_text = "Next"
+                    else
+                        button_color = ImGui.ColorConvertDouble4ToU32(1, 0, 0, 1)
+                        button_text = "Play"
+                    end
+                elseif next_region_to_play and next_region_to_play.index == item.index then
+                    button_color = ImGui.ColorConvertDouble4ToU32(1, 0.55, 0, 1)
+                    button_text = "Next"
+                end
+                push_style_color(ctx, ImGui.Col_Button, button_color)
+                if ImGui.Button(ctx, button_text .. "##" .. i) then
+                    if currently_playing_region then
+                        next_region_to_play = item
+                    else
+                        play_region(item)
+                    end
+                end
+                if ImGui.IsItemClicked(ctx, 1) then
+                    if currently_playing_region and currently_playing_region.index == item.index then
+                        r.OnStopButton()
+                        currently_playing_region = nil
+                        next_region_to_play = nil
+                        r.UpdateTimeline()
+                    end
+                end
+                pop_style_color(ctx)
+
+                ImGui.TableSetColumnIndex(ctx, 3)
+                if ImGui.Button(ctx, "X##clear_name" .. i) then
+                    clear_item_name(item)
+                end
+                ImGui.SameLine(ctx)
+
+                local display_name = item.name ~= "" and item.name or ""
+                if editing_name == i then
+                    local changed, new_name = ImGui.InputText(ctx, "##name" .. i, item.name)
+                    if changed then
+                        update_item_name(item, new_name)
+                    end
+                    if ImGui.IsItemDeactivatedAfterEdit(ctx) then
+                        editing_name = nil
+                    end
+                else
+                    if ImGui.Selectable(ctx, display_name, false) then
+                        editing_name = i
+                    end
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 4)
+                edit_time(ctx, item, false)
+
+                ImGui.TableSetColumnIndex(ctx, 5)
+                edit_time(ctx, item, true)
+
+                ImGui.TableSetColumnIndex(ctx, 6)
+                edit_color(item, i)
+
+                ImGui.TableSetColumnIndex(ctx, 7)
+                if ImGui.Button(ctx, "To Marker##" .. i) then
+                    toggle_marker_region(item, items)
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 8)
+                if ImGui.Button(ctx, "X##" .. i) then
+                    delete_item(item)
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 9)
+                if ImGui.Button(ctx, ">##nav" .. i) then
+                    r.SetEditCurPos(item.pos, true, false)
+                    r.GetSet_LoopTimeRange(true, false, item.pos, item.rgnend, false)
+                    r.UpdateTimeline()
+                end
+            end
+        end
+        ImGui.EndTable(ctx)
+    end
+end
+
+local function calculate_available_height(ctx)
+    local window_height = ImGui.GetWindowHeight(ctx)
+    local cursor_pos_y = ImGui.GetCursorPosY(ctx)
+    local bottom_section_height = 57 * settings.scale_factor
+    return window_height - cursor_pos_y - bottom_section_height
+end
+
+local function create_custom_button(button_id)
+    local window_width = ImGui.GetWindowWidth(ctx)
+    local num_buttons_per_row = 4
+    local padding = 6  -- Vaste padding zonder scaling
+    local available_width = window_width - (padding * (num_buttons_per_row + 1))
+    local button_width = available_width / num_buttons_per_row
+
+    local stored_name = r.GetExtState(SCRIPT_NAME, "custom_button_" .. button_id .. "_name")
+    local button_name = stored_name ~= "" and stored_name or ("Custom##btn" .. button_id)
+    local stored_action = r.GetExtState(SCRIPT_NAME, "custom_button_" .. button_id .. "_action")
+
+    if ImGui.Button(ctx, button_name, button_width) then
+        if stored_action ~= "" then
+            local command_id = r.NamedCommandLookup(stored_action)
+            if command_id ~= 0 then
+                r.Main_OnCommand(command_id, 0)
+            end
+        end
+    end
+    if ImGui.IsItemClicked(ctx, 1) then
+        local retval, action_id = r.GetUserInputs("Assign Action", 1, "Command ID:", stored_action)
+        if retval then
+            r.SetExtState(SCRIPT_NAME, "custom_button_" .. button_id .. "_action", action_id, true)
+        end
+    end
+
+    if ImGui.IsItemClicked(ctx, 0) and ImGui.IsKeyDown(ctx, ImGui.Mod_Alt) then
+        local display_name = stored_name ~= "" and stored_name:gsub("##btn.*", "") or "CUSTOM BUTTON"
+        local retval, new_name = r.GetUserInputs("Button Name", 1, "New Name:", display_name)
+        if retval then
+            r.SetExtState(SCRIPT_NAME, "custom_button_" .. button_id .. "_name", new_name .. "##btn" .. button_id, true)
+        end
+    end
+end
+
+local function add_marker_buttons(ctx)
+    local button_width = 115 * settings.scale_factor    
+    if ImGui.Button(ctx, "Marker@start sel items", button_width) then
+        run_script("TK_marker at start items on the track.lua")
+    end
+    same_line(ctx)    
+    if ImGui.Button(ctx, "Marker@mid sel items", button_width) then
+        run_script("TK_marker at middle items on the track.lua")
+    end
+end
+
+local function sync_autocolor_state()
+    local marker_state = r.GetToggleCommandState(r.NamedCommandLookup("_S&MAUTOCOLOR_MKR_ENABLE"))
+    local region_state = r.GetToggleCommandState(r.NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE"))
+    local desired_state = (marker_state == 1 or region_state == 1) and 1 or 0
+    if marker_state ~= desired_state then
+        r.Main_OnCommand(r.NamedCommandLookup("_S&MAUTOCOLOR_MKR_ENABLE"), 0)
+    end
+    if region_state ~= desired_state then
+        r.Main_OnCommand(r.NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE"), 0)
+    end   
+    return desired_state == 1
+end
+
+local function move_markers_and_regions_to_cursor()
+    local cursor_pos = reaper.GetCursorPosition()
+    local current_project_key = get_project_key()
+    local all_items = project_items[current_project_key] or {}
+    
+    if #all_items > 0 then
+        local offset = cursor_pos - all_items[1].pos
+        
+        r.Undo_BeginBlock()
+        
+        for _, item in ipairs(all_items) do
+            local new_pos = item.pos + offset
+            if item.isRegion then
+                local new_end = item.rgnend + offset
+                if item.visible then
+                    r.SetProjectMarker(item.index, true, new_pos, new_end, item.name, item.color)
+                else
+                    item.pos = new_pos
+                    item.rgnend = new_end
+                end
+            else
+                if item.visible then
+                    r.SetProjectMarker(item.index, false, new_pos, 0, item.name, item.color)
+                else
+                    item.pos = new_pos
+                end
+            end
+        end
+        
+        r.Undo_EndBlock("Move all markers and regions to cursor", -1)
+        r.UpdateTimeline()
+        
+        save_invisible_items()
+        save_visibility_to_project()
+    end
+end
+
+
+local function run_script(script_name)
+    local script_path = r.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/" .. script_name
+    if r.file_exists(script_path) then
+        dofile(script_path)
+    else
+        r.ShowMessageBox("Script not found: " .. script_name, "Error", 0)
+    end
+end
+
+local function draw_actions_tab(ctx)
+    if ImGui.BeginChild(ctx, "ActionsChild", 0, calculate_available_height(ctx)) then
+        ImGui.BeginGroup(ctx)
+        
+        local window_width = ImGui.GetWindowWidth(ctx)
+        local num_buttons_per_row = 4
+        local padding = 6
+        local available_width = window_width - (padding * (num_buttons_per_row + 1))
+        local button_width = available_width / num_buttons_per_row
+
+        push_style_color(ctx, ImGui.Col_Button, cached_colors.accent_color)
+        if ImGui.Button(ctx, "Action Browser", button_width) then
+            if show_action_browser then
+                SHOW_ACTION_BROWSER = false
+                show_action_browser = false
+            else
+                SHOW_ACTION_BROWSER = true
+                local action_browser_path = r.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_Action_Browser.lua"
+                dofile(action_browser_path)
+                show_action_browser = true
+            end
+        end
+        pop_style_color(ctx)
+        same_line(ctx)
+
+        local smart_marker_state = r.GetToggleCommandState(r.NamedCommandLookup("_SWSMA_TOGGLE"))
+        local button_text = smart_marker_state == 1 and "Smart Marker: ON" or "Smart Marker: OFF"
+        local button_color = smart_marker_state == 1 and 0x00AA00FF or 0xAA0000FF
+
+        push_style_color(ctx, ImGui.Col_Button, button_color)
+        if ImGui.Button(ctx, button_text, button_width) then
+            r.Main_OnCommand(r.NamedCommandLookup("_SWSMA_TOGGLE"), 0)
+        end
+        pop_style_color(ctx)
+        same_line(ctx)
+
+        if ImGui.Button(ctx, "Autocolor Window", button_width) then
+            r.Main_OnCommand(r.NamedCommandLookup("_SWSAUTOCOLOR_OPEN"), 0)
+        end
+        same_line(ctx)
+        
+        local autocolor_enabled = sync_autocolor_state()
+        local ac_button_text = autocolor_enabled and "Autocolor: ON" or "Autocolor: OFF"
+        local ac_button_color = autocolor_enabled and 0x00AA00FF or 0xAA0000FF
+        
+        push_style_color(ctx, ImGui.Col_Button, ac_button_color)
+        if ImGui.Button(ctx, ac_button_text, button_width) then
+            r.Main_OnCommand(r.NamedCommandLookup("_S&MAUTOCOLOR_MKR_ENABLE"), 0)
+            r.Main_OnCommand(r.NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE"), 0)
+        end
+        pop_style_color(ctx)
+
+        if ImGui.Button(ctx, "Learn Browser", button_width) then
+            if show_weblink_browser then
+                SHOW_WEBLINK_BROWSER = false
+                show_weblink_browser = false
+            else
+                SHOW_WEBLINK_BROWSER = true
+                local weblink_browser_path = r.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_Learn_Browser(MR).lua"
+                dofile(weblink_browser_path)
+                show_weblink_browser = true
+            end
+        end
+        same_line(ctx)
+        if ImGui.Button(ctx, "Marker@start sel items", button_width) then
+            run_script("TK_marker at start items on the track.lua")
+        end
+        same_line(ctx)
+        
+        if ImGui.Button(ctx, "Marker@mid sel items", button_width) then
+            run_script("TK_marker at middle items on the track.lua")
+        end
+        same_line(ctx)
+        
+        if ImGui.Button(ctx, "Move All to cursor", button_width) then
+            move_markers_and_regions_to_cursor()
+        end
+        sepa_rator(ctx)
+      
+        for i = 1, 4 do
+            create_custom_button(i)
+            if i < 4 then same_line(ctx) end
+        end
+
+        for i = 5, 8 do
+            create_custom_button(i)
+            if i < 8 then same_line(ctx) end
+        end
+
+        ImGui.EndGroup(ctx)
+        ImGui.EndChild(ctx)
+    end
+end
+
+local function execute_stored_action(action_id)
+    if action_id ~= "" then
+        local command_id = r.NamedCommandLookup(action_id)
+        if command_id ~= 0 then
+            r.Main_OnCommand(command_id, 0)
+        end
+    end
+end
+
+local function handle_button_context_menu(ctx, button_id, current_name, current_action)
+    if ImGui.IsItemClicked(ctx, 1) then
+        local retval, action_id = r.GetUserInputs("Actie Toewijzen", 1, "Command ID:", current_action)
+        if retval then
+            r.SetExtState(SCRIPT_NAME, "custom_button_" .. button_id .. "_action", action_id, true)
+        end
+    end
+    if ImGui.IsItemClicked(ctx, 0) and ImGui.IsKeyDown(ctx, ImGui.Mod_Alt()) then
+        local display_name = current_name ~= "" and current_name:gsub("##btn.*", "") or "CUSTOM BUTTON"
+        local retval, new_name = r.GetUserInputs("Button Name", 1, "New Name:", display_name)
+        if retval then
+            r.SetExtState(SCRIPT_NAME, "custom_button_" .. button_id .. "_name", new_name .. "##btn" .. button_id, true)
+        end
+    end
+end
+
+
+
+local function toggle_learn_browser()
+    if show_weblink_browser then
+        SHOW_WEBLINK_BROWSER = false
+        show_weblink_browser = false
+    else
+        SHOW_WEBLINK_BROWSER = true
+        local weblink_browser_path = r.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_Learn_Browser(MR).lua"
+        dofile(weblink_browser_path)
+        show_weblink_browser = true
+    end
+end
+
+
+local function DrawRegionManagerCheckbox(ctx)
+    local changed, new_state = ImGui.Checkbox(ctx, "R/M Manager", show_region_manager)
+    
+    if changed then
+        r.Main_OnCommand(REGION_MANAGER_COMMAND_ID, 0)
+        -- Update state na actie
+        show_region_manager = r.JS_Window_Find("Region/Marker Manager", true) ~= nil
+    end
+end
+
+local function DrawShowRgnPlaylistCheckbox(ctx)
+    local changed, new_state = ImGui.Checkbox(ctx, "Region Playlist", show_region_playlist)
+    
+    if changed then
+        r.Main_OnCommand(PLAYLIST_COMMAND_ID, 0)
+        -- Update state na actie
+        show_region_playlist = r.GetToggleCommandStateEx(0, PLAYLIST_COMMAND_ID) == 1
+    end
+end
+
+local function DrawRenderMatrixCheckbox(ctx)
+    local changed, new_state = ImGui.Checkbox(ctx, "Region Matrix", show_region_matrix)
+    
+    if changed then
+        r.Main_OnCommand(REGION_MATRIX_COMMAND_ID, 0)
+        -- Update state na actie
+        show_region_matrix = r.JS_Window_Find("Region Render Matrix", true) ~= nil
+    end
+end
+
+
+local function get_region_under_play_cursor()
+    local play_pos = r.GetPlayPosition()
+    local num_markers = r.CountProjectMarkers(0)
+    for i = 0, num_markers - 1 do
+        local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
+        if isrgn and pos <= play_pos and rgnend >= play_pos then
+            return {
+                start = pos,
+                ending = rgnend,
+                name = name,
+                color = color,
+                index = markrgnindexnumber
+            }
+        end
     end
     return nil
 end
+local function lighten_color(r, g, b, factor)
+    return math.min(r + (255 - r) * factor, 255),
+           math.min(g + (255 - g) * factor, 255),
+           math.min(b + (255 - b) * factor, 255)
+end
 
-------------------------------------------------------------------------------------------------
--- FUNTIES VOOR PRESET SYSTEEM
--- Functie om het pad voor een preset bestand te krijgen
+local function format_time(seconds)
+    local minutes = math.floor(seconds / 60)
+    local remaining_seconds = seconds % 60
+    return string.format("%d:%05.2f", minutes, remaining_seconds)
+end
+
+local function draw_region_progress(ctx, region, window_width)
+    if not region then return end
+
+    local play_pos = r.GetPlayPosition()
+    local progress = (play_pos - region.start) / (region.ending - region.start)
+    progress = math.max(0, math.min(1, progress))
+
+    local bar_width = window_width - 16 
+    local bar_height = 14 * settings.scale_factor
+    local pos_x, pos_y = ImGui.GetCursorScreenPos(ctx)
+
+    local draw_list = ImGui.GetWindowDrawList(ctx)
+    local red, g, b = r.ColorFromNative(region.color)
+    local region_color = ImGui.ColorConvertDouble4ToU32(red/255, g/255, b/255, 1)
+    
+    local lr, lg, lb = lighten_color(red, g, b, 0.5)
+    local light_region_color = ImGui.ColorConvertDouble4ToU32(lr/255, lg/255, lb/255, 1)
+
+    ImGui.DrawList_AddRectFilled(draw_list, pos_x, pos_y, pos_x + bar_width, pos_y + bar_height, region_color)
+    ImGui.DrawList_AddRectFilled(draw_list, pos_x, pos_y, pos_x + bar_width * progress, pos_y + bar_height, light_region_color)
+
+    local elapsed_time = play_pos - region.start
+    local remaining_time = region.ending - play_pos
+    local total_time = region.ending - region.start
+    local time_text = string.format("%d: %s - %s / %s / %s", 
+        region.index or 0, 
+        region.name or "", 
+        format_time(elapsed_time), 
+        format_time(remaining_time), 
+        format_time(total_time)
+    )
+    
+    local text_width = ImGui.CalcTextSize(ctx, time_text)
+    local text_x = pos_x + (bar_width - text_width) / 2
+    
+    ImGui.DrawList_AddText(draw_list, text_x, pos_y + 1, cached_colors.text_color, time_text)
+    ImGui.Dummy(ctx, 0, 1)
+end
+
+
+local function draw_bottom_section(ctx)
+    local window_width = get_window_width(ctx)
+    local window_height = get_window_height(ctx)
+   
+    local window_pos_x, window_pos_y = ImGui.GetWindowPos(ctx)
+    local draw_list = ImGui.GetWindowDrawList(ctx)
+    local line_color = 0x4D4D4DFF
+    local line_thickness = 1 * settings.scale_factor
+
+    -- Teken de lijn
+    ImGui.DrawList_AddLine(
+        draw_list,
+        window_pos_x,
+        window_pos_y + ImGui.GetCursorPosY(ctx),
+        window_pos_x + window_width,
+        window_pos_y + ImGui.GetCursorPosY(ctx),
+        line_color,
+        line_thickness
+    )
+
+    local button_width = 70 * settings.scale_factor
+    ImGui.Dummy(ctx, 0, 3)
+    if ImGui.Button(ctx, "GRIDLINES", button_width) then
+        r.Main_OnCommand(COMMANDS.GRIDLINES, 0)
+    end
+    same_line(ctx)
+    if ImGui.Button(ctx, "MANAGER", button_width) then
+        r.Main_OnCommand(COMMANDS.MANAGER, 0)
+    end
+    same_line(ctx)
+    if ImGui.Button(ctx, "PLAYLIST", button_width) then
+        r.Main_OnCommand(COMMANDS.PLAYLIST, 0)
+    end
+    same_line(ctx)
+    if ImGui.Button(ctx, "MATRIX", button_width) then
+        r.Main_OnCommand(COMMANDS.MATRIX, 0)
+    end
+    same_line(ctx)
+
+    ImGui.SetCursorPosX(ctx, window_width - (105 + 118) * settings.scale_factor)
+    if ImGui.Button(ctx, "DEL ALL MARKERS", 105 * settings.scale_factor) then
+        r.Main_OnCommand(r.NamedCommandLookup("_SWSMARKERLIST9"), 0)
+    end
+
+    same_line(ctx)
+    ImGui.SetCursorPosX(ctx, window_width - (105 + 8) * settings.scale_factor)
+    if ImGui.Button(ctx, "DEL ALL REGIONS", 105 * settings.scale_factor) then
+        r.Main_OnCommand(r.NamedCommandLookup("_SWSMARKERLIST10"), 0)
+    end
+
+    local progress_y = window_height - 24 * settings.scale_factor
+    ImGui.SetCursorPosY(ctx, progress_y - (2 * settings.scale_factor))
+    ImGui.Dummy(ctx, 1, 1)
+    local current_region = get_region_under_play_cursor()
+    draw_region_progress(ctx, current_region, window_width)
+    ImGui.Dummy(ctx, 1, 5)
+end
+
+local function get_directory_hash(path)
+    local hash = 0
+    local i = 0
+    local file = r.EnumerateFiles(path, i)
+    
+    while file do
+        local full_path = path .. "/" .. file
+        -- Gebruik alleen file_exists voor de hash
+        if r.file_exists(full_path) then
+            hash = hash + 1
+        end
+        i = i + 1
+        file = r.EnumerateFiles(path, i)
+    end
+    
+    return hash
+end
+
+
+local function update_file_cache()
+    local current_time = r.time_precise()
+    
+    if current_time - CACHE_CONFIG.FILES.last_update < CACHE_CONFIG.FILES.interval then
+        return cached_files
+    end
+
+    local project_hash = get_directory_hash(project_path)
+    local global_hash = get_directory_hash(global_path)
+    
+    if project_hash ~= cached_files.project_hash then
+        cached_files.project = {}
+        local i = 0
+        local file = r.EnumerateFiles(project_path, i)
+        while file do
+            if file:match("%.json$") then
+                local display_name = file:gsub("%.json$", "")
+                table.insert(cached_files.project, {
+                    name = display_name,
+                    path = project_path .. "/" .. file
+                })
+            end
+            i = i + 1
+            file = r.EnumerateFiles(project_path, i)
+        end
+        cached_files.project_hash = project_hash
+    end
+
+    if global_hash ~= cached_files.global_hash then
+        cached_files.global = {}
+        local i = 0
+        local file = r.EnumerateFiles(global_path, i)
+        while file do
+            if file:match("%.json$") then
+                local display_name = file:gsub("%.json$", "")
+                table.insert(cached_files.global, {
+                    name = display_name,
+                    path = global_path .. "/" .. file
+                })
+            end
+            i = i + 1
+            file = r.EnumerateFiles(global_path, i)
+        end
+        cached_files.global_hash = global_hash
+    end
+
+    CACHE_CONFIG.FILES.last_update = current_time
+    return cached_files
+end
+
+local function get_preset_files()
+    local files = update_file_cache()
+    return {
+        project = files.project,
+        global = files.global
+    }
+end
+
 local function get_filename_for_set(action)
-    local retval, user_input = reaper.GetUserInputs(action .. " Marker/Region Set", 1, "Filename:", "")
+    local retval, user_input = r.GetUserInputs(action .. " Marker/Region Set", 1, "Filename:", "")
     if retval and user_input ~= "" then
         local filename = user_input
         if not filename:match("%.json$") then
@@ -685,74 +1963,6 @@ local function get_filename_for_set(action)
     return nil
 end
 
--- Functie om preset bestanden op te halen
-local function get_preset_files()
-    local presets = {project = {}, global = {}}
-    
-    local function add_presets_from_path(path, category)
-        local i = 0
-        local file = reaper.EnumerateFiles(path, i)
-        while file do
-            if file:match("%.json$") then
-                local display_name = file:gsub("%.json$", "")
-                local full_path = path .. "/" .. file
-                table.insert(presets[category], {name = display_name, path = full_path})
-            end
-            i = i + 1
-            file = reaper.EnumerateFiles(path, i)
-        end
-    end
-    
-    add_presets_from_path(project_path, "project")
-    add_presets_from_path(global_path, "global")
-    return presets
-end
-
--- Functie om een marker/region set op te slaan
-local function save_marker_region_set()
-    local filename = get_filename_for_set("Save")
-    if filename then
-        local prefix = save_preset_globally and "g_" or "p_"
-        local full_path = filename:gsub("([^\\/]+)$", prefix .. "%1")
-
-        local data = {markers = {}, regions = {}}
-        local current_project_key = get_project_key()
-        local items = project_items[current_project_key] or {}
-        
-        for _, item in ipairs(items) do
-            local entry = {
-                name = item.name,
-                pos = item.pos,
-                visible = item.visible,
-                color = item.color,
-                index = item.index
-            }
-            if item.isRegion then
-                entry.endPos = item.rgnend
-                table.insert(data.regions, entry)
-            else
-                table.insert(data.markers, entry)
-            end
-        end
-
-        if #data.markers > 0 or #data.regions > 0 then
-            local file, err = io.open(full_path, "w")
-            if file then
-                file:write(json.encode(data))
-                file:close()
-                reaper.ShowConsoleMsg("Preset saved successfully.\n")
-            else
-                reaper.ShowConsoleMsg("Error opening file for writing: " .. tostring(err) .. "\n")
-            end
-        else
-            reaper.ShowConsoleMsg("No items to Save.\n")
-        end
-    else
-        reaper.ShowConsoleMsg("Save canceled or no filename specified.\n")
-    end
-end
-
--- Functie om een marker/region set te laden
 local function load_marker_region_set(filepath)
     local file = io.open(filepath, "r")
     if file then
@@ -760,9 +1970,8 @@ local function load_marker_region_set(filepath)
         file:close()
         local success, decoded = pcall(json.decode, content)
         if success then
-            reaper.Undo_BeginBlock()
+            r.Undo_BeginBlock()
             
-            -- Wis alle bestaande markers en regions
             local current_project_key = get_project_key()
             local items_to_delete = {}
             for _, item in ipairs(project_items[current_project_key] or {}) do
@@ -771,12 +1980,10 @@ local function load_marker_region_set(filepath)
             for _, item in ipairs(items_to_delete) do
                 delete_item(item)
             end
-            
-            -- Wis alle interne datastructuren
+
             project_items[current_project_key] = {}
             invisible_items = {}
             
-            -- Laad de nieuwe markers en regions uit de preset
             if decoded.markers then
                 for _, marker in ipairs(decoded.markers) do
                     local new_marker = {
@@ -789,7 +1996,7 @@ local function load_marker_region_set(filepath)
                         project_key = current_project_key
                     }
                     if marker.visible then
-                        reaper.AddProjectMarker2(0, false, marker.pos, 0, marker.name, marker.index, marker.color)
+                        r.AddProjectMarker2(0, false, marker.pos, 0, marker.name, marker.index, marker.color)
                     else
                         table.insert(invisible_items, new_marker)
                     end
@@ -811,195 +2018,143 @@ local function load_marker_region_set(filepath)
                         project_key = current_project_key
                     }
                     if region.visible then
-                        reaper.AddProjectMarker2(0, true, region.pos, endPos, region.name, region.index, region.color)
+                        r.AddProjectMarker2(0, true, region.pos, endPos, region.name, region.index, region.color)
                     else
                         table.insert(invisible_items, new_region)
                     end
                     table.insert(project_items[current_project_key], new_region)
                 end
-            end
-           
-            reaper.UpdateTimeline()
+            end   
+            r.UpdateTimeline()
             save_invisible_items()
             save_visibility_to_project()
-            reaper.Undo_EndBlock("Load Marker/Region Set", -1)
-        else
-            reaper.ShowMessageBox("Error decoding JSON file.", "Error", 0)
-        end
-    else
-        reaper.ShowMessageBox("Cannot open file: " .. filepath, "Error", 0)
-    end
-end
-----------------------------------------------------------------------------------------------
--- FUNTIES VOOR CONVERSIE MARKERS EN REGIONS
-
--- Hulpfunctie om de volgende zichtbare marker te vinden
-local function find_next_visible_marker(items, start_pos)
-    for _, item in ipairs(items) do
-        if not item.isRegion and item.visible and item.pos > start_pos then
-            return item.pos
+            r.Undo_EndBlock("Load Marker/Region Set", -1)
         end
     end
-    return reaper.GetProjectLength()
 end
 
--- Hulpfunctie om de volgende beschikbare index te vinden
-local function get_next_available_index(items, is_region)
-    local max_index = 0
-    for _, item in ipairs(items) do
-        if item.visible and item.isRegion == is_region and item.index > max_index then
-            max_index = item.index
-        end
-    end
-    return max_index + 1
-end
+local function save_marker_region_set()
+    local filename = get_filename_for_set("Save")
+    if filename then
+        local prefix = save_preset_globally and "g_" or "p_"
+        local full_path = filename:gsub("([^\\/]+)$", prefix .. "%1")
 
-local function toggle_marker_region(item, items)
-    if item.isRegion then
-        -- Converteer regio naar marker
-        reaper.DeleteProjectMarker(0, item.index, true)
-        local new_index = get_next_available_index(items, false)
-        reaper.AddProjectMarker2(0, false, item.pos, 0, item.name, new_index, item.color)
-        item.isRegion = false
-        item.rgnend = nil
-        item.index = new_index
-    else
-        -- Converteer marker naar regio
-        reaper.DeleteProjectMarker(0, item.index, false)
-        local rgnend = find_next_visible_marker(items, item.pos)
-        local new_index = get_next_available_index(items, true)
-        reaper.AddProjectMarker2(0, true, item.pos, rgnend, item.name, new_index, item.color)
-        item.isRegion = true
-        item.rgnend = rgnend
-        item.index = new_index
-    end
-    reaper.UpdateTimeline()
-end
-
-----------------------------------------------------------------------------------------------
--- FUNTIES VOOR TIMELINE MINIMAP
-local function snap_to_grid(time)
-    local _, division = reaper.GetSetProjectGrid(0, false)
-    return math.floor(time / (division * 2) + 0.5) * (division * 2)
-end
-
-local function draw_timeline_minimap(ctx, items)
-    local width, height = reaper.ImGui_GetContentRegionAvail(ctx)
-    local project_length = reaper.GetProjectLength(0)
-    local draw_list = reaper.ImGui_GetWindowDrawList(ctx)
-    local pos_x, pos_y = reaper.ImGui_GetCursorScreenPos(ctx)
-    local right_margin = 0
-    local time_label_height = 13
-    reaper.ImGui_DrawList_AddRectFilled(draw_list, pos_x, pos_y, pos_x + width - right_margin, pos_y + height - time_label_height, 0x202020FF)
-    
-    local num_markers = 8
-    for i = 0, num_markers do
-        local proportion = i / num_markers
-        local time = proportion * project_length
-        local beat_time = reaper.TimeMap2_timeToQN(0, time)
-        local nearest_measure = math.floor(beat_time / 4) * 4 -- Assuming 4 beats per measure
-        local nearest_measure_time = reaper.TimeMap2_QNToTime(0, nearest_measure)
-        local x = pos_x + (nearest_measure_time / project_length) * (width - right_margin)
-        local mbt = reaper.format_timestr_pos(nearest_measure_time, "", 1):match("(%d+%.1)") -- Only measure and beat without ticks
-        reaper.ImGui_DrawList_AddLine(draw_list, x, pos_y, x, pos_y + height - time_label_height, 0x808080FF, 1)
-        reaper.ImGui_DrawList_AddText(draw_list, x, pos_y + height - time_label_height, 0xFFFFFFFF, mbt)
-    end
-    
-    for _, item in ipairs(items) do
-        if item.visible then
-            local x = pos_x + ((item.pos / project_length) * (width - right_margin))
-            local r, g, b = reaper.ColorFromNative(item.color)
-            local color = reaper.ImGui_ColorConvertDouble4ToU32(r/255, g/255, b/255, 1)
-
+        local data = {markers = {}, regions = {}}
+        local current_project_key = get_project_key()
+        local items = project_items[current_project_key] or {}
+        
+        for _, item in ipairs(items) do
+            local entry = {
+                name = item.name,
+                pos = item.pos,
+                visible = item.visible,
+                color = item.color,
+                index = item.index
+            }
+            
             if item.isRegion then
-                local end_x = pos_x + ((item.rgnend / project_length) * (width - right_margin))
-                reaper.ImGui_DrawList_AddRectFilled(draw_list, x, pos_y, end_x, pos_y + height - time_label_height, color)
+                entry.endPos = item.rgnend
+                table.insert(data.regions, entry)
             else
-                reaper.ImGui_DrawList_AddLine(draw_list, x, pos_y, x, pos_y + height - time_label_height, color, 2)
+                table.insert(data.markers, entry)
             end
         end
-    end
-    
-    local cursor_pos = reaper.GetCursorPosition()
-    local cursor_x = pos_x + ((cursor_pos / project_length) * (width - right_margin))
-    reaper.ImGui_DrawList_AddLine(draw_list, cursor_x, pos_y, cursor_x, pos_y + height - time_label_height, 0xFFFFFFFF, 2)
-    
-    reaper.ImGui_InvisibleButton(ctx, "timeline", width, height)
-    if reaper.ImGui_IsItemHovered(ctx) then
-        if reaper.ImGui_IsMouseClicked(ctx, 0) then
-            local mouse_x = reaper.ImGui_GetMousePos(ctx)
-            local new_pos = ((mouse_x - pos_x) / (width - right_margin)) * project_length
-            local snapped_pos = snap_to_grid(new_pos)
-            reaper.SetEditCurPos(snapped_pos, true, true)
+
+        if #data.markers > 0 or #data.regions > 0 then
+            local file, err = io.open(full_path, "w")
+            if file then
+                file:write(json.encode(data))
+                file:close()
+                r.ShowConsoleMsg("Preset saved successfully.\n")
+            else
+                r.ShowConsoleMsg("Error opening file for writing: " .. tostring(err) .. "\n")
+            end
+        else
+            r.ShowConsoleMsg("No items to Save.\n")
         end
     end
 end
 
------------------------------------------------------------------------------------------
--- FUNCTIES VOOR KNOPPEN EN CHECKBOXEN 
-function IsRegionMarkerManagerOpen()
-    local title = "Region/Marker Manager"
-    local hwnd = reaper.JS_Window_Find(title, true)
-    return hwnd ~= nil
-  end
-
-function AreGridlinesShown()
-    return reaper.GetToggleCommandStateEx(0, 42328) == 1
-end
-
-function IsRegionPlaylistVisible()
-    return reaper.GetToggleCommandStateEx(0, reaper.NamedCommandLookup("_S&M_SHOW_RGN_PLAYLIST")) == 1
-  end
-
-function DrawShowRgnPlaylistCheckbox()
-    local is_visible = IsRegionPlaylistVisible()
-    local rv, new_checkbox = reaper.ImGui_Checkbox(ctx, "Region Playlist", is_visible)
-    if rv and new_checkbox ~= is_visible then
-      reaper.Main_OnCommand(reaper.NamedCommandLookup("_S&M_SHOW_RGN_PLAYLIST"), 0)
+local function handle_preset_item(ctx, preset, index, category, selected_preset)
+    local is_selected = (selected_preset.category == category and selected_preset.index == index)
+    if ImGui.Selectable(ctx, preset.name, is_selected) then
+        if ImGui.IsKeyDown(ctx, ImGui.Mod_Alt) then
+            table.remove(presets[category], index)
+            os.remove(preset.path)
+            selected_preset = {category = nil, index = nil}
+        else
+            selected_preset = {category = category, index = index}
+            load_marker_region_set(preset.path)
+        end
     end
-  end
-
-  local function IsRenderMatrixVisible()
-    local title = "Region Render Matrix"
-    local hwnd = reaper.JS_Window_Find(title, true)
-    return hwnd ~= nil
-end
-
-local function DrawRenderMatrixCheckbox()
-    local is_rrm_open = IsRenderMatrixVisible()
-    local changed_rrm, new_show_region_matrix_visible = reaper.ImGui_Checkbox(ctx, "Region Matrix", is_rrm_open)
-    if changed_rrm then
-        reaper.Main_OnCommand(41888, 0)
-        is_rrm_open = IsRenderMatrixVisible()
+    if is_selected then
+        ImGui.SetItemDefaultFocus(ctx)
     end
 end
 
-
--- Functie om autocolor voor zowel markers als regions in te stellen
-local function sync_autocolor_state()
-    local marker_state = reaper.GetToggleCommandState(reaper.NamedCommandLookup("_S&MAUTOCOLOR_MKR_ENABLE"))
-    local region_state = reaper.GetToggleCommandState(reaper.NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE"))
+local function draw_preset_section(ctx)
+    local window_width = ImGui.GetWindowWidth(ctx)
+    local num_buttons_per_row = 8
+    local padding = 6
+    local available_width = window_width - (padding * (num_buttons_per_row + 1))
+    local button_width = available_width / num_buttons_per_row
     
-    -- Bepaal de gewenste staat (aan als een van beide aan is, anders uit)
-    local desired_state = (marker_state == 1 or region_state == 1) and 1 or 0
-    
-    -- Zet beide acties naar de gewenste staat
-    if marker_state ~= desired_state then
-        reaper.Main_OnCommand(reaper.NamedCommandLookup("_S&MAUTOCOLOR_MKR_ENABLE"), 0)
-    end
-    if region_state ~= desired_state then
-        reaper.Main_OnCommand(reaper.NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE"), 0)
+    if ImGui.Button(ctx, "Save Preset", button_width) then
+        save_marker_region_set()
     end
     
-    return desired_state == 1
+    same_line(ctx)
+    ImGui.SetNextItemWidth(ctx, button_width +20)
+
+    local presets = get_preset_files()
+    local selected_preset = {category = nil, index = nil}
+    
+    if ImGui.BeginCombo(ctx, "##Presets", selected_preset.index and 
+        (selected_preset.category .. ": " .. presets[selected_preset.category][selected_preset.index].name) or "Select preset") then
+        
+        if #presets.project > 0 then
+            ImGui.TextDisabled(ctx, "Project Presets:")
+            for i, preset in ipairs(presets.project) do
+                handle_preset_item(ctx, preset, i, "project", selected_preset)
+            end
+        end
+
+        if #presets.global > 0 then
+            ImGui.TextDisabled(ctx, "Global Presets:")
+            for i, preset in ipairs(presets.global) do
+                handle_preset_item(ctx, preset, i, "global", selected_preset)
+            end
+        end    
+        ImGui.EndCombo(ctx)
+    end
+    same_line(ctx)
+    local button_text = save_preset_globally and "Global: ON" or "Global: OFF"
+    if ImGui.Button(ctx, button_text, button_width) then
+        save_preset_globally = not save_preset_globally
+        r.SetExtState(SCRIPT_NAME, "save_preset_globally", tostring(save_preset_globally), true)
+    end
 end
 
--- Hernummer funtie 
+local function handle_preset_item(ctx, preset, index, category, selected_preset)
+    local is_selected = (selected_preset.category == category and selected_preset.index == index)
+    if ImGui.Selectable(ctx, preset.name, is_selected) then
+        if ImGui.IsKeyDown(ctx, ImGui.Mod_Alt()) then
+            table.remove(presets[category], index)
+            os.remove(preset.path)
+            selected_preset = {category = nil, index = nil}
+        else
+            selected_preset = {category = category, index = index}
+            load_marker_region_set(preset.path)
+        end
+    end
+    if is_selected then
+        ImGui.SetItemDefaultFocus(ctx)
+    end
+end
+
 local function renumber_items(is_region)
     local current_project_key = get_project_key()
     local items = project_items[current_project_key] or {}
-    
-    -- Stap 1: Sla de huidige zichtbaarheidsstatus op en maak alles zichtbaar
     local visibility_status = {}
     for _, item in ipairs(items) do
         if item.isRegion == is_region then
@@ -1009,16 +2164,14 @@ local function renumber_items(is_region)
             end
         end
     end
-    
-    -- Stap 2: Voer de REAPER-actie uit om alle (nu zichtbare) items te hernummeren
+
     local action_id = is_region and "_SWSMARKERLIST8" or "_SWSMARKERLIST7"
-    reaper.Main_OnCommand(reaper.NamedCommandLookup(action_id), 0)
-    
-    -- Stap 3: Update onze interne datastructuren met de nieuwe nummering
-    local _, num_markers, num_regions = reaper.CountProjectMarkers(0)
+    r.Main_OnCommand(r.NamedCommandLookup(action_id), 0)
+
+    local _, num_markers, num_regions = r.CountProjectMarkers(0)
     local new_items = {}
     for i = 0, num_markers + num_regions - 1 do
-        local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = reaper.EnumProjectMarkers3(0, i)
+        local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
         if retval ~= 0 and isrgn == is_region then
             local item = {
                 name = name,
@@ -1027,961 +2180,186 @@ local function renumber_items(is_region)
                 color = color,
                 index = markrgnindexnumber,
                 isRegion = isrgn,
-                visible = true,  -- Tijdelijk alles zichtbaar
+                visible = true,
                 project_key = current_project_key
             }
             table.insert(new_items, item)
         end
     end
     
-    -- Stap 4: Herstel de oorspronkelijke zichtbaarheidsstatus
     for _, item in ipairs(new_items) do
         local original_visibility = visibility_status[item.index]
         if original_visibility == false then
             set_item_visibility(item, false)
         end
     end
-    
-    -- Update de project_items tabel
     project_items[current_project_key] = new_items
-    
-    -- Update de timeline en sla de wijzigingen op
-    reaper.UpdateTimeline()
+    r.UpdateTimeline()
     save_invisible_items()
     save_visibility_to_project()
 end
 
-local function move_markers_and_regions_to_cursor()
-    local cursor_pos = reaper.GetCursorPosition()
-    local current_project_key = get_project_key()
-    local all_items = project_items[current_project_key] or {}
+-----------------------------------------------------------------------------
+
+function frame()
+    current_dims = getScaledDimensions(settings.scale_factor)
+
+    local window_flags = BASE_WINDOW_FLAGS
+    if is_pinned then window_flags = window_flags | ImGui.WindowFlags_TopMost end
+    if is_nomove then window_flags = window_flags | ImGui.WindowFlags_NoMove end
     
-    if #all_items > 0 then
-        local offset = cursor_pos - all_items[1].pos
-        
-        reaper.Undo_BeginBlock()
-        
-        for _, item in ipairs(all_items) do
-            local new_pos = item.pos + offset
-            if item.isRegion then
-                local new_end = item.rgnend + offset
-                if item.visible then
-                    reaper.SetProjectMarker(item.index, true, new_pos, new_end, item.name, item.color)
-                else
-                    item.pos = new_pos
-                    item.rgnend = new_end
-                end
-            else
-                if item.visible then
-                    reaper.SetProjectMarker(item.index, false, new_pos, 0, item.name, item.color)
-                else
-                    item.pos = new_pos
-                end
-            end
-        end
-        
-        reaper.Undo_EndBlock("Move all markers and regions to cursor", -1)
-        reaper.UpdateTimeline()
-        
-        save_invisible_items()
-        save_visibility_to_project()
-    end
-end
-
-local function run_script(script_name)
-    local script_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/" .. script_name
-    if reaper.file_exists(script_path) then
-        dofile(script_path)
-    else
-        reaper.ShowMessageBox("Script not found: " .. script_name, "Error", 0)
-    end
-end
-
-local function add_marker_buttons(ctx)
-    if reaper.ImGui_Button(ctx, "Marker@start sel items", 120) then
-        run_script("TK_marker at start items on the track.lua")
-    end
-    reaper.ImGui_SameLine(ctx)
-    if reaper.ImGui_Button(ctx, "Marker@mid sel items", 120) then
-        run_script("TK_marker at middle items on the track.lua")
-    end
-end
-------------------------------------------------------------------------------------------------
--- REGION VOORTGANGSBAR
-local function lighten_color(r, g, b, factor)
-    return math.min(r + (255 - r) * factor, 255),
-           math.min(g + (255 - g) * factor, 255),
-           math.min(b + (255 - b) * factor, 255)
-end
-
-
-local function get_region_under_play_cursor()
-    local play_pos = reaper.GetPlayPosition()
-    local num_markers = reaper.CountProjectMarkers(0)
-    for i = 0, num_markers - 1 do
-        local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = reaper.EnumProjectMarkers3(0, i)
-        if isrgn and pos <= play_pos and rgnend >= play_pos then
-            return {start = pos, ending = rgnend, name = name, color = color, index = markrgnindexnumber}
-        end
-    end
-    return nil
-end
-
-
-local function format_time(seconds)
-    local minutes = math.floor(seconds / 60)
-    local remaining_seconds = seconds % 60
-    return string.format("%d:%05.2f", minutes, remaining_seconds)
-end
-
-local function draw_region_progress(ctx, region, window_width)
-    if not region then return end
-
-    local play_pos = reaper.GetPlayPosition()
-    local progress = (play_pos - region.start) / (region.ending - region.start)
-    progress = math.max(0, math.min(1, progress))
-
-    local bar_width = window_width - 16
-    local bar_height = 14
-    local pos_x, pos_y = reaper.ImGui_GetCursorScreenPos(ctx)
-
-    local draw_list = reaper.ImGui_GetWindowDrawList(ctx)
-    local r, g, b = reaper.ColorFromNative(region.color)
-    local region_color = reaper.ImGui_ColorConvertDouble4ToU32(r/255, g/255, b/255, 1)
-    
-    local lr, lg, lb = lighten_color(r, g, b, 0.5) -- factor om lichter te maken
-    local light_region_color = reaper.ImGui_ColorConvertDouble4ToU32(lr/255, lg/255, lb/255, 1)
-
-    reaper.ImGui_DrawList_AddRectFilled(draw_list, pos_x, pos_y, pos_x + bar_width, pos_y + bar_height, region_color)
-    reaper.ImGui_DrawList_AddRectFilled(draw_list, pos_x, pos_y, pos_x + bar_width * progress, pos_y + bar_height, light_region_color)
-
-    local elapsed_time = play_pos - region.start
-    local remaining_time = region.ending - play_pos
-    local total_time = region.ending - region.start
-    local time_text = string.format("%d: %s - %s / %s / %s", region.index or 0, region.name or "", format_time(elapsed_time), format_time(remaining_time), format_time(total_time))
-    
-    local text_width = reaper.ImGui_CalcTextSize(ctx, time_text)
-    local text_x = pos_x + (bar_width - text_width) / 2
-    
-    reaper.ImGui_DrawList_AddText(draw_list, text_x, pos_y + 1, 0x000000FF, time_text)
-
-    reaper.ImGui_SetCursorPosY(ctx, reaper.ImGui_GetCursorPosY(ctx) + bar_height + 5)
-    reaper.ImGui_Dummy(ctx, 0, 0)
-end
-------------------------------------------------------------------------------------------------
--- TESTGEBIED!!!! --
--- Funtie om markers en regions te selecteren
-
-
--- Functie om Naamveld leeg te maken
-function clear_item_name(item)
-    item.name = ""
-    item_names[item.index .. (item.isRegion and "R" or "M")] = ""
-    local flags = 1  
-    reaper.SetProjectMarker4(0, item.index, item.isRegion, item.pos, item.rgnend or 0, "", item.color, flags)
-    reaper.UpdateTimeline()
-end
-
--- Functies om region af te spelen
-local function play_region(region)
-    if region and region.visible then
-        reaper.SetEditCurPos(region.pos, true, false)
-        reaper.GetSet_LoopTimeRange(true, false, region.pos, region.rgnend, false)
-        reaper.OnPlayButton()
-        currently_playing_region = region
-        reaper.UpdateTimeline()
-    end
-end
-
-local function find_next_marker_position(current_pos)
     local items = get_markers_and_regions()
-    local next_pos = nil
+    SetTKStyle()
+    push_font(ctx, fonts[settings.scale_factor])
+
+    ImGui.SetNextWindowSizeConstraints(ctx, current_dims.WINDOW_WIDTH , current_dims.WINDOW_HEIGHT, 16384, 16384)
+    local visible, open = ImGui.Begin(ctx, 'TK SMART', window_open, window_flags)
     
-    -- Zoek alleen naar de eerstvolgende marker
-    for _, item in ipairs(items) do
-        if not item.isRegion and item.visible and item.pos > current_pos then
-            if not next_pos or item.pos < next_pos then
-                next_pos = item.pos
-            end
-        end
+    if ImGui.IsKeyPressed(ctx, ImGui.Key_Escape) then
+        if settings.save_on_close then SaveSettings() end
+        window_open = false
     end
     
-    -- Als er geen volgende marker is, gebruik project einde
-    if not next_pos then
-        local project_end = reaper.GetProjectLength()
-        -- Check of er items zijn die voorbij project einde gaan
-        local num_items = reaper.CountMediaItems(0)
-        for i = 0, num_items - 1 do
-            local item = reaper.GetMediaItem(0, i)
-            local item_end = reaper.GetMediaItemInfo_Value(item, "D_POSITION") + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-            project_end = math.max(project_end, item_end)
-        end
-        next_pos = project_end
-    end
-    
-    return next_pos
-end
-
-
-local function play_marker(marker)
-    if marker and marker.visible then
-        marker.end_time = find_next_marker_position(marker.pos)
-        if marker.end_time > marker.pos then
-            reaper.SetEditCurPos(marker.pos, true, false)
-            -- Stel de tijdselectie in van huidige marker tot volgende marker
-            reaper.GetSet_LoopTimeRange(true, false, marker.pos, marker.end_time, false)
-            reaper.OnPlayButton()
-            currently_playing_marker = marker
-            reaper.UpdateTimeline()
-        end
-    end
-end
-
-
-local function handle_region_playback()
-    if currently_playing_region then
-        local play_state = reaper.GetPlayState()
-        local play_position = reaper.GetPlayPosition()
-        
-        -- Voeg een kleine buffer toe om te vroeg stoppen te voorkomen
-        if play_state == 0 or (play_position >= (currently_playing_region.rgnend - 0.01) and 
-           play_position > currently_playing_region.pos + 0.1) then
-            currently_playing_region = nil
-            if next_region_to_play then
-                play_region(next_region_to_play)
-                next_region_to_play = nil
-            end
-            reaper.UpdateTimeline()
-        end
-    end
-end
-
-local function handle_marker_playback()
-    if currently_playing_marker then
-        local play_state = reaper.GetPlayState()
-        local play_position = reaper.GetPlayPosition()
-        
-        -- Voeg een kleine buffer toe om te vroeg stoppen te voorkomen
-        if play_state == 0 or (play_position >= currently_playing_marker.end_time and 
-           play_position > currently_playing_marker.pos + 0.1) then
-            currently_playing_marker = nil
-            if next_marker_to_play then
-                play_marker(next_marker_to_play)
-                next_marker_to_play = nil
-            end
-            reaper.UpdateTimeline()
-        end
-    end
-end
-
-local function create_custom_button(button_id)
-    -- Gebruik vaste breedte van 120 pixels
-    local button_width = 120
-    
-    local stored_name = reaper.GetExtState("TK_SMART", "custom_button_" .. button_id .. "_name")
-    local button_name = stored_name ~= "" and stored_name or ("Dummy##btn" .. button_id)
-    local stored_action = reaper.GetExtState("TK_SMART", "custom_button_" .. button_id .. "_action")
-
-    -- Zet vaste breedte voor de button
-    reaper.ImGui_PushItemWidth(ctx, button_width)
-    if reaper.ImGui_Button(ctx, button_name, button_width) then
-        if stored_action ~= "" then
-            local command_id = reaper.NamedCommandLookup(stored_action)
-            if command_id ~= 0 then
-                reaper.Main_OnCommand(command_id, 0)
-            end
-        end
-    end
-    reaper.ImGui_PopItemWidth(ctx)
-
-    -- Rechtermuisklik voor actie toewijzing
-    if reaper.ImGui_IsItemClicked(ctx, 1) then
-        local retval, action_id = reaper.GetUserInputs("Actie Toewijzen", 1, "Command ID:", stored_action)
-        if retval then
-            reaper.SetExtState("TK_SMART", "custom_button_" .. button_id .. "_action", action_id, true)
-        end
-    end
-
-    -- Alt + linkermuisklik voor naam wijzigen
-    if reaper.ImGui_IsItemClicked(ctx, 0) and reaper.ImGui_IsKeyDown(ctx, reaper.ImGui_Mod_Alt()) then
-        local current_name = stored_name ~= "" and stored_name or "CUSTOM BUTTON"
-        local retval, new_name = reaper.GetUserInputs("Button Name", 1, "New Name:", current_name)
-        if retval then
-            reaper.SetExtState("TK_SMART", "custom_button_" .. button_id .. "_name", new_name .. "##btn" .. button_id, true)
-        end
-    end
-end
-
-
-
--------------------------------------------------------------------------------------------------
--- MAIN FUNCTION
-local function main()
-    -- Initialisatie
-    -- ensure_json_file_exists()
-    -- load_invisible_items()
-    handle_region_playback()
-    handle_marker_playback()
-    local items = get_markers_and_regions()
-    
-    
-    -- GUI OPMAAK
-    local dark_gray = 0x303030FF
-    local hover_gray = 0x606060FF
-    local active_gray = 0x404040FF
-    local button_width = 75
-    reaper.ImGui_PushFont(ctx, arial_font)
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)
-    reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowRounding(), 7) 
-
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_WindowBg(), 0x000000FF)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), 0xFFFFFFFF)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), dark_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hover_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), active_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Tab(), dark_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_TabHovered(), hover_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), dark_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgHovered(), hover_gray)
-    reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), active_gray)
-    
-    local min_width = 520
-    local transparency = 0.75
-    reaper.ImGui_SetNextWindowSizeConstraints(ctx, min_width, 300, 16384, 16384)
-    reaper.ImGui_SetNextWindowBgAlpha(ctx, transparency)
-    
-    local window_flags = reaper.ImGui_WindowFlags_NoTitleBar() | 
-                         reaper.ImGui_WindowFlags_NoCollapse() | 
-                         reaper.ImGui_WindowFlags_NoScrollbar() |
-                         reaper.ImGui_WindowFlags_NoScrollWithMouse()
-    
-    local visible, open = reaper.ImGui_Begin(ctx, 'TK SMART', true, window_flags)
     if visible then
-
-        -- PRESET FUNCTIONALITEIT
-        local presets = get_preset_files()
-        local selected_preset = {category = nil, index = nil}
-
-        if reaper.ImGui_Button(ctx, "Save Preset", button_width) then
-            save_marker_region_set()
-        end
+        local content_w = ImGui.GetContentRegionAvail(ctx)
         
-        reaper.ImGui_SameLine(ctx)
-        reaper.ImGui_SetNextItemWidth(ctx, 158)
-        if reaper.ImGui_BeginCombo(ctx, "##Presets", selected_preset.index and (selected_preset.category .. ": " .. presets[selected_preset.category][selected_preset.index].name) or "Select preset") then
-            if #presets.project > 0 then
-                reaper.ImGui_TextDisabled(ctx, "Project Presets:")
-                for i, preset in ipairs(presets.project) do
-                    local is_selected = (selected_preset.category == "project" and selected_preset.index == i)
-                    if reaper.ImGui_Selectable(ctx, preset.name, is_selected) then
-                        if reaper.ImGui_IsKeyDown(ctx, reaper.ImGui_Mod_Alt()) then
-                            -- Delete preset
-                            table.remove(presets.project, i)
-                            os.remove(preset.path)
-                            selected_preset = {category = nil, index = nil}
-                        else
-                            -- Load preset
-                            selected_preset = {category = "project", index = i}
-                            load_marker_region_set(preset.path)
-                        end
-                    end
-                    if is_selected then
-                        reaper.ImGui_SetItemDefaultFocus(ctx)
-                    end
-                end
-            end
-       
-            if #presets.global > 0 then
-                reaper.ImGui_TextDisabled(ctx, "Global Presets:")
-                for i, preset in ipairs(presets.global) do
-                    local is_selected = (selected_preset.category == "global" and selected_preset.index == i)
-                    if reaper.ImGui_Selectable(ctx, preset.name, is_selected) then
-                        if reaper.ImGui_IsKeyDown(ctx, reaper.ImGui_Mod_Alt()) then
-                            -- Delete preset
-                            table.remove(presets.global, i)
-                            os.remove(preset.path)
-                            selected_preset = {category = nil, index = nil}
-                        else
-                            -- Load preset
-                            selected_preset = {category = "global", index = i}
-                            load_marker_region_set(preset.path)
-                        end
-                    end
-                    if is_selected then
-                        reaper.ImGui_SetItemDefaultFocus(ctx)
-                    end
-                end
-            end
-            
-            reaper.ImGui_EndCombo(ctx)
-        end
-    
-        reaper.ImGui_SameLine(ctx)
-        local changed, new_save_preset_globally = reaper.ImGui_Checkbox(ctx, "Global preset", save_preset_globally)
-        if changed then
-            save_preset_globally = new_save_preset_globally
-            reaper.SetExtState("TK_SMART", "save_preset_globally", tostring(save_preset_globally), true)
-        end
-
-        -- QUIT BUTTON
-        local window_width = reaper.ImGui_GetWindowWidth(ctx)
-        reaper.ImGui_SameLine(ctx, window_width - 47 - 8)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0xFF5555FF)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0xFF0000FF)
-        if reaper.ImGui_Button(ctx, 'Quit', 47) then
-            open = false
-        end
-        reaper.ImGui_PopStyleColor(ctx, 3)
-
-        -- AD MARKER AND REGION BUTTON
-        if reaper.ImGui_Button(ctx, "+Marker", button_width) then
-            local cursor_pos = reaper.GetCursorPosition()
-            reaper.AddProjectMarker(0, false, cursor_pos, 0, "", -1)
-            items = get_markers_and_regions() -- Gebruik de bestaande functie van TK_SMART
-        end
-        reaper.ImGui_SameLine(ctx)
+        TKTitleBar()
+        push_font(ctx, fonts[settings.scale_factor])
+        if show_settings then TKScaleSettings() end
         
-        if reaper.ImGui_Button(ctx, "+Region", button_width) then
-            local start_time, end_time = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
-            
+        draw_preset_section(ctx)
+        local window_width = ImGui.GetWindowWidth(ctx)
+        local num_buttons_per_row = 8
+        local padding = 6
+        local available_width = window_width - (padding * (num_buttons_per_row + 1))
+        local button_width = available_width / num_buttons_per_row
+        ImGui.SameLine(ctx)
+
+        if ImGui.Button(ctx, "+Marker", button_width -20) then
+            local cursor_pos = r.GetCursorPosition()
+            r.AddProjectMarker(0, false, cursor_pos, 0, "", -1)
+            items = get_markers_and_regions()
+        end
+        ImGui.SameLine(ctx)
+
+        if ImGui.Button(ctx, "+Region", button_width -20) then
+            local start_time, end_time = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
             if end_time <= start_time then
-                start_time = reaper.GetCursorPosition()
+                start_time = r.GetCursorPosition()
                 end_time = start_time + 1
             end
-            reaper.AddProjectMarker(0, true, start_time, end_time, "", -1)
-            items = get_markers_and_regions() -- Gebruik de bestaande functie van TK_SMART
+            r.AddProjectMarker(0, true, start_time, end_time, "", -1)
+            items = get_markers_and_regions()
+        end
+        ImGui.SameLine(ctx)
+
+        if ImGui.Button(ctx, "Renumber M", button_width) then
+            r.Undo_BeginBlock()
+            renumber_items(false) 
+            r.Undo_EndBlock("Renumber Markers", -1)
+            items = get_markers_and_regions()
+        end
+        ImGui.SameLine(ctx)
+
+        if ImGui.Button(ctx, "Renumber R", button_width) then
+            r.Undo_BeginBlock()
+            renumber_items(true)
+            r.Undo_EndBlock("Renumber Regions", -1)
+            items = get_markers_and_regions()
         end
         reaper.ImGui_SameLine(ctx)
 
-        -- RENUMBER MARKERS AND REGIONS BUTTONS
-        if reaper.ImGui_Button(ctx, "Renumber M", button_width) then
-            reaper.Undo_BeginBlock()
-            renumber_items(false)  -- false voor markers
-            reaper.Undo_EndBlock("Renumber Markers", -1)
-            items = get_markers_and_regions()  -- Update de items na hernummering
-        end
-        
-        reaper.ImGui_SameLine(ctx)
-        if reaper.ImGui_Button(ctx, "Renumber R", button_width) then
-            reaper.Undo_BeginBlock()
-            renumber_items(true)  -- true voor regions
-            reaper.Undo_EndBlock("Renumber Regions", -1)
-            items = get_markers_and_regions()  -- Update de items na hernummering
-        end
-
-        -- BROWSER BUTTON
-        reaper.ImGui_SameLine(ctx)
-        local window_width = reaper.ImGui_GetWindowWidth(ctx)
-        reaper.ImGui_SetCursorPosX(ctx, window_width - 47 - 8)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0x0080FFFF)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), 0x0099FFFF)
         reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), 0x0080FFFF)
-        if reaper.ImGui_Button(ctx, "Browser", 47) then
-        if show_browser then
-        SHOW_BROWSER = false
-        show_browser = false
-        else
-        SHOW_BROWSER = true
-        local browser_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_marker_Region_Action_Browser.lua"
-        dofile(browser_path)
-        show_browser = true
+        if reaper.ImGui_Button(ctx, "Browser", button_width) then
+            if show_browser then
+            SHOW_BROWSER = false
+            show_browser = false
+            else
+            SHOW_BROWSER = true
+            local browser_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_marker_Region_Action_Browser.lua"
+            dofile(browser_path)
+            show_browser = true
+            end
         end
-    end
         reaper.ImGui_PopStyleColor(ctx, 3)
 
-        -- TIMELINE
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Header(), 0x00000000)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_HeaderHovered(), 0x00000000)
-        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_HeaderActive(), 0x00000000)
-
-        if reaper.ImGui_Selectable(ctx, "Project Timeline", false) then
+        ImGui.PushStyleColor(ctx, ImGui.Col_Header, 0x00000000)
+        ImGui.PushStyleColor(ctx, ImGui.Col_HeaderHovered, 0x00000000)
+        ImGui.PushStyleColor(ctx, ImGui.Col_HeaderActive, 0x00000000)
+        if ImGui.Selectable(ctx, "Timeline", false) then
             show_minimap = not show_minimap
         end
+        ImGui.PopStyleColor(ctx, 3)
 
-        reaper.ImGui_PopStyleColor(ctx, 3)
-        
         if show_minimap then
-            local timeline_height = 50
-            reaper.ImGui_BeginChild(ctx, "Timeline", 0, timeline_height, reaper.ImGui_WindowFlags_None())
+            local timeline_height = 50 * settings.scale_factor
+            ImGui.BeginChild(ctx, "Timeline", 0, timeline_height, ImGui.WindowFlags_None)
             draw_timeline_minimap(ctx, items)
-            reaper.ImGui_EndChild(ctx)
+            ImGui.EndChild(ctx)
         end
-
-        -- MARKER TABEL
-        if reaper.ImGui_BeginTabBar(ctx, "MarkerRegionTabs") then
+        
+        if ImGui.BeginTabBar(ctx, "MarkerRegionTabs") then
             local available_height = calculate_available_height(ctx)
             
-            if reaper.ImGui_BeginTabItem(ctx, "Markers") then
-                if reaper.ImGui_BeginChild(ctx, "MarkersTableChild", 0, available_height) then
-                    if reaper.ImGui_BeginTable(ctx, "MarkersTable", 9, reaper.ImGui_TableFlags_Borders()) then
-                    reaper.ImGui_TableSetupColumn(ctx, "##Visible", reaper.ImGui_TableColumnFlags_WidthFixed(), 35)
-                    reaper.ImGui_TableSetupColumn(ctx, "ID", reaper.ImGui_TableColumnFlags_WidthFixed(), 30)
-                    reaper.ImGui_TableSetupColumn(ctx, "Play", reaper.ImGui_TableColumnFlags_WidthFixed(), 35)
-                    reaper.ImGui_TableSetupColumn(ctx, "Name", reaper.ImGui_TableColumnFlags_WidthStretch())
-                    reaper.ImGui_TableSetupColumn(ctx, "Time", reaper.ImGui_TableColumnFlags_WidthFixed(), 75)
-                    reaper.ImGui_TableSetupColumn(ctx, "Color", reaper.ImGui_TableColumnFlags_WidthFixed(), 35)
-                    reaper.ImGui_TableSetupColumn(ctx, "Convert", reaper.ImGui_TableColumnFlags_WidthFixed(), 55)
-                    reaper.ImGui_TableSetupColumn(ctx, "Del", reaper.ImGui_TableColumnFlags_WidthFixed(), 15)
-                    reaper.ImGui_TableSetupColumn(ctx, "Sel", reaper.ImGui_TableColumnFlags_WidthFixed(), 15)
-                    reaper.ImGui_TableHeadersRow(ctx)
-                    
-                    -- klik functie om alle markers te tonen of te verbergen
-                    reaper.ImGui_TableSetColumnIndex(ctx, 0)
-                    local x, y = reaper.ImGui_GetCursorScreenPos(ctx)
-                    local draw_list = reaper.ImGui_GetWindowDrawList(ctx)
-                    local text_width = reaper.ImGui_CalcTextSize(ctx, "Visible")
-                    local cell_width = 35 -- De breedte die we eerder hebben ingesteld
-                    local cell_height = reaper.ImGui_GetTextLineHeight(ctx)
-                    
-                    reaper.ImGui_DrawList_AddText(draw_list, x + (cell_width - text_width) / 2, y, 0xFFFFFFFF, "Visible")
-                    
-                    if reaper.ImGui_InvisibleButton(ctx, "##VisibleHeaderMarkers", cell_width, cell_height) then
-                        local all_markers_visible = true
-                        for _, item in ipairs(project_items[get_project_key()] or {}) do
-                            if not item.isRegion then
-                                all_markers_visible = all_markers_visible and item.visible
-                            end
-                        end
-                        update_all_items_visibility(not all_markers_visible, "markers")
-                    end
-                    -- --
-
-                    for i, item in ipairs(items) do
-                        if not item.isRegion then
-                            reaper.ImGui_TableNextRow(ctx)
-                            
-                            reaper.ImGui_TableSetColumnIndex(ctx, 0) -- Visible checbox
-                            local changed, new_visible = reaper.ImGui_Checkbox(ctx, "##visible" .. i, item.visible)
-                            if changed then
-                                set_item_visibility(item, new_visible)
-                            end
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 1) -- ID
-                            display_colored_id(ctx, item, i, items)
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 2)
-                            local button_text = "Play"
-                            local button_color
-                            
-                            if currently_playing_marker and currently_playing_marker.index == item.index then
-                                if next_marker_to_play and next_marker_to_play.index == item.index then
-                                    button_color = reaper.ImGui_ColorConvertDouble4ToU32(1, 0.55, 0, 1)
-                                    button_text = "Next"
-                                else
-                                    button_color = reaper.ImGui_ColorConvertDouble4ToU32(1, 0, 0, 1)
-                                    button_text = "Play"
-                                end
-                            elseif next_marker_to_play and next_marker_to_play.index == item.index then
-                                button_color = reaper.ImGui_ColorConvertDouble4ToU32(1, 0.55, 0, 1)
-                                button_text = "Next"
-                            else
-                                button_color = reaper.ImGui_ColorConvertDouble4ToU32(0.19, 0.19, 0.19, 1)
-                                button_text = "Play"
-                            end
-                            
-                            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
-                            if reaper.ImGui_Button(ctx, button_text .. "##" .. i) then
-                                if currently_playing_marker then
-                                    next_marker_to_play = item
-                                else
-                                    play_marker(item)
-                                end
-                            end
-                            
-                            if reaper.ImGui_IsItemClicked(ctx, 1) then  -- 1 is rechtermuisknop
-                                if currently_playing_marker and currently_playing_marker.index == item.index then
-                                    reaper.OnStopButton()
-                                    currently_playing_marker = nil
-                                    next_marker_to_play = nil
-                                end
-                            end
-                            reaper.ImGui_PopStyleColor(ctx)
-                            
-                            
-                            reaper.ImGui_TableSetColumnIndex(ctx, 3) -- Name
-
-                            -- naam veld leeg maken
-                            if reaper.ImGui_Button(ctx, "X##clear_name" .. i) then
-                                clear_item_name(item)
-                            end
-                            reaper.ImGui_SameLine(ctx)
-
-                            -- naamweergave en bewerking
-                            local display_name = item.name ~= "" and item.name or ""
-                            if editing_name == i then
-                                local changed, new_name = reaper.ImGui_InputText(ctx, "##name" .. i, item.name)
-                                if changed then
-                                    item.name = new_name
-                                    if item.visible then
-                                        reaper.SetProjectMarker3(0, item.index, item.isRegion, item.pos, item.rgnend or 0, new_name, item.color)
-                                        reaper.UpdateTimeline()
-                                    end
-                                end
-                                if reaper.ImGui_IsItemDeactivatedAfterEdit(ctx) then
-                                    editing_name = nil
-                                end
-                            else
-                                if reaper.ImGui_Selectable(ctx, display_name, false) then
-                                    editing_name = i
-                                end
-                            end
-
-                        
-                            reaper.ImGui_TableSetColumnIndex(ctx, 4) -- Time
-                            edit_time(ctx, item, false)
-                            reaper.ImGui_TableSetColumnIndex(ctx, 5) -- Color
-                            edit_color(item, i)
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 6) -- Convert
-                            if reaper.ImGui_Button(ctx, "To Region##" .. i) then
-                            toggle_marker_region(item, items)
-                            end
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 7) -- Delete button
-                            if reaper.ImGui_Button(ctx, "X##" .. i) then
-                            delete_item(item)
-                            end
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 8) -- Navigate kolom
-                            if reaper.ImGui_Button(ctx, ">##nav" .. i) then
-                                reaper.SetEditCurPos(item.pos, true, false)
-                                reaper.UpdateTimeline()
-                            end
-                        end
-                    end
-                    reaper.ImGui_EndTable(ctx)
+            if ImGui.BeginTabItem(ctx, "Markers") then
+                if ImGui.BeginChild(ctx, "MarkersTableChild", 0, available_height) then
+                    draw_marker_table(ctx, get_markers_and_regions())
                 end
-            end
-                reaper.ImGui_EndChild(ctx)
-                reaper.ImGui_EndTabItem(ctx)
+                ImGui.EndChild(ctx)
+                ImGui.EndTabItem(ctx)
             end
             
-            -- REGION TABEL
-            if reaper.ImGui_BeginTabItem(ctx, "Regions") then
-                if reaper.ImGui_BeginChild(ctx, "RegionsTableChild", 0, available_height) then
-                    if reaper.ImGui_BeginTable(ctx, "RegionsTable", 10, reaper.ImGui_TableFlags_Borders()) then
-                    reaper.ImGui_TableSetupColumn(ctx, "##Visible", reaper.ImGui_TableColumnFlags_WidthFixed(), 35)
-                    reaper.ImGui_TableSetupColumn(ctx, "ID", reaper.ImGui_TableColumnFlags_WidthFixed(), 30)
-                    reaper.ImGui_TableSetupColumn(ctx, "Play", reaper.ImGui_TableColumnFlags_WidthFixed(), 35)
-                    reaper.ImGui_TableSetupColumn(ctx, "Name", reaper.ImGui_TableColumnFlags_WidthStretch())
-                    reaper.ImGui_TableSetupColumn(ctx, "Start", reaper.ImGui_TableColumnFlags_WidthFixed(), 75)
-                    reaper.ImGui_TableSetupColumn(ctx, "End", reaper.ImGui_TableColumnFlags_WidthFixed(), 75)
-                    reaper.ImGui_TableSetupColumn(ctx, "Color", reaper.ImGui_TableColumnFlags_WidthFixed(), 35)
-                    reaper.ImGui_TableSetupColumn(ctx, "Convert", reaper.ImGui_TableColumnFlags_WidthFixed(), 55)
-                    reaper.ImGui_TableSetupColumn(ctx, "Del", reaper.ImGui_TableColumnFlags_WidthFixed(), 15)
-                    reaper.ImGui_TableSetupColumn(ctx, "Sel", reaper.ImGui_TableColumnFlags_WidthFixed(), 15)
-                    reaper.ImGui_TableHeadersRow(ctx)
-                    
-                    -- klik funtie om alle regions te verbergen of te zien
-                    reaper.ImGui_TableSetColumnIndex(ctx, 0)
-                    local x, y = reaper.ImGui_GetCursorScreenPos(ctx)
-                    local draw_list = reaper.ImGui_GetWindowDrawList(ctx)
-                    local text_width = reaper.ImGui_CalcTextSize(ctx, "Visible")
-                    local cell_width = 35 -- De breedte die we eerder hebben ingesteld
-                    local cell_height = reaper.ImGui_GetTextLineHeight(ctx)
-                    
-                    reaper.ImGui_DrawList_AddText(draw_list, x + (cell_width - text_width) / 2, y, 0xFFFFFFFF, "Visible")
-                    
-                    if reaper.ImGui_InvisibleButton(ctx, "##VisibleHeaderRegions", cell_width, cell_height) then
-                        local all_regions_visible = true
-                        for _, item in ipairs(project_items[get_project_key()] or {}) do
-                            if item.isRegion then
-                                all_regions_visible = all_regions_visible and item.visible
-                            end
-                        end
-                        update_all_items_visibility(not all_regions_visible, "regions")
-                    end
-                    -- --
-
-                    for i, item in ipairs(items) do
-                        if item.isRegion then
-                            reaper.ImGui_TableNextRow(ctx)
-                            
-                            reaper.ImGui_TableSetColumnIndex(ctx, 0) -- Visible checbox
-                            local changed, new_visible = reaper.ImGui_Checkbox(ctx, "##visible" .. i, item.visible)
-                            if changed then
-                                set_item_visibility(item, new_visible)
-                            end
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 1) -- ID
-                            display_colored_id(ctx, item, i, items)
-
-                            -- In de region loop, voor de play button:
-                            reaper.ImGui_TableSetColumnIndex(ctx, 2)
-                            local button_text = "Play"
-                            local button_color
-
-                            if currently_playing_region and currently_playing_region.index == item.index then
-                                if next_region_to_play and next_region_to_play.index == item.index then
-                                    button_color = reaper.ImGui_ColorConvertDouble4ToU32(1, 0.55, 0, 1) -- oranje
-                                    button_text = "Next"
-                                else
-                                    button_color = reaper.ImGui_ColorConvertDouble4ToU32(1, 0, 0, 1) -- rood
-                                    button_text = "Play"
-                                end
-                            elseif next_region_to_play and next_region_to_play.index == item.index then
-                                button_color = reaper.ImGui_ColorConvertDouble4ToU32(1, 0.55, 0, 1) -- oranje
-                                button_text = "Next"
-                            else
-                                button_color = reaper.ImGui_ColorConvertDouble4ToU32(0.19, 0.19, 0.19, 1) -- standaard grijs
-                                button_text = "Play"
-                            end
-                            
-                            reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
-                            if reaper.ImGui_Button(ctx, button_text .. "##" .. i) then
-                                if currently_playing_region then
-                                    next_region_to_play = item
-                                else
-                                    play_region(item)
-                                end
-                            end
-                            
-                            if reaper.ImGui_IsItemClicked(ctx, 1) then  -- 1 is rechtermuisknop
-                                if currently_playing_region and currently_playing_region.index == item.index then
-                                    reaper.OnStopButton()
-                                    currently_playing_region = nil
-                                    next_region_to_play = nil
-                                end
-                            end
-                            reaper.ImGui_PopStyleColor(ctx)
-                            
-
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 3) -- Name
-
-                            -- naam veld leeg maken
-                            if reaper.ImGui_Button(ctx, "X##clear_name" .. i) then
-                                clear_item_name(item)
-                            end
-                            reaper.ImGui_SameLine(ctx)
-
-                            -- naamweergave en bewerking
-                            local display_name = item.name ~= "" and item.name or ""
-                            if editing_name == i then
-                                local changed, new_name = reaper.ImGui_InputText(ctx, "##name" .. i, item.name)
-                                if changed then
-                                    item.name = new_name
-                                    if item.visible then
-                                        reaper.SetProjectMarker3(0, item.index, item.isRegion, item.pos, item.rgnend or 0, new_name, item.color)
-                                        reaper.UpdateTimeline()
-                                    end
-                                end
-                                if reaper.ImGui_IsItemDeactivatedAfterEdit(ctx) then
-                                    editing_name = nil
-                                end
-                            else
-                                if reaper.ImGui_Selectable(ctx, display_name, false) then
-                                    editing_name = i
-                                end
-                            end
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 4) -- Start time
-                            edit_time(ctx, item, false)
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 5) -- End time
-                            edit_time(ctx, item, true)
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 6) -- Color
-                            edit_color(item, i)
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 7) -- Convert
-                            if reaper.ImGui_Button(ctx, "To Marker##" .. i) then
-                            toggle_marker_region(item, items)
-                            end
-
-                            reaper.ImGui_TableSetColumnIndex(ctx, 8) -- Del
-                            if reaper.ImGui_Button(ctx, "X##" .. i) then
-                                delete_item(item)
-                            end
-                            reaper.ImGui_TableSetColumnIndex(ctx, 9) -- Navigate kolom
-                            if reaper.ImGui_Button(ctx, ">##nav" .. i) then
-                                reaper.SetEditCurPos(item.pos, true, false)
-                                reaper.GetSet_LoopTimeRange(true, false, item.pos, item.rgnend, false)
-                                reaper.UpdateTimeline()
-                            end
-
-                        end
-                    end
-                    reaper.ImGui_EndTable(ctx)
+            if ImGui.BeginTabItem(ctx, "Regions") then
+                if ImGui.BeginChild(ctx, "RegionsTableChild", 0, available_height) then
+                    draw_region_table(ctx, get_markers_and_regions())
                 end
+                ImGui.EndChild(ctx)
+                ImGui.EndTabItem(ctx)
             end
-                reaper.ImGui_EndChild(ctx)
-                reaper.ImGui_EndTabItem(ctx)
-            end
-
-            -- TAB3: ACTIONS TAB
-            if reaper.ImGui_BeginTabItem(ctx, "Actions") then
-                if reaper.ImGui_BeginChild(ctx, "ActionsChild", 0, available_height) then
-                reaper.ImGui_BeginGroup(ctx)
-                local button_width = 120
-                if reaper.ImGui_Button(ctx, "Smart Action Browser", button_width) then
-                    if show_action_browser then
-                        SHOW_ACTION_BROWSER = false
-                        show_action_browser = false
-                    else
-                        SHOW_ACTION_BROWSER = true
-                        local action_browser_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_Action_Browser.lua"
-                        dofile(action_browser_path)
-                        show_action_browser = true
-                    end
+            
+            if ImGui.BeginTabItem(ctx, "Actions") then
+                if ImGui.BeginChild(ctx, "ActionsChild", 0, available_height) then
+                    draw_actions_tab(ctx)
                 end
-                reaper.ImGui_SameLine(ctx)
-                
-                local smart_marker_state = reaper.GetToggleCommandState(reaper.NamedCommandLookup("_SWSMA_TOGGLE"))
-                local button_text = smart_marker_state == 1 and "Smart Marker: ON" or "Smart Marker: OFF"
-                local button_color = smart_marker_state == 1 and 0x00AA00FF or 0xAA0000FF -- Groen als aan, rood als uit
-
-                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
-                if reaper.ImGui_Button(ctx, button_text, button_width) then
-                    local command_id = reaper.NamedCommandLookup("_SWSMA_TOGGLE")
-                    reaper.Main_OnCommand(command_id, 0)
-                    smart_marker_state = reaper.GetToggleCommandState(command_id)
-                end
-                reaper.ImGui_PopStyleColor(ctx)
-                reaper.ImGui_SameLine(ctx)
-
-                if reaper.ImGui_Button(ctx, "Autocolor Window", button_width) then
-                    reaper.Main_OnCommand(reaper.NamedCommandLookup("_SWSAUTOCOLOR_OPEN"), 0)
-                end
-                reaper.ImGui_SameLine(ctx)
-                
-                local autocolor_enabled = sync_autocolor_state()
-                local button_text = autocolor_enabled and "Autocolor: ON" or "Autocolor: OFF"
-                local button_color = autocolor_enabled and 0x00AA00FF or 0xAA0000FF
-
-                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), button_color)
-                if reaper.ImGui_Button(ctx, button_text, button_width) then
-                    autocolor_enabled = not autocolor_enabled
-                    local desired_state = autocolor_enabled and 1 or 0
-                    
-                   
-                    if reaper.GetToggleCommandState(reaper.NamedCommandLookup("_S&MAUTOCOLOR_MKR_ENABLE")) ~= desired_state then
-                        reaper.Main_OnCommand(reaper.NamedCommandLookup("_S&MAUTOCOLOR_MKR_ENABLE"), 0)
-                    end
-                    if reaper.GetToggleCommandState(reaper.NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE")) ~= desired_state then
-                        reaper.Main_OnCommand(reaper.NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE"), 0)
-                    end
-                end
-                reaper.ImGui_PopStyleColor(ctx)
-                
-                if reaper.ImGui_Button(ctx, "Move All to cursor", button_width) then
-                    move_markers_and_regions_to_cursor()
-                    items = get_markers_and_regions() -- Update de items na verplaatsing
-                end
-                reaper.ImGui_SameLine(ctx)
-                
-                create_custom_button(1)
-                reaper.ImGui_SameLine(ctx)
-                create_custom_button(2)
-                reaper.ImGui_SameLine(ctx)
-                create_custom_button(3)
-
-                create_custom_button(4)
-                reaper.ImGui_SameLine(ctx)
-                create_custom_button(5)
-                reaper.ImGui_SameLine(ctx)
-                create_custom_button(6)
-                reaper.ImGui_SameLine(ctx)
-                create_custom_button(7)
-                
-                local ddp_action_id = reaper.NamedCommandLookup("__DDP_MARKER_EDITOR")
-                if ddp_action_id ~= 0 then
-                    if reaper.ImGui_Button(ctx, "DDP Manager", button_width) then
-                        reaper.Main_OnCommand(ddp_action_id, 0)
-                    end
-                else
-                    reaper.ImGui_Text(ctx, "DDP Marker Editor not present.")
-                    if reaper.ImGui_Button(ctx, "Download DDP Ext", button_width) then
-                        reaper.CF_ShellExecute("https://stash.reaper.fm/34295/reaper_ddp_edit_R1.zip")
-                    end
-                end
-                reaper.ImGui_SameLine(ctx)
-                add_marker_buttons(ctx)
-                reaper.ImGui_SameLine(ctx)
-                
-                reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF8C00FF) -- Oranje kleur
-                if reaper.ImGui_Button(ctx, "Learn Browser", button_width) then
-                    if show_weblink_browser then
-                        SHOW_WEBLINK_BROWSER = false
-                        show_weblink_browser = false
-                    else
-                        SHOW_WEBLINK_BROWSER = true
-                        local weblink_browser_path = reaper.GetResourcePath() .. "/Scripts/TK Scripts/TK SMART/TK_Learn_Browser(MR).lua"
-                        dofile(weblink_browser_path)
-                        show_weblink_browser = true
-                    end
-                end
-                reaper.ImGui_PopStyleColor(ctx)
-
-
-                reaper.ImGui_EndGroup(ctx)
-            end
-                reaper.ImGui_EndChild(ctx)
-                reaper.ImGui_EndTabItem(ctx)
-            end
-
-        -- EINDE TAB    
-            reaper.ImGui_EndTabBar(ctx)
+                ImGui.EndChild(ctx)
+                ImGui.EndTabItem(ctx)
+            end   
+            ImGui.EndTabBar(ctx)
         end
 
-------------------------------------------------------------------------------
--- BOTTEM SECTION        
-        reaper.ImGui_Separator(ctx)
-        local button_width = 70
-
-        local are_gridlines_shown = AreGridlinesShown()
-        local changed, new_show_as_gridlines = reaper.ImGui_Checkbox(ctx, "Show Gridlines", are_gridlines_shown)
-        if changed and new_show_as_gridlines ~= are_gridlines_shown then
-            reaper.Main_OnCommand(42328, 0) 
-        end
-        reaper.ImGui_SameLine(ctx)
-        local is_rmm_open = IsRegionMarkerManagerOpen()
-        local changed_rmm, new_show_region_marker_manager = reaper.ImGui_Checkbox(ctx, "R/M Manager", is_rmm_open)
-        if changed_rmm and new_show_region_marker_manager ~= is_rmm_open then
-            reaper.Main_OnCommand(40326, 0) 
-        end
-        reaper.ImGui_SameLine(ctx)
-        DrawShowRgnPlaylistCheckbox()
+        draw_bottom_section(ctx)
+        handle_region_playback()
+        handle_marker_playback()
         
-        reaper.ImGui_SameLine(ctx)
-        DrawRenderMatrixCheckbox()
-   
-        reaper.ImGui_SameLine(ctx)
-
-        local window_width = reaper.ImGui_GetWindowWidth(ctx)
-        reaper.ImGui_SameLine(ctx, window_width - 47 - 61)
-        if reaper.ImGui_Button(ctx, "DEL M", 47) then
-            reaper.Main_OnCommand(reaper.NamedCommandLookup("_SWSMARKERLIST9"), 0)
-          
-        end
-        local window_width = reaper.ImGui_GetWindowWidth(ctx)
-        reaper.ImGui_SameLine(ctx, window_width - 47 - 8)
-        if reaper.ImGui_Button(ctx, "DEL R", 47) then
-            reaper.Main_OnCommand(reaper.NamedCommandLookup("_SWSMARKERLIST10"), 0)
-       
-        end
-        reaper.ImGui_Dummy(ctx, 0, 3) 
-        local current_region = get_region_under_play_cursor()
-        draw_region_progress(ctx, current_region, window_width)
-        reaper.ImGui_Dummy(ctx, 0, 0)
-----------------------------------------------------------------------------------
--- SCRIPT EINDE
-    -- stijlen afsluiten    
-    reaper.ImGui_PopStyleColor(ctx, 10)
-    reaper.ImGui_PopStyleVar(ctx, 2)
-    reaper.ImGui_PopFont(ctx)
-    
-    -- sluit script met esc key
-    if check_esc_key() then open = false end
-    reaper.ImGui_End(ctx)
-    end   
-    
-    if open then
-        reaper.defer(main)
-    else
-        save_invisible_items()
-        save_visibility_to_project()
+        pop_font(ctx)
+        pop_style_color(ctx, 24)
+        pop_style_var(ctx, 5)
+        pop_font(ctx)
+        ImGui.End(ctx)
     end
+    if not window_open then
+        if settings.save_on_close then SaveSettings() end
+    end
+    return window_open
 end
-reaper.defer(main)
+
+function loop()
+  if frame() then
+      r.defer(loop)
+  else
+    if settings.save_on_close then  
+        SaveSettings()
+    end
+  end
+end
+
+r.defer(loop)
+
+end)  -- PCall end - Error handling
+if not ok then
+  r.ShowConsoleMsg("TK SCALE SCRIPT Error: " .. tostring(err) .. "\n")
+  r.ShowMessageBox("An error occurred in TK SCALE SCRIPT. Check console for details.", "Script Error", 0)
+end
+
