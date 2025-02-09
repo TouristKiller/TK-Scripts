@@ -60,7 +60,7 @@
     </reapack>
 
     <reapack name="TK_Item gridlines.lua" type="script" desc="TK_Item gridlines">
-    <version name="0.1.0" author="TouristKiller" time="2025-02-09T15:10:00Z">
+    <version name="0.1.1" author="TouristKiller" time="2025-02-09T15:40:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_Item%20gridlines.lua</source>
      <source main="main" file="TK_Item gridlines.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_Item%gridlines.lua</source>
     </version>

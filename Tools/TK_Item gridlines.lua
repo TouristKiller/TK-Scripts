@@ -1,6 +1,6 @@
 -- @description TK_Item gridlines
 -- @author TouristKiller
--- @version 0.1.0
+-- @version 0.1.1
 -- @changelog 
 --[[
 + Initial Release
@@ -77,7 +77,7 @@ function ShowConfigWindow()
     local window_flags = ImGui.WindowFlags_NoResize | ImGui.WindowFlags_AlwaysAutoResize | ImGui.WindowFlags_TopMost
     local config_visible, config_open = ImGui.Begin(ctx, 'TK Item Gridlines', true, window_flags)    
     if config_visible then
-        ImGui.PushItemWidth(ctx, 185)
+        ImGui.PushItemWidth(ctx, 250)
         changed, config.line_thickness = ImGui.SliderDouble(ctx, 'Thickness', config.line_thickness, 0.1, 5.0, '%.3f')
         changed, config.opacity = ImGui.SliderDouble(ctx, 'Opacity', config.opacity, 0.0, 1.0, '%.3f')       
         ImGui.PopItemWidth(ctx)
@@ -95,7 +95,7 @@ function ShowConfigWindow()
                 break
             end
         end
-        ImGui.PushItemWidth(ctx, 90)
+        ImGui.PushItemWidth(ctx, 122)
         if ImGui.BeginCombo(ctx, "Grid", current_color) then
             for _, color_data in ipairs(colors) do
                 local is_selected = (config.color == color_data[2])
@@ -118,7 +118,7 @@ function ShowConfigWindow()
         end
         ImGui.PopItemWidth(ctx)
         ImGui.Separator(ctx)
-        ImGui.PushItemWidth(ctx, 30)
+        ImGui.PushItemWidth(ctx, 80)
         local display_numerator = config.denominator
         local display_denominator = config.numerator             
         local changed_num, new_num = ImGui.InputInt(ctx, 'Numerator##num', display_numerator)
@@ -128,7 +128,7 @@ function ShowConfigWindow()
         if changed_den then config.numerator = new_den end
         ImGui.PopItemWidth(ctx)
         ImGui.Separator(ctx)        
-        if ImGui.Button(ctx, "All Items") then
+        if ImGui.Button(ctx, "All Items", 95) then
             local start_time, end_time = r.GetSet_ArrangeView2(0, false, 0, 0)
             local num_items = r.CountMediaItems(0)
             for i = 0, num_items - 1 do
@@ -141,21 +141,18 @@ function ShowConfigWindow()
                 end
             end
         end
-        ImGui.SameLine(ctx)
-        ImGui.PushItemWidth(ctx, 80)
+        ImGui.SameLine(ctx)   
         if show_full_grid then
             ImGui.PushStyleColor(ctx, ImGui.Col_Button, 0x00FF00FF)
-            if ImGui.Button(ctx, "Full Grid") then 
+            if ImGui.Button(ctx, "Full Grid", 95) then 
                 show_full_grid = not show_full_grid 
             end
             ImGui.PopStyleColor(ctx)
         else
-            if ImGui.Button(ctx, "Full Grid") then 
+            if ImGui.Button(ctx, "Full Grid", 95) then 
                 show_full_grid = not show_full_grid 
             end
         end
-
-        ImGui.PopItemWidth(ctx)
         ImGui.SameLine(ctx)
         local changed, new_value = ImGui.Checkbox(ctx, "Beat Numbers", config.show_beat_numbers)
         if changed then
