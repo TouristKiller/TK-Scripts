@@ -1,6 +1,6 @@
 -- @description TK_Item gridlines
 -- @author TouristKiller
--- @version 0.1.1
+-- @version 0.1.2
 -- @changelog 
 --[[
 + Initial Release
@@ -44,7 +44,8 @@ local config = {
     numerator = 4,  
     denominator = 4,  
     show_beat_numbers = true,
-    beat_number_size = 14
+    beat_number_size = 14,
+    measure_only = false
 }
 
 local compound_time_signatures = {
@@ -128,7 +129,7 @@ function ShowConfigWindow()
         if changed_den then config.numerator = new_den end
         ImGui.PopItemWidth(ctx)
         ImGui.Separator(ctx)        
-        if ImGui.Button(ctx, "All Items", 95) then
+        if ImGui.Button(ctx, "All Items", 60) then
             local start_time, end_time = r.GetSet_ArrangeView2(0, false, 0, 0)
             local num_items = r.CountMediaItems(0)
             for i = 0, num_items - 1 do
@@ -144,17 +145,23 @@ function ShowConfigWindow()
         ImGui.SameLine(ctx)   
         if show_full_grid then
             ImGui.PushStyleColor(ctx, ImGui.Col_Button, 0x00FF00FF)
-            if ImGui.Button(ctx, "Full Grid", 95) then 
+            if ImGui.Button(ctx, "Full Grid", 60) then 
                 show_full_grid = not show_full_grid 
             end
             ImGui.PopStyleColor(ctx)
         else
-            if ImGui.Button(ctx, "Full Grid", 95) then 
+            if ImGui.Button(ctx, "Full Grid", 60) then 
                 show_full_grid = not show_full_grid 
             end
         end
+        ImGui.SameLine(ctx)  
+        local changed, new_value = ImGui.Checkbox(ctx, "Measure Only", config.measure_only)
+        if changed then
+            config.measure_only = new_value
+        end
+
         ImGui.SameLine(ctx)
-        local changed, new_value = ImGui.Checkbox(ctx, "Beat Numbers", config.show_beat_numbers)
+        local changed, new_value = ImGui.Checkbox(ctx, "Numbers", config.show_beat_numbers)
         if changed then
             config.show_beat_numbers = new_value
         end
@@ -224,34 +231,37 @@ function RenderGridLines(draw_list, track_y, track_height, window_y, item_pos, i
             local arrange_width = RIGHT - LEFT
             local pixels = arrange_width * (grid_pos - viewport_start) / (viewport_end - viewport_start)
             local screen_x = LEFT + pixels
-
+    
             local base_color = config.color & 0xFFFFFF00
             local alpha = math.floor(config.opacity * 255)
             local color = base_color | alpha
-
+    
             local beat_index = math.floor((grid_pos / beat_duration) + 0.5)
-            local line_thickness = (beat_index % beats_per_measure == 0) and config.line_thickness * 2 or config.line_thickness
-
-            ImGui.DrawList_AddLine(draw_list,
-                screen_x, window_y + track_y,
-                screen_x, window_y + track_y + track_height,
-                color,
-                line_thickness)
-
-            if config.show_beat_numbers then
-                local beat_in_measure = (beat_index % beats_per_measure) + 1
-                local measure_number = math.floor(beat_index / beats_per_measure) + 1
-                local number_text = string.format("%d.%d", measure_number, beat_in_measure)
-                
-                ImGui.DrawList_AddText(draw_list, 
-                    screen_x + 2, window_y + track_y, 
-                    config.text_color, 
-                    number_text)
+            local isMeasureBoundary = (beat_index % beats_per_measure == 0)
+            local line_thickness = isMeasureBoundary and config.line_thickness * 2 or config.line_thickness
+    
+            if not config.measure_only or isMeasureBoundary then
+                ImGui.DrawList_AddLine(draw_list,
+                    screen_x, window_y + track_y,
+                    screen_x, window_y + track_y + track_height,
+                    color,
+                    line_thickness)
+    
+                if config.show_beat_numbers then
+                    local beat_in_measure = (beat_index % beats_per_measure) + 1
+                    local measure_number = math.floor(beat_index / beats_per_measure) + 1
+                    local number_text = string.format("%d.%d", measure_number, beat_in_measure)
+                    
+                    ImGui.DrawList_AddText(draw_list,
+                        screen_x + 2, window_y + track_y,
+                        config.text_color,
+                        number_text)
+                end
             end
         end
         ::continue::
     end
-end
+end    
 
 
 function main()
