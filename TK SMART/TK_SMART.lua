@@ -1,11 +1,9 @@
 -- @description TK Script Template for ReaScript with TK GUI
 -- @author TouristKiller
--- @version 2.0.0
+-- @version 2.0.1
 -- @changelog
 --[[
-+ Implemented TK SCRIPT TEMPLATE (UI TEMPLATE)
-+ Improved performance
-+ A Lot of under the hood stuff ;o)
++ Added DDP button again
 ]]--
 ----------------------------------------------------------------------------
 local r = reaper
@@ -1655,6 +1653,17 @@ local function draw_actions_tab(ctx)
         if ImGui.Button(ctx, "Move All to cursor", button_width) then
             move_markers_and_regions_to_cursor()
         end
+        local ddp_action_id = r.NamedCommandLookup("__DDP_MARKER_EDITOR")
+        if ddp_action_id ~= 0 then
+            if ImGui.Button(ctx, "DDP Manager", button_width) then
+                r.Main_OnCommand(ddp_action_id, 0)
+            end
+        else
+            ImGui.Text(ctx, "DDP Marker Editor not present.")
+            if ImGui.Button(ctx, "Download DDP Ext", button_width) then
+                r.CF_ShellExecute("https://stash.reaper.fm/34295/reaper_ddp_edit_R1.zip")
+            end
+        end
         sepa_rator(ctx)
       
         for i = 1, 4 do
@@ -1666,7 +1675,6 @@ local function draw_actions_tab(ctx)
             create_custom_button(i)
             if i < 8 then same_line(ctx) end
         end
-
         ImGui.EndGroup(ctx)
         ImGui.EndChild(ctx)
     end
