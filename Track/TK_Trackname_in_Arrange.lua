@@ -1,9 +1,10 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.8.9
+-- @version 0.9.0
 -- @changelog 
 --[[
-+ Bugfix: Added hide tekst /label for selected track(s) and hover
++ Child /normal on by default
++ Thanks to Etalon the overlay window is now always displayed under other windows (at least as far as I've tested so far ;o) )
 ]]--
 
 local r                  = reaper
@@ -24,6 +25,7 @@ local needs_font_update  = false
 local ImGuiScale_saved   = nil
 local screen_scale       = nil
 local grid_divide_state  = 0
+local hasDrawingFocusBeenHandled = false
 
 local color_cache        = {}
 local cached_bg_color    = nil
@@ -78,10 +80,74 @@ local function DrawOverArrange()
     r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
 end
 
+local function handleDrawingFocus()
+    if hasDrawingFocusBeenHandled then return end
+    
+    local windowsToFocus = {}
+    
+    local arr = r.new_array({}, 1024)
+    local ret = r.JS_Window_ArrayAllTop(arr)
+    if ret >= 1 then
+        local childs = arr.table()
+        for j = 1, #childs do
+            local hwnd = r.JS_Window_HandleFromAddress(childs[j])
+            if r.JS_Window_GetClassName(hwnd) == "RPTopmostButton" and r.JS_Window_IsVisible(hwnd) then
+                table.insert(windowsToFocus, hwnd)
+            end
+        end
+    end
+    
+    local trackCount = r.CountTracks(0)
+    for i = 0, trackCount - 1 do
+        local track = r.GetTrack(0, i)
+        if track then
+            local fxCount = r.TrackFX_GetCount(track)
+            for fx = 0, fxCount - 1 do
+                local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fx)
+                if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
+                    table.insert(windowsToFocus, floatingHwnd)
+                end
+            end
+        end
+    end
+    
+    local retval, tracknum, itemnum, fxnum = r.GetFocusedFX()
+    if retval == 1 then
+        local track = r.GetTrack(0, tracknum-1)
+        local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fxnum)
+        if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
+            table.insert(windowsToFocus, floatingHwnd)
+        end
+    end
+    
+    local retval, tracknum, fxnum = r.GetLastTouchedFX()
+    if retval then
+        local track = r.GetTrack(0, tracknum-1)
+        local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fxnum)
+        if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
+            table.insert(windowsToFocus, floatingHwnd)
+        end
+    end
+    
+    r.defer(function()
+        for _, hwnd in ipairs(windowsToFocus) do
+            r.JS_Window_Show(hwnd, "HIDE")
+            r.defer(function() 
+                r.JS_Window_Show(hwnd, "SHOW")
+                r.JS_Window_SetForeground(hwnd)
+                r.JS_Window_SetFocus(hwnd)
+            end)
+        end
+        
+        hasDrawingFocusBeenHandled = true
+    end)
+end
+
+
 local default_settings              = {
     text_opacity                    = 1.0,
     show_parent_tracks              = true,
-    show_child_tracks               = false,
+    show_child_tracks               = true,
     show_first_fx                   = false,
     show_parent_label               = false,
     show_record_color               = true,
@@ -626,9 +692,8 @@ function ShowSettingsWindow()
             r.SetExtState("TK_TRACKNAMES", "settings_visible", "0", false)
         end
         r.ImGui_PopStyleColor(ctx, 3)
-        --r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Separator(), 0xFF0000FF) -- Donkerrood
         r.ImGui_Separator(ctx)
-        --r.ImGui_PopStyleColor(ctx)
+
 
         -- PRESETS
         if r.ImGui_Button(ctx, "Save Preset" , 90) then
@@ -1523,6 +1588,7 @@ end
 profiler.run()
 profiler.start()]]--
 function loop()
+    handleDrawingFocus()
     if r.GetExtState("TK_TRACKNAMES", "reload_settings") == "1" then
         LoadSettings()
         r.SetExtState("TK_TRACKNAMES", "reload_settings", "0", false)
