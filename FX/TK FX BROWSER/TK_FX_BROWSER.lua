@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.0.5:
+-- @version 1.0.6:
 -- @changelog:
 --[[        
 + Added option to show favorites on top in FOLDER lists
@@ -6259,19 +6259,20 @@ local function DrawItems(tbl, main_cat_name)
                                     end
                                 end
                                
-                                -- Vervang de huidige favorites optie code met:
-                                local is_favorite = table.contains(favorite_plugins, plugin.name)
+                            
+                                local is_favorite = table.contains(favorite_plugins, tbl[i].fx[j])
                                 if is_favorite then
                                     if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                                        RemoveFromFavorites(plugin.name)
+                                        RemoveFromFavorites(tbl[i].fx[j])
                                         GetPluginsForFolder(selected_folder)
                                     end
                                 else
                                     if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                                        AddToFavorites(plugin.name)
+                                        AddToFavorites(tbl[i].fx[j])
                                         GetPluginsForFolder(selected_folder)
                                     end
                                 end
+
 
                                
                                 if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
