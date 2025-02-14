@@ -1,10 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.0
+-- @version 0.9.1
 -- @changelog 
 --[[
-+ Child /normal on by default
-+ Thanks to Etalon the overlay window is now always displayed under other windows (at least as far as I've tested so far ;o) )
++ Keep Folder track border visible even if child tracks are collapsed
++ Auto adjust text color based on background color
++ Added Auto Center option. Sets labels automatically to the center of arrange view
 ]]--
 
 local r                  = reaper
@@ -14,6 +15,7 @@ local json               = dofile(script_path .. "json.lua")
 package.path             = r.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
 local im                 = require 'imgui' '0.9.3'
 local ctx                = im.CreateContext('Track Names')
+
 
 local script_active      = true
 local settings_visible   = false
@@ -46,7 +48,8 @@ local window_flags       = flags |
                            r.ImGui_WindowFlags_NoMove() |
                            r.ImGui_WindowFlags_NoSavedSettings() |
                            r.ImGui_WindowFlags_NoMouseInputs() |
-                           r.ImGui_WindowFlags_NoFocusOnAppearing()
+                           r.ImGui_WindowFlags_NoFocusOnAppearing() 
+                          
 
 local settings_flags     = r.ImGui_WindowFlags_NoTitleBar() | 
                            r.ImGui_WindowFlags_TopMost() |
@@ -91,7 +94,7 @@ local function handleDrawingFocus()
         local childs = arr.table()
         for j = 1, #childs do
             local hwnd = r.JS_Window_HandleFromAddress(childs[j])
-            if r.JS_Window_GetClassName(hwnd) == "RPTopmostButton" and r.JS_Window_IsVisible(hwnd) then
+            if r.JS_Window_GetClassName(hwnd) == "#32770" and r.JS_Window_IsVisible(hwnd) then
                 table.insert(windowsToFocus, hwnd)
             end
         end
@@ -222,6 +225,7 @@ local default_settings              = {
     master_gradient_end_alpha       = 0.0,
     text_hover_hide                 = false,
     text_hover_enabled              = false,
+    auto_center                     = false,
 }
 
 local settings = {}
@@ -256,36 +260,133 @@ function CreateFonts()
     settings_font = r.ImGui_CreateFont('Arial', 14)
     r.ImGui_Attach(ctx, settings_font)
 end
-if old_text_size ~= settings.text_size then
-    CreateFonts()
-    end 
+if old_text_size ~= settings.text_size then CreateFonts()end 
 
-function GetTextColor(track, is_child)
+function GetTextColor(track, is_child, is_parent_label)
+    -- Direct witte tekst voor parent labels
+    if is_parent_label then
+        if settings.show_label then
+            return 0xFFFFFFFF -- Wit bij label aan
+        else
+            -- Gebruik gekozen tekstkleur bij label uit
+            if settings.color_mode == 1 then
+                return 0xFFFFFFFF -- Wit
+            elseif settings.color_mode == 2 then
+                return 0x000000FF -- Zwart
+            elseif settings.color_mode == 3 then
+                local track_color = r.GetTrackColor(track)
+                return track_color == 0 and 0xFFFFFFFF or GetCachedColor(track_color, 1.0)
+            else -- Complementair
+                local track_color = r.GetTrackColor(track)
+                if track_color == 0 then return 0xFFFFFFFF end
+                
+                local r_val, g_val, b_val = r.ColorFromNative(track_color)
+                local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val/255, g_val/255, b_val/255)
+                h = (h + 0.5) % 1.0
+                local r_comp, g_comp, b_comp = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
+                return r.ColorToNative(
+                    math.floor(r_comp * 255 + 0.5),
+                    math.floor(g_comp * 255 + 0.5),
+                    math.floor(b_comp * 255 + 0.5)
+                ) | 0xFF
+            end
+        end
+    end
+
     if is_child and settings.inherit_parent_color then
         local parent_track = r.GetParentTrack(track)
-        if parent_track then
-            track = parent_track
+        if parent_track then track = parent_track end
+    end
+    if not settings.show_label then
+        if settings.color_mode == 1 then
+            return 0xFFFFFFFF 
+        elseif settings.color_mode == 2 then
+            return 0x000000FF
+        elseif settings.color_mode == 3 then
+            local track_color = r.GetTrackColor(track)
+            return track_color == 0 and 0xFFFFFFFF or GetCachedColor(track_color, 1.0)
+        else 
+            local track_color = r.GetTrackColor(track)
+            if track_color == 0 then return 0xFFFFFFFF end
+            
+            local r_val, g_val, b_val = r.ColorFromNative(track_color)
+            local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val/255, g_val/255, b_val/255)
+            h = (h + 0.5) % 1.0
+            local r_comp, g_comp, b_comp = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
+            return r.ColorToNative(
+                math.floor(r_comp * 255 + 0.5),
+                math.floor(g_comp * 255 + 0.5),
+                math.floor(b_comp * 255 + 0.5)
+            ) | 0xFF
         end
     end
 
-    if settings.color_mode == 1 then
-        return 0xFFFFFFFF
-    elseif settings.color_mode == 2 then
-        return 0x000000FF
-    elseif settings.color_mode == 3 then
-        return GetCachedColor(r.GetTrackColor(track), 1.0)
+    local label_color
+    if settings.label_color_mode == 1 then
+        label_color = 0xFFFFFF
+    elseif settings.label_color_mode == 2 then
+        label_color = 0x000000
+    elseif settings.label_color_mode == 3 then
+        label_color = r.GetTrackColor(track)
     else
         local track_color = r.GetTrackColor(track)
-        local cache_key = "complementary_" .. track_color
-        if not color_cache[cache_key] then
-            local r_val, g_val, b_val = r.ColorFromNative(track_color)
-            local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val, g_val, b_val)
-            h = (h + 0.5) % 1.0
-            local r_val, g_val, b_val = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
-            color_cache[cache_key] = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
-        end
-        return color_cache[cache_key]
+        local r_val, g_val, b_val = r.ColorFromNative(track_color)
+        local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val/255, g_val/255, b_val/255)
+        h = (h + 0.5) % 1.0
+        local r_comp, g_comp, b_comp = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
+        label_color = r.ColorToNative(
+            math.floor(r_comp * 255 + 0.5),
+            math.floor(g_comp * 255 + 0.5),
+            math.floor(b_comp * 255 + 0.5)
+        )
     end
+
+    local text_color
+    if settings.color_mode == 3 and is_parent_label then 
+        text_color = 0xFFFFFFFF
+    elseif settings.color_mode == 1 then 
+        text_color = (label_color == 0xFFFFFF) and 0x000000FF or 0xFFFFFFFF
+    elseif settings.color_mode == 2 then
+        text_color = (label_color == 0x000000) and 0xFFFFFFFF or 0x000000FF
+    elseif settings.color_mode == 3 then
+        local track_color = r.GetTrackColor(track)
+        if label_color == 0xFFFFFF then
+            text_color = GetCachedColor(track_color, 1.0)
+        elseif track_color == 0 or track_color == label_color then
+            text_color = 0xFFFFFFFF
+        else
+            text_color = GetCachedColor(track_color, 1.0)
+        end
+    else
+        local track_color = r.GetTrackColor(track)
+        if track_color == 0 and (label_color == 0x000000 or settings.label_color_mode == 3) then
+            text_color = 0xFFFFFFFF
+        elseif label_color == 0xFFFFFF then
+            local r_val, g_val, b_val = r.ColorFromNative(track_color)
+            local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val/255, g_val/255, b_val/255)
+            h = (h + 0.5) % 1.0
+            local r_comp, g_comp, b_comp = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
+            text_color = r.ColorToNative(
+                math.floor(r_comp * 255 + 0.5),
+                math.floor(g_comp * 255 + 0.5),
+                math.floor(b_comp * 255 + 0.5)
+            ) | 0xFF
+        elseif settings.label_color_mode == 4 then
+            text_color = 0xFFFFFFFF
+        else
+            local r_val, g_val, b_val = r.ColorFromNative(track_color)
+            local h, s, v = r.ImGui_ColorConvertRGBtoHSV(r_val/255, g_val/255, b_val/255)
+            h = (h + 0.5) % 1.0
+            local r_comp, g_comp, b_comp = r.ImGui_ColorConvertHSVtoRGB(h, s, v)
+            text_color = r.ColorToNative(
+                math.floor(r_comp * 255 + 0.5),
+                math.floor(g_comp * 255 + 0.5),
+                math.floor(b_comp * 255 + 0.5)
+            ) | 0xFF
+        end
+    end
+
+    return text_color
 end
 
 function GetLabelColor(track)
@@ -396,7 +497,6 @@ function LoadPreset(name)
     end
 end
 
-
 function GetPresetList()
     local presets = {}
     local idx = 0
@@ -455,8 +555,6 @@ function UpdateTrackColors()
     reaper.UpdateArrange()
 end
 
-
-
 function RefreshProjectState()
     UpdateBgColorCache()
     if settings.custom_colors_enabled then
@@ -511,11 +609,8 @@ function ResetSettings()
 end
 
 function BlendColor(track, blend, mode)
-    -- Bepaal eerst of het een even of oneven track is
     local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
     local is_selected = r.IsTrackSelected(track)
-    
-    -- Kies de juiste achtergrondkleur
     local base
     if is_selected then
         base = track_number % 2 == 0 
@@ -534,12 +629,10 @@ function BlendColor(track, blend, mode)
     local blend_r, blend_g, blend_b = reaper.ColorFromNative(blend)
     local result_r, result_g, result_b
     
-    -- Hulpfuncties voor nauwkeurigere berekeningen
     local function normalize(value) return value / 255.0 end
     local function denormalize(value) return math.floor(value * 255 + 0.5) end
     local function clamp(value) return math.max(0, math.min(255, value)) end
 
-    -- Genormaliseerde waarden
     local nb_r, nb_g, nb_b = normalize(base_r), normalize(base_g), normalize(base_b)
     local nbl_r, nbl_g, nbl_b = normalize(blend_r), normalize(blend_g), normalize(blend_b)
 
@@ -765,13 +858,10 @@ function ShowSettingsWindow()
             settings.show_first_fx = not settings.show_first_fx
         end
         r.ImGui_SameLine(ctx, column_width * 3)
-        if r.ImGui_RadioButton(ctx, "Show button", settings.show_settings_button) then
-            settings.show_settings_button = not settings.show_settings_button
+        if r.ImGui_RadioButton(ctx, "Info Line", settings.show_info_line) then
+            settings.show_info_line = not settings.show_info_line
         end
-        r.ImGui_SameLine(ctx, column_width * 4)
-        if r.ImGui_RadioButton(ctx, "Autosave", settings.autosave_enabled) then
-            settings.autosave_enabled = not settings.autosave_enabled
-        end
+
         if r.ImGui_RadioButton(ctx, "Track Label", settings.show_label) then
             settings.show_label = not settings.show_label
         end
@@ -783,15 +873,25 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, column_width * 2)
         if r.ImGui_RadioButton(ctx, "Center", settings.text_centered) then
             settings.text_centered = not settings.text_centered
+            if settings.text_centered then
+                settings.right_align = false
+            end
         end
         r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Auto Center", settings.auto_center) then
+            settings.auto_center = not settings.auto_center
+            if settings.auto_center then
+                settings.text_centered = true
+                settings.right_align = false
+            end
+        end
+        r.ImGui_SameLine(ctx, column_width * 4)
+        r.ImGui_BeginDisabled(ctx, settings.text_centered)
         if r.ImGui_RadioButton(ctx, "Right align", settings.right_align) then
             settings.right_align = not settings.right_align
         end
-        r.ImGui_SameLine(ctx, column_width * 4)
-        if r.ImGui_RadioButton(ctx, "Info Line", settings.show_info_line) then
-            settings.show_info_line = not settings.show_info_line
-        end
+        r.ImGui_EndDisabled(ctx)
+
         if r.ImGui_RadioButton(ctx, "Track #", settings.show_track_numbers) then
             settings.show_track_numbers = not settings.show_track_numbers
         end
@@ -839,8 +939,16 @@ function ShowSettingsWindow()
             settings.text_hover_hide = not settings.text_hover_hide
         end
         r.ImGui_SameLine(ctx, column_width * 2)
-        if r.ImGui_RadioButton(ctx, "Hide text on hover", settings.text_hover_enabled) then
+        if r.ImGui_RadioButton(ctx, "Hide on hover", settings.text_hover_enabled) then
             settings.text_hover_enabled = not settings.text_hover_enabled
+        end
+        r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Show button", settings.show_settings_button) then
+            settings.show_settings_button = not settings.show_settings_button
+        end
+        r.ImGui_SameLine(ctx, column_width * 4)
+        if r.ImGui_RadioButton(ctx, "Autosave", settings.autosave_enabled) then
+            settings.autosave_enabled = not settings.autosave_enabled
         end
 
         r.ImGui_Dummy(ctx, 0, 2)
@@ -848,6 +956,8 @@ function ShowSettingsWindow()
         r.ImGui_Dummy(ctx, 0, 2)
         if r.ImGui_RadioButton(ctx, "Track colors:", settings.show_track_colors) then
             settings.show_track_colors = not settings.show_track_colors
+            hasDrawingFocusBeenHandled = false
+            handleDrawingFocus()
             needs_font_update = true
         end
         if settings.show_track_colors then
@@ -1051,7 +1161,9 @@ function ShowSettingsWindow()
                 r.ImGui_EndCombo(ctx)
             end
         end
-        changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal Offset", settings.horizontal_offset, 0, RIGHT - LEFT)
+        r.ImGui_BeginDisabled(ctx, settings.auto_center and settings.text_centered)
+            changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal Offset", settings.horizontal_offset, 0, RIGHT - LEFT)
+        r.ImGui_EndDisabled(ctx)
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
         changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical Offset", settings.vertical_offset, -50, 50)
@@ -1434,12 +1546,12 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
             end
             
             if has_visible_children then
+                -- Originele code voor uitgeklapte folder met zichtbare children
                 local end_track = r.GetTrack(0, end_idx)
                 local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
                 local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
                 local total_height = (end_y + end_height) - track_y
                 
-                -- Teken de borders
                 if settings.folder_border_top then
                     DrawFolderBorderLine(
                         draw_list,
@@ -1487,10 +1599,60 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                         settings.border_thickness
                     )
                 end
+            else
+                -- Code voor ingeklapte folder
+                if settings.folder_border_top then
+                    DrawFolderBorderLine(
+                        draw_list,
+                        LEFT,
+                        WY + track_y + settings.border_thickness/2,
+                        RIGHT - scroll_size,
+                        WY + track_y + settings.border_thickness/2,
+                        border_color,
+                        settings.border_thickness
+                    )
+                end
+
+                if settings.folder_border_left then
+                    DrawFolderBorderLine(
+                        draw_list,
+                        LEFT + settings.border_thickness/2,
+                        WY + track_y,
+                        LEFT + settings.border_thickness/2,
+                        WY + track_y + track_height,
+                        border_color,
+                        settings.border_thickness
+                    )
+                end
+                
+                if settings.folder_border_right then
+                    DrawFolderBorderLine(
+                        draw_list,
+                        RIGHT - scroll_size - settings.border_thickness/2,
+                        WY + track_y,
+                        RIGHT - scroll_size - settings.border_thickness/2,
+                        WY + track_y + track_height,
+                        border_color,
+                        settings.border_thickness
+                    )
+                end
+                
+                if settings.folder_border_bottom then
+                    DrawFolderBorderLine(
+                        draw_list,
+                        LEFT,
+                        WY + track_y + track_height - settings.border_thickness/2,
+                        RIGHT - scroll_size,
+                        WY + track_y + track_height - settings.border_thickness/2,
+                        border_color,
+                        settings.border_thickness
+                    )
+                end
             end
         end
     end
 end
+
 
 function GetDarkerColor(color)
     local r_val, g_val, b_val = r.ColorFromNative(color)
@@ -1637,7 +1799,7 @@ function loop()
             UpdateBgColorCache()
         end
 
-        for i = -1, track_count - 1 do  -- -1 voor master track
+        for i = -1, track_count - 1 do 
             local track
             if i == -1 then
                 track = r.GetMasterTrack(0)
@@ -1654,15 +1816,13 @@ function loop()
                 if master_visible == 1 then
                     if settings.show_track_colors and settings.use_custom_master_color then
                         if settings.master_gradient_enabled then
-                            -- Converteer de alpha waardes naar de juiste schaal (0-255)
+    
                             local start_alpha = (settings.master_gradient_start_alpha * 255)//1
                             local end_alpha = (settings.master_gradient_end_alpha * 255)//1
                             
-                            -- Pas beide alpha waardes toe op de master kleur
                             local start_color = (settings.master_track_color & 0xFFFFFF00) | start_alpha
                             local end_color = (settings.master_track_color & 0xFFFFFF00) | end_alpha
                             
-                            -- Render de gradient met beide kleuren
                             r.ImGui_DrawList_AddRectFilledMultiColor(
                                 draw_list, 
                                 LEFT, 
@@ -1683,19 +1843,26 @@ function loop()
                     local text = "MASTER"
                     local text_width = r.ImGui_CalcTextSize(ctx, text)
                     local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5)
-                    local text_x = WX + settings.horizontal_offset
+                    local text_x
                     
                     if settings.text_centered then
-                        local offset = (max_width - text_width) / 2
-                        text_x = WX + settings.horizontal_offset + offset
+                        if settings.auto_center then
+                            local window_width = RIGHT - LEFT - scroll_size
+                            text_x = LEFT + (window_width / 2) - (text_width / 2)
+                        else                      
+                            local offset = (max_width - text_width) / 2
+                            text_x = WX + settings.horizontal_offset + offset
+                        end
                     elseif settings.right_align then
                         text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
+                    else
+                        text_x = WX + settings.horizontal_offset
                     end
                     
                     local text_color = GetTextColor(track)
                     text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
-                
                     r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
+                    
                 end
             else
             
@@ -1896,21 +2063,34 @@ function loop()
                                 local BASE_SPACING = 20
                                 local NUMBER_SPACING = 20
                                 local TEXT_SIZE_FACTOR = settings.text_size
-
+                                
                                 if settings.text_centered then
-                                    if should_show_name then
-                                        local total_spacing = BASE_SPACING + TEXT_SIZE_FACTOR
-                                        if settings.show_track_numbers then
-                                            total_spacing = total_spacing + NUMBER_SPACING /2
+                                    if settings.auto_center then
+                                        local window_width = RIGHT - LEFT - scroll_size
+                                        if should_show_name then
+                                            local total_spacing = (BASE_SPACING * 5) + TEXT_SIZE_FACTOR  -- Verdubbel de base spacing
+                                            if settings.show_track_numbers then
+                                                total_spacing = total_spacing + NUMBER_SPACING
+                                            end
+                                            
+                                            local total_width = track_text_width + parent_text_width + total_spacing
+                                            local start_x = LEFT + (window_width / 2) - (total_width / 2)
+                                            parent_text_pos = start_x + track_text_width + total_spacing
+                                        else
+                                            parent_text_pos = LEFT + (window_width / 2) - (parent_text_width / 2)
                                         end
-                                        
-                                        local offset = (max_width - track_text_width) / 2
-                                        parent_text_pos = WX + settings.horizontal_offset + offset + track_text_width + total_spacing
-                                        label_x = parent_text_pos
                                     else
-                                        local offset = (max_width - parent_text_width) / 2
-                                        parent_text_pos = WX + settings.horizontal_offset + offset
-                                        label_x = parent_text_pos
+                                        if should_show_name then
+                                            local total_spacing = BASE_SPACING + TEXT_SIZE_FACTOR
+                                            if settings.show_track_numbers then
+                                                total_spacing = total_spacing + NUMBER_SPACING /2
+                                            end
+                                            local offset = (max_width - track_text_width) / 2
+                                            parent_text_pos = WX + settings.horizontal_offset + offset + track_text_width + total_spacing
+                                        else
+                                            local offset = (max_width - parent_text_width) / 2
+                                            parent_text_pos = WX + settings.horizontal_offset + offset
+                                        end
                                     end
                                 elseif settings.right_align then
                                     local right_margin = 20
@@ -1920,10 +2100,8 @@ function loop()
                                     end
                                     
                                     parent_text_pos = RIGHT - scroll_size - parent_text_width - right_margin - settings.horizontal_offset
-                                    label_x = parent_text_pos
                                     if should_show_name then
                                         parent_text_pos = parent_text_pos - track_text_width - total_spacing
-                                        label_x = parent_text_pos
                                     end
                                 else
                                     if should_show_name then
@@ -1931,12 +2109,12 @@ function loop()
                                         if settings.show_track_numbers then
                                             total_spacing = total_spacing + NUMBER_SPACING
                                         end
-                                        
                                         parent_text_pos = WX + settings.horizontal_offset + track_text_width + total_spacing
-                                        label_x = parent_text_pos
                                     end
                                 end
-
+                                
+                                label_x = parent_text_pos
+                                
                                 if settings.show_label then
                                     local parent_color = r.GetTrackColor(parents[#parents])
                                     local r_val, g_val, b_val = r.ColorFromNative(parent_color)
@@ -1956,7 +2134,7 @@ function loop()
                                     )
                                 end
 
-                                local parent_text_color = GetTextColor(parents[#parents])
+                                local parent_text_color = GetTextColor(parents[#parents], false, true)
                                 r.ImGui_DrawList_AddText(
                                     draw_list,
                                     parent_text_pos,
@@ -1980,15 +2158,22 @@ function loop()
                             end
                             
                             local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
-                            local text_x = WX + settings.horizontal_offset
-                                    
+                            local text_x
+
                             if settings.text_centered then
-                                local offset = (max_width - text_width) / 2
-                                text_x = WX + settings.horizontal_offset + offset
+                                if settings.auto_center then
+                                    local window_width = RIGHT - LEFT - scroll_size
+                                    text_x = LEFT + (window_width / 2) - (text_width / 2)
+                                else
+                                    local offset = (max_width - text_width) / 2
+                                    text_x = WX + settings.horizontal_offset + offset
+                                end
                             elseif settings.right_align then
                                 text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
+                            else
+                                text_x = WX + settings.horizontal_offset
                             end
-                        
+
                             if settings.show_label then
                                 local label_color = GetLabelColor(track)
                                 r.ImGui_DrawList_AddRectFilled(
@@ -2072,12 +2257,20 @@ function loop()
                             if in_lane then
                                 local retval, env_name = r.GetEnvelopeName(env)
                                 local text_width = r.ImGui_CalcTextSize(ctx, env_name)
-                                local env_text_x = WX + settings.horizontal_offset
+                                local env_text_x
+                                
                                 if settings.text_centered then
-                                    local offset = (max_width - text_width) / 2
-                                    env_text_x = WX + settings.horizontal_offset + offset
+                                    if settings.auto_center then
+                                        local window_width = RIGHT - LEFT - scroll_size
+                                        env_text_x = LEFT + (window_width / 2) - (text_width / 2)
+                                    else
+                                        local offset = (max_width - text_width) / 2
+                                        env_text_x = WX + settings.horizontal_offset + offset
+                                    end
                                 elseif settings.right_align then
                                     env_text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
+                                else
+                                    env_text_x = WX + settings.horizontal_offset
                                 end
                                 
                                 local absolute_env_y = track_y + env_y
