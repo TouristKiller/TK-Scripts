@@ -1,12 +1,9 @@
 -- @description TK_Item gridlines
 -- @author TouristKiller
--- @version 0.1.3
+-- @version 0.1.4
 -- @changelog 
 --[[
-+ Credits to Etalon for the code to handle drawing focus...awesome!
-+ Improved beat numbering
-+ impoved overall behaviour
-+ UI changes
++ Improved handleDrawingFocus function. overlay is set to background in all circumstances
 ]]--
 
 local r = reaper
@@ -260,18 +257,26 @@ function DrawOverArrange()
     ImGui.SetNextWindowSize(ctx, RIGHT - LEFT - scroll_size, BOT - TOP)
 end
 
-local function handleDrawingFocus() -- THANX Etalon for this code ;0) !!!
+local function handleDrawingFocus() -- Thanx Etalon!!!
     if hasDrawingFocusBeenHandled then return end
-    if ImGui.IsWindowAppearing(ctx) then return end
     local windowsToFocus = {}
+    -- Check all top-level windows
     local arr = r.new_array({}, 1024)
     local ret = r.JS_Window_ArrayAllTop(arr)
     if ret >= 1 then
         local childs = arr.table()
         for j = 1, #childs do
             local hwnd = r.JS_Window_HandleFromAddress(childs[j])
-            if r.JS_Window_GetClassName(hwnd) == "RPTopmostButton" and r.JS_Window_IsVisible(hwnd) then
-                table.insert(windowsToFocus, hwnd)
+            if r.JS_Window_IsVisible(hwnd) then
+                local className = r.JS_Window_GetClassName(hwnd)
+                -- Capture all REAPER windows
+                if className:match("^REAPER") or  -- Captures all REAPER* classes
+                className == "#32770" or       -- Captures all native dialogs
+                className:match("Lua_LICE") or -- Captures all Lua script windows
+                className:match("^WDL")        -- Captures all WDL components
+                then
+                    table.insert(windowsToFocus, hwnd)
+                end
             end
         end
     end
@@ -304,18 +309,14 @@ local function handleDrawingFocus() -- THANX Etalon for this code ;0) !!!
             table.insert(windowsToFocus, floatingHwnd)
         end
     end
-    
     r.defer(function()
         for _, hwnd in ipairs(windowsToFocus) do
-            r.JS_Window_Show(hwnd, "HIDE")
-            r.defer(function() 
-                r.JS_Window_Show(hwnd, "SHOW")
+            r.defer(function()
                 r.JS_Window_SetForeground(hwnd)
-                r.JS_Window_SetFocus(hwnd)
             end)
         end
         hasDrawingFocusBeenHandled = true
-    end)  
+    end)
 end
 
 function RenderGridLines(draw_list, track_y, track_height, window_y, item_pos, item_end)
