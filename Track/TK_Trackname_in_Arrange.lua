@@ -1,11 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.1
+-- @version 0.9.2
 -- @changelog 
 --[[
-+ Keep Folder track border visible even if child tracks are collapsed
-+ Auto adjust text color based on background color
-+ Added Auto Center option. Sets labels automatically to the center of arrange view
++ Improved handleDrawingFocus function. overlay is set to background in all circumstances
 ]]--
 
 local r                  = reaper
@@ -85,21 +83,27 @@ end
 
 local function handleDrawingFocus()
     if hasDrawingFocusBeenHandled then return end
-    
     local windowsToFocus = {}
-    
+    -- Check all top-level windows
     local arr = r.new_array({}, 1024)
     local ret = r.JS_Window_ArrayAllTop(arr)
     if ret >= 1 then
         local childs = arr.table()
         for j = 1, #childs do
             local hwnd = r.JS_Window_HandleFromAddress(childs[j])
-            if r.JS_Window_GetClassName(hwnd) == "#32770" and r.JS_Window_IsVisible(hwnd) then
-                table.insert(windowsToFocus, hwnd)
+            if r.JS_Window_IsVisible(hwnd) then
+                local className = r.JS_Window_GetClassName(hwnd)
+                -- Capture all REAPER windows
+                if className:match("^REAPER") or  -- Captures all REAPER* classes
+                className == "#32770" or       -- Captures all native dialogs
+                className:match("Lua_LICE") or -- Captures all Lua script windows
+                className:match("^WDL")        -- Captures all WDL components
+                then
+                    table.insert(windowsToFocus, hwnd)
+                end
             end
         end
     end
-    
     local trackCount = r.CountTracks(0)
     for i = 0, trackCount - 1 do
         local track = r.GetTrack(0, i)
@@ -113,7 +117,6 @@ local function handleDrawingFocus()
             end
         end
     end
-    
     local retval, tracknum, itemnum, fxnum = r.GetFocusedFX()
     if retval == 1 then
         local track = r.GetTrack(0, tracknum-1)
@@ -122,7 +125,6 @@ local function handleDrawingFocus()
             table.insert(windowsToFocus, floatingHwnd)
         end
     end
-    
     local retval, tracknum, fxnum = r.GetLastTouchedFX()
     if retval then
         local track = r.GetTrack(0, tracknum-1)
@@ -131,22 +133,16 @@ local function handleDrawingFocus()
             table.insert(windowsToFocus, floatingHwnd)
         end
     end
-    
     r.defer(function()
         for _, hwnd in ipairs(windowsToFocus) do
-            r.JS_Window_Show(hwnd, "HIDE")
-            r.defer(function() 
-                r.JS_Window_Show(hwnd, "SHOW")
+            r.defer(function()
                 r.JS_Window_SetForeground(hwnd)
-                r.JS_Window_SetFocus(hwnd)
             end)
         end
-        
         hasDrawingFocusBeenHandled = true
     end)
 end
-
-
+                                              
 local default_settings              = {
     text_opacity                    = 1.0,
     show_parent_tracks              = true,
@@ -805,6 +801,7 @@ function ShowSettingsWindow()
                     r.ImGui_EndPopup(ctx)
                 end
                 if is_clicked then
+                    hasDrawingFocusBeenHandled = false
                     LoadPreset(preset_name)
                 end
             end
@@ -831,6 +828,7 @@ function ShowSettingsWindow()
         end
         r.ImGui_SameLine(ctx, column_width * 3)
         if r.ImGui_Button(ctx, "Reset Settings", 90) then
+            hasDrawingFocusBeenHandled = false
             ResetSettings()
         end
         r.ImGui_SameLine(ctx, column_width * 4)
