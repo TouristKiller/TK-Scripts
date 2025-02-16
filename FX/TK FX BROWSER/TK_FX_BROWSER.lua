@@ -1,11 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.0.6:
+-- @version 1.0.7:
 -- @changelog:
 --[[        
-+ Added option to show favorites on top in FOLDER lists
-
-
++ Better positioning when showing main window again after hiding
++ Better positioning when left docking the screenshot window to main window
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -26,14 +25,7 @@ StartBulkScreenshot     = function() end
 local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
 local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
-local needs_font_update = false
-local selected_plugin = nil
-browser_search_term = ""
-local current_open_folder = nil
-local ITEMS_PER_BATCH = 30
-local loaded_items_count = ITEMS_PER_BATCH
-local last_scroll_position = 0
-local current_filtered_fx = {} 
+
 
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
@@ -4010,12 +4002,13 @@ local function ShowScreenshotWindow()
                     r.ImGui_WindowFlags_NoFocusOnAppearing() |
                     
                     r.ImGui_WindowFlags_NoScrollbar()
-  
+
     if config.dock_screenshot_window then
         local viewport = r.ImGui_GetMainViewport(ctx)
         local viewport_pos_x, viewport_pos_y = r.ImGui_Viewport_GetPos(viewport)
         local viewport_width = r.ImGui_Viewport_GetWorkSize(viewport)
-        
+        local gap = 10
+
         -- Check dock positie hoofdvenster
         local is_main_window_left_docked = (main_window_pos_x - viewport_pos_x) < 20
         local is_main_window_right_docked = (main_window_pos_x + main_window_width) > (viewport_pos_x + viewport_width - 20)
@@ -4028,11 +4021,18 @@ local function ShowScreenshotWindow()
         end
         
         if config.dock_screenshot_left then
-            r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) - config.screenshot_window_width - 5, main_window_pos_y, r.ImGui_Cond_Always())
+            -- Links docken: compenseer voor browser panel indien actief
+            local browser_offset = (config.show_browser_panel and config.dock_screenshot_left) and (config.browser_panel_width + 5) or 0
+            local left_pos = main_window_pos_x - config.screenshot_window_width - (2 * gap) - browser_offset
+            r.ImGui_SetNextWindowPos(ctx, left_pos, main_window_pos_y, r.ImGui_Cond_Always())
         else
-            r.ImGui_SetNextWindowPos(ctx, viewport_pos_x + (main_window_pos_x - viewport_pos_x) + main_window_width + 5, main_window_pos_y, r.ImGui_Cond_Always())
+            -- Rechts docken: gebruik de volledige rechterkant van het hoofdvenster
+            local right_pos = main_window_pos_x + main_window_width + (gap / 2)
+            r.ImGui_SetNextWindowPos(ctx, right_pos, main_window_pos_y, r.ImGui_Cond_Always())
         end
     end
+
+                    
     r.ImGui_SetNextWindowSizeConstraints(ctx, min_width, 200, FLT_MAX, FLT_MAX)
     r.ImGui_SetNextWindowSize(ctx, math.max(min_width, config.screenshot_window_width), config.screenshot_window_height or 600, r.ImGui_Cond_FirstUseEver())
     
@@ -7464,6 +7464,32 @@ function InitializeImGuiContext()
     end
 end
 
+function EnsureWindowVisible()
+    if config.hide_main_window then
+        config.dock_screenshot_window = false
+        config.show_screenshot_window = true
+        r.ImGui_SetNextWindowPos(ctx, 10000, 10000)
+        was_hidden = true
+    else
+        if was_hidden then
+            local viewport = r.ImGui_GetMainViewport(ctx)
+            local vp_x, vp_y = r.ImGui_Viewport_GetPos(viewport)
+            local vp_w, vp_h = r.ImGui_Viewport_GetWorkSize(viewport)
+            
+            -- Aangepaste breedte naar 200
+            local window_w = 200
+            local window_h = 600
+            local center_x = vp_x + (vp_w - window_w) * 0.5
+            local center_y = vp_y + (vp_h - window_h) * 0.5
+            
+            r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Always())
+            r.ImGui_SetNextWindowSize(ctx, window_w, window_h, r.ImGui_Cond_Always())
+            
+            was_hidden = false
+        end
+    end
+end
+
 -----------------------------------------------------------------------------------------
 function Main()
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
@@ -7498,10 +7524,7 @@ function Main()
 
         end
         
-
         last_selected_track = TRACK
-        
-      
         
         ProcessTextureLoadQueue()
         if r.time_precise() % 300 < 1 then
@@ -7532,6 +7555,7 @@ function Main()
         else
             InitializeImGuiContext()
         end
+
 -- FX lijst hoogte berekenen
 local fx_list_height = 0
 if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
@@ -7546,13 +7570,7 @@ local min_window_height = CalculateTopHeight(config) + CalculateMenuHeight(confi
 r.ImGui_SetNextWindowSizeConstraints(ctx, 140, min_window_height, 16384, 16384)
 ----------------------------------------------------------------------------------   
 handleDocking()
-
-if config.hide_main_window then
-    config.dock_screenshot_window = false
-    config.show_screenshot_window = true
-    r.ImGui_SetNextWindowPos(ctx, 10000, 10000)
-    
-end
+EnsureWindowVisible()
 
 local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoScrollbar())
 dock = r.ImGui_GetWindowDockID(ctx)
