@@ -1,12 +1,14 @@
 -- @description TK_time selection loop color
--- @version 2.1
+-- @version 2.2
 -- @author TouristKiller
 -- @changelog
---   + Added native color conversion for cross-platform compatibility
+--   + Added MIDI editor time selection coloring
+--   + Added platform independent color handling
 
 local r = reaper
-local original_bgsel = r.ColorToNative(0, 0, 0) 
-local original_bgsel2 = r.ColorToNative(0, 0, 0) 
+local original_bgsel = r.ColorToNative(0, 0, 0)
+local original_bgsel2 = r.ColorToNative(0, 0, 0)
+local original_midi_sel = r.ColorToNative(0, 0, 0)
 local disco_mode = false
 local disco_hue = 0
 local DISCO_SPEED = 0.005
@@ -16,30 +18,41 @@ local last_loop_state = -1
 function InitColors()
     original_bgsel = r.GetThemeColor("col_tl_bgsel", 0)
     original_bgsel2 = r.GetThemeColor("col_tl_bgsel2", 0)
+    original_midi_sel = r.GetThemeColor("midi_selbg", 0)
 end
 
 function GetSettings()
     local loop_color = tonumber(r.GetExtState("TK_time selection loop color", "loop_color")) or r.ColorToNative(0, 0, 255)
     local default_color = tonumber(r.GetExtState("TK_time selection loop color", "default_color")) or r.ColorToNative(255, 255, 255)
+    local midi_color = tonumber(r.GetExtState("TK_time selection loop color", "midi_color")) or r.ColorToNative(255, 0, 0)
     local only_loop = r.GetExtState("TK_time selection loop color", "only_loop") == "1"
     local only_arrange = r.GetExtState("TK_time selection loop color", "only_arrange") == "1"
+    local enable_midi = r.GetExtState("TK_time selection loop color", "enable_midi") == "1"
     disco_mode = r.GetExtState("TK_time selection loop color", "disco_mode") == "1"
-    return loop_color, default_color, only_loop, only_arrange
+    return loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi
 end
 
-function SaveSettings(loop_color, default_color, only_loop, only_arrange)
+function SaveSettings(loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi)
     r.SetExtState("TK_time selection loop color", "loop_color", tostring(loop_color), true)
     r.SetExtState("TK_time selection loop color", "default_color", tostring(default_color), true)
+    r.SetExtState("TK_time selection loop color", "midi_color", tostring(midi_color), true)
     r.SetExtState("TK_time selection loop color", "only_loop", only_loop and "1" or "0", true)
     r.SetExtState("TK_time selection loop color", "only_arrange", only_arrange and "1" or "0", true)
+    r.SetExtState("TK_time selection loop color", "enable_midi", enable_midi and "1" or "0", true)
     r.SetExtState("TK_time selection loop color", "disco_mode", disco_mode and "1" or "0", true)
 end
 
 function RestoreThemeColors()
     r.SetThemeColor("col_tl_bgsel", original_bgsel, 0)
     r.SetThemeColor("col_tl_bgsel2", original_bgsel2, 0)
+    r.SetThemeColor("midi_selbg", original_midi_sel, 0)
     r.UpdateArrange()
     r.UpdateTimeline()
+    -- Update MIDI editor if it's open
+    local midi_editor = r.MIDIEditor_GetActive()
+    if midi_editor then
+        r.MIDIEditor_OnCommand(midi_editor, 40462) -- Refresh MIDI editor
+    end
 end
 
 function SetButtonState(set)
@@ -99,14 +112,14 @@ end
 function GetDiscoColor()
     local red, green, blue = HSVtoRGB(disco_hue, 1, 1)
     disco_hue = (disco_hue + DISCO_SPEED) % 1
-    -- Rond de waardes af naar hele getallen
     return r.ColorToNative(math.floor(red * 255), math.floor(green * 255), math.floor(blue * 255))
 end
 
 function ChangeTimeSelectionColor()
     local is_loop_enabled = r.GetSetRepeat(-1)
-    local loop_color, default_color, only_loop, only_arrange = GetSettings()
+    local loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi = GetSettings()
     
+    -- Update arrange view colors
     if is_loop_enabled == 0 then
         if only_loop then
             r.SetThemeColor("col_tl_bgsel2", default_color, 0)
@@ -118,44 +131,41 @@ function ChangeTimeSelectionColor()
             r.SetThemeColor("col_tl_bgsel", default_color, 0)
             r.SetThemeColor("col_tl_bgsel2", default_color, 0)
         end
-        r.UpdateArrange()
-        r.UpdateTimeline()
-        last_loop_state = is_loop_enabled
-        return
-    end
-
-    if disco_mode and is_loop_enabled == 1 then
-        local disco_color = GetDiscoColor()
+    else
+        local active_color = disco_mode and GetDiscoColor() or loop_color
         if only_loop then
-            r.SetThemeColor("col_tl_bgsel2", disco_color, 0)
+            r.SetThemeColor("col_tl_bgsel2", active_color, 0)
             r.SetThemeColor("col_tl_bgsel", original_bgsel, 0)
         elseif only_arrange then
-            r.SetThemeColor("col_tl_bgsel", disco_color, 0)
+            r.SetThemeColor("col_tl_bgsel", active_color, 0)
             r.SetThemeColor("col_tl_bgsel2", original_bgsel2, 0)
         else
-            r.SetThemeColor("col_tl_bgsel", disco_color, 0)
-            r.SetThemeColor("col_tl_bgsel2", disco_color, 0)
+            r.SetThemeColor("col_tl_bgsel", active_color, 0)
+            r.SetThemeColor("col_tl_bgsel2", active_color, 0)
         end
-        r.UpdateArrange()
-        r.UpdateTimeline()
-        return
     end
 
-    if is_loop_enabled ~= last_loop_state then
-        if only_loop then
-            r.SetThemeColor("col_tl_bgsel2", loop_color, 0)
-            r.SetThemeColor("col_tl_bgsel", original_bgsel, 0)
-        elseif only_arrange then
-            r.SetThemeColor("col_tl_bgsel", loop_color, 0)
-            r.SetThemeColor("col_tl_bgsel2", original_bgsel2, 0)
+    -- Update MIDI editor colors if enabled
+    if enable_midi then
+        if is_loop_enabled == 1 then
+            r.SetThemeColor("midi_selbg", midi_color, 0)
         else
-            r.SetThemeColor("col_tl_bgsel", loop_color, 0)
-            r.SetThemeColor("col_tl_bgsel2", loop_color, 0)
+            r.SetThemeColor("midi_selbg", default_color, 0)
         end
-        r.UpdateArrange()
-        r.UpdateTimeline()
-        last_loop_state = is_loop_enabled
+    else
+        r.SetThemeColor("midi_selbg", original_midi_sel, 0)
     end
+    
+    r.UpdateArrange()
+    r.UpdateTimeline()
+    
+    -- Update MIDI editor if it's open
+    local midi_editor = r.MIDIEditor_GetActive()
+    if midi_editor then
+        r.MIDIEditor_OnCommand(midi_editor, 40462) -- Refresh MIDI editor
+    end
+    
+    last_loop_state = is_loop_enabled
 end
 
 function Main()
