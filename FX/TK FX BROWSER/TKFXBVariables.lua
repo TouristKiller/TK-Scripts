@@ -93,14 +93,5 @@ show_only_active = false
 -- MATRIX
 show_matrix_exclusive = false
 
--- MISC
-local needs_font_update = false
-local selected_plugin = nil
-browser_search_term = ""
-local current_open_folder = nil
-local ITEMS_PER_BATCH = 30
-local loaded_items_count = ITEMS_PER_BATCH
-local last_scroll_position = 0
-local current_filtered_fx = {} 
-local was_hidden = false
+
 

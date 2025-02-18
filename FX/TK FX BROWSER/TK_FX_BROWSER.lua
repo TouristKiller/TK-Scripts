@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.0.7:
+-- @version 1.0.8:
 -- @changelog:
 --[[        
 + Better positioning when showing main window again after hiding
@@ -26,7 +26,16 @@ local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
 local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
 
-
+-- MISC
+local needs_font_update = false
+local selected_plugin = nil
+browser_search_term = ""
+local current_open_folder = nil
+local ITEMS_PER_BATCH = 30
+local loaded_items_count = ITEMS_PER_BATCH
+local last_scroll_position = 0
+local current_filtered_fx = {} 
+local was_hidden = false
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
