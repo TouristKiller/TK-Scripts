@@ -1,9 +1,8 @@
 -- @description TK_time selection loop color
--- @version 2.2
+-- @version 2.3
 -- @author TouristKiller
 -- @changelog
---   + Added MIDI editor time selection coloring
---   + Added platform independent color handling
+--   + Bugfixes
 
 local r = reaper
 local original_bgsel = r.ColorToNative(0, 0, 0)
@@ -19,6 +18,13 @@ function InitColors()
     original_bgsel = r.GetThemeColor("col_tl_bgsel", 0)
     original_bgsel2 = r.GetThemeColor("col_tl_bgsel2", 0)
     original_midi_sel = r.GetThemeColor("midi_selbg", 0)
+end
+
+function SwapRB(color)
+    local r = (color >> 16) & 0xFF
+    local g = (color >> 8) & 0xFF
+    local b = color & 0xFF
+    return (b << 16) | (g << 8) | r
 end
 
 function GetSettings()
@@ -48,12 +54,8 @@ function RestoreThemeColors()
     r.SetThemeColor("midi_selbg", original_midi_sel, 0)
     r.UpdateArrange()
     r.UpdateTimeline()
-    -- Update MIDI editor if it's open
-    local midi_editor = r.MIDIEditor_GetActive()
-    if midi_editor then
-        r.MIDIEditor_OnCommand(midi_editor, 40462) -- Refresh MIDI editor
-    end
 end
+
 
 function SetButtonState(set)
     local is_new_value, filename, sec, cmd, mode, resolution, val = r.get_action_context()
@@ -118,8 +120,7 @@ end
 function ChangeTimeSelectionColor()
     local is_loop_enabled = r.GetSetRepeat(-1)
     local loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi = GetSettings()
-    
-    -- Update arrange view colors
+
     if is_loop_enabled == 0 then
         if only_loop then
             r.SetThemeColor("col_tl_bgsel2", default_color, 0)
@@ -133,6 +134,7 @@ function ChangeTimeSelectionColor()
         end
     else
         local active_color = disco_mode and GetDiscoColor() or loop_color
+        
         if only_loop then
             r.SetThemeColor("col_tl_bgsel2", active_color, 0)
             r.SetThemeColor("col_tl_bgsel", original_bgsel, 0)
@@ -145,7 +147,6 @@ function ChangeTimeSelectionColor()
         end
     end
 
-    -- Update MIDI editor colors if enabled
     if enable_midi then
         if is_loop_enabled == 1 then
             r.SetThemeColor("midi_selbg", midi_color, 0)
@@ -159,21 +160,14 @@ function ChangeTimeSelectionColor()
     r.UpdateArrange()
     r.UpdateTimeline()
     
-    -- Update MIDI editor if it's open
-    local midi_editor = r.MIDIEditor_GetActive()
-    if midi_editor then
-        r.MIDIEditor_OnCommand(midi_editor, 40462) -- Refresh MIDI editor
-    end
-    
     last_loop_state = is_loop_enabled
 end
 
+    
 function Main()
     ChangeTimeSelectionColor()
     r.defer(Main)
 end
-
--- Script initialization
 InitColors()
 
 if r.GetExtState("TK_time selection loop color", "CALL_SETUP") == "1" then

@@ -1,9 +1,8 @@
 -- @description TK_time selection loop color configuration
--- @version 2.2
+-- @version 2.3
 -- @author TouristKiller
 -- @changelog
---   + Added MIDI editor color options
---   + Added platform independent color handling
+--   + Bugfixes
 
 local r = reaper
 local ctx = r.ImGui_CreateContext('Color Settings')
@@ -26,13 +25,20 @@ local function SetupStyle()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x404040FF)
 end
 
-
-function SwapRB(color)
-    local r = (color >> 16) & 0xFF
-    local g = (color >> 8) & 0xFF
-    local b = color & 0xFF
-    return (b << 16) | (g << 8) | r
+function IsWindows()
+    return package.config:sub(1,1) == '\\'
 end
+
+function ProcessColor(color)
+    if IsWindows() then
+        local r = (color >> 16) & 0xFF
+        local g = (color >> 8) & 0xFF
+        local b = color & 0xFF
+        return (b << 16) | (g << 8) | r
+    end
+    return color
+end
+
 
 function GetSettings()
     local loop_color = tonumber(r.GetExtState("TK_time selection loop color", "loop_color")) or r.ColorToNative(0, 0, 255)
@@ -74,21 +80,21 @@ function Main()
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 8, 4)
         
         r.ImGui_Text(ctx, 'Loop Color')
-        local rv, new_color = r.ImGui_ColorEdit3(ctx, '##loop_color', SwapRB(temp_loop_color))
+        local rv, new_color = r.ImGui_ColorEdit3(ctx, '##loop_color', ProcessColor(temp_loop_color))
         if rv then
-            temp_loop_color = SwapRB(new_color)
+            temp_loop_color = ProcessColor(new_color)
         end
         
         r.ImGui_Text(ctx, 'Default Color')
-        local rv2, new_default = r.ImGui_ColorEdit3(ctx, '##default_color', SwapRB(temp_default_color))
+        local rv2, new_default = r.ImGui_ColorEdit3(ctx, '##default_color', ProcessColor(temp_default_color))
         if rv2 then
-            temp_default_color = SwapRB(new_default)
+            temp_default_color = ProcessColor(new_default)
         end
         
         r.ImGui_Text(ctx, 'MIDI Selection Color')
-        local rv3, new_midi = r.ImGui_ColorEdit3(ctx, '##midi_color', SwapRB(temp_midi_color))
+        local rv3, new_midi = r.ImGui_ColorEdit3(ctx, '##midi_color', ProcessColor(temp_midi_color))
         if rv3 then
-            temp_midi_color = SwapRB(new_midi)
+            temp_midi_color = ProcessColor(new_midi)
         end
         
         local cmd_id = GetMainScriptCommandID()
