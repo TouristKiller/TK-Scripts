@@ -1,9 +1,9 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.0.1
+-- @version 0.1.0
 -- @changelog 
 --[[
-+ TK TRANSPORT First basic version
++ TK TRANSPORT ALPHA 1.0
 ]]--
 
 
@@ -12,8 +12,13 @@ local ctx               = r.ImGui_CreateContext('Transport Control')
 local script_path       = debug.getinfo(1, 'S').source:match([[^@?(.*[\/])[^\/]-$]])
 package.path            = package.path .. ";" .. script_path .. "?.lua"
 local json              = require("json")
+local font_path         = script_path .. "Icons-Regular.otf"
 local preset_path       = script_path .. "tk_transport_presets/"
 local preset_name       = ""
+
+local CustomButtons     = require('custom_buttons')
+local ButtonEditor      = require('button_editor')
+local ButtonRenderer    = require('button_renderer')
 
 
 local PLAY_COMMAND      = 1007
@@ -60,12 +65,20 @@ local default_settings  = {
     current_font        = "Arial",
     font_size           = 12,
     center_transport    = true,
+    -- x offset
     transport_x         = 0.41,      
     timesel_x           = 0.0,        
     tempo_x             = 0.69,         
     playrate_x          = 0.93,      
     env_x               = 0.19,           
-    settings_x          = 0.99,      
+    settings_x          = 0.99,
+    -- y offset
+    transport_y         = 0.15,      
+    timesel_y           = 0.15,        
+    tempo_y             = 0.15,         
+    playrate_y          = 0.15,      
+    env_y               = 0.15,           
+    settings_y          = 0.15,    
 
     -- Color settings
     background          = 0x000000FF,
@@ -109,7 +122,9 @@ for k, v in pairs(default_settings) do
 end
 
 local font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
+local font_icons = r.ImGui_CreateFont(font_path, settings.font_size)
 r.ImGui_Attach(ctx, font)
+r.ImGui_Attach(ctx, font_icons)
 local font_needs_update = false
 function UpdateFont()
     font_needs_update = true
@@ -136,11 +151,15 @@ function LoadSettings()
     end
 end
 LoadSettings()
+CustomButtons.LoadLastUsedPreset()
+CustomButtons.LoadCurrentButtons()
 
 function ResetSettings()
     for k, v in pairs(default_settings) do
         settings[k] = v
     end
+    r.DeleteExtState("TK_TRANSPORT", "last_preset", true)
+    preset_name = nil
     SaveSettings()
     font_needs_update = true
 end
@@ -205,10 +224,23 @@ function GetPresetList()
     return presets
 end
 
+function SaveLastUsedPreset(name)
+    r.SetExtState("TK_TRANSPORT", "last_preset", name, true)
+end
+
+function LoadLastUsedPreset()
+    local last_preset = r.GetExtState("TK_TRANSPORT", "last_preset")
+    if last_preset ~= "" then
+        preset_name = last_preset
+        LoadPreset(last_preset)
+    end
+end
+
+LoadLastUsedPreset()
+
 
 function SetStyle()
     -- Style setup
-    --r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.frame_rounding)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 2)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), settings.popup_rounding)
@@ -263,29 +295,45 @@ function ShowSettings(main_window_width)
         r.ImGui_Separator(ctx)
 
         if r.ImGui_CollapsingHeader(ctx, "Presets") then
-            local rv
-            rv, preset_name = r.ImGui_InputText(ctx, "Preset Name", preset_name or "")
+            local presets = GetPresetList()
+            local display_name = preset_name and preset_name ~= "" and preset_name or "preset_name"
             
-            if r.ImGui_Button(ctx, "Save Preset") and preset_name and preset_name ~= "" then
+            if r.ImGui_BeginCombo(ctx, "##PresetCombo", display_name) then
+                for _, preset in ipairs(presets) do
+                    local is_selected = (preset == preset_name)
+                    if r.ImGui_Selectable(ctx, preset, is_selected) then
+                        preset_name = preset
+                        LoadPreset(preset)
+                        SaveLastUsedPreset(preset)  
+                    end
+                    if is_selected then
+                        r.ImGui_SetItemDefaultFocus(ctx)
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Resave") and preset_name then
                 SavePreset(preset_name)
             end
             
-            r.ImGui_Separator(ctx)
-            local presets = GetPresetList()
-            for _, preset in ipairs(presets) do
-                if r.ImGui_Button(ctx, "Load##" .. preset) then
-                    LoadPreset(preset)
-                end
-                r.ImGui_SameLine(ctx)
-                r.ImGui_Text(ctx, preset)
-                
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Delete##" .. preset) then
-                    local preset_path = CreatePresetsFolder()
-                    os.remove(preset_path .. "/" .. preset .. ".json")
-                end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Delete") and preset_name then
+                local preset_path = CreatePresetsFolder()
+                os.remove(preset_path .. "/" .. preset_name .. ".json")
+                preset_name = nil
             end
-        end 
+            
+            local new_preset_name = "new preset" 
+            local rv
+            rv, new_preset_name = r.ImGui_InputText(ctx, "##", new_preset_name)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Save As New") and new_preset_name and new_preset_name ~= "" then
+                preset_name = new_preset_name  
+                SavePreset(new_preset_name)
+            end
+        end
 
         if r.ImGui_CollapsingHeader(ctx, "Style Settings") then
             local rv
@@ -367,39 +415,60 @@ function ShowSettings(main_window_width)
             rv, settings.center_transport = r.ImGui_Checkbox(ctx, "Center Transport", settings.center_transport)
             local buttons_width = settings.use_graphic_buttons and 280 or 380
             
+            -- Transport positie controls
             if settings.center_transport then
                 settings.transport_x = ((main_window_width - buttons_width) / 2) / main_window_width
             else
-                local transport_percent = settings.transport_x * 100  -- Already stored as percentage
-                rv, transport_percent = r.ImGui_SliderDouble(ctx, "Transport", transport_percent, 0, 100, "%.0f%%")
-                settings.transport_x = transport_percent / 100
-                local transport_pos = transport_percent * main_window_width
+                local transport_percent_x = settings.transport_x * 100
+                rv, transport_percent_x = r.ImGui_SliderDouble(ctx, "Transport X", transport_percent_x, 0, 100, "%.0f%%")
+                settings.transport_x = transport_percent_x / 100
             end
-    
-            local timesel_percent = settings.timesel_x * 100  -- Already stored as percentage
-            rv, timesel_percent = r.ImGui_SliderDouble(ctx, "Time Selection", timesel_percent, 0, 100, "%.0f%%")
-            settings.timesel_x = timesel_percent / 100
-            local timesel_pos = timesel_percent * main_window_width
-
-            local tempo_percent = settings.tempo_x * 100  -- Already stored as percentage
-            rv, tempo_percent = r.ImGui_SliderDouble(ctx, "Tempo", tempo_percent, 0, 100, "%.0f%%")
-            settings.tempo_x = tempo_percent / 100
-            local tempo_pos = tempo_percent * main_window_width
-
-            local playrate_percent = settings.playrate_x * 100  -- Already stored as percentage
-            rv, playrate_percent = r.ImGui_SliderDouble(ctx, "PlayRate", playrate_percent, 0, 100, "%.0f%%")
-            settings.playrate_x = playrate_percent / 100
-            local playrate_pos = playrate_percent * main_window_width
-
-            local env_percent = settings.env_x * 100  -- Already stored as percentage
-            rv, env_percent = r.ImGui_SliderDouble(ctx, "ENV Button", env_percent, 0, 100, "%.0f%%")
-            settings.env_x = env_percent / 100
-            local env_pos = env_percent * main_window_width
-
-            local settings_percent = settings.settings_x * 100  -- Already stored as percentage
-            rv, settings_percent = r.ImGui_SliderDouble(ctx, "Settings Button", settings_percent, 0, 100, "%.0f%%")
-            settings.settings_x = settings_percent / 100
-            local settings_pos = settings_percent * main_window_width
+            local transport_percent_y = settings.transport_y * 100
+            rv, transport_percent_y = r.ImGui_SliderDouble(ctx, "Transport Y", transport_percent_y, 0, 100, "%.0f%%")
+            settings.transport_y = transport_percent_y / 100
+        
+            -- Time Selection positie controls
+            local timesel_percent_x = settings.timesel_x * 100
+            rv, timesel_percent_x = r.ImGui_SliderDouble(ctx, "Time Selection X", timesel_percent_x, 0, 100, "%.0f%%")
+            settings.timesel_x = timesel_percent_x / 100
+            local timesel_percent_y = settings.timesel_y * 100
+            rv, timesel_percent_y = r.ImGui_SliderDouble(ctx, "Time Selection Y", timesel_percent_y, 0, 100, "%.0f%%")
+            settings.timesel_y = timesel_percent_y / 100
+        
+            -- Tempo positie controls
+            local tempo_percent_x = settings.tempo_x * 100
+            rv, tempo_percent_x = r.ImGui_SliderDouble(ctx, "Tempo X", tempo_percent_x, 0, 100, "%.0f%%")
+            settings.tempo_x = tempo_percent_x / 100
+            local tempo_percent_y = settings.tempo_y * 100
+            rv, tempo_percent_y = r.ImGui_SliderDouble(ctx, "Tempo Y", tempo_percent_y, 0, 100, "%.0f%%")
+            settings.tempo_y = tempo_percent_y / 100
+        
+            -- Playrate positie controls
+            local playrate_percent_x = settings.playrate_x * 100
+            rv, playrate_percent_x = r.ImGui_SliderDouble(ctx, "PlayRate X", playrate_percent_x, 0, 100, "%.0f%%")
+            settings.playrate_x = playrate_percent_x / 100
+            local playrate_percent_y = settings.playrate_y * 100
+            rv, playrate_percent_y = r.ImGui_SliderDouble(ctx, "PlayRate Y", playrate_percent_y, 0, 100, "%.0f%%")
+            settings.playrate_y = playrate_percent_y / 100
+        
+            -- ENV Button positie controls
+            local env_percent_x = settings.env_x * 100
+            rv, env_percent_x = r.ImGui_SliderDouble(ctx, "ENV Button X", env_percent_x, 0, 100, "%.0f%%")
+            settings.env_x = env_percent_x / 100
+            local env_percent_y = settings.env_y * 100
+            rv, env_percent_y = r.ImGui_SliderDouble(ctx, "ENV Button Y", env_percent_y, 0, 100, "%.0f%%")
+            settings.env_y = env_percent_y / 100
+        
+            -- Settings Button positie controls
+            local settings_percent_x = settings.settings_x * 100
+            rv, settings_percent_x = r.ImGui_SliderDouble(ctx, "Settings Button X", settings_percent_x, 0, 100, "%.0f%%")
+            settings.settings_x = settings_percent_x / 100
+            local settings_percent_y = settings.settings_y * 100
+            rv, settings_percent_y = r.ImGui_SliderDouble(ctx, "Settings Button Y", settings_percent_y, 0, 100, "%.0f%%")
+            settings.settings_y = settings_percent_y / 100
+        
+        
+            
             r.ImGui_Separator(ctx)
             r.ImGui_Text(ctx, "Time Selection Display")
             rv, settings.show_time_selection = r.ImGui_Checkbox(ctx, "Show Time", settings.show_time_selection)
@@ -451,16 +520,21 @@ function ShowSettings(main_window_width)
                 r.ImGui_EndCombo(ctx)
             end
         end
-        
+      
+        r.ImGui_Separator(ctx)
         if r.ImGui_Button(ctx, "Reset to Defaults") then
             ResetSettings()
             SaveSettings()
         end
         
         r.ImGui_SameLine(ctx)
-        
         if r.ImGui_Button(ctx, "Save Settings") then
             SaveSettings()
+        end
+
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Custom Button Editor") then
+            CustomButtons.show_editor = true
         end
 
         r.ImGui_PopStyleVar(ctx, 8)
@@ -470,9 +544,10 @@ function ShowSettings(main_window_width)
     show_settings = settings_open
 end
 
-function EnvelopeOverride(main_window_width)
+function EnvelopeOverride(main_window_width, main_window_height)
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.env_x * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, settings.env_y * main_window_height)
     local current_mode = "No override"
     for _, mode in ipairs(AUTOMATION_MODES) do
         if r.GetToggleCommandState(mode.command) == 1 then
@@ -536,11 +611,12 @@ function ShowRecordMenu()
 end
 
 
-function Transport_Buttons(main_window_width)
+function Transport_Buttons(main_window_width, main_window_height)
     if not settings.show_transport then return end
     
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.transport_x * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
      
     local buttonSize = settings.font_size * 1.1
     local drawList = r.ImGui_GetWindowDrawList(ctx)
@@ -556,6 +632,7 @@ function Transport_Buttons(main_window_width)
         graphics.DrawArrows(pos_x-10, pos_y, buttonSize, false)
         
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local play_state = r.GetPlayState() & 1 == 1
         local play_color = play_state and settings.play_active or settings.transport_normal 
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -568,6 +645,7 @@ function Transport_Buttons(main_window_width)
         play_graphics.DrawPlay(pos_x, pos_y, buttonSize)
         
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         if r.ImGui_InvisibleButton(ctx, "STOP", buttonSize, buttonSize) then
             r.Main_OnCommand(STOP_COMMAND, 0)
@@ -575,6 +653,7 @@ function Transport_Buttons(main_window_width)
         graphics.DrawStop(pos_x, pos_y, buttonSize)
         
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local pause_state = r.GetPlayState() & 2 == 2
         local pause_color = pause_state and settings.pause_active or settings.transport_normal
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -586,6 +665,7 @@ function Transport_Buttons(main_window_width)
         pause_graphics.DrawPause(pos_x, pos_y, buttonSize)
         
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local rec_state = r.GetToggleCommandState(RECORD_COMMAND)
         local rec_color = (rec_state == 1) and settings.record_active or settings.transport_normal
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -597,6 +677,7 @@ function Transport_Buttons(main_window_width)
         rec_graphics.DrawRecord(pos_x, pos_y, buttonSize)
         
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local repeat_state = r.GetToggleCommandState(REPEAT_COMMAND)
         local loop_color = (repeat_state == 1) and settings.loop_active or settings.transport_normal
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -608,6 +689,7 @@ function Transport_Buttons(main_window_width)
         loop_graphics.DrawLoop(pos_x, pos_y, buttonSize)
         
         r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         if r.ImGui_InvisibleButton(ctx, ">>", buttonSize, buttonSize) then
             r.Main_OnCommand(GOTO_END, 0)
@@ -620,7 +702,7 @@ function Transport_Buttons(main_window_width)
         end
         
         r.ImGui_SameLine(ctx)
-        
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local play_state = r.GetPlayState() & 1 == 1
         if play_state then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.play_active)
@@ -632,13 +714,13 @@ function Transport_Buttons(main_window_width)
         ShowPlaySyncMenu()
 
         r.ImGui_SameLine(ctx)
-        
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         if r.ImGui_Button(ctx, "STOP") then
             r.Main_OnCommand(STOP_COMMAND, 0)
         end
         
         r.ImGui_SameLine(ctx)
-        
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local pause_state = r.GetPlayState() & 2 == 2
         if pause_state then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.pause_active)
@@ -649,7 +731,7 @@ function Transport_Buttons(main_window_width)
         if pause_state then r.ImGui_PopStyleColor(ctx) end
         
         r.ImGui_SameLine(ctx)
-        
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local rec_state = r.GetToggleCommandState(RECORD_COMMAND)
         if rec_state == 1 then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.record_active)
@@ -660,7 +742,7 @@ function Transport_Buttons(main_window_width)
         if rec_state == 1 then r.ImGui_PopStyleColor(ctx) end
         ShowRecordMenu()
         r.ImGui_SameLine(ctx)
-        
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local repeat_state = r.GetToggleCommandState(REPEAT_COMMAND)
         if repeat_state == 1 then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.loop_active)
@@ -671,7 +753,7 @@ function Transport_Buttons(main_window_width)
         if repeat_state == 1 then r.ImGui_PopStyleColor(ctx) end
         
         r.ImGui_SameLine(ctx)
-        
+        r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         if r.ImGui_Button(ctx, ">>") then
             r.Main_OnCommand(GOTO_END, 0)
         end
@@ -783,15 +865,16 @@ function DrawTransportGraphics(drawList, x, y, size, color)
     }
 end
 
-function PlayRate_Slider(main_window_width)
+function PlayRate_Slider(main_window_width, main_window_height)
     if not settings.show_playrate then return end
     local current_rate = r.Master_GetPlayRate(0)
     
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.playrate_x * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, settings.playrate_y * main_window_height)
     r.ImGui_Text(ctx, 'Rate:')
     r.ImGui_SameLine(ctx)
-    
+    r.ImGui_SetCursorPosY(ctx, settings.playrate_y * main_window_height)
     r.ImGui_PushItemWidth(ctx, 80)
     local rv, new_rate = r.ImGui_SliderDouble(ctx, '##PlayRateSlider', current_rate, 0.25, 4.0, "%.2fx")  
     
@@ -805,11 +888,13 @@ function PlayRate_Slider(main_window_width)
     r.ImGui_PopItemWidth(ctx)
 end
 
-function ShowCursorPosition()
+function ShowCursorPosition(main_window_width, main_window_height)
     if not settings.show_transport then return end
     r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
     r.ImGui_InvisibleButton(ctx, "##", 10, 10)
     r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
     local play_state = r.GetPlayState()
     local position = (play_state == 1) and r.GetPlayPosition() or r.GetCursorPosition()
 
@@ -835,35 +920,42 @@ function ShowCursorPosition()
     r.ImGui_PopStyleColor(ctx)
 end
 
-function ShowTempoAndTimeSignature(main_window_width)
+function ShowTempoAndTimeSignature(main_window_width, main_window_height)
     if not settings.show_tempo then return end
-    
     local tempo = r.Master_GetTempo()
 
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.tempo_x * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height + 2)
     r.ImGui_Text(ctx, "BPM:")
-    r.ImGui_SameLine(ctx)
     
-    r.ImGui_PushItemWidth(ctx, settings.font_size * 6.5)
-    local rv_tempo, new_tempo = r.ImGui_InputDouble(ctx, "##tempo", tempo, 0.1, 1.0, "%.1f")
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+    r.ImGui_PushItemWidth(ctx, settings.font_size * 4)
+    local rv_tempo, new_tempo = r.ImGui_InputDouble(ctx, "##tempo", tempo, 0, 0, "%.1f", r.ImGui_InputTextFlags_EnterReturnsTrue())
     if rv_tempo then r.CSurf_OnTempoChange(new_tempo) end
     if r.ImGui_IsItemClicked(ctx, 1) then r.CSurf_OnTempoChange(120.0) end
     r.ImGui_PopItemWidth(ctx)
    
    r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
    r.ImGui_Text(ctx, "Time Sig:")
-   r.ImGui_SameLine(ctx)
    
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
    local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = r.GetTempoTimeSigMarker(0, 0)
    if not retval then timesig_num, timesig_denom = 4, 4 end
-   
-   r.ImGui_PushItemWidth(ctx, 80)
-   local rv_num, new_num = r.ImGui_InputInt(ctx, "##num", timesig_num)
+   r.ImGui_PushItemWidth(ctx, settings.font_size * 2)
+   local rv_num, new_num = r.ImGui_InputInt(ctx, "##num", timesig_num, 0, 0, r.ImGui_InputTextFlags_EnterReturnsTrue())
    r.ImGui_SameLine(ctx)
+   r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
    r.ImGui_Text(ctx, "/")
+
    r.ImGui_SameLine(ctx)
-   local rv_denom, new_denom = r.ImGui_InputInt(ctx, "##denom", timesig_denom)
+   r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+   local rv_denom, new_denom = r.ImGui_InputInt(ctx, "##denom", timesig_denom, 0, 0, r.ImGui_InputTextFlags_EnterReturnsTrue())
+
+
    
    if rv_num or rv_denom then
        r.Undo_BeginBlock()
@@ -881,13 +973,11 @@ function ShowTempoAndTimeSignature(main_window_width)
        r.PreventUIRefresh(-1)
        r.Undo_EndBlock("Change time signature", 1|4|8)
    end
-   
    r.ImGui_PopItemWidth(ctx)
-   r.ImGui_SameLine(ctx)
 end
 
 
-function ShowTimeSelection(main_window_width)
+function ShowTimeSelection(main_window_width, main_window_height)
     if not settings.show_timesel then return end
     
     local start_time, end_time = r.GetSet_LoopTimeRange2(0, false, false, 0, 0, false)
@@ -932,7 +1022,8 @@ function ShowTimeSelection(main_window_width)
         math.floor(beatsInMeasure_length),
         ticks_length)
 
-    r.ImGui_SetCursorPosX(ctx, settings.timesel_x * main_window_width)
+        r.ImGui_SetCursorPosX(ctx, settings.timesel_x * main_window_width)
+        r.ImGui_SetCursorPosY(ctx, settings.timesel_y * main_window_height)
 
     if settings.timesel_invisible then
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
@@ -973,9 +1064,10 @@ function ShowTimeSelection(main_window_width)
     end
 end
 
-function VisualMetronome()
+function VisualMetronome(main_window_width, main_window_height)
     if not settings.show_vismetronome then return end
     r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
     local playPos = reaper.GetPlayPosition()
     local tempo = reaper.Master_GetTempo()
     local beatLength = 60/tempo
@@ -1021,11 +1113,14 @@ function VisualMetronome()
     end
 end
 
-
 function Main()
     if font_needs_update then
         font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
+        font_icons = r.ImGui_CreateFont(font_path, settings.font_size)
+        
         r.ImGui_Attach(ctx, font)
+        r.ImGui_Attach(ctx, font_icons)
+        
         font_needs_update = false
     end
     r.ImGui_PushFont(ctx, font)
@@ -1035,22 +1130,39 @@ function Main()
     local visible, open = r.ImGui_Begin(ctx, 'Transport', true, window_flags)
     if visible then
         local main_window_width = r.ImGui_GetWindowWidth(ctx)
+        local main_window_height = r.ImGui_GetWindowHeight(ctx) 
          
-        ShowTimeSelection(main_window_width)
-        EnvelopeOverride(main_window_width)
-        Transport_Buttons(main_window_width)
-        ShowCursorPosition(main_window_width)
-        VisualMetronome(main_window_width)
-        ShowTempoAndTimeSignature(main_window_width)
-        PlayRate_Slider(main_window_width) 
+        ShowTimeSelection(main_window_width, main_window_height)
+        EnvelopeOverride(main_window_width, main_window_height)
+        Transport_Buttons(main_window_width, main_window_height)
+        ShowCursorPosition(main_window_width, main_window_height)
+        VisualMetronome(main_window_width, main_window_height)
+        ButtonRenderer.RenderButtons(ctx, CustomButtons)
+        ButtonEditor.ShowEditor(ctx, CustomButtons, settings)
+        CustomButtons.CheckForCommandPick()
+        ShowTempoAndTimeSignature(main_window_width, main_window_height)
+        PlayRate_Slider(main_window_width, main_window_height) 
         
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, settings.settings_x * main_window_width)
-        if r.ImGui_Button(ctx, "S") then
+        r.ImGui_SetCursorPosY(ctx, settings.settings_y * main_window_height)
+        
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000) 
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+        
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+        
+        r.ImGui_PushFont(ctx, font_icons)
+        if r.ImGui_Button(ctx, "\u{0047}") then
             show_settings = not show_settings
         end
+        r.ImGui_PopFont(ctx)
+        
+        r.ImGui_PopStyleVar(ctx)
+        r.ImGui_PopStyleColor(ctx, 3)
+        
         ShowSettings(main_window_width)
-
         
         r.ImGui_End(ctx)
     end
@@ -1060,6 +1172,8 @@ function Main()
     
     if open then
         r.defer(Main)
+    else
+        CustomButtons.SaveCurrentButtons()
     end
 end
 

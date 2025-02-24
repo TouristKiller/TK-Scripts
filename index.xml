@@ -49,11 +49,16 @@
  </category>
 
 <category name="Transport">
-     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-    <version name="0.0.1" author="TouristKiller" time="2025-02-23T12:00:00Z">
-    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
-     <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
-    </version>
+    <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
+        <version name="0.1.0" author="TouristKiller" time="2025-02-25T00:00:00Z">
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
+            <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
+            <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
+            <source file="button_renderer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_renderer.lua</source>
+            <source file="custom_buttons.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/custom_buttons.lua</source>
+            <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
+            <source file="Icons-Regular.otf">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/Icons-Regular.otf</source>
+        </version>
     </reapack>
 </category>
 
