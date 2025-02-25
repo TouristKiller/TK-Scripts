@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.1.1
+-- @version 0.1.2
 -- @changelog 
 --[[
 + TK TRANSPORT ALPHA 1.0
@@ -8,6 +8,8 @@
 
 
 local r                 = reaper
+local ctx               = r.ImGui_CreateContext('Transport Control')
+
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator      = package.config:sub(1, 1)
 package.path            = script_path .. "?.lua;"
