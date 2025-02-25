@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.1.2
+-- @version 0.1.3
 -- @changelog 
 --[[
 + TK TRANSPORT ALPHA 1.0
@@ -68,6 +68,8 @@ local default_settings  = {
     current_font        = "Arial",
     font_size           = 12,
     center_transport    = true,
+    current_preset_name = "",
+
     -- x offset
     transport_x         = 0.41,      
     timesel_x           = 0.0,        
@@ -301,6 +303,12 @@ function ShowSettings(main_window_width)
             local presets = GetPresetList()
             local display_name = preset_name and preset_name ~= "" and preset_name or "preset_name"
             
+            -- Static variable for new preset name input
+            if not preset_input_name then
+                preset_input_name = ""
+            end
+            
+            -- Preset selection combo
             if r.ImGui_BeginCombo(ctx, "##PresetCombo", display_name) then
                 for _, preset in ipairs(presets) do
                     local is_selected = (preset == preset_name)
@@ -316,11 +324,13 @@ function ShowSettings(main_window_width)
                 r.ImGui_EndCombo(ctx)
             end
             
+            -- Resave current preset
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Resave") and preset_name then
                 SavePreset(preset_name)
             end
             
+            -- Delete current preset
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Delete") and preset_name then
                 local preset_path = CreatePresetsFolder()
@@ -328,15 +338,21 @@ function ShowSettings(main_window_width)
                 preset_name = nil
             end
             
-            local new_preset_name = "new preset" 
+            -- New preset input and save
             local rv
-            rv, new_preset_name = r.ImGui_InputText(ctx, "##", new_preset_name)
+            rv, preset_input_name = r.ImGui_InputText(ctx, "##NewPreset", preset_input_name)
+            
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Save As New") and new_preset_name and new_preset_name ~= "" then
-                preset_name = new_preset_name  
-                SavePreset(new_preset_name)
+            if r.ImGui_Button(ctx, "Save As New") and preset_input_name ~= "" then
+                preset_name = preset_input_name
+                SavePreset(preset_input_name)
+                -- Only clear input after successful save
+                if r.file_exists(preset_path .. "/" .. preset_input_name .. ".json") then
+                    preset_input_name = ""
+                end
             end
         end
+        
 
         if r.ImGui_CollapsingHeader(ctx, "Style Settings") then
             local rv
