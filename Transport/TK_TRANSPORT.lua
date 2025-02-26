@@ -1,9 +1,16 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.1.3
+-- @version 0.1.4 alpha
 -- @changelog 
 --[[
-+ TK TRANSPORT ALPHA 1.0
++ Show current preset in settings window and button editor
++ Lot of small bugfixes
++ Gui changes
++ Added more precise positioning for elements
++ Set Custom Transport Button images (play, stop, pause, record, loop, rewind, forward)
+     You need 3 state images (like the Reaper taskbar Icons)
+     Tip: Make a folder with you images and use the path to the folder
+     You can lock the path to your images in the settings
 ]]--
 
 
@@ -31,6 +38,16 @@ local RECORD_COMMAND    = 1013
 local REPEAT_COMMAND    = 1068
 local GOTO_START        = 40042
 local GOTO_END          = 40043
+
+local transport_custom_images = {
+    play = nil,
+    stop = nil,
+    pause = nil,
+    record = nil,
+    loop = nil,
+    rewind = nil,
+    forward = nil
+}
 
 local AUTOMATION_MODES  = {
     {name               = "No override", command = 40876},
@@ -77,6 +94,8 @@ local default_settings  = {
     playrate_x          = 0.93,      
     env_x               = 0.19,           
     settings_x          = 0.99,
+    cursorpos_x         = 0.25,
+    visualmtr_x         = 0.32,
     -- y offset
     transport_y         = 0.15,      
     timesel_y           = 0.15,        
@@ -84,6 +103,8 @@ local default_settings  = {
     playrate_y          = 0.15,      
     env_y               = 0.15,           
     settings_y          = 0.15,    
+    cursorpos_y         = 0.15,
+    visualmtr_y         = 0.15,
 
     -- Color settings
     background          = 0x000000FF,
@@ -118,6 +139,32 @@ local default_settings  = {
     show_vismetronome   = true,
     show_time_selection = true,
     show_beats_selection = true,
+
+    -- Custom Transport Button settings
+    use_custom_play_image       = false,
+    custom_play_image_path      = "",
+    custom_play_image_size      = 1.0,
+    use_custom_stop_image       = false,
+    custom_stop_image_path      = "",
+    custom_stop_image_size      = 1.0,
+    use_custom_pause_image      = false, 
+    custom_pause_image_path     = "",
+    custom_pause_image_size     = 1.0,
+    use_custom_record_image     = false,
+    custom_record_image_path    = "",
+    custom_record_image_size    = 1.0,
+    use_custom_loop_image       = false,
+    custom_loop_image_path      = "",
+    custom_loop_image_size      = 1.0,
+    use_custom_rewind_image     = false,
+    custom_rewind_image_path    = "",
+    custom_rewind_image_size    = 1.0,
+    use_custom_forward_image    = false,
+    custom_forward_image_path   = "",
+    custom_image_size           = 1.0,
+    locked_button_folder_path = "",
+    use_locked_button_folder = false,
+
 }
 
 local settings          = {}
@@ -133,6 +180,36 @@ r.ImGui_Attach(ctx, font_icons)
 local font_needs_update = false
 function UpdateFont()
     font_needs_update = true
+end
+
+function UpdateCustomImages()
+    if settings.use_custom_play_image and settings.custom_play_image_path ~= "" then
+        transport_custom_images.play = r.ImGui_CreateImage(settings.custom_play_image_path)
+    end
+    
+    if settings.use_custom_stop_image and settings.custom_stop_image_path ~= "" then
+        transport_custom_images.stop = r.ImGui_CreateImage(settings.custom_stop_image_path)
+    end
+    
+    if settings.use_custom_pause_image and settings.custom_pause_image_path ~= "" then
+        transport_custom_images.pause = r.ImGui_CreateImage(settings.custom_pause_image_path)
+    end 
+    
+    if settings.use_custom_record_image and settings.custom_record_image_path ~= "" then
+        transport_custom_images.record = r.ImGui_CreateImage(settings.custom_record_image_path)
+    end
+    
+    if settings.use_custom_loop_image and settings.custom_loop_image_path ~= "" then
+        transport_custom_images.loop = r.ImGui_CreateImage(settings.custom_loop_image_path)
+    end
+    
+    if settings.use_custom_rewind_image and settings.custom_rewind_image_path ~= "" then
+        transport_custom_images.rewind = r.ImGui_CreateImage(settings.custom_rewind_image_path)
+    end
+    
+    if settings.use_custom_forward_image and settings.custom_forward_image_path ~= "" then
+        transport_custom_images.forward = r.ImGui_CreateImage(settings.custom_forward_image_path)
+    end
 end
 
 function SaveSettings()
@@ -156,6 +233,7 @@ function LoadSettings()
     end
 end
 LoadSettings()
+UpdateCustomImages()
 CustomButtons.LoadLastUsedPreset()
 CustomButtons.LoadCurrentButtons()
 
@@ -208,6 +286,7 @@ function LoadPreset(name)
         if old_font_size ~= settings.font_size or old_font_name ~= settings.current_font then
             font_needs_update = true
         end
+        UpdateCustomImages()
         SaveSettings()
     end
 end
@@ -270,7 +349,7 @@ function SetStyle()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.background)
 end
 
-function ShowSettings(main_window_width)
+function ShowSettings(main_window_width , main_window_height)
     if not show_settings then return end
     
     SetStyle()
@@ -279,13 +358,20 @@ function ShowSettings(main_window_width)
     r.ImGui_SetNextWindowSize(ctx, 400, -1)
     local settings_visible, settings_open = r.ImGui_Begin(ctx, 'Transport Settings', true, settings_flags)
     if settings_visible then
+        local window_width = r.ImGui_GetWindowWidth(ctx)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
         r.ImGui_Text(ctx, "TK")
         r.ImGui_PopStyleColor(ctx)
         r.ImGui_SameLine(ctx)
         r.ImGui_Text(ctx, "TRANSPORT")
         
-        local window_width = r.ImGui_GetWindowWidth(ctx)
+        if preset_name and preset_name ~= "" then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, window_width - 150)  -- Positie aanpassen naar wens
+            r.ImGui_Text(ctx, "Preset: " .. preset_name)
+        end
+        
+        
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, window_width - 25)
         r.ImGui_SetCursorPosY(ctx, 6)
@@ -430,65 +516,272 @@ function ShowSettings(main_window_width)
             local flags = r.ImGui_ColorEditFlags_NoInputs()
             local rv
             local column_width = r.ImGui_GetWindowWidth(ctx) / 2
-        
-            rv, settings.center_transport = r.ImGui_Checkbox(ctx, "Center Transport", settings.center_transport)
+
+            r.ImGui_Text(ctx, "Transport")
+            rv, settings.center_transport = r.ImGui_Checkbox(ctx, "Center", settings.center_transport)
             local buttons_width = settings.use_graphic_buttons and 280 or 380
-            
+           
             -- Transport positie controls
             if settings.center_transport then
                 settings.transport_x = ((main_window_width - buttons_width) / 2) / main_window_width
             else
                 local transport_percent_x = settings.transport_x * 100
-                rv, transport_percent_x = r.ImGui_SliderDouble(ctx, "Transport X", transport_percent_x, 0, 100, "%.0f%%")
+                rv, transport_percent_x = r.ImGui_SliderDouble(ctx, "X##transportX", transport_percent_x, 0, 100, "%.0f%%")
                 settings.transport_x = transport_percent_x / 100
             end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##transpX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.transport_x = math.max(0, settings.transport_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##transpX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.transport_x = math.min(1, settings.transport_x + pixel_change)
+            end
+            
             local transport_percent_y = settings.transport_y * 100
-            rv, transport_percent_y = r.ImGui_SliderDouble(ctx, "Transport Y", transport_percent_y, 0, 100, "%.0f%%")
+            rv, transport_percent_y = r.ImGui_SliderDouble(ctx, "Y##transportY", transport_percent_y, 0, 100, "%.0f%%")
             settings.transport_y = transport_percent_y / 100
-        
-            -- Time Selection positie controls
-            local timesel_percent_x = settings.timesel_x * 100
-            rv, timesel_percent_x = r.ImGui_SliderDouble(ctx, "Time Selection X", timesel_percent_x, 0, 100, "%.0f%%")
-            settings.timesel_x = timesel_percent_x / 100
-            local timesel_percent_y = settings.timesel_y * 100
-            rv, timesel_percent_y = r.ImGui_SliderDouble(ctx, "Time Selection Y", timesel_percent_y, 0, 100, "%.0f%%")
-            settings.timesel_y = timesel_percent_y / 100
-        
-            -- Tempo positie controls
-            local tempo_percent_x = settings.tempo_x * 100
-            rv, tempo_percent_x = r.ImGui_SliderDouble(ctx, "Tempo X", tempo_percent_x, 0, 100, "%.0f%%")
-            settings.tempo_x = tempo_percent_x / 100
-            local tempo_percent_y = settings.tempo_y * 100
-            rv, tempo_percent_y = r.ImGui_SliderDouble(ctx, "Tempo Y", tempo_percent_y, 0, 100, "%.0f%%")
-            settings.tempo_y = tempo_percent_y / 100
-        
-            -- Playrate positie controls
-            local playrate_percent_x = settings.playrate_x * 100
-            rv, playrate_percent_x = r.ImGui_SliderDouble(ctx, "PlayRate X", playrate_percent_x, 0, 100, "%.0f%%")
-            settings.playrate_x = playrate_percent_x / 100
-            local playrate_percent_y = settings.playrate_y * 100
-            rv, playrate_percent_y = r.ImGui_SliderDouble(ctx, "PlayRate Y", playrate_percent_y, 0, 100, "%.0f%%")
-            settings.playrate_y = playrate_percent_y / 100
-        
-            -- ENV Button positie controls
-            local env_percent_x = settings.env_x * 100
-            rv, env_percent_x = r.ImGui_SliderDouble(ctx, "ENV Button X", env_percent_x, 0, 100, "%.0f%%")
-            settings.env_x = env_percent_x / 100
-            local env_percent_y = settings.env_y * 100
-            rv, env_percent_y = r.ImGui_SliderDouble(ctx, "ENV Button Y", env_percent_y, 0, 100, "%.0f%%")
-            settings.env_y = env_percent_y / 100
-        
-            -- Settings Button positie controls
-            local settings_percent_x = settings.settings_x * 100
-            rv, settings_percent_x = r.ImGui_SliderDouble(ctx, "Settings Button X", settings_percent_x, 0, 100, "%.0f%%")
-            settings.settings_x = settings_percent_x / 100
-            local settings_percent_y = settings.settings_y * 100
-            rv, settings_percent_y = r.ImGui_SliderDouble(ctx, "Settings Button Y", settings_percent_y, 0, 100, "%.0f%%")
-            settings.settings_y = settings_percent_y / 100
-        
-        
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##transpY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.transport_y = math.max(0, settings.transport_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##transpY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.transport_y = math.min(1, settings.transport_y + pixel_change)
+            end
+            r.ImGui_Separator(ctx)
+            r.ImGui_Text(ctx, "Cursor Position")
+            -- Cursor Position positie controls
+            local cursorpos_percent_x = settings.cursorpos_x * 100
+            rv, cursorpos_percent_x = r.ImGui_SliderDouble(ctx, "X##cursorX", cursorpos_percent_x, 0, 100, "%.0f%%")
+            settings.cursorpos_x = cursorpos_percent_x / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##cursorX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.cursorpos_x = math.max(0, settings.cursorpos_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##cursorX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.cursorpos_x = math.min(1, settings.cursorpos_x + pixel_change)
+            end
+            
+            local cursorpos_percent_y = settings.cursorpos_y * 100
+            rv, cursorpos_percent_y = r.ImGui_SliderDouble(ctx, "Y##cursorY", cursorpos_percent_y, 0, 100, "%.0f%%")
+            settings.cursorpos_y = cursorpos_percent_y / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##cursorY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.cursorpos_y = math.max(0, settings.cursorpos_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##cursorY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.cursorpos_y = math.min(1, settings.cursorpos_y + pixel_change)
+            end
             
             r.ImGui_Separator(ctx)
+            r.ImGui_Text(ctx, "Visual Metronome")
+            -- Visual Metronome positie controls
+            local visualmtr_percent_x = settings.visualmtr_x * 100
+            rv, visualmtr_percent_x = r.ImGui_SliderDouble(ctx, "X##visualmtrX", visualmtr_percent_x, 0, 100, "%.0f%%")
+            settings.visualmtr_x = visualmtr_percent_x / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##visualmtrX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.visualmtr_x = math.max(0, settings.visualmtr_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##visualmtrX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.visualmtr_x = math.min(1, settings.visualmtr_x + pixel_change)
+            end
+            
+            local visualmtr_percent_y = settings.visualmtr_y * 100
+            rv, visualmtr_percent_y = r.ImGui_SliderDouble(ctx, "Y##visualmtrY", visualmtr_percent_y, 0, 100, "%.0f%%")
+            settings.visualmtr_y = visualmtr_percent_y / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##visualmtrY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.visualmtr_y = math.max(0, settings.visualmtr_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##visualmtrY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.visualmtr_y = math.min(1, settings.visualmtr_y + pixel_change)
+            end
+            r.ImGui_Separator(ctx)
+            r.ImGui_Text(ctx, "Time Selection")
+            -- Time Selection positie controls
+            local timesel_percent_x = settings.timesel_x * 100
+            rv, timesel_percent_x = r.ImGui_SliderDouble(ctx, "X##timeselX", timesel_percent_x, 0, 100, "%.0f%%")
+            settings.timesel_x = timesel_percent_x / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##timeselX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.timesel_x = math.max(0, settings.timesel_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##timeselX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.timesel_x = math.min(1, settings.timesel_x + pixel_change)
+            end
+            
+            local timesel_percent_y = settings.timesel_y * 100
+            rv, timesel_percent_y = r.ImGui_SliderDouble(ctx, "Y##timeselY", timesel_percent_y, 0, 100, "%.0f%%")
+            settings.timesel_y = timesel_percent_y / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##timeselY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.timesel_y = math.max(0, settings.timesel_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##timeselY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.timesel_y = math.min(1, settings.timesel_y + pixel_change)
+            end
+            r.ImGui_Separator(ctx)
+            r.ImGui_Text(ctx, "Tempo")
+            -- Tempo positie controls
+            local tempo_percent_x = settings.tempo_x * 100
+            rv, tempo_percent_x = r.ImGui_SliderDouble(ctx, "X##tempoX", tempo_percent_x, 0, 100, "%.0f%%")
+            settings.tempo_x = tempo_percent_x / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##tempoX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.tempo_x = math.max(0, settings.tempo_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##tempoX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.tempo_x = math.min(1, settings.tempo_x + pixel_change)
+            end
+            
+            local tempo_percent_y = settings.tempo_y * 100
+            rv, tempo_percent_y = r.ImGui_SliderDouble(ctx, "Y##tempoY", tempo_percent_y, 0, 100, "%.0f%%")
+            settings.tempo_y = tempo_percent_y / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##tempoY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.tempo_y = math.max(0, settings.tempo_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##tempoY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.tempo_y = math.min(1, settings.tempo_y + pixel_change)
+            end
+            r.ImGui_Separator(ctx)
+            r.ImGui_Text(ctx, "Playrate")
+            -- Playrate positie controls
+            local playrate_percent_x = settings.playrate_x * 100
+            rv, playrate_percent_x = r.ImGui_SliderDouble(ctx, "X##playrateX", playrate_percent_x, 0, 100, "%.0f%%")
+            settings.playrate_x = playrate_percent_x / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##playrateX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.playrate_x = math.max(0, settings.playrate_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##playrateX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.playrate_x = math.min(1, settings.playrate_x + pixel_change)
+            end
+            
+            local playrate_percent_y = settings.playrate_y * 100
+            rv, playrate_percent_y = r.ImGui_SliderDouble(ctx, "Y##playrateY", playrate_percent_y, 0, 100, "%.0f%%")
+            settings.playrate_y = playrate_percent_y / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##playrateY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.playrate_y = math.max(0, settings.playrate_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##playrateY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.playrate_y = math.min(1, settings.playrate_y + pixel_change)
+            end
+            r.ImGui_Separator(ctx)
+            r.ImGui_Text(ctx, "Envelope")
+            -- ENV Button positie controls
+            local env_percent_x = settings.env_x * 100
+            rv, env_percent_x = r.ImGui_SliderDouble(ctx, "X##envX", env_percent_x, 0, 100, "%.0f%%")
+            settings.env_x = env_percent_x / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##envX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.env_x = math.max(0, settings.env_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##envX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.env_x = math.min(1, settings.env_x + pixel_change)
+            end
+            
+            local env_percent_y = settings.env_y * 100
+            rv, env_percent_y = r.ImGui_SliderDouble(ctx, "Y##envY", env_percent_y, 0, 100, "%.0f%%")
+            settings.env_y = env_percent_y / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##envY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.env_y = math.max(0, settings.env_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##envY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.env_y = math.min(1, settings.env_y + pixel_change)
+            end
+            r.ImGui_Separator(ctx)
+            r.ImGui_Text(ctx, "Settings")
+            -- Settings Button positie controls
+            local settings_percent_x = settings.settings_x * 100
+            rv, settings_percent_x = r.ImGui_SliderDouble(ctx, "X##settingsX", settings_percent_x, 0, 100, "%.0f%%")
+            settings.settings_x = settings_percent_x / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##settingsX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.settings_x = math.max(0, settings.settings_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##settingsX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.settings_x = math.min(1, settings.settings_x + pixel_change)
+            end
+            
+            local settings_percent_y = settings.settings_y * 100
+            rv, settings_percent_y = r.ImGui_SliderDouble(ctx, "Y##settingsY", settings_percent_y, 0, 100, "%.0f%%")
+            settings.settings_y = settings_percent_y / 100
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##settingsY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.settings_y = math.max(0, settings.settings_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##settingsY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.settings_y = math.min(1, settings.settings_y + pixel_change)
+            end
+            r.ImGui_Separator(ctx)
+            
             r.ImGui_Text(ctx, "Time Selection Display")
             rv, settings.show_time_selection = r.ImGui_Checkbox(ctx, "Show Time", settings.show_time_selection)
             r.ImGui_SameLine(ctx, column_width)
@@ -509,7 +802,205 @@ function ShowSettings(main_window_width)
             rv, settings.show_playrate = r.ImGui_Checkbox(ctx, "Playrate", settings.show_playrate)
             rv, settings.show_vismetronome = r.ImGui_Checkbox(ctx, "Visual Metronome", settings.show_vismetronome)
         end
-         
+
+        if r.ImGui_CollapsingHeader(ctx, "Custom Transport Button Images") then
+            local changed = false
+        
+            rv, settings.custom_image_size = r.ImGui_SliderDouble(ctx, "Global Image Scale", settings.custom_image_size or 1.0, 0.5, 2.0, "%.2fx")
+            rv, settings.use_locked_button_folder = r.ImGui_Checkbox(ctx, "Use last image folder for all buttons", settings.use_locked_button_folder)
+            if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                r.ImGui_Text(ctx, "Current folder: " .. settings.locked_button_folder_path)
+            end
+            
+            r.ImGui_Separator(ctx)
+            
+            -- Play button
+            rv, settings.use_custom_play_image = r.ImGui_Checkbox(ctx, "Use Custom Play Button", settings.use_custom_play_image)
+            changed = changed or rv
+            if settings.use_custom_play_image then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Browse##Play") then
+                    local start_dir = ""
+                    if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                        start_dir = settings.locked_button_folder_path
+                    end
+                    
+                    local retval, file = r.GetUserFileNameForRead(start_dir, "Select Play Button Image", ".png")
+                    if retval then
+                        settings.custom_play_image_path = file
+                        changed = true
+
+                        if settings.use_locked_button_folder then
+                            settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                        end
+                    end
+                end
+                
+                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_play_image_path or "None"))
+            end
+            rv, settings.custom_play_image_size = r.ImGui_SliderDouble(ctx, "Play Image Scale", settings.custom_play_image_size, 0.5, 2.0, "%.2fx")
+
+            -- Stop button
+            rv, settings.use_custom_stop_image = r.ImGui_Checkbox(ctx, "Use Custom Stop Button", settings.use_custom_stop_image)
+            changed = changed or rv
+            if settings.use_custom_stop_image then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Browse##Stop") then
+                    local start_dir = ""
+                    if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                        start_dir = settings.locked_button_folder_path
+                    end
+                    
+                    local retval, file = r.GetUserFileNameForRead(start_dir, "Select Stop Button Image", ".png")
+                    if retval then
+                        settings.custom_stop_image_path = file
+                        changed = true
+                        
+                        -- Extraheer en onthoud het mappad
+                        if settings.use_locked_button_folder then
+                            settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                        end
+                    end
+                end
+                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_stop_image_path or "None"))
+            end
+            rv, settings.custom_stop_image_size = r.ImGui_SliderDouble(ctx, "Stop Image Scale", settings.custom_stop_image_size, 0.5, 2.0, "%.2fx")
+
+            -- Pause button
+            rv, settings.use_custom_pause_image = r.ImGui_Checkbox(ctx, "Use Custom Pause Button", settings.use_custom_pause_image)
+            changed = changed or rv
+            if settings.use_custom_pause_image then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Browse##Pause") then
+                    local start_dir = ""
+                    if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                        start_dir = settings.locked_button_folder_path
+                    end
+                    
+                    local retval, file = r.GetUserFileNameForRead(start_dir, "Select Pause Button Image", ".png")
+                    if retval then
+                        settings.custom_pause_image_path = file
+                        changed = true
+                        
+                        -- Extraheer en onthoud het mappad
+                        if settings.use_locked_button_folder then
+                            settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                        end
+                    end
+                end
+                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_pause_image_path or "None"))
+            end
+            rv, settings.custom_pause_image_size = r.ImGui_SliderDouble(ctx, "Pause Image Scale", settings.custom_pause_image_size, 0.5, 2.0, "%.2fx")
+
+            -- Record button
+            rv, settings.use_custom_record_image = r.ImGui_Checkbox(ctx, "Use Custom Record Button", settings.use_custom_record_image)
+            changed = changed or rv
+            if settings.use_custom_record_image then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Browse##Record") then
+                    local start_dir = ""
+                    if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                        start_dir = settings.locked_button_folder_path
+                    end
+                    
+                    local retval, file = r.GetUserFileNameForRead(start_dir, "Select Record Button Image", ".png")
+                    if retval then
+                        settings.custom_record_image_path = file
+                        changed = true
+                        
+                        -- Extraheer en onthoud het mappad
+                        if settings.use_locked_button_folder then
+                            settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                        end
+                    end
+                end
+                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_record_image_path or "None"))
+            end
+            rv, settings.custom_record_image_size = r.ImGui_SliderDouble(ctx, "Record Image Scale", settings.custom_record_image_size, 0.5, 2.0, "%.2fx")
+            
+            -- Loop button
+            rv, settings.use_custom_loop_image = r.ImGui_Checkbox(ctx, "Use Custom Loop Button", settings.use_custom_loop_image)
+            changed = changed or rv
+            if settings.use_custom_loop_image then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Browse##Loop") then
+                    local start_dir = ""
+                    if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                        start_dir = settings.locked_button_folder_path
+                    end
+                    
+                    local retval, file = r.GetUserFileNameForRead(start_dir, "Select Loop Button Image", ".png")
+                    if retval then
+                        settings.custom_loop_image_path = file
+                        changed = true
+                        
+                        -- Extraheer en onthoud het mappad
+                        if settings.use_locked_button_folder then
+                            settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                        end
+                    end
+                end
+                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_loop_image_path or "None"))
+            end
+            rv, settings.custom_loop_image_size = r.ImGui_SliderDouble(ctx, "Loop Image Scale", settings.custom_loop_image_size, 0.5, 2.0, "%.2fx")
+            
+            -- Rewind button
+            rv, settings.use_custom_rewind_image = r.ImGui_Checkbox(ctx, "Use Custom Rewind Button", settings.use_custom_rewind_image)
+            changed = changed or rv
+            if settings.use_custom_rewind_image then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Browse##Rewind") then
+                    local start_dir = ""
+                    if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                        start_dir = settings.locked_button_folder_path
+                    end
+                    
+                    local retval, file = r.GetUserFileNameForRead(start_dir, "Select Rewind Button Image", ".png")
+                    if retval then
+                        settings.custom_rewind_image_path = file
+                        changed = true
+                        
+                        -- Extraheer en onthoud het mappad
+                        if settings.use_locked_button_folder then
+                            settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                        end
+                    end
+                end
+                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_rewind_image_path or "None"))
+            end
+            rv, settings.custom_rewind_image_size = r.ImGui_SliderDouble(ctx, "Rewind Image Scale", settings.custom_rewind_image_size, 0.5, 2.0, "%.2fx")
+            
+            -- Forward button
+            rv, settings.use_custom_forward_image = r.ImGui_Checkbox(ctx, "Use Custom Forward Button", settings.use_custom_forward_image)
+            changed = changed or rv
+            if settings.use_custom_forward_image then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Browse##Forward") then
+                    local start_dir = ""
+                    if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                        start_dir = settings.locked_button_folder_path
+                    end
+                    
+                    local retval, file = r.GetUserFileNameForRead(start_dir, "Select Forward Button Image", ".png")
+                    if retval then
+                        settings.custom_forward_image_path = file
+                        changed = true
+                        
+                        -- Extraheer en onthoud het mappad
+                        if settings.use_locked_button_folder then
+                            settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                        end
+                    end
+                end
+                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_forward_image_path or "None"))
+            end
+            rv, settings.custom_forward_image_size = r.ImGui_SliderDouble(ctx, "Forward Image Scale", settings.custom_forward_image_size, 0.5, 2.0, "%.2fx")
+            
+            if changed then
+                UpdateCustomImages()
+            end
+        end
+        
         if r.ImGui_CollapsingHeader(ctx, "Font Settings") then
             local rv
             if r.ImGui_BeginCombo(ctx, "Font", settings.current_font) then
@@ -647,21 +1138,52 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(GOTO_START, 0)
         end
         
-        local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, settings.transport_normal)
-        graphics.DrawArrows(pos_x-10, pos_y, buttonSize, false)
+        -- Rewind knop met custom image
+        if settings.use_custom_rewind_image and transport_custom_images.rewind and r.ImGui_ValidatePtr(transport_custom_images.rewind, 'ImGui_Image*') then
+            local uv_x = 0
+            if r.ImGui_IsItemHovered(ctx) then
+                uv_x = 0.33
+            end
+            
+            local scaled_size = buttonSize * settings.custom_rewind_image_size * settings.custom_image_size
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.rewind,
+                pos_x, pos_y,
+                pos_x + scaled_size, pos_y + scaled_size,
+                uv_x, 0, uv_x + 0.33, 1)
+        else
+            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, settings.transport_normal)
+            graphics.DrawArrows(pos_x-10, pos_y, buttonSize, false)
+        end
         
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
         local play_state = r.GetPlayState() & 1 == 1
-        local play_color = play_state and settings.play_active or settings.transport_normal 
+        local play_color = play_state and settings.play_active or settings.transport_normal
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         if r.ImGui_InvisibleButton(ctx, "PLAY", buttonSize, buttonSize) then
             r.Main_OnCommand(PLAY_COMMAND, 0)
         end
         ShowPlaySyncMenu()
         
-        local play_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, play_color)
-        play_graphics.DrawPlay(pos_x, pos_y, buttonSize)
+        -- Play knop met custom image
+        if settings.use_custom_play_image and transport_custom_images.play and r.ImGui_ValidatePtr(transport_custom_images.play, 'ImGui_Image*') then
+            local uv_x = 0
+            if r.ImGui_IsItemHovered(ctx) then
+                uv_x = 0.33
+            end
+            if play_state then
+                uv_x = 0.66
+            end
+            
+            local scaled_size = buttonSize * settings.custom_play_image_size * settings.custom_image_size
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.play,
+                pos_x, pos_y,
+                pos_x + scaled_size, pos_y + scaled_size,
+                uv_x, 0, uv_x + 0.33, 1)
+        else
+            local play_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, play_color)
+            play_graphics.DrawPlay(pos_x, pos_y, buttonSize)
+        end
         
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
@@ -669,7 +1191,23 @@ function Transport_Buttons(main_window_width, main_window_height)
         if r.ImGui_InvisibleButton(ctx, "STOP", buttonSize, buttonSize) then
             r.Main_OnCommand(STOP_COMMAND, 0)
         end
-        graphics.DrawStop(pos_x, pos_y, buttonSize)
+        
+        -- Stop knop met custom image
+        if settings.use_custom_stop_image and transport_custom_images.stop and r.ImGui_ValidatePtr(transport_custom_images.stop, 'ImGui_Image*') then
+            local uv_x = 0
+            if r.ImGui_IsItemHovered(ctx) then
+                uv_x = 0.33
+            end
+            
+            local scaled_size = buttonSize * settings.custom_stop_image_size * settings.custom_image_size
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.stop,
+                pos_x, pos_y,
+                pos_x + scaled_size, pos_y + scaled_size,
+                uv_x, 0, uv_x + 0.33, 1)
+        else
+            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, settings.transport_normal)
+            graphics.DrawStop(pos_x, pos_y, buttonSize)
+        end
         
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
@@ -680,8 +1218,25 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(PAUSE_COMMAND, 0)
         end
         
-        local pause_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, pause_color)
-        pause_graphics.DrawPause(pos_x, pos_y, buttonSize)
+        -- Pause knop met custom image
+        if settings.use_custom_pause_image and transport_custom_images.pause and r.ImGui_ValidatePtr(transport_custom_images.pause, 'ImGui_Image*') then
+            local uv_x = 0
+            if r.ImGui_IsItemHovered(ctx) then
+                uv_x = 0.33
+            end
+            if pause_state then
+                uv_x = 0.66
+            end
+            
+            local scaled_size = buttonSize * settings.custom_pause_image_size * settings.custom_image_size
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.pause,
+                pos_x, pos_y,
+                pos_x + scaled_size, pos_y + scaled_size,
+                uv_x, 0, uv_x + 0.33, 1)
+        else
+            local pause_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, pause_color)
+            pause_graphics.DrawPause(pos_x, pos_y, buttonSize)
+        end
         
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
@@ -692,8 +1247,26 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(RECORD_COMMAND, 0)
         end
         ShowRecordMenu()
-        local rec_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, rec_color)
-        rec_graphics.DrawRecord(pos_x, pos_y, buttonSize)
+        
+        -- Record knop met custom image
+        if settings.use_custom_record_image and transport_custom_images.record and r.ImGui_ValidatePtr(transport_custom_images.record, 'ImGui_Image*') then
+            local uv_x = 0
+            if r.ImGui_IsItemHovered(ctx) then
+                uv_x = 0.33
+            end
+            if rec_state == 1 then
+                uv_x = 0.66
+            end
+            
+            local scaled_size = buttonSize * settings.custom_record_image_size * settings.custom_image_size
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.record,
+                pos_x, pos_y,
+                pos_x + scaled_size, pos_y + scaled_size,
+                uv_x, 0, uv_x + 0.33, 1)
+        else
+            local rec_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, rec_color)
+            rec_graphics.DrawRecord(pos_x, pos_y, buttonSize)
+        end
         
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
@@ -704,8 +1277,25 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(REPEAT_COMMAND, 0)
         end
         
-        local loop_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, loop_color)
-        loop_graphics.DrawLoop(pos_x, pos_y, buttonSize)
+        -- Loop knop met custom image
+        if settings.use_custom_loop_image and transport_custom_images.loop and r.ImGui_ValidatePtr(transport_custom_images.loop, 'ImGui_Image*') then
+            local uv_x = 0
+            if r.ImGui_IsItemHovered(ctx) then
+                uv_x = 0.33
+            end
+            if repeat_state == 1 then
+                uv_x = 0.66
+            end
+            
+            local scaled_size = buttonSize * settings.custom_loop_image_size * settings.custom_image_size
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.loop,
+                pos_x, pos_y,
+                pos_x + scaled_size, pos_y + scaled_size,
+                uv_x, 0, uv_x + 0.33, 1)
+        else
+            local loop_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, loop_color)
+            loop_graphics.DrawLoop(pos_x, pos_y, buttonSize)
+        end
         
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
@@ -713,9 +1303,27 @@ function Transport_Buttons(main_window_width, main_window_height)
         if r.ImGui_InvisibleButton(ctx, ">>", buttonSize, buttonSize) then
             r.Main_OnCommand(GOTO_END, 0)
         end
-        graphics.DrawArrows(pos_x+5, pos_y, buttonSize, true)
+        
+        -- Forward knop met custom image
+        if settings.use_custom_forward_image and transport_custom_images.forward and r.ImGui_ValidatePtr(transport_custom_images.forward, 'ImGui_Image*') then
+            local uv_x = 0
+            if r.ImGui_IsItemHovered(ctx) then
+                uv_x = 0.33
+            end
+            
+            local scaled_size = buttonSize * settings.custom_forward_image_size * settings.custom_image_size
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.forward,
+                pos_x, pos_y,
+                pos_x + scaled_size, pos_y + scaled_size,
+                uv_x, 0, uv_x + 0.33, 1)
+        else
+            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, settings.transport_normal)
+            graphics.DrawArrows(pos_x+5, pos_y, buttonSize, true)
+        end
         
     else
+    
+    
         if r.ImGui_Button(ctx, "<<") then
             r.Main_OnCommand(GOTO_START, 0)
         end
@@ -910,10 +1518,12 @@ end
 function ShowCursorPosition(main_window_width, main_window_height)
     if not settings.show_transport then return end
     r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
+    r.ImGui_SetCursorPosX(ctx, settings.cursorpos_x * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, settings.cursorpos_y * main_window_height)
     r.ImGui_InvisibleButton(ctx, "##", 10, 10)
     r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
+    r.ImGui_SetCursorPosX(ctx, settings.cursorpos_x * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, settings.cursorpos_y * main_window_height)
     local play_state = r.GetPlayState()
     local position = (play_state == 1) and r.GetPlayPosition() or r.GetCursorPosition()
 
@@ -945,7 +1555,7 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
 
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.tempo_x * main_window_width)
-    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height + 2)
+    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
     r.ImGui_Text(ctx, "BPM:")
     
     r.ImGui_SameLine(ctx)
@@ -1070,7 +1680,12 @@ function ShowTimeSelection(main_window_width, main_window_height)
             sec_format, end_format, len_format)
     end
 
-    r.ImGui_Button(ctx, display_text)
+    if display_text == "" then
+        r.ImGui_Button(ctx, "##TimeSelectionEmpty")
+    else
+        r.ImGui_Button(ctx, display_text)
+    end
+    
 
     if not settings.timesel_border then
         r.ImGui_PopStyleVar(ctx)
@@ -1086,12 +1701,13 @@ end
 function VisualMetronome(main_window_width, main_window_height)
     if not settings.show_vismetronome then return end
     r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosY(ctx, settings.transport_y * main_window_height)
+    r.ImGui_SetCursorPosX(ctx, settings.visualmtr_x * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, settings.visualmtr_y * main_window_height)
     local playPos = reaper.GetPlayPosition()
     local tempo = reaper.Master_GetTempo()
     local beatLength = 60/tempo
     local currentBeatPhase = playPos % beatLength
-    local pulseSize = settings.font_size * 0.62
+    local pulseSize = settings.font_size * 0.5
 
     local pulseIntensity = math.exp(-currentBeatPhase * 8/beatLength)
     local finalSize = pulseSize * (1 + pulseIntensity * 0.1)
@@ -1181,7 +1797,7 @@ function Main()
         r.ImGui_PopStyleVar(ctx)
         r.ImGui_PopStyleColor(ctx, 3)
         
-        ShowSettings(main_window_width)
+        ShowSettings(main_window_width, main_window_height)
         
         r.ImGui_End(ctx)
     end

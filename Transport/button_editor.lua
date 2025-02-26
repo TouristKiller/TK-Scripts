@@ -32,11 +32,18 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings)
     local visible, open = r.ImGui_Begin(ctx, "Custom Button Editor##TK", true, window_flags)
     
     if visible then
+        local window_width = r.ImGui_GetWindowWidth(ctx)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
         r.ImGui_Text(ctx, "TK")
         r.ImGui_PopStyleColor(ctx)
         r.ImGui_SameLine(ctx)
-        r.ImGui_Text(ctx, "BUTTON SETTINGS")
+        r.ImGui_Text(ctx, "BUTTON EDITOR")
+        
+        if custom_buttons.current_preset then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, window_width - 150)  -- Positie aanpassen naar wens
+            r.ImGui_Text(ctx, "Preset: " .. custom_buttons.current_preset)
+        end
         
         local window_width = r.ImGui_GetWindowWidth(ctx)
         r.ImGui_SameLine(ctx)
@@ -118,13 +125,35 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings)
             custom_buttons.SaveCurrentButtons()
         end
 
-        r.ImGui_Separator(ctx)
+
+        
+
 
         if custom_buttons.current_edit then
             local button = custom_buttons.buttons[custom_buttons.current_edit]
             
             r.ImGui_BeginChild(ctx, "ButtonEditor", 0, 200)
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_Checkbox(ctx, "Use Icon", button.use_icon) then
+                button.use_icon = not button.use_icon
+                custom_buttons.SaveCurrentButtons()
+            end
             
+            if button.use_icon then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Browse Icons") then
+                    IconBrowser.show_window = true
+                end
+                
+                local selected_icon = IconBrowser.Show(ctx)
+                if selected_icon then
+                    button.icon_name = selected_icon
+                    button.icon = nil
+                    custom_buttons.SaveCurrentButtons()
+                end
+            end
+            r.ImGui_Separator(ctx)
             if r.ImGui_CollapsingHeader(ctx, "Basic Settings", r.ImGui_TreeNodeFlags_DefaultOpen()) then
                 local changed = false
                 
@@ -164,39 +193,7 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings)
                 
                 if changed then custom_buttons.SaveCurrentButtons() end
             end
-            r.ImGui_Separator(ctx)
 
-            if r.ImGui_Checkbox(ctx, "Use Icon", button.use_icon) then
-                button.use_icon = not button.use_icon
-                custom_buttons.SaveCurrentButtons()
-            end
-            r.ImGui_SameLine(ctx)
-            if button.use_icon then
-                if r.ImGui_Button(ctx, "Browse Icons") then
-                    IconBrowser.show_window = true
-                end
-                
-                r.ImGui_Text(ctx, "Or select from list")
-                r.ImGui_SameLine(ctx)
-                local icon_list = GetIconFiles()
-                if r.ImGui_BeginCombo(ctx, "##", button.icon_name or "Choose an icon") then
-                    for _, icon_name in ipairs(icon_list) do
-                        if r.ImGui_Selectable(ctx, icon_name, button.icon_name == icon_name) then
-                            button.icon_name = icon_name
-                            button.icon = r.ImGui_CreateImage(r.GetResourcePath() .. "/Data/toolbar_icons/" .. icon_name)
-                            custom_buttons.SaveCurrentButtons()
-                        end
-                    end
-                    r.ImGui_EndCombo(ctx)
-                end
-                
-                local selected_icon = IconBrowser.Show(ctx)
-                if selected_icon then
-                    button.icon_name = selected_icon
-                    button.icon = nil
-                    custom_buttons.SaveCurrentButtons()
-                end
-            end
             r.ImGui_Separator(ctx)
             if r.ImGui_CollapsingHeader(ctx, "Left Click Action") then
                 local changed = false
@@ -265,6 +262,7 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings)
             end
             r.ImGui_EndChild(ctx)
             r.ImGui_Text(ctx, "Set Left click for single click action, right click for menu")
+            r.ImGui_Text(ctx, "Always save button in preset after editing, or it will be lost")
         end
         r.ImGui_End(ctx)
     end

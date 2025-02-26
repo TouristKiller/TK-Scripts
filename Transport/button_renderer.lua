@@ -65,7 +65,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons)
                     r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
                 end
             else
-                if r.ImGui_Button(ctx, button.name, button.width) then
+                if r.ImGui_Button(ctx, button.name ~= "" and button.name or "##EmptyButton"..i, button.width) then
                     if button.left_click.command then
                         local command_id = tonumber(button.left_click.command) or r.NamedCommandLookup(button.left_click.command)
                         if command_id then
