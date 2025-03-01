@@ -50,7 +50,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="0.1.4" author="TouristKiller" time="2026-02-25T22:45:00Z">
+        <version name="0.1.8" author="TouristKiller" time="2026-03-01T20:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -59,9 +59,23 @@
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
             <source file="Icons-Regular.otf">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/Icons-Regular.otf</source>
             <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
+            
+            <!-- Visible widgets (added to action list) -->
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_CursorPosition.lua</source>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_Manager.lua</source>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_Metronome.lua</source>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_PlayRate.lua</source>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_Tempo.lua</source>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_TimeSelection.lua</source>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_Transport.lua</source>
+            
+            <!-- Invisible files (not in action list) -->
+            <source file="widget_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/widget_manager.lua</source>
+            <source file="TK_Widget_Handler.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_Handler.lua</source>
         </version>
     </reapack>
 </category>
+
 
 
  <category name="Tools">

@@ -1,16 +1,12 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.1.4 alpha
+-- @version 0.1.8
 -- @changelog 
 --[[
-+ Show current preset in settings window and button editor
-+ Lot of small bugfixes
-+ Gui changes
-+ Added more precise positioning for elements
-+ Set Custom Transport Button images (play, stop, pause, record, loop, rewind, forward)
-     You need 3 state images (like the Reaper taskbar Icons)
-     Tip: Make a folder with you images and use the path to the folder
-     You can lock the path to your images in the settings
++ Added Widgets and Widget Manager. Integrated in TK TRANSPORT, but also available as separate scripts 
++ Widgets can be used "standalone" or in combination with TK TRANSPORT and placed freely on the screen or in the Native Reaper transport bar
++ Export custom buttons preset as Action (can be used to switch buttons preset)
++ BugFixes
 ]]--
 
 
@@ -29,6 +25,7 @@ local preset_name       = ""
 local CustomButtons     = require('custom_buttons')
 local ButtonEditor      = require('button_editor')
 local ButtonRenderer    = require('button_renderer')
+local WidgetManager     = require('widget_manager')
 
 
 local PLAY_COMMAND      = 1007
@@ -60,7 +57,7 @@ local AUTOMATION_MODES  = {
     {name               = "Write", command = 40882}
 }
 
-local show_settings     = true 
+local show_settings     = false 
 local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoScrollbar()
 local settings_flags    = window_flags | r.ImGui_WindowFlags_NoResize() 
 
@@ -139,6 +136,8 @@ local default_settings  = {
     show_vismetronome   = true,
     show_time_selection = true,
     show_beats_selection = true,
+    show_settings_button = true,  
+    show_env_button      = true,
 
     -- Custom Transport Button settings
     use_custom_play_image       = false,
@@ -183,34 +182,77 @@ function UpdateFont()
 end
 
 function UpdateCustomImages()
+    -- Play knop
     if settings.use_custom_play_image and settings.custom_play_image_path ~= "" then
-        transport_custom_images.play = r.ImGui_CreateImage(settings.custom_play_image_path)
+        if r.file_exists(settings.custom_play_image_path) then
+            transport_custom_images.play = r.ImGui_CreateImage(settings.custom_play_image_path)
+        else
+            settings.custom_play_image_path = ""
+            transport_custom_images.play = nil
+        end
     end
     
+    -- Stop knop
     if settings.use_custom_stop_image and settings.custom_stop_image_path ~= "" then
-        transport_custom_images.stop = r.ImGui_CreateImage(settings.custom_stop_image_path)
+        if r.file_exists(settings.custom_stop_image_path) then
+            transport_custom_images.stop = r.ImGui_CreateImage(settings.custom_stop_image_path)
+        else
+            settings.custom_stop_image_path = ""
+            transport_custom_images.stop = nil
+        end
     end
     
+    -- Pause knop
     if settings.use_custom_pause_image and settings.custom_pause_image_path ~= "" then
-        transport_custom_images.pause = r.ImGui_CreateImage(settings.custom_pause_image_path)
-    end 
+        if r.file_exists(settings.custom_pause_image_path) then
+            transport_custom_images.pause = r.ImGui_CreateImage(settings.custom_pause_image_path)
+        else
+            settings.custom_pause_image_path = ""
+            transport_custom_images.pause = nil
+        end
+    end
     
+    -- Record knop
     if settings.use_custom_record_image and settings.custom_record_image_path ~= "" then
-        transport_custom_images.record = r.ImGui_CreateImage(settings.custom_record_image_path)
+        if r.file_exists(settings.custom_record_image_path) then
+            transport_custom_images.record = r.ImGui_CreateImage(settings.custom_record_image_path)
+        else
+            settings.custom_record_image_path = ""
+            transport_custom_images.record = nil
+        end
     end
     
+    -- Loop knop (let op: gebruik loop_image, niet repeat_image)
     if settings.use_custom_loop_image and settings.custom_loop_image_path ~= "" then
-        transport_custom_images.loop = r.ImGui_CreateImage(settings.custom_loop_image_path)
+        if r.file_exists(settings.custom_loop_image_path) then
+            transport_custom_images.loop = r.ImGui_CreateImage(settings.custom_loop_image_path)
+        else
+            settings.custom_loop_image_path = ""
+            transport_custom_images.loop = nil
+        end
     end
     
+    -- Rewind knop
     if settings.use_custom_rewind_image and settings.custom_rewind_image_path ~= "" then
-        transport_custom_images.rewind = r.ImGui_CreateImage(settings.custom_rewind_image_path)
+        if r.file_exists(settings.custom_rewind_image_path) then
+            transport_custom_images.rewind = r.ImGui_CreateImage(settings.custom_rewind_image_path)
+        else
+            settings.custom_rewind_image_path = ""
+            transport_custom_images.rewind = nil
+        end
     end
     
+    -- Forward knop
     if settings.use_custom_forward_image and settings.custom_forward_image_path ~= "" then
-        transport_custom_images.forward = r.ImGui_CreateImage(settings.custom_forward_image_path)
+        if r.file_exists(settings.custom_forward_image_path) then
+            transport_custom_images.forward = r.ImGui_CreateImage(settings.custom_forward_image_path)
+        else
+            settings.custom_forward_image_path = ""
+            transport_custom_images.forward = nil
+        end
     end
 end
+
 
 function SaveSettings()
     local section = "TK_TRANSPORT"
@@ -791,9 +833,7 @@ function ShowSettings(main_window_width , main_window_height)
             rv, settings.timesel_border = r.ImGui_Checkbox(ctx, "Show Button Border", settings.timesel_border)
             rv, settings.timesel_color = r.ImGui_ColorEdit4(ctx, "Button Color", settings.timesel_color, flags)
         
-            r.ImGui_Separator(ctx)
             r.ImGui_Text(ctx, "Show/Hide Elements")
-            rv, settings.use_graphic_buttons = r.ImGui_Checkbox(ctx, "Use Graphic Buttons", settings.use_graphic_buttons)
             rv, settings.show_timesel = r.ImGui_Checkbox(ctx, "Time selection", settings.show_timesel)
             r.ImGui_SameLine(ctx, column_width)
             rv, settings.show_transport = r.ImGui_Checkbox(ctx, "Transport Controls", settings.show_transport)
@@ -801,11 +841,14 @@ function ShowSettings(main_window_width , main_window_height)
             r.ImGui_SameLine(ctx, column_width)
             rv, settings.show_playrate = r.ImGui_Checkbox(ctx, "Playrate", settings.show_playrate)
             rv, settings.show_vismetronome = r.ImGui_Checkbox(ctx, "Visual Metronome", settings.show_vismetronome)
-        end
+            r.ImGui_SameLine(ctx, column_width)
+            rv, settings.show_env_button = r.ImGui_Checkbox(ctx, "ENV Button", settings.show_env_button)
+            rv, settings.show_settings_button = r.ImGui_Checkbox(ctx, "Settings Button", settings.show_settings_button)
+            end
 
         if r.ImGui_CollapsingHeader(ctx, "Custom Transport Button Images") then
             local changed = false
-        
+            rv, settings.use_graphic_buttons = r.ImGui_Checkbox(ctx, "Use Graphic Buttons", settings.use_graphic_buttons)
             rv, settings.custom_image_size = r.ImGui_SliderDouble(ctx, "Global Image Scale", settings.custom_image_size or 1.0, 0.5, 2.0, "%.2fx")
             rv, settings.use_locked_button_folder = r.ImGui_Checkbox(ctx, "Use last image folder for all buttons", settings.use_locked_button_folder)
             if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
@@ -814,7 +857,6 @@ function ShowSettings(main_window_width , main_window_height)
             
             r.ImGui_Separator(ctx)
             
-            -- Play button
             rv, settings.use_custom_play_image = r.ImGui_Checkbox(ctx, "Use Custom Play Button", settings.use_custom_play_image)
             changed = changed or rv
             if settings.use_custom_play_image then
@@ -836,11 +878,9 @@ function ShowSettings(main_window_width , main_window_height)
                     end
                 end
                 
-                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_play_image_path or "None"))
             end
             rv, settings.custom_play_image_size = r.ImGui_SliderDouble(ctx, "Play Image Scale", settings.custom_play_image_size, 0.5, 2.0, "%.2fx")
 
-            -- Stop button
             rv, settings.use_custom_stop_image = r.ImGui_Checkbox(ctx, "Use Custom Stop Button", settings.use_custom_stop_image)
             changed = changed or rv
             if settings.use_custom_stop_image then
@@ -856,17 +896,14 @@ function ShowSettings(main_window_width , main_window_height)
                         settings.custom_stop_image_path = file
                         changed = true
                         
-                        -- Extraheer en onthoud het mappad
                         if settings.use_locked_button_folder then
                             settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
                         end
                     end
                 end
-                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_stop_image_path or "None"))
             end
             rv, settings.custom_stop_image_size = r.ImGui_SliderDouble(ctx, "Stop Image Scale", settings.custom_stop_image_size, 0.5, 2.0, "%.2fx")
 
-            -- Pause button
             rv, settings.use_custom_pause_image = r.ImGui_Checkbox(ctx, "Use Custom Pause Button", settings.use_custom_pause_image)
             changed = changed or rv
             if settings.use_custom_pause_image then
@@ -882,17 +919,14 @@ function ShowSettings(main_window_width , main_window_height)
                         settings.custom_pause_image_path = file
                         changed = true
                         
-                        -- Extraheer en onthoud het mappad
                         if settings.use_locked_button_folder then
                             settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
                         end
                     end
                 end
-                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_pause_image_path or "None"))
             end
             rv, settings.custom_pause_image_size = r.ImGui_SliderDouble(ctx, "Pause Image Scale", settings.custom_pause_image_size, 0.5, 2.0, "%.2fx")
 
-            -- Record button
             rv, settings.use_custom_record_image = r.ImGui_Checkbox(ctx, "Use Custom Record Button", settings.use_custom_record_image)
             changed = changed or rv
             if settings.use_custom_record_image then
@@ -907,18 +941,14 @@ function ShowSettings(main_window_width , main_window_height)
                     if retval then
                         settings.custom_record_image_path = file
                         changed = true
-                        
-                        -- Extraheer en onthoud het mappad
                         if settings.use_locked_button_folder then
                             settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
                         end
                     end
                 end
-                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_record_image_path or "None"))
             end
             rv, settings.custom_record_image_size = r.ImGui_SliderDouble(ctx, "Record Image Scale", settings.custom_record_image_size, 0.5, 2.0, "%.2fx")
             
-            -- Loop button
             rv, settings.use_custom_loop_image = r.ImGui_Checkbox(ctx, "Use Custom Loop Button", settings.use_custom_loop_image)
             changed = changed or rv
             if settings.use_custom_loop_image then
@@ -934,17 +964,14 @@ function ShowSettings(main_window_width , main_window_height)
                         settings.custom_loop_image_path = file
                         changed = true
                         
-                        -- Extraheer en onthoud het mappad
                         if settings.use_locked_button_folder then
                             settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
                         end
                     end
                 end
-                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_loop_image_path or "None"))
             end
             rv, settings.custom_loop_image_size = r.ImGui_SliderDouble(ctx, "Loop Image Scale", settings.custom_loop_image_size, 0.5, 2.0, "%.2fx")
-            
-            -- Rewind button
+
             rv, settings.use_custom_rewind_image = r.ImGui_Checkbox(ctx, "Use Custom Rewind Button", settings.use_custom_rewind_image)
             changed = changed or rv
             if settings.use_custom_rewind_image then
@@ -960,17 +987,14 @@ function ShowSettings(main_window_width , main_window_height)
                         settings.custom_rewind_image_path = file
                         changed = true
                         
-                        -- Extraheer en onthoud het mappad
                         if settings.use_locked_button_folder then
                             settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
                         end
                     end
                 end
-                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_rewind_image_path or "None"))
             end
             rv, settings.custom_rewind_image_size = r.ImGui_SliderDouble(ctx, "Rewind Image Scale", settings.custom_rewind_image_size, 0.5, 2.0, "%.2fx")
             
-            -- Forward button
             rv, settings.use_custom_forward_image = r.ImGui_Checkbox(ctx, "Use Custom Forward Button", settings.use_custom_forward_image)
             changed = changed or rv
             if settings.use_custom_forward_image then
@@ -986,13 +1010,11 @@ function ShowSettings(main_window_width , main_window_height)
                         settings.custom_forward_image_path = file
                         changed = true
                         
-                        -- Extraheer en onthoud het mappad
                         if settings.use_locked_button_folder then
                             settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
                         end
                     end
                 end
-                --r.ImGui_Text(ctx, "Path: " .. (settings.custom_forward_image_path or "None"))
             end
             rv, settings.custom_forward_image_size = r.ImGui_SliderDouble(ctx, "Forward Image Scale", settings.custom_forward_image_size, 0.5, 2.0, "%.2fx")
             
@@ -1030,7 +1052,9 @@ function ShowSettings(main_window_width , main_window_height)
                 r.ImGui_EndCombo(ctx)
             end
         end
-      
+        if r.ImGui_CollapsingHeader(ctx, "Widget Manager") then
+            WidgetManager.RenderWidgetManagerUI(ctx, script_path)
+        end
         r.ImGui_Separator(ctx)
         if r.ImGui_Button(ctx, "Reset to Defaults") then
             ResetSettings()
@@ -1055,6 +1079,7 @@ function ShowSettings(main_window_width , main_window_height)
 end
 
 function EnvelopeOverride(main_window_width, main_window_height)
+    if not settings.show_env_button then return end 
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.env_x * main_window_width)
     r.ImGui_SetCursorPosY(ctx, settings.env_y * main_window_height)
@@ -1138,7 +1163,6 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(GOTO_START, 0)
         end
         
-        -- Rewind knop met custom image
         if settings.use_custom_rewind_image and transport_custom_images.rewind and r.ImGui_ValidatePtr(transport_custom_images.rewind, 'ImGui_Image*') then
             local uv_x = 0
             if r.ImGui_IsItemHovered(ctx) then
@@ -1165,7 +1189,6 @@ function Transport_Buttons(main_window_width, main_window_height)
         end
         ShowPlaySyncMenu()
         
-        -- Play knop met custom image
         if settings.use_custom_play_image and transport_custom_images.play and r.ImGui_ValidatePtr(transport_custom_images.play, 'ImGui_Image*') then
             local uv_x = 0
             if r.ImGui_IsItemHovered(ctx) then
@@ -1192,7 +1215,6 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(STOP_COMMAND, 0)
         end
         
-        -- Stop knop met custom image
         if settings.use_custom_stop_image and transport_custom_images.stop and r.ImGui_ValidatePtr(transport_custom_images.stop, 'ImGui_Image*') then
             local uv_x = 0
             if r.ImGui_IsItemHovered(ctx) then
@@ -1218,7 +1240,6 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(PAUSE_COMMAND, 0)
         end
         
-        -- Pause knop met custom image
         if settings.use_custom_pause_image and transport_custom_images.pause and r.ImGui_ValidatePtr(transport_custom_images.pause, 'ImGui_Image*') then
             local uv_x = 0
             if r.ImGui_IsItemHovered(ctx) then
@@ -1248,7 +1269,6 @@ function Transport_Buttons(main_window_width, main_window_height)
         end
         ShowRecordMenu()
         
-        -- Record knop met custom image
         if settings.use_custom_record_image and transport_custom_images.record and r.ImGui_ValidatePtr(transport_custom_images.record, 'ImGui_Image*') then
             local uv_x = 0
             if r.ImGui_IsItemHovered(ctx) then
@@ -1277,7 +1297,6 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(REPEAT_COMMAND, 0)
         end
         
-        -- Loop knop met custom image
         if settings.use_custom_loop_image and transport_custom_images.loop and r.ImGui_ValidatePtr(transport_custom_images.loop, 'ImGui_Image*') then
             local uv_x = 0
             if r.ImGui_IsItemHovered(ctx) then
@@ -1304,7 +1323,6 @@ function Transport_Buttons(main_window_width, main_window_height)
             r.Main_OnCommand(GOTO_END, 0)
         end
         
-        -- Forward knop met custom image
         if settings.use_custom_forward_image and transport_custom_images.forward and r.ImGui_ValidatePtr(transport_custom_images.forward, 'ImGui_Image*') then
             local uv_x = 0
             if r.ImGui_IsItemHovered(ctx) then
@@ -1322,7 +1340,6 @@ function Transport_Buttons(main_window_width, main_window_height)
         end
         
     else
-    
     
         if r.ImGui_Button(ctx, "<<") then
             r.Main_OnCommand(GOTO_START, 0)
@@ -1499,6 +1516,7 @@ function PlayRate_Slider(main_window_width, main_window_height)
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.playrate_x * main_window_width)
     r.ImGui_SetCursorPosY(ctx, settings.playrate_y * main_window_height)
+    r.ImGui_AlignTextToFramePadding(ctx)
     r.ImGui_Text(ctx, 'Rate:')
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosY(ctx, settings.playrate_y * main_window_height)
@@ -1553,13 +1571,9 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
     if not settings.show_tempo then return end
     local tempo = r.Master_GetTempo()
 
-    r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.tempo_x * main_window_width)
     r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-    r.ImGui_Text(ctx, "BPM:")
-    
-    r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+
     r.ImGui_PushItemWidth(ctx, settings.font_size * 4)
     local rv_tempo, new_tempo = r.ImGui_InputDouble(ctx, "##tempo", tempo, 0, 0, "%.1f", r.ImGui_InputTextFlags_EnterReturnsTrue())
     if rv_tempo then r.CSurf_OnTempoChange(new_tempo) end
@@ -1567,8 +1581,7 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
     r.ImGui_PopItemWidth(ctx)
    
    r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-   r.ImGui_Text(ctx, "Time Sig:")
+   r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
    
    r.ImGui_SameLine(ctx)
    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
@@ -1584,8 +1597,6 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
    local rv_denom, new_denom = r.ImGui_InputInt(ctx, "##denom", timesig_denom, 0, 0, r.ImGui_InputTextFlags_EnterReturnsTrue())
 
-
-   
    if rv_num or rv_denom then
        r.Undo_BeginBlock()
        r.PreventUIRefresh(1)
@@ -1604,7 +1615,6 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
    end
    r.ImGui_PopItemWidth(ctx)
 end
-
 
 function ShowTimeSelection(main_window_width, main_window_height)
     if not settings.show_timesel then return end
@@ -1758,6 +1768,11 @@ function Main()
         
         font_needs_update = false
     end
+    local needs_refresh = r.GetExtState("TK_TRANSPORT", "refresh_buttons")
+    if needs_refresh == "1" then
+        CustomButtons.LoadLastUsedPreset()
+        r.SetExtState("TK_TRANSPORT", "refresh_buttons", "0", false)
+    end
     r.ImGui_PushFont(ctx, font)
 
     SetStyle()
@@ -1773,32 +1788,49 @@ function Main()
         ShowCursorPosition(main_window_width, main_window_height)
         VisualMetronome(main_window_width, main_window_height)
         ButtonRenderer.RenderButtons(ctx, CustomButtons)
-        ButtonEditor.ShowEditor(ctx, CustomButtons, settings)
+        ButtonEditor.ShowEditor(ctx, CustomButtons, settings, main_window_width, main_window_height)
         CustomButtons.CheckForCommandPick()
         ShowTempoAndTimeSignature(main_window_width, main_window_height)
         PlayRate_Slider(main_window_width, main_window_height) 
         
+        if settings.show_settings_button then
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, settings.settings_x * main_window_width)
         r.ImGui_SetCursorPosY(ctx, settings.settings_y * main_window_height)
+
         
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000) 
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-        
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
-        
-        r.ImGui_PushFont(ctx, font_icons)
-        if r.ImGui_Button(ctx, "\u{0047}") then
-            show_settings = not show_settings
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000) 
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+            
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+            
+            r.ImGui_PushFont(ctx, font_icons)
+            if r.ImGui_Button(ctx, "\u{0047}") then
+                show_settings = not show_settings
+            end
+            r.ImGui_PopFont(ctx)
+            
+            r.ImGui_PopStyleVar(ctx)
+            r.ImGui_PopStyleColor(ctx, 3)
         end
-        r.ImGui_PopFont(ctx)
-        
-        r.ImGui_PopStyleVar(ctx)
-        r.ImGui_PopStyleColor(ctx, 3)
-        
         ShowSettings(main_window_width, main_window_height)
+
+        if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) and not r.ImGui_IsAnyItemHovered(ctx) then
+            r.ImGui_OpenPopup(ctx, "TransportContextMenu")
+        end
         
+        if r.ImGui_BeginPopup(ctx, "TransportContextMenu") then
+            if r.ImGui_MenuItem(ctx, "Show Settings") then
+                show_settings = true
+            end
+            
+            if r.ImGui_MenuItem(ctx, "Close Script") then
+                open = false
+            end
+            
+            r.ImGui_EndPopup(ctx)
+        end
         r.ImGui_End(ctx)
     end
     r.ImGui_PopFont(ctx)

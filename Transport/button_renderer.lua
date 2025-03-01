@@ -17,52 +17,83 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons)
             
             if button.use_icon and button.icon_name then
                 if not r.ImGui_ValidatePtr(ButtonRenderer.image_cache[button.icon_name], 'ImGui_Image*') then
-                    ButtonRenderer.image_cache[button.icon_name] = r.ImGui_CreateImage(resource_path .. "/Data/toolbar_icons/" .. button.icon_name)
+                    local icon_path = resource_path .. "/Data/toolbar_icons/" .. button.icon_name
+                    if r.file_exists(icon_path) then
+                        ButtonRenderer.image_cache[button.icon_name] = r.ImGui_CreateImage(icon_path)
+                    else
+                        -- Bestand bestaat niet, schakel icon uit voor deze knop
+                        button.use_icon = false
+                        button.icon_name = nil
+                    end
                 end
                 button.icon = ButtonRenderer.image_cache[button.icon_name]
             
-                
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
-                
-                local cursorX, cursorY = r.ImGui_GetCursorPos(ctx)
-                local clicked = r.ImGui_Button(ctx, "##" .. i, button.width, button.width)
-                
-                r.ImGui_SetCursorPos(ctx, cursorX, cursorY)
-                
-                local uv_x = 0
-                if r.ImGui_IsItemHovered(ctx) then
-                    uv_x = 0.33
-                end
-                if r.ImGui_IsItemActive(ctx) then
-                    uv_x = 0.66
-                end
-                
-                r.ImGui_Image(ctx, button.icon, button.width, button.width, uv_x, 0, uv_x + 0.33, 1)
-                
-                r.ImGui_PopStyleVar(ctx)
-                r.ImGui_PopStyleColor(ctx, 3)
-                
-                if clicked then
-                    if button.left_click.command then
-                        local command_id = tonumber(button.left_click.command) or r.NamedCommandLookup(button.left_click.command)
-                        if command_id then
-                            if button.left_click.type == 1 then
-                                local editor = r.MIDIEditor_GetActive()
-                                if editor then
-                                    r.MIDIEditor_OnCommand(editor, command_id)
+                if r.ImGui_ValidatePtr(button.icon, 'ImGui_Image*') then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+                    
+                    local cursorX, cursorY = r.ImGui_GetCursorPos(ctx)
+                    local clicked = r.ImGui_Button(ctx, "##" .. i, button.width, button.width)
+                    
+                    r.ImGui_SetCursorPos(ctx, cursorX, cursorY)
+                    
+                    local uv_x = 0
+                    if r.ImGui_IsItemHovered(ctx) then
+                        uv_x = 0.33
+                    end
+                    if r.ImGui_IsItemActive(ctx) then
+                        uv_x = 0.66
+                    end
+                    
+                    r.ImGui_Image(ctx, button.icon, button.width, button.width, uv_x, 0, uv_x + 0.33, 1)
+                    
+                    r.ImGui_PopStyleVar(ctx)
+                    r.ImGui_PopStyleColor(ctx, 3)
+                    
+                    if clicked then
+                        if button.left_click.command then
+                            local command_id = tonumber(button.left_click.command) or r.NamedCommandLookup(button.left_click.command)
+                            if command_id then
+                                if button.left_click.type == 1 then
+                                    local editor = r.MIDIEditor_GetActive()
+                                    if editor then
+                                        r.MIDIEditor_OnCommand(editor, command_id)
+                                    end
+                                else
+                                    r.Main_OnCommand(command_id, 0)
                                 end
-                            else
-                                r.Main_OnCommand(command_id, 0)
                             end
                         end
                     end
-                end
-                
-                if r.ImGui_IsItemClicked(ctx, 1) then
-                    r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
+                    
+                    if r.ImGui_IsItemClicked(ctx, 1) then
+                        r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
+                    end
+                else
+                    -- Fallback naar tekstknop wanneer afbeelding ongeldig is
+                    button.use_icon = false
+                    
+                    if r.ImGui_Button(ctx, button.name ~= "" and button.name or "##EmptyButton"..i, button.width) then
+                        if button.left_click.command then
+                            local command_id = tonumber(button.left_click.command) or r.NamedCommandLookup(button.left_click.command)
+                            if command_id then
+                                if button.left_click.type == 1 then
+                                    local editor = r.MIDIEditor_GetActive()
+                                    if editor then
+                                        r.MIDIEditor_OnCommand(editor, command_id)
+                                    end
+                                else
+                                    r.Main_OnCommand(command_id, 0)
+                                end
+                            end
+                        end
+                    end
+                    
+                    if r.ImGui_IsItemClicked(ctx, 1) then
+                        r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
+                    end
                 end
             else
                 if r.ImGui_Button(ctx, button.name ~= "" and button.name or "##EmptyButton"..i, button.width) then
@@ -111,6 +142,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons)
         end
     end
 end
+
 
 return ButtonRenderer
 

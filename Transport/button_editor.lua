@@ -22,7 +22,7 @@ function GetIconFiles()
     return icons
 end
 
-function ButtonEditor.ShowEditor(ctx, custom_buttons, settings)
+function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_width, main_window_height)
     if not custom_buttons.show_editor then return end
 
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), settings.window_rounding)
@@ -96,6 +96,24 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings)
                     new_preset_name = ""
                 end
             end
+            if r.ImGui_Button(ctx, "Create action for this preset") and custom_buttons.current_preset then
+                r.ShowConsoleMsg("Attempting to create action for: " .. custom_buttons.current_preset .. "\n")
+                local cmd_id = custom_buttons.RegisterCommandToLoadPreset(custom_buttons.current_preset)
+                r.ShowConsoleMsg("Command ID: " .. tostring(cmd_id) .. "\n")
+                if cmd_id ~= 0 then
+                    r.ImGui_OpenPopup(ctx, "ActionCreatedPopup")
+                end
+            end
+            
+            if r.ImGui_BeginPopup(ctx, "ActionCreatedPopup") then
+                r.ImGui_Text(ctx, "Action created! You can find it in the action list as:")
+                r.ImGui_Text(ctx, "TK_TRANSPORT_LOAD_PRESET_" .. custom_buttons.current_preset)
+                if r.ImGui_Button(ctx, "OK") then
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+            
         end
         
         r.ImGui_Separator(ctx)
@@ -160,11 +178,39 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings)
                 rv, button.name = r.ImGui_InputText(ctx, "Name", button.name)
                 changed = changed or rv
                 
+                -- X positie met pixel-nauwkeurige knoppen
                 rv, button.position = r.ImGui_SliderDouble(ctx, "Position X", button.position, 0, 1, "%.3f")
                 changed = changed or rv
                 
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##btnPosX", 20, 20) then
+                    local pixel_change = 1 / r.ImGui_GetWindowWidth(ctx)
+                    button.position = math.max(0, button.position - pixel_change)
+                    changed = true
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##btnPosX", 20, 20) then
+                    local pixel_change = 1 / r.ImGui_GetWindowWidth(ctx)
+                    button.position = math.min(1, button.position + pixel_change)
+                    changed = true
+                end
+                
+                -- Y positie met pixel-nauwkeurige knoppen
                 rv, button.position_y = r.ImGui_SliderDouble(ctx, "Position Y", button.position_y or 0.15, 0, 1, "%.3f")
                 changed = changed or rv
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##btnPosY", 20, 20) then
+                    local pixel_change = 1 / r.ImGui_GetWindowHeight(ctx)
+                    button.position_y = math.max(0, button.position_y - pixel_change)
+                    changed = true
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##btnPosY", 20, 20) then
+                    local pixel_change = 1 / r.ImGui_GetWindowHeight(ctx)
+                    button.position_y = math.min(1, button.position_y + pixel_change)
+                    changed = true
+                end
                 
                 rv, button.width = r.ImGui_SliderInt(ctx, "Width", button.width, 12, 200)
                 changed = changed or rv

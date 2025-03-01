@@ -131,6 +131,57 @@ function CustomButtons.DeleteButtonPreset(name)
     end
 end
 
+function CustomButtons.RegisterCommandToLoadPreset(preset_name)
+    -- Create cross-platform safe filename
+    local safe_name = preset_name:gsub("[^%w]", "_")
+    local command_id = "TK_TRANSPORT_" .. safe_name
+    local section_name = "Custom: Scripts"
+    local command_name = "TK_TRANSPORT_" .. preset_name
+    
+    -- Get the OS path separator
+    local sep = package.config:sub(1,1) -- Returns "/" on Unix/Mac, "\" on Windows
+    
+    -- Create directory and path safely
+    local preset_loader_dir = script_path .. "preset_loaders"
+    local preset_script_path = preset_loader_dir .. sep .. "TK_TRANSPORT_" .. safe_name .. ".lua"
+    r.RecursiveCreateDirectory(preset_loader_dir, 0)
+    
+    -- Create script content with platform-independent path handling
+    local script_content = [[
+local r = reaper
+local script_path = debug.getinfo(1, 'S').source:match([=[^@?(.*[\/])[^\/]-$]=])
+local sep = package.config:sub(1,1)  -- OS path separator
+package.path = script_path .. ".." .. sep .. "?.lua;" .. package.path
+local CustomButtons = require('custom_buttons')
+CustomButtons.LoadLastUsedPreset()
+CustomButtons.LoadButtonPreset("]] .. preset_name .. [[")
+CustomButtons.SaveCurrentButtons()
+r.SetExtState("TK_TRANSPORT", "last_button_preset", "]] .. preset_name .. [[", true)
+r.UpdateArrange()
+r.SetExtState("TK_TRANSPORT", "refresh_buttons", "1", false)
+]]
+    
+    -- Write the script file
+    local file = io.open(preset_script_path, "w")
+    if file then
+        file:write(script_content)
+        file:close()
+        
+        -- Register as REAPER action
+        local result = r.AddRemoveReaScript(true, 0, preset_script_path, true)
+        r.RefreshToolbar2(0, 0)
+        return result and 1 or 0
+    end
+    
+    return 0
+end
+
+
+
+
+
+
+
 function CustomButtons.CheckForCommandPick()
     local retval, lastfx = r.GetLastTouchedFX()
     
