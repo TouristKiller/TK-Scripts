@@ -1,10 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.0.8:
+-- @version 1.1.0:
 -- @changelog:
 --[[        
-+ Better positioning when showing main window again after hiding
-+ Better positioning when left docking the screenshot window to main window
++ BUGFIX: Show current plugin instead of opening a new one in the screenshot window
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -2781,9 +2780,8 @@ local function ShowFolderDropdown()
                 show_sends_window = false
                 show_action_browser = false
                 ClearScreenshotCache()
-                r.ShowConsoleMsg("Selected folder set to: " .. tostring(selected_folder) .. "\n")
+                GetPluginsForFolder("Current Track FX")
             end
-            
             
             
             
@@ -3814,13 +3812,25 @@ local function DrawMasonryLayout(screenshots)
                     
                     r.ImGui_BeginGroup(ctx)
                     if r.ImGui_ImageButton(ctx, "##"..fx.name, texture, display_width, display_height) then
-                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                            r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                            if config.close_after_adding_fx then
-                                SHOULD_CLOSE_SCRIPT = true
+                        if selected_folder == "Current Project FX" then
+                            -- Bestaande project FX code
+                        elseif selected_folder == "Current Track FX" then
+                            local fx_index = r.TrackFX_GetByName(TRACK, fx.name, false)
+                            if fx_index >= 0 then
+                                local is_open = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+                                r.TrackFX_Show(TRACK, fx_index, is_open and 2 or 3)
+                            end
+                        else
+                            -- Nieuwe FX toevoegen
+                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                if config.close_after_adding_fx then
+                                    SHOULD_CLOSE_SCRIPT = true
+                                end
                             end
                         end
                     end
+                    
                     
                     if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
                         r.ImGui_OpenPopup(ctx, "ScreenshotPluginMenu_" .. i)
@@ -5343,7 +5353,9 @@ local function ShowScreenshotWindow()
                                                         end
                                                     end
                                                 elseif selected_folder == "Current Track FX" then
+                                                    reaper.ShowConsoleMsg("Debug: Klik op " .. plugin.fx_name .. "\n")
                                                     local fx_index = r.TrackFX_GetByName(TRACK, plugin.fx_name, false)
+                                                    reaper.ShowConsoleMsg("FX Index: " .. fx_index .. "\n")
                                                     if fx_index >= 0 then
                                                         local is_open = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
                                                         r.TrackFX_Show(TRACK, fx_index, is_open and 2 or 3)
