@@ -1,5 +1,13 @@
 local r = reaper
 local WidgetManager = {}
+local script_path = debug.getinfo(1, 'S').source:match([[^@?(.*[\/])[^\/]-$]])
+package.path = script_path .. "?.lua;" .. package.path
+
+-- Probeer de JSON module te laden
+local json_status, json = pcall(require, "json")
+if not json_status then
+    r.ShowConsoleMsg("Could not load JSON module. Make sure it's installed.\n")
+end
 
 local widgets = {
     {
@@ -46,6 +54,9 @@ local widgets = {
     }
 }
 
+local script_path = debug.getinfo(1, 'S').source:match([[^@?(.*[\/])[^\/]-$]])
+local json = require("json")
+
 function WidgetManager.SaveCommandIDs()
     local ids = {}
     for i, widget in ipairs(widgets) do
@@ -54,22 +65,36 @@ function WidgetManager.SaveCommandIDs()
         end
     end
     
-    local str = "{\n"
-    for k, v in pairs(ids) do
-        str = str .. string.format('  [%q] = %q,\n', k, v)
-    end
-    str = str .. "}"
+    local success, json_str = pcall(function()
+        return json.encode(ids)
+    end)
     
-    r.SetExtState("TK_WIDGET_MANAGER", "command_ids", str, true)
+    if success then
+        local file_path = script_path .. "widget_command_ids.json"
+        local file = io.open(file_path, "w")
+        if file then
+            file:write(json_str)
+            file:close()
+            return true
+        end
+    end
+    return false
 end
 
 function WidgetManager.LoadCommandIDs()
-    local ids_str = r.GetExtState("TK_WIDGET_MANAGER", "command_ids")
-    if ids_str ~= "" then
-        local loaded_ids, err = load("return " .. ids_str)
-        if loaded_ids then
-            local ids = loaded_ids()
-            if ids and type(ids) == "table" then
+    local file_path = script_path .. "widget_command_ids.json"
+    local file = io.open(file_path, "r")
+    
+    if file then
+        local json_str = file:read("*all")
+        file:close()
+        
+        if json_str and json_str ~= "" then
+            local success, ids = pcall(function()
+                return json.decode(json_str)
+            end)
+            
+            if success and ids and type(ids) == "table" then
                 for i, widget in ipairs(widgets) do
                     if ids[widget.script] then
                         widget.command_id = ids[widget.script]
@@ -79,6 +104,7 @@ function WidgetManager.LoadCommandIDs()
             end
         end
     end
+    
     return false
 end
 
