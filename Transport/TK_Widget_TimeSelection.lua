@@ -162,10 +162,10 @@ function ShowTimeSelection(h)
     
     if r.ImGui_BeginPopup(h.ctx, "TimeSelectionMenu") then
         if r.ImGui_MenuItem(h.ctx, "Go to start") then
-            r.GoToRegionMrkrID(0, 0)
+            r.Main_OnCommand(40630, 0)
         end
         if r.ImGui_MenuItem(h.ctx, "Go to end") then
-            r.GoToRegionMrkrID(0, 1)
+            r.Main_OnCommand(40631, 0)
         end
         r.ImGui_Separator(h.ctx)
         if r.ImGui_MenuItem(h.ctx, "Clear time selection") then

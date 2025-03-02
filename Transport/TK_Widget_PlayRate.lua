@@ -13,11 +13,35 @@ local default_settings = {
     widget_width = 150,
     widget_height = 30,
     use_tk_transport_theme = true,
+    
+    -- Voeg deze ontbrekende stijlwaarden toe
+    window_rounding = 4.0,
+    frame_rounding = 4.0,
+    popup_rounding = 4.0,
+    grab_rounding = 4.0,
+    grab_min_size = 10.0,
+    button_border_size = 1.0,
+    border_size = 1.0,
+    
+    -- Basiskleurinstellingen
+    background_color = 0x333333FF,
+    text_color = 0xFFFFFFFF,
+    button_color = 0x555555FF,
+    button_hover_color = 0x777777FF,
+    button_active_color = 0x999999FF,
+    border_color = 0x888888FF,
+    check_mark = 0xFFFFFFFF,
+    slider_grab = 0x888888FF,
+    slider_grab_active = 0xAAAAAAFF,
+    frame_bg = 0x444444FF,
+    frame_bg_hovered = 0x666666FF,
+    frame_bg_active = 0x888888FF
 }
 
 local widget = handler.init("PlayRate Widget", default_settings)
 widget.SetWidgetTitle("Playback Rate")
 widget.LoadSettings("PLAYRATE_WIDGET")
+
 
 function ShowPlayRateSlider(h)
     local current_rate = r.Master_GetPlayRate(0)

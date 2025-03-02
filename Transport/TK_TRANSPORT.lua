@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.2.1
+-- @version 0.2.2
 -- @changelog 
 --[[
 + Added Widgets and Widget Manager. Integrated in TK TRANSPORT, but also available as separate scripts 
