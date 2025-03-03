@@ -1,7 +1,9 @@
 local r = reaper
+-- Aan het begin van je script, onder de andere 'local' definities
 local script_path = debug.getinfo(1, 'S').source:match([[^@?(.*[\/])[^\/]-$]])
 package.path = script_path .. "?.lua;" .. package.path
 
+-- Probeer de JSON module te laden
 local json_status, json = pcall(require, "json")
 if not json_status then
     r.ShowConsoleMsg("can not load json\n")
@@ -51,6 +53,13 @@ local widgets = {
         name = "Cursor Position",
         script = "TK_Widget_CursorPosition.lua",
         description = "Displays current cursor position (time and bars/beats)",
+        command_id = "",
+        is_open = false
+    },
+    {
+        name = "Tap Tempo",
+        script = "TK_Widget_TapTempo.lua",
+        description = "Tap to set the tempo",
         command_id = "",
         is_open = false
     }

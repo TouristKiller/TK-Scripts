@@ -50,7 +50,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="0.2.2" author="TouristKiller" time="2026-03-02T14:45:00Z">
+        <version name="0.2.3" author="TouristKiller" time="2026-03-03T15:15:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -68,6 +68,7 @@
             <source main="main" file="TK_Widget_Tempo.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_Tempo.lua</source>
             <source main="main" file="TK_Widget_TimeSelection.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_TimeSelection.lua</source>
             <source main="main" file="TK_Widget_Transport.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_Transport.lua</source>
+            <source main="main" file="TK_Widget_TapTempo.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Widget_TapTempo.lua</source>
             
             <!-- Invisible files (not in action list) -->
             <source file="widget_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/widget_manager.lua</source>

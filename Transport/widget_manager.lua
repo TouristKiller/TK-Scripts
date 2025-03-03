@@ -51,6 +51,13 @@ local widgets = {
         description = "Displays current cursor position (time and bars/beats)",
         command_id = "",
         is_open = false
+    },
+    {
+        name = "Tap Tempo",
+        script = "TK_Widget_TapTempo.lua", 
+        description = "Tap to set the tempo",
+        command_id = "",
+        is_open = false
     }
 }
 

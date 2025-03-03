@@ -1,14 +1,25 @@
 local r = reaper
+local SECTIONS = 0
 local resource_path = r.GetResourcePath()
+
+
 local ButtonRenderer = {}
 ButtonRenderer.image_cache = {}
 
 function ButtonRenderer.RenderButtons(ctx, custom_buttons)
+    -- Haal de globale offsets op (of gebruik 0 als default)
+    local x_offset = custom_buttons.x_offset or 0
+    local y_offset = custom_buttons.y_offset or 0
+    
     for i, button in ipairs(custom_buttons.buttons) do
         if button.visible then
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, button.position * r.ImGui_GetWindowWidth(ctx))
-            r.ImGui_SetCursorPosY(ctx, (button.position_y or 0.15) * r.ImGui_GetWindowHeight(ctx))
+            -- Pas de positie aan met de globale offsets
+            local x_pos = (button.position + x_offset) * r.ImGui_GetWindowWidth(ctx)
+            local y_pos = ((button.position_y or 0.15) + y_offset) * r.ImGui_GetWindowHeight(ctx)
+            
+            r.ImGui_SetCursorPosX(ctx, x_pos)
+            r.ImGui_SetCursorPosY(ctx, y_pos)
             
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button.color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), button.hover_color)
@@ -145,6 +156,3 @@ end
 
 
 return ButtonRenderer
-
-
-

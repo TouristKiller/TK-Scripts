@@ -1,12 +1,11 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.2.2
+-- @version 0.2.3
 -- @changelog 
 --[[
-+ Added Widgets and Widget Manager. Integrated in TK TRANSPORT, but also available as separate scripts 
-+ Widgets can be used "standalone" or in combination with TK TRANSPORT and placed freely on the screen or in the Native Reaper transport bar
-+ Export custom buttons preset as Action (can be used to switch buttons preset)
-+ BugFixes
++ Added TapTempo feature and Widget
++ Added Overal offset for custom buttons
++ Gui Adjustments
 ]]--
 
 
@@ -35,6 +34,28 @@ local RECORD_COMMAND    = 1013
 local REPEAT_COMMAND    = 1068
 local GOTO_START        = 40042
 local GOTO_END          = 40043
+
+-- TapTempo state variables
+local tap_times = {}
+local tap_average_times = {}
+local tap_clock = 0
+local tap_average_current = 0
+local tap_clicks = 0
+local tap_z = 0
+local tap_w = 0
+local last_tap_time = 0
+
+local section_states = {
+    transport_open = false,
+    cursor_open = false,
+    metronome_open = false,
+    timesel_open = false,
+    tempo_open = false,
+    playrate_open = false,
+    env_open = false,
+    taptempo_open = false,
+    settings_open = false
+}
 
 local transport_custom_images = {
     play = nil,
@@ -93,6 +114,7 @@ local default_settings  = {
     settings_x          = 0.99,
     cursorpos_x         = 0.25,
     visualmtr_x         = 0.32,
+    custom_buttons_x_offset = 0.0,
     -- y offset
     transport_y         = 0.15,      
     timesel_y           = 0.15,        
@@ -102,6 +124,7 @@ local default_settings  = {
     settings_y          = 0.15,    
     cursorpos_y         = 0.15,
     visualmtr_y         = 0.15,
+    custom_buttons_y_offset = 0.0,
 
     -- Color settings
     background          = 0x000000FF,
@@ -163,6 +186,20 @@ local default_settings  = {
     custom_image_size           = 1.0,
     locked_button_folder_path = "",
     use_locked_button_folder = false,
+
+        -- TapTempo settings
+    show_taptempo = true,
+    taptempo_x = 0.80,
+    taptempo_y = 0.15,
+    tap_button_text = "TAP",
+    tap_button_width = 50,
+    tap_button_height = 30,
+    tap_input_limit = 16,
+    set_tempo_on_tap = true,
+    show_accuracy_indicator = true,
+    high_accuracy_color = 0x00FF00FF,
+    medium_accuracy_color = 0xFFFF00FF,
+    low_accuracy_color = 0xFF0000FF
 
 }
 
@@ -391,6 +428,29 @@ function SetStyle()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.background)
 end
 
+function ShowSectionHeader(title, state_key)
+    r.ImGui_Text(ctx, title)
+    r.ImGui_SameLine(ctx)
+    
+    -- Style voor onzichtbare knop achtergrond
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)       -- Volledig transparant
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000) -- Blijft transparant bij hover
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)  -- Blijft transparant bij klik
+    
+    -- Verwijder de knop border
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+    
+    if r.ImGui_Button(ctx, section_states[state_key] and "-##" .. title or "+##" .. title) then
+        section_states[state_key] = not section_states[state_key]
+    end
+    
+    -- Pop de styles
+    r.ImGui_PopStyleVar(ctx)
+    r.ImGui_PopStyleColor(ctx, 3)
+    
+    return section_states[state_key]
+end
+
 function ShowSettings(main_window_width , main_window_height)
     if not show_settings then return end
     
@@ -559,280 +619,358 @@ function ShowSettings(main_window_width , main_window_height)
             local rv
             local column_width = r.ImGui_GetWindowWidth(ctx) / 2
 
-            r.ImGui_Text(ctx, "Transport")
-            rv, settings.center_transport = r.ImGui_Checkbox(ctx, "Center", settings.center_transport)
-            local buttons_width = settings.use_graphic_buttons and 280 or 380
-           
-            -- Transport positie controls
-            if settings.center_transport then
-                settings.transport_x = ((main_window_width - buttons_width) / 2) / main_window_width
-            else
-                local transport_percent_x = settings.transport_x * 100
-                rv, transport_percent_x = r.ImGui_SliderDouble(ctx, "X##transportX", transport_percent_x, 0, 100, "%.0f%%")
-                settings.transport_x = transport_percent_x / 100
-            end
+            if ShowSectionHeader("Transport", "transport_open") then
+                rv, settings.center_transport = r.ImGui_Checkbox(ctx, "Center", settings.center_transport)
+                local buttons_width = settings.use_graphic_buttons and 280 or 380
             
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##transpX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.transport_x = math.max(0, settings.transport_x - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##transpX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.transport_x = math.min(1, settings.transport_x + pixel_change)
-            end
-            
-            local transport_percent_y = settings.transport_y * 100
-            rv, transport_percent_y = r.ImGui_SliderDouble(ctx, "Y##transportY", transport_percent_y, 0, 100, "%.0f%%")
-            settings.transport_y = transport_percent_y / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##transpY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.transport_y = math.max(0, settings.transport_y - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##transpY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.transport_y = math.min(1, settings.transport_y + pixel_change)
+                -- Transport positie controls
+                if settings.center_transport then
+                    settings.transport_x = ((main_window_width - buttons_width) / 2) / main_window_width
+                else
+                    local transport_percent_x = settings.transport_x * 100
+                    rv, transport_percent_x = r.ImGui_SliderDouble(ctx, "X##transportX", transport_percent_x, 0, 100, "%.0f%%")
+                    settings.transport_x = transport_percent_x / 100
+                end
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##transpX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.transport_x = math.max(0, settings.transport_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##transpX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.transport_x = math.min(1, settings.transport_x + pixel_change)
+                end
+                
+                local transport_percent_y = settings.transport_y * 100
+                rv, transport_percent_y = r.ImGui_SliderDouble(ctx, "Y##transportY", transport_percent_y, 0, 100, "%.0f%%")
+                settings.transport_y = transport_percent_y / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##transpY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.transport_y = math.max(0, settings.transport_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##transpY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.transport_y = math.min(1, settings.transport_y + pixel_change)
+                end  
             end
             r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Cursor Position")
-            -- Cursor Position positie controls
-            local cursorpos_percent_x = settings.cursorpos_x * 100
-            rv, cursorpos_percent_x = r.ImGui_SliderDouble(ctx, "X##cursorX", cursorpos_percent_x, 0, 100, "%.0f%%")
-            settings.cursorpos_x = cursorpos_percent_x / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##cursorX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.cursorpos_x = math.max(0, settings.cursorpos_x - pixel_change)
+            if ShowSectionHeader("Cursor Position", "cursor_open") then
+                -- Cursor Position positie controls
+                local cursorpos_percent_x = settings.cursorpos_x * 100
+                rv, cursorpos_percent_x = r.ImGui_SliderDouble(ctx, "X##cursorX", cursorpos_percent_x, 0, 100, "%.0f%%")
+                settings.cursorpos_x = cursorpos_percent_x / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##cursorX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.cursorpos_x = math.max(0, settings.cursorpos_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##cursorX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.cursorpos_x = math.min(1, settings.cursorpos_x + pixel_change)
+                end
+                
+                local cursorpos_percent_y = settings.cursorpos_y * 100
+                rv, cursorpos_percent_y = r.ImGui_SliderDouble(ctx, "Y##cursorY", cursorpos_percent_y, 0, 100, "%.0f%%")
+                settings.cursorpos_y = cursorpos_percent_y / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##cursorY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.cursorpos_y = math.max(0, settings.cursorpos_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##cursorY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.cursorpos_y = math.min(1, settings.cursorpos_y + pixel_change)
+                end
             end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##cursorX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.cursorpos_x = math.min(1, settings.cursorpos_x + pixel_change)
+            r.ImGui_Separator(ctx)
+            if ShowSectionHeader("Visual Metronome", "visualmtr_open") then
+                -- Visual Metronome positie controls
+                local visualmtr_percent_x = settings.visualmtr_x * 100
+                rv, visualmtr_percent_x = r.ImGui_SliderDouble(ctx, "X##visualmtrX", visualmtr_percent_x, 0, 100, "%.0f%%")
+                settings.visualmtr_x = visualmtr_percent_x / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##visualmtrX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.visualmtr_x = math.max(0, settings.visualmtr_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##visualmtrX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.visualmtr_x = math.min(1, settings.visualmtr_x + pixel_change)
+                end
+                
+                local visualmtr_percent_y = settings.visualmtr_y * 100
+                rv, visualmtr_percent_y = r.ImGui_SliderDouble(ctx, "Y##visualmtrY", visualmtr_percent_y, 0, 100, "%.0f%%")
+                settings.visualmtr_y = visualmtr_percent_y / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##visualmtrY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.visualmtr_y = math.max(0, settings.visualmtr_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##visualmtrY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.visualmtr_y = math.min(1, settings.visualmtr_y + pixel_change)
+                end
             end
-            
-            local cursorpos_percent_y = settings.cursorpos_y * 100
-            rv, cursorpos_percent_y = r.ImGui_SliderDouble(ctx, "Y##cursorY", cursorpos_percent_y, 0, 100, "%.0f%%")
-            settings.cursorpos_y = cursorpos_percent_y / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##cursorY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.cursorpos_y = math.max(0, settings.cursorpos_y - pixel_change)
+            r.ImGui_Separator(ctx)
+            if ShowSectionHeader("Time Selection", "timesel_open") then
+                -- Time Selection positie controls
+                local timesel_percent_x = settings.timesel_x * 100
+                rv, timesel_percent_x = r.ImGui_SliderDouble(ctx, "X##timeselX", timesel_percent_x, 0, 100, "%.0f%%")
+                settings.timesel_x = timesel_percent_x / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##timeselX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.timesel_x = math.max(0, settings.timesel_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##timeselX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.timesel_x = math.min(1, settings.timesel_x + pixel_change)
+                end
+                
+                local timesel_percent_y = settings.timesel_y * 100
+                rv, timesel_percent_y = r.ImGui_SliderDouble(ctx, "Y##timeselY", timesel_percent_y, 0, 100, "%.0f%%")
+                settings.timesel_y = timesel_percent_y / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##timeselY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.timesel_y = math.max(0, settings.timesel_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##timeselY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.timesel_y = math.min(1, settings.timesel_y + pixel_change)
+                end
+                rv, settings.show_time_selection = r.ImGui_Checkbox(ctx, "Show Time", settings.show_time_selection)
+                r.ImGui_SameLine(ctx, column_width)
+                rv, settings.show_beats_selection = r.ImGui_Checkbox(ctx, "Show Beats", settings.show_beats_selection)
+                rv, settings.timesel_invisible = r.ImGui_Checkbox(ctx, "Invisible Button", settings.timesel_invisible)
+                r.ImGui_SameLine(ctx, column_width)
+                rv, settings.timesel_border = r.ImGui_Checkbox(ctx, "Show Button Border", settings.timesel_border)
+                rv, settings.timesel_color = r.ImGui_ColorEdit4(ctx, "Button Color", settings.timesel_color, flags)
             end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##cursorY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.cursorpos_y = math.min(1, settings.cursorpos_y + pixel_change)
+            r.ImGui_Separator(ctx)
+            if ShowSectionHeader("Tempo", "tempo_open") then
+                -- Tempo positie controls
+                local tempo_percent_x = settings.tempo_x * 100
+                rv, tempo_percent_x = r.ImGui_SliderDouble(ctx, "X##tempoX", tempo_percent_x, 0, 100, "%.0f%%")
+                settings.tempo_x = tempo_percent_x / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##tempoX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.tempo_x = math.max(0, settings.tempo_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##tempoX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.tempo_x = math.min(1, settings.tempo_x + pixel_change)
+                end
+                
+                local tempo_percent_y = settings.tempo_y * 100
+                rv, tempo_percent_y = r.ImGui_SliderDouble(ctx, "Y##tempoY", tempo_percent_y, 0, 100, "%.0f%%")
+                settings.tempo_y = tempo_percent_y / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##tempoY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.tempo_y = math.max(0, settings.tempo_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##tempoY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.tempo_y = math.min(1, settings.tempo_y + pixel_change)
+                end
+            end
+            r.ImGui_Separator(ctx)
+            if ShowSectionHeader("Playrate", "playrate_open") then
+                -- Playrate positie controls
+                local playrate_percent_x = settings.playrate_x * 100
+                rv, playrate_percent_x = r.ImGui_SliderDouble(ctx, "X##playrateX", playrate_percent_x, 0, 100, "%.0f%%")
+                settings.playrate_x = playrate_percent_x / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##playrateX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.playrate_x = math.max(0, settings.playrate_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##playrateX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.playrate_x = math.min(1, settings.playrate_x + pixel_change)
+                end
+                
+                local playrate_percent_y = settings.playrate_y * 100
+                rv, playrate_percent_y = r.ImGui_SliderDouble(ctx, "Y##playrateY", playrate_percent_y, 0, 100, "%.0f%%")
+                settings.playrate_y = playrate_percent_y / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##playrateY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.playrate_y = math.max(0, settings.playrate_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##playrateY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.playrate_y = math.min(1, settings.playrate_y + pixel_change)
+                end
+            end
+            r.ImGui_Separator(ctx)
+            if ShowSectionHeader("Envelope", "env_open") then
+                -- ENV Button positie controls
+                local env_percent_x = settings.env_x * 100
+                rv, env_percent_x = r.ImGui_SliderDouble(ctx, "X##envX", env_percent_x, 0, 100, "%.0f%%")
+                settings.env_x = env_percent_x / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##envX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.env_x = math.max(0, settings.env_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##envX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.env_x = math.min(1, settings.env_x + pixel_change)
+                end
+                
+                local env_percent_y = settings.env_y * 100
+                rv, env_percent_y = r.ImGui_SliderDouble(ctx, "Y##envY", env_percent_y, 0, 100, "%.0f%%")
+                settings.env_y = env_percent_y / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##envY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.env_y = math.max(0, settings.env_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##envY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.env_y = math.min(1, settings.env_y + pixel_change)
+                end
+            end
+            r.ImGui_Separator(ctx)
+
+            if ShowSectionHeader("TapTempo", "taptempo_open") then
+                local taptempo_percent_x = settings.taptempo_x * 100
+                rv, taptempo_percent_x = r.ImGui_SliderDouble(ctx, "X##taptempoX", taptempo_percent_x, 0, 100, "%.0f%%")
+                settings.taptempo_x = taptempo_percent_x / 100
+                
+                local taptempo_percent_y = settings.taptempo_y * 100
+                rv, taptempo_percent_y = r.ImGui_SliderDouble(ctx, "Y##taptempoY", taptempo_percent_y, 0, 100, "%.0f%%")
+                settings.taptempo_y = taptempo_percent_y / 100
+                
+                rv, settings.tap_button_text = r.ImGui_InputText(ctx, "Button Text", settings.tap_button_text)
+                r.ImGui_SetNextItemWidth(ctx, 80)
+                rv, settings.tap_button_width = r.ImGui_InputInt(ctx, "Button Width", settings.tap_button_width)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetNextItemWidth(ctx, 80)
+                rv, settings.tap_button_height = r.ImGui_InputInt(ctx, "Button Height", settings.tap_button_height)
+                r.ImGui_SetNextItemWidth(ctx, 80)
+                rv, settings.tap_input_limit = r.ImGui_InputInt(ctx, "History Size", settings.tap_input_limit)
+                rv, settings.set_tempo_on_tap = r.ImGui_Checkbox(ctx, "Set Project Tempo Automatically", settings.set_tempo_on_tap)
+                r.ImGui_SameLine(ctx)
+                rv, settings.show_accuracy_indicator = r.ImGui_Checkbox(ctx, "Show Accuracy Indicator", settings.show_accuracy_indicator)
+                
+                if settings.show_accuracy_indicator then
+                    rv, settings.high_accuracy_color = r.ImGui_ColorEdit4(ctx, "High Accuracy Color", settings.high_accuracy_color)
+                    rv, settings.medium_accuracy_color = r.ImGui_ColorEdit4(ctx, "Medium Accuracy Color", settings.medium_accuracy_color)
+                    rv, settings.low_accuracy_color = r.ImGui_ColorEdit4(ctx, "Low Accuracy Color", settings.low_accuracy_color)
+                end
             end
             
             r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Visual Metronome")
-            -- Visual Metronome positie controls
-            local visualmtr_percent_x = settings.visualmtr_x * 100
-            rv, visualmtr_percent_x = r.ImGui_SliderDouble(ctx, "X##visualmtrX", visualmtr_percent_x, 0, 100, "%.0f%%")
-            settings.visualmtr_x = visualmtr_percent_x / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##visualmtrX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.visualmtr_x = math.max(0, settings.visualmtr_x - pixel_change)
+            if ShowSectionHeader("Settings", "settings_open") then
+                -- Settings Button positie controls
+                local settings_percent_x = settings.settings_x * 100
+                rv, settings_percent_x = r.ImGui_SliderDouble(ctx, "X##settingsX", settings_percent_x, 0, 100, "%.0f%%")
+                settings.settings_x = settings_percent_x / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##settingsX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.settings_x = math.max(0, settings.settings_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##settingsX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.settings_x = math.min(1, settings.settings_x + pixel_change)
+                end
+                
+                local settings_percent_y = settings.settings_y * 100
+                rv, settings_percent_y = r.ImGui_SliderDouble(ctx, "Y##settingsY", settings_percent_y, 0, 100, "%.0f%%")
+                settings.settings_y = settings_percent_y / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##settingsY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.settings_y = math.max(0, settings.settings_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##settingsY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.settings_y = math.min(1, settings.settings_y + pixel_change)
+                end
             end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##visualmtrX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.visualmtr_x = math.min(1, settings.visualmtr_x + pixel_change)
-            end
-            
-            local visualmtr_percent_y = settings.visualmtr_y * 100
-            rv, visualmtr_percent_y = r.ImGui_SliderDouble(ctx, "Y##visualmtrY", visualmtr_percent_y, 0, 100, "%.0f%%")
-            settings.visualmtr_y = visualmtr_percent_y / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##visualmtrY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.visualmtr_y = math.max(0, settings.visualmtr_y - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##visualmtrY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.visualmtr_y = math.min(1, settings.visualmtr_y + pixel_change)
-            end
-            r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Time Selection")
-            -- Time Selection positie controls
-            local timesel_percent_x = settings.timesel_x * 100
-            rv, timesel_percent_x = r.ImGui_SliderDouble(ctx, "X##timeselX", timesel_percent_x, 0, 100, "%.0f%%")
-            settings.timesel_x = timesel_percent_x / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##timeselX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.timesel_x = math.max(0, settings.timesel_x - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##timeselX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.timesel_x = math.min(1, settings.timesel_x + pixel_change)
-            end
-            
-            local timesel_percent_y = settings.timesel_y * 100
-            rv, timesel_percent_y = r.ImGui_SliderDouble(ctx, "Y##timeselY", timesel_percent_y, 0, 100, "%.0f%%")
-            settings.timesel_y = timesel_percent_y / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##timeselY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.timesel_y = math.max(0, settings.timesel_y - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##timeselY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.timesel_y = math.min(1, settings.timesel_y + pixel_change)
-            end
-            r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Tempo")
-            -- Tempo positie controls
-            local tempo_percent_x = settings.tempo_x * 100
-            rv, tempo_percent_x = r.ImGui_SliderDouble(ctx, "X##tempoX", tempo_percent_x, 0, 100, "%.0f%%")
-            settings.tempo_x = tempo_percent_x / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##tempoX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.tempo_x = math.max(0, settings.tempo_x - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##tempoX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.tempo_x = math.min(1, settings.tempo_x + pixel_change)
-            end
-            
-            local tempo_percent_y = settings.tempo_y * 100
-            rv, tempo_percent_y = r.ImGui_SliderDouble(ctx, "Y##tempoY", tempo_percent_y, 0, 100, "%.0f%%")
-            settings.tempo_y = tempo_percent_y / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##tempoY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.tempo_y = math.max(0, settings.tempo_y - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##tempoY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.tempo_y = math.min(1, settings.tempo_y + pixel_change)
-            end
-            r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Playrate")
-            -- Playrate positie controls
-            local playrate_percent_x = settings.playrate_x * 100
-            rv, playrate_percent_x = r.ImGui_SliderDouble(ctx, "X##playrateX", playrate_percent_x, 0, 100, "%.0f%%")
-            settings.playrate_x = playrate_percent_x / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##playrateX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.playrate_x = math.max(0, settings.playrate_x - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##playrateX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.playrate_x = math.min(1, settings.playrate_x + pixel_change)
-            end
-            
-            local playrate_percent_y = settings.playrate_y * 100
-            rv, playrate_percent_y = r.ImGui_SliderDouble(ctx, "Y##playrateY", playrate_percent_y, 0, 100, "%.0f%%")
-            settings.playrate_y = playrate_percent_y / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##playrateY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.playrate_y = math.max(0, settings.playrate_y - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##playrateY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.playrate_y = math.min(1, settings.playrate_y + pixel_change)
-            end
-            r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Envelope")
-            -- ENV Button positie controls
-            local env_percent_x = settings.env_x * 100
-            rv, env_percent_x = r.ImGui_SliderDouble(ctx, "X##envX", env_percent_x, 0, 100, "%.0f%%")
-            settings.env_x = env_percent_x / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##envX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.env_x = math.max(0, settings.env_x - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##envX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.env_x = math.min(1, settings.env_x + pixel_change)
-            end
-            
-            local env_percent_y = settings.env_y * 100
-            rv, env_percent_y = r.ImGui_SliderDouble(ctx, "Y##envY", env_percent_y, 0, 100, "%.0f%%")
-            settings.env_y = env_percent_y / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##envY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.env_y = math.max(0, settings.env_y - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##envY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.env_y = math.min(1, settings.env_y + pixel_change)
-            end
-            r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Settings")
-            -- Settings Button positie controls
-            local settings_percent_x = settings.settings_x * 100
-            rv, settings_percent_x = r.ImGui_SliderDouble(ctx, "X##settingsX", settings_percent_x, 0, 100, "%.0f%%")
-            settings.settings_x = settings_percent_x / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##settingsX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.settings_x = math.max(0, settings.settings_x - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##settingsX", 20, 20) then
-                local pixel_change = 1 / main_window_width
-                settings.settings_x = math.min(1, settings.settings_x + pixel_change)
-            end
-            
-            local settings_percent_y = settings.settings_y * 100
-            rv, settings_percent_y = r.ImGui_SliderDouble(ctx, "Y##settingsY", settings_percent_y, 0, 100, "%.0f%%")
-            settings.settings_y = settings_percent_y / 100
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "-##settingsY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.settings_y = math.max(0, settings.settings_y - pixel_change)
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+##settingsY", 20, 20) then
-                local pixel_change = 1 / main_window_height
-                settings.settings_y = math.min(1, settings.settings_y + pixel_change)
+            -- In de ShowSettings functie, onder "Layout Settings"
+            if r.ImGui_CollapsingHeader(ctx, "Custom Buttons Group") then
+                local rv
+                
+                -- X positie offset
+                r.ImGui_Text(ctx, "Global Position Offset")
+                local custom_buttons_x_percent = settings.custom_buttons_x_offset * 100
+                rv, custom_buttons_x_percent = r.ImGui_SliderDouble(ctx, "X##customButtonsX", custom_buttons_x_percent, -100, 100, "%.0f%%")
+                settings.custom_buttons_x_offset = custom_buttons_x_percent / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##customButtonsX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.custom_buttons_x_offset = settings.custom_buttons_x_offset - pixel_change
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##customButtonsX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.custom_buttons_x_offset = settings.custom_buttons_x_offset + pixel_change
+                end
+                
+                -- Y positie offset
+                local custom_buttons_y_percent = settings.custom_buttons_y_offset * 100
+                rv, custom_buttons_y_percent = r.ImGui_SliderDouble(ctx, "Y##customButtonsY", custom_buttons_y_percent, -100, 100, "%.0f%%")
+                settings.custom_buttons_y_offset = custom_buttons_y_percent / 100
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##customButtonsY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.custom_buttons_y_offset = settings.custom_buttons_y_offset - pixel_change
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##customButtonsY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.custom_buttons_y_offset = settings.custom_buttons_y_offset + pixel_change
+                end
+                
+                if r.ImGui_Button(ctx, "Reset Offset") then
+                    settings.custom_buttons_x_offset = 0.0
+                    settings.custom_buttons_y_offset = 0.0
+                end
             end
             r.ImGui_Separator(ctx)
             
-            r.ImGui_Text(ctx, "Time Selection Display")
-            rv, settings.show_time_selection = r.ImGui_Checkbox(ctx, "Show Time", settings.show_time_selection)
-            r.ImGui_SameLine(ctx, column_width)
-            rv, settings.show_beats_selection = r.ImGui_Checkbox(ctx, "Show Beats", settings.show_beats_selection)
-            rv, settings.timesel_invisible = r.ImGui_Checkbox(ctx, "Invisible Button", settings.timesel_invisible)
-            r.ImGui_SameLine(ctx, column_width)
-            rv, settings.timesel_border = r.ImGui_Checkbox(ctx, "Show Button Border", settings.timesel_border)
-            rv, settings.timesel_color = r.ImGui_ColorEdit4(ctx, "Button Color", settings.timesel_color, flags)
-        
+
             r.ImGui_Text(ctx, "Show/Hide Elements")
             rv, settings.show_timesel = r.ImGui_Checkbox(ctx, "Time selection", settings.show_timesel)
             r.ImGui_SameLine(ctx, column_width)
@@ -843,6 +981,8 @@ function ShowSettings(main_window_width , main_window_height)
             rv, settings.show_vismetronome = r.ImGui_Checkbox(ctx, "Visual Metronome", settings.show_vismetronome)
             r.ImGui_SameLine(ctx, column_width)
             rv, settings.show_env_button = r.ImGui_Checkbox(ctx, "ENV Button", settings.show_env_button)
+            rv, settings.show_taptempo = r.ImGui_Checkbox(ctx, "Show TapTempo", settings.show_taptempo)
+            r.ImGui_SameLine(ctx, column_width)
             rv, settings.show_settings_button = r.ImGui_Checkbox(ctx, "Settings Button", settings.show_settings_button)
             end
 
@@ -1758,6 +1898,121 @@ function VisualMetronome(main_window_width, main_window_height)
     end
 end
 
+-- TapTempo helper functions
+local function average(matrix)
+    if #matrix == 0 then return 0 end
+    local sum = 0
+    for i, cell in ipairs(matrix) do
+        sum = sum + cell
+    end
+    return sum / #matrix
+end
+
+local function standardDeviation(t)
+    if #t <= 1 then return 0 end
+    local m = average(t)
+    local sum = 0
+    for k, v in pairs(t) do
+        if type(v) == 'number' then
+            sum = sum + ((v - m) * (v - m))
+        end
+    end
+    return math.sqrt(sum / (#t - 1))
+end
+
+function TapTempo(main_window_width, main_window_height)
+    if not settings.show_taptempo then return end
+    
+    -- Position the TapTempo widget
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosX(ctx, settings.taptempo_x * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, settings.taptempo_y * main_window_height)
+    
+    -- Style the tap button
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.button_normal)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.button_hovered)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.button_active)
+    
+    -- TAP button
+    if r.ImGui_Button(ctx, settings.tap_button_text, settings.tap_button_width, settings.tap_button_height) then
+        local current_time = r.time_precise()
+        if last_tap_time > 0 then
+            local tap_interval = current_time - last_tap_time
+            tap_z = tap_z + 1
+            if tap_z > settings.tap_input_limit then tap_z = 1 end
+            tap_times[tap_z] = 60 / tap_interval
+            tap_average_current = average(tap_times)
+            
+            if settings.set_tempo_on_tap and tap_average_current > 0 then
+                r.CSurf_OnTempoChange(tap_average_current)
+            end
+        end
+        last_tap_time = current_time
+    end
+    
+    -- Context menu
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        r.ImGui_OpenPopup(ctx, "TapTempoMenu")
+    end
+    
+    r.ImGui_PopStyleColor(ctx, 3)
+    
+    -- Display current BPM and accuracy
+    r.ImGui_SameLine(ctx)
+    if #tap_times > 0 then
+        local deviation = standardDeviation(tap_times)
+        local precision = 0
+        if tap_average_current > 0 then
+            precision = (tap_average_current - deviation) / tap_average_current
+        end
+        
+        if settings.show_accuracy_indicator then
+            local accuracyColor = settings.low_accuracy_color
+            if precision > 0.9 then
+                accuracyColor = settings.high_accuracy_color
+            elseif precision > 0.5 then
+                accuracyColor = settings.medium_accuracy_color
+            end
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), accuracyColor)
+            r.ImGui_Text(ctx, string.format("%.1f%%", precision * 100))
+            r.ImGui_PopStyleColor(ctx)
+            r.ImGui_SameLine(ctx)
+        end
+        
+        r.ImGui_Text(ctx, string.format("BPM: %.1f", math.floor(tap_average_current * 10 + 0.5) / 10))
+    else
+        r.ImGui_Text(ctx, "Tap to start...")
+    end
+    
+    -- Context menu items
+    if r.ImGui_BeginPopup(ctx, "TapTempoMenu") then
+        if r.ImGui_MenuItem(ctx, "Reset Taps") then
+            tap_times = {}
+            tap_average_times = {}
+            tap_clicks = 0
+            tap_z = 0
+            tap_w = 0
+            last_tap_time = 0
+        end
+        
+        local rv
+        rv, settings.set_tempo_on_tap = r.ImGui_MenuItem(ctx, "Set Project Tempo", nil, settings.set_tempo_on_tap)
+        
+        if #tap_times > 0 then
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Set Half Tempo") then
+                r.CSurf_OnTempoChange(tap_average_current / 2)
+            end
+            if r.ImGui_MenuItem(ctx, "Set Double Tempo") then
+                r.CSurf_OnTempoChange(tap_average_current * 2)
+            end
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+end
+
 function Main()
     if font_needs_update then
         font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
@@ -1787,11 +2042,15 @@ function Main()
         Transport_Buttons(main_window_width, main_window_height)
         ShowCursorPosition(main_window_width, main_window_height)
         VisualMetronome(main_window_width, main_window_height)
+        CustomButtons.x_offset = settings.custom_buttons_x_offset
+        CustomButtons.y_offset = settings.custom_buttons_y_offset
+
         ButtonRenderer.RenderButtons(ctx, CustomButtons)
         ButtonEditor.ShowEditor(ctx, CustomButtons, settings, main_window_width, main_window_height)
         CustomButtons.CheckForCommandPick()
         ShowTempoAndTimeSignature(main_window_width, main_window_height)
         PlayRate_Slider(main_window_width, main_window_height) 
+        TapTempo(main_window_width, main_window_height) 
         
         if settings.show_settings_button then
         r.ImGui_SameLine(ctx)
