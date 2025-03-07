@@ -1,11 +1,10 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.2.3
+-- @version 0.2.5
 -- @changelog 
 --[[
-+ Added TapTempo feature and Widget
-+ Added Overal offset for custom buttons
-+ Gui Adjustments
++ Bugfix Context when more project tabs are open
++ 
 ]]--
 
 
@@ -1924,10 +1923,9 @@ function TapTempo(main_window_width, main_window_height)
     if not settings.show_taptempo then return end
     
     -- Position the TapTempo widget
-    r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.taptempo_x * main_window_width)
     r.ImGui_SetCursorPosY(ctx, settings.taptempo_y * main_window_height)
-    
+    r.ImGui_AlignTextToFramePadding(ctx)
     -- Style the tap button
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.button_normal)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.button_hovered)
@@ -1959,6 +1957,7 @@ function TapTempo(main_window_width, main_window_height)
     
     -- Display current BPM and accuracy
     r.ImGui_SameLine(ctx)
+    r.ImGui_AlignTextToFramePadding(ctx)
     if #tap_times > 0 then
         local deviation = standardDeviation(tap_times)
         local precision = 0
@@ -1975,11 +1974,12 @@ function TapTempo(main_window_width, main_window_height)
             end
             
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), accuracyColor)
+            
             r.ImGui_Text(ctx, string.format("%.1f%%", precision * 100))
             r.ImGui_PopStyleColor(ctx)
             r.ImGui_SameLine(ctx)
+            r.ImGui_AlignTextToFramePadding(ctx)
         end
-        
         r.ImGui_Text(ctx, string.format("BPM: %.1f", math.floor(tap_average_current * 10 + 0.5) / 10))
     else
         r.ImGui_Text(ctx, "Tap to start...")
@@ -2014,6 +2014,15 @@ function TapTempo(main_window_width, main_window_height)
 end
 
 function Main()
+    if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+        ctx = r.ImGui_CreateContext('Transport Control')
+        font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
+        font_icons = r.ImGui_CreateFont(font_path, settings.font_size)
+        r.ImGui_Attach(ctx, font)
+        r.ImGui_Attach(ctx, font_icons)
+        font_needs_update = false
+    end
+
     if font_needs_update then
         font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
         font_icons = r.ImGui_CreateFont(font_path, settings.font_size)
