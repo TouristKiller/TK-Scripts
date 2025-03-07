@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.2.5
+-- @version 0.2.6
 -- @changelog 
 --[[
 + Bugfix Context when more project tabs are open
