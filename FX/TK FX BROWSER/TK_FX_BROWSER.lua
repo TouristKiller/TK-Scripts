@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.1.6:
+-- @version 1.1.7:
 -- @changelog:
 --[[        
 + BUGFIX: Show current plugin instead of opening a new one in the screenshot window
@@ -349,7 +349,7 @@ end
 NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
 TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
 LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
-IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 1)
+IconFont = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
 -- Attach de fonts
 r.ImGui_Attach(ctx, NormalFont)
 r.ImGui_Attach(ctx, LargeFont)
@@ -7475,8 +7475,8 @@ function InitializeImGuiContext()
         NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
         TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
         LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
-        IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
-       
+        IconFont = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
+
         r.ImGui_Attach(ctx, NormalFont)
         r.ImGui_Attach(ctx, TinyFont)
         r.ImGui_Attach(ctx, LargeFont)
