@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.1.0:
+-- @version 1.1.1:
 -- @changelog:
 --[[        
 + BUGFIX: Show current plugin instead of opening a new one in the screenshot window
@@ -336,9 +336,9 @@ function UpdateFonts()
     end
 
     -- Dan maken we nieuwe fonts aan
-    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13, r.ImGui_FontFlags_Bold())
+    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13)
     TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 10)
-    LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16, r.ImGui_FontFlags_Bold())
+    LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16)
 
     -- En attachen ze weer
     r.ImGui_Attach(ctx, NormalFont)
@@ -347,9 +347,9 @@ function UpdateFonts()
 end
 
 -- Maak de fonts aan
-NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13, r.ImGui_FontFlags_Bold())
-LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16, r.ImGui_FontFlags_Bold())
+NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13)
 TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 10)
+LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16)
 
 -- Attach de fonts
 r.ImGui_Attach(ctx, NormalFont)
