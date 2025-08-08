@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.1.1:
+-- @version 1.1.2:
 -- @changelog:
 --[[        
 + BUGFIX: Show current plugin instead of opening a new one in the screenshot window
@@ -841,7 +841,7 @@ end
 local function ShowConfigWindow()
     local function NewSection(title)
         r.ImGui_Spacing(ctx)
-        r.ImGui_PushFont(ctx, NormalFont)
+        r.ImGui_PushFont(ctx, NormalFont, 13)
         r.ImGui_Text(ctx, title)
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
@@ -863,7 +863,7 @@ local function ShowConfigWindow()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x666666FF)  -- normale staat
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
     if visible then
-        r.ImGui_PushFont(ctx, LargeFont)
+        r.ImGui_PushFont(ctx, LargeFont, 16)
         r.ImGui_Text(ctx, "TK FX BROWSER SETTINGS")
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
@@ -2879,7 +2879,7 @@ local function ShowScreenshotControls()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
     
-    r.ImGui_PushFont(ctx, IconFont)
+    r.ImGui_PushFont(ctx, IconFont, 12)
     if r.ImGui_Button(ctx, "\u{0047}", button_height, button_width) then
         r.ImGui_OpenPopup(ctx, "ScreenshotControlsMenu")
     end
@@ -4064,7 +4064,7 @@ local function ShowScreenshotWindow()
       
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
-        r.ImGui_PushFont(ctx, NormalFont)
+        r.ImGui_PushFont(ctx, NormalFont, 13)
         --r.ImGui_SetCursorPosY(ctx, 5)
     
         if show_media_browser then
@@ -7571,7 +7571,7 @@ function Main()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), config.slider_active_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
-        r.ImGui_PushFont(ctx, NormalFont)
+        r.ImGui_PushFont(ctx, NormalFont, 13)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         else
             InitializeImGuiContext()
@@ -7630,7 +7630,7 @@ if visible then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 -- Voeg de '+' knop toe linksboven
                 r.ImGui_SetCursorPos(ctx, 0, 0)
-                r.ImGui_PushFont(ctx, IconFont)
+                r.ImGui_PushFont(ctx, IconFont, 12)
                 if r.ImGui_Button(ctx, '\u{0050}', 20, 20) then
                     config.show_screenshot_window = not config.show_screenshot_window
                     ClearScreenshotCache()
@@ -7664,7 +7664,7 @@ if visible then
                 
                 r.ImGui_PopStyleColor(ctx, 4)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
-                r.ImGui_PushFont(ctx, LargeFont)
+                r.ImGui_PushFont(ctx, LargeFont, 16)
                 local text_width = r.ImGui_CalcTextSize(ctx, track_name)
                 local window_width = r.ImGui_GetWindowWidth(ctx)
                 local pos_x = (window_width - text_width -7) * 0.5
@@ -7684,7 +7684,7 @@ if visible then
                     r.ImGui_PopFont(ctx)
                 end
 
-                r.ImGui_PushFont(ctx, NormalFont)
+                r.ImGui_PushFont(ctx, NormalFont, 13)
                 if r.ImGui_IsItemClicked(ctx, 1) then 
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
@@ -7909,7 +7909,7 @@ if visible then
                 if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
                     r.ImGui_PopFont(ctx)
                 end
-                r.ImGui_PushFont(ctx, LargeFont)
+                r.ImGui_PushFont(ctx, LargeFont, 16)
                 local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
                 local type_pos_x = (window_width - type_text_width) * 0.5
                 local type_pos_y = pos_y + text_height
@@ -8752,7 +8752,7 @@ if visible then
             Frame()
         else
             r.ImGui_Text(ctx, "NO TRACK SELECTED")
-            r.ImGui_PushFont(ctx, IconFont)
+            r.ImGui_PushFont(ctx, IconFont, 12)
             if r.ImGui_Button(ctx, show_settings and "\u{0047}" or "\u{0047}", 20, 20) then
                 show_settings = not show_settings
             end
