@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.1.2:
+-- @version 1.1.3:
 -- @changelog:
 --[[        
 + BUGFIX: Show current plugin instead of opening a new one in the screenshot window
