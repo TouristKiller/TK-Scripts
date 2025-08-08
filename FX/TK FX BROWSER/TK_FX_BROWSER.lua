@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.1.3:
+-- @version 1.1.4:
 -- @changelog:
 --[[        
 + BUGFIX: Show current plugin instead of opening a new one in the screenshot window
@@ -301,8 +301,7 @@ local TKFXfonts = {
     "Liberation Sans",
     "DejaVu Sans"
 }
-local IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
-r.ImGui_Attach(ctx, IconFont)
+
 
 function exit()
     if ctx then
@@ -336,9 +335,9 @@ function UpdateFonts()
     end
 
     -- Dan maken we nieuwe fonts aan
-    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13)
-    TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 10)
-    LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16)
+    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
+    TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
+    LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
 
     -- En attachen ze weer
     r.ImGui_Attach(ctx, NormalFont)
@@ -347,14 +346,16 @@ function UpdateFonts()
 end
 
 -- Maak de fonts aan
-NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13)
-TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 10)
-LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16)
-
+NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
+TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
+LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
+IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 1)
+r.ImGui_Attach(ctx, IconFont)
 -- Attach de fonts
 r.ImGui_Attach(ctx, NormalFont)
 r.ImGui_Attach(ctx, LargeFont)
 r.ImGui_Attach(ctx, TinyFont)
+r.ImGui_Attach(ctx, IconFont)
 
 ---------------------------------------------------------------------
 local function EnsureFileExists(filepath)
@@ -7472,9 +7473,9 @@ function InitializeImGuiContext()
     if not ctx then
         ctx = r.ImGui_CreateContext('TK FX Browser')
         
-        NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 13, r.ImGui_FontFlags_Bold())
-        TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 10)
-        LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 16, r.ImGui_FontFlags_Bold())
+        NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
+        TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
+        LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
         IconFont = r.ImGui_CreateFont(script_path .. 'Icons-Regular.otf', 12)
        
         r.ImGui_Attach(ctx, NormalFont)
@@ -7571,7 +7572,7 @@ function Main()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), config.slider_active_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
-        r.ImGui_PushFont(ctx, NormalFont, 13)
+        r.ImGui_PushFont(ctx, NormalFont, 12)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         else
             InitializeImGuiContext()
@@ -7664,7 +7665,7 @@ if visible then
                 
                 r.ImGui_PopStyleColor(ctx, 4)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
-                r.ImGui_PushFont(ctx, LargeFont, 16)
+                r.ImGui_PushFont(ctx, LargeFont, 15)
                 local text_width = r.ImGui_CalcTextSize(ctx, track_name)
                 local window_width = r.ImGui_GetWindowWidth(ctx)
                 local pos_x = (window_width - text_width -7) * 0.5
@@ -7684,7 +7685,7 @@ if visible then
                     r.ImGui_PopFont(ctx)
                 end
 
-                r.ImGui_PushFont(ctx, NormalFont, 13)
+                r.ImGui_PushFont(ctx, NormalFont, 12)
                 if r.ImGui_IsItemClicked(ctx, 1) then 
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
@@ -7909,7 +7910,7 @@ if visible then
                 if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
                     r.ImGui_PopFont(ctx)
                 end
-                r.ImGui_PushFont(ctx, LargeFont, 16)
+                r.ImGui_PushFont(ctx, LargeFont, 15)
                 local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
                 local type_pos_x = (window_width - type_text_width) * 0.5
                 local type_pos_y = pos_y + text_height

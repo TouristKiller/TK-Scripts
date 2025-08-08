@@ -224,7 +224,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                 end
             end
         end
-        r.ImGui_PushFont(ctx, TinyFont, 10)
+        r.ImGui_PushFont(ctx, TinyFont, 9)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
         -- meter_type
         if not config.meter_type then 
