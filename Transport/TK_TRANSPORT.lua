@@ -1,15 +1,16 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.2.6
+-- @version 0.2.7
 -- @changelog 
 --[[
-+ Bugfix Context when more project tabs are open
-+ 
++ Update to ReaImGui
++ Right-click context menu items can be swapped
 ]]--
 
 
 local r                 = reaper
 local ctx               = r.ImGui_CreateContext('Transport Control')
+
 
 local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator      = package.config:sub(1, 1)
@@ -19,6 +20,7 @@ local json              = require("json")
 local font_path         = script_path .. "Icons-Regular.otf"
 local preset_path       = script_path .. "tk_transport_presets" .. os_separator
 local preset_name       = ""
+
 
 local CustomButtons     = require('custom_buttons')
 local ButtonEditor      = require('button_editor')
@@ -209,7 +211,7 @@ for k, v in pairs(default_settings) do
 end
 
 local font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
-local font_icons = r.ImGui_CreateFont(font_path, settings.font_size)
+local font_icons = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
 r.ImGui_Attach(ctx, font)
 r.ImGui_Attach(ctx, font_icons)
 local font_needs_update = false
@@ -1714,7 +1716,7 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
     r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
 
     r.ImGui_PushItemWidth(ctx, settings.font_size * 4)
-    local rv_tempo, new_tempo = r.ImGui_InputDouble(ctx, "##tempo", tempo, 0, 0, "%.1f", r.ImGui_InputTextFlags_EnterReturnsTrue())
+local rv_tempo, new_tempo = r.ImGui_InputDouble(ctx, "##tempo", tempo, 0, 0, "%.1f")
     if rv_tempo then r.CSurf_OnTempoChange(new_tempo) end
     if r.ImGui_IsItemClicked(ctx, 1) then r.CSurf_OnTempoChange(120.0) end
     r.ImGui_PopItemWidth(ctx)
@@ -1727,14 +1729,14 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
    local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = r.GetTempoTimeSigMarker(0, 0)
    if not retval then timesig_num, timesig_denom = 4, 4 end
    r.ImGui_PushItemWidth(ctx, settings.font_size * 2)
-   local rv_num, new_num = r.ImGui_InputInt(ctx, "##num", timesig_num, 0, 0, r.ImGui_InputTextFlags_EnterReturnsTrue())
+   local rv_num, new_num = r.ImGui_InputInt(ctx, "##num", timesig_num, 0, 0)
    r.ImGui_SameLine(ctx)
    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
    r.ImGui_Text(ctx, "/")
 
    r.ImGui_SameLine(ctx)
    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-   local rv_denom, new_denom = r.ImGui_InputInt(ctx, "##denom", timesig_denom, 0, 0, r.ImGui_InputTextFlags_EnterReturnsTrue())
+   local rv_denom, new_denom = r.ImGui_InputInt(ctx, "##denom", timesig_denom, 0, 0)
 
    if rv_num or rv_denom then
        r.Undo_BeginBlock()
@@ -2017,7 +2019,7 @@ function Main()
     if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         ctx = r.ImGui_CreateContext('Transport Control')
         font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
-        font_icons = r.ImGui_CreateFont(font_path, settings.font_size)
+        font_icons = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
         r.ImGui_Attach(ctx, font)
         r.ImGui_Attach(ctx, font_icons)
         font_needs_update = false
@@ -2025,7 +2027,7 @@ function Main()
 
     if font_needs_update then
         font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
-        font_icons = r.ImGui_CreateFont(font_path, settings.font_size)
+        font_icons = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
         
         r.ImGui_Attach(ctx, font)
         r.ImGui_Attach(ctx, font_icons)
@@ -2037,7 +2039,7 @@ function Main()
         CustomButtons.LoadLastUsedPreset()
         r.SetExtState("TK_TRANSPORT", "refresh_buttons", "0", false)
     end
-    r.ImGui_PushFont(ctx, font)
+    r.ImGui_PushFont(ctx, font, settings.font_size)
 
     SetStyle()
     
@@ -2062,23 +2064,20 @@ function Main()
         TapTempo(main_window_width, main_window_height) 
         
         if settings.show_settings_button then
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, settings.settings_x * main_window_width)
-        r.ImGui_SetCursorPosY(ctx, settings.settings_y * main_window_height)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, settings.settings_x * main_window_width)
+            r.ImGui_SetCursorPosY(ctx, settings.settings_y * main_window_height)
 
-        
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000) 
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-            
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
-            
-            r.ImGui_PushFont(ctx, font_icons)
+
+            r.ImGui_PushFont(ctx, font_icons, 12)
             if r.ImGui_Button(ctx, "\u{0047}") then
                 show_settings = not show_settings
             end
             r.ImGui_PopFont(ctx)
-            
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx, 3)
         end

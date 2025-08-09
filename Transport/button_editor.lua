@@ -22,13 +22,21 @@ function GetIconFiles()
     return icons
 end
 
+local function MoveItem(t, from, to)
+    if to < 1 or to > #t or from == to then return false end
+    t[from], t[to] = t[to], t[from]
+    return true
+end
+
+
+
 function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_width, main_window_height)
     if not custom_buttons.show_editor then return end
 
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), settings.window_rounding)
     local window_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_TopMost()
     
-    r.ImGui_SetNextWindowSize(ctx, 400, -1)
+    r.ImGui_SetNextWindowSize(ctx, 500, -1)
     local visible, open = r.ImGui_Begin(ctx, "Custom Button Editor##TK", true, window_flags)
     
     if visible then
@@ -266,46 +274,122 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
             end
 
             if r.ImGui_CollapsingHeader(ctx, "Right Click Menu") then
+                button.right_menu = button.right_menu or {}
+                button.right_menu.items = button.right_menu.items or {}
+
                 if r.ImGui_Button(ctx, "Add A Menu Item") then
-                    table.insert(button.right_menu.items, {
-                        name = "New Item",
-                        command = nil
-                    })
+                    table.insert(button.right_menu.items, { name = "New Item", command = "", type = 0 })
                     custom_buttons.SaveCurrentButtons()
                 end
-                
-                local menu_changed = false
-                for idx, item in ipairs(button.right_menu.items) do
-                    r.ImGui_PushID(ctx, idx)
-                    if r.ImGui_Button(ctx, "X") then
-                        table.remove(button.right_menu.items, idx)
-                        menu_changed = true
+                r.ImGui_SameLine(ctx)
+                r.ImGui_TextDisabled(ctx, "Drag or ↑ ↓ rearrange")
+                r.ImGui_Separator(ctx)
+
+                local remove_index
+                local payload_type = "TK_BTN_RCMENU_ITEM"
+
+                -- Table: Drag | Name | Cmd | Type | Move | Del
+                if r.ImGui_BeginTable(ctx, "RCM_TABLE", 6,
+                    r.ImGui_TableFlags_SizingStretchProp()
+                    | r.ImGui_TableFlags_BordersInnerV()
+                    | r.ImGui_TableFlags_RowBg()
+                ) then
+                    r.ImGui_TableSetupColumn(ctx, "Drag", r.ImGui_TableColumnFlags_WidthFixed(), 30)
+                    r.ImGui_TableSetupColumn(ctx, "Name", 0)
+                    r.ImGui_TableSetupColumn(ctx, "Cmd", r.ImGui_TableColumnFlags_WidthFixed(), 100)
+                    r.ImGui_TableSetupColumn(ctx, "Type", r.ImGui_TableColumnFlags_WidthFixed(), 70)
+                    r.ImGui_TableSetupColumn(ctx, "Move", r.ImGui_TableColumnFlags_WidthFixed(), 50)
+                    r.ImGui_TableSetupColumn(ctx, "X", r.ImGui_TableColumnFlags_WidthFixed(), 20)
+                    r.ImGui_TableHeadersRow(ctx)
+
+                    for idx, item in ipairs(button.right_menu.items) do
+                        r.ImGui_PushID(ctx, idx)
+                        r.ImGui_TableNextRow(ctx)
+
+                        r.ImGui_TableSetColumnIndex(ctx, 0)
+
+                        local handle_w   = 30
+                        local handle_h   = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                        local handle_txt = "≡≡"  -- kan ook "☰" of ":::" naar smaak
+
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        0x00000000)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x66666633)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  0x88888855)
+                        r.ImGui_Button(ctx, handle_txt .. "##drag", handle_w, handle_h)
+                        r.ImGui_PopStyleColor(ctx, 3)
+
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeAll())
+                            r.ImGui_SetTooltip(ctx, "Drag to move")
+                        end
+
+                        -- Drag source
+                        if r.ImGui_BeginDragDropSource(ctx) then
+                            r.ImGui_SetDragDropPayload(ctx, payload_type, tostring(idx))
+                            r.ImGui_Text(ctx, "Drag: " .. (item.name ~= "" and item.name or ("Item " .. idx)))
+                            r.ImGui_EndDragDropSource(ctx)
+                        end
+
+                        -- Drop target (geef visuele feedback)
+                        if r.ImGui_BeginDragDropTarget(ctx) then
+                            local ok, payload = r.ImGui_AcceptDragDropPayload(ctx, payload_type)
+                            if ok then
+                                local from = tonumber(payload)
+                                if from and from ~= idx and MoveItem(button.right_menu.items, from, idx) then
+                                    custom_buttons.SaveCurrentButtons()
+                                end
+                            end
+                            r.ImGui_EndDragDropTarget(ctx)
+                        end
+
+                        -- Name
+                        r.ImGui_TableSetColumnIndex(ctx, 1)
+                        r.ImGui_SetNextItemWidth(ctx, -1)
+                        local rv_name, new_name = r.ImGui_InputText(ctx, "##name", item.name)
+                        if rv_name then item.name = new_name; custom_buttons.SaveCurrentButtons() end
+
+                        -- Cmd
+                        r.ImGui_TableSetColumnIndex(ctx, 2)
+                        r.ImGui_SetNextItemWidth(ctx, -1)
+                        local rv_cmd, new_cmd = r.ImGui_InputText(ctx, "##cmd", item.command or "")
+                        if rv_cmd then item.command = new_cmd; custom_buttons.SaveCurrentButtons() end
+
+                        -- Type
+                        r.ImGui_TableSetColumnIndex(ctx, 3)
+                        r.ImGui_SetNextItemWidth(ctx, -1)
+                        local rv_type, new_type = r.ImGui_Combo(ctx, "##type", item.type or 0, "Main\0MIDI Editor\0")
+                        if rv_type then item.type = new_type; custom_buttons.SaveCurrentButtons() end
+
+                        -- Move
+                        r.ImGui_TableSetColumnIndex(ctx, 4)
+                        r.ImGui_SetNextItemWidth(ctx, -1)
+                        if idx > 1 and r.ImGui_Button(ctx, "↑##up") then
+                            if MoveItem(button.right_menu.items, idx, idx - 1) then custom_buttons.SaveCurrentButtons() end
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if idx < #button.right_menu.items and r.ImGui_Button(ctx, "↓##down") then
+                            if MoveItem(button.right_menu.items, idx, idx + 1) then custom_buttons.SaveCurrentButtons() end
+                        end
+
+                        -- Delete
+                        r.ImGui_TableSetColumnIndex(ctx, 5)
+                        r.ImGui_SetNextItemWidth(ctx, -1)
+                        if r.ImGui_Button(ctx, "X##del") then
+                            remove_index = idx
+                        end
+
+                        r.ImGui_PopID(ctx)
                     end
-                    r.ImGui_SameLine(ctx)
-                    
-                    local rv_name, new_name = r.ImGui_InputText(ctx, "Naam##" .. idx, item.name)
-                    if rv_name then
-                        item.name = new_name
-                        menu_changed = true
-                    end
-                    
-                    local rv_cmd, new_command = r.ImGui_InputText(ctx, "Command ID##" .. idx, item.command or "")
-                    if rv_cmd then
-                        item.command = new_command
-                        menu_changed = true
-                    end
-                    
-                    local rv_type, new_type = r.ImGui_Combo(ctx, "Command Type##" .. idx, item.type or 0, "Main\0MIDI Editor\0")
-                    if rv_type then
-                        item.type = new_type
-                        menu_changed = true
-                    end
-                    
-                    r.ImGui_PopID(ctx)
+
+                    r.ImGui_EndTable(ctx)
                 end
-                
-                if menu_changed then custom_buttons.SaveCurrentButtons() end
+
+                if remove_index then
+                    table.remove(button.right_menu.items, remove_index)
+                    custom_buttons.SaveCurrentButtons()
+                end
             end
+
             r.ImGui_EndChild(ctx)
             r.ImGui_Text(ctx, "Set Left click for single click action, right click for menu")
             r.ImGui_Text(ctx, "Always save button in preset after editing, or it will be lost")
