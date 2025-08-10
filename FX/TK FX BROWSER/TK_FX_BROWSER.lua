@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.1.8:
+-- @version 1.1.9:
 -- @changelog:
 --[[        
-+ BUGFIX: Show current plugin instead of opening a new one in the screenshot window
++ BUGFIX: Fixed ID issues. Improved scrolling in browser window.
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -35,6 +35,20 @@ local loaded_items_count = ITEMS_PER_BATCH
 local last_scroll_position = 0
 local current_filtered_fx = {} 
 local was_hidden = false
+local unique_id_counter = 0
+
+-- Function to generate truly unique IDs for ImGui components
+function GenerateUniqueID(base_name)
+    unique_id_counter = unique_id_counter + 1
+    local sanitized_name = base_name:gsub("[^%w%s-]", "_") -- Sanitize name for ImGui safety
+    return "##" .. sanitized_name .. "_" .. unique_id_counter .. "_" .. os.time()
+end
+
+-- Function to safely create ImGui ImageButtons with guaranteed unique IDs
+function CreateUniqueImageButton(ctx, base_name, texture, width, height)
+    local id = GenerateUniqueID(base_name)
+    return r.ImGui_ImageButton(ctx, id, texture, width, height), id
+end
 
 ------ SEXAN FX BROWSER PARSER V7 ----------------------------------------
 function ThirdPartyDeps()
@@ -3811,7 +3825,8 @@ local function DrawMasonryLayout(screenshots)
                     local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                     
                     r.ImGui_BeginGroup(ctx)
-                    if r.ImGui_ImageButton(ctx, "##"..fx.name, texture, display_width, display_height) then
+                    -- Using our helper function for truly unique IDs
+                    if r.ImGui_ImageButton(ctx, GenerateUniqueID(fx.name.."_masonry"), texture, display_width, display_height) then
                         if selected_folder == "Current Project FX" then
                             -- Bestaande project FX code
                         elseif selected_folder == "Current Track FX" then
@@ -4832,7 +4847,7 @@ local function ShowScreenshotWindow()
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
             local scroll_y = r.ImGui_GetScrollY(ctx)
             local scroll_max_y = r.ImGui_GetScrollMaxY(ctx)
-            if not config.use_pagination and scroll_y > 0 and scroll_y/scroll_max_y > 0.8 and #current_filtered_fx > loaded_items_count then
+            if current_filtered_fx and not config.use_pagination and scroll_y > 0 and scroll_y/scroll_max_y > 0.8 and #current_filtered_fx > loaded_items_count then
                 loaded_items_count = loaded_items_count + ITEMS_PER_BATCH
                 for i = #screenshot_search_results + 1, math.min(loaded_items_count, #current_filtered_fx) do
                     table.insert(screenshot_search_results, {name = current_filtered_fx[i]})
@@ -4911,7 +4926,7 @@ local function ShowScreenshotWindow()
                                         if width and height then
                                             local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                             
-                                            if r.ImGui_ImageButton(ctx, "##"..fx.fx_name, texture, display_width, display_height) then
+                                            if r.ImGui_ImageButton(ctx, GenerateUniqueID(fx.fx_name), texture, display_width, display_height) then
                                                 local fx_index = r.TrackFX_GetByName(TRACK, fx.fx_name, false)
                                                 if fx_index >= 0 then
                                                     local is_open = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
@@ -5029,7 +5044,8 @@ local function ShowScreenshotWindow()
                                 local width, height = r.ImGui_Image_GetSize(texture)
                                 if width and height then
                                     local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
-                                    if r.ImGui_ImageButton(ctx, "##"..plugin_name, texture, display_width, display_height) then
+                                    -- Adding a unique identifier using index i to avoid duplicate IDs
+                                    if r.ImGui_ImageButton(ctx, GenerateUniqueID(plugin_name), texture, display_width, display_height) then
                                         if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                                             r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
                                             if config.close_after_adding_fx then
@@ -5038,9 +5054,12 @@ local function ShowScreenshotWindow()
                                         end
                                     end
                                     if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
-                                        r.ImGui_OpenPopup(ctx, "ScreenshotPluginMenu_" .. i)
+                                        local popup_id = GenerateUniqueID("ScreenshotPluginMenu_" .. plugin_name)
+                                        r.SetExtState("TK_FX_BROWSER", "CURRENT_POPUP_ID", popup_id, false)
+                                        r.ImGui_OpenPopup(ctx, popup_id)
                                     end                                 
-                                    if r.ImGui_BeginPopup(ctx, "ScreenshotPluginMenu_" .. i) then
+                                    local stored_popup_id = r.GetExtState("TK_FX_BROWSER", "CURRENT_POPUP_ID")
+                                    if r.ImGui_BeginPopup(ctx, stored_popup_id) then
                                         if r.ImGui_MenuItem(ctx, "Make Screenshot") then
                                             MakeScreenshot(plugin_name, nil, true)
                                         end
@@ -5223,16 +5242,21 @@ local function ShowScreenshotWindow()
                                         if width and height then
                                             local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                             
-                                            if r.ImGui_ImageButton(ctx, "##"..fx_name.."_master", texture, display_width, display_height) then
+                                            -- Using our helper function to generate a unique ID for master track FX
+                                            local master_unique_id = GenerateUniqueID("master_fx_"..fx_name.."_idx"..i)
+                                            if r.ImGui_ImageButton(ctx, master_unique_id, texture, display_width, display_height) then
                                                 local is_open = r.TrackFX_GetFloatingWindow(master_track, i)
                                                 r.TrackFX_Show(master_track, i, is_open and 2 or 3)
                                             end
                                             
                                             if r.ImGui_IsItemClicked(ctx, 1) then
-                                                r.ImGui_OpenPopup(ctx, "FXContextMenu_master_" .. i)
+                                                local master_popup_id = GenerateUniqueID("FXContextMenu_master_" .. fx_name)
+                                                r.SetExtState("TK_FX_BROWSER", "MASTER_POPUP_ID", master_popup_id, false)
+                                                r.ImGui_OpenPopup(ctx, master_popup_id)
                                             end
                                             
-                                            if r.ImGui_BeginPopup(ctx, "FXContextMenu_master_" .. i) then
+                                            local stored_master_popup_id = r.GetExtState("TK_FX_BROWSER", "MASTER_POPUP_ID")
+                                            if r.ImGui_BeginPopup(ctx, stored_master_popup_id) then
                                                 if r.ImGui_MenuItem(ctx, "Delete") then
                                                     r.TrackFX_Delete(master_track, i)
                                                 end
@@ -5337,7 +5361,9 @@ local function ShowScreenshotWindow()
                                         if width and height then
                                             local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                             
-                                            if r.ImGui_ImageButton(ctx, "##"..plugin.fx_name..(plugin.track_number and ("_"..plugin.track_number) or ""), texture, display_width, display_height) then
+                                                    -- Using our helper function to generate a unique ID
+                                            local unique_id = GenerateUniqueID(plugin.fx_name..(plugin.track_number and ("_track"..plugin.track_number) or ""))
+                                            if r.ImGui_ImageButton(ctx, unique_id, texture, display_width, display_height) then
 
                                                 if selected_folder == "Current Project FX" then
                                                     local track = r.GetTrack(0, plugin.track_number - 1)
@@ -5428,7 +5454,7 @@ local function ShowScreenshotWindow()
                                 if width and height then
                                     local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                     
-                                    if r.ImGui_ImageButton(ctx, "##"..fx.name, texture, display_width, display_height) then
+                                    if r.ImGui_ImageButton(ctx, GenerateUniqueID(fx.name.."_search"), texture, display_width, display_height) then
                                         if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                                             r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
                                             if config.close_after_adding_fx then
