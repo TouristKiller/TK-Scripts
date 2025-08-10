@@ -1,16 +1,15 @@
 local r = reaper
--- Aan het begin van je script, onder de andere 'local' definities
+
 local script_path = debug.getinfo(1, 'S').source:match([[^@?(.*[\/])[^\/]-$]])
 package.path = script_path .. "?.lua;" .. package.path
 
--- Probeer de JSON module te laden
 local json_status, json = pcall(require, "json")
 if not json_status then
     r.ShowConsoleMsg("can not load json\n")
 end
 
 local ctx = r.ImGui_CreateContext('TK Widget Manager')
-local font = r.ImGui_CreateFont('sans-serif', 14)
+local font = r.ImGui_CreateFont('arial', 12)
 r.ImGui_Attach(ctx, font)
 
 local widgets = {
@@ -74,9 +73,6 @@ local settings = {
     grab_min_size = 8.0,
     button_border_size = 1.0,
     border_size = 1.0,
-    current_font = "Arial",
-    font_size = 14,
-    
     background = 0x000000FF,
     button_normal = 0x333333FF,
     play_active = 0x00FF00FF,    
@@ -373,7 +369,7 @@ function Main()
     local visible, open = r.ImGui_Begin(ctx, 'TK Widget Manager', true, window_flags)
     
     if visible then
-        r.ImGui_PushFont(ctx, font)
+        r.ImGui_PushFont(ctx, font, 12)
         
         if showing_setup then
             ShowSetupDialog()

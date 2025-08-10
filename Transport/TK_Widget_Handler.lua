@@ -1,6 +1,5 @@
 local r = reaper
 local handler = {}
-
 function handler.init(widget_name, default_settings)
     local h = {}
     h.r = reaper
@@ -252,8 +251,8 @@ function handler.init(widget_name, default_settings)
         end
         
         h.SetStyle()
-        
-        r.ImGui_PushFont(h.ctx, h.font)
+
+        r.ImGui_PushFont(h.ctx, h.font, h.settings.font_size)
         local visible, open = r.ImGui_Begin(h.ctx, h.widget_title or "Widget", true, window_flags)
         if visible then
             if content_func then

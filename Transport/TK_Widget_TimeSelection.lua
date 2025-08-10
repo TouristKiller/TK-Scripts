@@ -9,7 +9,7 @@ local default_settings = {
     overlay_enabled = true,
     rel_pos_x = 0.0,
     rel_pos_y = 0.15,
-    font_size = 14,
+    font_size = 12,
     show_background = true,
     widget_width = 400,
     widget_height = 30,
@@ -25,7 +25,6 @@ local default_settings = {
     current_font = "Arial",
     last_pos_x = 100,
     last_pos_y = 100,
-    
     show_time_selection = true,
     show_beats_selection = true,
     timesel_border = true,
