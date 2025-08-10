@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.1.7:
+-- @version 1.1.8:
 -- @changelog:
 --[[        
 + BUGFIX: Show current plugin instead of opening a new one in the screenshot window
@@ -335,7 +335,7 @@ function UpdateFonts()
     end
 
     -- Dan maken we nieuwe fonts aan
-    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
+    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
     TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
     LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
 
@@ -346,7 +346,7 @@ function UpdateFonts()
 end
 
 -- Maak de fonts aan
-NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
+NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
 TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
 LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
 IconFont = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
@@ -841,7 +841,7 @@ end
 local function ShowConfigWindow()
     local function NewSection(title)
         r.ImGui_Spacing(ctx)
-        r.ImGui_PushFont(ctx, NormalFont, 13)
+        r.ImGui_PushFont(ctx, NormalFont, 11)
         r.ImGui_Text(ctx, title)
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
@@ -851,7 +851,7 @@ local function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 560
+    local window_height = 580
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -863,7 +863,7 @@ local function ShowConfigWindow()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x666666FF)  -- normale staat
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
     if visible then
-        r.ImGui_PushFont(ctx, LargeFont, 16)
+        r.ImGui_PushFont(ctx, LargeFont, 15)
         r.ImGui_Text(ctx, "TK FX BROWSER SETTINGS")
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
@@ -4064,7 +4064,7 @@ local function ShowScreenshotWindow()
       
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
-        r.ImGui_PushFont(ctx, NormalFont, 13)
+        r.ImGui_PushFont(ctx, NormalFont, 11)
         --r.ImGui_SetCursorPosY(ctx, 5)
     
         if show_media_browser then
@@ -7472,7 +7472,7 @@ function InitializeImGuiContext()
     if not ctx then
         ctx = r.ImGui_CreateContext('TK FX Browser')
         
-        NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
+        NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
         TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
         LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
         IconFont = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
@@ -7571,7 +7571,7 @@ function Main()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), config.slider_active_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
-        r.ImGui_PushFont(ctx, NormalFont, 12)
+        r.ImGui_PushFont(ctx, NormalFont, 11)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         else
             InitializeImGuiContext()
@@ -7684,7 +7684,7 @@ if visible then
                     r.ImGui_PopFont(ctx)
                 end
 
-                r.ImGui_PushFont(ctx, NormalFont, 12)
+                r.ImGui_PushFont(ctx, NormalFont, 11)
                 if r.ImGui_IsItemClicked(ctx, 1) then 
                     r.ImGui_OpenPopup(ctx, "TrackContextMenu")
                 end
