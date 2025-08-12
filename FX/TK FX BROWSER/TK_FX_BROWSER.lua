@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.2.1:
+-- @version 1.2.2:
 -- @changelog:
 --[[        
 + cant keep up! hahaha :o)
@@ -263,7 +263,8 @@ local function SetDefaultConfig()
         browser_panel_width = browser_panel_width or 200,
         use_pagination = true,
         use_masonry_layout = false,
-        show_favorites_on_top = true
+        show_favorites_on_top = true,
+        open_floating_after_adding = false, 
     } 
 end
 local config = SetDefaultConfig()    
@@ -1393,6 +1394,8 @@ local function ShowConfigWindow()
             _, config.close_after_adding_fx = r.ImGui_Checkbox(ctx, "Close script after adding FX", config.close_after_adding_fx)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.open_floating_after_adding = r.ImGui_Checkbox(ctx, "Open FX floating after adding", config.open_floating_after_adding)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.include_x86_bridged = r.ImGui_Checkbox(ctx, "Include x86 bridged plugins", config.include_x86_bridged)
             r.ImGui_Separator(ctx)
             r.ImGui_Dummy(ctx, 0, 5)
@@ -3947,41 +3950,18 @@ local function DrawMasonryLayout(screenshots)
                     local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                     
                     r.ImGui_BeginGroup(ctx)
-                    
-                    -- Bepaal welke ID en klik-handler te gebruiken
-                    local clicked = false
-                    if selected_folder == "Current Track FX" then
-                        -- Gebruik eenvoudige ID voor Current Track FX
-                        local button_id = "masonry_track_fx_" .. i
-                        clicked = r.ImGui_ImageButton(ctx, button_id, texture, display_width, display_height)
-                    else
-                        -- Gebruik GenerateUniqueID voor andere folders
-                        clicked = r.ImGui_ImageButton(ctx, GenerateUniqueID(fx.name.."_masonry"), texture, display_width, display_height)
-                    end
-                    
-                    if clicked then
-                        if selected_folder == "Current Project FX" then
-                            -- GEBRUIK DIRECT DE FX DATA UIT HET MASONRY OBJECT
-                            if fx.track_number and fx.fx_index then
-                                local track = r.GetTrack(0, fx.track_number - 1)
-                                if track and r.ValidatePtr(track, "MediaTrack*") then
-                                    local is_open = r.TrackFX_GetFloatingWindow(track, fx.fx_index)
-                                    r.TrackFX_Show(track, fx.fx_index, is_open and 2 or 3)
-                                end
-                            end
-                        elseif selected_folder == "Current Track FX" then
-                            -- Current Track FX logica - gebruik fx_index uit masonry data
-                            if fx.fx_index and fx.fx_index >= 0 and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                local is_open = r.TrackFX_GetFloatingWindow(TRACK, fx.fx_index)
-                                r.TrackFX_Show(TRACK, fx.fx_index, is_open and 2 or 3)
-                            end
-                        else
-                            -- Nieuwe FX toevoegen
-                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                                if config.close_after_adding_fx then
-                                    SHOULD_CLOSE_SCRIPT = true
-                                end
+
+                    -- LINKS KLIK VOOR MASONRY LAYOUT
+                    local masonry_clicked = r.ImGui_ImageButton(ctx, "masonry_" .. i, texture, display_width, display_height)
+
+                    if masonry_clicked then
+                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                        if target_track then
+                            r.TrackFX_AddByName(target_track, fx.name, false, -1000)
+                            LAST_USED_FX = fx.name
+                            
+                            if config.close_after_adding_fx then
+                                SHOULD_CLOSE_SCRIPT = true
                             end
                         end
                     end
@@ -5084,7 +5064,7 @@ local function ShowScreenshotWindow()
                         local current_track_identifier = nil
                         local column_width = available_width / num_columns
 
- for i, plugin in ipairs(filtered_plugins) do
+                         for i, plugin in ipairs(filtered_plugins) do
                             local track_identifier
                             
                             -- Gebruik verschillende identifiers voor master en normale tracks
@@ -5428,17 +5408,39 @@ local function ShowScreenshotWindow()
                         
                                 r.ImGui_BeginGroup(ctx)
                                 local plugin_name = filtered_plugins[i]
+                                
+                                -- Skip separator items
+                                if plugin_name == "--Favorites End--" then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                                    r.ImGui_Text(ctx, "--- Favorites End ---")
+                                    r.ImGui_PopStyleColor(ctx)
+                                    r.ImGui_EndGroup(ctx)
+                                    goto continue
+                                end
+                                
                                 local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                                 local screenshot_file = screenshot_path .. safe_name .. ".png"
                                 if r.file_exists(screenshot_file) then
-                                    local texture = LoadSearchTexture(screenshot_file, plugin and plugin.fx_name or get_safe_name(plugin_name))
+                                    local texture = LoadSearchTexture(screenshot_file, plugin_name)
                                     if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                         local width, height = r.ImGui_Image_GetSize(texture)
                                         if width and height then
                                             local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
-                                            if r.ImGui_ImageButton(ctx, GenerateUniqueID(plugin_name), texture, display_width, display_height) then
-                                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                                    r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                                                                        
+                                            -- LINKS KLIK VOOR NORMALE FOLDERS
+                                            local folder_clicked = r.ImGui_ImageButton(ctx, "folder_plugin_" .. i, texture, display_width, display_height)
+
+                                            if folder_clicked then
+                                                local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                                if target_track then
+                                                    local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000)
+                                                    LAST_USED_FX = plugin_name
+                                                    
+                                                    -- OPEN FLOATING ALS OPTIE ENABLED IS
+                                                    if config.open_floating_after_adding and fx_index >= 0 then
+                                                        r.TrackFX_Show(target_track, fx_index, 3) -- 3 = open floating
+                                                    end
+                                                    
                                                     if config.close_after_adding_fx then
                                                         SHOULD_CLOSE_SCRIPT = true
                                                     end
@@ -5453,6 +5455,53 @@ local function ShowScreenshotWindow()
                                             end    
                                         end
                                     end
+                                else
+                                    -- Geen screenshot beschikbaar, toon alleen tekst knop
+                                    if r.ImGui_Button(ctx, plugin_name, display_size, 30) then
+                                        -- Validatie: controleer of er een track geselecteerd is
+                                        if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then
+                                            -- Geen track geselecteerd, selecteer de eerste track of master
+                                            local first_track = r.GetTrack(0, 0)
+                                            if first_track then
+                                                r.SetOnlyTrackSelected(first_track)
+                                                TRACK = first_track
+                                            else
+                                                -- Als er geen tracks zijn, selecteer master track
+                                                TRACK = r.GetMasterTrack(0)
+                                                r.SetOnlyTrackSelected(TRACK)
+                                            end
+                                        end
+                                        
+                                        -- Voeg plugin toe aan geselecteerde track
+                                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                            if ADD_FX_TO_ITEM then
+                                                -- Voeg toe aan item
+                                                local selected_item = r.GetSelectedMediaItem(0, 0)
+                                                if selected_item then
+                                                    local take = r.GetActiveTake(selected_item)
+                                                    if take then
+                                                        r.TakeFX_AddByName(take, plugin_name, 1)
+                                                        LAST_USED_FX = plugin_name
+                                                    else
+                                                        r.ShowMessageBox("No active take found on selected item", "Error", 0)
+                                                    end
+                                                else
+                                                    r.ShowMessageBox("No item selected. Plugin added to track instead.", "Info", 0)
+                                                    r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                                    LAST_USED_FX = plugin_name
+                                                end
+                                            else
+                                                -- Voeg toe aan track
+                                                r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                                LAST_USED_FX = plugin_name
+                                            end
+                                            
+                                            if config.close_after_adding_fx then
+                                                SHOULD_CLOSE_SCRIPT = true
+                                            end
+                                        end
+                                    end
+                                    ShowPluginContextMenu(plugin_name, "folder_text_" .. i)
                                 end
                             
                                 r.ImGui_EndGroup(ctx)
@@ -5461,6 +5510,8 @@ local function ShowScreenshotWindow()
                                         r.ImGui_Dummy(ctx, 0, 5)
                                     end
                                 end
+                                
+                                ::continue::
                             end
                         end
                     end
@@ -5496,15 +5547,27 @@ local function ShowScreenshotWindow()
                                 local width, height = r.ImGui_Image_GetSize(texture)
                                 if width and height then
                                     local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
-                                    
-                                    if r.ImGui_ImageButton(ctx, GenerateUniqueID(fx.name.."_search"), texture, display_width, display_height) then
-                                        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                            r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                 
+                                    -- LINKS KLIK VOOR SEARCH RESULTS
+                                    local search_clicked = r.ImGui_ImageButton(ctx, "search_result_" .. i, texture, display_width, display_height)
+
+                                    if search_clicked then
+                                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                        if target_track then
+                                            local fx_index = r.TrackFX_AddByName(target_track, fx.name, false, -1000)
+                                            LAST_USED_FX = fx.name
+                                            
+                                            -- OPEN FLOATING ALS OPTIE ENABLED IS
+                                            if config.open_floating_after_adding and fx_index >= 0 then
+                                                r.TrackFX_Show(target_track, fx_index, 3) -- 3 = open floating
+                                            end
+                                            
                                             if config.close_after_adding_fx then
                                                 SHOULD_CLOSE_SCRIPT = true
                                             end
                                         end
                                     end
+
                                     ShowPluginContextMenu(fx.name, "search_" .. i)
                                              
                                     if config.show_name_in_screenshot_window and not config.hidden_names[fx.name] then
@@ -5514,6 +5577,53 @@ local function ShowScreenshotWindow()
                                     end
                                 end
                             end
+                        else
+                            -- Geen screenshot beschikbaar, toon alleen tekst knop
+                            if r.ImGui_Button(ctx, fx.name, display_size, 30) then
+                                -- Validatie: controleer of er een track geselecteerd is
+                                if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then
+                                    -- Geen track geselecteerd, selecteer de eerste track of master
+                                    local first_track = r.GetTrack(0, 0)
+                                    if first_track then
+                                        r.SetOnlyTrackSelected(first_track)
+                                        TRACK = first_track
+                                    else
+                                        -- Als er geen tracks zijn, selecteer master track
+                                        TRACK = r.GetMasterTrack(0)
+                                        r.SetOnlyTrackSelected(TRACK)
+                                    end
+                                end
+                                
+                                -- Voeg plugin toe aan geselecteerde track
+                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                    if ADD_FX_TO_ITEM then
+                                        -- Voeg toe aan item
+                                        local selected_item = r.GetSelectedMediaItem(0, 0)
+                                        if selected_item then
+                                            local take = r.GetActiveTake(selected_item)
+                                            if take then
+                                                r.TakeFX_AddByName(take, fx.name, 1)
+                                                LAST_USED_FX = fx.name
+                                            else
+                                                r.ShowMessageBox("No active take found on selected item", "Error", 0)
+                                            end
+                                        else
+                                            r.ShowMessageBox("No item selected. Plugin added to track instead.", "Info", 0)
+                                            r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                            LAST_USED_FX = fx.name
+                                        end
+                                    else
+                                        -- Voeg toe aan track
+                                        r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                        LAST_USED_FX = fx.name
+                                    end
+                                    
+                                    if config.close_after_adding_fx then
+                                        SHOULD_CLOSE_SCRIPT = true
+                                    end
+                                end
+                            end
+                            ShowPluginContextMenu(fx.name, "search_text_" .. i)
                         end
                          
                         r.ImGui_EndGroup(ctx) 
@@ -5773,9 +5883,14 @@ end
                         for _, plugin in ipairs(plugins) do
                             local display_name = plugin.name:gsub("^(%S+:)", "")
                             if r.ImGui_Selectable(ctx, display_name .. "##search_" .. global_idx, global_idx == ADDFX_Sel_Entry) then
-                                r.TrackFX_AddByName(TRACK, plugin.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                local fx_index = r.TrackFX_AddByName(TRACK, plugin.name, false, -1000 - r.TrackFX_GetCount(TRACK))
                                 r.ImGui_CloseCurrentPopup(ctx)
                                 LAST_USED_FX = plugin.name
+                                
+                                -- OPEN FLOATING ALS OPTIE ENABLED IS
+                                if config.open_floating_after_adding and fx_index >= 0 then
+                                    r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                                end
                             end
     
                             if r.ImGui_IsItemHovered(ctx) then
@@ -5888,10 +6003,16 @@ end
                 -- Original view
                 for i = 1, #filtered_fx do
                     if r.ImGui_Selectable(ctx, filtered_fx[i].name .. "##search_" .. i, i == ADDFX_Sel_Entry) then
-                        r.TrackFX_AddByName(TRACK, filtered_fx[i].name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                        r.ImGui_CloseCurrentPopup(ctx)
-                        LAST_USED_FX = filtered_fx[i].name
+                    local fx_index = r.TrackFX_AddByName(TRACK, filtered_fx[i].name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                    r.ImGui_CloseCurrentPopup(ctx)
+                    LAST_USED_FX = filtered_fx[i].name
+                    
+                        -- OPEN FLOATING ALS OPTIE ENABLED IS
+                        if config.open_floating_after_adding and fx_index >= 0 then
+                            r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                        end
                     end
+
     
                     if r.ImGui_IsItemHovered(ctx) then
                         if filtered_fx[i].name ~= current_hovered_plugin then
@@ -6007,8 +6128,14 @@ end
     
         if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
             if ADDFX_Sel_Entry and ADDFX_Sel_Entry > 0 and ADDFX_Sel_Entry <= #filtered_fx then
-                r.TrackFX_AddByName(TRACK, filtered_fx[ADDFX_Sel_Entry].name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                local fx_index = r.TrackFX_AddByName(TRACK, filtered_fx[ADDFX_Sel_Entry].name, false, -1000 - r.TrackFX_GetCount(TRACK))
                 LAST_USED_FX = filtered_fx[ADDFX_Sel_Entry].name
+                
+                -- OPEN FLOATING ALS OPTIE ENABLED IS
+                if config.open_floating_after_adding and fx_index >= 0 then
+                    r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                end
+                
                 ADDFX_Sel_Entry = nil
                 FILTER = ''
                 r.ImGui_CloseCurrentPopup(ctx)
@@ -6067,7 +6194,12 @@ local function DrawItems(tbl, main_cat_name)
                                 AddFXToItem(plugin.name)
                             else
                                 if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    r.TrackFX_AddByName(TRACK, plugin.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                    local fx_index = r.TrackFX_AddByName(TRACK, plugin.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                    
+                                    -- OPEN FLOATING ALS OPTIE ENABLED IS
+                                    if config.open_floating_after_adding and fx_index >= 0 then
+                                        r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                                    end
                                 end
                             end
                             LAST_USED_FX = plugin.name
@@ -6194,13 +6326,18 @@ local function DrawItems(tbl, main_cat_name)
                             elseif main_cat_name == "DEVELOPER" then
                                 name = name:gsub(' %(' .. Literalize(tbl[i].name) .. '%)', "")
                             end
-                           
+
                             if r.ImGui_Selectable(ctx, name .. "##plugin_list_" .. i .. "_" .. j) then
                                 if ADD_FX_TO_ITEM then
                                     AddFXToItem(tbl[i].fx[j])
                                 else
                                     if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                        r.TrackFX_AddByName(TRACK, tbl[i].fx[j], false, -1000 - r.TrackFX_GetCount(TRACK))
+                                        local fx_index = r.TrackFX_AddByName(TRACK, tbl[i].fx[j], false, -1000 - r.TrackFX_GetCount(TRACK))
+                                        
+                                        -- OPEN FLOATING ALS OPTIE ENABLED IS
+                                        if config.open_floating_after_adding and fx_index >= 0 then
+                                            r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                                        end
                                     end
                                 end
                                 LAST_USED_FX = tbl[i].fx[j]
@@ -6340,7 +6477,12 @@ local function DrawFavorites()
     for i, fav in ipairs(favorite_plugins) do
         if r.ImGui_Selectable(ctx, fav .. "##favorites_" .. i) then
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
+                local fx_index = r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
+                
+                -- OPEN FLOATING ALS OPTIE ENABLED IS
+                if config.open_floating_after_adding and fx_index >= 0 then
+                    r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                end
             end
             LAST_USED_FX = fav
             if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
