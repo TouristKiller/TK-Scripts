@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.2.0:
+-- @version 1.2.1:
 -- @changelog:
 --[[        
-+ BUGFIX: Fixed ID issues. Improved scrolling in browser window.
++ cant keep up! hahaha :o)
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -3040,15 +3040,18 @@ local function DrawFxChains(tbl, path)
     while i <= #tbl do
         local item = tbl[i]
         if type(item) == "table" and item.dir then
+            -- SUBMAPPEN HANDELEN
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)  
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), config.background_color) 
             if r.ImGui_BeginMenu(ctx, item.dir) then               
+                -- RECURSIEF SUBMAPPEN DOORLOPEN
                 DrawFxChains(item, table.concat({ path, os_separator, item.dir }))              
                 r.ImGui_EndMenu(ctx)               
             end  
             reaper.ImGui_PopStyleColor(ctx)
-        elseif type(item) ~= "table" then
+        elseif type(item) == "string" then
+            -- NORMALE FX CHAIN FILES
             if r.ImGui_Selectable(ctx, item .. "##fxchain_" .. i) then
                 if ADD_FX_TO_ITEM then
                     local selected_item = r.GetSelectedMediaItem(0, 0)
@@ -3077,8 +3080,8 @@ local function DrawFxChains(tbl, path)
                     if retval then
                         local resource_path = r.GetResourcePath()
                         local fx_chains_path = resource_path .. "/FXChains"
-                        local old_path = fx_chains_path .. "/" .. item .. extension
-                        local new_path = fx_chains_path .. "/" .. new_name .. extension
+                        local old_path = fx_chains_path .. path .. os_separator .. item .. extension
+                        local new_path = fx_chains_path .. path .. os_separator .. new_name .. extension
                         if os.rename(old_path, new_path) then
                             tbl[i] = new_name
                             FX_LIST_TEST, CAT_TEST = MakeFXFiles()  
@@ -3091,7 +3094,7 @@ local function DrawFxChains(tbl, path)
                 if r.ImGui_MenuItem(ctx, "Delete") then
                     local resource_path = r.GetResourcePath()
                     local fx_chains_path = resource_path .. "/FXChains"
-                    local file_path = fx_chains_path .. "/" .. item .. extension
+                    local file_path = fx_chains_path .. path .. os_separator .. item .. extension
                     if os.remove(file_path) then
                         table.remove(tbl, i)
                         FX_LIST_TEST, CAT_TEST = MakeFXFiles() 
@@ -3102,6 +3105,65 @@ local function DrawFxChains(tbl, path)
                     end
                 end
                 r.ImGui_EndPopup(ctx)
+            end
+        elseif type(item) == "table" and not item.dir then
+            -- FALLBACK VOOR ANDERE TABLE STRUCTUREN
+            for j = 1, #item do
+                if type(item[j]) == "string" then
+                    if r.ImGui_Selectable(ctx, item[j] .. "##fxchain_" .. i .. "_" .. j) then
+                        if ADD_FX_TO_ITEM then
+                            local selected_item = r.GetSelectedMediaItem(0, 0)
+                            if selected_item then
+                                local take = r.GetActiveTake(selected_item)
+                                if take then
+                                    r.TakeFX_AddByName(take, table.concat({ path, os_separator, item[j], extension }), 1)
+                                end
+                            end
+                        else
+                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                r.TrackFX_AddByName(TRACK, table.concat({ path, os_separator, item[j], extension }), false,
+                                    -1000 - r.TrackFX_GetCount(TRACK))
+                                if config.close_after_adding_fx then
+                                    SHOULD_CLOSE_SCRIPT = true
+                                end
+                            end
+                        end
+                    end
+                    if r.ImGui_IsItemClicked(ctx, 1) then
+                        r.ImGui_OpenPopup(ctx, "FXChainOptions_" .. i .. "_" .. j)
+                    end
+                    if r.ImGui_BeginPopup(ctx, "FXChainOptions_" .. i .. "_" .. j) then
+                        if r.ImGui_MenuItem(ctx, "Rename") then
+                            local retval, new_name = r.GetUserInputs("Rename FX Chain", 1, "New name:", item[j])
+                            if retval then
+                                local resource_path = r.GetResourcePath()
+                                local fx_chains_path = resource_path .. "/FXChains"
+                                local old_path = fx_chains_path .. path .. os_separator .. item[j] .. extension
+                                local new_path = fx_chains_path .. path .. os_separator .. new_name .. extension
+                                if os.rename(old_path, new_path) then
+                                    item[j] = new_name
+                                    FX_LIST_TEST, CAT_TEST = MakeFXFiles()  
+                                    r.ShowMessageBox("FX Chain renamed", "Success", 0)
+                                else
+                                    r.ShowMessageBox("Could not rename FX Chain", "Error", 0)
+                                end
+                            end
+                        end
+                        if r.ImGui_MenuItem(ctx, "Delete") then
+                            local resource_path = r.GetResourcePath()
+                            local fx_chains_path = resource_path .. "/FXChains"
+                            local file_path = fx_chains_path .. path .. os_separator .. item[j] .. extension
+                            if os.remove(file_path) then
+                                table.remove(item, j)
+                                FX_LIST_TEST, CAT_TEST = MakeFXFiles() 
+                                r.ShowMessageBox("FX Chain deleted", "Success", 0)
+                            else
+                                r.ShowMessageBox("Could not delete FX Chain", "Error", 0)
+                            end
+                        end
+                        r.ImGui_EndPopup(ctx)
+                    end
+                end
             end
         end
         i = i + 1
