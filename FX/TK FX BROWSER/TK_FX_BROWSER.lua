@@ -1,10 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.3.0:
+-- @version 1.3.1:
 -- @changelog:
 --[[        
-+ bugfix: fixed plugins added in wrong order
-+ feature: added support for custom folder structures
++ added: set parent right click context
++ aadded: show /hide custom folders in settings menu
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -53,6 +53,10 @@ local rename_folder_new_name = ""
 local show_create_folder_popup = false
 local new_folder_for_plugin = ""
 local new_folder_name_input = ""
+local show_create_parent_folder_popup = false
+local selected_folder_for_parent = nil
+local selected_folder_name = nil
+local new_parent_folder_name = ""
 
 screenshot_search_results = screenshot_search_results or {}
 
@@ -283,6 +287,7 @@ local function SetDefaultConfig()
         show_favorites_on_top = true,
         open_floating_after_adding = false, 
         custom_folders = {},
+        show_custom_folders = true,
         hide_custom_dropdown = false,
     } 
 end
@@ -1093,7 +1098,7 @@ local function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 580
+    local window_height = 600
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -1320,7 +1325,11 @@ local function ShowConfigWindow()
             r.ImGui_SetCursorPosX(ctx, column4_width)
             changed, new_value = r.ImGui_Checkbox(ctx, "Actions", config.show_actions)
             if changed then config.show_actions = new_value end
-
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.show_custom_folders = r.ImGui_Checkbox(ctx, "Custom Folders", config.show_custom_folders)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_Separator(ctx)
             r.ImGui_Dummy(ctx, 0, 5)
          
@@ -1712,12 +1721,23 @@ if r.ImGui_BeginTabItem(ctx, "CUSTOM FOLDERS") then
     r.ImGui_Separator(ctx)
     
     -- Recursive folder display function
-    local function DisplayFolderTree(folders, path_prefix)
-        path_prefix = path_prefix or ""
-        
-        for folder_name, folder_content in pairs(folders) do
-            local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
-            r.ImGui_PushID(ctx, full_path)
+local function DisplayFolderTree(folders, path_prefix)
+    path_prefix = path_prefix or ""
+    
+    -- SORTEER DE FOLDER NAMEN ALFABETISCH
+    local sorted_folder_names = {}
+    for folder_name, _ in pairs(folders) do
+        table.insert(sorted_folder_names, folder_name)
+    end
+    table.sort(sorted_folder_names, function(a, b) 
+        return a:lower() < b:lower() 
+    end)
+    
+    -- GEBRUIK DE GESORTEERDE NAMEN
+    for _, folder_name in ipairs(sorted_folder_names) do
+        local folder_content = folders[folder_name]
+        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+        r.ImGui_PushID(ctx, full_path)
             
             if IsPluginArray(folder_content) then
                 -- Plugin folder
@@ -3594,9 +3614,20 @@ local function ShowCustomFolderDropdown()
         r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
         
         if r.ImGui_BeginCombo(ctx, "##CustomFolderDropdown", "Custom") then
-            -- Recursive functie om nested folders te tonen
+            -- Recursive functie om nested folders te tonen (MET SORTERING)
             local function ShowNestedFolders(folders, prefix)
-                for folder_name, folder_content in pairs(folders) do
+                -- SORTEER DE FOLDER NAMEN ALFABETISCH
+                local sorted_folder_names = {}
+                for folder_name, _ in pairs(folders) do
+                    table.insert(sorted_folder_names, folder_name)
+                end
+                table.sort(sorted_folder_names, function(a, b) 
+                    return a:lower() < b:lower() 
+                end)
+                
+                -- GEBRUIK DE GESORTEERDE NAMEN
+                for _, folder_name in ipairs(sorted_folder_names) do
+                    local folder_content = folders[folder_name]
                     local full_path = prefix == "" and folder_name or (prefix .. "/" .. folder_name)
                     
                     if IsPluginArray(folder_content) then
@@ -4126,12 +4157,24 @@ end
 local function DisplayCustomFoldersInBrowser(folders, path_prefix)
     path_prefix = path_prefix or ""
     
-    for folder_name, folder_content in pairs(folders) do
+    -- SORTEER DE FOLDER NAMEN ALFABETISCH
+    local sorted_folder_names = {}
+    for folder_name, _ in pairs(folders) do
+        table.insert(sorted_folder_names, folder_name)
+    end
+    table.sort(sorted_folder_names, function(a, b) 
+        return a:lower() < b:lower() 
+    end)
+    
+    -- GEBRUIK DE GESORTEERDE NAMEN
+    for _, folder_name in ipairs(sorted_folder_names) do
+        local folder_content = folders[folder_name]
         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
         
         if IsPluginArray(folder_content) then
 
             if r.ImGui_Selectable(ctx, folder_name:upper()) then
+                
                 selected_folder = full_path
                 show_media_browser = false
                 show_sends_window = false
@@ -4147,6 +4190,15 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
 
             if r.ImGui_IsItemClicked(ctx, 1) then
                 custom_folders_open[full_path] = not custom_folders_open[full_path]
+                r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
+            end
+            if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
+                if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
+                    show_create_parent_folder_popup = true
+                    selected_folder_for_parent = full_path
+                    selected_folder_name = folder_name
+                end
+                r.ImGui_EndPopup(ctx)
             end
             
             if custom_folders_open[full_path] then
@@ -4236,7 +4288,9 @@ local function ShowBrowserPanel()
     end
 
 -- CUSTOM FOLDERS
-DisplayCustomFoldersInBrowser(config.custom_folders)
+if config.show_custom_folders then  -- VOEG DEZE CHECK TOE
+    DisplayCustomFoldersInBrowser(config.custom_folders)
+end
     
 -- CURRENT TRACK FX
 r.ImGui_Selectable(ctx, "CURRENT TRACK FX")
@@ -5827,12 +5881,12 @@ local function ShowScreenshotWindow()
                                                 end
                                             end
 
-ShowFXContextMenu({
-    fx_name = plugin.fx_name,
-    track_number = plugin.track_number,
-    fx_index = plugin.fx_index,
-    is_master = plugin.is_master
-}, "current_project_fx_" .. i)         
+                                                ShowFXContextMenu({
+                                                    fx_name = plugin.fx_name,
+                                                    track_number = plugin.track_number,
+                                                    fx_index = plugin.fx_index,
+                                                    is_master = plugin.is_master
+                                                }, "current_project_fx_" .. i)         
                                                 if config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] then
                                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                                     r.ImGui_Text(ctx, plugin.fx_name)
@@ -7589,7 +7643,7 @@ local function CalculateMenuHeight(config)
     if config.show_projects then height = height + 16 end
     if config.show_sends then height = height + 16 end
     if config.show_actions then height = height + 16 end
-    if next(config.custom_folders) then height = height + 16 end  -- VOEG DEZE REGEL TOE
+    if config.show_custom_folders and next(config.custom_folders) then height = height + 16 end  -- WIJZIG DEZE REGEL
     if LAST_USED_FX then height = height + 16 end
     return height
 end
@@ -7607,7 +7661,18 @@ end
 local function DrawCustomFoldersMenu(folders, path_prefix)
     path_prefix = path_prefix or ""
     
-    for folder_name, folder_content in pairs(folders) do
+    -- SORTEER DE FOLDER NAMEN ALFABETISCH
+    local sorted_folder_names = {}
+    for folder_name, _ in pairs(folders) do
+        table.insert(sorted_folder_names, folder_name)
+    end
+    table.sort(sorted_folder_names, function(a, b) 
+        return a:lower() < b:lower() 
+    end)
+    
+    -- GEBRUIK DE GESORTEERDE NAMEN
+    for _, folder_name in ipairs(sorted_folder_names) do
+        local folder_content = folders[folder_name]
         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
         
         if IsPluginArray(folder_content) then
@@ -7622,7 +7687,21 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
             
             if r.ImGui_BeginMenu(ctx, folder_name .. " (" .. #folder_content .. ")") then
-                -- Toon alle plugins in deze folder
+                -- NIEUWE CONTEXT MENU VOOR FOLDERS
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
+                end
+                
+                if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
+                    if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
+                        show_create_parent_folder_popup = true
+                        selected_folder_for_parent = full_path
+                        selected_folder_name = folder_name
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+                
+                -- Toon alle plugins in deze folder (bestaande code)
                 local favorites = {}
                 local regular = {}
                 
@@ -7638,7 +7717,7 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
                 
                 for group_idx, plugin_group in ipairs(plugins_to_show) do
                     for plugin_idx, plugin_name in ipairs(plugin_group) do
-                        if type(plugin_name) == "string" then -- Zorg ervoor dat het een string is
+                        if type(plugin_name) == "string" then
                             if r.ImGui_Selectable(ctx, plugin_name .. "##custom_" .. full_path .. "_" .. plugin_idx) then
                                 if ADD_FX_TO_ITEM then
                                     AddFXToItem(plugin_name)
@@ -7646,9 +7725,8 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
                                     if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                                         local fx_index = r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
                                         
-                                        -- OPEN FLOATING ALS OPTIE ENABLED IS
                                         if config.open_floating_after_adding and fx_index >= 0 then
-                                            r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                                            r.TrackFX_Show(TRACK, fx_index, 3)
                                         end
                                     end
                                 end
@@ -7670,7 +7748,6 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
                         end
                     end
                     
-                    -- Voeg separator toe tussen favorites en regular plugins
                     if config.show_favorites_on_top and group_idx == 1 and #favorites > 0 and #regular > 0 then
                         if r.ImGui_Selectable(ctx, "--Favorites End--", false, r.ImGui_SelectableFlags_Disabled()) then end
                     end
@@ -7686,7 +7763,7 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PopStyleColor(ctx, 2)
             
         elseif IsSubfolderStructure(folder_content) then
-            -- Parent folder - toon als submenu
+            -- Parent folder - toon als submenu (bestaande code)
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
@@ -7741,27 +7818,28 @@ function Frame()
         r.ImGui_PopStyleColor(ctx, 2)
     end
     -- CUSTOM FOLDERS SECTIE
-    if next(config.custom_folders) then
-        r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
-        r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+if config.show_custom_folders and next(config.custom_folders) then  -- VOEG show_custom_folders CHECK TOE
+    r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+    r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
 
-        if r.ImGui_BeginMenu(ctx, "CUSTOM") then
-            DrawCustomFoldersMenu(config.custom_folders, "")
-            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
-                r.ImGui_CloseCurrentPopup(ctx)
-            end
-            r.ImGui_EndMenu(ctx)
+    if r.ImGui_BeginMenu(ctx, "CUSTOM") then
+        DrawCustomFoldersMenu(config.custom_folders, "")
+        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+            r.ImGui_CloseCurrentPopup(ctx)
         end
-
-        r.ImGui_PopStyleVar(ctx, 4)
-        r.ImGui_PopStyleColor(ctx, 2)
+        
+        r.ImGui_EndMenu(ctx)
     end
+
+    r.ImGui_PopStyleVar(ctx, 4)
+    r.ImGui_PopStyleColor(ctx, 2)
+end
 
     for i = 1, #CAT_TEST do
         local category_name = CAT_TEST[i].name
@@ -9379,6 +9457,71 @@ if visible then
                 show_create_folder_popup = false
                 new_folder_for_plugin = ""
                 new_folder_name_input = ""
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            
+            r.ImGui_EndPopup(ctx)
+        end
+
+        -- CREATE PARENT FOLDER POPUP
+        if show_create_parent_folder_popup then
+            r.ImGui_OpenPopup(ctx, "Create Parent Folder")
+        end
+
+        if r.ImGui_BeginPopupModal(ctx, "Create Parent Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+            r.ImGui_Text(ctx, "Create parent folder above: " .. (selected_folder_name or ""))
+            r.ImGui_Separator(ctx)
+            
+            r.ImGui_PushItemWidth(ctx, 250)
+            local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##ParentFolderName", "Enter parent folder name", new_parent_folder_name or "")
+            if changed then
+                new_parent_folder_name = new_name
+            end
+            r.ImGui_PopItemWidth(ctx)
+            
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Button(ctx, "Create", 100, 0) then
+                if new_parent_folder_name and new_parent_folder_name ~= "" and selected_folder_for_parent then
+                    -- Parse the current folder path
+                    local parts = {}
+                    for part in selected_folder_for_parent:gmatch("[^/]+") do
+                        table.insert(parts, part)
+                    end
+                    
+                    if #parts > 0 then
+                        local folder_name = parts[#parts]
+                        
+                        -- Navigate to parent location
+                        local current = config.custom_folders
+                        for i = 1, #parts - 1 do
+                            current = current[parts[i]]
+                        end
+                        
+                        -- Remove old folder and create new structure
+                        local old_content = current[folder_name]
+                        current[folder_name] = nil
+                        
+                        -- Create new parent folder with old folder as subfolder
+                        current[new_parent_folder_name] = {
+                            [folder_name] = old_content
+                        }
+                        
+                        SaveCustomFolders()
+                        r.ShowMessageBox("Parent folder '" .. new_parent_folder_name .. "' created successfully!", "Success", 0)
+                    end
+                end
+                show_create_parent_folder_popup = false
+                selected_folder_for_parent = nil
+                selected_folder_name = nil
+                new_parent_folder_name = ""
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+                show_create_parent_folder_popup = false
+                selected_folder_for_parent = nil
+                selected_folder_name = nil
+                new_parent_folder_name = ""
                 r.ImGui_CloseCurrentPopup(ctx)
             end
             
