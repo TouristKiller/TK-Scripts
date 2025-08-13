@@ -1,9 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.2.2:
+-- @version 1.3.0:
 -- @changelog:
 --[[        
-+ cant keep up! hahaha :o)
++ bugfix: fixed plugins added in wrong order
++ feature: added support for custom folder structures
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -36,6 +37,22 @@ local last_scroll_position = 0
 local current_filtered_fx = {} 
 local was_hidden = false
 local unique_id_counter = 0
+
+--custom folders
+local custom_folder_states = {}
+local show_plugin_browser = false
+local selected_custom_folder_for_browse = nil
+local plugin_search_text = ""
+local new_custom_folder_name = ""
+local custom_folders_open = {}
+local current_folder_context = nil
+local plugin_input_text = {}
+local show_rename_folder_popup = false
+local rename_folder_path = nil
+local rename_folder_new_name = ""
+local show_create_folder_popup = false
+local new_folder_for_plugin = ""
+local new_folder_name_input = ""
 
 screenshot_search_results = screenshot_search_results or {}
 
@@ -265,6 +282,8 @@ local function SetDefaultConfig()
         use_masonry_layout = false,
         show_favorites_on_top = true,
         open_floating_after_adding = false, 
+        custom_folders = {},
+        hide_custom_dropdown = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -298,6 +317,191 @@ local function ResetConfig()
     config = SetDefaultConfig()
     SaveConfig()
 end
+
+
+-- CUSTOM FOLDERS HELPERS
+local function IsPluginArray(folder_content)
+    if type(folder_content) ~= "table" then return false end
+    if next(folder_content) == nil then return true end -- lege array is ook een plugin array
+    
+    -- Check of alle items strings zijn (plugin namen)
+    for i, item in ipairs(folder_content) do
+        if type(item) ~= "string" then return false end
+    end
+    
+    -- Check of er geen named keys zijn (alleen numerieke indices)
+    for key, value in pairs(folder_content) do
+        if type(key) ~= "number" then return false end
+    end
+    
+    return true
+end
+
+local function IsSubfolderStructure(folder_content)
+    if type(folder_content) ~= "table" then return false end
+    if next(folder_content) == nil then return false end -- lege table is geen subfolder
+    
+    -- Check of er named keys zijn (folder namen)
+    for key, value in pairs(folder_content) do
+        if type(key) ~= "string" then return false end
+        if type(value) ~= "table" then return false end
+    end
+    
+    return true
+end
+
+local function GetPluginsFromCustomFolder(folder_path)
+    local parts = {}
+    for part in folder_path:gmatch("[^/]+") do
+        table.insert(parts, part)
+    end
+    
+    local current = config.custom_folders
+    for _, part in ipairs(parts) do
+        if current[part] then
+            current = current[part]
+        else
+            return {}
+        end
+    end
+    
+    if IsPluginArray(current) then
+        return current
+    else
+        return {}
+    end
+end
+
+local function CreateNestedFolder(folder_path, is_subfolder_of)
+    local parts = {}
+    if is_subfolder_of then
+        for part in is_subfolder_of:gmatch("[^/]+") do
+            table.insert(parts, part)
+        end
+    end
+    for part in folder_path:gmatch("[^/]+") do
+        table.insert(parts, part)
+    end
+    
+    local current = config.custom_folders
+    for i, part in ipairs(parts) do
+        if i == #parts then
+            -- Laatste deel: maak plugin array
+            current[part] = current[part] or {}
+        else
+            -- Tussenliggende delen: maak subfolder structuur
+            current[part] = current[part] or {}
+            current = current[part]
+        end
+    end
+end
+
+local function SaveCustomFolders()
+    -- Converteer de nested structure naar een JSON-vriendelijke format
+    local function convertForJSON(folders)
+        local result = {}
+        for folder_name, folder_content in pairs(folders) do
+            if IsPluginArray(folder_content) then
+                -- Plugin array - converteer naar object met type indicator
+                result[folder_name] = {
+                    _type = "plugins",
+                    plugins = folder_content
+                }
+            elseif IsSubfolderStructure(folder_content) then
+                -- Subfolder structure - recursief converteren
+                result[folder_name] = {
+                    _type = "folder",
+                    subfolders = convertForJSON(folder_content)
+                }
+            end
+        end
+        return result
+    end
+    
+    local json_data = convertForJSON(config.custom_folders)
+    
+    local success, json_string = pcall(json.encode, json_data)
+    
+    if success then
+        local file = io.open(script_path .. "custom_folders.json", "w")
+        if file then
+            file:write(json_string)
+            file:close()
+        else
+            r.ShowConsoleMsg("Error: Could not open custom_folders.json for writing\n")
+        end
+    else
+        r.ShowConsoleMsg("Error: Could not encode custom folders to JSON: " .. tostring(json_string) .. "\n")
+    end
+end
+
+local function LoadCustomFolders()
+    local file = io.open(script_path .. "custom_folders.json", "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        
+        -- Check if content is empty or invalid
+        if not content or content == "" or content:match("^%s*$") then
+            -- Empty or whitespace-only file, initialize with empty structure
+            config.custom_folders = {}
+            return
+        end
+        
+        local success, loaded_data = pcall(json.decode, content)
+        
+        if success and loaded_data and type(loaded_data) == "table" then
+            -- Converteer terug van JSON format naar runtime format
+            local function convertFromJSON(data)
+                local result = {}
+                for folder_name, folder_data in pairs(data) do
+                    if type(folder_data) == "table" then
+                        if folder_data._type == "plugins" then
+                            -- Plugin array
+                            result[folder_name] = folder_data.plugins or {}
+                        elseif folder_data._type == "folder" then
+                            -- Subfolder structure
+                            result[folder_name] = convertFromJSON(folder_data.subfolders or {})
+                        else
+                            -- Backward compatibility - oude format
+                            if folder_data[1] and type(folder_data[1]) == "string" then
+                                -- Het is een plugin array
+                                result[folder_name] = folder_data
+                            else
+                                -- Het is een subfolder structure
+                                result[folder_name] = convertFromJSON(folder_data)
+                            end
+                        end
+                    end
+                end
+                return result
+            end
+            
+            config.custom_folders = convertFromJSON(loaded_data)
+        else
+            -- JSON decode failed, initialize with empty structure
+            r.ShowConsoleMsg("Warning: Could not parse custom_folders.json, initializing with empty folders\n")
+            config.custom_folders = {}
+            
+            -- Optionally backup the corrupt file
+            local backup_path = script_path .. "custom_folders_backup.json"
+            local backup_file = io.open(backup_path, "w")
+            if backup_file then
+                backup_file:write(content)
+                backup_file:close()
+                r.ShowConsoleMsg("Backup of corrupt file saved as: " .. backup_path .. "\n")
+            end
+        end
+    else
+        -- File doesn't exist, initialize with empty structure
+        config.custom_folders = {}
+    end
+end
+
+
+
+
+LoadCustomFolders()
 ----------------------------------------------------------------------------------
 -- FONTS
 local TKFXfonts = { 
@@ -385,6 +589,8 @@ local function EnsureFileExists(filepath)
 end
 
 EnsureFileExists(script_path .. "tknotes.txt")
+
+
 
 local function load_projects_info()
     local file = io.open(PROJECTS_INFO_FILE, "r")
@@ -836,7 +1042,20 @@ local function ShowPluginManagerTab()
 end
 
 function GetPluginsForFolder(folder_name)
- 
+    -- Check if it's a custom folder (kan ook een pad zijn zoals "Drums/Kick")
+    if folder_name and folder_name:find("/") then
+        -- Het is een subfolder pad
+        return GetPluginsFromCustomFolder(folder_name)
+    elseif config.custom_folders[folder_name] then
+        local folder_content = config.custom_folders[folder_name]
+        if IsPluginArray(folder_content) then
+            return folder_content
+        else
+            return {} -- Het is een parent folder met subfolders
+        end
+    end
+    
+    -- Bestaande code voor normale folders...
     local filtered_plugins = {}
     for i = 1, #CAT_TEST do
         if CAT_TEST[i].name == "FOLDERS" then
@@ -1449,12 +1668,356 @@ local function ShowConfigWindow()
             ShowPluginManagerTab()
             r.ImGui_EndTabItem(ctx)
         end
-        r.ImGui_EndTabBar(ctx)
-        end
-        r.ImGui_PopStyleColor(ctx, 2)
-        r.ImGui_End(ctx)
+
+if r.ImGui_BeginTabItem(ctx, "CUSTOM FOLDERS") then
+    r.ImGui_Text(ctx, "Manage Custom Plugin Folders:")
+    r.ImGui_Separator(ctx)
+    
+    -- Add new folder section
+    r.ImGui_Text(ctx, "Add New Folder:")
+    r.ImGui_PushItemWidth(ctx, 200)
+    local changed, new_folder_name = r.ImGui_InputTextWithHint(ctx, "##NewFolderName", "Enter folder name", new_custom_folder_name or "")
+    if changed then
+        new_custom_folder_name = new_folder_name
     end
-    return config_open
+    r.ImGui_PopItemWidth(ctx)
+    
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Add Folder") then
+        if new_custom_folder_name and new_custom_folder_name ~= "" then
+            CreateNestedFolder(new_custom_folder_name, current_folder_context)
+            SaveCustomFolders()
+            new_custom_folder_name = ""
+        end
+    end
+    
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Add Subfolder") then
+        if new_custom_folder_name and new_custom_folder_name ~= "" and current_folder_context then
+            CreateNestedFolder(new_custom_folder_name, current_folder_context)
+            SaveCustomFolders()
+            new_custom_folder_name = ""
+        end
+    end
+    
+    -- Breadcrumb navigation
+    if current_folder_context then
+        r.ImGui_Text(ctx, "Current: " .. current_folder_context)
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Back to Root") then
+            current_folder_context = nil
+        end
+    end
+    
+    r.ImGui_Separator(ctx)
+    
+    -- Recursive folder display function
+    local function DisplayFolderTree(folders, path_prefix)
+        path_prefix = path_prefix or ""
+        
+        for folder_name, folder_content in pairs(folders) do
+            local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+            r.ImGui_PushID(ctx, full_path)
+            
+            if IsPluginArray(folder_content) then
+                -- Plugin folder
+                if r.ImGui_CollapsingHeader(ctx, folder_name .. " (" .. #folder_content .. " plugins)") then
+                    r.ImGui_Indent(ctx, 20)
+                    
+                    -- Set context for adding plugins
+                    if r.ImGui_Button(ctx, "Set as Context##" .. full_path) then
+                        current_folder_context = full_path
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Browse##" .. full_path) then
+                        selected_custom_folder_for_browse = full_path
+                        show_plugin_browser = true
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Rename##" .. full_path) then
+                        rename_folder_path = full_path
+                        rename_folder_new_name = folder_name
+                        show_rename_folder_popup = true
+                    end
+                    
+                    -- PLUGIN TOEVOEG SECTIE - HANDMATIG
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_Text(ctx, "Add Plugin:")
+                    r.ImGui_PushItemWidth(ctx, 250)
+                    if not plugin_input_text then
+                        plugin_input_text = {}
+                    end
+                    if not plugin_input_text[full_path] then
+                        plugin_input_text[full_path] = ""
+                    end
+                    local plugin_changed, new_plugin = r.ImGui_InputTextWithHint(ctx, "##AddPlugin" .. full_path, "Enter plugin name", plugin_input_text[full_path])
+                    if plugin_changed then
+                        plugin_input_text[full_path] = new_plugin
+                    end
+                    r.ImGui_PopItemWidth(ctx)
+
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Add##" .. full_path) then
+                        if plugin_input_text[full_path] and plugin_input_text[full_path] ~= "" then
+                            -- Check if plugin exists in PLUGIN_LIST
+                            local plugin_exists = false
+                            local exact_plugin_name = nil
+                            for _, existing_plugin in ipairs(PLUGIN_LIST) do
+                                if existing_plugin:lower():find(plugin_input_text[full_path]:lower(), 1, true) then
+                                    plugin_exists = true
+                                    exact_plugin_name = existing_plugin
+                                    break
+                                end
+                            end
+                            
+                            if plugin_exists then
+                                if not table.contains(folder_content, exact_plugin_name) then
+                                    table.insert(folder_content, exact_plugin_name)
+                                    SaveCustomFolders()
+                                    plugin_input_text[full_path] = ""  -- Clear input after successful add
+                                else
+                                    r.ShowMessageBox("Plugin already in folder!", "Info", 0)
+                                end
+                            else
+                                r.ShowMessageBox("Plugin not found in installed plugins!\nTry typing part of the plugin name.", "Error", 0)
+                            end
+                        end
+                    end
+                    
+                    r.ImGui_Separator(ctx)
+                    
+                    -- List plugins
+                    for i, plugin in ipairs(folder_content) do
+                        r.ImGui_Text(ctx, plugin)
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, r.ImGui_GetWindowWidth(ctx) - 80)
+                        if r.ImGui_Button(ctx, "Remove##" .. i .. full_path) then
+                            table.remove(folder_content, i)
+                            SaveCustomFolders()
+                        end
+                    end
+                    
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
+                    if r.ImGui_Button(ctx, "Delete Folder##" .. full_path) then
+                        -- Remove from nested structure
+                        local parts = {}
+                        for part in full_path:gmatch("[^/]+") do
+                            table.insert(parts, part)
+                        end
+                        
+                        local current = config.custom_folders
+                        for i = 1, #parts - 1 do
+                            current = current[parts[i]]
+                        end
+                        current[parts[#parts]] = nil
+                        
+                        SaveCustomFolders()
+                    end
+                    r.ImGui_PopStyleColor(ctx)
+                    
+                    r.ImGui_Unindent(ctx, 20)
+                end
+                
+            elseif IsSubfolderStructure(folder_content) then
+                -- Parent folder with subfolders
+                if r.ImGui_CollapsingHeader(ctx, folder_name .. " (folder)") then
+                    r.ImGui_Indent(ctx, 20)
+                    
+                    if r.ImGui_Button(ctx, "Set as Context##" .. full_path) then
+                        current_folder_context = full_path
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Rename##" .. full_path) then
+                        rename_folder_path = full_path
+                        rename_folder_new_name = folder_name
+                        show_rename_folder_popup = true
+                    end
+                    
+                    r.ImGui_Separator(ctx)
+                    
+                    -- Recursively display subfolders
+                    DisplayFolderTree(folder_content, full_path)
+                    
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
+                    if r.ImGui_Button(ctx, "Delete Folder##" .. full_path) then
+                        local parts = {}
+                        for part in full_path:gmatch("[^/]+") do
+                            table.insert(parts, part)
+                        end
+                        
+                        local current = config.custom_folders
+                        for i = 1, #parts - 1 do
+                            current = current[parts[i]]
+                        end
+                        current[parts[#parts]] = nil
+                        
+                        SaveCustomFolders()
+                    end
+                    r.ImGui_PopStyleColor(ctx)
+                    
+                    r.ImGui_Unindent(ctx, 20)
+                end
+            end
+            
+            r.ImGui_PopID(ctx)
+        end
+    end
+    
+    -- Display the folder tree
+    if r.ImGui_BeginChild(ctx, "CustomFoldersList", -1, -50) then
+        DisplayFolderTree(config.custom_folders)
+        r.ImGui_EndChild(ctx)
+    end
+    
+    -- Rename folder popup
+    if show_rename_folder_popup then
+        r.ImGui_OpenPopup(ctx, "Rename Folder")
+    end
+    
+    if r.ImGui_BeginPopupModal(ctx, "Rename Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Rename folder: " .. (rename_folder_path or ""))
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_PushItemWidth(ctx, 300)
+        local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##RenameFolder", "Enter new name", rename_folder_new_name or "")
+        if changed then
+            rename_folder_new_name = new_name
+        end
+        r.ImGui_PopItemWidth(ctx)
+        
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Rename", 100, 0) then
+            if rename_folder_new_name and rename_folder_new_name ~= "" and rename_folder_path then
+                -- Parse the path
+                local parts = {}
+                for part in rename_folder_path:gmatch("[^/]+") do
+                    table.insert(parts, part)
+                end
+                
+                if #parts > 0 then
+                    -- Navigate to parent
+                    local current = config.custom_folders
+                    for i = 1, #parts - 1 do
+                        current = current[parts[i]]
+                    end
+                    
+                    -- Get the folder content
+                    local old_name = parts[#parts]
+                    local folder_content = current[old_name]
+                    
+                    -- Remove old and add with new name
+                    current[old_name] = nil
+                    current[rename_folder_new_name] = folder_content
+                    
+                    SaveCustomFolders()
+                end
+            end
+            show_rename_folder_popup = false
+            rename_folder_path = nil
+            rename_folder_new_name = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            show_rename_folder_popup = false
+            rename_folder_path = nil
+            rename_folder_new_name = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+    
+    -- Plugin browser popup
+    if show_plugin_browser then
+        r.ImGui_OpenPopup(ctx, "Plugin Browser")
+    end
+    
+    if r.ImGui_BeginPopupModal(ctx, "Plugin Browser", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Select plugins to add to: " .. (selected_custom_folder_for_browse or ""))
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_PushItemWidth(ctx, 300)
+        local search_changed, search_text = r.ImGui_InputTextWithHint(ctx, "##SearchPlugins", "Search plugins...", plugin_search_text or "")
+        if search_changed then
+            plugin_search_text = search_text
+        end
+        r.ImGui_PopItemWidth(ctx)
+        
+        if r.ImGui_BeginChild(ctx, "PluginBrowserList", 400, 300) then
+            for _, plugin in ipairs(PLUGIN_LIST) do
+                if not plugin_search_text or plugin_search_text == "" or 
+                plugin:lower():find(plugin_search_text:lower(), 1, true) then
+                    
+                    -- Check if plugin is already in the folder
+                    local already_in_folder = false
+                    local folder_plugins = GetPluginsFromCustomFolder(selected_custom_folder_for_browse)
+                    if folder_plugins then
+                        already_in_folder = table.contains(folder_plugins, plugin)
+                    end
+                    
+                    if not already_in_folder then
+                        if r.ImGui_Selectable(ctx, plugin) then
+                            -- Add plugin to the custom folder
+                            local parts = {}
+                            for part in selected_custom_folder_for_browse:gmatch("[^/]+") do
+                                table.insert(parts, part)
+                            end
+                            
+                            local current = config.custom_folders
+                            for _, part in ipairs(parts) do
+                                if current[part] then
+                                    current = current[part]
+                                else
+                                    return
+                                end
+                            end
+                            
+                            if IsPluginArray(current) then
+                                table.insert(current, plugin)
+                                SaveCustomFolders()
+                            end
+                        end
+                    else
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                        r.ImGui_Text(ctx, plugin .. " (already added)")
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+                end
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Close", 100, 0) then
+            show_plugin_browser = false
+            selected_custom_folder_for_browse = nil
+            plugin_search_text = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            show_plugin_browser = false
+            selected_custom_folder_for_browse = nil
+            plugin_search_text = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+    
+    r.ImGui_EndTabItem(ctx)
+end
+
+r.ImGui_EndTabBar(ctx)
+end
+
+r.ImGui_PopStyleColor(ctx, 2)
+r.ImGui_End(ctx)
+end
+return config_open
 end
 
 
@@ -2591,6 +3154,7 @@ local function ShowPluginContextMenu(plugin_name, menu_id)
     if not plugin_name or type(plugin_name) ~= "string" then
         return
     end
+    
     if r.ImGui_IsItemClicked(ctx, 1) then
         r.ImGui_OpenPopup(ctx, "PluginContextMenu_" .. menu_id)
     end
@@ -2621,6 +3185,51 @@ local function ShowPluginContextMenu(plugin_name, menu_id)
                 AddToFavorites(plugin_name)
                 GetPluginsForFolder(selected_folder)
                 ClearScreenshotCache()
+            end
+        end
+
+        -- ADD TO CUSTOM FOLDER SECTIE
+        if next(config.custom_folders) then
+            r.ImGui_Separator(ctx)
+            if r.ImGui_BeginMenu(ctx, "Add to Custom Folder") then
+                -- Recursive functie om nested folders te tonen
+                local function ShowCustomFolderMenu(folders, path_prefix)
+                    path_prefix = path_prefix or ""
+                    
+                    for folder_name, folder_content in pairs(folders) do
+                        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+                        
+                        if IsPluginArray(folder_content) then
+                            -- Plugin folder - kan plugin toevoegen
+                            if r.ImGui_MenuItem(ctx, folder_name .. " (" .. #folder_content .. ")") then
+                                -- Check if plugin already exists in folder
+                                if not table.contains(folder_content, plugin_name) then
+                                    table.insert(folder_content, plugin_name)
+                                    SaveCustomFolders()
+                                    r.ShowMessageBox("Plugin added to " .. folder_name, "Success", 0)
+                                else
+                                    r.ShowMessageBox("Plugin already exists in " .. folder_name, "Info", 0)
+                                end
+                            end
+                        elseif IsSubfolderStructure(folder_content) then
+                            -- Parent folder - toon als submenu
+                            if r.ImGui_BeginMenu(ctx, folder_name) then
+                                ShowCustomFolderMenu(folder_content, full_path)
+                                r.ImGui_EndMenu(ctx)
+                            end
+                        end
+                    end
+                end
+                
+                ShowCustomFolderMenu(config.custom_folders)
+                
+                r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "Create New Folder...") then
+                    show_create_folder_popup = true
+                    new_folder_for_plugin = plugin_name
+                end
+                
+                r.ImGui_EndMenu(ctx)
             end
         end
         
@@ -2716,29 +3325,49 @@ local function ShowPluginContextMenu(plugin_name, menu_id)
     end
 end
 
-local function ShowFXContextMenu(plugin, i)
+local function ShowFXContextMenu(plugin, menu_id)
     if r.ImGui_IsItemClicked(ctx, 1) then
-        r.ImGui_OpenPopup(ctx, "FXContextMenu_" .. i)
+        r.ImGui_OpenPopup(ctx, "FXContextMenu_" .. menu_id)
     end
 
-    if r.ImGui_BeginPopup(ctx, "FXContextMenu_" .. i) then
+    if r.ImGui_BeginPopup(ctx, "FXContextMenu_" .. menu_id) then
         local track
         local fx_index
 
+        -- Validatie voor plugin data
+        if not plugin or not plugin.fx_name then
+            r.ImGui_Text(ctx, "Invalid plugin data")
+            r.ImGui_EndPopup(ctx)
+            return
+        end
+
         if selected_folder == "Current Project FX" then
-            track = r.GetTrack(0, plugin.track_number - 1)
-            fx_index = (function()
-                local fx_count = r.TrackFX_GetCount(track)
-                for j = 0, fx_count - 1 do
-                    local retval, fx_name = r.TrackFX_GetFXName(track, j, "")
-                    if retval and fx_name == plugin.fx_name then
-                        return j
-                    end
-                end
-            end)()
+            if plugin.is_master then
+                track = r.GetMasterTrack(0)
+                fx_index = plugin.fx_index
+            else
+                track = r.GetTrack(0, plugin.track_number - 1)
+                fx_index = plugin.fx_index
+            end
         else
             track = TRACK
-            fx_index = r.TrackFX_GetByName(TRACK, plugin.fx_name, false)
+            if track and r.ValidatePtr(track, "MediaTrack*") then
+                fx_index = r.TrackFX_GetByName(track, plugin.fx_name, false)
+            end
+        end
+
+        -- Valideer track voordat we verdergaan
+        if not track or not r.ValidatePtr(track, "MediaTrack*") then
+            r.ImGui_Text(ctx, "No valid track selected")
+            r.ImGui_EndPopup(ctx)
+            return
+        end
+
+        -- Valideer fx_index
+        if not fx_index or fx_index < 0 then
+            r.ImGui_Text(ctx, "Plugin not found on track")
+            r.ImGui_EndPopup(ctx)
+            return
         end
 
         if r.ImGui_MenuItem(ctx, "Delete") then
@@ -2784,10 +3413,54 @@ local function ShowFXContextMenu(plugin, i)
             end
         end
 
+        -- ADD TO CUSTOM FOLDER SECTIE
+        if next(config.custom_folders) then
+            r.ImGui_Separator(ctx)
+            if r.ImGui_BeginMenu(ctx, "Add to Custom Folder") then
+                -- Recursive functie om nested folders te tonen
+                local function ShowCustomFolderMenu(folders, path_prefix)
+                    path_prefix = path_prefix or ""
+                    
+                    for folder_name, folder_content in pairs(folders) do
+                        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+                        
+                        if IsPluginArray(folder_content) then
+                            -- Plugin folder - kan plugin toevoegen
+                            if r.ImGui_MenuItem(ctx, folder_name .. " (" .. #folder_content .. ")") then
+                                -- Check if plugin already exists in folder
+                                if not table.contains(folder_content, fx_name) then
+                                    table.insert(folder_content, fx_name)
+                                    SaveCustomFolders()
+                                    r.ShowMessageBox("Plugin added to " .. folder_name, "Success", 0)
+                                else
+                                    r.ShowMessageBox("Plugin already exists in " .. folder_name, "Info", 0)
+                                end
+                            end
+                        elseif IsSubfolderStructure(folder_content) then
+                            -- Parent folder - toon als submenu
+                            if r.ImGui_BeginMenu(ctx, folder_name) then
+                                ShowCustomFolderMenu(folder_content, full_path)
+                                r.ImGui_EndMenu(ctx)
+                            end
+                        end
+                    end
+                end
+                
+                ShowCustomFolderMenu(config.custom_folders)
+                
+                r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "Create New Folder...") then
+                    show_create_folder_popup = true
+                    new_folder_for_plugin = fx_name
+                end
+                
+                r.ImGui_EndMenu(ctx)
+            end
+        end
+
         r.ImGui_EndPopup(ctx)
     end
 end
-
 
 local function ShowFolderDropdown()
     if config.screenshot_view_type == 3 then return end
@@ -2914,9 +3587,57 @@ local function ShowFolderDropdown()
     end
 end
 
+local function ShowCustomFolderDropdown()
+    if next(config.custom_folders) then
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushItemWidth(ctx, 110)
+        r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
+        
+        if r.ImGui_BeginCombo(ctx, "##CustomFolderDropdown", "Custom") then
+            -- Recursive functie om nested folders te tonen
+            local function ShowNestedFolders(folders, prefix)
+                for folder_name, folder_content in pairs(folders) do
+                    local full_path = prefix == "" and folder_name or (prefix .. "/" .. folder_name)
+                    
+                    if IsPluginArray(folder_content) then
+                        local display_name = prefix == "" and folder_name or ("  " .. folder_name)
+                        if r.ImGui_Selectable(ctx, display_name .. " (" .. #folder_content .. ")", selected_folder == full_path) then
+                            selected_folder = full_path
+                            show_media_browser = false
+                            show_sends_window = false
+                            show_action_browser = false
+                            screenshot_search_results = {}
+                            for _, plugin in ipairs(folder_content) do
+                                table.insert(screenshot_search_results, {name = plugin})
+                            end
+                            ClearScreenshotCache()
+                        end
+                    elseif IsSubfolderStructure(folder_content) then
+                        -- Toon parent folder header
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                        r.ImGui_Text(ctx, (prefix == "" and "" or "  ") .. folder_name .. " >")
+                        r.ImGui_PopStyleColor(ctx)
+                        
+                        -- Recursief tonen van subfolders
+                        ShowNestedFolders(folder_content, full_path)
+                    end
+                end
+            end
+            
+            ShowNestedFolders(config.custom_folders, "")
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_PopItemWidth(ctx)
+    end
+end
+
 local function ShowScreenshotControls()
     r.ImGui_SameLine(ctx)
     ShowFolderDropdown()
+    if not config.hide_custom_dropdown then  -- Voeg deze check toe
+        ShowCustomFolderDropdown()
+    end
+    
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local button_width = 20
     local button_height = 20
@@ -2953,6 +3674,13 @@ local function ShowScreenshotControls()
             end
             SaveConfig()
         end
+        
+        -- NIEUWE OPTIE VOOR CUSTOM DROPDOWN
+        if r.ImGui_MenuItem(ctx, config.hide_custom_dropdown and "Show Custom Dropdown" or "Hide Custom Dropdown") then
+            config.hide_custom_dropdown = not config.hide_custom_dropdown
+            SaveConfig()
+        end
+        
         if r.ImGui_MenuItem(ctx, config.show_name_in_screenshot_window and "Hide Names" or "Show Names") then
             config.show_name_in_screenshot_window = not config.show_name_in_screenshot_window
             SaveConfig()
@@ -2960,7 +3688,7 @@ local function ShowScreenshotControls()
 
         r.ImGui_Separator(ctx)
         
-        -- Screenshot size settings
+        -- Alle andere bestaande menu items...
         if r.ImGui_MenuItem(ctx, "Use Global Size", "", config.use_global_screenshot_size) then
             config.use_global_screenshot_size = not config.use_global_screenshot_size
             SaveConfig()
@@ -3002,6 +3730,7 @@ local function ShowScreenshotControls()
                 end
             end
         end
+        
         if r.ImGui_MenuItem(ctx, config.use_masonry_layout and "Normal Layout" or "Masonry Layout") then
             config.use_masonry_layout = not config.use_masonry_layout
             SaveConfig()
@@ -3011,12 +3740,12 @@ local function ShowScreenshotControls()
             config.compact_screenshots = not config.compact_screenshots
             SaveConfig()
         end
+        
         if r.ImGui_Checkbox(ctx, "Paginering Browser Panel", config.use_pagination) then
             config.use_pagination = not config.use_pagination 
             SaveConfig()           
-         end   
+        end   
         
-
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, config.show_browser_panel and "Hide Browser Panel" or "Show Browser Panel") then
             config.show_browser_panel = not config.show_browser_panel
@@ -3393,6 +4122,61 @@ local function ItemMatchesSearch(item_name, search_term)
     return item_name:lower():find(search_term:lower(), 1, true)
 end
 
+-- CUSTOM FOLDERS (NESTED)
+local function DisplayCustomFoldersInBrowser(folders, path_prefix)
+    path_prefix = path_prefix or ""
+    
+    for folder_name, folder_content in pairs(folders) do
+        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+        
+        if IsPluginArray(folder_content) then
+
+            if r.ImGui_Selectable(ctx, folder_name:upper()) then
+                selected_folder = full_path
+                show_media_browser = false
+                show_sends_window = false
+                show_action_browser = false
+                screenshot_search_results = {}
+                for _, plugin in ipairs(folder_content) do
+                    if plugin:lower():find(browser_search_term:lower(), 1, true) then
+                        table.insert(screenshot_search_results, {name = plugin})
+                    end
+                end
+                ClearScreenshotCache()
+            end
+
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                custom_folders_open[full_path] = not custom_folders_open[full_path]
+            end
+            
+            if custom_folders_open[full_path] then
+                r.ImGui_Indent(ctx, 1)
+                for i, plugin in ipairs(folder_content) do
+                    if ItemMatchesSearch(plugin, browser_search_term) then
+                        if r.ImGui_Selectable(ctx, plugin) then
+                            selected_folder = full_path
+                            screenshot_search_results = {{name = plugin}}
+                            ClearScreenshotCache()
+                        end
+                        ShowPluginContextMenu(plugin, "custom_" .. full_path .. "_" .. i)
+                    end
+                end
+                r.ImGui_Unindent(ctx, 1)
+            end
+            
+        elseif IsSubfolderStructure(folder_content) then
+            if r.ImGui_TreeNode(ctx, folder_name:upper()) then
+                r.ImGui_Indent(ctx, 1)
+                DisplayCustomFoldersInBrowser(folder_content, full_path)
+                r.ImGui_Unindent(ctx, 1)
+                r.ImGui_TreePop(ctx)
+            end
+        end
+    end
+end
+
+
+
 local function ShowBrowserPanel()
     if not config.show_browser_panel then return end
     
@@ -3450,6 +4234,9 @@ local function ShowBrowserPanel()
         end
         r.ImGui_Unindent(ctx, 10)
     end
+
+-- CUSTOM FOLDERS
+DisplayCustomFoldersInBrowser(config.custom_folders)
     
 -- CURRENT TRACK FX
 r.ImGui_Selectable(ctx, "CURRENT TRACK FX")
@@ -3957,7 +4744,7 @@ local function DrawMasonryLayout(screenshots)
                     if masonry_clicked then
                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                         if target_track then
-                            r.TrackFX_AddByName(target_track, fx.name, false, -1000)
+                            r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
                             LAST_USED_FX = fx.name
                             
                             if config.close_after_adding_fx then
@@ -3966,165 +4753,15 @@ local function DrawMasonryLayout(screenshots)
                         end
                     end
                     
-                    if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
-                        r.ImGui_OpenPopup(ctx, "ScreenshotPluginMenu_" .. i)
+                    if selected_folder == "Current Track FX" then
+                        ShowFXContextMenu({
+                            fx_name = fx.name,
+                            track_number = TRACK and r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") or 0,
+                            fx_index = fx.fx_index
+                        }, "masonry_track_" .. i)
+                    else
+                        ShowPluginContextMenu(fx.name, "masonry_" .. i)
                     end
-                    
-                    if r.ImGui_BeginPopup(ctx, "ScreenshotPluginMenu_" .. i) then
-                        if selected_folder == "Current Track FX" then
-                            -- Gebruik fx_index uit masonry data voor Current Track FX
-                            if fx.fx_index then
-                                if r.ImGui_MenuItem(ctx, "Delete") then
-                                    r.TrackFX_Delete(TRACK, fx.fx_index)
-                                end
-                                
-                                if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
-                                    local track_count = r.CountTracks(0)
-                                    for j = 0, track_count - 1 do
-                                        local target_track = r.GetTrack(0, j)
-                                        if target_track ~= TRACK then
-                                            r.TrackFX_CopyToTrack(TRACK, fx.fx_index, target_track, r.TrackFX_GetCount(target_track), false)
-                                        end
-                                    end
-                                end
-                                
-                                if r.ImGui_MenuItem(ctx, "Copy Plugin") then
-                                    copied_plugin = {track = TRACK, index = fx.fx_index}
-                                end
-                                
-                                if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
-                                    if copied_plugin then
-                                        local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
-                                        r.TrackFX_AddByName(TRACK, orig_name, false, -1000)
-                                    end
-                                end
-                                
-                                local is_enabled = r.TrackFX_GetEnabled(TRACK, fx.fx_index)
-                                if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
-                                    r.TrackFX_SetEnabled(TRACK, fx.fx_index, not is_enabled)
-                                end
-                                
-                                if table.contains(favorite_plugins, fx.name) then
-                                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                                        RemoveFromFavorites(fx.name)
-                                    end
-                                else
-                                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                                        AddToFavorites(fx.name)
-                                    end
-                                end
-                            end
-                        else
-                            -- Voor andere folders, gebruik de bestaande context menu code
-                            if r.ImGui_MenuItem(ctx, "Make Screenshot") then
-                                MakeScreenshot(fx.name, nil, true)
-                            end
-                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                                    AddPluginToSelectedTracks(fx.name)
-                                end
-                                if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                                    AddPluginToAllTracks(fx.name)
-                                end
-                            end
-                            if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                                AddToFavorites(fx.name)
-                            end
-                            if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                                RemoveFromFavorites(fx.name)
-                            end
-                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                if r.ImGui_MenuItem(ctx, "Add to new track as send") then
-                                    local track_idx = r.CountTracks(0)
-                                    r.InsertTrackAtIndex(track_idx, true)
-                                    local new_track = r.GetTrack(0, track_idx)
-                                    
-                                    if config.create_sends_folder then
-                                        -- Zoek bestaande SEND TRACK folder of maak nieuwe
-                                        local folder_idx = -1
-                                        for k = 0, track_idx - 1 do
-                                            local track = r.GetTrack(0, k)
-                                            local _, name = r.GetTrackName(track)
-                                            if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                                                folder_idx = k
-                                                break
-                                            end
-                                        end
-                                        
-                                        if folder_idx == -1 then
-                                            -- Maak nieuwe folder
-                                            r.InsertTrackAtIndex(track_idx, true)
-                                            local folder_track = r.GetTrack(0, track_idx)
-                                            r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
-                                            r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
-                                            folder_idx = track_idx
-                                            track_idx = track_idx + 1
-                                            new_track = r.GetTrack(0, track_idx)
-                                        else
-                                            -- Pas folder depth aan van huidige laatste track in folder
-                                            local last_track_in_folder
-                                            for k = folder_idx + 1, track_idx - 1 do
-                                                local track = r.GetTrack(0, k)
-                                                if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
-                                                    last_track_in_folder = track
-                                                end
-                                            end
-                                            if last_track_in_folder then
-                                                r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
-                                            end
-                                        end
-                                        
-                                        -- Zet nieuwe track als laatste in de folder
-                                        r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
-                                    end
-                                    
-                                    r.TrackFX_AddByName(new_track, fx.name, false, -1000)
-                                    r.CreateTrackSend(TRACK, new_track)
-                                    r.GetSetMediaTrackInfo_String(new_track, "P_NAME", fx.name .. " Send", true)
-                                end
-                            end
-                                                        
-                            if r.ImGui_MenuItem(ctx, "Add with Multi-Output Setup") then
-                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    r.TrackFX_AddByName(TRACK, fx.name, false, -1000)
-                                    
-                                    local num_outputs = tonumber(fx.name:match("%((%d+)%s+out%)")) or 0
-                                    local num_receives = math.floor(num_outputs / 2) - 1
-                                    
-                                    r.SetMediaTrackInfo_Value(TRACK, "I_NCHAN", num_outputs)
-                                    
-                                    for k = 1, num_receives do
-                                        local track_idx = r.CountTracks(0)
-                                        r.InsertTrackAtIndex(track_idx, true)
-                                        local new_track = r.GetTrack(0, track_idx)
-                                        
-                                        r.CreateTrackSend(TRACK, new_track)
-                                        local send_idx = r.GetTrackNumSends(TRACK, 0) - 1
-                                        
-                                        r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_SRCCHAN", k*2)
-                                        r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_DSTCHAN", 0)
-                                        r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_SENDMODE", 3)
-                                        r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_MIDIFLAGS", 0)
-                                        
-                                        local output_num = (k * 2) + 1
-                                        r.GetSetMediaTrackInfo_String(new_track, "P_NAME", fx.name .. " Out " .. output_num .. "-" .. (output_num + 1), true)
-                                    end
-                                end
-                            end
-                            if config.hidden_names[fx.name] then
-                                if r.ImGui_MenuItem(ctx, "Show Name") then
-                                    config.hidden_names[fx.name] = nil
-                                    SaveConfig()
-                                end
-                            else
-                                if r.ImGui_MenuItem(ctx, "Hide Name") then
-                                    config.hidden_names[fx.name] = true
-                                    SaveConfig()
-                                end
-                            end
-                        end
-                        r.ImGui_EndPopup(ctx)
-                    end  
                     
                     if config.show_name_in_screenshot_window and not config.hidden_names[fx.name] then
                         local max_name_length = 20  -- Maximum aantal karakters
@@ -5190,51 +5827,12 @@ local function ShowScreenshotWindow()
                                                 end
                                             end
 
-                                            -- Context menu voor Current Project FX
-                                            if r.ImGui_IsItemClicked(ctx, 1) then
-                                                r.ImGui_OpenPopup(ctx, "ProjectFXMenu_" .. i)
-                                            end
-
-                                            if r.ImGui_BeginPopup(ctx, "ProjectFXMenu_" .. i) then
-                                                if r.ImGui_MenuItem(ctx, "Delete") then
-                                                    if plugin.is_master then
-                                                        local master_track = r.GetMasterTrack(0)
-                                                        if plugin.fx_index then
-                                                            r.TrackFX_Delete(master_track, plugin.fx_index)
-                                                        end
-                                                    else
-                                                        local track = r.GetTrack(0, plugin.track_number - 1)
-                                                        if track and r.ValidatePtr(track, "MediaTrack*") and plugin.fx_index then
-                                                            r.TrackFX_Delete(track, plugin.fx_index)
-                                                        end
-                                                    end
-                                                end
-
-                                                if r.ImGui_MenuItem(ctx, "Copy Plugin") then
-                                                    if plugin.is_master then
-                                                        local master_track = r.GetMasterTrack(0)
-                                                        if plugin.fx_index then
-                                                            copied_plugin = {track = master_track, index = plugin.fx_index}
-                                                        end
-                                                    else
-                                                        local track = r.GetTrack(0, plugin.track_number - 1)
-                                                        if track and r.ValidatePtr(track, "MediaTrack*") and plugin.fx_index then
-                                                            copied_plugin = {track = track, index = plugin.fx_index}
-                                                        end
-                                                    end
-                                                end
-
-                                                if table.contains(favorite_plugins, plugin.fx_name) then
-                                                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                                                        RemoveFromFavorites(plugin.fx_name)
-                                                    end
-                                                else
-                                                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                                                        AddToFavorites(plugin.fx_name)
-                                                    end
-                                                end
-                                                r.ImGui_EndPopup(ctx)
-                                            end          
+ShowFXContextMenu({
+    fx_name = plugin.fx_name,
+    track_number = plugin.track_number,
+    fx_index = plugin.fx_index,
+    is_master = plugin.is_master
+}, "current_project_fx_" .. i)         
                                                 if config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] then
                                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                                     r.ImGui_Text(ctx, plugin.fx_name)
@@ -5433,7 +6031,7 @@ local function ShowScreenshotWindow()
                                             if folder_clicked then
                                                 local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                                 if target_track then
-                                                    local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000)
+                                                    local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
                                                     LAST_USED_FX = plugin_name
                                                     
                                                     -- OPEN FLOATING ALS OPTIE ENABLED IS
@@ -5554,7 +6152,7 @@ local function ShowScreenshotWindow()
                                     if search_clicked then
                                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                         if target_track then
-                                            local fx_index = r.TrackFX_AddByName(target_track, fx.name, false, -1000)
+                                            local fx_index = r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
                                             LAST_USED_FX = fx.name
                                             
                                             -- OPEN FLOATING ALS OPTIE ENABLED IS
@@ -6215,100 +6813,7 @@ local function DrawItems(tbl, main_cat_name)
                             is_screenshot_visible = true
                         end
                        
-                        if r.ImGui_IsItemClicked(ctx, 1) then
-                            r.ImGui_OpenPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. plugin.index)
-                        end
-                   
-                        if r.ImGui_BeginPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. plugin.index) then
-                            if r.ImGui_MenuItem(ctx, "Make Screenshot") then
-                                MakeScreenshot(plugin.name, nil, true)
-                            end
-                           
-                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                                    AddPluginToSelectedTracks(plugin.name, false)
-                                end
-                                if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                                    AddPluginToAllTracks(plugin.name, false)
-                                end
-                            end
-                       
-                            -- Vervang de huidige favorites optie code met:
-                            local is_favorite = table.contains(favorite_plugins, plugin.name)
-                            if is_favorite then
-                                if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                                    RemoveFromFavorites(plugin.name)
-                                    GetPluginsForFolder(selected_folder)
-                                end
-                            else
-                                if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                                    AddToFavorites(plugin.name)
-                                    GetPluginsForFolder(selected_folder)
-                                end
-                            end
-
-                       
-                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                if r.ImGui_MenuItem(ctx, "Add to new track as send") then
-                                    local track_idx = r.CountTracks(0)
-                                    r.InsertTrackAtIndex(track_idx, true)
-                                    local new_track = r.GetTrack(0, track_idx)
-                               
-                                    if config.create_sends_folder then
-                                        local folder_idx = -1
-                                        for k = 0, track_idx - 1 do
-                                            local track = r.GetTrack(0, k)
-                                            local _, name = r.GetTrackName(track)
-                                            if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                                                folder_idx = k
-                                                break
-                                            end
-                                        end
-                                       
-                                        if folder_idx == -1 then
-                                            r.InsertTrackAtIndex(track_idx, true)
-                                            local folder_track = r.GetTrack(0, track_idx)
-                                            r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
-                                            r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
-                                            folder_idx = track_idx
-                                            track_idx = track_idx + 1
-                                            new_track = r.GetTrack(0, track_idx)
-                                        else
-                                            local last_track_in_folder
-                                            for k = folder_idx + 1, track_idx - 1 do
-                                                local track = r.GetTrack(0, k)
-                                                if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
-                                                    last_track_in_folder = track
-                                                end
-                                            end
-                                            if last_track_in_folder then
-                                                r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
-                                            end
-                                        end
-                                       
-                                        r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
-                                    end
-                                   
-                                    r.TrackFX_AddByName(new_track, plugin.name, false, -1000)
-                                    r.CreateTrackSend(TRACK, new_track)
-                                    r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin.name .. " Send", true)
-                                end
-                            end
-                       
-                            if config.hidden_names[plugin.name] then
-                                if r.ImGui_MenuItem(ctx, "Show Name") then
-                                    config.hidden_names[plugin.name] = nil
-                                    SaveConfig()
-                                end
-                            else
-                                if r.ImGui_MenuItem(ctx, "Hide Name") then
-                                    config.hidden_names[plugin.name] = true
-                                    SaveConfig()
-                                end
-                            end
-                           
-                            r.ImGui_EndPopup(ctx)
-                        end
+                        ShowPluginContextMenu(plugin.name, "folders_" .. i .. "_" .. plugin.index)
                     end
                    
                     if config.show_favorites_on_top and _ == 1 and #favorites > 0 and #regular > 0 then
@@ -6354,101 +6859,7 @@ local function DrawItems(tbl, main_cat_name)
                                 is_screenshot_visible = true
                             end
                            
-                            if r.ImGui_IsItemClicked(ctx, 1) then
-                                r.ImGui_OpenPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j)
-                            end
-                           
-                            if r.ImGui_BeginPopup(ctx, "DrawItemsPluginMenu_" .. i .. "_" .. j) then
-                                if r.ImGui_MenuItem(ctx, "Make Screenshot") then
-                                    MakeScreenshot(tbl[i].fx[j], nil, true)
-                                end
-                               
-                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                                        AddPluginToSelectedTracks(tbl[i].fx[j], false)
-                                    end
-                                    if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                                        AddPluginToAllTracks(tbl[i].fx[j], false)
-                                    end
-                                end
-                               
-                            
-                                local is_favorite = table.contains(favorite_plugins, tbl[i].fx[j])
-                                if is_favorite then
-                                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                                        RemoveFromFavorites(tbl[i].fx[j])
-                                        GetPluginsForFolder(selected_folder)
-                                    end
-                                else
-                                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                                        AddToFavorites(tbl[i].fx[j])
-                                        GetPluginsForFolder(selected_folder)
-                                    end
-                                end
-
-
-                               
-                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    if r.ImGui_MenuItem(ctx, "Add to new track as send") then
-                                        local track_idx = r.CountTracks(0)
-                                        r.InsertTrackAtIndex(track_idx, true)
-                                        local new_track = r.GetTrack(0, track_idx)
-                                       
-                                        if config.create_sends_folder then
-                                            local folder_idx = -1
-                                            for k = 0, track_idx - 1 do
-                                                local track = r.GetTrack(0, k)
-                                                local _, name = r.GetTrackName(track)
-                                                if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                                                    folder_idx = k
-                                                    break
-                                                end
-                                            end
-                                           
-                                            if folder_idx == -1 then
-                                                r.InsertTrackAtIndex(track_idx, true)
-                                                local folder_track = r.GetTrack(0, track_idx)
-                                                r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
-                                                r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
-                                                folder_idx = track_idx
-                                                track_idx = track_idx + 1
-                                                new_track = r.GetTrack(0, track_idx)
-                                            else
-                                                local last_track_in_folder
-                                                for k = folder_idx + 1, track_idx - 1 do
-                                                    local track = r.GetTrack(0, k)
-                                                    if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
-                                                        last_track_in_folder = track
-                                                    end
-                                                end
-                                                if last_track_in_folder then
-                                                    r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
-                                                end
-                                            end
-                                           
-                                            r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
-                                        end
-                                       
-                                        r.TrackFX_AddByName(new_track, tbl[i].fx[j], false, -1000)
-                                        r.CreateTrackSend(TRACK, new_track)
-                                        r.GetSetMediaTrackInfo_String(new_track, "P_NAME", tbl[i].fx[j] .. " Send", true)
-                                    end
-                                end
-                               
-                                if config.hidden_names[tbl[i].fx[j]] then
-                                    if r.ImGui_MenuItem(ctx, "Show Name") then
-                                        config.hidden_names[tbl[i].fx[j]] = nil
-                                        SaveConfig()
-                                    end
-                                else
-                                    if r.ImGui_MenuItem(ctx, "Hide Name") then
-                                        config.hidden_names[tbl[i].fx[j]] = true
-                                        SaveConfig()
-                                    end
-                                end
-                               
-                                r.ImGui_EndPopup(ctx)
-                            end
+                            ShowPluginContextMenu(tbl[i].fx[j], "category_" .. i .. "_" .. j)
                         end
                     end
                 end
@@ -6500,90 +6911,7 @@ local function DrawFavorites()
         end
 
         
-        if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtsklik
-            r.ImGui_OpenPopup(ctx, "FavoritePluginMenu_" .. i)
-        end
-        if r.ImGui_BeginPopup(ctx, "FavoritePluginMenu_" .. i) then
-            if r.ImGui_MenuItem(ctx, "Make Screenshot") then
-                MakeScreenshot(fav, nil, true)
-            end
-            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                    AddPluginToSelectedTracks(fav, false)
-                end
-                if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                    AddPluginToAllTracks(fav, false)
-                end
-            end
-            if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                RemoveFromFavorites(fav)
-            end
-            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                if r.ImGui_MenuItem(ctx, "Add to new track as send") then
-                    local track_idx = r.CountTracks(0)
-                    r.InsertTrackAtIndex(track_idx, true)
-                    local new_track = r.GetTrack(0, track_idx)
-                    
-                    if config.create_sends_folder then
-                        -- Zoek bestaande SEND TRACK folder of maak nieuwe
-                        local folder_idx = -1
-                        for i = 0, track_idx - 1 do
-                            local track = r.GetTrack(0, i)
-                            local _, name = r.GetTrackName(track)
-                            if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                                folder_idx = i
-                                break
-                            end
-                        end
-                        
-                        if folder_idx == -1 then
-                            -- Maak nieuwe folder
-                            r.InsertTrackAtIndex(track_idx, true)
-                            local folder_track = r.GetTrack(0, track_idx)
-                            r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
-                            r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
-                            folder_idx = track_idx
-                            track_idx = track_idx + 1
-                            new_track = r.GetTrack(0, track_idx)
-                        else
-                            -- Pas folder depth aan van huidige laatste track in folder
-                            local last_track_in_folder
-                            for i = folder_idx + 1, track_idx - 1 do
-                                local track = r.GetTrack(0, i)
-                                if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
-                                    last_track_in_folder = track
-                                end
-                            end
-                            if last_track_in_folder then
-                                r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
-                            end
-                        end
-                        
-                        -- Zet nieuwe track als laatste in de folder
-                        r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
-                    end
-                    
-                    
-                    -- Gebruik de juiste plugin identifier voor elk menu
-                    r.TrackFX_AddByName(new_track, fav, false, -1000)
-                    r.CreateTrackSend(TRACK, new_track)
-                    r.GetSetMediaTrackInfo_String(new_track, "P_NAME", fav .. " Send", true)
-                end
-            end
-            
-            if config.hidden_names[fav] then
-                if r.ImGui_MenuItem(ctx, "Show Name") then
-                    config.hidden_names[fav] = nil
-                    SaveConfig()
-                end
-            else
-                if r.ImGui_MenuItem(ctx, "Hide Name") then
-                    config.hidden_names[fav] = true
-                    SaveConfig()
-                end
-            end
-            r.ImGui_EndPopup(ctx)
-        end
+        ShowPluginContextMenu(fav, "favorites_" .. i)
     end
     if not r.ImGui_IsWindowHovered(ctx) then
         is_screenshot_visible = false
@@ -7260,7 +7588,8 @@ local function CalculateMenuHeight(config)
     if config.show_video_processor then height = height + 16 end
     if config.show_projects then height = height + 16 end
     if config.show_sends then height = height + 16 end
-    if config.show_action then height = height + 16 end
+    if config.show_actions then height = height + 16 end
+    if next(config.custom_folders) then height = height + 16 end  -- VOEG DEZE REGEL TOE
     if LAST_USED_FX then height = height + 16 end
     return height
 end
@@ -7273,6 +7602,113 @@ local function CalculateBottomSectionHeight(config)
     end
     if not config.hideMeter then height = height + 90 end
     return height
+end
+
+local function DrawCustomFoldersMenu(folders, path_prefix)
+    path_prefix = path_prefix or ""
+    
+    for folder_name, folder_content in pairs(folders) do
+        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+        
+        if IsPluginArray(folder_content) then
+            -- Plugin folder - toon als menu met plugins
+            r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+            r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+            
+            if r.ImGui_BeginMenu(ctx, folder_name .. " (" .. #folder_content .. ")") then
+                -- Toon alle plugins in deze folder
+                local favorites = {}
+                local regular = {}
+                
+                for _, plugin_name in ipairs(folder_content) do
+                    if table.contains(favorite_plugins, plugin_name) then
+                        table.insert(favorites, plugin_name)
+                    else
+                        table.insert(regular, plugin_name)
+                    end
+                end
+                
+                local plugins_to_show = config.show_favorites_on_top and {favorites, regular} or {folder_content}
+                
+                for group_idx, plugin_group in ipairs(plugins_to_show) do
+                    for plugin_idx, plugin_name in ipairs(plugin_group) do
+                        if type(plugin_name) == "string" then -- Zorg ervoor dat het een string is
+                            if r.ImGui_Selectable(ctx, plugin_name .. "##custom_" .. full_path .. "_" .. plugin_idx) then
+                                if ADD_FX_TO_ITEM then
+                                    AddFXToItem(plugin_name)
+                                else
+                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                        local fx_index = r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                        
+                                        -- OPEN FLOATING ALS OPTIE ENABLED IS
+                                        if config.open_floating_after_adding and fx_index >= 0 then
+                                            r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                                        end
+                                    end
+                                end
+                                LAST_USED_FX = plugin_name
+                                if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
+                                    SHOULD_CLOSE_SCRIPT = true
+                                end
+                            end
+                            
+                            if r.ImGui_IsItemHovered(ctx) then
+                                if plugin_name ~= current_hovered_plugin then
+                                    current_hovered_plugin = plugin_name
+                                    LoadPluginScreenshot(current_hovered_plugin)
+                                end
+                                is_screenshot_visible = true
+                            end
+                            
+                            ShowPluginContextMenu(plugin_name, "custom_main_" .. full_path .. "_" .. plugin_idx)
+                        end
+                    end
+                    
+                    -- Voeg separator toe tussen favorites en regular plugins
+                    if config.show_favorites_on_top and group_idx == 1 and #favorites > 0 and #regular > 0 then
+                        if r.ImGui_Selectable(ctx, "--Favorites End--", false, r.ImGui_SelectableFlags_Disabled()) then end
+                    end
+                end
+                
+                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+            
+            r.ImGui_PopStyleVar(ctx, 4)
+            r.ImGui_PopStyleColor(ctx, 2)
+            
+        elseif IsSubfolderStructure(folder_content) then
+            -- Parent folder - toon als submenu
+            r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+            r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+            
+            if r.ImGui_BeginMenu(ctx, folder_name) then
+                -- Recursief tonen van subfolders
+                DrawCustomFoldersMenu(folder_content, full_path)
+                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+            
+            r.ImGui_PopStyleVar(ctx, 4)
+            r.ImGui_PopStyleColor(ctx, 2)
+        end
+    end
 end
 
 -----------------------------------------------------------------
@@ -7304,6 +7740,29 @@ function Frame()
         r.ImGui_PopStyleVar(ctx, 4)
         r.ImGui_PopStyleColor(ctx, 2)
     end
+    -- CUSTOM FOLDERS SECTIE
+    if next(config.custom_folders) then
+        r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+        r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+
+        if r.ImGui_BeginMenu(ctx, "CUSTOM") then
+            DrawCustomFoldersMenu(config.custom_folders, "")
+            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+
+        r.ImGui_PopStyleVar(ctx, 4)
+        r.ImGui_PopStyleColor(ctx, 2)
+    end
+
     for i = 1, #CAT_TEST do
         local category_name = CAT_TEST[i].name
         if (category_name == "ALL PLUGINS" and config.show_all_plugins) or
@@ -7614,6 +8073,21 @@ function Main()
         InitializeImGuiContext()
         return r.defer(Main)
     end   
+        if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then
+        local selected_track = r.GetSelectedTrack(0, 0)
+        local master_track = r.GetMasterTrack(0)
+        if r.IsTrackSelected(master_track) then
+            TRACK = master_track
+        elseif selected_track then
+            TRACK = selected_track
+        else
+            -- Fallback: gebruik eerste track of master
+            local first_track = r.GetTrack(0, 0)
+            TRACK = first_track or master_track
+        end
+    end
+
+
     if needs_font_update then
         UpdateFonts()
         needs_font_update = false
@@ -8870,7 +9344,47 @@ if visible then
         if show_add_script_popup then
             r.ImGui_OpenPopup(ctx, "Add User Script")
             showAddScriptPopup()
-        end       
+        end  
+        
+        if show_create_folder_popup then
+    r.ImGui_OpenPopup(ctx, "Create New Folder")
+        end
+
+        if r.ImGui_BeginPopupModal(ctx, "Create New Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+            r.ImGui_Text(ctx, "Create new folder for: " .. (new_folder_for_plugin or ""))
+            r.ImGui_Separator(ctx)
+            
+            r.ImGui_PushItemWidth(ctx, 250)
+            local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##NewFolderName", "Enter folder name", new_folder_name_input)
+            if changed then
+                new_folder_name_input = new_name
+            end
+            r.ImGui_PopItemWidth(ctx)
+            
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Button(ctx, "Create", 100, 0) then
+                if new_folder_name_input and new_folder_name_input ~= "" and new_folder_for_plugin and new_folder_for_plugin ~= "" then
+                    -- Create new folder and add plugin
+                    config.custom_folders[new_folder_name_input] = {new_folder_for_plugin}
+                    SaveCustomFolders()
+                    r.ShowMessageBox("Folder '" .. new_folder_name_input .. "' created with plugin", "Success", 0)
+                end
+                show_create_folder_popup = false
+                new_folder_for_plugin = ""
+                new_folder_name_input = ""
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+                show_create_folder_popup = false
+                new_folder_for_plugin = ""
+                new_folder_name_input = ""
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            
+            r.ImGui_EndPopup(ctx)
+        end
+        
         if check_esc_key() then open = false end
         r.ImGui_End(ctx)
         end
