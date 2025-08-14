@@ -1,10 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.3.1:
+-- @version 1.3.2:
 -- @changelog:
 --[[        
-+ added: set parent right click context
-+ aadded: show /hide custom folders in settings menu
++ added: set tag to all selected tracks
++ added: toggle option for search in screenshotwindow
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -59,6 +59,7 @@ local selected_folder_name = nil
 local new_parent_folder_name = ""
 
 screenshot_search_results = screenshot_search_results or {}
+
 
 -- Function to generate truly unique IDs for ImGui components
 function GenerateUniqueID(base_name)
@@ -289,6 +290,7 @@ local function SetDefaultConfig()
         custom_folders = {},
         show_custom_folders = true,
         hide_custom_dropdown = false,
+        show_screenshot_search = true,
     } 
 end
 local config = SetDefaultConfig()    
@@ -3668,6 +3670,48 @@ local function ShowScreenshotControls()
     if not config.hide_custom_dropdown then  -- Voeg deze check toe
         ShowCustomFolderDropdown()
     end
+    show_screenshot_search = config.show_screenshot_search ~= false
+    if show_screenshot_search then
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushItemWidth(ctx, 80)
+        local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+        r.ImGui_PopItemWidth(ctx)
+        r.ImGui_SameLine(ctx)
+        -- Voeg de ALL-checkbox toe
+        r.ImGui_SameLine(ctx)
+        all_plugins_search = all_plugins_search or false
+        local all_changed, new_all = r.ImGui_Checkbox(ctx, "##all_plugins_search", all_plugins_search)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "When enabled, search will include all plugins (not just the selected folder).")
+        end
+        if all_changed then
+            all_plugins_search = new_all
+            screenshot_search_results = {}
+            loaded_items_count = ITEMS_PER_BATCH
+        end
+
+        if changed or all_changed then
+            browser_search_term = new_search
+            screenshot_search_results = {}
+            loaded_items_count = ITEMS_PER_BATCH
+            if all_plugins_search and #browser_search_term >= 3 then
+                -- Zoek door alle plugins
+                for _, plugin in ipairs(PLUGIN_LIST) do
+                    if plugin:lower():find(browser_search_term:lower(), 1, true) then
+                        table.insert(screenshot_search_results, {name = plugin})
+                    end
+                end
+            elseif selected_folder and browser_search_term ~= "" then
+                -- Zoek alleen in geselecteerde folder
+                local filtered_plugins = GetPluginsForFolder(selected_folder)
+                for _, plugin in ipairs(filtered_plugins) do
+                    if plugin:lower():find(browser_search_term:lower(), 1, true) then
+                        table.insert(screenshot_search_results, {name = plugin})
+                    end
+                end
+            end
+        end
+    end
     
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local button_width = 20
@@ -3706,9 +3750,12 @@ local function ShowScreenshotControls()
             SaveConfig()
         end
         
-        -- NIEUWE OPTIE VOOR CUSTOM DROPDOWN
         if r.ImGui_MenuItem(ctx, config.hide_custom_dropdown and "Show Custom Dropdown" or "Hide Custom Dropdown") then
             config.hide_custom_dropdown = not config.hide_custom_dropdown
+            SaveConfig()
+        end
+        if r.ImGui_MenuItem(ctx, (config.show_screenshot_search and "Hide" or "Show") .. " Search Bar") then
+            config.show_screenshot_search = not config.show_screenshot_search
             SaveConfig()
         end
         
@@ -8754,6 +8801,23 @@ if visible then
                                         SaveTags()
                                     end
                                 end
+                                if r.ImGui_MenuItem(ctx, "Add this tag to all selected tracks") then
+                                    local track_count = r.CountSelectedTracks(0)
+                                    for j = 0, track_count - 1 do
+                                        local track = r.GetSelectedTrack(0, j)
+                                        local guid = r.GetTrackGUID(track)
+                                        track_tags[guid] = track_tags[guid] or {}
+                                        local already = false
+                                        for _, t in ipairs(track_tags[guid]) do
+                                            if t == tag then already = true break end
+                                        end
+                                        if not already then
+                                            table.insert(track_tags[guid], tag)
+                                        end
+                                    end
+                                    SaveTags()
+                                end
+
                                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Separator(), 0x666666FF)
                                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 1, 1)
                                 r.ImGui_Text(ctx, "- - - - - - - - - - - - - - - - - - - - - - - - - - - -")
