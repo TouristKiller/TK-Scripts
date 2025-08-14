@@ -1,10 +1,11 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.2.9
+-- @version 0.3.0
 -- @changelog 
 --[[
-+ Update to ReaImGui
-+ Right-click context menu items can be swapped
++ added toggle show all track envelopes (ENV left+right click)
++ added jump to time /marker/ region (cursor position left click)
++ added toggle preserve pitch (Playrate right click)
 ]]--
 
 
@@ -1241,15 +1242,20 @@ function EnvelopeOverride(main_window_width, main_window_height)
         end
     end
     
-    if r.ImGui_Button(ctx, "ENV") then
+    if r.ImGui_Button(ctx, "ENV") or r.ImGui_IsItemClicked(ctx, 1) then
         r.ImGui_OpenPopup(ctx, "AutomationMenu")
     end
-    
+
     if current_mode ~= "No override" then
         r.ImGui_PopStyleColor(ctx)
     end
-    
+
     if r.ImGui_BeginPopup(ctx, "AutomationMenu") then
+        local envelopes_visible = r.GetToggleCommandState(40926) == 1
+        if r.ImGui_MenuItem(ctx, "Toggle all active track envelopes", nil, envelopes_visible) then
+            r.Main_OnCommand(40926, 0)
+        end
+        r.ImGui_Separator(ctx)
         for _, mode in ipairs(AUTOMATION_MODES) do
             if r.ImGui_MenuItem(ctx, mode.name, nil, current_mode == mode.name) then
                 r.Main_OnCommand(mode.command, 0)
@@ -1671,16 +1677,29 @@ function PlayRate_Slider(main_window_width, main_window_height)
     r.ImGui_SetCursorPosY(ctx, settings.playrate_y * main_window_height)
     r.ImGui_PushItemWidth(ctx, 80)
     local rv, new_rate = r.ImGui_SliderDouble(ctx, '##PlayRateSlider', current_rate, 0.25, 4.0, "%.2fx")  
-    
+
     if r.ImGui_IsItemClicked(ctx, 1) then
-        new_rate = 1.0
-        r.CSurf_OnPlayRateChange(new_rate)
-    elseif rv then
+        r.ImGui_OpenPopup(ctx, "PlayRateMenu")
+    end
+
+    if r.ImGui_BeginPopup(ctx, "PlayRateMenu") then
+        if r.ImGui_MenuItem(ctx, "Set playrate to 1.0") then
+            r.Main_OnCommand(40521, 0)
+        end
+        local preserve_pitch_on = r.GetToggleCommandState(40671) == 1
+        if r.ImGui_MenuItem(ctx, "Toggle preserve pitch in audio items", nil, preserve_pitch_on) then
+            r.Main_OnCommand(40671, 0)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+
+    if rv then
         r.CSurf_OnPlayRateChange(new_rate)
     end
     
     r.ImGui_PopItemWidth(ctx)
 end
+
 
 function ShowCursorPosition(main_window_width, main_window_height)
     if not settings.show_transport then return end
@@ -1711,8 +1730,11 @@ function ShowCursorPosition(main_window_width, main_window_height)
     math.floor(beatsInMeasure+1),
     ticks)
     
-    r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), settings.button_normal)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.button_normal)
     r.ImGui_Button(ctx, mbt_str .. " / " .. time_str)
+    if r.ImGui_IsItemClicked(ctx, 0) then
+    r.Main_OnCommand(40069, 0)
+    end
     r.ImGui_PopStyleColor(ctx)
 end
 
