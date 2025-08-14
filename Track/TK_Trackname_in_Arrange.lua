@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.2
+-- @version 0.9.3
 -- @changelog 
 --[[
-+ Improved handleDrawingFocus function. overlay is set to background in all circumstances
++ Bugfix: no longer crashes when no track is selected
 ]]--
 
 local r                  = reaper
@@ -117,20 +117,26 @@ local function handleDrawingFocus()
             end
         end
     end
+
     local retval, tracknum, itemnum, fxnum = r.GetFocusedFX()
     if retval == 1 then
         local track = r.GetTrack(0, tracknum-1)
-        local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fxnum)
-        if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
-            table.insert(windowsToFocus, floatingHwnd)
+        if track then
+            local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fxnum)
+            if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
+                table.insert(windowsToFocus, floatingHwnd)
+            end
         end
     end
+
     local retval, tracknum, fxnum = r.GetLastTouchedFX()
     if retval then
         local track = r.GetTrack(0, tracknum-1)
-        local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fxnum)
-        if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
-            table.insert(windowsToFocus, floatingHwnd)
+        if track then
+            local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fxnum)
+            if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
+                table.insert(windowsToFocus, floatingHwnd)
+            end
         end
     end
     r.defer(function()
