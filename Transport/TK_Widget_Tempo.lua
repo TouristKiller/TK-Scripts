@@ -5,6 +5,12 @@ package.path = script_path .. "?.lua;"
 
 local handler = require("TK_Widget_Handler")
 
+local tempo_dragging = false
+local tempo_start_value = 0
+local tempo_accumulated_delta = 0
+local tempo_mouse_anchor_x, tempo_mouse_anchor_y = nil, nil
+local tempo_last_mouse_y = nil
+
 local default_settings = {
     overlay_enabled = true,
     rel_pos_x = 0.5,
@@ -47,6 +53,7 @@ local widget = handler.init("Tempo Widget", default_settings)
 widget.SetWidgetTitle("Tempo & Time Signature")
 widget.LoadSettings("TEMPO_WIDGET")
 
+
 function ShowTempoAndTimeSignature(h)
     local tempo = r.Master_GetTempo()
     r.ImGui_SetCursorPosX(h.ctx, 10)
@@ -58,9 +65,62 @@ function ShowTempoAndTimeSignature(h)
     r.ImGui_PushStyleColor(h.ctx, r.ImGui_Col_FrameBg(), h.settings.button_color)
     r.ImGui_PushStyleColor(h.ctx, r.ImGui_Col_FrameBgHovered(), h.settings.button_hover_color)
     r.ImGui_PushItemWidth(h.ctx, 60)
-    local rv_tempo, new_tempo = r.ImGui_InputDouble(h.ctx, "##tempo", tempo, 0, 0, "%.1f")
-    if rv_tempo and r.ImGui_IsItemDeactivatedAfterEdit(h.ctx) then r.CSurf_OnTempoChange(new_tempo) end
-    if r.ImGui_IsItemClicked(h.ctx, 1) then r.CSurf_OnTempoChange(120.0) end
+
+    -- Dragable tempo
+    local tempo_text = string.format("%.1f", tempo)
+    r.ImGui_Button(h.ctx, tempo_text)
+
+    -- Start drag
+    if r.ImGui_IsItemClicked(h.ctx, 0) then
+        tempo_dragging = true
+        tempo_start_value = tempo
+        tempo_accumulated_delta = 0
+        if r.GetMousePosition then
+            tempo_mouse_anchor_x, tempo_mouse_anchor_y = r.GetMousePosition()
+            tempo_last_mouse_y = tempo_mouse_anchor_y
+        end
+        if r.JS_Mouse_SetCursor then
+            r.JS_Mouse_SetCursor(r.JS_Mouse_LoadCursor(0)) -- IDC_BLANK
+        end
+    end
+
+    -- Dragging
+    if tempo_dragging and r.GetMousePosition then
+        local _, current_mouse_y = r.GetMousePosition()
+        if tempo_last_mouse_y then
+            local mouse_delta_y = current_mouse_y - tempo_last_mouse_y
+            if math.abs(mouse_delta_y) > 0 then
+                local sensitivity = 5 -- pixels per BPM
+                tempo_accumulated_delta = tempo_accumulated_delta + (-mouse_delta_y / sensitivity)
+                local adjusted_tempo = math.floor(tempo_start_value + tempo_accumulated_delta + 0.5)
+                adjusted_tempo = math.max(20, math.min(300, adjusted_tempo))
+                r.CSurf_OnTempoChange(adjusted_tempo)
+            end
+        end
+        -- Zet de muis altijd terug naar de ankerpositie ná delta-berekening
+        if r.JS_Mouse_SetPosition and tempo_mouse_anchor_x then
+            r.JS_Mouse_SetPosition(tempo_mouse_anchor_x, tempo_mouse_anchor_y)
+            tempo_last_mouse_y = tempo_mouse_anchor_y
+        else
+            tempo_last_mouse_y = current_mouse_y
+        end
+    end
+
+    -- Stop drag
+    if not r.ImGui_IsMouseDown(h.ctx, 0) then
+        if tempo_dragging then
+            if r.JS_Mouse_SetCursor then
+                r.JS_Mouse_SetCursor(r.JS_Mouse_LoadCursor(32512)) -- IDC_ARROW
+            end
+            if tempo_mouse_anchor_x and tempo_mouse_anchor_y and r.JS_Mouse_SetPosition then
+                r.JS_Mouse_SetPosition(tempo_mouse_anchor_x, tempo_mouse_anchor_y)
+            end
+        end
+        tempo_dragging = false
+        tempo_last_mouse_y = nil
+        tempo_mouse_anchor_x, tempo_mouse_anchor_y = nil, nil
+    end
+
     r.ImGui_PopItemWidth(h.ctx)
     r.ImGui_SameLine(h.ctx)
     r.ImGui_Text(h.ctx, "Time Sig:")

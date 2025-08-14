@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.2.8
+-- @version 0.2.9
 -- @changelog 
 --[[
 + Update to ReaImGui
@@ -45,6 +45,14 @@ local tap_clicks = 0
 local tap_z = 0
 local tap_w = 0
 local last_tap_time = 0
+
+local tempo_dragging = false
+local tempo_start_value = 0
+local tempo_accumulated_delta = 0
+local tempo_button_center_x = nil
+local tempo_button_center_y = nil
+local tempo_last_mouse_y = nil
+local tempo_mouse_anchor_x, tempo_mouse_anchor_y = nil, nil
 
 local section_states = {
     transport_open = false,
@@ -1710,51 +1718,142 @@ end
 
 function ShowTempoAndTimeSignature(main_window_width, main_window_height)
     if not settings.show_tempo then return end
-    local tempo = r.Master_GetTempo()
+    local tempo = reaper.Master_GetTempo()
 
-    r.ImGui_SetCursorPosX(ctx, settings.tempo_x * main_window_width)
-    r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+    reaper.ImGui_SetCursorPosX(ctx, settings.tempo_x * main_window_width)
+    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
 
-    r.ImGui_PushItemWidth(ctx, settings.font_size * 4)
-local rv_tempo, new_tempo = r.ImGui_InputDouble(ctx, "##tempo", tempo, 0, 0, "%.1f")
-    if rv_tempo then r.CSurf_OnTempoChange(new_tempo) end
-    if r.ImGui_IsItemClicked(ctx, 1) then r.CSurf_OnTempoChange(120.0) end
-    r.ImGui_PopItemWidth(ctx)
-   
-   r.ImGui_SameLine(ctx)
-   r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-   
-   r.ImGui_SameLine(ctx)
-   r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-   local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = r.GetTempoTimeSigMarker(0, 0)
-   if not retval then timesig_num, timesig_denom = 4, 4 end
-   r.ImGui_PushItemWidth(ctx, settings.font_size * 2)
-   local rv_num, new_num = r.ImGui_InputInt(ctx, "##num", timesig_num, 0, 0)
-   r.ImGui_SameLine(ctx)
-   r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-   r.ImGui_Text(ctx, "/")
+    reaper.ImGui_PushItemWidth(ctx, settings.font_size * 4)
+    local tempo_text = string.format("%.1f", tempo)
+    reaper.ImGui_Button(ctx, tempo_text)
 
-   r.ImGui_SameLine(ctx)
-   r.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-   local rv_denom, new_denom = r.ImGui_InputInt(ctx, "##denom", timesig_denom, 0, 0)
+    -- Start dragging: sla de klikpositie op als anker
+    if reaper.ImGui_IsItemClicked(ctx, 0) then
+        tempo_dragging = true
+        tempo_start_value = tempo
+        tempo_accumulated_delta = 0
 
-   if rv_num or rv_denom then
-       r.Undo_BeginBlock()
-       r.PreventUIRefresh(1)
-       
-       local _, measures = r.TimeMap2_timeToBeats(0, 0)
-       local ptx_in_effect = r.FindTempoTimeSigMarker(0, 0)
+        -- Sla de huidige muispositie op als anker
+        if reaper.GetMousePosition then
+            tempo_mouse_anchor_x, tempo_mouse_anchor_y = reaper.GetMousePosition()
+            tempo_last_mouse_y = tempo_mouse_anchor_y
+        end
 
-       local num_to_set = rv_num and new_num > 0 and new_num or timesig_num
-       local denom_to_set = rv_denom and new_denom > 0 and new_denom or timesig_denom
+        -- Verberg de cursor volledig (FL Studio stijl)
+        if reaper.JS_Mouse_SetCursor then
+            reaper.JS_Mouse_SetCursor(reaper.JS_Mouse_LoadCursor(0)) -- IDC_BLANK
+        end
+    end
 
-       r.SetTempoTimeSigMarker(0, -1, -1, measures, 0, -1, num_to_set, denom_to_set, true)
-       r.GetSetTempoTimeSigMarkerFlag(0, ptx_in_effect + 1, 1|2|16, true)
-       
-       r.PreventUIRefresh(-1)
-       r.Undo_EndBlock("Change time signature", 1|4|8)
-   end
-   r.ImGui_PopItemWidth(ctx)
+    -- Mouse drag: cursor springt steeds terug naar ankerpositie, delta wordt vóór reset berekend
+    if tempo_dragging and reaper.GetMousePosition then
+        local _, current_mouse_y = reaper.GetMousePosition()
+if tempo_last_mouse_y then
+    local mouse_delta_y = current_mouse_y - tempo_last_mouse_y
+    if math.abs(mouse_delta_y) > 0 then
+        local sensitivity = 5 -- pixels per BPM
+        tempo_accumulated_delta = tempo_accumulated_delta + (-mouse_delta_y / sensitivity)
+        local adjusted_tempo = math.floor(tempo_start_value + tempo_accumulated_delta + 0.5)
+        adjusted_tempo = math.max(1, math.min(590, adjusted_tempo))
+        reaper.CSurf_OnTempoChange(adjusted_tempo)
+    end
+end
+        -- Zet de muis altijd terug naar de ankerpositie ná delta-berekening
+        if reaper.JS_Mouse_SetPosition and tempo_mouse_anchor_x then
+            reaper.JS_Mouse_SetPosition(tempo_mouse_anchor_x, tempo_mouse_anchor_y)
+            tempo_last_mouse_y = tempo_mouse_anchor_y
+        else
+            tempo_last_mouse_y = current_mouse_y
+        end
+    end
+
+    -- Stop dragging: cursor terug naar klikpositie en zichtbaar maken
+    if not reaper.ImGui_IsMouseDown(ctx, 0) then
+        if tempo_dragging then
+            if reaper.JS_Mouse_SetCursor then
+                reaper.JS_Mouse_SetCursor(reaper.JS_Mouse_LoadCursor(32512)) -- IDC_ARROW
+            end
+            if tempo_mouse_anchor_x and tempo_mouse_anchor_y and reaper.JS_Mouse_SetPosition then
+                reaper.JS_Mouse_SetPosition(tempo_mouse_anchor_x, tempo_mouse_anchor_y)
+            end
+        end
+        tempo_dragging = false
+        tempo_last_mouse_y = nil
+        tempo_mouse_anchor_x, tempo_mouse_anchor_y = nil, nil
+    end
+
+    -- Rechtsklik menu voor tempo
+    if reaper.ImGui_IsItemClicked(ctx, 1) then
+        reaper.ImGui_OpenPopup(ctx, "TempoMenu")
+    end
+
+    -- Tempo popup menu
+    if reaper.ImGui_BeginPopup(ctx, "TempoMenu") then
+        reaper.ImGui_Text(ctx, "Set Tempo:")
+        reaper.ImGui_PushItemWidth(ctx, 100)
+        local popup_tempo = tempo
+        local rv_popup, new_popup_tempo = reaper.ImGui_InputDouble(ctx, "##PopupTempo", popup_tempo, 1, 10, "%.1f")
+        if rv_popup then
+            new_popup_tempo = math.max(2, math.min(500, new_popup_tempo))
+            reaper.CSurf_OnTempoChange(new_popup_tempo)
+        end
+        reaper.ImGui_PopItemWidth(ctx)
+
+        reaper.ImGui_Separator(ctx)
+
+        local common_tempos = {60, 80, 100, 120, 140, 160, 180}
+        for _, bpm in ipairs(common_tempos) do
+            if reaper.ImGui_MenuItem(ctx, tostring(bpm) .. " BPM") then
+                reaper.CSurf_OnTempoChange(bpm)
+            end
+        end
+
+        reaper.ImGui_Separator(ctx)
+
+        if reaper.ImGui_MenuItem(ctx, "Reset to 120 BPM") then
+            reaper.CSurf_OnTempoChange(120.0)
+        end
+
+        reaper.ImGui_EndPopup(ctx)
+    end
+
+    reaper.ImGui_PopItemWidth(ctx)
+
+    -- ... bestaande code voor time signature ...
+    reaper.ImGui_SameLine(ctx)
+    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+
+    reaper.ImGui_SameLine(ctx)
+    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+    local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = reaper.GetTempoTimeSigMarker(0, 0)
+    if not retval then timesig_num, timesig_denom = 4, 4 end
+    reaper.ImGui_PushItemWidth(ctx, settings.font_size * 2)
+    local rv_num, new_num = reaper.ImGui_InputInt(ctx, "##num", timesig_num, 0, 0)
+    reaper.ImGui_SameLine(ctx)
+    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+    reaper.ImGui_Text(ctx, "/")
+
+    reaper.ImGui_SameLine(ctx)
+    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+    local rv_denom, new_denom = reaper.ImGui_InputInt(ctx, "##denom", timesig_denom, 0, 0)
+
+    if rv_num or rv_denom then
+        reaper.Undo_BeginBlock()
+        reaper.PreventUIRefresh(1)
+
+        local _, measures = reaper.TimeMap2_timeToBeats(0, 0)
+        local ptx_in_effect = reaper.FindTempoTimeSigMarker(0, 0)
+
+        local num_to_set = rv_num and new_num > 0 and new_num or timesig_num
+        local denom_to_set = rv_denom and new_denom > 0 and new_denom or timesig_denom
+
+        reaper.SetTempoTimeSigMarker(0, -1, -1, measures, 0, -1, num_to_set, denom_to_set, true)
+        reaper.GetSetTempoTimeSigMarkerFlag(0, ptx_in_effect + 1, 1|2|16, true)
+
+        reaper.PreventUIRefresh(-1)
+        reaper.Undo_EndBlock("Change time signature", 1|4|8)
+    end
+    reaper.ImGui_PopItemWidth(ctx)
 end
 
 function ShowTimeSelection(main_window_width, main_window_height)
