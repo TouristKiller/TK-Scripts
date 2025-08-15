@@ -93,5 +93,23 @@ show_only_active = false
 -- MATRIX
 show_matrix_exclusive = false
 
-
+--custom folders
+custom_folder_states = {}
+show_plugin_browser = false
+selected_custom_folder_for_browse = nil
+plugin_search_text = ""
+new_custom_folder_name = ""
+custom_folders_open = {}
+current_folder_context = nil
+plugin_input_text = {}
+show_rename_folder_popup = false
+rename_folder_path = nil
+rename_folder_new_name = ""
+show_create_folder_popup = false
+new_folder_for_plugin = ""
+new_folder_name_input = ""
+show_create_parent_folder_popup = false
+selected_folder_for_parent = nil
+selected_folder_name = nil
+new_parent_folder_name = ""
 
