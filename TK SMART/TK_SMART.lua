@@ -1,6 +1,6 @@
 -- @description TK Script Template for ReaScript with TK GUI
 -- @author TouristKiller
--- @version 2.0.1
+-- @version 2.0.2
 -- @changelog
 --[[
 + Added DDP button again
@@ -886,8 +886,9 @@ local function draw_timeline_minimap(ctx, items)
     for _, item in ipairs(items) do
         if item.visible then
             local x = pos_x + ((item.pos / project_length) * (width - right_margin))
-            local r, g, b = r.ColorFromNative(item.color)
-            local color = ImGui.ColorConvertDouble4ToU32(r/255, g/255, b/255, 1)
+            -- avoid shadowing global 'r' (reaper) with color components
+            local cr, cg, cb = r.ColorFromNative(item.color)
+            local color = ImGui.ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, 1)
 
             if item.isRegion then
                 local end_x = pos_x + ((item.rgnend / project_length) * (width - right_margin))
@@ -1002,7 +1003,7 @@ local function edit_color(item, i)
                 active_color_picker = i
             end
         else
-            local r, g, b = r.ColorFromNative(item.color)
+            -- removed shadowing of global 'r'; ColorFromNative result not needed here
             local retval, new_color = r.GR_SelectColor(item.color)
             if retval then
                 local native_color = new_color|0x1000000
