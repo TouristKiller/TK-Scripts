@@ -1,10 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.3.7:
+-- @version 1.3.8:
 -- @changelog:
 --[[        
-++ Script Launcher
-
+++ Some more tweaking
+++ Added drag and drop (from screenshot window to track. hold shift to add fx to item)
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -42,6 +42,11 @@ local current_filtered_fx = {}
 local was_hidden = false
 local unique_id_counter = 0
 local pushed_main_styles = false
+
+-- Drag/drop state
+dragging_fx_name = dragging_fx_name or nil
+potential_drag_fx_name = potential_drag_fx_name or nil
+drag_start_x, drag_start_y = drag_start_x or 0, drag_start_y or 0
 
 screenshot_search_results = screenshot_search_results or {}
 browser_panel_selected = browser_panel_selected or nil
@@ -219,6 +224,7 @@ local function SetDefaultConfig()
         show_projects = true,
         show_sends = true,
         show_actions = true,
+        show_scripts = true, 
         bulk_screenshot_vst = true,
         bulk_screenshot_vst3 = true,
         bulk_screenshot_js = true,
@@ -278,6 +284,7 @@ local function SetDefaultConfig()
         hide_custom_dropdown = false,
         show_screenshot_search = true,
     show_browser_search = true, -- nieuw: zoekbox in browser panel tonen/verbergen
+    enable_drag_add_fx = true, -- nieuwe optie: sleep screenshot naar track om FX toe te voegen
     -- (scripts launcher niet meer hier opgeslagen; apart bestand)
     } 
 end
@@ -658,6 +665,38 @@ function exit()
     end
 end
 r.atexit(exit)
+
+-- Eenvoudige overlay voor drag hint
+local function DrawDragOverlay()
+    if dragging_fx_name then
+        local imx, imy = r.ImGui_GetMousePos(ctx)
+        local sx, sy = r.GetMousePosition()
+        local t = select(1, r.GetTrackFromPoint(sx, sy))
+        local track_name = "(geen track)"
+        if t then
+            local ok; ok, track_name = r.GetSetMediaTrackInfo_String(t, 'P_NAME', '', false)
+            if not ok or track_name == '' then track_name = 'Track' end
+        end
+        local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
+        local vp = r.ImGui_GetMainViewport(ctx)
+        local vp_x, vp_y = r.ImGui_Viewport_GetPos(vp)
+        local rel_x = imx - vp_x + 18
+        local rel_y = imy - vp_y + 18
+        r.ImGui_SetNextWindowBgAlpha(ctx, 0.38)
+        r.ImGui_SetNextWindowPos(ctx, rel_x, rel_y, r.ImGui_Cond_Always())
+        local flags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs()
+        if r.ImGui_Begin(ctx, '##drag_overlay', true, flags) then
+            r.ImGui_Text(ctx, '➡ ' .. dragging_fx_name)
+            if shift then
+                r.ImGui_Text(ctx, 'Add to Item (SHIFT)')
+            else
+                r.ImGui_Text(ctx, 'Track: ' .. track_name)
+            end
+            r.ImGui_Text(ctx, 'Release to add')
+        end
+        r.ImGui_End(ctx)
+    end
+end
 
 function UpdateFonts()
     -- Eerst detachen we de bestaande fonts
@@ -1437,9 +1476,13 @@ local function ShowConfigWindow()
             changed, new_value = r.ImGui_Checkbox(ctx, "Actions", config.show_actions)
             if changed then config.show_actions = new_value end
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.show_custom_folders = r.ImGui_Checkbox(ctx, "Custom Folders", config.show_custom_folders)
+            changed, new_value = r.ImGui_Checkbox(ctx, "Scripts", config.show_scripts)
+            if changed then config.show_scripts = new_value end
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.show_custom_folders = r.ImGui_Checkbox(ctx, "Custom Folders", config.show_custom_folders)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_Separator(ctx)
             r.ImGui_Dummy(ctx, 0, 5)
@@ -3884,22 +3927,23 @@ local function ShowScreenshotControls()
         r.ImGui_PopItemWidth(ctx)
         r.ImGui_SameLine(ctx)
 
-        -- Sorteerknoppen
+        -- Sorteerknop (toggle A/R)
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
-        if r.ImGui_Button(ctx, "A", 20, 20) then
-            screenshot_sort_mode = "alphabet"
+        local sort_label = (screenshot_sort_mode == "alphabet") and "A" or "R"
+        if r.ImGui_Button(ctx, sort_label, 20, 20) then
+            if screenshot_sort_mode == "alphabet" then
+                screenshot_sort_mode = "rating"
+            else
+                screenshot_sort_mode = "alphabet"
+            end
             SortScreenshotResults()
         end
         if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Sort alphabetically")
-        end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "R", 20, 20) then
-            screenshot_sort_mode = "rating"
-            SortScreenshotResults()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Sort by rating")
+            if screenshot_sort_mode == "alphabet" then
+                r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
+            else
+                r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+            end
         end
 
         -- Global Search knop
@@ -4340,6 +4384,18 @@ local function DrawBrowserItems(tbl, main_cat_name)
             end
         end
 
+        -- Pas dezelfde sortering toe als hoofd A/R toggle
+        local sm = config.sort_mode or sort_mode or "alphabet"
+        if sm == "alphabet" then
+            table.sort(filtered_fx, function(a,b) return a:lower() < b:lower() end)
+        elseif sm == "rating" then
+            table.sort(filtered_fx, function(a,b)
+                local ra = plugin_ratings[a] or 0
+                local rb = plugin_ratings[b] or 0
+                if ra == rb then return a:lower() < b:lower() else return ra > rb end
+            end)
+        end
+
         if #filtered_fx > 0 then
             r.ImGui_PushID(ctx, i)
             r.ImGui_Indent(ctx, 10)
@@ -4562,26 +4618,31 @@ local function ShowBrowserPanel()
         if changed_browser_search then
             browser_search_term = new_browser_search
         end
-        -- Sorteer / Global knoppen (A,R,All)
+        -- Sorteer / Global knoppen (Toggle A/R, All)
         r.ImGui_SameLine(ctx)
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
-        if r.ImGui_Button(ctx, "A", 20, 20) then
-            screenshot_sort_mode = "alphabet"
+        local sort_label = (screenshot_sort_mode == "alphabet") and "A" or "R"
+        if r.ImGui_Button(ctx, sort_label, 20, 20) then
+            if screenshot_sort_mode == "alphabet" then
+                screenshot_sort_mode = "rating"
+            else
+                screenshot_sort_mode = "alphabet"
+            end
             SortScreenshotResults()
         end
-        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Sort alphabetically") end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "R", 20, 20) then
-            screenshot_sort_mode = "rating"
-            SortScreenshotResults()
+        if r.ImGui_IsItemHovered(ctx) then
+            if screenshot_sort_mode == "alphabet" then
+                r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
+            else
+                r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+            end
         end
-        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Sort by rating") end
         r.ImGui_SameLine(ctx)
         if browser_search_term == "" then r.ImGui_BeginDisabled(ctx) end
-        if r.ImGui_Button(ctx, "All", 30, 20) then
+        if r.ImGui_Button(ctx, "All", 20, 20) then
             -- Zelfde globale zoekactie als in screenshot controls
             screenshot_search_results = {}
-            local MAX_RESULTS = 200
+            local MAX_RESULTS = 250
             local too_many_results = false
             for _, plugin in ipairs(PLUGIN_LIST) do
                 if plugin:lower():find(browser_search_term:lower(), 1, true) then
@@ -5006,24 +5067,26 @@ local function ShowBrowserPanel()
                 ClearScreenshotCache()
             end
         end
-                -- SCRIPTS launcher entry
-                if r.ImGui_Selectable(ctx, "SCRIPTS") then
-                    if not show_scripts_browser then
-                        UpdateLastViewedFolder(selected_folder)
-                        show_scripts_browser = true
-                        show_action_browser = false
-                        show_media_browser = false
-                        show_sends_window = false
-                        selected_folder = "Scripts"
-                    else
-                        show_scripts_browser = false
-                        show_action_browser = false
-                        show_media_browser = false
-                        show_sends_window = false
-                        selected_folder = last_viewed_folder
-                        GetPluginsForFolder(last_viewed_folder)
+                -- SCRIPTS launcher entry (met toggle)
+                if config.show_scripts then
+                    if r.ImGui_Selectable(ctx, "SCRIPTS") then
+                        if not show_scripts_browser then
+                            UpdateLastViewedFolder(selected_folder)
+                            show_scripts_browser = true
+                            show_action_browser = false
+                            show_media_browser = false
+                            show_sends_window = false
+                            selected_folder = "Scripts"
+                        else
+                            show_scripts_browser = false
+                            show_action_browser = false
+                            show_media_browser = false
+                            show_sends_window = false
+                            selected_folder = last_viewed_folder
+                            GetPluginsForFolder(last_viewed_folder)
+                        end
+                        ClearScreenshotCache()
                     end
-                    ClearScreenshotCache()
                 end
         if LAST_USED_FX and r.ValidatePtr(TRACK, "MediaTrack*") then
             if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
@@ -5510,6 +5573,38 @@ local function DrawMasonryLayout(screenshots)
 
                     -- Image button
                     local masonry_clicked = r.ImGui_ImageButton(ctx, "masonry_" .. i, texture, display_width, display_height)
+
+                    if config.enable_drag_add_fx then
+                        -- Start mogelijke drag bij mouse down
+                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
+                            potential_drag_fx_name = fx.name
+                            drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                        end
+                        -- Escaleren naar echte drag na beweging
+                        if potential_drag_fx_name == fx.name and r.ImGui_IsMouseDown(ctx,0) then
+                            local mx,my = r.ImGui_GetMousePos(ctx)
+                            if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
+                                dragging_fx_name = fx.name
+                                potential_drag_fx_name = nil
+                            end
+                        end
+                        -- Als muis los zonder voldoende beweging -> reset potential (click wordt verwerkt)
+                        if potential_drag_fx_name == fx.name and r.ImGui_IsMouseReleased(ctx,0) then
+                            potential_drag_fx_name = nil
+                        end
+                    end
+
+                    -- Normale klik alleen uitvoeren als we NIET aan het draggen zijn
+                    if masonry_clicked and dragging_fx_name ~= fx.name then
+                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                        if target_track then
+                            r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
+                            LAST_USED_FX = fx.name
+                            if config.close_after_adding_fx then
+                                SHOULD_CLOSE_SCRIPT = true
+                            end
+                        end
+                    end
 
                     if masonry_clicked then
                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
@@ -7245,6 +7340,37 @@ local function ShowScreenshotWindow()
                                     -- LINKS KLIK VOOR SEARCH RESULTS
                                     local search_clicked = r.ImGui_ImageButton(ctx, "search_result_" .. i, texture, display_width, display_height)
 
+                                    if config.enable_drag_add_fx then
+                                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
+                                            potential_drag_fx_name = fx.name
+                                            drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                                        end
+                                        if potential_drag_fx_name == fx.name and r.ImGui_IsMouseDown(ctx,0) then
+                                            local mx,my = r.ImGui_GetMousePos(ctx)
+                                            if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
+                                                dragging_fx_name = fx.name
+                                                potential_drag_fx_name = nil
+                                            end
+                                        end
+                                        if potential_drag_fx_name == fx.name and r.ImGui_IsMouseReleased(ctx,0) then
+                                            potential_drag_fx_name = nil
+                                        end
+                                    end
+
+                                    if search_clicked and dragging_fx_name ~= fx.name then
+                                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                        if target_track then
+                                            local fx_index = r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                            LAST_USED_FX = fx.name
+                                            if config.open_floating_after_adding and fx_index and fx_index >= 0 then
+                                                r.TrackFX_Show(target_track, fx_index, 3)
+                                            end
+                                            if config.close_after_adding_fx then
+                                                SHOULD_CLOSE_SCRIPT = true
+                                            end
+                                        end
+                                    end
+
                                     if search_clicked then
                                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                         if target_track then
@@ -7449,16 +7575,23 @@ local function FilterBox()
         SaveConfig()
     end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "A", x_button_width, button_height) then
-        sort_mode = "alphabet"
+    -- Sorteer toggle (A/R)
+    local sort_label_main = (sort_mode == "alphabet") and "A" or ((sort_mode == "rating") and "R" or "A")
+    if r.ImGui_Button(ctx, sort_label_main, x_button_width, button_height) then
+        if sort_mode == "alphabet" then
+            sort_mode = "rating"
+        else
+            sort_mode = "alphabet"
+        end
         config.sort_mode = sort_mode
         SaveConfig()
     end
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "R", x_button_width, button_height) then
-        sort_mode = "rating"
-        config.sort_mode = sort_mode
-        SaveConfig()
+    if r.ImGui_IsItemHovered(ctx) then
+        if sort_mode == "alphabet" then
+            r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
+        elseif sort_mode == "rating" then
+            r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+        end
     end
     r.ImGui_SameLine(ctx)
     if r.ImGui_Button(ctx, "X", x_button_width, button_height) then
@@ -10453,6 +10586,10 @@ if visible then
         if check_esc_key() then open = false end
     -- debug overlay verwijderd
         r.ImGui_End(ctx)
+        -- Overlay voor drag hint tekenen (buiten hoofdvenster)
+        if config.enable_drag_add_fx then
+            DrawDragOverlay()
+        end
         end
  
        
@@ -10467,6 +10604,39 @@ if visible then
     
     if SHOULD_CLOSE_SCRIPT then
         return
+    end
+    -- Globale drop afhandeling als fallback (meer betrouwbaar buiten item code)
+    if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
+        local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
+        if shift then
+            local item = r.GetSelectedMediaItem(0,0)
+            if item then
+                local take = r.GetActiveTake(item)
+                if take then
+                    r.TakeFX_AddByName(take, dragging_fx_name, 1)
+                    LAST_USED_FX = dragging_fx_name
+                end
+            end
+        else
+            local sx, sy = r.GetMousePosition()
+            local track = select(1, r.GetTrackFromPoint(sx, sy))
+            if not track then
+                local ix, iy = r.ImGui_GetMousePos(ctx)
+                track = select(1, r.GetTrackFromPoint(ix, iy))
+            end
+            if not track then
+                track = r.GetSelectedTrack(0,0) or r.GetTrack(0,0) or r.GetMasterTrack(0)
+            end
+            if track then
+                local fx_index = r.TrackFX_AddByName(track, dragging_fx_name, false, -1000 - r.TrackFX_GetCount(track))
+                LAST_USED_FX = dragging_fx_name
+                if config.open_floating_after_adding and fx_index and fx_index >= 0 then
+                    r.TrackFX_Show(track, fx_index, 3)
+                end
+            end
+        end
+        dragging_fx_name = nil
+        potential_drag_fx_name = nil
     end
     if open then        
         r.defer(Main)
