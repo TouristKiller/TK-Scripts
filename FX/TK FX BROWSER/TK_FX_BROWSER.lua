@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.3.8:
+-- @version 1.3.9:
 -- @changelog:
 --[[        
 ++ Some more tweaking
@@ -1804,7 +1804,7 @@ local function ShowConfigWindow()
                     r.ImGui_Text(ctx, string.format("Plugins (%d):", fx_count))
                     -- Scrollbare child bij veel plugins
                     local list_height = math.min(120, fx_count * 18 + 4)
-                    if r.ImGui_BeginChild(ctx, "FooterFXList", -1, list_height, true) then
+                    if r.ImGui_BeginChild(ctx, "FooterFXList", -1, list_height) then
                         for i=0, fx_count-1 do
                             local retval, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                             if retval and fx_name ~= "" then
@@ -1837,7 +1837,7 @@ local function ShowConfigWindow()
                     r.ImGui_Separator(ctx)
                     r.ImGui_Text(ctx, string.format("Plugins (%d):", fx_count))
                     local list_height = math.min(120, fx_count * 18 + 4)
-                    if r.ImGui_BeginChild(ctx, "FooterFXList", -1, list_height, true) then
+                    if r.ImGui_BeginChild(ctx, "FooterFXList", -1, list_height) then
                         for i=0, fx_count-1 do
                             local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                             if ok and fx_name ~= "" then
