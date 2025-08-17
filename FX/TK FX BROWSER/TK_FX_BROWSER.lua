@@ -1,10 +1,14 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.3.9:
+-- @version 1.4.0:
 -- @changelog:
 --[[        
-++ Some more tweaking
-++ Added drag and drop (from screenshot window to track. hold shift to add fx to item)
+++ Added option to show "clean" plugin name (without type end channel info)
+++ Added dropdown in main settings window (screenshots tab) where you can chouse a specific folder 
+    to take screenshots from. Still respecting the other settings for taking sreenshots
+++ added a toggle button in Plugin Manager (main settings window) that shows you the plugins
+    that do not have a screenshot (known bug... some x86 bridged plugins stay in this list even if there
+    is a screenshot made)
 
               ---------------------TODO-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin 
@@ -247,6 +251,7 @@ local function SetDefaultConfig()
         hide_default_titlebar_menu_items = false,
         show_name_in_screenshot_window = true,
         show_name_in_main_window = true,
+        clean_plugin_names = false, 
         hidden_names = {},
         excluded_plugins = {},
         plugin_visibility = {},
@@ -274,7 +279,7 @@ local function SetDefaultConfig()
         hide_main_window = false,
         show_browser_panel = true,
         browser_panel_width = browser_panel_width or 200,
-        screenshot_section_width = screenshot_section_width or 600, -- bewaart breedte screenshot gedeelte bij verbergen browser
+        screenshot_section_width = screenshot_section_width or 600, 
         use_pagination = true,
         use_masonry_layout = false,
         show_favorites_on_top = true,
@@ -283,9 +288,10 @@ local function SetDefaultConfig()
         show_custom_folders = true,
         hide_custom_dropdown = false,
         show_screenshot_search = true,
-    show_browser_search = true, -- nieuw: zoekbox in browser panel tonen/verbergen
-    enable_drag_add_fx = true, -- nieuwe optie: sleep screenshot naar track om FX toe te voegen
-    -- (scripts launcher niet meer hier opgeslagen; apart bestand)
+        show_browser_search = true, 
+        enable_drag_add_fx = true, 
+        show_missing_screenshots_only = false, 
+    bulk_selected_folder = nil, -- nieuwe selectie voor bulk screenshots (specifieke folder of pad voor custom)
     } 
 end
 local config = SetDefaultConfig()    
@@ -308,7 +314,7 @@ local function LoadConfig()
             config[k] = v
         end
         config.folder_specific_sizes = loaded_config.folder_specific_sizes or {}
-    -- scripts_launcher migratie: indien aanwezig in oude config, later migreren
+   
     legacy_scripts_launcher = loaded_config.scripts_launcher
     else
         SetDefaultConfig()
@@ -317,7 +323,6 @@ end
 LoadConfig()
 PROJECTS_DIR = config.last_used_project_location
 
--- Separate persistence for scripts launcher
 local scripts_launcher_path = script_path .. "scripts_launcher.json"
 local scripts_launcher = {}
 
@@ -328,12 +333,12 @@ local function LoadScriptsLauncher()
         local ok, data = pcall(function() return json.decode(content) end)
         if ok and type(data) == "table" then scripts_launcher = data end
     elseif legacy_scripts_launcher then
-        -- migrate from old config
+       
         scripts_launcher = legacy_scripts_launcher
         legacy_scripts_launcher = nil
         local mf = io.open(scripts_launcher_path, "w")
         if mf then mf:write(json.encode(scripts_launcher)); mf:close() end
-        SaveConfig() -- remove old field on next run (not saved anymore)
+        SaveConfig() 
     end
 end
 
@@ -353,14 +358,14 @@ end
 -- CUSTOM FOLDERS HELPERS
 local function IsPluginArray(folder_content)
     if type(folder_content) ~= "table" then return false end
-    if next(folder_content) == nil then return true end -- lege array is ook een plugin array
+    if next(folder_content) == nil then return true end 
     
-    -- Check of alle items strings zijn (plugin namen)
+  
     for i, item in ipairs(folder_content) do
         if type(item) ~= "string" then return false end
     end
     
-    -- Check of er geen named keys zijn (alleen numerieke indices)
+   
     for key, value in pairs(folder_content) do
         if type(key) ~= "number" then return false end
     end
@@ -370,15 +375,103 @@ end
 
 local function IsSubfolderStructure(folder_content)
     if type(folder_content) ~= "table" then return false end
-    if next(folder_content) == nil then return false end -- lege table is geen subfolder
+    if next(folder_content) == nil then return false end 
     
-    -- Check of er named keys zijn (folder namen)
+  
     for key, value in pairs(folder_content) do
         if type(key) ~= "string" then return false end
         if type(value) ~= "table" then return false end
     end
     
     return true
+end
+
+
+local function CleanPluginName(name)
+    if not name or name == '' then return name end
+    local original = name
+   
+    name = name:gsub('^VST3i?:%s*','')
+               :gsub('^VSTi:%s*','')
+               :gsub('^VST3:%s*','')
+               :gsub('^VST:%s*','')
+               :gsub('^CLAPi?:%s*','')
+               :gsub('^JSFX:%s*','')
+               :gsub('^JS:%s*','')
+               :gsub('^AU:%s*','')
+               :gsub('^LV2:%s*','')
+    
+    name = name:gsub('%s*%(%d+%s*ch%)$','')
+               :gsub('%s*%(%d+in%s*%d+out%)$','')
+   
+    name = name:gsub('%s+$','')
+    return name ~= '' and name or original
+end
+
+-- Screenshot detectie helpers
+local function StripX86Markers(name)
+    if not name then return '' end
+    
+    name = name
+        :gsub('%s*[%(%[]x86[^%]%)]*[%]%)]','')    
+        :gsub('[%s%-]+x86[%s%-]*bridged',' ')      
+        :gsub('[%s%-]x86[%s%-]',' ')               
+        :gsub('x86%s*:%s*','')                     
+    return name
+end
+
+local function NormalizePluginNameForMatch(name)
+    if not name then return '' end
+    name = name:lower()
+    name = name:gsub('^vst3i?:%s*',''):gsub('^vsti?:%s*',''):gsub('^vst3:%s*',''):gsub('^vst:%s*',''):gsub('^js:%s*',''):gsub('^clapi?:%s*',''):gsub('^clap:%s*',''):gsub('^lv2:%s*','')
+    name = name:gsub('%s*%(%d+%s*ch%)$',''):gsub('%s*%(%d+in%s*%d+out%)$','')
+    name = StripX86Markers(name)
+    name = CleanPluginName(name)
+    name = name:gsub('%s+',' ')
+    name = name:gsub('[^%w]+','')
+    return name
+end
+
+local screenshot_index_norm = nil
+local function BuildScreenshotIndex(force)
+    if screenshot_index_norm and not force then return end
+    screenshot_index_norm = {}
+    local i = 0
+    while true do
+        local fname = r.EnumerateFiles(screenshot_path, i)
+        if not fname then break end
+        local base = fname:match('(.+)%.png$') or fname:match('(.+)%.jpg$') or fname:match('(.+)%.jpeg$')
+        if base then
+            local norm = NormalizePluginNameForMatch(base)
+            screenshot_index_norm[norm] = true
+        end
+        i = i + 1
+    end
+end
+
+local function HasScreenshot(plugin_name)
+    BuildScreenshotIndex()
+    local norm = NormalizePluginNameForMatch(plugin_name)
+    if screenshot_index_norm[norm] then return true end
+    
+    local stripped_x86 = StripX86Markers(plugin_name)
+    local variants = {
+        plugin_name,
+        CleanPluginName(plugin_name),
+        (plugin_name or ''):gsub('[^%w%s-]','_'),
+        CleanPluginName(plugin_name):gsub('[^%w%s-]','_'),
+        stripped_x86,
+        CleanPluginName(stripped_x86),
+        StripX86Markers(CleanPluginName(plugin_name))
+    }
+    for _, base in ipairs(variants) do
+        if base and base ~= '' then
+            local png = screenshot_path .. base .. '.png'
+            local jpg = screenshot_path .. base .. '.jpg'
+            if r.file_exists(png) or r.file_exists(jpg) then return true end
+        end
+    end
+    return false
 end
 
 local function GetPluginsFromCustomFolder(folder_path)
@@ -417,10 +510,10 @@ local function CreateNestedFolder(folder_path, is_subfolder_of)
     local current = config.custom_folders
     for i, part in ipairs(parts) do
         if i == #parts then
-            -- Laatste deel: maak plugin array
+           
             current[part] = current[part] or {}
         else
-            -- Tussenliggende delen: maak subfolder structuur
+           
             current[part] = current[part] or {}
             current = current[part]
         end
@@ -428,18 +521,18 @@ local function CreateNestedFolder(folder_path, is_subfolder_of)
 end
 
 local function SaveCustomFolders()
-    -- Converteer de nested structure naar een JSON-vriendelijke format
+    
     local function convertForJSON(folders)
         local result = {}
         for folder_name, folder_content in pairs(folders) do
             if IsPluginArray(folder_content) then
-                -- Plugin array - converteer naar object met type indicator
+                
                 result[folder_name] = {
                     _type = "plugins",
                     plugins = folder_content
                 }
             elseif IsSubfolderStructure(folder_content) then
-                -- Subfolder structure - recursief converteren
+            
                 result[folder_name] = {
                     _type = "folder",
                     subfolders = convertForJSON(folder_content)
@@ -472,9 +565,9 @@ local function LoadCustomFolders()
         local content = file:read("*all")
         file:close()
         
-        -- Check if content is empty or invalid
+      
         if not content or content == "" or content:match("^%s*$") then
-            -- Empty or whitespace-only file, initialize with empty structure
+           
             config.custom_folders = {}
             return
         end
@@ -482,24 +575,24 @@ local function LoadCustomFolders()
         local success, loaded_data = pcall(json.decode, content)
         
         if success and loaded_data and type(loaded_data) == "table" then
-            -- Converteer terug van JSON format naar runtime format
+           
             local function convertFromJSON(data)
                 local result = {}
                 for folder_name, folder_data in pairs(data) do
                     if type(folder_data) == "table" then
                         if folder_data._type == "plugins" then
-                            -- Plugin array
+                            
                             result[folder_name] = folder_data.plugins or {}
                         elseif folder_data._type == "folder" then
-                            -- Subfolder structure
+                            
                             result[folder_name] = convertFromJSON(folder_data.subfolders or {})
                         else
-                            -- Backward compatibility - oude format
+                            
                             if folder_data[1] and type(folder_data[1]) == "string" then
-                                -- Het is een plugin array
+                               
                                 result[folder_name] = folder_data
                             else
-                                -- Het is een subfolder structure
+                                
                                 result[folder_name] = convertFromJSON(folder_data)
                             end
                         end
@@ -510,11 +603,10 @@ local function LoadCustomFolders()
             
             config.custom_folders = convertFromJSON(loaded_data)
         else
-            -- JSON decode failed, initialize with empty structure
+            
             r.ShowConsoleMsg("Warning: Could not parse custom_folders.json, initializing with empty folders\n")
             config.custom_folders = {}
             
-            -- Optionally backup the corrupt file
             local backup_path = script_path .. "custom_folders_backup.json"
             local backup_file = io.open(backup_path, "w")
             if backup_file then
@@ -666,7 +758,6 @@ function exit()
 end
 r.atexit(exit)
 
--- Eenvoudige overlay voor drag hint
 local function DrawDragOverlay()
     if dragging_fx_name then
         local imx, imy = r.ImGui_GetMousePos(ctx)
@@ -699,7 +790,7 @@ local function DrawDragOverlay()
 end
 
 function UpdateFonts()
-    -- Eerst detachen we de bestaande fonts
+   
     if r.ImGui_ValidatePtr(NormalFont, 'ImGui_Resource*') then
         r.ImGui_Detach(ctx, NormalFont)
     end
@@ -710,23 +801,21 @@ function UpdateFonts()
         r.ImGui_Detach(ctx, TinyFont)
     end
 
-    -- Dan maken we nieuwe fonts aan
+    
     NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
     TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
     LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
 
-    -- En attachen ze weer
     r.ImGui_Attach(ctx, NormalFont)
     r.ImGui_Attach(ctx, TinyFont)
     r.ImGui_Attach(ctx, LargeFont)
 end
 
--- Maak de fonts aan
 NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
 TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
 LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
 IconFont = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
--- Attach de fonts
+
 r.ImGui_Attach(ctx, NormalFont)
 r.ImGui_Attach(ctx, LargeFont)
 r.ImGui_Attach(ctx, TinyFont)
@@ -782,7 +871,7 @@ local function get_all_projects()
     local projects = {}
     local current_project_dir = config.last_used_project_location or PROJECTS_DIR
     local stack = {{path = current_project_dir, depth = 0}}
-    -- Verwijder de lokale max_depth declaratie en gebruik de globale max_depth variabele
+   
     while #stack > 0 do
         local current = table.remove(stack)
         local path, depth = current.path, current.depth
@@ -801,7 +890,7 @@ local function get_all_projects()
             end
             i = i + 1
         until not file
-        if depth < max_depth then  -- Gebruik hier de globale max_depth
+        if depth < max_depth then  
             i = 0
             repeat
                 local subdir = r.EnumerateSubdirectories(path, i)
@@ -842,9 +931,9 @@ end
 
 
 local function LoadProjects()
-    projects = {}  -- Maak de lijst leeg
-    filtered_projects = {}  -- Maak ook de gefilterde lijst leeg
-    projects = get_all_projects()  -- Laad nieuwe projecten met huidige max_depth
+    projects = {}  
+    filtered_projects = {} 
+    projects = get_all_projects()  
     filtered_projects = projects
     save_projects_info(projects)
 end
@@ -949,7 +1038,7 @@ local function ClearScreenshotCache(periodic_cleanup)
     if periodic_cleanup then
         local to_remove = {}
         for key, last_used in pairs(texture_last_used) do
-            if current_time - last_used > 300 then -- 5 minuten timeout
+            if current_time - last_used > 300 then 
                 table.insert(to_remove, key)
             end
         end
@@ -962,7 +1051,7 @@ local function ClearScreenshotCache(periodic_cleanup)
             texture_load_queue[key] = nil
         end
     else
-        -- Volledige cache wissen
+    
         if r.ImGui_DestroyImage then
             for key, texture in pairs(search_texture_cache) do
                 r.ImGui_DestroyImage(ctx, texture)
@@ -986,7 +1075,7 @@ end
 initFoldersCategory()
 
 local function UpdateLastViewedFolder(new_folder)
-    if -- new_folder ~= "Current Project FX" and 
+    if 
        new_folder ~= "Projects" and 
        new_folder ~= "Actions" and 
        new_folder ~= "Sends/Receives" then
@@ -1023,7 +1112,7 @@ local function GetCurrentProjectFX()
                     track_name = track_name,
                     track_number = track_number,
                     track_color = track_color,
-                    fx_index = j,  -- Dit was al aanwezig, goed!
+                    fx_index = j,  
                     unique_id = track_number .. "_" .. j
                 })
             end
@@ -1040,8 +1129,8 @@ local function GetCurrentTrackFX()
             local retval, fx_name = reaper.TrackFX_GetFXName(TRACK, j, "")
             if retval then
                 table.insert(fx_list, {
-                    fx_name = fx_name,  -- Voeg fx_name toe
-                    fx_index = j,  -- Make sure fx_index is included
+                    fx_name = fx_name,  
+                    fx_index = j,  
                     track_number = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER")
                 })
             end
@@ -1054,26 +1143,79 @@ end
 local search_filter = ""
 local filtered_plugins = {}
 local function InitializeFilteredPlugins()
-    for _, plugin_name in ipairs(PLUGIN_LIST) do
-        config.plugin_visibility[plugin_name] = true -- Zet alle plugins standaard op zichtbaar
+    filtered_plugins = {}
+    if not config then return end
+    config.plugin_visibility = config.plugin_visibility or {}
+    config.excluded_plugins = config.excluded_plugins or {}
+
+    -- Zorg dat screenshot index beschikbaar is voor HasScreenshot test
+    if type(BuildScreenshotIndex) == 'function' then
+        pcall(BuildScreenshotIndex) -- geen force, normale lazy build
+    end
+
+    for _, plugin_name in ipairs(PLUGIN_LIST or {}) do
+        if config.plugin_visibility[plugin_name] == nil then
+            config.plugin_visibility[plugin_name] = true
+        end
+
+        local has_shot = false
+        if config.show_missing_screenshots_only then
+            if type(HasScreenshot) == 'function' then
+                local ok, res = pcall(HasScreenshot, plugin_name)
+                if ok then has_shot = res end
+            end
+            if has_shot then goto continue end
+        end
+
         table.insert(filtered_plugins, {
-            name = plugin_name, 
-            visible = config.plugin_visibility[plugin_name] ~= false,
+            name       = plugin_name,
+            visible    = config.plugin_visibility[plugin_name] ~= false,
             searchable = not config.excluded_plugins[plugin_name]
         })
+        ::continue::
     end
+
     table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
+end
+
+-- Initialiseer meteen indien we in modus 'alleen ontbrekende screenshots' zitten zodat eerste weergave klopt
+if config.show_missing_screenshots_only then
+    InitializeFilteredPlugins()
 end
 
 local CHECKBOX_WIDTH = 15
 local last_clicked_plugin_index = nil
-local last_clicked_column = nil  -- 1 voor Bulk, 2 voor Search
+local last_clicked_column = nil 
 local function ShowPluginManagerTab()
+    -- Kolommen:
+    -- 1) "Bulk*" (config.plugin_visibility[plugin] true/false) bepaalt deelname aan bulk processen (en geselecteerde missing shots)
+    -- 2) "Search" (config.excluded_plugins[plugin]) bepaalt of plugin meegenomen wordt in zoekresultaten.
     if #filtered_plugins == 0 then
         InitializeFilteredPlugins()
     end
     if r.ImGui_Button(ctx, "Update Plugin List", 110) then
         FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+    end
+    r.ImGui_SameLine(ctx)
+
+    local toggle_label = config.show_missing_screenshots_only and "show all" or "missing screenshots"
+    if r.ImGui_Button(ctx, toggle_label, 120, 20) then
+        config.show_missing_screenshots_only = not config.show_missing_screenshots_only
+
+        filtered_plugins = {}
+
+        BuildScreenshotIndex(true)
+        for _, plugin in ipairs(PLUGIN_LIST) do
+            local include = (not config.show_missing_screenshots_only) or (config.show_missing_screenshots_only and not HasScreenshot(plugin))
+            if include and (search_filter == '' or string.find(string.lower(plugin), string.lower(search_filter))) then
+                table.insert(filtered_plugins, {
+                    name = plugin,
+                    visible = config.plugin_visibility[plugin] ~= false,
+                    searchable = not config.excluded_plugins[plugin]
+                })
+            end
+        end
+        table.sort(filtered_plugins, function(a,b) return a.name:lower() < b.name:lower() end)
     end
     r.ImGui_SameLine(ctx)
     r.ImGui_PushItemWidth(ctx, 120)
@@ -1082,21 +1224,34 @@ local function ShowPluginManagerTab()
     if changed then
         search_filter = new_search_filter
         filtered_plugins = {}
+        BuildScreenshotIndex(true)
         for _, plugin in ipairs(PLUGIN_LIST) do
+            if config.show_missing_screenshots_only and HasScreenshot(plugin) then goto continue_search end
             if search_filter == "" or string.find(string.lower(plugin), string.lower(search_filter)) then
                 table.insert(filtered_plugins, {
-                    name = plugin, 
+                    name = plugin,
                     visible = config.plugin_visibility[plugin] ~= false,
                     searchable = not config.excluded_plugins[plugin]
                 })
             end
+            ::continue_search::
         end
         table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
     end
-    r.ImGui_SameLine(ctx)
+    
     r.ImGui_Text(ctx, string.format(" | Total plugins: %d", #PLUGIN_LIST))
     r.ImGui_SameLine(ctx)
     r.ImGui_Text(ctx, string.format(" | Shown plugins: %d", #filtered_plugins))
+    if config.show_missing_screenshots_only then
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, START_SELECTED and "STOP" or "Make Shots (Selected)") then
+            if START_SELECTED then
+                STOP_SELECTED = true
+            else
+                StartSelectedMissingScreenshots()
+            end
+        end
+    end
     local window_width = r.ImGui_GetWindowWidth(ctx)
         local column1_width = 45  -- Voor "Bulk" checkbox
         local column2_width = 45  -- Voor "Search" checkbox
@@ -1248,7 +1403,7 @@ local function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 600
+    local window_height = 620
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -1495,7 +1650,7 @@ local function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Show screenshots in Search", config.show_screenshot_in_search)
-
+            
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.hideTopButtons = r.ImGui_Checkbox(ctx, "No Top Buttons", config.hideTopButtons)
             r.ImGui_SameLine(ctx)
@@ -1519,6 +1674,7 @@ local function ShowConfigWindow()
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.show_favorites_on_top = r.ImGui_Checkbox(ctx, "Show Favorites On Top", config.show_favorites_on_top)
             r.ImGui_Dummy(ctx, 0, 5)
+ 
             NewSection("SCREENSHOT WINDOW:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local changed, new_value = r.ImGui_Checkbox(ctx, "Show Window", config.show_screenshot_window)
@@ -1526,12 +1682,9 @@ local function ShowConfigWindow()
                 config.show_screenshot_window = new_value
                 ClearScreenshotCache()
             end
+            
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
-            _, config.show_name_in_screenshot_window = r.ImGui_Checkbox(ctx, "Show Names", config.show_name_in_screenshot_window)
-            r.ImGui_SameLine(ctx)
-           
-            r.ImGui_SetCursorPosX(ctx, column3_width)
             local dock_changed, new_dock_value = r.ImGui_Checkbox(ctx, "Dock", config.dock_screenshot_window)
             if dock_changed then
                 local main_dock_id = r.ImGui_GetWindowDockID(ctx)
@@ -1545,7 +1698,7 @@ local function ShowConfigWindow()
             end
             
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
             local dock_side_changed, new_dock_side = r.ImGui_Checkbox(ctx, "Dock Left", config.dock_screenshot_left)
             if dock_side_changed then
                 local main_dock_id = r.ImGui_GetWindowDockID(ctx)
@@ -1554,7 +1707,14 @@ local function ShowConfigWindow()
                     config.show_screenshot_window = true
                 end
                 SaveConfig()
-            end            
+            end  
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.show_name_in_screenshot_window = r.ImGui_Checkbox(ctx, "Show Names", config.show_name_in_screenshot_window)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.clean_plugin_names = r.ImGui_Checkbox(ctx, "Clean Plugin Names", config.clean_plugin_names)
+       
 
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -1772,6 +1932,88 @@ local function ShowConfigWindow()
             _, config.screenshot_default_folder_only = r.ImGui_Checkbox(ctx, "Default Only", config.screenshot_default_folder_only)
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_Separator(ctx)
+            -- Keuze: specifieke map voor bulk screenshots
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Bulk Folder")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width * 2)
+            local current_label
+            do
+                local sel = config.bulk_selected_folder
+                if not sel or sel == "__ALL_PLUGINS" then
+                    current_label = "All Plugins"
+                elseif sel:match("^DEV::") then
+                    current_label = "Developer: " .. sel:sub(6)
+                elseif sel == "CUSTOM::ALL" then
+                    current_label = "Custom (all)"
+                elseif sel:match("^CUST::") then
+                    current_label = "Custom: " .. sel:sub(7)
+                else
+                    current_label = sel -- standaard folder naam of legacy custom path
+                end
+            end
+            if r.ImGui_BeginCombo(ctx, "##BulkFolderSelect", current_label) then
+                local function AddSelectable(label, value)
+                    local selected = (config.bulk_selected_folder == value)
+                    if r.ImGui_Selectable(ctx, label, selected) then
+                        config.bulk_selected_folder = value
+                    end
+                end
+                AddSelectable("All Plugins", "__ALL_PLUGINS")
+                for i = 1, #CAT_TEST do
+                    if CAT_TEST[i].name == "FOLDERS" then
+                        for j = 1, #CAT_TEST[i].list do
+                            local fname = CAT_TEST[i].list[j].name
+                            AddSelectable(fname, fname)
+                        end
+                        break
+                    end
+                end
+                -- Developers (flexibele naam: DEV, DEVS, DEVELOPER(S))
+                local function IsDevCat(n)
+                    n = (n or ""):upper()
+                    return n == "DEV" or n == "DEVS" or n:find("DEVELOPER") ~= nil
+                end
+                for i = 1, #CAT_TEST do
+                    if IsDevCat(CAT_TEST[i].name) then
+                        for j = 1, #CAT_TEST[i].list do
+                            local dname = CAT_TEST[i].list[j].name
+                            AddSelectable("Developer: " .. dname, "DEV::" .. dname)
+                        end
+                        break
+                    end
+                end
+                -- Custom folders (inclusief subfolder paden)
+                local function TraverseCustom(tbl, prefix)
+                    prefix = prefix or ""
+                    for name, content in pairs(tbl) do
+                        local path = prefix == "" and name or (prefix .. "/" .. name)
+                        if IsPluginArray(content) then
+                            AddSelectable("Custom: " .. path, "CUST::" .. path)
+                        elseif IsSubfolderStructure(content) then
+                            TraverseCustom(content, path)
+                        end
+                    end
+                end
+                if config.custom_folders and next(config.custom_folders) then
+                    AddSelectable("Custom (all)", "CUSTOM::ALL")
+                end
+                if config.custom_folders and next(config.custom_folders) then
+                    TraverseCustom(config.custom_folders, "")
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Limit bulk screenshots to this (sub)folder. Custom folder paths are supported.") end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            if config.bulk_selected_folder then
+                if r.ImGui_Button(ctx, "Clear##BulkFolderClear", 60, 20) then
+                    config.bulk_selected_folder = nil
+                end
+            end
+            r.ImGui_Separator(ctx)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.close_after_adding_fx = r.ImGui_Checkbox(ctx, "Close script after adding FX", config.close_after_adding_fx)
             r.ImGui_SameLine(ctx)
@@ -1795,67 +2037,6 @@ local function ShowConfigWindow()
                     PROCESS = true
                     StartBulkScreenshot()
                 end
-            end
-            -- Plugin lijst van geselecteerde track
-            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                local fx_count = r.TrackFX_GetCount(TRACK)
-                if fx_count > 0 then
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_Text(ctx, string.format("Plugins (%d):", fx_count))
-                    -- Scrollbare child bij veel plugins
-                    local list_height = math.min(120, fx_count * 18 + 4)
-                    if r.ImGui_BeginChild(ctx, "FooterFXList", -1, list_height) then
-                        for i=0, fx_count-1 do
-                            local retval, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
-                            if retval and fx_name ~= "" then
-                                -- Strip prefix types voor compactheid
-                                fx_name = fx_name:gsub("VST3?:%s*", ""):gsub("CLAP:%s*", ""):gsub("JS:%s*", "")
-                                if r.ImGui_Selectable(ctx, fx_name, false) then
-                                    -- Select FX in chain (optioneel future: focus FX)
-                                    LAST_USED_FX = fx_name
-                                end
-                                if r.ImGui_IsItemHovered(ctx) then
-                                    r.ImGui_SetTooltip(ctx, "Click: mark as recent. Right-click: open context.")
-                                end
-                                if r.ImGui_IsItemClicked(ctx, 1) then
-                                    r.TrackFX_Show(TRACK, i, 3) -- toggle floating
-                                end
-                            end
-                        end
-                        r.ImGui_EndChild(ctx)
-                    end
-                else
-                    r.ImGui_Text(ctx, "Plugins: (none)")
-                end
-            else
-                r.ImGui_Text(ctx, "Plugins: -")
-            end
-            -- Plugin lijst van geselecteerde track
-            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                local fx_count = r.TrackFX_GetCount(TRACK)
-                if fx_count > 0 then
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_Text(ctx, string.format("Plugins (%d):", fx_count))
-                    local list_height = math.min(120, fx_count * 18 + 4)
-                    if r.ImGui_BeginChild(ctx, "FooterFXList", -1, list_height) then
-                        for i=0, fx_count-1 do
-                            local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
-                            if ok and fx_name ~= "" then
-                                fx_name = fx_name:gsub("VST3?:%s*", ""):gsub("CLAP:%s*", ""):gsub("JS:%s*", "")
-                                if r.ImGui_Selectable(ctx, fx_name, false) then
-                                    LAST_USED_FX = fx_name
-                                end
-                                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Click: mark recent. Right-click: open FX window") end
-                                if r.ImGui_IsItemClicked(ctx, 1) then r.TrackFX_Show(TRACK, i, 3) end
-                            end
-                        end
-                        r.ImGui_EndChild(ctx)
-                    end
-                else
-                    r.ImGui_Text(ctx, "Plugins: (none)")
-                end
-            else
-                r.ImGui_Text(ctx, "Plugins: -")
             end
             r.ImGui_PopStyleColor(ctx)
             r.ImGui_SameLine(ctx)
@@ -2194,7 +2375,8 @@ local function DisplayFolderTree(folders, path_prefix)
                     end
                     
                     if not already_in_folder then
-                        if r.ImGui_Selectable(ctx, plugin .. "  " .. GetStarsString(plugin)) then
+                        local display_plugin = config.clean_plugin_names and CleanPluginName(plugin) or plugin
+                        if r.ImGui_Selectable(ctx, display_plugin .. "  " .. GetStarsString(plugin)) then
                             -- Add plugin to the custom folder
                             local parts = {}
                             for part in selected_custom_folder_for_browse:gmatch("[^/]+") do
@@ -2299,7 +2481,12 @@ local function handleDocking()
 end
 
 local function IsX86Bridged(plugin_name)
-    return plugin_name:find("x86") ~= nil
+    if not plugin_name then return false end
+    return (plugin_name:match('%(x86%)')
+        or plugin_name:match('%[x86%]')
+        or plugin_name:match('[%s%-]x86[%s%)]*$')
+        or plugin_name:lower():match('x86%s*bridged')
+        or plugin_name:match('x86:')) and true or false
 end
 
 local function ScreenshotExists(plugin_name, size_option)
@@ -2841,6 +3028,105 @@ local function EnumerateInstalledFX()
     fx_list = {}
     total_fx_count = 0
     local default_folder_plugins = {}
+    local bulk_folder_plugins = nil
+    do
+        local sel = config.bulk_selected_folder
+        if sel and sel ~= "__ALL_PLUGINS" then
+            bulk_folder_plugins = {}
+            if sel:match("^DEV::") then
+                local devname = sel:sub(6)
+                local function IsDevCat(n)
+                    n = (n or ""):upper()
+                    return n == "DEV" or n == "DEVS" or n:find("DEVELOPER") ~= nil
+                end
+                for i = 1, #CAT_TEST do
+                    if IsDevCat(CAT_TEST[i].name) then
+                        for j = 1, #CAT_TEST[i].list do
+                            if CAT_TEST[i].list[j].name == devname then
+                                for k = 1, #CAT_TEST[i].list[j].fx do
+                                    bulk_folder_plugins[CAT_TEST[i].list[j].fx[k]] = true
+                                end
+                                break
+                            end
+                        end
+                        break
+                    end
+                end
+            elseif sel == "CUSTOM::ALL" then
+                local function CollectAll(tbl)
+                    for _, content in pairs(tbl) do
+                        if IsPluginArray(content) then
+                            for _, plg in ipairs(content) do bulk_folder_plugins[plg] = true end
+                        elseif IsSubfolderStructure(content) then
+                            CollectAll(content)
+                        end
+                    end
+                end
+                CollectAll(config.custom_folders or {})
+            elseif sel:match("^CUST::") then
+                local path = sel:sub(7)
+                local function FetchCustom(path_in)
+                    local parts = {}
+                    for part in path_in:gmatch("[^/]+") do table.insert(parts, part) end
+                    local cur = config.custom_folders
+                    for _, p in ipairs(parts) do
+                        cur = cur and cur[p]
+                        if not cur then return end
+                    end
+                    if cur and IsPluginArray(cur) then
+                        for _, plg in ipairs(cur) do bulk_folder_plugins[plg] = true end
+                    elseif cur and IsSubfolderStructure(cur) then
+                        local function Recurse(tbl)
+                            for _, v in pairs(tbl) do
+                                if IsPluginArray(v) then
+                                    for _, plg in ipairs(v) do bulk_folder_plugins[plg] = true end
+                                elseif IsSubfolderStructure(v) then
+                                    Recurse(v)
+                                end
+                            end
+                        end
+                        Recurse(cur)
+                    end
+                end
+                FetchCustom(path)
+            else
+                -- Legacy: standaard folder naam of oude custom pad zonder prefix
+                for i = 1, #CAT_TEST do
+                    if CAT_TEST[i].name == "FOLDERS" then
+                        for j = 1, #CAT_TEST[i].list do
+                            if CAT_TEST[i].list[j].name == sel then
+                                for k = 1, #CAT_TEST[i].list[j].fx do
+                                    bulk_folder_plugins[CAT_TEST[i].list[j].fx[k]] = true
+                                end
+                                break
+                            end
+                        end
+                        break
+                    end
+                end
+                -- Probeer legacy custom pad
+                if next(bulk_folder_plugins) == nil and config.custom_folders then
+                    local function LegacyFetch(path_in)
+                        local parts = {}
+                        for part in path_in:gmatch("[^/]+") do table.insert(parts, part) end
+                        local cur = config.custom_folders
+                        for _, p in ipairs(parts) do
+                            cur = cur and cur[p]
+                            if not cur then return end
+                        end
+                        if cur and IsPluginArray(cur) then
+                            for _, plg in ipairs(cur) do bulk_folder_plugins[plg] = true end
+                        end
+                    end
+                    LegacyFetch(sel)
+                    if next(bulk_folder_plugins) == nil then bulk_folder_plugins = nil end
+                end
+            end
+            if bulk_folder_plugins and next(bulk_folder_plugins) == nil then
+                bulk_folder_plugins = nil -- fallback naar niets als leeg
+            end
+        end
+    end
     
     if config.screenshot_default_folder_only and config.default_folder then
         for i = 1, #CAT_TEST do
@@ -2862,7 +3148,9 @@ local function EnumerateInstalledFX()
         if not retval then break end
         
         local include_fx = false
-        if not config.screenshot_default_folder_only or default_folder_plugins[fx_name] then
+    local passes_default = (not config.screenshot_default_folder_only) or default_folder_plugins[fx_name]
+    local passes_bulk_folder = (not bulk_folder_plugins) or bulk_folder_plugins[fx_name]
+    if passes_default and passes_bulk_folder then
             if fx_name:match("^VST:") and not fx_name:match("^VST3:") and not fx_name:match("^VSTi:") and config.bulk_screenshot_vst then
                 include_fx = true
             elseif fx_name:match("^VSTi:") and not fx_name:match("^VST3i:") and config.bulk_screenshot_vsti then
@@ -2888,6 +3176,10 @@ local function EnumerateInstalledFX()
             elseif fx_name:match("^LV2i:") and config.bulk_screenshot_lv2i then
                 include_fx = true
             end
+        end
+        -- Respecteer Bulk* checkbox uit Plugin Manager (plugin_visibility == false => overslaan)
+        if include_fx and config.plugin_visibility and config.plugin_visibility[fx_name] == false then
+            include_fx = false
         end
         if include_fx and (not IsX86Bridged(fx_name) or config.include_x86_bridged) then
             total_fx_count = total_fx_count + 1
@@ -2940,6 +3232,29 @@ local function ProcessFX(index, start_time)
     end
 end
 
+-- Single screenshot helper (afgeleid van bulk flow)
+function StartSingleScreenshotCapture(plugin_name, cb)
+    -- Valideer naam
+    if not plugin_name or plugin_name == '' then if cb then cb(false) end return end
+    -- Sla x86 bridged over indien uitgeschakeld
+    if IsX86Bridged(plugin_name) and config.include_x86_bridged == false then if cb then cb(false) end return end
+    -- Bestaat al (voor individuele run alleen overslaan als size option != 1)
+    if config.screenshot_size_option ~= 1 and ScreenshotExists and ScreenshotExists(plugin_name, config.screenshot_size_option) then
+        if cb then cb(true) end
+        return
+    end
+    -- Gebruik is_individual=true zodat bulk filters niet opnieuw toegepast worden
+    local ok, err = pcall(function()
+        MakeScreenshot(plugin_name, function()
+            if cb then cb(true) end
+        end, true)
+    end)
+    if not ok then
+        log_to_file("Single screenshot crash/err: " .. tostring(err))
+        if cb then cb(false) end
+    end
+end
+
 
 local function ClearScreenshots()
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
@@ -2980,6 +3295,65 @@ StartBulkScreenshot = function()
     else
         STOP_REQUESTED = true
     end
+end
+
+-- Geselecteerde ontbrekende screenshots alleen
+function StartSelectedMissingScreenshots()
+    if START_SELECTED then
+        STOP_SELECTED = true
+        return
+    end
+    -- Verzamel geselecteerde plugins (bulk checkbox = visibility true) die geen screenshot hebben
+    selected_missing_queue = {}
+    for _, p in ipairs(filtered_plugins) do
+        if config.show_missing_screenshots_only and config.plugin_visibility[p.name] ~= false and not HasScreenshot(p.name) then
+            table.insert(selected_missing_queue, p.name)
+        end
+    end
+    if #selected_missing_queue == 0 then return end
+    START_SELECTED = true
+    STOP_SELECTED = false
+    current_selected_index = 1
+    ProcessSelectedMissing()
+end
+
+-- Let op: deze functie wordt eerder aangeroepen in StartSelectedMissingScreenshots()
+-- Daarom mag hij niet 'local' zijn (of we hadden hem moeten forward-declareren).
+-- Veranderd naar globale functie zodat de eerdere call niet op een nil globale eindigt.
+function ProcessSelectedMissing()
+    if STOP_SELECTED then
+        START_SELECTED = false
+        STOP_SELECTED = false
+        return
+    end
+    local plugin_name = selected_missing_queue and selected_missing_queue[current_selected_index]
+    if not plugin_name then
+        -- Klaar
+        START_SELECTED = false
+        BuildScreenshotIndex(true)
+        -- Verwijder gemaakte uit de zichtbare lijst als we in missing modus zitten
+        if config.show_missing_screenshots_only then
+            local refreshed = {}
+            for _, p in ipairs(PLUGIN_LIST) do
+                if not HasScreenshot(p) and (search_filter == '' or string.find(string.lower(p), string.lower(search_filter))) then
+                    table.insert(refreshed, { name = p, visible = config.plugin_visibility[p] ~= false, searchable = not config.excluded_plugins[p] })
+                end
+            end
+            table.sort(refreshed, function(a,b) return a.name:lower() < b.name:lower() end)
+            filtered_plugins = refreshed
+        end
+        return
+    end
+    LAST_USED_FX = plugin_name
+    StartSingleScreenshotCapture(plugin_name, function()
+        if STOP_SELECTED then
+            START_SELECTED = false
+            STOP_SELECTED = false
+            return
+        end
+        current_selected_index = current_selected_index + 1
+        r.defer(ProcessSelectedMissing)
+    end)
 end
 
 function LoadPluginScreenshot(plugin_name)
@@ -4482,7 +4856,8 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     local start_idx = (tbl[i].current_page - 1) * ITEMS_PER_PAGE + 1
                     local end_idx = math.min(start_idx + ITEMS_PER_PAGE - 1, #filtered_fx)
                     for j = start_idx, end_idx do
-                        if r.ImGui_Selectable(ctx, filtered_fx[j] .. "  " .. GetStarsString(filtered_fx[j])) then
+                        local display_name = config.clean_plugin_names and CleanPluginName(filtered_fx[j]) or filtered_fx[j]
+                        if r.ImGui_Selectable(ctx, display_name .. "  " .. GetStarsString(filtered_fx[j])) then
                             selected_folder = nil
                             selected_individual_item = filtered_fx[j]
                             screenshot_search_results = {{name = filtered_fx[j]}}
@@ -4492,7 +4867,8 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     end
                 else
                     for j = 1, #filtered_fx do
-                        if r.ImGui_Selectable(ctx, filtered_fx[j] .. "  " .. GetStarsString(filtered_fx[j])) then
+                        local display_name = config.clean_plugin_names and CleanPluginName(filtered_fx[j]) or filtered_fx[j]
+                        if r.ImGui_Selectable(ctx, display_name .. "  " .. GetStarsString(filtered_fx[j])) then
                             selected_folder = nil
                             selected_individual_item = filtered_fx[j]
                             screenshot_search_results = {{name = filtered_fx[j]}}
@@ -4568,7 +4944,8 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
         if custom_folders_open[full_path] then
             r.ImGui_Indent(ctx, 1)
             for i, plugin in ipairs(folder_content) do
-                if r.ImGui_Selectable(ctx, plugin .. "  " .. GetStarsString(plugin)) then
+                local display_plugin = config.clean_plugin_names and CleanPluginName(plugin) or plugin
+                if r.ImGui_Selectable(ctx, display_plugin .. "  " .. GetStarsString(plugin)) then
                     -- Gedrag gelijk aan andere subfolders: folder deselecteren en alleen deze plugin tonen
                     selected_folder = nil
                     selected_individual_item = plugin
@@ -4707,11 +5084,12 @@ local function ShowBrowserPanel()
         if r.ImGui_IsItemClicked(ctx, 1) then
             favorites_is_open = not favorites_is_open
         end
-        if favorites_is_open then
+    if favorites_is_open then
             r.ImGui_Indent(ctx, 10)
             for i, fav in ipairs(favorite_plugins) do
                 if ItemMatchesSearch(fav, browser_search_term) then
-                    if r.ImGui_Selectable(ctx, fav .. "  " .. GetStarsString(fav)) then
+            local fav_display = config.clean_plugin_names and CleanPluginName(fav) or fav
+            if r.ImGui_Selectable(ctx, fav_display .. "  " .. GetStarsString(fav)) then
                         selected_folder = nil
                         selected_individual_item = fav
                         screenshot_search_results = {{name = fav}}
@@ -4753,10 +5131,11 @@ local function ShowBrowserPanel()
         if current_track_fx_is_open then
             r.ImGui_Indent(ctx, 10)
             local current_track_fx = GetCurrentTrackFX()
-            for i, fx in ipairs(current_track_fx) do
+        for i, fx in ipairs(current_track_fx) do
                 if ItemMatchesSearch(fx.fx_name, browser_search_term) then
                     local unique_id = "current_track_fx_" .. i .. "_" .. (fx.fx_index or 0)
-                    if r.ImGui_Selectable(ctx, fx.fx_name .. "  " .. GetStarsString(fx.fx_name) .. "##" .. unique_id) then
+            local display_fx_name = config.clean_plugin_names and CleanPluginName(fx.fx_name) or fx.fx_name
+            if r.ImGui_Selectable(ctx, display_fx_name .. "  " .. GetStarsString(fx.fx_name) .. "##" .. unique_id) then
                         if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                             local fx_index = fx.fx_index
                             if fx_index and fx_index >= 0 then
@@ -4793,10 +5172,11 @@ local function ShowBrowserPanel()
         if current_project_fx_is_open then
             r.ImGui_Indent(ctx, 10)
             local project_fx = GetCurrentProjectFX()
-            for i, fx in ipairs(project_fx) do
+        for i, fx in ipairs(project_fx) do
                 if fx.fx_name:lower():find(browser_search_term:lower(), 1, true) then
                     local unique_id = "project_fx_" .. i .. "_track" .. (fx.track_number or 0) .. "_fx" .. (fx.fx_index or 0)
-                    if r.ImGui_Selectable(ctx, fx.fx_name .. "  " .. GetStarsString(fx.fx_name) .. "##" .. unique_id) then
+            local display_fx_name = config.clean_plugin_names and CleanPluginName(fx.fx_name) or fx.fx_name
+            if r.ImGui_Selectable(ctx, display_fx_name .. "  " .. GetStarsString(fx.fx_name) .. "##" .. unique_id) then
                         if fx.is_master then
                             local master_track = r.GetMasterTrack(0)
                             if fx.fx_index ~= nil then
@@ -4918,7 +5298,8 @@ local function ShowBrowserPanel()
                                 if config.show_favorites_on_top then
                                     if #favorites > 0 then
                                         for _, plugin_name in ipairs(favorites) do
-                                            if r.ImGui_Selectable(ctx, plugin_name .. "  " .. GetStarsString(plugin_name)) then
+                                            local display_name = config.clean_plugin_names and CleanPluginName(plugin_name) or plugin_name
+                                            if r.ImGui_Selectable(ctx, display_name .. "  " .. GetStarsString(plugin_name)) then
                                                 selected_plugin = plugin_name
                                                 selected_folder = nil
                                                 screenshot_search_results = {{name = plugin_name}}
@@ -4932,7 +5313,8 @@ local function ShowBrowserPanel()
                                         end
                                     end
                                     for _, plugin_name in ipairs(regular_plugins) do
-                                        if r.ImGui_Selectable(ctx, plugin_name .. "  " .. GetStarsString(plugin_name)) then
+                                        local display_name = config.clean_plugin_names and CleanPluginName(plugin_name) or plugin_name
+                                        if r.ImGui_Selectable(ctx, display_name .. "  " .. GetStarsString(plugin_name)) then
                                             selected_plugin = plugin_name
                                             selected_folder = nil
                                             screenshot_search_results = {{name = plugin_name}}
@@ -4943,7 +5325,8 @@ local function ShowBrowserPanel()
                                     end
                                 else
                                     for _, plugin in ipairs(all_plugins) do
-                                        if r.ImGui_Selectable(ctx, plugin.name .. "  " .. GetStarsString(plugin.name)) then
+                                        local display_name = config.clean_plugin_names and CleanPluginName(plugin.name) or plugin.name
+                                        if r.ImGui_Selectable(ctx, display_name .. "  " .. GetStarsString(plugin.name)) then
                                             selected_plugin = plugin.name
                                             selected_folder = nil
                                             screenshot_search_results = {{name = plugin.name}}
@@ -5438,7 +5821,9 @@ local function ShowBrowserPanel()
                         for i = 0, fx_count - 1 do
                             local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                             if ok and fx_name ~= "" then
-                                fx_name = fx_name:gsub("VST3?:%s*", ""):gsub("CLAP:%s*", ""):gsub("JS:%s*", "")
+                                if config.clean_plugin_names then
+                                    fx_name = CleanPluginName(fx_name)
+                                end
                                 if r.ImGui_Selectable(ctx, fx_name .. "##footerfx" .. i, false) then
                                     LAST_USED_FX = fx_name
                                 end
@@ -5543,7 +5928,8 @@ local function DrawMasonryLayout(screenshots)
         if fx.is_message then
             -- Toon bericht in gele tekst over de volledige breedte
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF) -- Gele tekst
-            r.ImGui_TextWrapped(ctx, fx.name)
+            local display_name = config.clean_plugin_names and CleanPluginName(fx.name) or fx.name
+            r.ImGui_TextWrapped(ctx, display_name)
             r.ImGui_PopStyleColor(ctx)
             goto continue -- Skip de rest van de loop voor dit item
         end
@@ -5632,9 +6018,10 @@ local function DrawMasonryLayout(screenshots)
                     if config.show_name_in_screenshot_window and not config.hidden_names[fx.name] then
                         local y_before = r.ImGui_GetCursorPosY(ctx)
                         r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                        r.ImGui_Text(ctx, fx.name)
+                        local display_name = config.clean_plugin_names and CleanPluginName(fx.name) or fx.name
+                        r.ImGui_Text(ctx, display_name)
                         r.ImGui_PopTextWrapPos(ctx)
-                        r.ImGui_Text(ctx, GetStarsString(fx.name))
+                        r.ImGui_Text(ctx, GetStarsString(fx.name)) -- sterren blijven gebaseerd op originele naam
                         local y_after = r.ImGui_GetCursorPosY(ctx)
                         text_height = y_after - y_before
                     end
@@ -6766,7 +7153,8 @@ local function ShowScreenshotWindow()
                                         end
                                     end
                                 else
-                                    if r.ImGui_Button(ctx, plugin_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
+                                    local btn_name = config.clean_plugin_names and CleanPluginName(plugin_name) or plugin_name
+                                    if r.ImGui_Button(ctx, btn_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
                                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                         if target_track then
                                             r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
@@ -6843,7 +7231,8 @@ local function ShowScreenshotWindow()
                                         end
                                     end
                                 else
-                                    if r.ImGui_Button(ctx, plugin_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
+                                    local btn_name = config.clean_plugin_names and CleanPluginName(plugin_name) or plugin_name
+                                    if r.ImGui_Button(ctx, btn_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
                                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                         if target_track then
                                             r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
@@ -7015,8 +7404,9 @@ local function ShowScreenshotWindow()
                                                     is_master = plugin.is_master
                                                 }, "current_project_fx_" .. i)         
                                                 if config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] then
+                                                    local display_name = config.clean_plugin_names and CleanPluginName(plugin.fx_name) or plugin.fx_name
                                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                                    r.ImGui_Text(ctx, plugin.fx_name)
+                                                    r.ImGui_Text(ctx, display_name)
                                                     r.ImGui_PopTextWrapPos(ctx)
                                                     r.ImGui_Text(ctx, GetStarsString(plugin.fx_name))
                                                 end
@@ -7094,8 +7484,9 @@ local function ShowScreenshotWindow()
                                     }, "current_track_" .. i)
 
                                     if config.show_name_in_screenshot_window and not config.hidden_names[fx.fx_name] then
+                                        local display_name = config.clean_plugin_names and CleanPluginName(fx.fx_name) or fx.fx_name
                                         r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                        r.ImGui_Text(ctx, fx.fx_name)
+                                        r.ImGui_Text(ctx, display_name)
                                         r.ImGui_PopTextWrapPos(ctx)
                                         r.ImGui_Text(ctx, GetStarsString(fx.fx_name))
                                     end
@@ -7239,7 +7630,8 @@ local function ShowScreenshotWindow()
                                     end
                                 else
                                     -- Geen screenshot beschikbaar, toon alleen tekst knop
-                                    if r.ImGui_Button(ctx, plugin_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
+                                    local btn_name = config.clean_plugin_names and CleanPluginName(plugin_name) or plugin_name
+                                    if r.ImGui_Button(ctx, btn_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
                                         -- Validatie: controleer of er een track geselecteerd is
                                         if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then
                                             -- Geen track geselecteerd, selecteer de eerste track of master
@@ -7318,7 +7710,8 @@ local function ShowScreenshotWindow()
                         if fx.is_message then
                              -- Toon bericht in gele tekst over de volledige breedte
                             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF) -- Gele tekst
-                            r.ImGui_TextWrapped(ctx, fx.name)
+                            local display_name = config.clean_plugin_names and CleanPluginName(fx.name) or fx.name
+                            r.ImGui_TextWrapped(ctx, display_name)
                             r.ImGui_PopStyleColor(ctx)
                             goto continue -- Skip de rest van de loop voor dit item
                         end
@@ -7400,7 +7793,8 @@ local function ShowScreenshotWindow()
                             end
                         else
                             -- Geen screenshot beschikbaar, toon alleen tekst knop
-                            if r.ImGui_Button(ctx, fx.name .. "  " .. GetStarsString(fx.name), display_size, 30) then
+                            local fx_btn_name = config.clean_plugin_names and CleanPluginName(fx.name) or fx.name
+                            if r.ImGui_Button(ctx, fx_btn_name .. "  " .. GetStarsString(fx.name), display_size, 30) then
                                 -- Validatie: controleer of er een track geselecteerd is
                                 if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then
                                     -- Geen track geselecteerd, selecteer de eerste track of master
@@ -7775,7 +8169,8 @@ end
             else
                 -- Original view
                 for i = 1, #filtered_fx do
-                    if r.ImGui_Selectable(ctx, filtered_fx[i].name .. "  " .. GetStarsString(filtered_fx[i].name) .. "##search_" .. i, i == ADDFX_Sel_Entry) then
+                    local search_display = config.clean_plugin_names and CleanPluginName(filtered_fx[i].name) or filtered_fx[i].name
+                    if r.ImGui_Selectable(ctx, search_display .. "  " .. GetStarsString(filtered_fx[i].name) .. "##search_" .. i, i == ADDFX_Sel_Entry) then
                     local fx_index = r.TrackFX_AddByName(TRACK, filtered_fx[i].name, false, -1000 - r.TrackFX_GetCount(TRACK))
                     r.ImGui_CloseCurrentPopup(ctx)
                     LAST_USED_FX = filtered_fx[i].name
@@ -7877,7 +8272,8 @@ local function DrawItems(tbl, main_cat_name)
        
                 for _, plugin_group in ipairs(plugins_to_show) do
                     for _, plugin in ipairs(plugin_group) do
-                        if r.ImGui_Selectable(ctx, plugin.name .. "  " .. GetStarsString(plugin.name) .. "##plugin_list_" .. i .. "_" .. plugin.index) then
+                        local list_display = config.clean_plugin_names and CleanPluginName(plugin.name) or plugin.name
+                        if r.ImGui_Selectable(ctx, list_display .. "  " .. GetStarsString(plugin.name) .. "##plugin_list_" .. i .. "_" .. plugin.index) then
                             if ADD_FX_TO_ITEM then
                                 AddFXToItem(plugin.name)
                             else
@@ -7922,7 +8318,8 @@ local function DrawItems(tbl, main_cat_name)
                                 name = name:gsub(' %(' .. Literalize(tbl[i].name) .. '%)', "")
                             end
 
-                            if r.ImGui_Selectable(ctx, name .. "  " .. GetStarsString(tbl[i].fx[j]) .. "##plugin_list_" .. i .. "_" .. j) then
+                            local cat_display = config.clean_plugin_names and CleanPluginName(name) or name
+                            if r.ImGui_Selectable(ctx, cat_display .. "  " .. GetStarsString(tbl[i].fx[j]) .. "##plugin_list_" .. i .. "_" .. j) then
                                 if ADD_FX_TO_ITEM then
                                     AddFXToItem(tbl[i].fx[j])
                                 else
@@ -7976,7 +8373,8 @@ end
 
 local function DrawFavorites()
     for i, fav in ipairs(favorite_plugins) do
-        if r.ImGui_Selectable(ctx, fav .. "  " .. GetStarsString(fav) .. "##favorites_" .. i) then
+    local fav_display_global = config.clean_plugin_names and CleanPluginName(fav) or fav
+    if r.ImGui_Selectable(ctx, fav_display_global .. "  " .. GetStarsString(fav) .. "##favorites_" .. i) then
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                 local fx_index = r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
                 
@@ -8754,7 +9152,8 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
                 for group_idx, plugin_group in ipairs(plugins_to_show) do
                     for plugin_idx, plugin_name in ipairs(plugin_group) do
                         if type(plugin_name) == "string" then
-                            if r.ImGui_Selectable(ctx, plugin_name .. "  " .. GetStarsString(plugin_name) .. "##custom_" .. full_path .. "_" .. plugin_idx) then
+                            local custom_display = config.clean_plugin_names and CleanPluginName(plugin_name) or plugin_name
+                            if r.ImGui_Selectable(ctx, custom_display .. "  " .. GetStarsString(plugin_name) .. "##custom_" .. full_path .. "_" .. plugin_idx) then
                                 if ADD_FX_TO_ITEM then
                                     AddFXToItem(plugin_name)
                                 else
