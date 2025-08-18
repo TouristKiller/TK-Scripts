@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="1.4.1" author="TouristKiller" time="2025-08-18T00:30:00Z">
+    <version name="1.5.0" author="TouristKiller" time="2025-08-19T00:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -41,12 +41,7 @@
     <source file="arial.ttf">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/arial.ttf</source>
     <source file="Icons-Regular.otf">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/Icons-Regular.otf</source>
                 <changelog><![CDATA[           
-++ Added option to show "clean" plugin name (without type end channel info)
-++ Added dropdown in main settings window (screenshots tab) where you can chouse a specific folder 
-    to take screenshots from. Still respecting the other settings for taking sreenshots
-++ added a toggle button in Plugin Manager (main settings window) that shows you the plugins
-    that do not have a screenshot (known bug... some x86 bridged plugins stay in this list even if there
-    is a screenshot made)
+
 
 ]]></changelog>
     </version>
