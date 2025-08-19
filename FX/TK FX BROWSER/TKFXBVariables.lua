@@ -113,3 +113,15 @@ selected_folder_for_parent = nil
 selected_folder_name = nil
 new_parent_folder_name = ""
 
+-- MISC
+needs_font_update = false
+selected_plugin = nil
+browser_search_term = ""
+current_open_folder = nil
+ITEMS_PER_BATCH = 30
+loaded_items_count = ITEMS_PER_BATCH
+last_scroll_position = 0
+current_filtered_fx = {} 
+was_hidden = false
+unique_id_counter = 0
+pushed_main_styles = false

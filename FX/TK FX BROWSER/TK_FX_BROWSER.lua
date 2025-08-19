@@ -31,18 +31,7 @@ local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags
 local plugin_ratings_path = script_path .. "plugin_ratings.json"
 local plugin_ratings = {}
 
--- MISC
-local needs_font_update = false
-local selected_plugin = nil
-browser_search_term = ""
-local current_open_folder = nil
-local ITEMS_PER_BATCH = 30
-local loaded_items_count = ITEMS_PER_BATCH
-local last_scroll_position = 0
-local current_filtered_fx = {} 
-local was_hidden = false
-local unique_id_counter = 0
-local pushed_main_styles = false
+
 
 -- Drag/drop state
 dragging_fx_name = dragging_fx_name or nil
@@ -570,6 +559,15 @@ local function RenderMissingList(missing)
             ShowPluginContextMenu(name, "missing_ctx_" .. i)
         end
         r.ImGui_PopStyleVar(ctx)
+    end
+end
+
+-- Top spacing helper for first screenshot row (grid modes use a dummy; masonry adjusts column heights)
+local top_screenshot_spacing_applied = false
+local function ApplyTopScreenshotSpacing()
+    if not top_screenshot_spacing_applied then
+        r.ImGui_Dummy(ctx, 0, 6) -- small vertical gap above first row of screenshots
+        top_screenshot_spacing_applied = true
     end
 end
 
@@ -1545,12 +1543,13 @@ local function ShowConfigWindow()
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
+
         r.ImGui_Separator(ctx)
         r.ImGui_Spacing(ctx)
     end
     local config_open = true
     local window_width = 480
-    local window_height = 620
+    local window_height = 640
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -4671,11 +4670,7 @@ local function ShowScreenshotControls()
                 new_search_performed = true
             end
         end
-        if screenshot_search_results and #screenshot_search_results < 5 and browser_search_term ~= "" and selected_folder ~= nil then
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFAA00FF)
-            r.ImGui_Text(ctx, "Tip: Press 'All' for a global search if you miss results.")
-            r.ImGui_PopStyleColor(ctx)
-        end
+   
     end
 
 
@@ -6246,6 +6241,12 @@ local function ScaleScreenshotSize(width, height, max_display_size)
 end
 
 local function DrawMasonryLayout(screenshots)
+    -- Apply top spacing for masonry by offsetting initial column heights (dummy would be overridden by SetCursorPos)
+    local initial_spacing = 0
+    if not top_screenshot_spacing_applied then
+        initial_spacing = 6 -- same visual gap as grid
+        top_screenshot_spacing_applied = true
+    end
     local available_width = r.ImGui_GetContentRegionAvail(ctx)
     local column_width = display_size + 10
     local num_columns = math.max(1, math.floor(available_width / column_width))
@@ -6253,7 +6254,7 @@ local function DrawMasonryLayout(screenshots)
     local padding = config.compact_screenshots and 2 or 20
 
     for i = 1, num_columns do
-        column_heights[i] = 0
+        column_heights[i] = initial_spacing
     end
 
     for i, fx in ipairs(screenshots) do
@@ -6394,6 +6395,9 @@ local function ShowScreenshotWindow()
     if not screenshot_search_results then
         screenshot_search_results = {}
     end
+
+    -- reset spacing flag each frame of screenshot window
+    top_screenshot_spacing_applied = false
 
     -- Gebruik browser_panel_selected voor submappen, selected_folder voor folders
     local active_folder = browser_panel_selected or selected_folder
@@ -7429,6 +7433,38 @@ local function ShowScreenshotWindow()
     
         r.ImGui_PopStyleColor(ctx, 2)
         end
+   
+    local folder_match_count = nil
+    -- Ondersteun ook subfolders via browser_panel_selected (All Plugins / Category / Developer view)
+    local active_folder_for_tip = browser_panel_selected or selected_folder
+    if (not search_warning_message) and browser_search_term ~= "" and active_folder_for_tip then
+        local folder_plugins = GetPluginsForFolder(active_folder_for_tip)
+        if folder_plugins then
+            local cnt = 0
+            local term = browser_search_term:lower()
+            for _, p in ipairs(folder_plugins) do
+                if p:lower():find(term, 1, true) then
+                    cnt = cnt + 1
+                    if cnt >= 3 then break end -- we hoeven alleen te weten of het <3 blijft
+                end
+            end
+            folder_match_count = cnt
+        end
+    end
+    local show_folder_tip = (not search_warning_message) and folder_match_count and folder_match_count > 0 and folder_match_count < 3
+        if show_folder_tip then
+            local tip_text = "Tip: Press 'All' for a global search if you miss results."
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFAA00FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x332200FF)
+            if r.ImGui_BeginChild(ctx, "SearchFolderTip", -1, 22) then
+                local text_w = r.ImGui_CalcTextSize(ctx, tip_text)
+                local win_w = r.ImGui_GetWindowWidth(ctx)
+                r.ImGui_SetCursorPosX(ctx, (win_w - text_w) * 0.5)
+                r.ImGui_Text(ctx, tip_text)
+                r.ImGui_EndChild(ctx)
+            end
+            r.ImGui_PopStyleColor(ctx, 2)
+        end
 
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
             local scroll_y = r.ImGui_GetScrollY(ctx)
@@ -7525,6 +7561,8 @@ local function ShowScreenshotWindow()
                             RenderMissingList(missing)
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
+                            -- top spacing before first favorites grid row
+                            ApplyTopScreenshotSpacing()
                             for i, plugin_name in ipairs(with_shot) do
                                 if plugin_name == "--Favorites End--" then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
@@ -7667,6 +7705,8 @@ local function ShowScreenshotWindow()
                             RenderMissingList(missing)
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
+                            -- top spacing before first custom folder grid row
+                            ApplyTopScreenshotSpacing()
                             for i, plugin_name in ipairs(with_shot) do
                                 if plugin_name == "--Favorites End--" then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
@@ -8120,6 +8160,8 @@ local function ShowScreenshotWindow()
                                 end
                             else
                                 local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
+                                -- top spacing before first standard folder grid row
+                                ApplyTopScreenshotSpacing()
                                 for i, plugin_name in ipairs(with_shot) do
                                     if plugin_name == "--Favorites End--" then
                                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
@@ -8259,6 +8301,8 @@ local function ShowScreenshotWindow()
                             r.ImGui_TextWrapped(ctx, display_name)
                             r.ImGui_PopStyleColor(ctx)
                         end
+                        -- top spacing before first search results grid row (after potential messages)
+                        if #with_shot > 0 then ApplyTopScreenshotSpacing() end
                         -- Render screenshots in grid
                         for i, plugin_name in ipairs(with_shot) do
                             local column = (i - 1) % num_columns
