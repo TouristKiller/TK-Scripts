@@ -1,11 +1,9 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.3.0
+-- @version 0.3.1
 -- @changelog 
 --[[
-+ added toggle show all track envelopes (ENV left+right click)
-+ added jump to time /marker/ region (cursor position left click)
-+ added toggle preserve pitch (Playrate right click)
++ added local time + set BMP color + centered timesignature
 ]]--
 
 
@@ -124,6 +122,7 @@ local default_settings  = {
     settings_x          = 0.99,
     cursorpos_x         = 0.25,
     visualmtr_x         = 0.32,
+    local_time_x        = 0.50,
     custom_buttons_x_offset = 0.0,
     -- y offset
     transport_y         = 0.15,      
@@ -134,6 +133,7 @@ local default_settings  = {
     settings_y          = 0.15,    
     cursorpos_y         = 0.15,
     visualmtr_y         = 0.15,
+    local_time_y        = 0.02,
     custom_buttons_y_offset = 0.0,
 
     -- Color settings
@@ -158,6 +158,8 @@ local default_settings  = {
     metronome_enabled   = 0x00FF00FF,
     timesel_color       = 0x333333FF,
     timesel_border      = true,
+    show_local_time     = true,
+    local_time_color    = 0xFFFFFFFF,
     timesel_invisible   = false,
 
     -- Visibility settings
@@ -209,7 +211,11 @@ local default_settings  = {
     show_accuracy_indicator = true,
     high_accuracy_color = 0x00FF00FF,
     medium_accuracy_color = 0xFFFF00FF,
-    low_accuracy_color = 0xFF0000FF
+    low_accuracy_color = 0xFF0000FF,
+    tempo_presets = {60,80,100,120,140,160,180},
+    tempo_button_color = 0x333333FF,
+    tempo_button_color_hover = 0x444444FF,
+    measure_display_width = 160  
 
 }
 
@@ -318,6 +324,13 @@ function LoadSettings()
         if old_font_size ~= settings.font_size then
             font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
             r.ImGui_Attach(ctx, font)
+        end
+        if not settings.tempo_presets or type(settings.tempo_presets) ~= 'table' or #settings.tempo_presets==0 then
+            settings.tempo_presets = {60,80,100,120,140,160,180}
+        end
+    else
+        if not settings.tempo_presets then
+            settings.tempo_presets = {60,80,100,120,140,160,180}
         end
     end
 end
@@ -806,6 +819,8 @@ function ShowSettings(main_window_width , main_window_height)
                     local pixel_change = 1 / main_window_height
                     settings.tempo_y = math.min(1, settings.tempo_y + pixel_change)
                 end
+                rv, settings.tempo_button_color = r.ImGui_ColorEdit4(ctx, "Tempo Button Color", settings.tempo_button_color, flags)
+                rv, settings.tempo_button_color_hover = r.ImGui_ColorEdit4(ctx, "Tempo Hover Color", settings.tempo_button_color_hover, flags)
             end
             r.ImGui_Separator(ctx)
             if ShowSectionHeader("Playrate", "playrate_open") then
@@ -936,7 +951,46 @@ function ShowSettings(main_window_width , main_window_height)
                     settings.settings_y = math.min(1, settings.settings_y + pixel_change)
                 end
             end
-            -- In de ShowSettings functie, onder "Layout Settings"
+            r.ImGui_Separator(ctx)
+            if ShowSectionHeader("Local Time", "localtime_open") then
+            local changed = false
+            local lt_x_pct = (settings.local_time_x or 0.50) * 100
+            rv, lt_x_pct = r.ImGui_SliderDouble(ctx, "X##ltimeX", lt_x_pct, 0, 100, "%.0f%%")
+            settings.local_time_x = lt_x_pct / 100
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##ltimeX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.local_time_x = math.max(0, settings.local_time_x - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##ltimeX", 20, 20) then
+                local pixel_change = 1 / main_window_width
+                settings.local_time_x = math.min(1, settings.local_time_x + pixel_change)
+            end
+
+            local lt_y_pct = (settings.local_time_y or 0.02) * 100
+            rv, lt_y_pct = r.ImGui_SliderDouble(ctx, "Y##ltimeY", lt_y_pct, 0, 100, "%.0f%%")
+            settings.local_time_y = lt_y_pct / 100
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "-##ltimeY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.local_time_y = math.max(0, settings.local_time_y - pixel_change)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "+##ltimeY", 20, 20) then
+                local pixel_change = 1 / main_window_height
+                settings.local_time_y = math.min(1, settings.local_time_y + pixel_change)
+            end
+
+            if r.ImGui_Button(ctx, "Reset##ltime") then
+                settings.local_time_x = 0.50
+                settings.local_time_y = 0.02
+            end
+
+            local flags = r.ImGui_ColorEditFlags_NoInputs()
+            local rv_col, new_col = r.ImGui_ColorEdit4(ctx, "Color##localtime", settings.local_time_color or 0xFFFFFFFF, flags)
+            if rv_col then settings.local_time_color = new_col end
+            end
             if r.ImGui_CollapsingHeader(ctx, "Custom Buttons Group") then
                 local rv
                 
@@ -988,13 +1042,18 @@ function ShowSettings(main_window_width , main_window_height)
             rv, settings.show_tempo = r.ImGui_Checkbox(ctx, "Tempo/Time Signature", settings.show_tempo)
             r.ImGui_SameLine(ctx, column_width)
             rv, settings.show_playrate = r.ImGui_Checkbox(ctx, "Playrate", settings.show_playrate)
+            rv, settings.show_local_time = r.ImGui_Checkbox(ctx, "Local Time", settings.show_local_time)
             rv, settings.show_vismetronome = r.ImGui_Checkbox(ctx, "Visual Metronome", settings.show_vismetronome)
             r.ImGui_SameLine(ctx, column_width)
             rv, settings.show_env_button = r.ImGui_Checkbox(ctx, "ENV Button", settings.show_env_button)
             rv, settings.show_taptempo = r.ImGui_Checkbox(ctx, "Show TapTempo", settings.show_taptempo)
             r.ImGui_SameLine(ctx, column_width)
             rv, settings.show_settings_button = r.ImGui_Checkbox(ctx, "Settings Button", settings.show_settings_button)
+            
             end
+
+    
+        
 
         if r.ImGui_CollapsingHeader(ctx, "Custom Transport Button Images") then
             local changed = false
@@ -1706,36 +1765,30 @@ function ShowCursorPosition(main_window_width, main_window_height)
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.cursorpos_x * main_window_width)
     r.ImGui_SetCursorPosY(ctx, settings.cursorpos_y * main_window_height)
-    r.ImGui_InvisibleButton(ctx, "##", 10, 10)
-    r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosX(ctx, settings.cursorpos_x * main_window_width)
-    r.ImGui_SetCursorPosY(ctx, settings.cursorpos_y * main_window_height)
     local play_state = r.GetPlayState()
     local position = (play_state == 1) and r.GetPlayPosition() or r.GetCursorPosition()
-
     local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = reaper.GetTempoTimeSigMarker(0, 0)
     if not retval then timesig_num, timesig_denom = 4, 4 end
-    
-    local retval, measures, cml, fullbeats = r.TimeMap2_timeToBeats(0, position)
+    local _, measures, cml, fullbeats = reaper.TimeMap2_timeToBeats(0, position)
     measures = measures or 0
-    
     local beatsInMeasure = fullbeats % timesig_num
     local ticks = math.floor((beatsInMeasure - math.floor(beatsInMeasure)) * 960/10)
     local minutes = math.floor(position / 60)
     local seconds = position % 60
     local time_str = string.format("%d:%06.3f", minutes, seconds)
-    
-    local mbt_str = string.format("%d.%d.%02d", 
-    math.floor(measures+1), 
-    math.floor(beatsInMeasure+1),
-    ticks)
-    
+    local mbt_str = string.format("%d.%d.%02d", math.floor(measures+1), math.floor(beatsInMeasure+1), ticks)
+    local combined = mbt_str .. " / " .. time_str
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.button_normal)
-    r.ImGui_Button(ctx, mbt_str .. " / " .. time_str)
-    if r.ImGui_IsItemClicked(ctx, 0) then
-    r.Main_OnCommand(40069, 0)
-    end
+    r.ImGui_Button(ctx, combined)
     r.ImGui_PopStyleColor(ctx)
+end
+
+-- Hulpfunctie: zet globale project tempo zonder nieuwe tempo marker op cursor
+local function SetProjectTempoGlobal(new_tempo)
+    if not new_tempo or new_tempo <= 0 then return end
+    -- Schrijf direct naar project info (tempo = BPPQN? Nee: tempo veld index 0 = proj tempo)
+    -- Volgens API: GetSetProjectInfo(project, "TEMPO", value, true)
+    reaper.GetSetProjectInfo(0, 'TEMPO', new_tempo, true)
 end
 
 function ShowTempoAndTimeSignature(main_window_width, main_window_height)
@@ -1747,10 +1800,38 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
 
     reaper.ImGui_PushItemWidth(ctx, settings.font_size * 4)
     local tempo_text = string.format("%.1f", tempo)
+    -- Gebruik aparte kleur indien ingesteld
+    if settings.tempo_button_color then
+        local hov = settings.tempo_button_color_hover or settings.tempo_button_color
+        local act = hov
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), settings.tempo_button_color)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hov)
+        reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), act)
+    end
+    -- Bereid gecombineerde maat/tijd tekst voor centrering
+    local play_state = reaper.GetPlayState()
+    local position = (play_state == 1) and reaper.GetPlayPosition() or reaper.GetCursorPosition()
+    local retval, pos, measurepos, beatpos, bpm_marker, timesig_num, timesig_denom = reaper.GetTempoTimeSigMarker(0, 0)
+    if not retval then timesig_num, timesig_denom = 4,4 end
+    local _, measures, cml, fullbeats = reaper.TimeMap2_timeToBeats(0, position)
+    measures = measures or 0
+    local beatsInMeasure = fullbeats % timesig_num
+    local ticks = math.floor((beatsInMeasure - math.floor(beatsInMeasure)) * 960/10)
+    local mbt_str = string.format("%d.%d.%02d", math.floor(measures+1), math.floor(beatsInMeasure+1), ticks)
+    local combined_mbt = mbt_str
+    -- Tempo knop (klik & drag bron)
     reaper.ImGui_Button(ctx, tempo_text)
+    -- Registreer clicks op TEMPO knop voordat we andere items tekenen
+    local tempo_button_left_click = reaper.ImGui_IsItemClicked(ctx, 0)
+    local tempo_button_right_click = reaper.ImGui_IsItemClicked(ctx, 1)
+    if settings.tempo_button_color then
+        reaper.ImGui_PopStyleColor(ctx, 3)
+    end
 
-    -- Start dragging: sla de klikpositie op als anker
-    if reaper.ImGui_IsItemClicked(ctx, 0) then
+    -- (MBT weergave onder tempo verwijderd op verzoek)
+
+    -- Start dragging: alleen wanneer op tempo knop geklikt
+    if tempo_button_left_click then
         tempo_dragging = true
         tempo_start_value = tempo
         tempo_accumulated_delta = 0
@@ -1774,10 +1855,10 @@ if tempo_last_mouse_y then
     local mouse_delta_y = current_mouse_y - tempo_last_mouse_y
     if math.abs(mouse_delta_y) > 0 then
         local sensitivity = 5 -- pixels per BPM
-        tempo_accumulated_delta = tempo_accumulated_delta + (-mouse_delta_y / sensitivity)
-        local adjusted_tempo = math.floor(tempo_start_value + tempo_accumulated_delta + 0.5)
-        adjusted_tempo = math.max(1, math.min(590, adjusted_tempo))
-        reaper.CSurf_OnTempoChange(adjusted_tempo)
+    tempo_accumulated_delta = tempo_accumulated_delta + (-mouse_delta_y / sensitivity)
+    local adjusted_tempo = math.floor(tempo_start_value + tempo_accumulated_delta + 0.5)
+    adjusted_tempo = math.max(1, math.min(590, adjusted_tempo))
+    reaper.CSurf_OnTempoChange(adjusted_tempo)
     end
 end
         -- Zet de muis altijd terug naar de ankerpositie ná delta-berekening
@@ -1804,8 +1885,8 @@ end
         tempo_mouse_anchor_x, tempo_mouse_anchor_y = nil, nil
     end
 
-    -- Rechtsklik menu voor tempo
-    if reaper.ImGui_IsItemClicked(ctx, 1) then
+    -- Rechtsklik menu alleen op tempo knop
+    if tempo_button_right_click then
         reaper.ImGui_OpenPopup(ctx, "TempoMenu")
     end
 
@@ -1817,23 +1898,95 @@ end
         local rv_popup, new_popup_tempo = reaper.ImGui_InputDouble(ctx, "##PopupTempo", popup_tempo, 1, 10, "%.1f")
         if rv_popup then
             new_popup_tempo = math.max(2, math.min(500, new_popup_tempo))
-            reaper.CSurf_OnTempoChange(new_popup_tempo)
+            SetProjectTempoGlobal(new_popup_tempo)
         end
         reaper.ImGui_PopItemWidth(ctx)
 
         reaper.ImGui_Separator(ctx)
 
-        local common_tempos = {60, 80, 100, 120, 140, 160, 180}
-        for _, bpm in ipairs(common_tempos) do
-            if reaper.ImGui_MenuItem(ctx, tostring(bpm) .. " BPM") then
-                reaper.CSurf_OnTempoChange(bpm)
+    -- Dynamische, bewerkbare tempo presets (persist in settings)
+    settings.tempo_presets = settings.tempo_presets or {60,80,100,120,140,160,180}
+    -- Sorteer oplopend
+    table.sort(settings.tempo_presets, function(a,b) return a<b end)
+        local i = 1
+    while i <= #settings.tempo_presets do
+        local bpm_val = tonumber(settings.tempo_presets[i])
+            if bpm_val then
+                if reaper.ImGui_MenuItem(ctx, string.format("%g BPM", bpm_val)) then
+                    SetProjectTempoGlobal(bpm_val)
+                end
             end
+            i=i+1
+        end
+
+        if reaper.ImGui_BeginMenu(ctx, "Edit Presets") then
+            -- Werk in een tijdelijke kopie zodat tussentijds typen niet permanent alles overschrijft
+            if not editing_tempo_presets then
+                editing_tempo_presets = {}
+                for ii,vv in ipairs(settings.tempo_presets) do editing_tempo_presets[ii]=vv end
+            end
+            local remove_index = nil
+            for idx, v in ipairs(editing_tempo_presets) do
+                reaper.ImGui_PushID(ctx, idx)
+                reaper.ImGui_PushItemWidth(ctx, 60)
+                local changed, new_val = reaper.ImGui_InputDouble(ctx, "##tp", v, 0,0,"%.2f")
+                reaper.ImGui_PopItemWidth(ctx)
+                reaper.ImGui_SameLine(ctx)
+                if reaper.ImGui_Button(ctx, "X") then remove_index = idx end
+                if changed then
+                    -- Pas alleen lokaal aan; nog niet saven
+                    if new_val and new_val>=2 and new_val<=500 then
+                        editing_tempo_presets[idx] = new_val
+                    elseif new_val and new_val < 2 then
+                        -- Laat lage tussenwaarden (bij typen) ongemoeid zodat niet alles naar 2 BPM springt
+                        -- niets doen
+                    end
+                end
+                reaper.ImGui_PopID(ctx)
+            end
+            if remove_index then table.remove(editing_tempo_presets, remove_index) end
+            reaper.ImGui_Separator(ctx)
+            -- Nieuw preset toevoegen
+            temp_new_preset_val = temp_new_preset_val or 120.0
+            reaper.ImGui_PushItemWidth(ctx, 80)
+            local add_changed, add_val = reaper.ImGui_InputDouble(ctx, "##addPreset", temp_new_preset_val, 0,0,"%.2f")
+            if add_changed then temp_new_preset_val = add_val end
+            reaper.ImGui_PopItemWidth(ctx); reaper.ImGui_SameLine(ctx)
+            if reaper.ImGui_Button(ctx, "Add") then
+                if add_val and add_val>=2 and add_val<=500 then
+                    local exists=false; for _,v in ipairs(editing_tempo_presets) do if math.abs(v-add_val)<0.0001 then exists=true break end end
+                    if not exists then table.insert(editing_tempo_presets, add_val) end
+                end
+            end
+            reaper.ImGui_Separator(ctx)
+            if reaper.ImGui_Button(ctx, "Save Presets") then
+                -- Filter & sorteer en schrijf terug
+                local cleaned = {}
+                local seen = {}
+                for _,val in ipairs(editing_tempo_presets) do
+                    if type(val)=="number" and val>=2 and val<=500 then
+                        local key = string.format("%.3f", val)
+                        if not seen[key] then table.insert(cleaned, val); seen[key]=true end
+                    end
+                end
+                table.sort(cleaned, function(a,b) return a<b end)
+                settings.tempo_presets = cleaned
+                SaveSettings()
+                editing_tempo_presets = nil
+            end
+            reaper.ImGui_SameLine(ctx)
+            if reaper.ImGui_Button(ctx, "Reset Defaults") then
+                editing_tempo_presets = {60,80,100,120,140,160,180}
+            end
+            reaper.ImGui_SameLine(ctx)
+            if reaper.ImGui_Button(ctx, "Cancel") then editing_tempo_presets = nil end
+            reaper.ImGui_EndMenu(ctx)
         end
 
         reaper.ImGui_Separator(ctx)
 
         if reaper.ImGui_MenuItem(ctx, "Reset to 120 BPM") then
-            reaper.CSurf_OnTempoChange(120.0)
+            SetProjectTempoGlobal(120.0)
         end
 
         reaper.ImGui_EndPopup(ctx)
@@ -1841,7 +1994,6 @@ end
 
     reaper.ImGui_PopItemWidth(ctx)
 
-    -- ... bestaande code voor time signature ...
     reaper.ImGui_SameLine(ctx)
     reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
 
@@ -1851,13 +2003,66 @@ end
     if not retval then timesig_num, timesig_denom = 4, 4 end
     reaper.ImGui_PushItemWidth(ctx, settings.font_size * 2)
     local rv_num, new_num = reaper.ImGui_InputInt(ctx, "##num", timesig_num, 0, 0)
+    do
+        local active = reaper.ImGui_IsItemActive(ctx)
+        local focused = reaper.ImGui_IsItemFocused(ctx)
+        local disp_num = (rv_num and new_num>0) and new_num or timesig_num
+        if not active and not focused then
+            local min_x, min_y = reaper.ImGui_GetItemRectMin(ctx)
+            local max_x, max_y = reaper.ImGui_GetItemRectMax(ctx)
+            local w = max_x - min_x
+            local h = max_y - min_y
+            local txt = tostring(disp_num)
+            local tw, th = reaper.ImGui_CalcTextSize(ctx, txt)
+            local dl = reaper.ImGui_GetWindowDrawList(ctx)
+            -- Dek oorspronkelijke tekst af: vul alleen binnenvlak (klein inset voor border)
+            local inset = 2
+            local frame_col = reaper.ImGui_GetColor(ctx, reaper.ImGui_Col_FrameBg()) or settings.button_normal
+            reaper.ImGui_DrawList_AddRectFilled(dl, min_x+inset, min_y+inset, max_x-inset, max_y-inset, frame_col, 3)
+            local tx = min_x + (w - tw) * 0.5
+            local ty = min_y + (h - th) * 0.5
+            local text_col = reaper.ImGui_GetColor(ctx, reaper.ImGui_Col_Text()) or 0xFFFFFFFF
+            reaper.ImGui_DrawList_AddText(dl, tx, ty, text_col, txt)
+        end
+    end
+    -- Separator dichter tegen numerator
     reaper.ImGui_SameLine(ctx)
+    do
+        local curx = reaper.ImGui_GetCursorPosX(ctx)
+        -- Trek standaard item spacing iets af
+        reaper.ImGui_SetCursorPosX(ctx, curx - (settings.font_size * 0.6))
+    end
     reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
     reaper.ImGui_Text(ctx, "/")
 
     reaper.ImGui_SameLine(ctx)
+    do
+        local curx = reaper.ImGui_GetCursorPosX(ctx)
+        reaper.ImGui_SetCursorPosX(ctx, curx - (settings.font_size * 0.6))
+    end
     reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
     local rv_denom, new_denom = reaper.ImGui_InputInt(ctx, "##denom", timesig_denom, 0, 0)
+    do
+        local active = reaper.ImGui_IsItemActive(ctx)
+        local focused = reaper.ImGui_IsItemFocused(ctx)
+        local disp_den = (rv_denom and new_denom>0) and new_denom or timesig_denom
+        if not active and not focused then
+            local min_x, min_y = reaper.ImGui_GetItemRectMin(ctx)
+            local max_x, max_y = reaper.ImGui_GetItemRectMax(ctx)
+            local w = max_x - min_x
+            local h = max_y - min_y
+            local txt = tostring(disp_den)
+            local tw, th = reaper.ImGui_CalcTextSize(ctx, txt)
+            local dl = reaper.ImGui_GetWindowDrawList(ctx)
+            local inset = 2
+            local frame_col = reaper.ImGui_GetColor(ctx, reaper.ImGui_Col_FrameBg()) or settings.button_normal
+            reaper.ImGui_DrawList_AddRectFilled(dl, min_x+inset, min_y+inset, max_x-inset, max_y-inset, frame_col, 3)
+            local tx = min_x + (w - tw) * 0.5
+            local ty = min_y + (h - th) * 0.5
+            local text_col = reaper.ImGui_GetColor(ctx, reaper.ImGui_Col_Text()) or 0xFFFFFFFF
+            reaper.ImGui_DrawList_AddText(dl, tx, ty, text_col, txt)
+        end
+    end
 
     if rv_num or rv_denom then
         reaper.Undo_BeginBlock()
@@ -1970,6 +2175,24 @@ function ShowTimeSelection(main_window_width, main_window_height)
     end
 end
 
+-- Toon lokale tijd
+local last_local_time_sec = -1
+local cached_local_time = ""
+local function ShowLocalTime(main_window_width, main_window_height)
+    if not settings.show_local_time then return end
+    local t = os.time()
+    if t ~= last_local_time_sec then
+        cached_local_time = os.date("%H:%M:%S", t)
+        last_local_time_sec = t
+    end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosX(ctx, (settings.local_time_x or 0.5) * main_window_width)
+    r.ImGui_SetCursorPosY(ctx, (settings.local_time_y or 0.02) * main_window_height)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.local_time_color or 0xFFFFFFFF)
+    r.ImGui_Text(ctx, cached_local_time)
+    r.ImGui_PopStyleColor(ctx)
+end
+
 function VisualMetronome(main_window_width, main_window_height)
     if not settings.show_vismetronome then return end
     r.ImGui_SameLine(ctx)
@@ -2065,7 +2288,7 @@ function TapTempo(main_window_width, main_window_height)
             tap_average_current = average(tap_times)
             
             if settings.set_tempo_on_tap and tap_average_current > 0 then
-                r.CSurf_OnTempoChange(tap_average_current)
+                SetProjectTempoGlobal(tap_average_current)
             end
         end
         last_tap_time = current_time
@@ -2125,10 +2348,10 @@ function TapTempo(main_window_width, main_window_height)
         if #tap_times > 0 then
             r.ImGui_Separator(ctx)
             if r.ImGui_MenuItem(ctx, "Set Half Tempo") then
-                r.CSurf_OnTempoChange(tap_average_current / 2)
+                SetProjectTempoGlobal(tap_average_current / 2)
             end
             if r.ImGui_MenuItem(ctx, "Set Double Tempo") then
-                r.CSurf_OnTempoChange(tap_average_current * 2)
+                SetProjectTempoGlobal(tap_average_current * 2)
             end
         end
         
@@ -2173,6 +2396,7 @@ function Main()
         EnvelopeOverride(main_window_width, main_window_height)
         Transport_Buttons(main_window_width, main_window_height)
         ShowCursorPosition(main_window_width, main_window_height)
+    ShowLocalTime(main_window_width, main_window_height)
         VisualMetronome(main_window_width, main_window_height)
         CustomButtons.x_offset = settings.custom_buttons_x_offset
         CustomButtons.y_offset = settings.custom_buttons_y_offset
