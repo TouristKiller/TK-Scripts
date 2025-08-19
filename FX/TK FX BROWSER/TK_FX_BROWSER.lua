@@ -1,24 +1,14 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.5.0
+-- @version 1.5.1
 -- @changelog:
 --[[     
-++ Added option to hide manufacturer names (new "Hide Manufacturer" checkbox next to "Clean Plugin Names") – removes trailing developer suffix like (FabFilter) 
-++ Added 'Scripts' entry to screenshot window folder dropdown (listed under Actions) ++ Screenshot window folder dropdown now hides entries when their corresponding visibility checkboxes are disabled (Favorites, Projects, Sends/Receives, Actions, Scripts, Folders)
-++ Fixed: Scripts view now always shows the folder/screenshot controls (dropdown etc.) even when the browser panel is hidden, allowing navigation back to other categories.
-++ Added colored, collapsible header for Current Track FX (shows track number, name, and uses track color; collapse toggle to hide/show its FX list)
-++ Replaced bulk screenshot folder selection combo + treeview with a hover-activated cascading popup menu (Folders, Developers, Custom), improving speed of navigation and reducing clicks; selected item now shown with brackets and All Plugins remains instantly accessible.
-++ Simplified exclusive selection: category and folder selections now always clear each other.
-++ Persistent highlight for selected items and headers.
-++ Folder dropdown and navigation now behave consistently together.
-++ Added: “Capture Folder Screenshots” right‑click option to Folders, Favorites, Custom Folders, Category, Developer, and All Plugins panels.
-++ Added: Sequential folder screenshot capture with progress integration and completion / empty-folder notifications.
-++ Improved: GetPluginsForFolder now supports Favorites, custom nested paths, and any category/developer list (not only FOLDERS).
-++ Added: Folder screenshot option to custom folder cascading (popup) menus.
-++ Improved: Reused existing bulk progress bar variables for per-folder screenshot feedback.
+++ added option to choose between single or double click to add fx to track (-> main settings)
+++ added missing screenshot list in screenshot window when in view screenshot mode.
+    (list can be hidden in settings menu of screenshotwindow under visibility)
 
----------------------TODO-----------------------------------------
-            - Auto tracks and send /recieve for multi output plugin 
+---------------------TODO (sometime in the future ;o) )-----------------------------------------
+            - Auto tracks and send /recieve for multi output plugin
             - Meter functionality (Pre/post Peak) -- vooralsnog niet haalbaar
             
             - Expand project files
@@ -311,7 +301,9 @@ local function SetDefaultConfig()
         show_browser_search = true, 
         enable_drag_add_fx = true, 
         show_missing_screenshots_only = false, 
-        bulk_selected_folder = nil, -- nieuwe selectie voor bulk screenshots (specifieke folder of pad voor custom)
+        bulk_selected_folder = nil, 
+        add_fx_with_double_click = false, 
+        show_missing_list = true, -- toon onderaan lijst met plugins zonder screenshot
     } 
 end
 local config = SetDefaultConfig()    
@@ -527,6 +519,60 @@ local function HasScreenshot(plugin_name)
     return false
 end
 
+-- Helper: split plugin list into those with screenshots and those missing
+local function SplitPluginsByScreenshot(plugin_list)
+    local with_shot, missing = {}, {}
+    if not plugin_list then return with_shot, missing end
+    for _, name in ipairs(plugin_list) do
+        if name == "--Favorites End--" then
+            table.insert(with_shot, name) -- keep divider sentinel in screenshot section
+        else
+            if HasScreenshot(name) then
+                table.insert(with_shot, name)
+            else
+                table.insert(missing, name)
+            end
+        end
+    end
+    return with_shot, missing
+end
+
+-- Forward declaration (defined later) so we can call it inside RenderMissingList
+local GetStarsString
+
+local function RenderMissingList(missing)
+    if not (config.show_missing_list ~= false) then return end -- standaard aan; uit als false
+    if missing and #missing > 0 then
+        r.ImGui_Dummy(ctx, 0, 10)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, string.format("Missing Screenshots (%d)", #missing))
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
+        for i, name in ipairs(missing) do
+            local display_name = GetDisplayPluginName(name)
+            local stars = GetStarsString(name)
+            local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##missing_" .. i, false)
+            local do_add = false
+            if config.add_fx_with_double_click then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                    do_add = true
+                end
+            else
+                if activated then do_add = true end
+            end
+            if do_add then
+                local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                if target_track then
+                    r.TrackFX_AddByName(target_track, name, false, -1000 - r.TrackFX_GetCount(target_track))
+                    LAST_USED_FX = name
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                end
+            end
+            ShowPluginContextMenu(name, "missing_ctx_" .. i)
+        end
+        r.ImGui_PopStyleVar(ctx)
+    end
+end
+
 local function GetPluginsFromCustomFolder(folder_path)
     local parts = {}
     for part in folder_path:gmatch("[^/]+") do
@@ -736,7 +782,7 @@ local function DrawPluginWithRating(plugin_name)
     r.ImGui_Text(ctx, plugin_name .. "  " .. stars)
 end
 
-local function GetStarsString(plugin_name)
+GetStarsString = function(plugin_name)
     local rating = plugin_ratings[plugin_name] or 0
     local stars = ""
     for i = 1, 5 do
@@ -1809,6 +1855,17 @@ local function ShowConfigWindow()
                 end
                 SaveConfig()
             end  
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            local single_selected = not config.add_fx_with_double_click
+            if r.ImGui_RadioButton(ctx, "Single Click##AddFXMode", single_selected) then
+                config.add_fx_with_double_click = false
+                SaveConfig()
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click on its screenshot.")
+            end
+
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.show_name_in_screenshot_window = r.ImGui_Checkbox(ctx, "Show Names", config.show_name_in_screenshot_window)
             r.ImGui_SameLine(ctx)
@@ -1817,8 +1874,16 @@ local function ShowConfigWindow()
             _, config.clean_plugin_names = r.ImGui_Checkbox(ctx, "Clean Plugin Names", config.clean_plugin_names)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.remove_manufacturer_names = r.ImGui_Checkbox(ctx, "Hide Manufacturer", config.remove_manufacturer_names)
-       
+            _, config.remove_manufacturer_names = r.ImGui_Checkbox(ctx, "Hide Developer", config.remove_manufacturer_names)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            if r.ImGui_RadioButton(ctx, "Double Click##AddFXMode", config.add_fx_with_double_click) then
+                config.add_fx_with_double_click = true
+                SaveConfig()
+            end
+             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click.")
+            end
 
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -2726,6 +2791,7 @@ local function LoadTexture(file)
 end
     
 local function LoadSearchTexture(file, plugin_name)
+    -- Deferred (queued) texture loading to prevent excessive short-lived ImGui images
     local relative_path = file:gsub(screenshot_path, "")
     local unique_key = relative_path .. "_" .. (plugin_name or "unknown")
     local current_time = r.time_precise()
@@ -2733,18 +2799,14 @@ local function LoadSearchTexture(file, plugin_name)
         texture_last_used[unique_key] = current_time
         return search_texture_cache[unique_key]
     end
-    if r.file_exists(file) then
-        local texture = r.ImGui_CreateImage(file)
-        if texture then
-            search_texture_cache[unique_key] = texture
-            texture_last_used[unique_key] = current_time
-            log_to_file("Texture loaded: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
-            return texture
-        else
-            log_to_file("Failed to create texture: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
-        end
-    else
+    if not r.file_exists(file) then
         log_to_file("File does not exist: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
+        return nil
+    end
+    -- Queue the load if not already queued
+    if not texture_load_queue[unique_key] then
+        texture_load_queue[unique_key] = { file = file, queued_at = current_time, plugin = plugin_name }
+        log_to_file("Queued texture load: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
     end
     return nil
 end
@@ -2752,51 +2814,40 @@ end
     local function ProcessTextureLoadQueue()
     local textures_loaded = 0
     local current_time = r.time_precise()
-    -- Laad nieuwe textures
-    for file, queue_time in pairs(texture_load_queue) do
+    for unique_key, info in pairs(texture_load_queue) do
         if textures_loaded >= config.max_textures_per_frame then break end
-        if not search_texture_cache[file] then
+        local file = info.file
+        if not search_texture_cache[unique_key] and r.file_exists(file) then
             local texture = r.ImGui_CreateImage(file)
             if texture then
-                search_texture_cache[file] = texture
-                texture_last_used[file] = current_time
+                search_texture_cache[unique_key] = texture
+                texture_last_used[unique_key] = current_time
                 textures_loaded = textures_loaded + 1
-                log_to_file("Texture loaded: " .. file)
+                log_to_file("Texture loaded (deferred): " .. file .. " for plugin: " .. (info.plugin or "unknown"))
             else
                 log_to_file("Error loading texture: " .. file)
             end
         end
-        texture_load_queue[file] = nil
+        texture_load_queue[unique_key] = nil
     end
-    -- Verwijder oude textures, maar houd een minimum aantal
+    -- Cache eviction (LRU-style based on last used time)
     local cache_size = 0
     for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
-    
     if cache_size > config.max_cached_search_textures then
         local textures_to_remove = {}
-        for file, last_used in pairs(texture_last_used) do
+        for key, last_used in pairs(texture_last_used) do
             if current_time - last_used > config.texture_reload_delay and cache_size > config.min_cached_textures then
-                table.insert(textures_to_remove, file)
+                table.insert(textures_to_remove, key)
                 cache_size = cache_size - 1
             end
         end
-        for _, file in ipairs(textures_to_remove) do
-            if r.ImGui_DestroyImage then
-                r.ImGui_DestroyImage(ctx, search_texture_cache[file])
-            else
-                log_to_file("ImGui_DestroyImage not available, texture not destroyed: " .. file)
+        for _, key in ipairs(textures_to_remove) do
+            if r.ImGui_DestroyImage and search_texture_cache[key] then
+                r.ImGui_DestroyImage(ctx, search_texture_cache[key])
             end
-            search_texture_cache[file] = nil
-            texture_last_used[file] = nil
-            log_to_file("Texture removed: " .. file)
-        end
-    end
-    -- Herlaad verwijderde textures indien nodig
-    if cache_size < config.min_cached_textures then
-        for file in pairs(texture_last_used) do
-            if not search_texture_cache[file] then
-                texture_load_queue[file] = current_time
-            end
+            search_texture_cache[key] = nil
+            texture_last_used[key] = nil
+            log_to_file("Texture removed: " .. key)
         end
     end
 end  --
@@ -4662,6 +4713,9 @@ local function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, config.hide_main_window and "Show Main Window" or "Hide Main Window") then
                 config.hide_main_window = not config.hide_main_window; config.show_main_window = not config.hide_main_window; SaveConfig()
             end
+            if r.ImGui_MenuItem(ctx, (config.show_missing_list ~= false) and "Hide Missing List" or "Show Missing List") then
+                config.show_missing_list = not (config.show_missing_list ~= false); SaveConfig()
+            end
             r.ImGui_EndMenu(ctx)
         end
 
@@ -6203,6 +6257,18 @@ local function DrawMasonryLayout(screenshots)
     end
 
     for i, fx in ipairs(screenshots) do
+        if fx.is_separator then
+            -- Force separator line below tallest column so far
+            local max_h = 0
+            for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
+            r.ImGui_SetCursorPos(ctx, padding, max_h)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+            r.ImGui_Text(ctx, fx.label or "---")
+            r.ImGui_PopStyleColor(ctx)
+            local sep_height = r.ImGui_GetTextLineHeightWithSpacing(ctx) + (config.compact_screenshots and 2 or 10)
+            for c = 1, num_columns do column_heights[c] = max_h + sep_height end
+            goto continue
+        end
         -- Controleer of dit een bericht is in plaats van een plugin
         if fx.is_message then
             -- Toon bericht in gele tekst over de volledige breedte
@@ -6259,26 +6325,24 @@ local function DrawMasonryLayout(screenshots)
                         end
                     end
 
-                    -- Normale klik alleen uitvoeren als we NIET aan het draggen zijn
-                    if masonry_clicked and dragging_fx_name ~= fx.name then
-                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
-                        if target_track then
-                            r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
-                            LAST_USED_FX = fx.name
-                            if config.close_after_adding_fx then
-                                SHOULD_CLOSE_SCRIPT = true
-                            end
+                    -- Klik gedrag afhankelijk van single/double click setting
+                    local should_add = false
+                    if config.add_fx_with_double_click then
+                        -- Alleen toevoegen bij echte double click (en niet tijdens drag)
+                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= fx.name then
+                            should_add = true
+                        end
+                    else
+                        if masonry_clicked and dragging_fx_name ~= fx.name then
+                            should_add = true
                         end
                     end
-
-                    if masonry_clicked then
+                    if should_add then
                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                         if target_track then
                             r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
                             LAST_USED_FX = fx.name
-                            if config.close_after_adding_fx then
-                                SHOULD_CLOSE_SCRIPT = true
-                            end
+                            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                         end
                     end
 
@@ -6314,6 +6378,13 @@ local function DrawMasonryLayout(screenshots)
         end
         ::continue:: 
     end
+    -- Zorg dat de cursor onder de hoogste kolom komt zodat divider / missing lijst niet overlapt
+    local max_height = 0
+    for i = 1, #column_heights do
+        if column_heights[i] > max_height then max_height = column_heights[i] end
+    end
+    -- Extra marge onderaan
+    r.ImGui_SetCursorPosY(ctx, max_height + (config.compact_screenshots and 4 or 16))
 end
 
 
@@ -6404,10 +6475,13 @@ local function ShowScreenshotWindow()
     r.ImGui_SetNextWindowSize(ctx, math.max(min_width, config.screenshot_window_width), config.screenshot_window_height or 600, r.ImGui_Cond_FirstUseEver())
     
     local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
+    local screenshot_child_open = false
     if visible then
         ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
-        r.ImGui_BeginChild(ctx, "ScreenshotSection", -1, -1)
+        if r.ImGui_BeginChild(ctx, "ScreenshotSection", -1, -1) then
+            screenshot_child_open = true
+        end
        
       
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
@@ -7404,7 +7478,16 @@ local function ShowScreenshotWindow()
                             for i, plugin_name in ipairs(filtered_plugins) do
                                 local display_name = GetDisplayPluginName(plugin_name)
                                 local stars = GetStarsString(plugin_name)
-                                if r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##fav_list_" .. i, false) then
+                                local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##fav_list_" .. i, false)
+                                local do_add = false
+                                if config.add_fx_with_double_click then
+                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                                        do_add = true
+                                    end
+                                else
+                                    if activated then do_add = true end
+                                end
+                                if do_add then
                                     local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                     if target_track then
                                         r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
@@ -7416,26 +7499,56 @@ local function ShowScreenshotWindow()
                             end
                             r.ImGui_PopStyleVar(ctx)
                         elseif config.use_masonry_layout then
+                            local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
-                            for _, plugin in ipairs(filtered_plugins) do
-                                table.insert(masonry_data, {name = plugin})
+                            local fav_end_index
+                            for idx, plugin in ipairs(with_shot) do
+                                if plugin == "--Favorites End--" then
+                                    fav_end_index = idx
+                                    break
+                                end
+                            end
+                            if fav_end_index then
+                                for i = 1, fav_end_index - 1 do
+                                    masonry_data[#masonry_data+1] = {name = with_shot[i]}
+                                end
+                                masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Favorites End ---"}
+                                for i = fav_end_index + 1, #with_shot do
+                                    masonry_data[#masonry_data+1] = {name = with_shot[i]}
+                                end
+                            else
+                                for _, plugin in ipairs(with_shot) do
+                                    masonry_data[#masonry_data+1] = {name = plugin}
+                                end
                             end
                             DrawMasonryLayout(masonry_data)
+                            RenderMissingList(missing)
                         else
-                            for i, plugin_name in ipairs(filtered_plugins) do
-                                local column = (i - 1) % num_columns
-                                if column > 0 then r.ImGui_SameLine(ctx) end
-                                r.ImGui_BeginGroup(ctx)
-                                local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                                local screenshot_file = screenshot_path .. safe_name .. ".png"
-                                if r.file_exists(screenshot_file) then
+                            local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
+                            for i, plugin_name in ipairs(with_shot) do
+                                if plugin_name == "--Favorites End--" then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                                    r.ImGui_Text(ctx, "--- Favorites End ---")
+                                    r.ImGui_PopStyleColor(ctx)
+                                else
+                                    local column = (i - 1) % num_columns
+                                    if column > 0 then r.ImGui_SameLine(ctx) end
+                                    r.ImGui_BeginGroup(ctx)
+                                    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+                                    local screenshot_file = screenshot_path .. safe_name .. ".png"
                                     local texture = LoadSearchTexture(screenshot_file, plugin_name)
                                     if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                         local w, h = r.ImGui_Image_GetSize(texture)
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "fav_" .. i, texture, dw, dh)
-                                            if clicked then
+                                            local do_add = false
+                                            if config.add_fx_with_double_click then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
+                                            else
+                                                if clicked then do_add = true end
+                                            end
+                                            if do_add then
                                                 local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                                 if target_track then
                                                     local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
@@ -7455,9 +7568,70 @@ local function ShowScreenshotWindow()
                                             end
                                         end
                                     end
+                                    r.ImGui_EndGroup(ctx)
+                                    if not config.compact_screenshots and column == num_columns - 1 then
+                                        r.ImGui_Dummy(ctx, 0, 5)
+                                    end
+                                end
+                            end
+                            RenderMissingList(missing)
+                        end
+
+                    end -- END favorites condition
+
+                -- CUSTOM FOLDERS RENDERING
+                elseif (selected_folder and next(GetPluginsFromCustomFolder(selected_folder) or {}) ~= nil) then
+                    -- Haal plugins op uit custom folder
+                    filtered_plugins = GetPluginsFromCustomFolder(selected_folder or "") or {}
+                    -- Filter voor zoekterm
+                    local display_plugins = {}
+                    if config.show_favorites_on_top then
+                        local favorites, regular = {}, {}
+                        for _, plugin in ipairs(filtered_plugins) do
+                            if plugin:lower():find(browser_search_term:lower(), 1, true) then
+                                if table.contains(favorite_plugins, plugin) then
+                                    favorites[#favorites+1] = plugin
                                 else
-                                    local btn_name = GetDisplayPluginName(plugin_name)
-                                    if r.ImGui_Button(ctx, btn_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
+                                    regular[#regular+1] = plugin
+                                end
+                            end
+                        end
+                        SortPlainPluginList(favorites)
+                        SortPlainPluginList(regular)
+                        for _, p in ipairs(favorites) do display_plugins[#display_plugins+1] = p end
+                        if #favorites>0 and #regular>0 then display_plugins[#display_plugins+1] = "--Favorites End--" end
+                        for _, p in ipairs(regular) do display_plugins[#display_plugins+1] = p end
+                    else
+                        for _, plugin in ipairs(filtered_plugins) do
+                            if plugin:lower():find(browser_search_term:lower(),1,true) then
+                                display_plugins[#display_plugins+1] = plugin
+                            end
+                        end
+                        SortPlainPluginList(display_plugins)
+                    end
+                    filtered_plugins = display_plugins
+
+                    if #filtered_plugins == 0 then
+                        r.ImGui_Text(ctx, "No Custom Folder plugins match search.")
+                    else
+                        if view_mode == "list" then
+                            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
+                            for i, plugin_name in ipairs(filtered_plugins) do
+                                if plugin_name == "--Favorites End--" then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                                    r.ImGui_Text(ctx, "--- Favorites End ---")
+                                    r.ImGui_PopStyleColor(ctx)
+                                else
+                                    local display_name = GetDisplayPluginName(plugin_name)
+                                    local stars = GetStarsString(plugin_name)
+                                    local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##custom_list_" .. i, false)
+                                    local do_add = false
+                                    if config.add_fx_with_double_click then
+                                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
+                                    else
+                                        if activated then do_add = true end
+                                    end
+                                    if do_add then
                                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                         if target_track then
                                             r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
@@ -7465,71 +7639,58 @@ local function ShowScreenshotWindow()
                                             if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                                         end
                                     end
-                                    ShowPluginContextMenu(plugin_name, "favorites_text_" .. i)
+                                    ShowPluginContextMenu(plugin_name, "custom_list_ctx_" .. i)
                                 end
-                                r.ImGui_EndGroup(ctx)
-                                if not config.compact_screenshots and column == num_columns - 1 then
-                                    r.ImGui_Dummy(ctx, 0, 5)
-                                end
-                            end
-                        end
-
-                    end -- END favorites condition
-
-                -- CUSTOM FOLDERS RENDERING
-                elseif (function()
-                        local cf = GetPluginsFromCustomFolder(selected_folder or "")
-                        return cf and #cf > 0
-                    end)() then
-                    local custom_plugins = GetPluginsFromCustomFolder(selected_folder)
-                    local display_plugins = {}
-                    for _, plugin in ipairs(custom_plugins) do
-                        if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                            table.insert(display_plugins, plugin)
-                        end
-                    end
-                    filtered_plugins = display_plugins
-
-                    if #filtered_plugins == 0 then
-                        r.ImGui_Text(ctx, "No Plugins in Custom Folder.")
-                    else
-                        if view_mode == "list" then
-                            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
-                            for i, plugin_name in ipairs(filtered_plugins) do
-                                local display_name = GetDisplayPluginName(plugin_name)
-                                local stars = GetStarsString(plugin_name)
-                                if r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##custom_list_" .. i, false) then
-                                    local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
-                                    if target_track then
-                                        r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
-                                        LAST_USED_FX = plugin_name
-                                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                                    end
-                                end
-                                ShowPluginContextMenu(plugin_name, "custom_list_ctx_" .. i)
                             end
                             r.ImGui_PopStyleVar(ctx)
                         elseif config.use_masonry_layout then
+                            local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
-                            for _, plugin in ipairs(filtered_plugins) do
-                                table.insert(masonry_data, {name = plugin})
+                            local fav_end_index
+                            for idx, plugin in ipairs(with_shot) do
+                                if plugin == "--Favorites End--" then fav_end_index = idx break end
+                            end
+                            if fav_end_index then
+                                for i = 1, fav_end_index - 1 do
+                                    masonry_data[#masonry_data+1] = {name = with_shot[i]}
+                                end
+                                masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Favorites End ---"}
+                                for i = fav_end_index + 1, #with_shot do
+                                    masonry_data[#masonry_data+1] = {name = with_shot[i]}
+                                end
+                            else
+                                for _, plugin in ipairs(with_shot) do
+                                    masonry_data[#masonry_data+1] = {name = plugin}
+                                end
                             end
                             DrawMasonryLayout(masonry_data)
+                            RenderMissingList(missing)
                         else
-                            for i, plugin_name in ipairs(filtered_plugins) do
-                                local column = (i - 1) % num_columns
-                                if column > 0 then r.ImGui_SameLine(ctx) end
-                                r.ImGui_BeginGroup(ctx)
-                                local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                                local screenshot_file = screenshot_path .. safe_name .. ".png"
-                                if r.file_exists(screenshot_file) then
+                            local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
+                            for i, plugin_name in ipairs(with_shot) do
+                                if plugin_name == "--Favorites End--" then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                                    r.ImGui_Text(ctx, "--- Favorites End ---")
+                                    r.ImGui_PopStyleColor(ctx)
+                                else
+                                    local column = (i - 1) % num_columns
+                                    if column > 0 then r.ImGui_SameLine(ctx) end
+                                    r.ImGui_BeginGroup(ctx)
+                                    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+                                    local screenshot_file = screenshot_path .. safe_name .. ".png"
                                     local texture = LoadSearchTexture(screenshot_file, plugin_name)
                                     if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                         local w, h = r.ImGui_Image_GetSize(texture)
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "custom_" .. i, texture, dw, dh)
-                                            if clicked then
+                                            local do_add = false
+                                            if config.add_fx_with_double_click then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
+                                            else
+                                                if clicked then do_add = true end
+                                            end
+                                            if do_add then
                                                 local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                                 if target_track then
                                                     local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
@@ -7549,26 +7710,15 @@ local function ShowScreenshotWindow()
                                             end
                                         end
                                     end
-                                else
-                                    local btn_name = GetDisplayPluginName(plugin_name)
-                                    if r.ImGui_Button(ctx, btn_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
-                                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
-                                        if target_track then
-                                            r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
-                                            LAST_USED_FX = plugin_name
-                                            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                                        end
+                                    r.ImGui_EndGroup(ctx)
+                                    if not config.compact_screenshots and column == num_columns - 1 then
+                                        r.ImGui_Dummy(ctx, 0, 5)
                                     end
-                                    ShowPluginContextMenu(plugin_name, "custom_text_" .. i)
-                                end
-                                r.ImGui_EndGroup(ctx)
-                                if not config.compact_screenshots and column == num_columns - 1 then
-                                    r.ImGui_Dummy(ctx, 0, 5)
                                 end
                             end
+                            RenderMissingList(missing)
                         end
                     end
-
                 elseif selected_folder == "Current Project FX" then
                     filtered_plugins = GetCurrentProjectFX()
                     -- Filter alleen voor weergave
@@ -7695,8 +7845,16 @@ local function ShowScreenshotWindow()
                                                                                         
                                             local unique_id = "project_fx_" .. i .. "_" .. (plugin.track_number or 0) .. "_" .. (plugin.fx_index or 0)
 
-                                            if r.ImGui_ImageButton(ctx, unique_id, texture, display_width, display_height) then
-                                                -- Check of het een master track FX is
+                                            local clicked = r.ImGui_ImageButton(ctx, unique_id, texture, display_width, display_height)
+                                            local activate = false
+                                            if config.add_fx_with_double_click then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                                                    activate = true
+                                                end
+                                            else
+                                                if clicked then activate = true end
+                                            end
+                                            if activate then
                                                 if plugin.is_master then
                                                     local master_track = r.GetMasterTrack(0)
                                                     if plugin.fx_index ~= nil then
@@ -7704,14 +7862,10 @@ local function ShowScreenshotWindow()
                                                         r.TrackFX_Show(master_track, plugin.fx_index, is_open and 2 or 3)
                                                     end
                                                 else
-                                                    -- Normale track FX
                                                     local track = r.GetTrack(0, plugin.track_number - 1)
-                                                    if track and r.ValidatePtr(track, "MediaTrack*") then
-                                                        -- GEBRUIK DIRECT plugin.fx_index UIT DE PLUGIN DATA
-                                                        if plugin.fx_index ~= nil then
-                                                            local is_open = r.TrackFX_GetFloatingWindow(track, plugin.fx_index)
-                                                            r.TrackFX_Show(track, plugin.fx_index, is_open and 2 or 3)
-                                                        end
+                                                    if track and r.ValidatePtr(track, "MediaTrack*") and plugin.fx_index ~= nil then
+                                                        local is_open = r.TrackFX_GetFloatingWindow(track, plugin.fx_index)
+                                                        r.TrackFX_Show(track, plugin.fx_index, is_open and 2 or 3)
                                                     end
                                                 end
                                             end
@@ -7913,7 +8067,16 @@ local function ShowScreenshotWindow()
                                 else
                                     local display_name = GetDisplayPluginName(plugin_name)
                                     local stars = GetStarsString(plugin_name)
-                                    if r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##folder_list_" .. i, false) then
+                                    local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##folder_list_" .. i, false)
+                                    local do_add = false
+                                    if config.add_fx_with_double_click then
+                                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                                            do_add = true
+                                        end
+                                    else
+                                        if activated then do_add = true end
+                                    end
+                                    if do_add then
                                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                         if target_track then
                                             r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
@@ -7933,61 +8096,65 @@ local function ShowScreenshotWindow()
 
                             if config.use_masonry_layout then
                                 if filtered_plugins then
+                                    local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                                     local masonry_data = {}
-                                    for _, plugin in ipairs(filtered_plugins) do
-                                        table.insert(masonry_data, {name = plugin})
+                                    local fav_end_index
+                                    for idx, plugin in ipairs(with_shot) do
+                                        if plugin == "--Favorites End--" then fav_end_index = idx break end
+                                    end
+                                    if fav_end_index then
+                                        for i = 1, fav_end_index - 1 do
+                                            masonry_data[#masonry_data+1] = {name = with_shot[i]}
+                                        end
+                                        masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Favorites End ---"}
+                                        for i = fav_end_index + 1, #with_shot do
+                                            masonry_data[#masonry_data+1] = {name = with_shot[i]}
+                                        end
+                                    else
+                                        for _, plugin in ipairs(with_shot) do
+                                            masonry_data[#masonry_data+1] = {name = plugin}
+                                        end
                                     end
                                     DrawMasonryLayout(masonry_data)
+                                    RenderMissingList(missing)
                                 end
                             else
-                                for i = 1, #filtered_plugins do
-                                    local column = (i - 1) % num_columns
-                                    if column > 0 then
-                                        r.ImGui_SameLine(ctx)
-                                    end
-                            
-                                    r.ImGui_BeginGroup(ctx)
-                                    local plugin_name = filtered_plugins[i]
-                                    
-                                    -- Skip separator items
+                                local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
+                                for i, plugin_name in ipairs(with_shot) do
                                     if plugin_name == "--Favorites End--" then
                                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
                                         r.ImGui_Text(ctx, "--- Favorites End ---")
                                         r.ImGui_PopStyleColor(ctx)
-                                        r.ImGui_EndGroup(ctx)
-                                        goto continue
-                                    end
-                                    
-                                    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                                    local screenshot_file = screenshot_path .. safe_name .. ".png"
-                                    if r.file_exists(screenshot_file) then
+                                    else
+                                        local column = (i - 1) % num_columns
+                                        if column > 0 then r.ImGui_SameLine(ctx) end
+                                        r.ImGui_BeginGroup(ctx)
+                                        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+                                        local screenshot_file = screenshot_path .. safe_name .. ".png"
                                         local texture = LoadSearchTexture(screenshot_file, plugin_name)
                                         if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                             local width, height = r.ImGui_Image_GetSize(texture)
                                             if width and height then
                                                 local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
-                                                                                            
-                                                -- LINKS KLIK VOOR NORMALE FOLDERS
                                                 local folder_clicked = r.ImGui_ImageButton(ctx, "folder_plugin_" .. i, texture, display_width, display_height)
-
-                                                if folder_clicked then
+                                                local do_add = false
+                                                if config.add_fx_with_double_click then
+                                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
+                                                else
+                                                    if folder_clicked then do_add = true end
+                                                end
+                                                if do_add then
                                                     local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                                     if target_track then
                                                         local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
                                                         LAST_USED_FX = plugin_name
-                                                        
-                                                        -- OPEN FLOATING ALS OPTIE ENABLED IS
                                                         if config.open_floating_after_adding and fx_index >= 0 then
-                                                            r.TrackFX_Show(target_track, fx_index, 3) -- 3 = open floating
+                                                            r.TrackFX_Show(target_track, fx_index, 3)
                                                         end
-                                                        
-                                                        if config.close_after_adding_fx then
-                                                            SHOULD_CLOSE_SCRIPT = true
-                                                        end
+                                                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                                                     end
                                                 end
                                                 ShowPluginContextMenu(plugin_name, "folder_" .. i)
-                                                                                            
                                                 if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
                                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                                     r.ImGui_Text(ctx, plugin_name)
@@ -7996,65 +8163,13 @@ local function ShowScreenshotWindow()
                                                 end
                                             end
                                         end
-                                    else
-                                        -- Geen screenshot beschikbaar, toon alleen tekst knop
-                                        local btn_name = GetDisplayPluginName(plugin_name)
-                                        if r.ImGui_Button(ctx, btn_name .. "  " .. GetStarsString(plugin_name), display_size, 30) then
-                                            -- Validatie: controleer of er een track geselecteerd is
-                                            if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then
-                                                -- Geen track geselecteerd, selecteer de eerste track of master
-                                                local first_track = r.GetTrack(0, 0)
-                                                if first_track then
-                                                    r.SetOnlyTrackSelected(first_track)
-                                                    TRACK = first_track
-                                                else
-                                                    -- Als er geen tracks zijn, selecteer master track
-                                                    TRACK = r.GetMasterTrack(0)
-                                                    r.SetOnlyTrackSelected(TRACK)
-                                                end
-                                            end
-                                            
-                                            -- Voeg plugin toe aan geselecteerde track
-                                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                                if ADD_FX_TO_ITEM then
-                                                    -- Voeg toe aan item
-                                                    local selected_item = r.GetSelectedMediaItem(0, 0)
-                                                    if selected_item then
-                                                        local take = r.GetActiveTake(selected_item)
-                                                        if take then
-                                                            r.TakeFX_AddByName(take, plugin_name, 1)
-                                                            LAST_USED_FX = plugin_name
-                                                        else
-                                                            r.ShowMessageBox("No active take found on selected item", "Error", 0)
-                                                        end
-                                                    else
-                                                        r.ShowMessageBox("No item selected. Plugin added to track instead.", "Info", 0)
-                                                        r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                                                        LAST_USED_FX = plugin_name
-                                                    end
-                                                else
-                                                    -- Voeg toe aan track
-                                                    r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                                                    LAST_USED_FX = plugin_name
-                                                end
-                                                
-                                                if config.close_after_adding_fx then
-                                                    SHOULD_CLOSE_SCRIPT = true
-                                                end
-                                            end
-                                        end
-                                        ShowPluginContextMenu(plugin_name, "folder_text_" .. i)
-                                    end
-                                
-                                    r.ImGui_EndGroup(ctx)
-                                    if not config.compact_screenshots then
-                                        if column == num_columns - 1 then
+                                        r.ImGui_EndGroup(ctx)
+                                        if not config.compact_screenshots and column == num_columns - 1 then
                                             r.ImGui_Dummy(ctx, 0, 5)
                                         end
                                     end
-                                    
-                                    ::continue::
                                 end
+                                RenderMissingList(missing)
                             end
                         end
                     end
@@ -8082,8 +8197,16 @@ local function ShowScreenshotWindow()
                         else
                             local display_name = GetDisplayPluginName(fx.name)
                             local stars = GetStarsString(fx.name)
-                            if r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##list_" .. i, false) then
-                                -- Zelfde gedrag als klikken op screenshot: toevoegen/actie openen
+                            local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##list_" .. i, false)
+                            local do_add = false
+                            if config.add_fx_with_double_click then
+                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                                    do_add = true
+                                end
+                            else
+                                if activated then do_add = true end
+                            end
+                            if do_add then
                                 local plugin_name = fx.name
                                 if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                                     r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
@@ -8097,153 +8220,111 @@ local function ShowScreenshotWindow()
                     r.ImGui_PopStyleVar(ctx)
                 else
                     if config.use_masonry_layout then
-                        DrawMasonryLayout(screenshot_search_results)
+                     
+                        local plain_names = {}
+                        local messages = {}
+                        for _, fx in ipairs(screenshot_search_results) do
+                            if fx.is_message then
+                                messages[#messages+1] = fx -- behoud originele tabel (heeft is_message + name)
+                            else
+                                plain_names[#plain_names+1] = fx.name
+                            end
+                        end
+                        local with_shot, missing = SplitPluginsByScreenshot(plain_names)
+                        -- Bouw masonry_data: eerst messages, dan alle plugins met screenshot
+                        local masonry_data = {}
+                        for _, msg in ipairs(messages) do masonry_data[#masonry_data+1] = msg end
+                        for _, plugin_name in ipairs(with_shot) do
+                            masonry_data[#masonry_data+1] = {name = plugin_name}
+                        end
+                        DrawMasonryLayout(masonry_data)
+                        RenderMissingList(missing)
                     else
                         local num_columns = math.max(1, math.floor(available_width / display_size))
-                        for i, fx in ipairs(screenshot_search_results) do
+                        -- Bouw aparte lijst van namen (exclusief message entries)
+                        local plain_names = {}
+                        local messages = {}
+                        for _, fx in ipairs(screenshot_search_results) do
                             if fx.is_message then
-                                 -- Toon bericht in gele tekst over de volledige breedte
-                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF) -- Gele tekst
-                                local display_name = GetDisplayPluginName(fx.name)
-                                r.ImGui_TextWrapped(ctx, display_name)
-                                r.ImGui_PopStyleColor(ctx)
-                                goto continue -- Skip de rest van de loop voor dit item
+                                messages[#messages+1] = fx
+                            else
+                                plain_names[#plain_names+1] = fx.name
                             end
-                            local column = (i - 1) % num_columns
-                        if column > 0 then
-                            r.ImGui_SameLine(ctx)
                         end
-                        r.ImGui_BeginGroup(ctx)
-                           
-                        local safe_name = fx.name:gsub("[^%w%s-]", "_")
-                        local screenshot_file = screenshot_path .. safe_name .. ".png"
-                        if r.file_exists(screenshot_file) then
-                            local texture = LoadSearchTexture(screenshot_file, fx.name)
-                            if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
-                                local width, height = r.ImGui_Image_GetSize(texture)
-                                if width and height then
-                                    local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
-                                 
-                                    -- LINKS KLIK VOOR SEARCH RESULTS
-                                    local search_clicked = r.ImGui_ImageButton(ctx, "search_result_" .. i, texture, display_width, display_height)
-
-                                    if config.enable_drag_add_fx then
-                                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
-                                            potential_drag_fx_name = fx.name
-                                            drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
-                                        end
-                                        if potential_drag_fx_name == fx.name and r.ImGui_IsMouseDown(ctx,0) then
-                                            local mx,my = r.ImGui_GetMousePos(ctx)
-                                            if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
-                                                dragging_fx_name = fx.name
+                        local with_shot, missing = SplitPluginsByScreenshot(plain_names)
+                        -- Render eerst eventuele messages altijd bovenaan
+                        for _, msg in ipairs(messages) do
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF)
+                            local display_name = GetDisplayPluginName(msg.name)
+                            r.ImGui_TextWrapped(ctx, display_name)
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        -- Render screenshots in grid
+                        for i, plugin_name in ipairs(with_shot) do
+                            local column = (i - 1) % num_columns
+                            if column > 0 then r.ImGui_SameLine(ctx) end
+                            r.ImGui_BeginGroup(ctx)
+                            local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+                            local screenshot_file = screenshot_path .. safe_name .. ".png"
+                            if r.file_exists(screenshot_file) then
+                                local texture = LoadSearchTexture(screenshot_file, plugin_name)
+                                if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                                    local width, height = r.ImGui_Image_GetSize(texture)
+                                    if width and height then
+                                        local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
+                                        local clicked = r.ImGui_ImageButton(ctx, "search_result_" .. i, texture, display_width, display_height)
+                                        if config.enable_drag_add_fx then
+                                            if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
+                                                potential_drag_fx_name = plugin_name
+                                                drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                                            end
+                                            if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx,0) then
+                                                local mx,my = r.ImGui_GetMousePos(ctx)
+                                                if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
+                                                    dragging_fx_name = plugin_name
+                                                    potential_drag_fx_name = nil
+                                                end
+                                            end
+                                            if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx,0) then
                                                 potential_drag_fx_name = nil
                                             end
                                         end
-                                        if potential_drag_fx_name == fx.name and r.ImGui_IsMouseReleased(ctx,0) then
-                                            potential_drag_fx_name = nil
-                                        end
-                                    end
-
-                                    if search_clicked and dragging_fx_name ~= fx.name then
-                                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
-                                        if target_track then
-                                            local fx_index = r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
-                                            LAST_USED_FX = fx.name
-                                            if config.open_floating_after_adding and fx_index and fx_index >= 0 then
-                                                r.TrackFX_Show(target_track, fx_index, 3)
-                                            end
-                                            if config.close_after_adding_fx then
-                                                SHOULD_CLOSE_SCRIPT = true
-                                            end
-                                        end
-                                    end
-
-                                    if search_clicked then
-                                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
-                                        if target_track then
-                                            local fx_index = r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
-                                            LAST_USED_FX = fx.name
-                                            
-                                            -- OPEN FLOATING ALS OPTIE ENABLED IS
-                                            if config.open_floating_after_adding and fx_index >= 0 then
-                                                r.TrackFX_Show(target_track, fx_index, 3) -- 3 = open floating
-                                            end
-                                            
-                                            if config.close_after_adding_fx then
-                                                SHOULD_CLOSE_SCRIPT = true
-                                            end
-                                        end
-                                    end
-
-                                    ShowPluginContextMenu(fx.name, "search_" .. i)
-                                             
-                                    if config.show_name_in_screenshot_window and not config.hidden_names[fx.name] then
-                                        r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                        r.ImGui_Text(ctx, fx.name)
-                                        r.ImGui_PopTextWrapPos(ctx)
-                                        r.ImGui_Text(ctx, GetStarsString(fx.name))
-                                    end
-                                end
-                            end
-                        else
-                            -- Geen screenshot beschikbaar, toon alleen tekst knop
-                            local fx_btn_name = GetDisplayPluginName(fx.name)
-                            if r.ImGui_Button(ctx, fx_btn_name .. "  " .. GetStarsString(fx.name), display_size, 30) then
-                                -- Validatie: controleer of er een track geselecteerd is
-                                if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    -- Geen track geselecteerd, selecteer de eerste track of master
-                                    local first_track = r.GetTrack(0, 0)
-                                    if first_track then
-                                        r.SetOnlyTrackSelected(first_track)
-                                        TRACK = first_track
-                                    else
-                                        -- Als er geen tracks zijn, selecteer master track
-                                        TRACK = r.GetMasterTrack(0)
-                                        r.SetOnlyTrackSelected(TRACK)
-                                    end
-                                end
-                                
-                                -- Voeg plugin toe aan geselecteerde track
-                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    if ADD_FX_TO_ITEM then
-                                        -- Voeg toe aan item
-                                        local selected_item = r.GetSelectedMediaItem(0, 0)
-                                        if selected_item then
-                                            local take = r.GetActiveTake(selected_item)
-                                            if take then
-                                                r.TakeFX_AddByName(take, fx.name, 1)
-                                                LAST_USED_FX = fx.name
-                                            else
-                                                r.ShowMessageBox("No active take found on selected item", "Error", 0)
-                                            end
+                                        local do_add = false
+                                        if config.add_fx_with_double_click then
+                                            if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
                                         else
-                                            r.ShowMessageBox("No item selected. Plugin added to track instead.", "Info", 0)
-                                            r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                                            LAST_USED_FX = fx.name
+                                            if clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                         end
-                                    else
-                                        -- Voeg toe aan track
-                                        r.TrackFX_AddByName(TRACK, fx.name, false, -1000 - r.TrackFX_GetCount(TRACK))
-                                        LAST_USED_FX = fx.name
-                                    end
-                                    
-                                    if config.close_after_adding_fx then
-                                        SHOULD_CLOSE_SCRIPT = true
+                                        if do_add then
+                                            local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                            if target_track then
+                                                local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                                LAST_USED_FX = plugin_name
+                                                if config.open_floating_after_adding and fx_index and fx_index >= 0 then
+                                                    r.TrackFX_Show(target_track, fx_index, 3)
+                                                end
+                                                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                                            end
+                                        end
+                                        ShowPluginContextMenu(plugin_name, "search_" .. i)
+                                        if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
+                                            r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
+                                            r.ImGui_Text(ctx, plugin_name)
+                                            r.ImGui_PopTextWrapPos(ctx)
+                                            r.ImGui_Text(ctx, GetStarsString(plugin_name))
+                                        end
                                     end
                                 end
                             end
-                            ShowPluginContextMenu(fx.name, "search_text_" .. i)
+                            r.ImGui_EndGroup(ctx)
+                            if column == num_columns - 1 and not config.compact_screenshots then
+                                r.ImGui_Dummy(ctx, 0, 5)
+                            end
                         end
-                         
-                        r.ImGui_EndGroup(ctx) 
-                        
-                        if column == num_columns - 1 and not config.compact_screenshots then
-                            r.ImGui_Dummy(ctx, 0, 5)
-                        end
-                        ::continue::
+                        -- Render missing list (divider + selectable items)
+                        RenderMissingList(missing)
                     end
                 end
-            end
             else
                 r.ImGui_Text(ctx, "Select a folder or enter a search term.")
             end
@@ -8418,7 +8499,11 @@ local function FilterBox()
                 local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                 local screenshot_file = screenshot_path .. safe_name .. ".png"
                 if r.file_exists(screenshot_file) then
-                    texture_load_queue[screenshot_file] = r.time_precise()
+                    local relative_path = screenshot_file:gsub(screenshot_path, "")
+                    local unique_key = relative_path .. "_" .. (plugin_name or "unknown")
+                    if not texture_load_queue[unique_key] and not search_texture_cache[unique_key] then
+                        texture_load_queue[unique_key] = { file = screenshot_file, queued_at = r.time_precise(), plugin = plugin_name }
+                    end
                 end
             end
         end
@@ -11382,6 +11467,10 @@ if visible then
         
         if check_esc_key() then open = false end
     -- debug overlay verwijderd
+        -- Close Screenshot child if it was opened
+        if screenshot_child_open then
+            r.ImGui_EndChild(ctx)
+        end
         r.ImGui_End(ctx)
         -- Overlay voor drag hint tekenen (buiten hoofdvenster)
         if config.enable_drag_add_fx then
