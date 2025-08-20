@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.5.1
+-- @version 1.5.3
 -- @changelog:
 --[[     
 ++ added option to choose between single or double click to add fx to track (-> main settings)
@@ -7886,15 +7886,8 @@ local function ShowScreenshotWindow()
                                             local unique_id = "project_fx_" .. i .. "_" .. (plugin.track_number or 0) .. "_" .. (plugin.fx_index or 0)
 
                                             local clicked = r.ImGui_ImageButton(ctx, unique_id, texture, display_width, display_height)
-                                            local activate = false
-                                            if config.add_fx_with_double_click then
-                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-                                                    activate = true
-                                                end
-                                            else
-                                                if clicked then activate = true end
-                                            end
-                                            if activate then
+                                            -- Hersteld gedrag: single left click opent/toggelt altijd bestaande FX (double-click setting alleen voor toevoegen nieuwe FX elders)
+                                            if clicked or (config.add_fx_with_double_click and r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0)) then
                                                 if plugin.is_master then
                                                     local master_track = r.GetMasterTrack(0)
                                                     if plugin.fx_index ~= nil then
