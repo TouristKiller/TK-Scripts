@@ -1,11 +1,13 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.5.3
+-- @version 1.5.4
 -- @changelog:
 --[[     
-++ added option to choose between single or double click to add fx to track (-> main settings)
-++ added missing screenshot list in screenshot window when in view screenshot mode.
-    (list can be hidden in settings menu of screenshotwindow under visibility)
+++ added change name of track by right-click in infobox
+++ Add tags from info box
+++ see selected item /take fx in infobox
+++ added missing drag and drop for some folders in grid/normal view
+++ Some minor tweaks
 
 ---------------------TODO (sometime in the future ;o) )-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin
@@ -30,6 +32,10 @@ local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags
 -- Ratings:
 local plugin_ratings_path = script_path .. "plugin_ratings.json"
 local plugin_ratings = {}
+
+-- Forward stub to prevent early calls failing before real definition later in file
+if not ClearScreenshotCache then function ClearScreenshotCache() end end
+if not BuildScreenshotIndex then function BuildScreenshotIndex() end end
 
 
 
@@ -3058,6 +3064,19 @@ local function CaptureExistingFX(track, fx_index)
                 end
             
             print("Screenshot Saved: " .. filename)
+            ClearScreenshotCache()
+            BuildScreenshotIndex(true)
+            if selected_folder then folder_changed = true end
+            if search_texture_cache then
+                for k, tex in pairs(search_texture_cache) do
+                    if k:find(safe_name, 1, true) then
+                        if r.ImGui_DestroyImage and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then r.ImGui_DestroyImage(ctx, tex) end
+                        search_texture_cache[k] = nil
+                        if texture_last_used then texture_last_used[k] = nil end
+                        if texture_load_queue then texture_load_queue[k] = nil end
+                    end
+                end
+            end
             else
             print("No Plugin Window for " .. fx_name)
             end
@@ -3432,15 +3451,16 @@ local function ProcessFX(index, start_time)
 end
 
 -- Single screenshot helper (afgeleid van bulk flow)
-function StartSingleScreenshotCapture(plugin_name, cb)
+function StartSingleScreenshotCapture(plugin_name, cb, force)
     -- Valideer naam
     if not plugin_name or plugin_name == '' then if cb then cb(false) end return end
     -- Sla x86 bridged over indien uitgeschakeld
     if IsX86Bridged(plugin_name) and config.include_x86_bridged == false then if cb then cb(false) end return end
-    -- Bestaat al (voor individuele run alleen overslaan als size option != 1)
-    if config.screenshot_size_option ~= 1 and ScreenshotExists and ScreenshotExists(plugin_name, config.screenshot_size_option) then
-        if cb then cb(true) end
-        return
+    if not force then
+        if config.screenshot_size_option ~= 1 and ScreenshotExists and ScreenshotExists(plugin_name, config.screenshot_size_option) then
+            if cb then cb(true) end
+            return
+        end
     end
     -- Gebruik is_individual=true zodat bulk filters niet opnieuw toegepast worden
     local ok, err = pcall(function()
@@ -4011,7 +4031,11 @@ function ShowPluginContextMenu(plugin_name, menu_id)
         ShowPluginRatingUI(plugin_name)
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Make Screenshot") then
-            MakeScreenshot(plugin_name, nil, true)
+            StartSingleScreenshotCapture(plugin_name, function()
+                ClearScreenshotCache()
+                BuildScreenshotIndex(true)
+                folder_changed = true
+            end, true)
         end
         
         if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
@@ -5297,10 +5321,15 @@ local function ShowBrowserPanel()
     -- Footer hoogte uit config (resizable). Init default indien nil.
     config.browser_footer_height = math.max(20, config.browser_footer_height or 150)
     local BROWSER_FOOTER_HEIGHT = config.browser_footer_height
+    -- Hoogte referentie van het hele browserpaneel (exclusief buitenste margins) eerst nulzetten; later meten
+    local browser_panel_start_y = r.ImGui_GetCursorPosY(ctx)
     browser_footer_text = browser_footer_text or "INFO BOX"
     -- Buitenste sectie: scrollbar verbergen via ScrollbarSize=0 (geen flags i.v.m. assert)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     r.ImGui_BeginChild(ctx, "BrowserSection", config.browser_panel_width, -1)
+    -- Meet totale hoogte van BrowserSection aan begin voor vaste 70%-berekening
+    local section_pos_y = r.ImGui_GetCursorScreenPos(ctx)
+    local section_start_y = section_pos_y -- screen pos not directly used; we will later compute height via window height minus pos diff
 
     -- Header
     r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 25 or 4)
@@ -5850,7 +5879,7 @@ local function ShowBrowserPanel()
                     -- Omgekeerd: sleep omhoog (delta negatief) vergroot footer, omlaag (delta positief) verkleint footer.
                     local new_height = BROWSER_FOOTER_HEIGHT - delta
                     local window_h = r.ImGui_GetWindowHeight(ctx)
-                    local max_h = math.floor(window_h * 0.5)
+                    local max_h = math.floor(window_h * 0.7) -- 70% van vensterhoogte
                     -- Min hoogte verlaagd van 100 naar 20
                     new_height = math.max(20, math.min(new_height, max_h))
                     if new_height ~= BROWSER_FOOTER_HEIGHT then
@@ -5932,13 +5961,82 @@ local function ShowBrowserPanel()
             r.ImGui_Text(ctx, string.format("Sample Rate: %s", sr > 0 and (tostring(math.floor(sr)) .. " Hz") or "Device"))
             r.ImGui_Text(ctx, string.format("BPM: %.2f", bpm))
             r.ImGui_Text(ctx, "Track #: " .. track_num_display)
-            r.ImGui_Text(ctx, "Track Name: " .. track_name)
+            -- Track name met rechtsklik rename
+            do
+                local label = "Track Name: " .. track_name
+                -- Gebruik Selectable zodat we een ID/item hebben voor context click
+                if r.ImGui_Selectable(ctx, label .. "##footer_track_name_sel", false, r.ImGui_SelectableFlags_AllowDoubleClick() ) then
+                    if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                        new_track_name = track_name
+                        show_rename_popup = true
+                    end
+                end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    new_track_name = track_name
+                    show_rename_popup = true
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Right-click or double-click to rename track")
+                end
+            end
             r.ImGui_Text(ctx, "Items: " .. item_count_display .. item_type_suffix)
             -- Tags in footer met zelfde rechtsklik menu als TagManager
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                 local guid = r.GetTrackGUID(TRACK)
                 local tags = guid and track_tags and track_tags[guid]
                 r.ImGui_Text(ctx, "Tags:")
+                -- + knop voor toevoegen tags (altijd zichtbaar)
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+", 16, 16) then
+                    r.ImGui_OpenPopup(ctx, "FooterAddTagPopup")
+                end
+                if r.ImGui_BeginPopup(ctx, "FooterAddTagPopup") then
+                    local track_guid_footer = guid
+                    track_tags[track_guid_footer] = track_tags[track_guid_footer] or {}
+                    r.ImGui_PushItemWidth(ctx, 120)
+                    local changed_footer, nt = r.ImGui_InputText(ctx, "##footer_new_tag", new_tag_buffer or "")
+                    if changed_footer then new_tag_buffer = nt end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Add") and new_tag_buffer ~= "" then
+                        if not table.contains(track_tags[track_guid_footer], new_tag_buffer) then
+                            table.insert(track_tags[track_guid_footer], new_tag_buffer)
+                            available_tags[new_tag_buffer] = true
+                            SaveTags()
+                        end
+                        new_tag_buffer = ""
+                    end
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_Text(ctx, "Beschikbare Tags:")
+                    local avail_w_tags = select(1, r.ImGui_GetContentRegionAvail(ctx))
+                    local line_w_tags = 0
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
+                    for tag_avail, _ in pairs(available_tags) do
+                        local tag_w_btn = r.ImGui_CalcTextSize(ctx, tag_avail) + 14
+                        if line_w_tags + tag_w_btn > avail_w_tags then
+                            r.ImGui_NewLine(ctx)
+                            line_w_tags = 0
+                        elseif line_w_tags > 0 then
+                            r.ImGui_SameLine(ctx)
+                        end
+                        local tag_color = tag_colors[tag_avail] or config.button_background_color
+                        local _, text_color = GetTagColorAndTextColor(tag_color)
+                        if tag_colors[tag_avail] then
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), tag_colors[tag_avail])
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), tag_colors[tag_avail])
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
+                        end
+                        if r.ImGui_Button(ctx, tag_avail) then
+                            if not table.contains(track_tags[track_guid_footer], tag_avail) then
+                                table.insert(track_tags[track_guid_footer], tag_avail)
+                                SaveTags()
+                            end
+                        end
+                        if tag_colors[tag_avail] then r.ImGui_PopStyleColor(ctx, 3) end
+                        line_w_tags = line_w_tags + tag_w_btn
+                    end
+                    r.ImGui_PopStyleVar(ctx)
+                    r.ImGui_EndPopup(ctx)
+                end
                 if tags and #tags > 0 then
                     r.ImGui_SameLine(ctx)
                     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
@@ -6146,23 +6244,65 @@ local function ShowBrowserPanel()
                     local list_height = math.min(120, fx_count * 18 + 4)
                     if r.ImGui_BeginChild(ctx, "FooterTrackFX", -1, list_height) then
                         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 2)
+            -- Eenvoudige lijst zonder drag & drop
                         for i = 0, fx_count - 1 do
                             local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                             if ok and fx_name ~= "" then
                                 if config.clean_plugin_names or config.remove_manufacturer_names then
                                     fx_name = CleanPluginName(fx_name)
                                 end
-                                if r.ImGui_Selectable(ctx, fx_name .. "##footerfx" .. i, false) then
-                                    LAST_USED_FX = fx_name
+                local clicked = r.ImGui_Selectable(ctx, fx_name .. "##footerfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                if clicked then
+                                    if r.TrackFX_GetFloatingWindow(TRACK, i) then
+                                        r.TrackFX_Show(TRACK, i, 2)
+                                    else
+                                        r.TrackFX_Show(TRACK, i, 3)
+                                    end
                                 end
-                                if r.ImGui_IsItemHovered(ctx) then
-                                    r.ImGui_SetTooltip(ctx, "Left: mark recent  |  Right: toggle floating FX window")
-                                end
+
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Left: toggle floating | Right: menu") end
+
+                                -- Context menu
                                 if r.ImGui_IsItemClicked(ctx, 1) then
-                                    r.TrackFX_Show(TRACK, i, 3)
+                                    r.ImGui_OpenPopup(ctx, "footer_fx_ctx_" .. i)
+                                end
+                                if r.ImGui_BeginPopup(ctx, "footer_fx_ctx_" .. i) then
+                                    fx_clipboard = fx_clipboard or {}
+                                    local enabled = r.TrackFX_GetEnabled and r.TrackFX_GetEnabled(TRACK, i)
+                                    local offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(TRACK, i)
+                                    if r.ImGui_MenuItem(ctx, (enabled and "Bypass" or "Enable")) then
+                                        if r.TrackFX_SetEnabled then r.TrackFX_SetEnabled(TRACK, i, not enabled) end
+                                    end
+                                    if r.ImGui_MenuItem(ctx, (offline and "Set Online" or "Set Offline")) then
+                                        if r.TrackFX_SetOffline then r.TrackFX_SetOffline(TRACK, i, not offline) end
+                                    end
+                                    if r.ImGui_MenuItem(ctx, "Float / Unfloat") then
+                                        if r.TrackFX_GetFloatingWindow(TRACK, i) then r.TrackFX_Show(TRACK, i, 2) else r.TrackFX_Show(TRACK, i, 3) end
+                                    end
+                                    r.ImGui_Separator(ctx)
+                                    if r.ImGui_MenuItem(ctx, "Copy") then fx_clipboard.track = TRACK; fx_clipboard.index = i end
+                                    local can_paste = fx_clipboard.track and r.ValidatePtr(fx_clipboard.track, "MediaTrack*") and fx_clipboard.index ~= nil
+                                    if not can_paste then r.ImGui_BeginDisabled(ctx) end
+                                    if r.ImGui_MenuItem(ctx, "Paste (after)") and can_paste then
+                                        local dest_index = i + 1
+                                        r.TrackFX_CopyToTrack(fx_clipboard.track, fx_clipboard.index, TRACK, dest_index, false)
+                                    end
+                                    if not can_paste then r.ImGui_EndDisabled(ctx) end
+                                    r.ImGui_Separator(ctx)
+                                    if i == 0 then r.ImGui_BeginDisabled(ctx) end
+                                    if r.ImGui_MenuItem(ctx, "Move Up") and i > 0 then r.TrackFX_CopyToTrack(TRACK, i, TRACK, i-1, true) end
+                                    if i == 0 then r.ImGui_EndDisabled(ctx) end
+                                    if i == fx_count - 1 then r.ImGui_BeginDisabled(ctx) end
+                                    if r.ImGui_MenuItem(ctx, "Move Down") and i < fx_count - 1 then r.TrackFX_CopyToTrack(TRACK, i, TRACK, i+2, true) end
+                                    if i == fx_count - 1 then r.ImGui_EndDisabled(ctx) end
+                                    r.ImGui_Separator(ctx)
+                                    if r.ImGui_MenuItem(ctx, "Rename Track to this FX") then r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", fx_name, true) end
+                                    if r.ImGui_MenuItem(ctx, "Delete FX") then r.TrackFX_Delete(TRACK, i) end
+                                    r.ImGui_EndPopup(ctx)
                                 end
                             end
                         end
+                        -- Geen eind-drop target meer nodig
                         r.ImGui_PopStyleVar(ctx)
                         r.ImGui_EndChild(ctx)
                     end
@@ -6173,6 +6313,83 @@ local function ShowBrowserPanel()
                 r.ImGui_Dummy(ctx, 0, 6)
                 r.ImGui_Separator(ctx)
                 r.ImGui_Text(ctx, "Track FX: -")
+            end
+
+            -- Item FX list (eerste geselecteerde item, actieve take)
+            do
+                local sel_item = r.GetSelectedMediaItem(0, 0)
+                local take = sel_item and r.GetActiveTake(sel_item) or nil
+                r.ImGui_Dummy(ctx, 0, 4)
+                r.ImGui_Separator(ctx)
+                if take then
+                    local ifx_count = r.TakeFX_GetCount(take)
+                    if ifx_count > 0 then
+                        r.ImGui_Text(ctx, string.format("Item FX (%d):", ifx_count))
+                        local list_height = math.min(100, ifx_count * 18 + 4)
+                        if r.ImGui_BeginChild(ctx, "FooterItemFX", -1, list_height) then
+                            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 2)
+                            for i = 0, ifx_count - 1 do
+                                local ok, ifx_name = r.TakeFX_GetFXName(take, i, "")
+                                if ok and ifx_name ~= "" then
+                                    if config.clean_plugin_names or config.remove_manufacturer_names then
+                                        ifx_name = CleanPluginName(ifx_name)
+                                    end
+                                    local clicked = r.ImGui_Selectable(ctx, ifx_name .. "##footeritemfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                                    if clicked then
+                                        if r.TakeFX_GetFloatingWindow(take, i) then
+                                            r.TakeFX_Show(take, i, 2)
+                                        else
+                                            r.TakeFX_Show(take, i, 3)
+                                        end
+                                    end
+                                    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Left: toggle floating | Right: menu") end
+                                    if r.ImGui_IsItemClicked(ctx, 1) then
+                                        r.ImGui_OpenPopup(ctx, "footer_itemfx_ctx_" .. i)
+                                    end
+                                    if r.ImGui_BeginPopup(ctx, "footer_itemfx_ctx_" .. i) then
+                                        item_fx_clipboard = item_fx_clipboard or {}
+                                        local enabled = r.TakeFX_GetEnabled and r.TakeFX_GetEnabled(take, i)
+                                        local offline = r.TakeFX_GetOffline and r.TakeFX_GetOffline(take, i)
+                                        if r.ImGui_MenuItem(ctx, (enabled and "Bypass" or "Enable")) then
+                                            if r.TakeFX_SetEnabled then r.TakeFX_SetEnabled(take, i, not enabled) end
+                                        end
+                                        if r.ImGui_MenuItem(ctx, (offline and "Set Online" or "Set Offline")) then
+                                            if r.TakeFX_SetOffline then r.TakeFX_SetOffline(take, i, not offline) end
+                                        end
+                                        if r.ImGui_MenuItem(ctx, "Float / Unfloat") then
+                                            if r.TakeFX_GetFloatingWindow(take, i) then r.TakeFX_Show(take, i, 2) else r.TakeFX_Show(take, i, 3) end
+                                        end
+                                        r.ImGui_Separator(ctx)
+                                        if r.ImGui_MenuItem(ctx, "Copy") then item_fx_clipboard.take = take; item_fx_clipboard.index = i end
+                                        local can_paste = item_fx_clipboard.take and item_fx_clipboard.index ~= nil
+                                        if not can_paste then r.ImGui_BeginDisabled(ctx) end
+                                        if r.ImGui_MenuItem(ctx, "Paste (after)") and can_paste then
+                                            local dest_index = i + 1
+                                            r.TakeFX_CopyToTake(item_fx_clipboard.take, item_fx_clipboard.index, take, dest_index, false)
+                                        end
+                                        if not can_paste then r.ImGui_EndDisabled(ctx) end
+                                        r.ImGui_Separator(ctx)
+                                        if i == 0 then r.ImGui_BeginDisabled(ctx) end
+                                        if r.ImGui_MenuItem(ctx, "Move Up") and i > 0 then r.TakeFX_CopyToTake(take, i, take, i-1, true) end
+                                        if i == 0 then r.ImGui_EndDisabled(ctx) end
+                                        if i == ifx_count - 1 then r.ImGui_BeginDisabled(ctx) end
+                                        if r.ImGui_MenuItem(ctx, "Move Down") and i < ifx_count - 1 then r.TakeFX_CopyToTake(take, i, take, i+2, true) end
+                                        if i == ifx_count - 1 then r.ImGui_EndDisabled(ctx) end
+                                        r.ImGui_Separator(ctx)
+                                        if r.ImGui_MenuItem(ctx, "Delete FX") then r.TakeFX_Delete(take, i) end
+                                        r.ImGui_EndPopup(ctx)
+                                    end
+                                end
+                            end
+                            r.ImGui_PopStyleVar(ctx)
+                            r.ImGui_EndChild(ctx)
+                        end
+                    else
+                        r.ImGui_Text(ctx, "Item FX: (none)")
+                    end
+                else
+                    r.ImGui_Text(ctx, "Item FX: - (no selected item with active take)")
+                end
             end
             r.ImGui_PopStyleColor(ctx)
             r.ImGui_EndChild(ctx)
@@ -7580,11 +7797,27 @@ local function ShowScreenshotWindow()
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "fav_" .. i, texture, dw, dh)
+                                            if config.enable_drag_add_fx then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
+                                                    potential_drag_fx_name = plugin_name
+                                                    drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                                                end
+                                                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx,0) then
+                                                    local mx,my = r.ImGui_GetMousePos(ctx)
+                                                    if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
+                                                        dragging_fx_name = plugin_name
+                                                        potential_drag_fx_name = nil
+                                                    end
+                                                end
+                                                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx,0) then
+                                                    potential_drag_fx_name = nil
+                                                end
+                                            end
                                             local do_add = false
                                             if config.add_fx_with_double_click then
-                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
                                             else
-                                                if clicked then do_add = true end
+                                                if clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                             end
                                             if do_add then
                                                 local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
@@ -7724,11 +7957,27 @@ local function ShowScreenshotWindow()
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "custom_" .. i, texture, dw, dh)
+                                            if config.enable_drag_add_fx then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
+                                                    potential_drag_fx_name = plugin_name
+                                                    drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                                                end
+                                                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx,0) then
+                                                    local mx,my = r.ImGui_GetMousePos(ctx)
+                                                    if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
+                                                        dragging_fx_name = plugin_name
+                                                        potential_drag_fx_name = nil
+                                                    end
+                                                end
+                                                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx,0) then
+                                                    potential_drag_fx_name = nil
+                                                end
+                                            end
                                             local do_add = false
                                             if config.add_fx_with_double_click then
-                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
                                             else
-                                                if clicked then do_add = true end
+                                                if clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                             end
                                             if do_add then
                                                 local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
@@ -8173,10 +8422,29 @@ local function ShowScreenshotWindow()
                                                 local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                                 local folder_clicked = r.ImGui_ImageButton(ctx, "folder_plugin_" .. i, texture, display_width, display_height)
                                                 local do_add = false
+                                                if config.enable_drag_add_fx then
+                                                    -- On initial mouse press over the image, mark as potential drag source
+                                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
+                                                        potential_drag_fx_name = plugin_name
+                                                        drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                                                    end
+                                                    -- If mouse is held and movement beyond threshold, escalate to real drag
+                                                    if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx,0) then
+                                                        local mx,my = r.ImGui_GetMousePos(ctx)
+                                                        if math.abs(mx - drag_start_x) > 3 or math.abs(my - drag_start_y) > 3 then
+                                                            dragging_fx_name = plugin_name
+                                                            potential_drag_fx_name = nil
+                                                        end
+                                                    end
+                                                    -- If released without movement -> treat as normal click (clear potential)
+                                                    if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx,0) then
+                                                        potential_drag_fx_name = nil
+                                                    end
+                                                end
                                                 if config.add_fx_with_double_click then
-                                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
+                                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
                                                 else
-                                                    if folder_clicked then do_add = true end
+                                                    if folder_clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                                 end
                                                 if do_add then
                                                     local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
@@ -9100,6 +9368,8 @@ local function DrawBottomButtons()
         r.ImGui_Text(ctx, "Open first FX on track (floating) and click OK")
         if r.ImGui_Button(ctx, "OK") then
             CaptureFirstTrackFX()
+            ClearScreenshotCache()
+            BuildScreenshotIndex(true)
             r.ImGui_CloseCurrentPopup(ctx)
         end
         r.ImGui_SameLine(ctx)
