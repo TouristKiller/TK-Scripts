@@ -1,6 +1,6 @@
 -- @description TK_Set selected MIDI item shape and view
 -- @author TouristKiller
--- @version 0.2.1
+-- @version 0.2.2
 -- @changelog 
 --[[
 + Removed toggle script. 
@@ -175,8 +175,8 @@ end
 ---------------------------------------------------------
 local function loop()
     if settings_visible then
-        r.ImGui_PushFont(ctx, font)
-        
+        r.ImGui_PushFont(ctx, font, 0)
+
         -- Style setup
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
