@@ -163,7 +163,7 @@
     </reapack>
 
     <reapack name="TK_Set selected MIDI item shape and view.lua" type="script" desc="TK_Set selected MIDI item shape and view">
-        <version name="0.2.1" author="TouristKiller" time="2025-01-27T12:00:00Z">
+        <version name="0.2.2" author="TouristKiller" time="2025-08-21T22:20:00Z">
             <changelog><![CDATA[           
 + Removed toggle script. 
 + Start stop monitor from settings window
