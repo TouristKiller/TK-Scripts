@@ -26,6 +26,10 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button.active_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), button.text_color)
             
+            local border_for_button = (button.show_border ~= false) and 1 or 0
+            if border_for_button == 0 then
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+            end
             if button.use_icon and button.icon_name then
                 if not r.ImGui_ValidatePtr(ButtonRenderer.image_cache[button.icon_name], 'ImGui_Image*') then
                     local icon_path = resource_path .. "/Data/toolbar_icons/" .. button.icon_name
@@ -150,6 +154,9 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons)
             end
             
             r.ImGui_PopStyleColor(ctx, 4)
+            if border_for_button == 0 then
+                r.ImGui_PopStyleVar(ctx)
+            end
         end
     end
 end

@@ -1,9 +1,9 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.3.1
+-- @version 0.3.5
 -- @changelog 
 --[[
-+ added local time + set BMP color + centered timesignature
+
 ]]--
 
 
@@ -110,6 +110,13 @@ local default_settings  = {
     border_size         = 1.0,
     current_font        = "Arial",
     font_size           = 12,
+    tempo_font_name         = "Arial",
+    timesig_font_name       = "Arial",
+    local_time_font_name    = "Arial",
+    tempo_font_size         = 12, -- BPM display
+    timesig_font_size       = 12, -- Time signature (maat) display
+    show_timesig_button     = false, -- Separate time signature button next to tempo
+    local_time_font_size    = 12, -- Local time clock display
     center_transport    = true,
     current_preset_name = "",
 
@@ -117,22 +124,23 @@ local default_settings  = {
     transport_x         = 0.41,      
     timesel_x           = 0.0,        
     tempo_x             = 0.69,         
+    timesig_x           = 0.75,
     playrate_x          = 0.93,      
     env_x               = 0.19,           
     settings_x          = 0.99,
     cursorpos_x         = 0.25,
-    visualmtr_x         = 0.32,
+    cursorpos_mode      = "both", -- display mode for cursor position: beats, time, both
     local_time_x        = 0.50,
     custom_buttons_x_offset = 0.0,
     -- y offset
     transport_y         = 0.15,      
     timesel_y           = 0.15,        
     tempo_y             = 0.15,         
+    timesig_y           = 0.02,
     playrate_y          = 0.15,      
     env_y               = 0.15,           
     settings_y          = 0.15,    
     cursorpos_y         = 0.15,
-    visualmtr_y         = 0.15,
     local_time_y        = 0.02,
     custom_buttons_y_offset = 0.0,
 
@@ -154,8 +162,6 @@ local default_settings  = {
     button_active       = 0x555555FF,
     border              = 0x444444FF,
     transport_normal    = 0x333333FF,
-    metronome_active    = 0x00FF00FF,
-    metronome_enabled   = 0x00FF00FF,
     timesel_color       = 0x333333FF,
     timesel_border      = true,
     show_local_time     = true,
@@ -168,7 +174,6 @@ local default_settings  = {
     show_transport      = true,
     show_tempo          = true,
     show_playrate       = true,
-    show_vismetronome   = true,
     show_time_selection = true,
     show_beats_selection = true,
     show_settings_button = true,  
@@ -226,12 +231,27 @@ for k, v in pairs(default_settings) do
 end
 
 local font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
+local font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
+local font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
+local font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
 local font_icons = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
 r.ImGui_Attach(ctx, font)
+r.ImGui_Attach(ctx, font_tempo)
+r.ImGui_Attach(ctx, font_timesig)
+r.ImGui_Attach(ctx, font_localtime)
 r.ImGui_Attach(ctx, font_icons)
 local font_needs_update = false
 function UpdateFont()
     font_needs_update = true
+end
+
+local function RebuildSectionFonts()
+    font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
+    font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
+    font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
+    r.ImGui_Attach(ctx, font_tempo)
+    r.ImGui_Attach(ctx, font_timesig)
+    r.ImGui_Attach(ctx, font_localtime)
 end
 
 function UpdateCustomImages()
@@ -492,7 +512,7 @@ function ShowSettings(main_window_width , main_window_height)
         
         if preset_name and preset_name ~= "" then
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, window_width - 150)  -- Positie aanpassen naar wens
+            r.ImGui_SetCursorPosX(ctx, window_width - 150)  -- Adjust position if needed
             r.ImGui_Text(ctx, "Preset: " .. preset_name)
         end
         
@@ -510,62 +530,57 @@ function ShowSettings(main_window_width , main_window_height)
         r.ImGui_PopStyleColor(ctx, 3)
         r.ImGui_Separator(ctx)
 
-        if r.ImGui_CollapsingHeader(ctx, "Presets") then
-            local presets = GetPresetList()
-            local display_name = preset_name and preset_name ~= "" and preset_name or "preset_name"
-            
-            -- Static variable for new preset name input
-            if not preset_input_name then
+        -- Presets (altijd zichtbaar)
+        r.ImGui_Text(ctx, "Presets:")
+        local presets = GetPresetList()
+        local display_name = preset_name and preset_name ~= "" and preset_name or "preset_name"
+
+        if not preset_input_name then
+            preset_input_name = ""
+        end
+
+        if r.ImGui_BeginCombo(ctx, "##PresetCombo", display_name) then
+            for _, preset in ipairs(presets) do
+                local is_selected = (preset == preset_name)
+                if r.ImGui_Selectable(ctx, preset, is_selected) then
+                    preset_name = preset
+                    LoadPreset(preset)
+                    SaveLastUsedPreset(preset)
+                end
+                if is_selected then
+                    r.ImGui_SetItemDefaultFocus(ctx)
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Resave") and preset_name then
+            SavePreset(preset_name)
+        end
+
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Delete") and preset_name then
+            local preset_path = CreatePresetsFolder()
+            os.remove(preset_path .. "/" .. preset_name .. ".json")
+            preset_name = nil
+        end
+
+        local rv
+        rv, preset_input_name = r.ImGui_InputText(ctx, "##NewPreset", preset_input_name)
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Save As New") and preset_input_name ~= "" then
+            preset_name = preset_input_name
+            SavePreset(preset_input_name)
+            local preset_path = CreatePresetsFolder()
+            if r.file_exists(preset_path .. "/" .. preset_input_name .. ".json") then
                 preset_input_name = ""
             end
-            
-            -- Preset selection combo
-            if r.ImGui_BeginCombo(ctx, "##PresetCombo", display_name) then
-                for _, preset in ipairs(presets) do
-                    local is_selected = (preset == preset_name)
-                    if r.ImGui_Selectable(ctx, preset, is_selected) then
-                        preset_name = preset
-                        LoadPreset(preset)
-                        SaveLastUsedPreset(preset)  
-                    end
-                    if is_selected then
-                        r.ImGui_SetItemDefaultFocus(ctx)
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end
-            
-            -- Resave current preset
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Resave") and preset_name then
-                SavePreset(preset_name)
-            end
-            
-            -- Delete current preset
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Delete") and preset_name then
-                local preset_path = CreatePresetsFolder()
-                os.remove(preset_path .. "/" .. preset_name .. ".json")
-                preset_name = nil
-            end
-            
-            -- New preset input and save
-            local rv
-            rv, preset_input_name = r.ImGui_InputText(ctx, "##NewPreset", preset_input_name)
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Save As New") and preset_input_name ~= "" then
-                preset_name = preset_input_name
-                SavePreset(preset_input_name)
-                -- Only clear input after successful save
-                if r.file_exists(preset_path .. "/" .. preset_input_name .. ".json") then
-                    preset_input_name = ""
-                end
-            end
         end
+        r.ImGui_Separator(ctx)
         
 
-        if r.ImGui_CollapsingHeader(ctx, "Style Settings") then
+    if r.ImGui_CollapsingHeader(ctx, "Style Settings") then
             local rv
             rv, settings.window_rounding = r.ImGui_SliderDouble(ctx, "Window Rounding", settings.window_rounding, 0.0, 20.0)
             rv, settings.frame_rounding = r.ImGui_SliderDouble(ctx, "Frame Rounding", settings.frame_rounding, 0.0, 20.0)
@@ -632,9 +647,7 @@ function ShowSettings(main_window_width , main_window_height)
             rv, settings.pause_active = r.ImGui_ColorEdit4(ctx, "Pause Active", settings.pause_active, flags)
            
             rv, settings.loop_active = r.ImGui_ColorEdit4(ctx, "Loop Active", settings.loop_active, flags)
-            r.ImGui_SameLine(ctx, column_width)
-            rv, settings.metronome_active = r.ImGui_ColorEdit4(ctx, "Metronome Pulse", settings.metronome_active, flags)
-            rv, settings.metronome_enabled = r.ImGui_ColorEdit4(ctx, "Metronome Enabled", settings.metronome_enabled, flags)
+            
         end
       
         if r.ImGui_CollapsingHeader(ctx, "Layout Settings") then
@@ -642,28 +655,58 @@ function ShowSettings(main_window_width , main_window_height)
             local rv
             local column_width = r.ImGui_GetWindowWidth(ctx) / 2
 
+            -- Globale basis font bovenaan
+            r.ImGui_Text(ctx, "Global Font")
+            if r.ImGui_BeginCombo(ctx, "Base Font", settings.current_font) then
+                for _, f in ipairs(fonts) do
+                    local sel = (settings.current_font == f)
+                    if r.ImGui_Selectable(ctx, f, sel) then
+                        settings.current_font = f
+                        UpdateFont()
+                        RebuildSectionFonts()
+                    end
+                    if sel then r.ImGui_SetItemDefaultFocus(ctx) end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            if r.ImGui_BeginCombo(ctx, "Base Size", tostring(settings.font_size)) then
+                for _, size in ipairs(text_sizes) do
+                    local sel = (settings.font_size == size)
+                    if r.ImGui_Selectable(ctx, tostring(size), sel) then
+                        settings.font_size = size
+                        UpdateFont()
+                        RebuildSectionFonts()
+                    end
+                    if sel then r.ImGui_SetItemDefaultFocus(ctx) end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_Separator(ctx)
+
             if ShowSectionHeader("Transport", "transport_open") then
-                rv, settings.center_transport = r.ImGui_Checkbox(ctx, "Center", settings.center_transport)
-                local buttons_width = settings.use_graphic_buttons and 280 or 380
-            
-                -- Transport positie controls
-                if settings.center_transport then
-                    settings.transport_x = ((main_window_width - buttons_width) / 2) / main_window_width
-                else
-                    local transport_percent_x = settings.transport_x * 100
-                    rv, transport_percent_x = r.ImGui_SliderDouble(ctx, "X##transportX", transport_percent_x, 0, 100, "%.0f%%")
-                    settings.transport_x = transport_percent_x / 100
-                end
-                
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "-##transpX", 20, 20) then
-                    local pixel_change = 1 / main_window_width
-                    settings.transport_x = math.max(0, settings.transport_x - pixel_change)
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "+##transpX", 20, 20) then
-                    local pixel_change = 1 / main_window_width
-                    settings.transport_x = math.min(1, settings.transport_x + pixel_change)
+                rv, settings.show_transport = r.ImGui_Checkbox(ctx, "Show##transport", settings.show_transport)
+                if settings.show_transport then
+                    rv, settings.center_transport = r.ImGui_Checkbox(ctx, "Center", settings.center_transport)
+                    local buttons_width = settings.use_graphic_buttons and 280 or 380
+
+                    -- Transport positie controls
+                    if settings.center_transport then
+                        settings.transport_x = ((main_window_width - buttons_width) / 2) / main_window_width
+                    else
+                        local transport_percent_x = settings.transport_x * 100
+                        rv, transport_percent_x = r.ImGui_SliderDouble(ctx, "X##transportX", transport_percent_x, 0, 100, "%.0f%%")
+                        settings.transport_x = transport_percent_x / 100
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "-##transpX", 20, 20) then
+                            local pixel_change = 1 / main_window_width
+                            settings.transport_x = math.max(0, settings.transport_x - pixel_change)
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "+##transpX", 20, 20) then
+                            local pixel_change = 1 / main_window_width
+                            settings.transport_x = math.min(1, settings.transport_x + pixel_change)
+                        end
+                    end
                 end
                 
                 local transport_percent_y = settings.transport_y * 100
@@ -714,41 +757,11 @@ function ShowSettings(main_window_width , main_window_height)
                     settings.cursorpos_y = math.min(1, settings.cursorpos_y + pixel_change)
                 end
             end
-            r.ImGui_Separator(ctx)
-            if ShowSectionHeader("Visual Metronome", "visualmtr_open") then
-                -- Visual Metronome positie controls
-                local visualmtr_percent_x = settings.visualmtr_x * 100
-                rv, visualmtr_percent_x = r.ImGui_SliderDouble(ctx, "X##visualmtrX", visualmtr_percent_x, 0, 100, "%.0f%%")
-                settings.visualmtr_x = visualmtr_percent_x / 100
-                
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "-##visualmtrX", 20, 20) then
-                    local pixel_change = 1 / main_window_width
-                    settings.visualmtr_x = math.max(0, settings.visualmtr_x - pixel_change)
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "+##visualmtrX", 20, 20) then
-                    local pixel_change = 1 / main_window_width
-                    settings.visualmtr_x = math.min(1, settings.visualmtr_x + pixel_change)
-                end
-                
-                local visualmtr_percent_y = settings.visualmtr_y * 100
-                rv, visualmtr_percent_y = r.ImGui_SliderDouble(ctx, "Y##visualmtrY", visualmtr_percent_y, 0, 100, "%.0f%%")
-                settings.visualmtr_y = visualmtr_percent_y / 100
-                
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "-##visualmtrY", 20, 20) then
-                    local pixel_change = 1 / main_window_height
-                    settings.visualmtr_y = math.max(0, settings.visualmtr_y - pixel_change)
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "+##visualmtrY", 20, 20) then
-                    local pixel_change = 1 / main_window_height
-                    settings.visualmtr_y = math.min(1, settings.visualmtr_y + pixel_change)
-                end
-            end
+           
             r.ImGui_Separator(ctx)
             if ShowSectionHeader("Time Selection", "timesel_open") then
+                rv, settings.show_timesel = r.ImGui_Checkbox(ctx, "Show##timesel", settings.show_timesel)
+                if settings.show_timesel then
                 -- Time Selection positie controls
                 local timesel_percent_x = settings.timesel_x * 100
                 rv, timesel_percent_x = r.ImGui_SliderDouble(ctx, "X##timeselX", timesel_percent_x, 0, 100, "%.0f%%")
@@ -786,9 +799,35 @@ function ShowSettings(main_window_width , main_window_height)
                 r.ImGui_SameLine(ctx, column_width)
                 rv, settings.timesel_border = r.ImGui_Checkbox(ctx, "Show Button Border", settings.timesel_border)
                 rv, settings.timesel_color = r.ImGui_ColorEdit4(ctx, "Button Color", settings.timesel_color, flags)
+                end
             end
             r.ImGui_Separator(ctx)
             if ShowSectionHeader("Tempo", "tempo_open") then
+                rv, settings.show_tempo = r.ImGui_Checkbox(ctx, "Show##tempo", settings.show_tempo)
+                if settings.show_tempo then
+                -- Tempo font
+                if r.ImGui_BeginCombo(ctx, "Tempo Font", settings.tempo_font_name) then
+                    for _, f in ipairs(fonts) do
+                        local sel = (settings.tempo_font_name == f)
+                        if r.ImGui_Selectable(ctx, f, sel) then
+                            settings.tempo_font_name = f
+                            RebuildSectionFonts()
+                        end
+                        if sel then r.ImGui_SetItemDefaultFocus(ctx) end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                if r.ImGui_BeginCombo(ctx, "Tempo Size", tostring(settings.tempo_font_size)) then
+                    for _, size in ipairs(text_sizes) do
+                        local sel = (settings.tempo_font_size == size)
+                        if r.ImGui_Selectable(ctx, tostring(size), sel) then
+                            settings.tempo_font_size = size
+                            RebuildSectionFonts()
+                        end
+                        if sel then r.ImGui_SetItemDefaultFocus(ctx) end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
                 -- Tempo positie controls
                 local tempo_percent_x = settings.tempo_x * 100
                 rv, tempo_percent_x = r.ImGui_SliderDouble(ctx, "X##tempoX", tempo_percent_x, 0, 100, "%.0f%%")
@@ -821,9 +860,12 @@ function ShowSettings(main_window_width , main_window_height)
                 end
                 rv, settings.tempo_button_color = r.ImGui_ColorEdit4(ctx, "Tempo Button Color", settings.tempo_button_color, flags)
                 rv, settings.tempo_button_color_hover = r.ImGui_ColorEdit4(ctx, "Tempo Hover Color", settings.tempo_button_color_hover, flags)
+                end
             end
             r.ImGui_Separator(ctx)
             if ShowSectionHeader("Playrate", "playrate_open") then
+                rv, settings.show_playrate = r.ImGui_Checkbox(ctx, "Show##playrate", settings.show_playrate)
+                if settings.show_playrate then
                 -- Playrate positie controls
                 local playrate_percent_x = settings.playrate_x * 100
                 rv, playrate_percent_x = r.ImGui_SliderDouble(ctx, "X##playrateX", playrate_percent_x, 0, 100, "%.0f%%")
@@ -854,9 +896,75 @@ function ShowSettings(main_window_width , main_window_height)
                     local pixel_change = 1 / main_window_height
                     settings.playrate_y = math.min(1, settings.playrate_y + pixel_change)
                 end
+                end
+            end
+            r.ImGui_Separator(ctx)
+            if ShowSectionHeader("Time Signature", "timesig_layout_open") then
+                rv, settings.show_timesig_button = r.ImGui_Checkbox(ctx, "Show##timesig", settings.show_timesig_button)
+                if settings.show_timesig_button then
+                -- Time Signature font
+                if r.ImGui_BeginCombo(ctx, "TimeSig Font", settings.timesig_font_name) then
+                    for _, f in ipairs(fonts) do
+                        local sel = (settings.timesig_font_name == f)
+                        if r.ImGui_Selectable(ctx, f, sel) then
+                            settings.timesig_font_name = f
+                            RebuildSectionFonts()
+                        end
+                        if sel then r.ImGui_SetItemDefaultFocus(ctx) end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                if r.ImGui_BeginCombo(ctx, "TimeSig Size", tostring(settings.timesig_font_size)) then
+                    for _, size in ipairs(text_sizes) do
+                        local sel = (settings.timesig_font_size == size)
+                        if r.ImGui_Selectable(ctx, tostring(size), sel) then
+                            settings.timesig_font_size = size
+                            RebuildSectionFonts()
+                        end
+                        if sel then r.ImGui_SetItemDefaultFocus(ctx) end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                -- Time Signature positie controls
+                local tsx = (settings.timesig_x or 0.75) * 100
+                rv, tsx = r.ImGui_SliderDouble(ctx, "X##timesigX", tsx, 0, 100, "%.0f%%")
+                settings.timesig_x = tsx / 100
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##timesigX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.timesig_x = math.max(0, settings.timesig_x - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##timesigX", 20, 20) then
+                    local pixel_change = 1 / main_window_width
+                    settings.timesig_x = math.min(1, settings.timesig_x + pixel_change)
+                end
+
+                local tsy = (settings.timesig_y or 0.02) * 100
+                rv, tsy = r.ImGui_SliderDouble(ctx, "Y##timesigY", tsy, 0, 100, "%.0f%%")
+                settings.timesig_y = tsy / 100
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "-##timesigY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.timesig_y = math.max(0, settings.timesig_y - pixel_change)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+##timesigY", 20, 20) then
+                    local pixel_change = 1 / main_window_height
+                    settings.timesig_y = math.min(1, settings.timesig_y + pixel_change)
+                end
+
+                if r.ImGui_Button(ctx, "Reset##timesigPos") then
+                    settings.timesig_x = 0.75
+                    settings.timesig_y = 0.02
+                end
+                r.ImGui_SameLine(ctx)
+                end
             end
             r.ImGui_Separator(ctx)
             if ShowSectionHeader("Envelope", "env_open") then
+                rv, settings.show_env_button = r.ImGui_Checkbox(ctx, "Show##env", settings.show_env_button)
+                if settings.show_env_button then
                 -- ENV Button positie controls
                 local env_percent_x = settings.env_x * 100
                 rv, env_percent_x = r.ImGui_SliderDouble(ctx, "X##envX", env_percent_x, 0, 100, "%.0f%%")
@@ -887,39 +995,65 @@ function ShowSettings(main_window_width , main_window_height)
                     local pixel_change = 1 / main_window_height
                     settings.env_y = math.min(1, settings.env_y + pixel_change)
                 end
+                end
             end
             r.ImGui_Separator(ctx)
 
             if ShowSectionHeader("TapTempo", "taptempo_open") then
-                local taptempo_percent_x = settings.taptempo_x * 100
-                rv, taptempo_percent_x = r.ImGui_SliderDouble(ctx, "X##taptempoX", taptempo_percent_x, 0, 100, "%.0f%%")
-                settings.taptempo_x = taptempo_percent_x / 100
-                
-                local taptempo_percent_y = settings.taptempo_y * 100
-                rv, taptempo_percent_y = r.ImGui_SliderDouble(ctx, "Y##taptempoY", taptempo_percent_y, 0, 100, "%.0f%%")
-                settings.taptempo_y = taptempo_percent_y / 100
-                
-                rv, settings.tap_button_text = r.ImGui_InputText(ctx, "Button Text", settings.tap_button_text)
-                r.ImGui_SetNextItemWidth(ctx, 80)
-                rv, settings.tap_button_width = r.ImGui_InputInt(ctx, "Button Width", settings.tap_button_width)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetNextItemWidth(ctx, 80)
-                rv, settings.tap_button_height = r.ImGui_InputInt(ctx, "Button Height", settings.tap_button_height)
-                r.ImGui_SetNextItemWidth(ctx, 80)
-                rv, settings.tap_input_limit = r.ImGui_InputInt(ctx, "History Size", settings.tap_input_limit)
-                rv, settings.set_tempo_on_tap = r.ImGui_Checkbox(ctx, "Set Project Tempo Automatically", settings.set_tempo_on_tap)
-                r.ImGui_SameLine(ctx)
-                rv, settings.show_accuracy_indicator = r.ImGui_Checkbox(ctx, "Show Accuracy Indicator", settings.show_accuracy_indicator)
-                
-                if settings.show_accuracy_indicator then
-                    rv, settings.high_accuracy_color = r.ImGui_ColorEdit4(ctx, "High Accuracy Color", settings.high_accuracy_color)
-                    rv, settings.medium_accuracy_color = r.ImGui_ColorEdit4(ctx, "Medium Accuracy Color", settings.medium_accuracy_color)
-                    rv, settings.low_accuracy_color = r.ImGui_ColorEdit4(ctx, "Low Accuracy Color", settings.low_accuracy_color)
+                rv, settings.show_taptempo = r.ImGui_Checkbox(ctx, "Show##taptempo", settings.show_taptempo)
+                if settings.show_taptempo then
+                    local taptempo_percent_x = settings.taptempo_x * 100
+                    rv, taptempo_percent_x = r.ImGui_SliderDouble(ctx, "X##taptempoX", taptempo_percent_x, 0, 100, "%.0f%%")
+                    settings.taptempo_x = taptempo_percent_x / 100
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "-##taptempoX", 20, 20) then
+                        local pixel_change = 1 / main_window_width
+                        settings.taptempo_x = math.max(0, settings.taptempo_x - pixel_change)
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "+##taptempoX", 20, 20) then
+                        local pixel_change = 1 / main_window_width
+                        settings.taptempo_x = math.min(1, settings.taptempo_x + pixel_change)
+                    end
+
+                    local taptempo_percent_y = settings.taptempo_y * 100
+                    rv, taptempo_percent_y = r.ImGui_SliderDouble(ctx, "Y##taptempoY", taptempo_percent_y, 0, 100, "%.0f%%")
+                    settings.taptempo_y = taptempo_percent_y / 100
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "-##taptempoY", 20, 20) then
+                        local pixel_change = 1 / main_window_height
+                        settings.taptempo_y = math.max(0, settings.taptempo_y - pixel_change)
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "+##taptempoY", 20, 20) then
+                        local pixel_change = 1 / main_window_height
+                        settings.taptempo_y = math.min(1, settings.taptempo_y + pixel_change)
+                    end
+
+                    rv, settings.tap_button_text = r.ImGui_InputText(ctx, "Button Text", settings.tap_button_text)
+                    r.ImGui_SetNextItemWidth(ctx, 80)
+                    rv, settings.tap_button_width = r.ImGui_InputInt(ctx, "Button Width", settings.tap_button_width)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetNextItemWidth(ctx, 80)
+                    rv, settings.tap_button_height = r.ImGui_InputInt(ctx, "Button Height", settings.tap_button_height)
+                    r.ImGui_SetNextItemWidth(ctx, 80)
+                    rv, settings.tap_input_limit = r.ImGui_InputInt(ctx, "History Size", settings.tap_input_limit)
+                    rv, settings.set_tempo_on_tap = r.ImGui_Checkbox(ctx, "Set Project Tempo Automatically", settings.set_tempo_on_tap)
+                    r.ImGui_SameLine(ctx)
+                    rv, settings.show_accuracy_indicator = r.ImGui_Checkbox(ctx, "Show Accuracy Indicator", settings.show_accuracy_indicator)
+
+                    if settings.show_accuracy_indicator then
+                        rv, settings.high_accuracy_color = r.ImGui_ColorEdit4(ctx, "High Accuracy Color", settings.high_accuracy_color)
+                        rv, settings.medium_accuracy_color = r.ImGui_ColorEdit4(ctx, "Medium Accuracy Color", settings.medium_accuracy_color)
+                        rv, settings.low_accuracy_color = r.ImGui_ColorEdit4(ctx, "Low Accuracy Color", settings.low_accuracy_color)
+                    end
                 end
             end
             
             r.ImGui_Separator(ctx)
             if ShowSectionHeader("Settings", "settings_open") then
+                rv, settings.show_settings_button = r.ImGui_Checkbox(ctx, "Show##settingsBtn", settings.show_settings_button)
+                if settings.show_settings_button then
                 -- Settings Button positie controls
                 local settings_percent_x = settings.settings_x * 100
                 rv, settings_percent_x = r.ImGui_SliderDouble(ctx, "X##settingsX", settings_percent_x, 0, 100, "%.0f%%")
@@ -950,9 +1084,35 @@ function ShowSettings(main_window_width , main_window_height)
                     local pixel_change = 1 / main_window_height
                     settings.settings_y = math.min(1, settings.settings_y + pixel_change)
                 end
+                end
             end
             r.ImGui_Separator(ctx)
             if ShowSectionHeader("Local Time", "localtime_open") then
+            rv, settings.show_local_time = r.ImGui_Checkbox(ctx, "Show##localtime", settings.show_local_time)
+            if settings.show_local_time then
+            -- Local Time font
+            if r.ImGui_BeginCombo(ctx, "Local Time Font", settings.local_time_font_name) then
+                for _, f in ipairs(fonts) do
+                    local sel = (settings.local_time_font_name == f)
+                    if r.ImGui_Selectable(ctx, f, sel) then
+                        settings.local_time_font_name = f
+                        RebuildSectionFonts()
+                    end
+                    if sel then r.ImGui_SetItemDefaultFocus(ctx) end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            if r.ImGui_BeginCombo(ctx, "Local Time Size", tostring(settings.local_time_font_size)) then
+                for _, size in ipairs(text_sizes) do
+                    local sel = (settings.local_time_font_size == size)
+                    if r.ImGui_Selectable(ctx, tostring(size), sel) then
+                        settings.local_time_font_size = size
+                        RebuildSectionFonts()
+                    end
+                    if sel then r.ImGui_SetItemDefaultFocus(ctx) end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
             local changed = false
             local lt_x_pct = (settings.local_time_x or 0.50) * 100
             rv, lt_x_pct = r.ImGui_SliderDouble(ctx, "X##ltimeX", lt_x_pct, 0, 100, "%.0f%%")
@@ -990,6 +1150,7 @@ function ShowSettings(main_window_width , main_window_height)
             local flags = r.ImGui_ColorEditFlags_NoInputs()
             local rv_col, new_col = r.ImGui_ColorEdit4(ctx, "Color##localtime", settings.local_time_color or 0xFFFFFFFF, flags)
             if rv_col then settings.local_time_color = new_col end
+            end
             end
             if r.ImGui_CollapsingHeader(ctx, "Custom Buttons Group") then
                 local rv
@@ -1035,20 +1196,7 @@ function ShowSettings(main_window_width , main_window_height)
             r.ImGui_Separator(ctx)
             
 
-            r.ImGui_Text(ctx, "Show/Hide Elements")
-            rv, settings.show_timesel = r.ImGui_Checkbox(ctx, "Time selection", settings.show_timesel)
-            r.ImGui_SameLine(ctx, column_width)
-            rv, settings.show_transport = r.ImGui_Checkbox(ctx, "Transport Controls", settings.show_transport)
-            rv, settings.show_tempo = r.ImGui_Checkbox(ctx, "Tempo/Time Signature", settings.show_tempo)
-            r.ImGui_SameLine(ctx, column_width)
-            rv, settings.show_playrate = r.ImGui_Checkbox(ctx, "Playrate", settings.show_playrate)
-            rv, settings.show_local_time = r.ImGui_Checkbox(ctx, "Local Time", settings.show_local_time)
-            rv, settings.show_vismetronome = r.ImGui_Checkbox(ctx, "Visual Metronome", settings.show_vismetronome)
-            r.ImGui_SameLine(ctx, column_width)
-            rv, settings.show_env_button = r.ImGui_Checkbox(ctx, "ENV Button", settings.show_env_button)
-            rv, settings.show_taptempo = r.ImGui_Checkbox(ctx, "Show TapTempo", settings.show_taptempo)
-            r.ImGui_SameLine(ctx, column_width)
-            rv, settings.show_settings_button = r.ImGui_Checkbox(ctx, "Settings Button", settings.show_settings_button)
+            -- (Show/Hide Elements verplaatst naar individuele secties)
             
             end
 
@@ -1232,35 +1380,6 @@ function ShowSettings(main_window_width , main_window_height)
             end
         end
         
-        if r.ImGui_CollapsingHeader(ctx, "Font Settings") then
-            local rv
-            if r.ImGui_BeginCombo(ctx, "Font", settings.current_font) then
-                for i, font in ipairs(fonts) do
-                    local is_selected = (settings.current_font == font)
-                    if r.ImGui_Selectable(ctx, font, is_selected) then
-                        settings.current_font = font
-                        UpdateFont()
-                    end
-                    if is_selected then
-                        r.ImGui_SetItemDefaultFocus(ctx)
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end
-            if r.ImGui_BeginCombo(ctx, "Font Size", tostring(settings.font_size)) then
-                for i, size in ipairs(text_sizes) do
-                    local is_selected = (settings.font_size == size)
-                    if r.ImGui_Selectable(ctx, tostring(size), is_selected) then
-                        settings.font_size = size
-                        UpdateFont()
-                    end
-                    if is_selected then
-                        r.ImGui_SetItemDefaultFocus(ctx)
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end
-        end
         if r.ImGui_CollapsingHeader(ctx, "Widget Manager") then
             WidgetManager.RenderWidgetManagerUI(ctx, script_path)
         end
@@ -1726,16 +1845,25 @@ end
 function PlayRate_Slider(main_window_width, main_window_height)
     if not settings.show_playrate then return end
     local current_rate = r.Master_GetPlayRate(0)
-    
+
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, settings.playrate_x * main_window_width)
     r.ImGui_SetCursorPosY(ctx, settings.playrate_y * main_window_height)
     r.ImGui_AlignTextToFramePadding(ctx)
     r.ImGui_Text(ctx, 'Rate:')
+    -- Click on label resets playrate to 1.0
+    if r.ImGui_IsItemClicked(ctx, 0) then
+        r.Main_OnCommand(40521, 0)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_BeginTooltip(ctx)
+        r.ImGui_Text(ctx, 'click to reset')
+        r.ImGui_EndTooltip(ctx)
+    end
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosY(ctx, settings.playrate_y * main_window_height)
     r.ImGui_PushItemWidth(ctx, 80)
-    local rv, new_rate = r.ImGui_SliderDouble(ctx, '##PlayRateSlider', current_rate, 0.25, 4.0, "%.2fx")  
+    local rv, new_rate = r.ImGui_SliderDouble(ctx, '##PlayRateSlider', current_rate, 0.25, 4.0, "%.2fx")
 
     if r.ImGui_IsItemClicked(ctx, 1) then
         r.ImGui_OpenPopup(ctx, "PlayRateMenu")
@@ -1755,7 +1883,7 @@ function PlayRate_Slider(main_window_width, main_window_height)
     if rv then
         r.CSurf_OnPlayRateChange(new_rate)
     end
-    
+
     r.ImGui_PopItemWidth(ctx)
 end
 
@@ -1777,21 +1905,83 @@ function ShowCursorPosition(main_window_width, main_window_height)
     local seconds = position % 60
     local time_str = string.format("%d:%06.3f", minutes, seconds)
     local mbt_str = string.format("%d.%d.%02d", math.floor(measures+1), math.floor(beatsInMeasure+1), ticks)
-    local combined = mbt_str .. " / " .. time_str
+    local mode = settings.cursorpos_mode or "both"
+    local label
+    if mode == "beats" then
+        label = mbt_str
+    elseif mode == "time" then
+        label = time_str
+    else
+        label = mbt_str .. " | " .. time_str
+    end
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.button_normal)
-    r.ImGui_Button(ctx, combined)
+    if r.ImGui_Button(ctx, label) and r.ImGui_IsItemClicked(ctx, 1) then
+        -- Right-click also triggers popup, fallback if needed
+    end
+    if r.ImGui_IsItemClicked(ctx, 1) then
+        r.ImGui_OpenPopup(ctx, "CursorPosModeMenu")
+    end
     r.ImGui_PopStyleColor(ctx)
+    if r.ImGui_BeginPopup(ctx, "CursorPosModeMenu") then
+        if r.ImGui_MenuItem(ctx, "Beats (MBT)", nil, mode=="beats") then settings.cursorpos_mode = "beats" end
+        if r.ImGui_MenuItem(ctx, "Time", nil, mode=="time") then settings.cursorpos_mode = "time" end
+        if r.ImGui_MenuItem(ctx, "Both", nil, mode=="both") then settings.cursorpos_mode = "both" end
+        r.ImGui_EndPopup(ctx)
+    end
 end
 
--- Hulpfunctie: zet globale project tempo zonder nieuwe tempo marker op cursor
+-- Set project tempo; if a tempo marker exists at time 0 update it, otherwise insert one.
 local function SetProjectTempoGlobal(new_tempo)
     if not new_tempo or new_tempo <= 0 then return end
-    -- Schrijf direct naar project info (tempo = BPPQN? Nee: tempo veld index 0 = proj tempo)
-    -- Volgens API: GetSetProjectInfo(project, "TEMPO", value, true)
-    reaper.GetSetProjectInfo(0, 'TEMPO', new_tempo, true)
+    local proj = 0
+    local count = reaper.CountTempoTimeSigMarkers(proj)
+    if count == 0 then
+        -- Geen markers aanwezig: alleen globaal tempo wijzigen (geen nieuwe marker toevoegen)
+        reaper.GetSetProjectInfo(proj, 'TEMPO', new_tempo, true)
+    else
+        -- Vind marker die actief is op edit cursor positie (laatste marker met timepos <= cursor)
+        local cursor = reaper.GetCursorPosition()
+        local target_index = nil
+        local target_timepos, target_measurepos, target_beatpos, target_num, target_denom, target_lineartempo
+        for i = 0, count - 1 do
+            local ok, timepos, measurepos, beatpos, bpm, num, denom, lineartempo = reaper.GetTempoTimeSigMarker(proj, i)
+            if ok then
+                if timepos <= cursor then
+                    target_index = i
+                    target_timepos = timepos
+                    target_measurepos = measurepos
+                    target_beatpos = beatpos
+                    target_num = num
+                    target_denom = denom
+                    target_lineartempo = lineartempo
+                else
+                    break -- markers zijn in tijdsvolgorde, dus klaar
+                end
+            end
+        end
+        if not target_index then
+            -- Cursor vóór eerste marker: gebruik eerste marker (index 0)
+            local ok, timepos, measurepos, beatpos, bpm, num, denom, lineartempo = reaper.GetTempoTimeSigMarker(proj, 0)
+            if ok then
+                target_index = 0
+                target_timepos = timepos
+                target_measurepos = measurepos
+                target_beatpos = beatpos
+                target_num = num
+                target_denom = denom
+                target_lineartempo = lineartempo
+            end
+        end
+        if target_index then
+            reaper.SetTempoTimeSigMarker(proj, target_index, target_timepos, target_measurepos, target_beatpos, new_tempo, target_num, target_denom, target_lineartempo)
+        end
+    end
+    if reaper.CSurf_OnTempoChange then reaper.CSurf_OnTempoChange(new_tempo) end
+    reaper.UpdateTimeline()
 end
 
-function ShowTempoAndTimeSignature(main_window_width, main_window_height)
+-- Toon alleen Tempo (BPM) knop + drag
+function ShowTempo(main_window_width, main_window_height)
     if not settings.show_tempo then return end
     local tempo = reaper.Master_GetTempo()
 
@@ -1820,7 +2010,9 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
     local mbt_str = string.format("%d.%d.%02d", math.floor(measures+1), math.floor(beatsInMeasure+1), ticks)
     local combined_mbt = mbt_str
     -- Tempo knop (klik & drag bron)
+    if font_tempo then reaper.ImGui_PushFont(ctx, font_tempo, settings.tempo_font_size or settings.font_size) end
     reaper.ImGui_Button(ctx, tempo_text)
+    if font_tempo then reaper.ImGui_PopFont(ctx) end
     -- Registreer clicks op TEMPO knop voordat we andere items tekenen
     local tempo_button_left_click = reaper.ImGui_IsItemClicked(ctx, 0)
     local tempo_button_right_click = reaper.ImGui_IsItemClicked(ctx, 1)
@@ -1828,7 +2020,7 @@ function ShowTempoAndTimeSignature(main_window_width, main_window_height)
         reaper.ImGui_PopStyleColor(ctx, 3)
     end
 
-    -- (MBT weergave onder tempo verwijderd op verzoek)
+    -- Geen timesig hier meer; volledig losgekoppeld
 
     -- Start dragging: alleen wanneer op tempo knop geklikt
     if tempo_button_left_click then
@@ -1904,7 +2096,7 @@ end
 
         reaper.ImGui_Separator(ctx)
 
-    -- Dynamische, bewerkbare tempo presets (persist in settings)
+    -- Dynamic editable tempo presets (persisted in settings)
     settings.tempo_presets = settings.tempo_presets or {60,80,100,120,140,160,180}
     -- Sorteer oplopend
     table.sort(settings.tempo_presets, function(a,b) return a<b end)
@@ -1919,12 +2111,13 @@ end
             i=i+1
         end
 
-        if reaper.ImGui_BeginMenu(ctx, "Edit Presets") then
-            -- Werk in een tijdelijke kopie zodat tussentijds typen niet permanent alles overschrijft
-            if not editing_tempo_presets then
-                editing_tempo_presets = {}
-                for ii,vv in ipairs(settings.tempo_presets) do editing_tempo_presets[ii]=vv end
-            end
+        -- Altijd presets bewerken tonen (geen uitklap menu)
+        if not editing_tempo_presets then
+            editing_tempo_presets = {}
+            for ii,vv in ipairs(settings.tempo_presets) do editing_tempo_presets[ii]=vv end
+        end
+        reaper.ImGui_Separator(ctx)
+        reaper.ImGui_Text(ctx, "Edit Presets")
             local remove_index = nil
             for idx, v in ipairs(editing_tempo_presets) do
                 reaper.ImGui_PushID(ctx, idx)
@@ -1980,8 +2173,6 @@ end
             end
             reaper.ImGui_SameLine(ctx)
             if reaper.ImGui_Button(ctx, "Cancel") then editing_tempo_presets = nil end
-            reaper.ImGui_EndMenu(ctx)
-        end
 
         reaper.ImGui_Separator(ctx)
 
@@ -1993,94 +2184,43 @@ end
     end
 
     reaper.ImGui_PopItemWidth(ctx)
+end
 
+-- Losse Time Signature editor (numerator/denominator)
+function ShowTimeSignature(main_window_width, main_window_height)
+    if not settings.show_timesig_button then return end -- hergebruik flag als zichtbaarheid; hernoemen kan later
     reaper.ImGui_SameLine(ctx)
-    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-
-    reaper.ImGui_SameLine(ctx)
-    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
+    reaper.ImGui_SetCursorPosX(ctx, (settings.timesig_x or (settings.tempo_x + 0.05)) * main_window_width)
+    reaper.ImGui_SetCursorPosY(ctx, (settings.timesig_y or settings.tempo_y) * main_window_height)
     local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = reaper.GetTempoTimeSigMarker(0, 0)
     if not retval then timesig_num, timesig_denom = 4, 4 end
-    reaper.ImGui_PushItemWidth(ctx, settings.font_size * 2)
-    local rv_num, new_num = reaper.ImGui_InputInt(ctx, "##num", timesig_num, 0, 0)
-    do
-        local active = reaper.ImGui_IsItemActive(ctx)
-        local focused = reaper.ImGui_IsItemFocused(ctx)
-        local disp_num = (rv_num and new_num>0) and new_num or timesig_num
-        if not active and not focused then
-            local min_x, min_y = reaper.ImGui_GetItemRectMin(ctx)
-            local max_x, max_y = reaper.ImGui_GetItemRectMax(ctx)
-            local w = max_x - min_x
-            local h = max_y - min_y
-            local txt = tostring(disp_num)
-            local tw, th = reaper.ImGui_CalcTextSize(ctx, txt)
-            local dl = reaper.ImGui_GetWindowDrawList(ctx)
-            -- Dek oorspronkelijke tekst af: vul alleen binnenvlak (klein inset voor border)
-            local inset = 2
-            local frame_col = reaper.ImGui_GetColor(ctx, reaper.ImGui_Col_FrameBg()) or settings.button_normal
-            reaper.ImGui_DrawList_AddRectFilled(dl, min_x+inset, min_y+inset, max_x-inset, max_y-inset, frame_col, 3)
-            local tx = min_x + (w - tw) * 0.5
-            local ty = min_y + (h - th) * 0.5
-            local text_col = reaper.ImGui_GetColor(ctx, reaper.ImGui_Col_Text()) or 0xFFFFFFFF
-            reaper.ImGui_DrawList_AddText(dl, tx, ty, text_col, txt)
+
+    if font_timesig then reaper.ImGui_PushFont(ctx, font_timesig, settings.timesig_font_size or settings.font_size) end
+    local ts_text = string.format("%d|%d", timesig_num, timesig_denom)
+    if reaper.ImGui_Button(ctx, ts_text) or reaper.ImGui_IsItemClicked(ctx,1) then
+        reaper.ImGui_OpenPopup(ctx, "TimeSigPopup")
+    end
+    if font_timesig then reaper.ImGui_PopFont(ctx) end
+    if reaper.ImGui_BeginPopup(ctx, "TimeSigPopup") then
+        reaper.ImGui_Text(ctx, "Set Time Signature")
+        reaper.ImGui_Separator(ctx)
+        reaper.ImGui_PushItemWidth(ctx, 60)
+        local rv_num, new_num = reaper.ImGui_InputInt(ctx, "Numerator", timesig_num, 0, 0)
+        local rv_denom, new_denom = reaper.ImGui_InputInt(ctx, "Denominator", timesig_denom, 0, 0)
+        reaper.ImGui_PopItemWidth(ctx)
+        if rv_num or rv_denom then
+            reaper.Undo_BeginBlock()
+            local num_to_set = rv_num and new_num>0 and new_num or timesig_num
+            local denom_to_set = rv_denom and new_denom>0 and new_denom or timesig_denom
+            local _, measures = reaper.TimeMap2_timeToBeats(0, 0)
+            local ptx_in_effect = reaper.FindTempoTimeSigMarker(0, 0)
+            reaper.SetTempoTimeSigMarker(0, -1, -1, measures, 0, -1, num_to_set, denom_to_set, true)
+            reaper.GetSetTempoTimeSigMarkerFlag(0, ptx_in_effect + 1, 1|2|16, true)
+            reaper.Undo_EndBlock("Change time signature", 1|4|8)
         end
+        if reaper.ImGui_Button(ctx, "Close") then reaper.ImGui_CloseCurrentPopup(ctx) end
+        reaper.ImGui_EndPopup(ctx)
     end
-    -- Separator dichter tegen numerator
-    reaper.ImGui_SameLine(ctx)
-    do
-        local curx = reaper.ImGui_GetCursorPosX(ctx)
-        -- Trek standaard item spacing iets af
-        reaper.ImGui_SetCursorPosX(ctx, curx - (settings.font_size * 0.6))
-    end
-    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-    reaper.ImGui_Text(ctx, "/")
-
-    reaper.ImGui_SameLine(ctx)
-    do
-        local curx = reaper.ImGui_GetCursorPosX(ctx)
-        reaper.ImGui_SetCursorPosX(ctx, curx - (settings.font_size * 0.6))
-    end
-    reaper.ImGui_SetCursorPosY(ctx, settings.tempo_y * main_window_height)
-    local rv_denom, new_denom = reaper.ImGui_InputInt(ctx, "##denom", timesig_denom, 0, 0)
-    do
-        local active = reaper.ImGui_IsItemActive(ctx)
-        local focused = reaper.ImGui_IsItemFocused(ctx)
-        local disp_den = (rv_denom and new_denom>0) and new_denom or timesig_denom
-        if not active and not focused then
-            local min_x, min_y = reaper.ImGui_GetItemRectMin(ctx)
-            local max_x, max_y = reaper.ImGui_GetItemRectMax(ctx)
-            local w = max_x - min_x
-            local h = max_y - min_y
-            local txt = tostring(disp_den)
-            local tw, th = reaper.ImGui_CalcTextSize(ctx, txt)
-            local dl = reaper.ImGui_GetWindowDrawList(ctx)
-            local inset = 2
-            local frame_col = reaper.ImGui_GetColor(ctx, reaper.ImGui_Col_FrameBg()) or settings.button_normal
-            reaper.ImGui_DrawList_AddRectFilled(dl, min_x+inset, min_y+inset, max_x-inset, max_y-inset, frame_col, 3)
-            local tx = min_x + (w - tw) * 0.5
-            local ty = min_y + (h - th) * 0.5
-            local text_col = reaper.ImGui_GetColor(ctx, reaper.ImGui_Col_Text()) or 0xFFFFFFFF
-            reaper.ImGui_DrawList_AddText(dl, tx, ty, text_col, txt)
-        end
-    end
-
-    if rv_num or rv_denom then
-        reaper.Undo_BeginBlock()
-        reaper.PreventUIRefresh(1)
-
-        local _, measures = reaper.TimeMap2_timeToBeats(0, 0)
-        local ptx_in_effect = reaper.FindTempoTimeSigMarker(0, 0)
-
-        local num_to_set = rv_num and new_num > 0 and new_num or timesig_num
-        local denom_to_set = rv_denom and new_denom > 0 and new_denom or timesig_denom
-
-        reaper.SetTempoTimeSigMarker(0, -1, -1, measures, 0, -1, num_to_set, denom_to_set, true)
-        reaper.GetSetTempoTimeSigMarkerFlag(0, ptx_in_effect + 1, 1|2|16, true)
-
-        reaper.PreventUIRefresh(-1)
-        reaper.Undo_EndBlock("Change time signature", 1|4|8)
-    end
-    reaper.ImGui_PopItemWidth(ctx)
 end
 
 function ShowTimeSelection(main_window_width, main_window_height)
@@ -2145,15 +2285,15 @@ function ShowTimeSelection(main_window_width, main_window_height)
 
     local display_text = ""
     if settings.show_beats_selection and settings.show_time_selection then
-        display_text = string.format("Selection: %s / %s / %s / %s / %s / %s",
+        display_text = string.format("Selection: %s | %s | %s | %s | %s | %s",
             start_midi, sec_format,
             end_midi, end_format,
             len_midi, len_format)
     elseif settings.show_beats_selection then
-        display_text = string.format("Selection: %s / %s / %s",
+        display_text = string.format("Selection: %s | %s | %s",
             start_midi, end_midi, len_midi)
     elseif settings.show_time_selection then
-        display_text = string.format("Selection: %s / %s / %s",
+        display_text = string.format("Selection: %s | %s | %s",
             sec_format, end_format, len_format)
     end
 
@@ -2178,70 +2318,53 @@ end
 -- Toon lokale tijd
 local last_local_time_sec = -1
 local cached_local_time = ""
+local session_start_time = os.time()
+local show_session_time = false
+
+local function format_session_time(seconds)
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    local s = seconds % 60
+    return string.format("%02d:%02d:%02d", h, m, s)
+end
+
 local function ShowLocalTime(main_window_width, main_window_height)
     if not settings.show_local_time then return end
     local t = os.time()
-    if t ~= last_local_time_sec then
-        cached_local_time = os.date("%H:%M:%S", t)
-        last_local_time_sec = t
+    local display_text
+    if show_session_time then
+        local elapsed = t - session_start_time
+        display_text = format_session_time(elapsed)
+    else
+        if t ~= last_local_time_sec then
+            cached_local_time = os.date("%H:%M:%S", t)
+            last_local_time_sec = t
+        end
+        display_text = cached_local_time
     end
     r.ImGui_SameLine(ctx)
     r.ImGui_SetCursorPosX(ctx, (settings.local_time_x or 0.5) * main_window_width)
     r.ImGui_SetCursorPosY(ctx, (settings.local_time_y or 0.02) * main_window_height)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.local_time_color or 0xFFFFFFFF)
-    r.ImGui_Text(ctx, cached_local_time)
+    if r.ImGui_InvisibleButton(ctx, "##LocalTimeToggle", 80, 20) then
+        show_session_time = not show_session_time
+    end
+    local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+    local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local tw, th = r.ImGui_CalcTextSize(ctx, display_text)
+    local tx = min_x + (max_x - min_x - tw) * 0.5
+    local ty = min_y + (max_y - min_y - th) * 0.5
+    if font_localtime then r.ImGui_PushFont(ctx, font_localtime, settings.local_time_font_size or settings.font_size) end
+    r.ImGui_DrawList_AddText(dl, tx, ty, settings.local_time_color or 0xFFFFFFFF, display_text)
+    if font_localtime then r.ImGui_PopFont(ctx) end
     r.ImGui_PopStyleColor(ctx)
-end
-
-function VisualMetronome(main_window_width, main_window_height)
-    if not settings.show_vismetronome then return end
-    r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosX(ctx, settings.visualmtr_x * main_window_width)
-    r.ImGui_SetCursorPosY(ctx, settings.visualmtr_y * main_window_height)
-    local playPos = reaper.GetPlayPosition()
-    local tempo = reaper.Master_GetTempo()
-    local beatLength = 60/tempo
-    local currentBeatPhase = playPos % beatLength
-    local pulseSize = settings.font_size * 0.5
-
-    local pulseIntensity = math.exp(-currentBeatPhase * 8/beatLength)
-    local finalSize = pulseSize * (1 + pulseIntensity * 0.1)
-    
-    local screenX, screenY = reaper.ImGui_GetCursorScreenPos(ctx)
-    local posX = screenX + pulseSize
-    local posY = screenY + pulseSize
-    
-    local buttonSize = pulseSize * 2
-    r.ImGui_InvisibleButton(ctx, "MetronomeButton", buttonSize, buttonSize)
-    
-    local drawList = reaper.ImGui_GetWindowDrawList(ctx)
-    local color = settings.button_normal
-    if currentBeatPhase < 0.05 then
-        color = settings.metronome_active
-
-    end
-
-    reaper.ImGui_DrawList_AddCircleFilled(drawList, posX, posY, finalSize, color)
-    
-    local metronome_enabled = r.GetToggleCommandState(40364) == 1
-    if metronome_enabled then
-        reaper.ImGui_DrawList_AddCircle(drawList, posX, posY, finalSize + 2, settings.metronome_enabled, 32, 2)
-    end
-    
-    if r.ImGui_IsItemClicked(ctx, 1) then
-        r.ImGui_OpenPopup(ctx, "MetronomeMenu")
-    end
-    
-    if r.ImGui_BeginPopup(ctx, "MetronomeMenu") then
-        if r.ImGui_MenuItem(ctx, "Metronome Settings") then
-            r.Main_OnCommand(40363, 0)
-        end
-        if r.ImGui_MenuItem(ctx, "Toggle Metronome") then
-            r.Main_OnCommand(40364, 0)
-        end
-        r.ImGui_EndPopup(ctx)
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, show_session_time and "Click to show local clock" or "Click to show session elapsed time")
     end
 end
+
+-- VisualMetronome removed (placeholder for future improved implementation)
 
 -- TapTempo helper functions
 local function average(matrix)
@@ -2363,17 +2486,29 @@ function Main()
     if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         ctx = r.ImGui_CreateContext('Transport Control')
         font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
+    font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
+    font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
+    font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
         font_icons = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
         r.ImGui_Attach(ctx, font)
+    r.ImGui_Attach(ctx, font_tempo)
+    r.ImGui_Attach(ctx, font_timesig)
+    r.ImGui_Attach(ctx, font_localtime)
         r.ImGui_Attach(ctx, font_icons)
         font_needs_update = false
     end
 
     if font_needs_update then
         font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
+    font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
+    font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
+    font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
         font_icons = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
         
         r.ImGui_Attach(ctx, font)
+    r.ImGui_Attach(ctx, font_tempo)
+    r.ImGui_Attach(ctx, font_timesig)
+    r.ImGui_Attach(ctx, font_localtime)
         r.ImGui_Attach(ctx, font_icons)
         
         font_needs_update = false
@@ -2397,14 +2532,15 @@ function Main()
         Transport_Buttons(main_window_width, main_window_height)
         ShowCursorPosition(main_window_width, main_window_height)
     ShowLocalTime(main_window_width, main_window_height)
-        VisualMetronome(main_window_width, main_window_height)
+        -- VisualMetronome removed
         CustomButtons.x_offset = settings.custom_buttons_x_offset
         CustomButtons.y_offset = settings.custom_buttons_y_offset
 
         ButtonRenderer.RenderButtons(ctx, CustomButtons)
         ButtonEditor.ShowEditor(ctx, CustomButtons, settings, main_window_width, main_window_height)
         CustomButtons.CheckForCommandPick()
-        ShowTempoAndTimeSignature(main_window_width, main_window_height)
+    ShowTempo(main_window_width, main_window_height)
+    ShowTimeSignature(main_window_width, main_window_height)
         PlayRate_Slider(main_window_width, main_window_height) 
         TapTempo(main_window_width, main_window_height) 
         
@@ -2436,11 +2572,12 @@ function Main()
             if r.ImGui_MenuItem(ctx, "Show Settings") then
                 show_settings = true
             end
-            
+            if r.ImGui_MenuItem(ctx, "Open Custom Button Editor") then
+                CustomButtons.show_editor = true
+            end
             if r.ImGui_MenuItem(ctx, "Close Script") then
                 open = false
             end
-            
             r.ImGui_EndPopup(ctx)
         end
         r.ImGui_End(ctx)

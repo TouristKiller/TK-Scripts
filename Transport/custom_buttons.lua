@@ -23,6 +23,8 @@ function CustomButtons.CreateNewButton()
         position_y = 0.15,
         width = 60,
         visible = true,
+    group = "", -- optional group name for batch editing
+    show_border = true, -- new: individual border toggle
         color = 0x333333FF,
         hover_color = 0x444444FF,
         active_color = 0x555555FF,
