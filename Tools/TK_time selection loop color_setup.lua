@@ -1,5 +1,5 @@
 -- @description TK_time selection loop color configuration
--- @version 2.3
+-- @version 2.4
 -- @author TouristKiller
 -- @changelog
 --   + Bugfixes
@@ -71,9 +71,9 @@ local temp_disco_mode = r.GetExtState("TK_time selection loop color", "disco_mod
 local temp_link_state = r.GetToggleCommandState(40621) == 1
 
 function Main()
-    r.ImGui_PushFont(ctx, font)
-    SetupStyle()  
-    r.ImGui_SetNextWindowSize(ctx, 250, 350) 
+    r.ImGui_PushFont(ctx, font, 0)
+    SetupStyle()
+    r.ImGui_SetNextWindowSize(ctx, 250, 350)
     local visible, open = r.ImGui_Begin(ctx, 'TK time selection loop color setup', true, r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoScrollbar())
     
     if visible then
