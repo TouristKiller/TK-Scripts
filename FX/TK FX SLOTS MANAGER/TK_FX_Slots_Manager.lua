@@ -1,6 +1,6 @@
 -- @description TK FX SLOTS MANAGER
 -- @author TouristKiller
--- @version 0.0.1
+-- @version 0.0.2
 -- @changelog:
 --[[     
 ++ INITIAL LAUNCH FOR TESTING
