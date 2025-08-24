@@ -1,18 +1,18 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.5.4
+-- @version 1.5.5
 -- @changelog:
 --[[     
-++ added change name of track by right-click in infobox
-++ Add tags from info box
-++ see selected item /take fx in infobox
-++ added missing drag and drop for some folders in grid/normal view
-++ Some minor tweaks
+++ Added setting voor screenshotwindow to respect Plugin Manager exclusion settings
+++ added priority settings in main settings window (to avoid display of duplicate plugins of different types)
+++ Added option to choose last opened folder as default folder
+++ Added option to pin favorite subfolders on top of list
+++ Implemented Flicker Guard (to prevent screenshot window flickering)
+++ Some cosmetic tweaks
 
 ---------------------TODO (sometime in the future ;o) )-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin
             - Meter functionality (Pre/post Peak) -- vooralsnog niet haalbaar
-            
             - Expand project files
             - Etc......
             
@@ -28,6 +28,8 @@ StartBulkScreenshot     = function() end
 local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
 local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
+-- Sentinel for special default folder option
+local LAST_OPENED_SENTINEL = "__LAST_OPENED__"
 
 -- Ratings:
 local plugin_ratings_path = script_path .. "plugin_ratings.json"
@@ -35,6 +37,42 @@ local plugin_ratings = {}
 
 -- Forward stub to prevent early calls failing before real definition later in file
 if not ClearScreenshotCache then function ClearScreenshotCache() end end
+
+-- Flicker Guard helpers/state
+function _build_screenshot_signature()
+    -- Compose a lightweight signature of the screenshot context
+    local cfg = rawget(_G, 'config') or {}
+    local folder = tostring(selected_folder or "")
+    local subgroup = tostring(browser_panel_selected or "")
+    local term = tostring(browser_search_term or "")
+    local mode = tostring(view_mode or "")
+    local stype = tostring(cfg.screenshot_view_type or "")
+    local page = tostring((screenshot_pagination and screenshot_pagination.current_page) or "")
+    local priority = table.concat(cfg.plugin_type_priority or {}, ",")
+    local apply = tostring(cfg.apply_type_priority or false)
+    local respect = tostring(cfg.respect_search_exclusions_in_screenshots or false)
+    return table.concat({folder, subgroup, term, mode, stype, page, priority, apply, respect}, "|")
+end
+
+_last_screenshot_signature = nil
+_screenshots_dirty = false
+_pending_clear_cache = false
+_last_search_input_time = 0.0
+_search_debounce_ms = 120 -- minimal delay between rebuilds on typing
+
+function MarkScreenshotsDirty()
+    _screenshots_dirty = true
+end
+
+function RequestClearScreenshotCache()
+    local cfg = rawget(_G, 'config') or {}
+    if not cfg.flicker_guard_enabled then
+        ClearScreenshotCache()
+        return
+    end
+    _pending_clear_cache = true
+    MarkScreenshotsDirty()
+end
 if not BuildScreenshotIndex then function BuildScreenshotIndex() end end
 
 
@@ -248,6 +286,8 @@ local function SetDefaultConfig()
         default_folder = nil,
         screenshot_size_option = 2, -- 1 = 128x128, 2 = 500x(to scale), 3 = original
         screenshot_default_folder_only = false,
+        apply_type_priority = true,
+        plugin_type_priority = { "CLAP", "VST3", "VST", "JS" },
         screenshot_delay = 0.5,
         close_after_adding_fx = false,
         folder_specific_sizes = {},
@@ -290,6 +330,8 @@ local function SetDefaultConfig()
         show_favorites_on_top = true,
         open_floating_after_adding = false, 
         custom_folders = {},
+        pinned_subgroups = {},
+        pinned_custom_subfolders = {},
         show_custom_folders = true,
         hide_custom_dropdown = false,
         show_screenshot_search = true,
@@ -298,10 +340,14 @@ local function SetDefaultConfig()
         show_missing_screenshots_only = false, 
         bulk_selected_folder = nil, 
         add_fx_with_double_click = false, 
-        show_missing_list = true, -- toon onderaan lijst met plugins zonder screenshot
+        show_missing_list = true, 
+        respect_search_exclusions_in_screenshots = false, 
+        flicker_guard_enabled = true,
+        last_viewed_folder = nil,
     } 
 end
 local config = SetDefaultConfig()    
+_G.config = config -- expose for early helpers defined before this local
 local window_alpha_int = math.floor(config.window_alpha * 100)  
 local function SaveConfig()
     local file = io.open(script_path .. "config.json", "w")
@@ -321,6 +367,14 @@ local function LoadConfig()
             config[k] = v
         end
         config.folder_specific_sizes = loaded_config.folder_specific_sizes or {}
+    -- Zorg dat pinned_subgroups altijd bestaat
+    config.pinned_subgroups = loaded_config.pinned_subgroups or {}
+    -- Zorg dat pinned_custom_subfolders altijd bestaat
+    config.pinned_custom_subfolders = loaded_config.pinned_custom_subfolders or {}
+    -- Zorg dat flicker_guard_enabled bestaat
+    if loaded_config.flicker_guard_enabled == nil then
+        config.flicker_guard_enabled = false
+    end
    
     legacy_scripts_launcher = loaded_config.scripts_launcher
     else
@@ -328,7 +382,34 @@ local function LoadConfig()
     end
 end
 LoadConfig()
+-- Sync global last_viewed_folder from config if present
+if config and config.last_viewed_folder then
+    last_viewed_folder = config.last_viewed_folder
+end
 PROJECTS_DIR = config.last_used_project_location
+
+-- Ensure Type Priority is reflected immediately at startup for initial lists
+do
+    local function ApplyStartupDedupe()
+        if not config.apply_type_priority then return end
+        -- If we already have a selected subgroup/folder at init time, ensure deduped lists
+        if browser_panel_selected and type(GetFxListForSubgroup) == 'function' then
+            local list = GetFxListForSubgroup(browser_panel_selected) or {}
+            current_filtered_fx = DedupeByTypePriority(list)
+        elseif selected_folder and type(GetPluginsForFolder) == 'function' then
+            current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
+        end
+        -- Prefill screenshot_search_results if empty but we have a current list
+        if (not screenshot_search_results or #screenshot_search_results == 0) and current_filtered_fx and #current_filtered_fx > 0 then
+            screenshot_search_results = {}
+            local cap = loaded_items_count or ITEMS_PER_BATCH or 30
+            for i = 1, math.min(cap, #current_filtered_fx) do
+                screenshot_search_results[#screenshot_search_results+1] = { name = current_filtered_fx[i] }
+            end
+        end
+    end
+    ApplyStartupDedupe()
+end
 
 local scripts_launcher_path = script_path .. "scripts_launcher.json"
 local scripts_launcher = {}
@@ -358,6 +439,7 @@ LoadScriptsLauncher()
 
 local function ResetConfig()
     config = SetDefaultConfig()
+    _G.config = config
     SaveConfig()
 end
 
@@ -472,6 +554,56 @@ local function NormalizePluginNameForMatch(name)
     return name
 end
 
+-- Determine plugin type from name prefix
+local function GetPluginType(name)
+    if not name or name == '' then return 'OTHER' end
+    if name:match('^VST3i?:') then return 'VST3' end
+    if name:match('^VSTi?:') then return 'VST' end
+    if name:match('^CLAPi?:') then return 'CLAP' end
+    if name:match('^JSFX:') or name:match('^JS:') then return 'JS' end
+    if name:match('^AU:') or name:match('^AUi:') then return 'AU' end
+    if name:match('^LV2i?:') then return 'LV2' end
+    return 'OTHER'
+end
+
+-- Build a priority index table from config.plugin_type_priority
+local function BuildTypePriorityIndex()
+    local idx = {}
+    if type(config.plugin_type_priority) == 'table' then
+        for i, t in ipairs(config.plugin_type_priority) do
+            idx[t] = i
+        end
+    end
+    return idx
+end
+
+-- Dedupe multi-format plugins by base cleaned name using configured type priority
+local function DedupeByTypePriority(list)
+    if not config.apply_type_priority or type(list) ~= 'table' then return list end
+    local priority = BuildTypePriorityIndex()
+    local best_by_key = {}
+    local order = {}
+    for _, fx in ipairs(list) do
+        local key = NormalizePluginNameForMatch(fx)
+        local t = GetPluginType(fx)
+        local p = priority[t] or math.huge
+        if not best_by_key[key] then
+            best_by_key[key] = {name = fx, prio = p, type = t}
+            table.insert(order, key)
+        else
+            local cur = best_by_key[key]
+            if p < cur.prio then
+                best_by_key[key] = {name = fx, prio = p, type = t}
+            end
+        end
+    end
+    local out = {}
+    for _, key in ipairs(order) do
+        table.insert(out, best_by_key[key].name)
+    end
+    return out
+end
+
 local screenshot_index_norm = nil
 local function BuildScreenshotIndex(force)
     if screenshot_index_norm and not force then return end
@@ -519,6 +651,10 @@ local function SplitPluginsByScreenshot(plugin_list)
     local with_shot, missing = {}, {}
     if not plugin_list then return with_shot, missing end
     for _, name in ipairs(plugin_list) do
+        -- Sla uitgesloten plugins over indien gebruikersoptie actief is
+        if config.respect_search_exclusions_in_screenshots and config.excluded_plugins and config.excluded_plugins[name] then
+            goto continue_plugin
+        end
         if name == "--Favorites End--" then
             table.insert(with_shot, name) -- keep divider sentinel in screenshot section
         else
@@ -528,6 +664,7 @@ local function SplitPluginsByScreenshot(plugin_list)
                 table.insert(missing, name)
             end
         end
+        ::continue_plugin::
     end
     return with_shot, missing
 end
@@ -1178,12 +1315,46 @@ end
 initFoldersCategory()
 
 local function UpdateLastViewedFolder(new_folder)
+    if not new_folder or new_folder == "" then return end
     if 
        new_folder ~= "Projects" and 
-       new_folder ~= "Actions" and 
-       new_folder ~= "Sends/Receives" then
-        last_viewed_folder = new_folder
+        new_folder ~= "Actions" and 
+        new_folder ~= "Sends/Receives" then
+        last_viewed_folder = new_folder -- Update last viewed folder
+        -- Persist in config so we can restore across sessions
+        config.last_viewed_folder = new_folder
+        SaveConfig()
     end
+end
+
+-- Helpers to work with non-FOLDERS groups (ALL PLUGINS / CATEGORY / DEVELOPER)
+local function IsNonFoldersSubgroup(name)
+    if not name or not CAT_TEST then return false end
+    for i = 1, #CAT_TEST do
+        local cat = CAT_TEST[i]
+        if cat and (cat.name == "ALL PLUGINS" or cat.name == "DEVELOPER" or cat.name == "CATEGORY") then
+            for j = 1, #cat.list do
+                if cat.list[j] and cat.list[j].name == name then return true end
+            end
+        end
+    end
+    return false
+end
+
+local function GetFxListForSubgroup(name)
+    if not name or not CAT_TEST then return nil end
+    for i = 1, #CAT_TEST do
+        local cat = CAT_TEST[i]
+        if cat and (cat.name == "ALL PLUGINS" or cat.name == "DEVELOPER" or cat.name == "CATEGORY") then
+            for j = 1, #cat.list do
+                local subgroup = cat.list[j]
+                if subgroup and subgroup.name == name then
+                    return subgroup.fx
+                end
+            end
+        end
+    end
+    return nil
 end
 
 
@@ -1320,7 +1491,7 @@ local function ShowPluginManagerTab()
     end
     r.ImGui_SameLine(ctx)
     r.ImGui_PushItemWidth(ctx, 120)
-    local changed, new_search_filter = r.ImGui_InputTextWithHint(ctx, "##Search plugins", "SEARCH PLUGINS", search_filter)
+            config.last_viewed_folder = new_folder
     r.ImGui_PopItemWidth(ctx)
     if changed then
         search_filter = new_search_filter
@@ -1350,54 +1521,6 @@ local function ShowPluginManagerTab()
                 STOP_SELECTED = true
             else
                 StartSelectedMissingScreenshots()
-
-                local selected = (selected_folder == folder.name)
-                if r.ImGui_Selectable(ctx, folder.name, selected) then
-                    if not r.ImGui_IsItemClicked(ctx, 1) then -- left click normal select
-                        selected_folder = folder.name
-                        browser_panel_selected = 'folders'
-                        local folder_plugins = GetPluginsForFolder(folder.name)
-                        current_filtered_fx = folder_plugins
-                        screenshot_search_results = {}
-                        if view_mode == 'list' then
-                            for j = 1, #folder_plugins do
-                                table.insert(screenshot_search_results, { name = folder_plugins[j] })
-                            end
-                        else
-                            loaded_items_count = ITEMS_PER_BATCH
-                            for j = 1, math.min(loaded_items_count, #folder_plugins) do
-                                table.insert(screenshot_search_results, { name = folder_plugins[j] })
-                            end
-                        end
-                        ClearScreenshotCache()
-                        SelectBrowserPanelItem('folders')
-                    end
-                end
-
-                -- Right-click context menu for folder item
-                if r.ImGui_IsItemClicked(ctx, 1) then
-                    r.ImGui_OpenPopup(ctx, "folder_item_ctx_" .. folder.name)
-                end
-                if r.ImGui_BeginPopup(ctx, "folder_item_ctx_" .. folder.name) then
-                    local toggle_label = (view_mode == 'screenshots' and 'Show List' or 'Show Screenshots')
-                    if r.ImGui_MenuItem(ctx, toggle_label) then
-                        local prev = view_mode
-                        view_mode = (view_mode == 'screenshots' and 'list' or 'screenshots')
-                        if view_mode == 'screenshots' then
-                            if prev ~= 'screenshots' then ClearScreenshotCache() end
-                        else
-                            -- switching to list: full load of folder plugins
-                            if selected_folder == folder.name then
-                                local folder_plugins = current_filtered_fx or GetPluginsForFolder(folder.name)
-                                screenshot_search_results = {}
-                                for j = 1, #folder_plugins do
-                                    table.insert(screenshot_search_results, { name = folder_plugins[j] })
-                                end
-                            end
-                        end
-                    end
-                    r.ImGui_EndPopup(ctx)
-                end
             end
         end
     end
@@ -1511,19 +1634,55 @@ local function ShowPluginManagerTab()
 end
 
 function GetPluginsForFolder(folder_name)
+    -- Normalize and guard
+    if not folder_name or folder_name == '' then return {} end
+
+    -- Special folders
     if folder_name == "Favorites" then
-        return favorite_plugins or {}
+        return DedupeByTypePriority(favorite_plugins or {})
     end
-    if folder_name and folder_name:find("/") then
-        return GetPluginsFromCustomFolder(folder_name)
-    elseif config.custom_folders[folder_name] then
+    if folder_name == "Current Track FX" then
+        local list = {}
+        local track_fx = GetCurrentTrackFX() or {}
+        for _, fx in ipairs(track_fx) do
+            table.insert(list, fx.fx_name)
+        end
+    return DedupeByTypePriority(list)
+    end
+    if folder_name == "Current Project FX" then
+        local list = {}
+        local proj_fx = GetCurrentProjectFX() or {}
+        for _, fx in ipairs(proj_fx) do
+            table.insert(list, fx.fx_name)
+        end
+    return DedupeByTypePriority(list)
+    end
+
+    -- Custom folders: nested path or top-level array
+    if folder_name:find("/") then
+    return DedupeByTypePriority(GetPluginsFromCustomFolder(folder_name))
+    elseif config.custom_folders and config.custom_folders[folder_name] then
         local folder_content = config.custom_folders[folder_name]
-        if IsPluginArray(folder_content) then return folder_content else return {} end
+    if IsPluginArray(folder_content) then return DedupeByTypePriority(folder_content) else return {} end
     end
-    for i = 1, #CAT_TEST do
-        for j = 1, #CAT_TEST[i].list do
-            if CAT_TEST[i].list[j].name == folder_name then
-                return CAT_TEST[i].list[j].fx
+
+    -- Only search REAPER's My folders (FOLDERS), avoid cross-category name collisions
+    if folders_category and #folders_category > 0 then
+        for i = 1, #folders_category do
+            if folders_category[i].name == folder_name then
+                return DedupeByTypePriority(folders_category[i].fx or {})
+            end
+        end
+    else
+        -- Fallback: scan CAT_TEST but restrict to FOLDERS category
+        for i = 1, #CAT_TEST do
+            if CAT_TEST[i].name == "FOLDERS" then
+                for j = 1, #CAT_TEST[i].list do
+                    if CAT_TEST[i].list[j].name == folder_name then
+                        return DedupeByTypePriority(CAT_TEST[i].list[j].fx or {})
+                    end
+                end
+                break
             end
         end
     end
@@ -1555,7 +1714,7 @@ local function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 640
+    local window_height = 680
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -1832,7 +1991,7 @@ local function ShowConfigWindow()
             local changed, new_value = r.ImGui_Checkbox(ctx, "Show Window", config.show_screenshot_window)
             if changed then
                 config.show_screenshot_window = new_value
-                ClearScreenshotCache()
+                RequestClearScreenshotCache()
             end
             
             r.ImGui_SameLine(ctx)
@@ -1890,38 +2049,80 @@ local function ShowConfigWindow()
                 r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click.")
             end
 
+            -- Nieuwe optie: respecteer search exclusions in screenshot window
+            r.ImGui_Dummy(ctx, 0, 5)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local rses_changed, rses_val = r.ImGui_Checkbox(ctx, "Respect Plugin Manager Search Exclusions", config.respect_search_exclusions_in_screenshots)
+            if rses_changed then
+                config.respect_search_exclusions_in_screenshots = rses_val
+                RequestClearScreenshotCache()
+                SaveConfig()
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "When enabled, plugins you excluded from search in Plugin Manager won't appear in the screenshot window.")
+            end
+
+            -- Flicker Guard toggle naast de exclusions checkbox
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            local fg_changed, fg_val = r.ImGui_Checkbox(ctx, "Flicker Guard", config.flicker_guard_enabled)
+            if fg_changed then
+                config.flicker_guard_enabled = fg_val
+                -- Bij aanzetten direct een cache refresh forceren om in sync te komen
+                RequestClearScreenshotCache()
+                SaveConfig()
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Reduces flicker by clearing/rebuilding caches only on real state changes and by debouncing typing.")
+            end
+
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Default Folder:")
             r.ImGui_SameLine(ctx, 0, 10)
             r.ImGui_PushItemWidth(ctx, slider_width)
             r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
-            if r.ImGui_BeginCombo(ctx, "##Default Folder", config.default_folder or "None") then
+            local current_default_label = config.default_folder
+            if current_default_label == LAST_OPENED_SENTINEL then current_default_label = "Last opened folder" end
+            if r.ImGui_BeginCombo(ctx, "##Default Folder", current_default_label or "None") then
                 if r.ImGui_Selectable(ctx, "None", config.default_folder == nil) then
                     config.default_folder = nil
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Last opened folder", config.default_folder == LAST_OPENED_SENTINEL) then
+                    config.default_folder = LAST_OPENED_SENTINEL
+                    SaveConfig()
                 end
                 if r.ImGui_Selectable(ctx, "Favorites", config.default_folder == "Favorites") then
                     config.default_folder = "Favorites"
+                    SaveConfig()
                 end
                 if r.ImGui_Selectable(ctx, "Current Project FX", config.default_folder == "Current Project FX") then
                     config.default_folder = "Current Project FX"
+                    SaveConfig()
                 end
                 if r.ImGui_Selectable(ctx, "Current Track FX", config.default_folder == "Current Track FX") then
                     config.default_folder = "Current Track FX"
+                    SaveConfig()
                 end
                 if r.ImGui_Selectable(ctx, "Projects", config.default_folder == "Projects") then
                     config.default_folder = "Projects"
+                    SaveConfig()
                 end
                 if r.ImGui_Selectable(ctx, "Sends/Receives", config.default_folder == "Sends/Receives") then
                     config.default_folder = "Sends/Receives" 
+                    SaveConfig()
                 end
                 if r.ImGui_Selectable(ctx, "Actions", config.default_folder == "Actions") then
                     config.default_folder = "Actions"
+                    SaveConfig()
                 end
                 for i = 1, #folders_category do
                     local is_selected = (config.default_folder == folders_category[i].name)
                     if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
                         config.default_folder = folders_category[i].name
+                        SaveConfig()
                     end
                 end
                 r.ImGui_EndCombo(ctx)
@@ -1929,23 +2130,18 @@ local function ShowConfigWindow()
             if r.ImGui_IsItemHovered(ctx) then
                 local wheel_delta = r.ImGui_GetMouseWheel(ctx)
                 if wheel_delta ~= 0 then
-                    local current_index = 0
-                    for i, folder in ipairs(folders_category) do
-                        if folder.name == config.default_folder then
-                            current_index = i
-                            break
-                        end
+                    -- Build the list of options for scrolling, including special entries
+                    local options = { nil, LAST_OPENED_SENTINEL, "Favorites", "Current Project FX", "Current Track FX", "Projects", "Sends/Receives", "Actions" }
+                    for i = 1, #folders_category do options[#options+1] = folders_category[i].name end
+                    local current_index = 1
+                    for i, opt in ipairs(options) do
+                        if opt == config.default_folder then current_index = i; break end
                     end
-                    current_index = current_index - wheel_delta
-                    if current_index < 0 then
-                        config.default_folder = nil
-                    elseif current_index == 0 then
-                        config.default_folder = folders_category[1].name
-                    elseif current_index > #folders_category then
-                        config.default_folder = folders_category[#folders_category].name
-                    else
-                        config.default_folder = folders_category[current_index].name
-                    end
+                    -- Mouse wheel: positive when scrolling up in ImGui, we invert to match previous logic
+                    local new_index = current_index - wheel_delta
+                    if new_index < 1 then new_index = 1 end
+                    if new_index > #options then new_index = #options end
+                    config.default_folder = options[new_index]
                     SaveConfig()
                 end
             end
@@ -1953,6 +2149,123 @@ local function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.resize_screenshots_with_window = r.ImGui_Checkbox(ctx, "Auto Resize Screenshots", config.resize_screenshots_with_window)
+
+            -- Type priority UI (checkbox + 4 dropdowns on one line)
+            r.ImGui_Dummy(ctx, 0, 5)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            -- Helper to refresh the current screenshot/search view after priority changes
+            local function RefreshAfterTypePriorityChange()
+                RequestClearScreenshotCache()
+                search_warning_message = nil
+                local term = (browser_search_term or "")
+                -- If there is a search term, rebuild results within current scope or global
+                if term ~= "" then
+                    local term_l = term:lower()
+                    if browser_panel_selected then
+                        current_filtered_fx = GetFxListForSubgroup(browser_panel_selected) or {}
+                        local filtered = {}
+                        for _, p in ipairs(current_filtered_fx) do
+                            if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
+                        end
+                        -- Apply type-priority dedupe immediately so UI reflects the change without extra toggles
+                        if config.apply_type_priority then
+                            filtered = DedupeByTypePriority(filtered)
+                        end
+                        current_filtered_fx = filtered
+                    elseif selected_folder then
+                        local base = GetPluginsForFolder(selected_folder) or {}
+                        local filtered = {}
+                        for _, p in ipairs(base) do
+                            if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
+                        end
+                        -- Apply type-priority dedupe immediately so UI reflects the change without extra toggles
+                        if config.apply_type_priority then
+                            filtered = DedupeByTypePriority(filtered)
+                        end
+                        current_filtered_fx = filtered
+                    else
+                        -- Global ALL search
+                        local matches = {}
+                        for _, plugin in ipairs(PLUGIN_LIST or {}) do
+                            if plugin:lower():find(term_l, 1, true) then matches[#matches+1] = plugin end
+                        end
+                        if config.apply_type_priority then
+                            matches = DedupeByTypePriority(matches)
+                        end
+                        screenshot_search_results = {}
+                        local MAX_RESULTS = 200
+                        for i = 1, math.min(MAX_RESULTS, #matches) do
+                            screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+                        end
+                        if #matches > MAX_RESULTS then
+                            search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
+                        end
+                        SortScreenshotResults()
+                        new_search_performed = true
+                        return
+                    end
+                else
+                    -- No search term: refresh active folder/subgroup listing
+                    if browser_panel_selected then
+                        current_filtered_fx = GetFxListForSubgroup(browser_panel_selected) or {}
+                        if config.apply_type_priority then
+                            current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
+                        end
+                    elseif selected_folder then
+                        current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
+                    else
+                        return
+                    end
+                end
+                -- Prefill screenshot_search_results from current_filtered_fx
+                loaded_items_count = ITEMS_PER_BATCH or loaded_items_count or 30
+                screenshot_search_results = {}
+                if view_mode == "list" then
+                    for i = 1, #current_filtered_fx do
+                        screenshot_search_results[#screenshot_search_results+1] = { name = current_filtered_fx[i] }
+                    end
+                else
+                    for i = 1, math.min(loaded_items_count, #current_filtered_fx) do
+                        screenshot_search_results[#screenshot_search_results+1] = { name = current_filtered_fx[i] }
+                    end
+                end
+                new_search_performed = true
+            end
+            local ap_changed, ap_val = r.ImGui_Checkbox(ctx, "Type Priority:  ", config.apply_type_priority)
+            if ap_changed then
+                config.apply_type_priority = ap_val
+                SaveConfig()
+                RefreshAfterTypePriorityChange()
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "When enabled, multiple formats of the same plugin are deduped by your chosen order.")
+            end
+
+            local types_all = {"CLAP","VST3","VST","JS","AU","LV2"}
+            local function drawTypeComboInline(idx)
+                r.ImGui_PushItemWidth(ctx, 83)
+                local current = config.plugin_type_priority[idx] or types_all[idx]
+                if r.ImGui_BeginCombo(ctx, "##TP"..idx, current) then
+                    for _, t in ipairs(types_all) do
+                        local is_sel = (current == t)
+                        if r.ImGui_Selectable(ctx, t, is_sel) then
+                            config.plugin_type_priority[idx] = t
+                            SaveConfig()
+                            RefreshAfterTypePriorityChange()
+                        end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                r.ImGui_PopItemWidth(ctx)
+            end
+            r.ImGui_SameLine(ctx)
+            drawTypeComboInline(1)
+            r.ImGui_SameLine(ctx)
+            drawTypeComboInline(2)
+            r.ImGui_SameLine(ctx)
+            drawTypeComboInline(3)
+            r.ImGui_SameLine(ctx)
+            drawTypeComboInline(4)
             
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Font:")
@@ -3064,7 +3377,7 @@ local function CaptureExistingFX(track, fx_index)
                 end
             
             print("Screenshot Saved: " .. filename)
-            ClearScreenshotCache()
+            RequestClearScreenshotCache()
             BuildScreenshotIndex(true)
             if selected_folder then folder_changed = true end
             if search_texture_cache then
@@ -3347,17 +3660,34 @@ local function EnumerateInstalledFX()
     end
     
     if config.screenshot_default_folder_only and config.default_folder then
-        for i = 1, #CAT_TEST do
-            if CAT_TEST[i].name == "FOLDERS" then
-                for j = 1, #CAT_TEST[i].list do
-                    if CAT_TEST[i].list[j].name == config.default_folder then
-                        for k = 1, #CAT_TEST[i].list[j].fx do
-                            default_folder_plugins[CAT_TEST[i].list[j].fx[k]] = true
+        local target_name = config.default_folder
+        if target_name == LAST_OPENED_SENTINEL then target_name = last_viewed_folder end
+        if target_name then
+            -- Search across known categories to find matching subfolder and collect its fx list
+            local function CollectFxByGroupName(cat_name_pred)
+                for i = 1, #CAT_TEST do
+                    local cat = CAT_TEST[i]
+                    if cat_name_pred(cat.name) then
+                        for j = 1, #cat.list do
+                            local grp = cat.list[j]
+                            if grp.name == target_name and grp.fx then
+                                for k = 1, #grp.fx do
+                                    default_folder_plugins[grp.fx[k]] = true
+                                end
+                                return true
+                            end
                         end
-                        break
                     end
                 end
-                break
+            end
+            -- FOLDERS (My folders)
+            local found = CollectFxByGroupName(function(n) return (n or ""):upper() == "FOLDERS" end)
+            -- If not found, try ALL PLUGINS/CATEGORY/DEVELOPER variants
+            if not found then
+                local function IsAllPlugins(n) n = (n or ""):upper(); return n == "ALL PLUGINS" or n == "ALL" end
+                local function IsCategory(n) n = (n or ""):upper(); return n == "CATEGORY" or n:find("CATEG") ~= nil end
+                local function IsDev(n) n = (n or ""):upper(); return n == "DEVELOPER" or n:find("DEV") ~= nil end
+                found = CollectFxByGroupName(IsAllPlugins) or CollectFxByGroupName(IsCategory) or CollectFxByGroupName(IsDev)
             end
         end
     end
@@ -3537,13 +3867,42 @@ function StartSelectedMissingScreenshots()
 end
 
 
-function StartFolderScreenshots(folder_name)
+-- Capture screenshots for a folder/group. Optionally accept a pre-resolved plugin list.
+function StartFolderScreenshots(folder_name, explicit_plugin_list)
     if not folder_name or folder_name == '' then return end
-    local plugins = GetPluginsForFolder(folder_name)
+
+    -- 1) Prefer explicitly provided list (if any)
+    local plugins = explicit_plugin_list
+
+    -- 2) Otherwise resolve via known folder resolvers (Favorites, Custom, FOLDERS)
+    if plugins == nil then
+        plugins = GetPluginsForFolder(folder_name)
+    end
+
+    -- 3) If still empty, try resolving groups from other categories (ALL PLUGINS / CATEGORY / DEVELOPER)
+    if (not plugins or #plugins == 0) and type(CAT_TEST) == 'table' then
+        for i = 1, #CAT_TEST do
+            local cat = CAT_TEST[i]
+            if cat and (cat.name == "ALL PLUGINS" or cat.name == "CATEGORY" or cat.name == "DEVELOPER") and type(cat.list) == 'table' then
+                for j = 1, #cat.list do
+                    local grp = cat.list[j]
+                    if grp and grp.name == folder_name then
+                        plugins = grp.fx or {}
+                        break
+                    end
+                end
+            end
+            if plugins and #plugins > 0 then break end
+        end
+    end
+
     if not plugins or #plugins == 0 then
         reaper.ShowMessageBox("Found no plugins in folder", "Folder screenshots", 0)
         return
     end
+
+    -- Apply type-priority dedupe for capture order (preserve first-seen order across keys)
+    plugins = DedupeByTypePriority(plugins)
 
     -- Reset / initialiseer voortgang (hergebruik bestaande bulk variabelen voor UI progress bar)
     loaded_fx_count = 0
@@ -4366,7 +4725,7 @@ local function ShowFolderDropdown()
                 if r.ImGui_Selectable(ctx, "Select Folder", selected_folder == nil) then
                     SelectFolderExclusive(nil)
                     screenshot_search_results = nil
-                    ClearScreenshotCache()
+                    RequestClearScreenshotCache()
                 end
 
             if config.show_favorites and r.ImGui_Selectable(ctx, "Favorites", selected_folder == "Favorites") then
@@ -4375,7 +4734,7 @@ local function ShowFolderDropdown()
                 show_sends_window = false
                 show_action_browser = false
                 screenshot_search_results = nil
-                ClearScreenshotCache()
+                RequestClearScreenshotCache()
                 GetPluginsForFolder(selected_folder)
             end
             if r.ImGui_Selectable(ctx, "Current Track FX", selected_folder == "Current Track FX") then
@@ -4383,7 +4742,7 @@ local function ShowFolderDropdown()
                 show_media_browser = false
                 show_sends_window = false
                 show_action_browser = false
-                ClearScreenshotCache()
+                RequestClearScreenshotCache()
                 GetPluginsForFolder("Current Track FX")
             end
             
@@ -4394,7 +4753,7 @@ local function ShowFolderDropdown()
                 show_media_browser = false
                 show_sends_window = false
                 show_action_browser = false
-                ClearScreenshotCache()
+                RequestClearScreenshotCache()
                 screenshot_search_results = nil
                 GetPluginsForFolder("Current Project FX") -- Forceer het laden
                 current_filtered_fx = nil -- Reset filtered fx
@@ -4404,14 +4763,14 @@ local function ShowFolderDropdown()
                 show_media_browser = true
                 show_sends_window = false
                 show_action_browser = false
-                ClearScreenshotCache()
+                RequestClearScreenshotCache()
             end
             if config.show_sends and r.ImGui_Selectable(ctx, "Sends/Receives", selected_folder == "Sends/Receives") then
                 SelectFolderExclusive("Sends/Receives")
                 show_media_browser = false
                 show_sends_window = true
                 show_action_browser = false
-                ClearScreenshotCache()
+                RequestClearScreenshotCache()
             end
             if config.show_actions and r.ImGui_Selectable(ctx, "Actions", selected_folder == "Actions") then
                 SelectFolderExclusive("Actions")
@@ -4584,7 +4943,7 @@ local function ShowScreenshotControls()
     if show_screenshot_search then
         r.ImGui_SameLine(ctx)
         r.ImGui_PushItemWidth(ctx, 70)
-        local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+    local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
         r.ImGui_PopItemWidth(ctx)
         r.ImGui_SameLine(ctx)
 
@@ -4612,31 +4971,36 @@ local function ShowScreenshotControls()
         if browser_search_term == "" then
             r.ImGui_BeginDisabled(ctx)
         end
-        if r.ImGui_Button(ctx, "All", 20, 20) then
-            -- Voer direct een globale zoekopdracht uit
+    if r.ImGui_Button(ctx, "All", 20, 20) then
+            -- Voer direct een globale zoekopdracht uit (met type-prioriteit dedupe)
             screenshot_search_results = {}
             local MAX_RESULTS = 200
-            local too_many_results = false
+            local term = browser_search_term:lower()
+            local matches = {}
             for _, plugin in ipairs(PLUGIN_LIST) do
-                if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                    if #screenshot_search_results < MAX_RESULTS then
-                        table.insert(screenshot_search_results, {name = plugin})
-                    else
-                        too_many_results = true
-                        break
-                    end
+                if plugin:lower():find(term, 1, true) then
+                    table.insert(matches, plugin)
                 end
+            end
+            -- Dedupe per type-prioriteit indien ingeschakeld
+            if config.apply_type_priority then
+                matches = DedupeByTypePriority(matches)
+            end
+            local total = #matches
+            local limit = math.min(total, MAX_RESULTS)
+            for i = 1, limit do
+                table.insert(screenshot_search_results, { name = matches[i] })
             end
 
             SortScreenshotResults()
-            if too_many_results then
+            if total > MAX_RESULTS then
                 search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
             end
             new_search_performed = true
             selected_folder = nil
             browser_panel_selected = nil
             last_selected_folder_before_global = nil
-            ClearScreenshotCache()
+            RequestClearScreenshotCache()
         end
         if browser_search_term == "" then
             r.ImGui_EndDisabled(ctx)
@@ -4648,19 +5012,24 @@ local function ShowScreenshotControls()
         -- Zoekveld logica
         if changed then
             browser_search_term = new_search
+            if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
             if browser_search_term == "" then
-                -- Zoekveld leeg: reset naar huidige folder
-                if selected_folder then
-                    screenshot_search_results = {}
-                    search_warning_message = nil
+                -- Zoekveld leeg: reset naar huidige context (category/dev/all uses current_filtered_fx)
+                screenshot_search_results = {}
+                search_warning_message = nil
+                if current_filtered_fx and #current_filtered_fx > 0 then
+                    for _, plugin in ipairs(current_filtered_fx) do
+                        table.insert(screenshot_search_results, {name = plugin})
+                    end
+                elseif selected_folder then
                     local filtered_plugins = GetPluginsForFolder(selected_folder)
                     for _, plugin in ipairs(filtered_plugins) do
                         table.insert(screenshot_search_results, {name = plugin})
                     end
-                    SortScreenshotResults()
-                    ClearScreenshotCache()
-                    new_search_performed = true
                 end
+                SortScreenshotResults()
+                RequestClearScreenshotCache()
+                new_search_performed = true
             else
                 -- Normale zoekopdracht in folder of submap
                 screenshot_search_results = {}
@@ -4670,23 +5039,34 @@ local function ShowScreenshotControls()
                 local MAX_RESULTS = 200
                 local too_many_results = false
 
-                if browser_panel_selected or selected_folder then
+                local source_list = nil
+                if current_filtered_fx and #current_filtered_fx > 0 then
+                    source_list = current_filtered_fx
+                elseif selected_folder or browser_panel_selected then
                     local folder_to_search = browser_panel_selected or selected_folder
-                    local filtered_plugins = GetPluginsForFolder(folder_to_search)
+                    source_list = GetPluginsForFolder(folder_to_search)
+                end
+                if source_list then
                     local count = 0
-                    for _, plugin in ipairs(filtered_plugins) do
-                        if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                            count = count + 1
-                            if count <= MAX_RESULTS then
-                                table.insert(screenshot_search_results, {name = plugin})
-                            end
+                    local term_l = browser_search_term:lower()
+                    local matches = {}
+                    for _, plugin in ipairs(source_list) do
+                        if plugin:lower():find(term_l, 1, true) then
+                            matches[#matches+1] = plugin
                         end
                     end
+                    if config.apply_type_priority then
+                        matches = DedupeByTypePriority(matches)
+                    end
+                    for i = 1, math.min(MAX_RESULTS, #matches) do
+                        screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+                    end
+                    count = #matches
                     too_many_results = (count > MAX_RESULTS)
                 end
 
                 SortScreenshotResults()
-                ClearScreenshotCache()
+                RequestClearScreenshotCache()
                 if too_many_results then
                     search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
                 end
@@ -4756,6 +5136,23 @@ local function ShowScreenshotControls()
                 else
                     config.show_screenshot_settings = false; config.show_only_dropdown = false
                 end; SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Respect PM exclusion", "", config.respect_search_exclusions_in_screenshots) then
+                config.respect_search_exclusions_in_screenshots = not config.respect_search_exclusions_in_screenshots
+                -- Re-filter huidige resultaten / cache opschonen
+                ClearScreenshotCache()
+                if screenshot_search_results and #screenshot_search_results > 0 and config.respect_search_exclusions_in_screenshots then
+                    local filtered = {}
+                    for i=1,#screenshot_search_results do
+                        local entry = screenshot_search_results[i]
+                        local pname = entry and entry.name or entry
+                        if pname and not config.excluded_plugins[pname] then
+                            filtered[#filtered+1] = entry
+                        end
+                    end
+                    screenshot_search_results = filtered
+                end
+                SaveConfig()
             end
             r.ImGui_EndMenu(ctx)
         end
@@ -5036,13 +5433,57 @@ end
 local ITEMS_PER_PAGE = 30
 
 local function DrawBrowserItems(tbl, main_cat_name)
-    for i = 1, #tbl do
+    -- Helpers voor pin-functionaliteit
+    local function EnsurePinnedList(cat)
+        if not config.pinned_subgroups then config.pinned_subgroups = {} end
+        if not config.pinned_subgroups[cat] then config.pinned_subgroups[cat] = {} end
+        return config.pinned_subgroups[cat]
+    end
+    local function IsSubgroupPinned(cat, name)
+        local lst = EnsurePinnedList(cat)
+        for _, n in ipairs(lst) do if n == name then return true end end
+        return false
+    end
+    local function PinSubgroup(cat, name)
+        local lst = EnsurePinnedList(cat)
+        if not IsSubgroupPinned(cat, name) then table.insert(lst, name); SaveConfig() end
+    end
+    local function UnpinSubgroup(cat, name)
+        local lst = EnsurePinnedList(cat)
+        for i=#lst,1,-1 do if lst[i] == name then table.remove(lst, i); SaveConfig(); break end end
+    end
+    local function BuildSubgroupDrawOrder(cat, items)
+        -- Map naam -> index (eerste match)
+        local index_by_name = {}
+        for i = 1, #items do index_by_name[items[i].name] = i end
+        local order = {}
+        -- Eerst de gepinde in volgorde van de lijst
+        local pinned = EnsurePinnedList(cat)
+        for _, name in ipairs(pinned) do
+            local idx = index_by_name[name]
+            if idx then table.insert(order, idx) end
+        end
+        -- Dan de rest in originele volgorde
+        local pinned_set = {}
+        for _, name in ipairs(pinned) do pinned_set[name] = true end
+        for i = 1, #items do
+            local nm = items[i].name
+            if not pinned_set[nm] then table.insert(order, i) end
+        end
+        return order
+    end
+
+    local draw_order = BuildSubgroupDrawOrder(main_cat_name or "", tbl)
+    for _, i in ipairs(draw_order) do
         local filtered_fx = {}
         for _, fx in ipairs(tbl[i].fx) do
             if browser_search_term == "" or fx:lower():find(browser_search_term:lower(), 1, true) then
                 table.insert(filtered_fx, fx)
             end
         end
+
+    -- Apply type-priority dedupe before sorting
+    filtered_fx = DedupeByTypePriority(filtered_fx)
 
         -- Pas dezelfde sortering toe als hoofd A/R toggle
         local sm = config.sort_mode or sort_mode or "alphabet"
@@ -5059,7 +5500,11 @@ local function DrawBrowserItems(tbl, main_cat_name)
         if #filtered_fx > 0 then
             r.ImGui_PushID(ctx, i)
             r.ImGui_Indent(ctx, 10)
-            local header_text = tbl[i].name
+            local subgroup_name = tbl[i].name
+            local header_text = subgroup_name
+            if IsSubgroupPinned(main_cat_name or "", subgroup_name) then
+                header_text = "\xF0\x9F\x93\x8C " .. header_text  -- "📌 "
+            end
             local is_selected = (browser_panel_selected == tbl[i].name)
             if is_selected then
                 local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -5071,6 +5516,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
             if r.ImGui_Selectable(ctx, header_text .. "##browseritem_" .. i, is_selected) then
                 -- Alleen screenshots tonen, NIET openklappen
                 SelectBrowserPanelItem(tbl[i].name)
+                UpdateLastViewedFolder(tbl[i].name)
                 loaded_items_count = ITEMS_PER_BATCH
                 current_filtered_fx = filtered_fx 
                 screenshot_search_results = {}
@@ -5111,7 +5557,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     local previous_mode = view_mode
                     view_mode = (view_mode == "screenshots" and "list" or "screenshots")
                     if view_mode == "screenshots" then
-                        if previous_mode ~= "screenshots" then ClearScreenshotCache() end
+                        if previous_mode ~= "screenshots" then RequestClearScreenshotCache() end
                     else
                         if current_filtered_fx and #current_filtered_fx > 0 then
                             screenshot_search_results = {}
@@ -5121,8 +5567,20 @@ local function DrawBrowserItems(tbl, main_cat_name)
                         end
                     end
                 end
+                -- Pin / Unpin submenu
+                if IsSubgroupPinned(main_cat_name or "", subgroup_name) then
+                    if r.ImGui_MenuItem(ctx, "Unpin Subgroup") then
+                        UnpinSubgroup(main_cat_name or "", subgroup_name)
+                        if r.ImGui_CloseCurrentPopup then r.ImGui_CloseCurrentPopup(ctx) end
+                    end
+                else
+                    if r.ImGui_MenuItem(ctx, "Pin Subgroup") then
+                        PinSubgroup(main_cat_name or "", subgroup_name)
+                        if r.ImGui_CloseCurrentPopup then r.ImGui_CloseCurrentPopup(ctx) end
+                    end
+                end
                 if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-                    StartFolderScreenshots(header_text)
+                    StartFolderScreenshots(subgroup_name)
                 end
                 r.ImGui_EndPopup(ctx)
             end
@@ -5141,7 +5599,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     for j = new_start, new_end do
                         table.insert(screenshot_search_results, {name = filtered_fx[j]})
                     end
-                    ClearScreenshotCache()
+                    RequestClearScreenshotCache()
                 end
                 r.ImGui_SameLine(ctx)
                 r.ImGui_Text(ctx, string.format("%d/%d", tbl[i].current_page, total_pages))
@@ -5158,7 +5616,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     for j = new_start, new_end do
                         table.insert(screenshot_search_results, {name = filtered_fx[j]})
                     end
-                    ClearScreenshotCache()
+                    RequestClearScreenshotCache()
                 end
                 r.ImGui_Unindent(ctx, 20)
             end
@@ -5174,7 +5632,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                             selected_folder = nil
                             selected_individual_item = filtered_fx[j]
                             screenshot_search_results = {{name = filtered_fx[j]}}
-                            ClearScreenshotCache()
+                            RequestClearScreenshotCache()
                         end
                         ShowPluginContextMenu(filtered_fx[j], "unique_id_" .. i .. "_" .. j)
                     end
@@ -5185,7 +5643,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                             selected_folder = nil
                             selected_individual_item = filtered_fx[j]
                             screenshot_search_results = {{name = filtered_fx[j]}}
-                            ClearScreenshotCache()
+                            RequestClearScreenshotCache()
                         end
                         ShowPluginContextMenu(filtered_fx[j], "unique_id_" .. i .. "_" .. j)
                     end
@@ -5209,14 +5667,33 @@ end
 -- CUSTOM FOLDERS (NESTED)
 local function DisplayCustomFoldersInBrowser(folders, path_prefix)
     path_prefix = path_prefix or ""
-    
-    -- SORTEER DE FOLDER NAMEN ALFABETISCH
-    local sorted_folder_names = {}
-    for folder_name, _ in pairs(folders) do
-        table.insert(sorted_folder_names, folder_name)
+    -- Helpers: pin list management for custom subfolders (by full path)
+    local function IsCustomPinned(full_path)
+        if not config.pinned_custom_subfolders then return false end
+        for _, p in ipairs(config.pinned_custom_subfolders) do if p == full_path then return true end end
+        return false
     end
-    table.sort(sorted_folder_names, function(a, b) 
-        return a:lower() < b:lower() 
+    local function PinCustom(full_path)
+        config.pinned_custom_subfolders = config.pinned_custom_subfolders or {}
+        if not IsCustomPinned(full_path) then table.insert(config.pinned_custom_subfolders, full_path); SaveConfig() end
+    end
+    local function UnpinCustom(full_path)
+        if not config.pinned_custom_subfolders then return end
+        for i=#config.pinned_custom_subfolders,1,-1 do
+            if config.pinned_custom_subfolders[i] == full_path then table.remove(config.pinned_custom_subfolders, i); SaveConfig(); break end
+        end
+    end
+    
+    -- SORTEER: eerst gepinde subfolders (op pad) dan alfabetisch de rest
+    local sorted_folder_names = {}
+    for folder_name, _ in pairs(folders) do table.insert(sorted_folder_names, folder_name) end
+    table.sort(sorted_folder_names, function(a, b)
+        local pa = (path_prefix == "" and a or (path_prefix .. "/" .. a))
+        local pb = (path_prefix == "" and b or (path_prefix .. "/" .. b))
+        local ia = IsCustomPinned(pa)
+        local ib = IsCustomPinned(pb)
+        if ia ~= ib then return ia end -- pinned eerst
+        return a:lower() < b:lower()
     end)
     
     -- GEBRUIK DE GESORTEERDE NAMEN
@@ -5226,6 +5703,7 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
         
         if IsPluginArray(folder_content) then
             local is_selected = (selected_folder == full_path)
+            local is_pinned = IsCustomPinned(full_path)
             -- Custom background highlight (sterker zichtbaar) voor geselecteerde map
             if is_selected then
                 local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -5235,17 +5713,27 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-            if r.ImGui_Selectable(ctx, folder_name:upper(), is_selected) then
+            local label = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_name:upper()
+            if r.ImGui_Selectable(ctx, label, is_selected) then
                 browser_panel_selected = nil
                 selected_folder = full_path
+                UpdateLastViewedFolder(full_path)
                 show_media_browser = false
                 show_sends_window = false
                 show_action_browser = false
                 screenshot_search_results = {}
+                local term_l = browser_search_term:lower()
+                local matches = {}
                 for _, plugin in ipairs(folder_content) do
-                    if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                        table.insert(screenshot_search_results, {name = plugin})
+                    if plugin:lower():find(term_l, 1, true) then
+                        matches[#matches+1] = plugin
                     end
+                end
+                if config.apply_type_priority then
+                    matches = DedupeByTypePriority(matches)
+                end
+                for i = 1, #matches do
+                    screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
                 end
                 ClearScreenshotCache()
             end
@@ -5266,6 +5754,11 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
                     local prev = view_mode
                     view_mode = (view_mode == "screenshots" and "list" or "screenshots")
                     if view_mode == "screenshots" and prev ~= "screenshots" then ClearScreenshotCache() end
+                end
+                if is_pinned then
+                    if r.ImGui_MenuItem(ctx, "Unpin Folder") then UnpinCustom(full_path) end
+                else
+                    if r.ImGui_MenuItem(ctx, "Pin Folder") then PinCustom(full_path) end
                 end
                 if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
                     StartFolderScreenshots(full_path)
@@ -5298,7 +5791,8 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-            local open = r.ImGui_TreeNode(ctx, folder_name:upper())
+            local label = ((IsCustomPinned(full_path) and "\xF0\x9F\x93\x8C ") or "") .. folder_name:upper()
+            local open = r.ImGui_TreeNode(ctx, label)
             if open then
                 r.ImGui_Indent(ctx, 1)
                 DisplayCustomFoldersInBrowser(folder_content, full_path)
@@ -5363,20 +5857,24 @@ local function ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
         if browser_search_term == "" then r.ImGui_BeginDisabled(ctx) end
         if r.ImGui_Button(ctx, "All", 20, 20) then
-            -- Zelfde globale zoekactie als in screenshot controls
-            screenshot_search_results = {}
+            -- Zelfde globale zoekactie als in screenshot controls, met type-prioriteit dedupe
             local MAX_RESULTS = 250
             local too_many_results = false
+            local term_l = browser_search_term:lower()
+            local matches = {}
             for _, plugin in ipairs(PLUGIN_LIST) do
-                if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                    if #screenshot_search_results < MAX_RESULTS then
-                        table.insert(screenshot_search_results, {name = plugin})
-                    else
-                        too_many_results = true
-                        break
-                    end
+                if plugin:lower():find(term_l, 1, true) then
+                    matches[#matches+1] = plugin
                 end
             end
+            if config.apply_type_priority then
+                matches = DedupeByTypePriority(matches)
+            end
+            screenshot_search_results = {}
+            for i = 1, math.min(MAX_RESULTS, #matches) do
+                screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+            end
+            too_many_results = (#matches > MAX_RESULTS)
             SortScreenshotResults()
             if too_many_results then
                 search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
@@ -5385,7 +5883,7 @@ local function ShowBrowserPanel()
             selected_folder = nil
             browser_panel_selected = nil
             last_selected_folder_before_global = nil
-            ClearScreenshotCache()
+            RequestClearScreenshotCache()
         end
         if browser_search_term == "" then r.ImGui_EndDisabled(ctx) end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)") end
@@ -5425,12 +5923,12 @@ local function ShowBrowserPanel()
         if r.ImGui_IsItemClicked(ctx, 1) then
             r.ImGui_OpenPopup(ctx, "folder_mode_ctx_favorites")
         end
-        if r.ImGui_BeginPopup(ctx, "folder_mode_ctx_favorites") then
+    if r.ImGui_BeginPopup(ctx, "folder_mode_ctx_favorites") then
             local toggle_label = (view_mode == "screenshots" and "Show List" or "Show Screenshots")
             if r.ImGui_MenuItem(ctx, toggle_label) then
                 local prev = view_mode
                 view_mode = (view_mode == "screenshots" and "list" or "screenshots")
-                if view_mode == "screenshots" and prev ~= "screenshots" then ClearScreenshotCache() end
+                if view_mode == "screenshots" and prev ~= "screenshots" then RequestClearScreenshotCache() end
             end
             if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
                 StartFolderScreenshots("Favorites")
@@ -5439,17 +5937,26 @@ local function ShowBrowserPanel()
         end
             if r.ImGui_IsItemClicked(ctx, 0) then
             SelectFolderExclusive("Favorites")
+            UpdateLastViewedFolder("Favorites")
             browser_panel_selected = nil
             show_media_browser = false
             show_sends_window = false
             show_action_browser = false
             screenshot_search_results = {}
+            local term_l = browser_search_term:lower()
+            local matches = {}
             for _, fav in ipairs(favorite_plugins) do
-                if fav:lower():find(browser_search_term:lower(), 1, true) then
-                    table.insert(screenshot_search_results, {name = fav})
+                if fav:lower():find(term_l, 1, true) then
+                    matches[#matches+1] = fav
                 end
             end
-            ClearScreenshotCache()
+            if config.apply_type_priority then
+                matches = DedupeByTypePriority(matches)
+            end
+            for i = 1, #matches do
+                screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+            end
+            RequestClearScreenshotCache()
         end
    
         if config.show_custom_folders then
@@ -5458,7 +5965,7 @@ local function ShowBrowserPanel()
 
         -- CURRENT TRACK FX
         local ctrack_selected = (selected_folder == "Current Track FX")
-        if ctrack_selected then
+    if ctrack_selected then
             local dl = r.ImGui_GetWindowDrawList(ctx)
             local x,y = r.ImGui_GetCursorScreenPos(ctx)
             local avail_w = r.ImGui_GetContentRegionAvail(ctx)
@@ -5466,13 +5973,14 @@ local function ShowBrowserPanel()
             r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
         end
     r.ImGui_Selectable(ctx, "CURRENT TRACK FX", ctrack_selected)
-        if r.ImGui_IsItemClicked(ctx, 0) then
+    if r.ImGui_IsItemClicked(ctx, 0) then
          
             SelectFolderExclusive("Current Track FX")
+            UpdateLastViewedFolder("Current Track FX")
             show_media_browser = false
             show_sends_window = false
             show_action_browser = false
-            ClearScreenshotCache()
+            RequestClearScreenshotCache()
             screenshot_search_results = nil
             filtered_plugins = GetCurrentTrackFX()
             GetPluginsForFolder("Current Track FX")
@@ -5488,9 +5996,10 @@ local function ShowBrowserPanel()
             r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
         end
     r.ImGui_Selectable(ctx, "CURRENT PROJECT FX", cproj_selected)
-        if r.ImGui_IsItemClicked(ctx, 0) then
+    if r.ImGui_IsItemClicked(ctx, 0) then
          
             SelectFolderExclusive("Current Project FX")
+            UpdateLastViewedFolder("Current Project FX")
             show_media_browser = false
             show_sends_window = false
             show_action_browser = false
@@ -5531,6 +6040,8 @@ local function ShowBrowserPanel()
                         r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
                     end
                 end
+                -- Auto-open when a subgroup is selected
+                if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end
                 if r.ImGui_CollapsingHeader(ctx, header_label) then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
@@ -5555,6 +6066,7 @@ local function ShowBrowserPanel()
                         r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
                     end
                 end
+                if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end
                 if r.ImGui_CollapsingHeader(ctx, "DEVELOPER") then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
@@ -5579,6 +6091,7 @@ local function ShowBrowserPanel()
                         r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
                     end
                 end
+                if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end
                 if r.ImGui_CollapsingHeader(ctx, "CATEGORY") then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
@@ -5604,7 +6117,40 @@ local function ShowBrowserPanel()
                     end
                 end
                 if r.ImGui_CollapsingHeader(ctx, "FOLDERS") then
-                    for j = 1, #CAT_TEST[i].list do
+                    -- Helpers for pinning FOLDERS entries (top-level My Folders)
+                    local function EnsurePinnedList()
+                        if not config.pinned_subgroups then config.pinned_subgroups = {} end
+                        if not config.pinned_subgroups["FOLDERS"] then config.pinned_subgroups["FOLDERS"] = {} end
+                        return config.pinned_subgroups["FOLDERS"]
+                    end
+                    local function IsPinned(name)
+                        local lst = EnsurePinnedList()
+                        for _, n in ipairs(lst) do if n == name then return true end end
+                        return false
+                    end
+                    local function Pin(name)
+                        local lst = EnsurePinnedList()
+                        if not IsPinned(name) then table.insert(lst, name); SaveConfig() end
+                    end
+                    local function Unpin(name)
+                        local lst = EnsurePinnedList()
+                        for k=#lst,1,-1 do if lst[k] == name then table.remove(lst, k); SaveConfig(); break end end
+                    end
+                    -- Build order: pinned first (in pin order), then others in original order
+                    local index_by_name = {}
+                    for idx=1,#CAT_TEST[i].list do index_by_name[CAT_TEST[i].list[idx].name] = idx end
+                    local order = {}
+                    local pinned = EnsurePinnedList()
+                    local pinned_set = {}
+                    for _, name in ipairs(pinned) do
+                        local idx = index_by_name[name]
+                        if idx then table.insert(order, idx); pinned_set[name] = true end
+                    end
+                    for idx=1,#CAT_TEST[i].list do
+                        local nm = CAT_TEST[i].list[idx].name
+                        if not pinned_set[nm] then table.insert(order, idx) end
+                    end
+                    for _, j in ipairs(order) do
                         local show_folder = browser_search_term == ""
                         if not show_folder then
                             for k = 1, #CAT_TEST[i].list[j].fx do
@@ -5616,7 +6162,9 @@ local function ShowBrowserPanel()
                         if show_folder then
                             r.ImGui_PushID(ctx, j)
                             r.ImGui_Indent(ctx, 10)
-                            local header_text = CAT_TEST[i].list[j].name
+                            local folder_name = CAT_TEST[i].list[j].name
+                            local is_pinned = IsPinned(folder_name)
+                            local header_text = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_name
                             local folder_is_selected = (selected_folder == header_text)
                             if folder_is_selected then
                                 local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -5628,7 +6176,7 @@ local function ShowBrowserPanel()
                             r.ImGui_Selectable(ctx, header_text, folder_is_selected)
                             r.ImGui_Unindent(ctx, 10)
                             if r.ImGui_IsItemClicked(ctx, 0) then
-                                selected_folder = header_text
+                                selected_folder = folder_name
                                 browser_panel_selected = nil -- deselect CATEGORY/DEVELOPER/ALL
                                 selected_plugin = nil
                                 UpdateLastViewedFolder(selected_folder)
@@ -5637,7 +6185,7 @@ local function ShowBrowserPanel()
                                 show_sends_window = false
                                 show_action_browser = false
                                 ClearScreenshotCache()
-                                GetPluginsForFolder(selected_folder)
+                                GetPluginsForFolder(folder_name)
                             elseif r.ImGui_IsItemClicked(ctx, 1) then
                                 r.ImGui_OpenPopup(ctx, "folder_browser_ctx_" .. j)
                             end
@@ -5649,8 +6197,8 @@ local function ShowBrowserPanel()
                                     if view_mode == 'screenshots' then
                                         if prev ~= 'screenshots' then ClearScreenshotCache() end
                                     else
-                                        if selected_folder == header_text then
-                                            local folder_plugins = GetPluginsForFolder(header_text)
+                                        if selected_folder == folder_name then
+                                            local folder_plugins = GetPluginsForFolder(folder_name)
                                             screenshot_search_results = {}
                                             for p = 1, #folder_plugins do
                                                 table.insert(screenshot_search_results, { name = folder_plugins[p] })
@@ -5658,8 +6206,13 @@ local function ShowBrowserPanel()
                                         end
                                     end
                                 end
+                                if is_pinned then
+                                    if r.ImGui_MenuItem(ctx, 'Unpin Folder') then Unpin(folder_name) end
+                                else
+                                    if r.ImGui_MenuItem(ctx, 'Pin Folder') then Pin(folder_name) end
+                                end
                                 if r.ImGui_MenuItem(ctx, 'Capture Folder Screenshots') then
-                                    StartFolderScreenshots(header_text)
+                                    StartFolderScreenshots(folder_name)
                                 end
                                 r.ImGui_EndPopup(ctx)
                             end
@@ -5829,6 +6382,7 @@ local function ShowBrowserPanel()
                     end
                 end
         if LAST_USED_FX and r.ValidatePtr(TRACK, "MediaTrack*") then
+            r.ImGui_Separator(ctx)
             if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
                 r.TrackFX_AddByName(TRACK, LAST_USED_FX, false, -1000 - r.TrackFX_GetCount(TRACK))
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
@@ -6608,10 +7162,278 @@ end
 
 
 
+-- Helper: Render de Scripts Launcher voor weergave in screenshotwindow
+local function RenderScriptsLauncherSection(popped_view_stylevars)
+    
+    ShowScreenshotControls()
+    r.ImGui_Separator(ctx)
+    
+    if not popped_view_stylevars then
+        r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
+    end
+    
+    scripts_launcher = scripts_launcher or {}
+  
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 14, 14)
+    if r.ImGui_Button(ctx, "+##AddScriptLauncher", 20, 20) then
+        show_add_script_popup = true
+        new_script_name = ""
+        new_script_cmd = ""
+        new_script_thumb = ""
+        r.ImGui_OpenPopup(ctx, "Add Script")
+    end
+    r.ImGui_PopStyleVar(ctx)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add script or action") end
+
+    if r.ImGui_BeginPopupModal(ctx, "Add Script", true, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        new_script_name = new_script_name or ""
+        new_script_cmd = new_script_cmd or ""
+        new_script_thumb = new_script_thumb or ""
+        local changedName, inpName = r.ImGui_InputText(ctx, "Naam", new_script_name)
+        if changedName then new_script_name = inpName end
+        local changedCmd, inpCmd = r.ImGui_InputText(ctx, "Script / Action ID", new_script_cmd)
+        if changedCmd then new_script_cmd = inpCmd end
+        r.ImGui_Text(ctx, "Thumbnail (120x80 recommended)")
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "choose...") then
+            local ok, file = r.GetUserFileNameForRead("", "Choose Image", "png;bmp;jpg;jpeg")
+            if ok and file and file ~= "" then new_script_thumb = file end
+        end
+        if new_script_thumb ~= "" then
+            local short = new_script_thumb:match("[^/\\]+$") or new_script_thumb
+            r.ImGui_Text(ctx, short)
+        else
+            r.ImGui_Text(ctx, "(no Image chosen)")
+        end
+        r.ImGui_Separator(ctx)
+        local can_save = (new_script_name ~= "" and new_script_cmd ~= "")
+        if not can_save then r.ImGui_BeginDisabled(ctx) end
+        if r.ImGui_Button(ctx, "SAVE", 60, 25) then
+            table.insert(scripts_launcher, {name=new_script_name, cmd=new_script_cmd, thumb=new_script_thumb})
+            SaveScriptsLauncher()
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        if not can_save then r.ImGui_EndDisabled(ctx) end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "CANCEL", 60, 25) then r.ImGui_CloseCurrentPopup(ctx) end
+        r.ImGui_EndPopup(ctx)
+    end
+
+    -- Scrollbare lijst (grid + editor) in child zodat scrollbar niet doorloopt tot boven
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local current_y = r.ImGui_GetCursorPosY(ctx)
+    local footer_height = 0 -- (reserveer ruimte indien later nodig)
+    local available_height = window_height - current_y - footer_height
+    if r.ImGui_BeginChild(ctx, "ScriptsLauncherList", -1, available_height) then
+        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+        local cell_w = 120
+        local cell_h = 80
+        local spacing = 12
+        local start_x = r.ImGui_GetCursorPosX(ctx)
+        local x = start_x
+        local y = r.ImGui_GetCursorPosY(ctx)
+        local cols = math.max(1, math.floor((avail_w + spacing) / (cell_w + spacing)))
+        local col_index = 0
+        for i, sc in ipairs(scripts_launcher) do
+            if col_index >= cols then
+                col_index = 0
+                x = start_x
+                y = y + cell_h + spacing + 30 -- extra ruimte voor naam
+            end
+            r.ImGui_SetCursorPos(ctx, x, y)
+            local id = "script_cell_" .. i
+            local cell_clicked = false
+            if sc.thumb and sc.thumb ~= "" and r.file_exists(sc.thumb) then
+                local tex = LoadSearchTexture(sc.thumb, sc.thumb)
+                if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+                    if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
+                else
+                    if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
+                end
+            else
+                if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
+            end
+
+            if cell_clicked then
+                local cmd = sc.cmd
+                if cmd:match("^_") then
+                    local cmd_id = r.NamedCommandLookup(cmd)
+                    if cmd_id ~= 0 then r.Main_OnCommand(cmd_id, 0) end
+                elseif tonumber(cmd) then
+                    r.Main_OnCommand(tonumber(cmd), 0)
+                end
+            end
+
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                edit_script_index = i
+                edit_script_name = sc.name
+                edit_script_cmd = sc.cmd
+                edit_script_thumb = sc.thumb
+            end
+            local text_w = r.ImGui_CalcTextSize(ctx, sc.name)
+            r.ImGui_SetCursorPos(ctx, x + (cell_w - text_w)/2, y + cell_h + 4)
+            r.ImGui_Text(ctx, sc.name)
+            col_index = col_index + 1
+            x = x + cell_w + spacing
+        end
+        -- Inline editor onder het raster
+        if edit_script_index then
+            r.ImGui_Separator(ctx)
+            r.ImGui_Text(ctx, "Edit Script:")
+            local idx = edit_script_index
+            local sc_edit = scripts_launcher[idx]
+            edit_script_name = edit_script_name or sc_edit.name
+            edit_script_cmd  = edit_script_cmd or sc_edit.cmd
+            edit_script_thumb = edit_script_thumb or sc_edit.thumb
+            local c1, n1 = r.ImGui_InputText(ctx, "Naam", edit_script_name)
+            if c1 then edit_script_name = n1 end
+            local c2, n2 = r.ImGui_InputText(ctx, "Script / Action ID", edit_script_cmd)
+            if c2 then edit_script_cmd = n2 end
+            r.ImGui_Text(ctx, "Thumbnail (120x80)")
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "choose...##EditThumb") then
+                local ok, file = r.GetUserFileNameForRead("", "Choose Image", "png;bmp;jpg;jpeg")
+                if ok and file and file ~= "" then edit_script_thumb = file end
+            end
+            if edit_script_thumb and edit_script_thumb ~= "" then
+                local short = edit_script_thumb:match("[^/\\]+$") or edit_script_thumb
+                r.ImGui_Text(ctx, short)
+            else
+                r.ImGui_Text(ctx, "(No Image Chosen)")
+            end
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x228B22FF)
+            if r.ImGui_Button(ctx, "SAVE", 60, 26) then
+                scripts_launcher[idx].name  = (edit_script_name ~= "" and edit_script_name) or scripts_launcher[idx].name
+                scripts_launcher[idx].cmd   = (edit_script_cmd ~= "" and edit_script_cmd) or scripts_launcher[idx].cmd
+                scripts_launcher[idx].thumb = edit_script_thumb or scripts_launcher[idx].thumb
+                SaveScriptsLauncher()
+                edit_script_index = nil
+                edit_script_name, edit_script_cmd, edit_script_thumb = nil, nil, nil
+            end
+            r.ImGui_PopStyleColor(ctx)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "CANCEL", 60, 26) then
+                edit_script_index = nil
+                edit_script_name, edit_script_cmd, edit_script_thumb = nil, nil, nil
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xAA2222FF)
+            if r.ImGui_Button(ctx, "All", 20, 20) then
+                -- Voer direct een globale zoekopdracht uit (met type-prioriteit dedupe)
+                screenshot_search_results = {}
+                local MAX_RESULTS = 200
+                local term = browser_search_term:lower()
+                local matches = {}
+                for _, plugin in ipairs(PLUGIN_LIST) do
+                    if plugin:lower():find(term, 1, true) then
+                        table.insert(matches, plugin)
+                    end
+                end
+                if config.apply_type_priority then
+                    matches = DedupeByTypePriority(matches)
+                end
+                local total = #matches
+                local limit = math.min(total, MAX_RESULTS)
+                for i = 1, limit do
+                    table.insert(screenshot_search_results, { name = matches[i] })
+                end
+
+                SortScreenshotResults()
+                ClearScreenshotCache()
+                if total > MAX_RESULTS then
+                    search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
+                end
+
+                new_search_performed = true
+            end
+            r.ImGui_PopStyleColor(ctx)
+        end 
+    r.ImGui_PopItemWidth(ctx)
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, show_categories and "C" or "A", button_width, button_height) then
+        show_categories = not show_categories
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, show_only_active and "O" or "F", button_width, button_height) then
+        show_only_active = not show_only_active
+    end
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local current_y = r.ImGui_GetCursorPosY(ctx)
+    local footer_height = 50
+    local available_height = window_height - current_y - footer_height
+    if r.ImGui_BeginChild(ctx, "ActionList", 0, available_height) then
+        local filteredActions = SearchActions(action_search_term)
+        if show_categories then
+            for category, actions in pairs(filteredActions) do
+                if #actions > 0 then
+                    if r.ImGui_TreeNode(ctx, category .. " (" .. #actions .. ")") then
+                        for _, action in ipairs(actions) do
+                            if action.state == 1 then
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF)
+                            end
+                            local prefix = action.state == 1 and "[ON] " or ""
+                            if r.ImGui_Selectable(ctx, prefix .. action.name) then
+                                r.Main_OnCommand(action.id, 0)
+                            elseif r.ImGui_IsItemClicked(ctx, 1) then
+                                CreateSmartMarker(action.id)
+                            end
+                            if action.state == 1 then
+                                r.ImGui_PopStyleColor(ctx)
+                            end
+                        end
+                        r.ImGui_TreePop(ctx)
+                    end
+                end
+            end
+        else
+            for _, action in ipairs(allActions) do
+                local state = r.GetToggleCommandState(action.id)
+                if (action_search_term == "" or action.name:lower():find(action_search_term:lower())) and (not show_only_active or state == 1) then
+                    if state == 1 then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF)
+                    end
+                    local prefix = state == 1 and "[ON] " or ""
+                    if r.ImGui_Selectable(ctx, prefix .. action.name) then
+                        r.Main_OnCommand(action.id, 0)
+                    elseif r.ImGui_IsItemClicked(ctx, 1) then
+                        CreateSmartMarker(action.id)
+                    end
+                    if state == 1 then
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+                end
+            end
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextWrapped(ctx, "Left-click: Execute action. Right-click: Create smart marker.")
+    r.ImGui_EndChild(ctx)
+end
+    return popped_view_stylevars
+end
+
 local function ShowScreenshotWindow()
     if not screenshot_search_results then
         screenshot_search_results = {}
     end
+
+    -- Helper: filter search results op excluded plugins indien optie actief
+    local function FilterSearchResults()
+        if not config.respect_search_exclusions_in_screenshots or not config.excluded_plugins then return end
+        if not screenshot_search_results or #screenshot_search_results == 0 then return end
+        local filtered = {}
+        for i = 1, #screenshot_search_results do
+            local entry = screenshot_search_results[i]
+            local pname = entry and entry.name or entry
+            if pname and not config.excluded_plugins[pname] then
+                filtered[#filtered+1] = entry
+            end
+        end
+        screenshot_search_results = filtered
+    end
+
+    FilterSearchResults()
 
     -- reset spacing flag each frame of screenshot window
     top_screenshot_spacing_applied = false
@@ -6621,29 +7443,53 @@ local function ShowScreenshotWindow()
 
     if (not screenshot_search_results or #screenshot_search_results == 0) and (not active_folder) then
         if config.default_folder then
-            selected_folder = config.default_folder
+            if config.default_folder == LAST_OPENED_SENTINEL and last_viewed_folder then
+                selected_folder = last_viewed_folder
+            else
+                selected_folder = config.default_folder
+            end
         end
     end
 
     if config.default_folder and not initialized_default then
-        if config.default_folder == "Projects" then
+        local df = config.default_folder
+        if df == LAST_OPENED_SENTINEL then
+            if last_viewed_folder then
+                if IsNonFoldersSubgroup(last_viewed_folder) then
+                    browser_panel_selected = last_viewed_folder
+                    selected_folder = nil
+                    current_filtered_fx = GetFxListForSubgroup(last_viewed_folder) or {}
+                    if config.apply_type_priority then
+                        current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
+                    end
+                    screenshot_search_results = {}
+                    local cap = loaded_items_count or ITEMS_PER_BATCH or 30
+                    for j = 1, math.min(cap, #current_filtered_fx) do
+                        table.insert(screenshot_search_results, {name = current_filtered_fx[j]})
+                    end
+                else
+                    browser_panel_selected = nil
+                    selected_folder = last_viewed_folder
+                end
+            end
+        elseif df == "Projects" then
             show_media_browser = true
             show_sends_window = false
             show_action_browser = false
             selected_folder = nil
             LoadProjects()
-        elseif config.default_folder == "Sends/Receives" then
+        elseif df == "Sends/Receives" then
             show_media_browser = false
             show_sends_window = true
             show_action_browser = false
             selected_folder = nil
-        elseif config.default_folder == "Actions" then
+        elseif df == "Actions" then
             show_media_browser = false
             show_sends_window = false
             show_action_browser = true
             selected_folder = nil
         else
-            selected_folder = config.default_folder
+            selected_folder = df
         end
         initialized_default = true
     end
@@ -6742,166 +7588,7 @@ local function ShowScreenshotWindow()
 --------------------------------------------------------------------------------------
         -- PROJECTS GEDEELTE:
         if show_scripts_browser then
-            -- Toon altijd de folder/screenshot controls zodat gebruiker kan terugschakelen
-            ShowScreenshotControls()
-            r.ImGui_Separator(ctx)
-            -- Script Launcher View
-            if not popped_view_stylevars then
-                r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
-            end
-            -- Ensure table exists
-            scripts_launcher = scripts_launcher or {}
-            -- Large plus button top-left
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 14, 14)
-            if r.ImGui_Button(ctx, "+##AddScriptLauncher", 20, 20) then
-                show_add_script_popup = true
-                new_script_name = ""
-                new_script_cmd = ""
-                new_script_thumb = ""
-                r.ImGui_OpenPopup(ctx, "Add Script")
-            end
-            r.ImGui_PopStyleVar(ctx)
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add script or action") end
-
-            -- Add Script Popup
-            if r.ImGui_BeginPopupModal(ctx, "Add Script", true, r.ImGui_WindowFlags_AlwaysAutoResize()) then
-                new_script_name = new_script_name or ""
-                new_script_cmd = new_script_cmd or ""
-                new_script_thumb = new_script_thumb or ""
-                local changedName, inpName = r.ImGui_InputText(ctx, "Naam", new_script_name)
-                if changedName then new_script_name = inpName end
-                local changedCmd, inpCmd = r.ImGui_InputText(ctx, "Script / Action ID", new_script_cmd)
-                if changedCmd then new_script_cmd = inpCmd end
-                r.ImGui_Text(ctx, "Thumbnail (120x80 recommended)")
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "choose...") then
-                    local ok, file = r.GetUserFileNameForRead("", "Choose Image", "png;bmp;jpg;jpeg")
-                    if ok and file and file ~= "" then new_script_thumb = file end
-                end
-                if new_script_thumb ~= "" then
-                    local short = new_script_thumb:match("[^/\\]+$") or new_script_thumb
-                    r.ImGui_Text(ctx, short)
-                else
-                    r.ImGui_Text(ctx, "(no Image chosen)")
-                end
-                r.ImGui_Separator(ctx)
-                local can_save = (new_script_name ~= "" and new_script_cmd ~= "")
-                if not can_save then r.ImGui_BeginDisabled(ctx) end
-                if r.ImGui_Button(ctx, "SAVE", 60, 25) then
-                    table.insert(scripts_launcher, {name=new_script_name, cmd=new_script_cmd, thumb=new_script_thumb})
-                    SaveScriptsLauncher()
-                    r.ImGui_CloseCurrentPopup(ctx)
-                end
-                if not can_save then r.ImGui_EndDisabled(ctx) end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "CANCEL", 60, 25) then r.ImGui_CloseCurrentPopup(ctx) end
-                r.ImGui_EndPopup(ctx)
-            end
-
-            -- Grid Rendering
-            local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-            local cell_w = 120
-            local cell_h = 80
-            local spacing = 12
-            local start_x = r.ImGui_GetCursorPosX(ctx)
-            local x = start_x
-            local y = r.ImGui_GetCursorPosY(ctx)
-            local cols = math.max(1, math.floor((avail_w + spacing) / (cell_w + spacing)))
-            local col_index = 0
-            for i, sc in ipairs(scripts_launcher) do
-                if col_index >= cols then
-                    col_index = 0
-                    x = start_x
-                    y = y + cell_h + spacing + 30 -- extra ruimte voor naam
-                end
-                r.ImGui_SetCursorPos(ctx, x, y)
-                local id = "script_cell_" .. i
-                local cell_clicked = false
-                if sc.thumb and sc.thumb ~= "" and r.file_exists(sc.thumb) then
-                    local tex = LoadSearchTexture(sc.thumb, sc.thumb)
-                    if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
-                        if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
-                    else
-                        if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
-                    end
-                else
-                    if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
-                end
-
-                if cell_clicked then
-                    local cmd = sc.cmd
-                    if cmd:match("^_") then
-                        local cmd_id = r.NamedCommandLookup(cmd)
-                        if cmd_id ~= 0 then r.Main_OnCommand(cmd_id, 0) end
-                    elseif tonumber(cmd) then
-                        r.Main_OnCommand(tonumber(cmd), 0)
-                    end
-                end
-
-                if r.ImGui_IsItemClicked(ctx, 1) then
-            
-                    edit_script_index = i
-                    edit_script_name = sc.name
-                    edit_script_cmd = sc.cmd
-                    edit_script_thumb = sc.thumb
-                end
-                local text_w = r.ImGui_CalcTextSize(ctx, sc.name)
-                r.ImGui_SetCursorPos(ctx, x + (cell_w - text_w)/2, y + cell_h + 4)
-                r.ImGui_Text(ctx, sc.name)
-                col_index = col_index + 1
-                x = x + cell_w + spacing
-                ::continue_scripts_loop:: -- (label behouden voor compatibiliteit; geen jumps meer hierheen)
-            end
-            -- Inline editor onder het raster
-            if edit_script_index then
-                r.ImGui_Separator(ctx)
-                r.ImGui_Text(ctx, "Edit Script:")
-                local idx = edit_script_index
-                local sc_edit = scripts_launcher[idx]
-                edit_script_name = edit_script_name or sc_edit.name
-                edit_script_cmd  = edit_script_cmd or sc_edit.cmd
-                edit_script_thumb = edit_script_thumb or sc_edit.thumb
-                local c1, n1 = r.ImGui_InputText(ctx, "Naam", edit_script_name)
-                if c1 then edit_script_name = n1 end
-                local c2, n2 = r.ImGui_InputText(ctx, "Script / Action ID", edit_script_cmd)
-                if c2 then edit_script_cmd = n2 end
-                r.ImGui_Text(ctx, "Thumbnail (120x80)")
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "choose...##EditThumb") then
-                    local ok, file = r.GetUserFileNameForRead("", "Choose Image", "png;bmp;jpg;jpeg")
-                    if ok and file and file ~= "" then edit_script_thumb = file end
-                end
-                if edit_script_thumb and edit_script_thumb ~= "" then
-                    local short = edit_script_thumb:match("[^/\\]+$") or edit_script_thumb
-                    r.ImGui_Text(ctx, short)
-                else
-                    r.ImGui_Text(ctx, "(No Image Chosen)")
-                end
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x228B22FF)
-                if r.ImGui_Button(ctx, "SAVE", 60, 26) then
-                    scripts_launcher[idx].name  = (edit_script_name ~= "" and edit_script_name) or scripts_launcher[idx].name
-                    scripts_launcher[idx].cmd   = (edit_script_cmd ~= "" and edit_script_cmd) or scripts_launcher[idx].cmd
-                    scripts_launcher[idx].thumb = edit_script_thumb or scripts_launcher[idx].thumb
-                    SaveScriptsLauncher()
-                    edit_script_index = nil
-                    edit_script_name, edit_script_cmd, edit_script_thumb = nil, nil, nil
-                end
-                r.ImGui_PopStyleColor(ctx)
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "CANCEL", 60, 26) then
-                    edit_script_index = nil
-                    edit_script_name, edit_script_cmd, edit_script_thumb = nil, nil, nil
-                end
-                r.ImGui_SameLine(ctx)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xAA2222FF)
-                if r.ImGui_Button(ctx, "DELETE", 60, 26) then
-                    table.remove(scripts_launcher, idx)
-                    SaveScriptsLauncher()
-                    edit_script_index = nil
-                    edit_script_name, edit_script_cmd, edit_script_thumb = nil, nil, nil
-                end
-                r.ImGui_PopStyleColor(ctx)
-            end
+            popped_view_stylevars = RenderScriptsLauncherSection(popped_view_stylevars)
         elseif show_media_browser then
             ShowScreenshotControls()
             r.ImGui_Separator(ctx)
@@ -7534,89 +8221,7 @@ local function ShowScreenshotWindow()
 --------------------------------------------------------------------------------------
         -- ACTIONS GEDEELTE
         elseif show_action_browser then
-            ShowScreenshotControls()
-            --ShowFolderDropdown()
-            r.ImGui_Separator(ctx) 
-            local window_width = r.ImGui_GetWindowWidth(ctx)
-            r.ImGui_PushItemWidth(ctx, window_width - 37)
-            local changed, new_search_term = r.ImGui_InputTextWithHint(ctx, "##ActionSearch", "SEARCH ACTIONS", action_search_term)
-            if changed then 
-                action_search_term = new_search_term 
-            end
-            r.ImGui_PopItemWidth(ctx)
-            r.ImGui_SameLine(ctx)
-            -- Toggle Categories knop
-            --r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
-            if r.ImGui_Button(ctx, show_categories and "C" or "A", button_width, button_height) then
-                show_categories = not show_categories
-            end
-            r.ImGui_SameLine(ctx)
-            -- r.ImGui_SetCursorPos(ctx, window_width - button_width * 2 - 10, 5)
-            if r.ImGui_Button(ctx, show_only_active and "O" or "F", button_width, button_height) then
-                show_only_active = not show_only_active
-            end
-            -- Bereken beschikbare hoogte voor scrollbaar gedeelte
-            local window_height = r.ImGui_GetWindowHeight(ctx)
-            local current_y = r.ImGui_GetCursorPosY(ctx)
-            local footer_height = 50 -- Hoogte voor separator en tekst onderaan
-            local available_height = window_height - current_y - footer_height
-            
-            if r.ImGui_BeginChild(ctx, "ActionList", 0, available_height) then
-                local filteredActions = SearchActions(action_search_term)
-                
-                if show_categories then
-                    -- Weergave met categorieën
-                    for category, actions in pairs(filteredActions) do
-                        if #actions > 0 then
-                            if r.ImGui_TreeNode(ctx, category .. " (" .. #actions .. ")") then
-                                for _, action in ipairs(actions) do
-                                    if action.state == 1 then
-                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF)
-                                    end
-                                    
-                                    local prefix = action.state == 1 and "[ON] " or ""
-                                    if r.ImGui_Selectable(ctx, prefix .. action.name) then
-                                        r.Main_OnCommand(action.id, 0)
-                                    elseif r.ImGui_IsItemClicked(ctx, 1) then
-                                        CreateSmartMarker(action.id)
-                                    end
-                                    
-                                    if action.state == 1 then
-                                        r.ImGui_PopStyleColor(ctx)
-                                    end
-                                end
-                                r.ImGui_TreePop(ctx)
-                            end
-                        end
-                    end
-                else
-                        -- Weergave van alle acties in één lijst
-                        for _, action in ipairs(allActions) do
-                            local state = r.GetToggleCommandState(action.id)
-                            if (action_search_term == "" or action.name:lower():find(action_search_term:lower())) 
-                            and (not show_only_active or state == 1) then
-                                if state == 1 then
-                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF)
-                                end
-                                
-                                local prefix = state == 1 and "[ON] " or ""
-                                if r.ImGui_Selectable(ctx, prefix .. action.name) then
-                                    r.Main_OnCommand(action.id, 0)
-                                elseif r.ImGui_IsItemClicked(ctx, 1) then
-                                    CreateSmartMarker(action.id)
-                                end
-                                
-                                if state == 1 then
-                                    r.ImGui_PopStyleColor(ctx)
-                                end
-                            end
-                        end
-                    end
-                    r.ImGui_EndChild(ctx)
-                end
-
-                r.ImGui_Separator(ctx)
-                r.ImGui_TextWrapped(ctx, "Left-click: Execute action. Right-click: Create smart marker.")
+            RenderActionsSection()
 
 --------------------------------------------------------------------------------------
         -- SCREENSHOTS GEDEELTE    
@@ -7655,7 +8260,7 @@ local function ShowScreenshotWindow()
     -- Ondersteun ook subfolders via browser_panel_selected (All Plugins / Category / Developer view)
     local active_folder_for_tip = browser_panel_selected or selected_folder
     if (not search_warning_message) and browser_search_term ~= "" and active_folder_for_tip then
-        local folder_plugins = GetPluginsForFolder(active_folder_for_tip)
+        local folder_plugins = current_filtered_fx and #current_filtered_fx > 0 and current_filtered_fx or GetPluginsForFolder(active_folder_for_tip)
         if folder_plugins then
             local cnt = 0
             local term = browser_search_term:lower()
@@ -7684,6 +8289,20 @@ local function ShowScreenshotWindow()
         end
 
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
+            -- Flicker Guard: coalesce clears/rebuilds on real state changes
+            if config.flicker_guard_enabled then
+                local now = r.time_precise()
+                local sig = _build_screenshot_signature()
+                local sig_changed = (sig ~= _last_screenshot_signature)
+                local typed_recently = (now - _last_search_input_time) * 1000.0 < _search_debounce_ms
+                if sig_changed and not typed_recently then
+                    if _pending_clear_cache then
+                        ClearScreenshotCache()
+                        _pending_clear_cache = false
+                    end
+                    _last_screenshot_signature = sig
+                end
+            end
             local scroll_y = r.ImGui_GetScrollY(ctx)
             local scroll_max_y = r.ImGui_GetScrollMaxY(ctx)
             if current_filtered_fx and not config.use_pagination and scroll_y > 0 and scroll_y/scroll_max_y > 0.8 and #current_filtered_fx > loaded_items_count then
@@ -7714,6 +8333,10 @@ local function ShowScreenshotWindow()
                         if plugin:lower():find(browser_search_term:lower(), 1, true) then
                             table.insert(display_plugins, plugin)
                         end
+                    end
+                    -- Type-priority dedupe voor Favorites
+                    if config.apply_type_priority then
+                        display_plugins = DedupeByTypePriority(display_plugins)
                     end
                     filtered_plugins = display_plugins
                     -- Pas A/R sortering toe op custom folder lijst
@@ -7867,6 +8490,11 @@ local function ShowScreenshotWindow()
                                 end
                             end
                         end
+                        -- Dedupe per segment om VST/VST3/etc. dubbels te verwijderen
+                        if config.apply_type_priority then
+                            favorites = DedupeByTypePriority(favorites)
+                            regular = DedupeByTypePriority(regular)
+                        end
                         SortPlainPluginList(favorites)
                         SortPlainPluginList(regular)
                         for _, p in ipairs(favorites) do display_plugins[#display_plugins+1] = p end
@@ -7877,6 +8505,9 @@ local function ShowScreenshotWindow()
                             if plugin:lower():find(browser_search_term:lower(),1,true) then
                                 display_plugins[#display_plugins+1] = plugin
                             end
+                        end
+                        if config.apply_type_priority then
+                            display_plugins = DedupeByTypePriority(display_plugins)
                         end
                         SortPlainPluginList(display_plugins)
                     end
@@ -8329,6 +8960,10 @@ local function ShowScreenshotWindow()
                                         SortPlainPluginList(display_plugins)
                                     end
                                     
+                                    -- Type-priority dedupe voor standaard folders
+                                    if config.apply_type_priority then
+                                        display_plugins = DedupeByTypePriority(display_plugins)
+                                    end
                                     filtered_plugins = display_plugins
                                     break
                                 end
@@ -8694,7 +9329,7 @@ local function FilterBox()
     local track_info_width = math.max(window_width - 10, 125)
     local x_button_width = 20
     local margin = 3
-    local search_width = track_info_width - (x_button_width * 4) - (margin * 3)
+    local search_width = track_info_width - (x_button_width * 3) - (margin * 2)
    
     -- Sort
     local sort_mode = config.sort_mode or "score" -- "score", "alphabet", "rating"
@@ -8705,10 +9340,10 @@ local function FilterBox()
     local meter_height = config.hideMeter and 0 or 90
     local meter_spacing = 5
     local bottom_buttons_height = config.hideBottomButtons and 0 or 70
-    local volume_slider_height = (config.hideBottomButtons or config.hideVolumeSlider) and 0 or 40
+    local volume_slider_height = config.hideVolumeSlider and 0 or 40
     
     local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
-    local search_results_max_height = window_height - total_ui_elements - 80
+    local search_results_max_height = window_height - total_ui_elements - 100
     if r.ImGui_IsWindowAppearing(ctx) then
         r.ImGui_SetKeyboardFocusHere(ctx)
     end
@@ -8724,13 +9359,23 @@ local function FilterBox()
     if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
         if FILTER == "" then
             if last_viewed_folder then
-                SelectFolderExclusive(last_viewed_folder)
                 r.ImGui_SetScrollY(ctx, 0)
                 show_screenshot_window = true
                 screenshot_window_interactive = true
-                screenshot_search_results = nil
+                screenshot_search_results = {}
                 ClearScreenshotCache()
-                GetPluginsForFolder(selected_folder)
+                if IsNonFoldersSubgroup(last_viewed_folder) then
+                    browser_panel_selected = last_viewed_folder
+                    selected_folder = nil
+                    current_filtered_fx = GetFxListForSubgroup(last_viewed_folder) or {}
+                    local cap = loaded_items_count or ITEMS_PER_BATCH or 30
+                    for j = 1, math.min(cap, #current_filtered_fx) do
+                        table.insert(screenshot_search_results, {name = current_filtered_fx[j]})
+                    end
+                else
+                    SelectFolderExclusive(last_viewed_folder)
+                    GetPluginsForFolder(selected_folder)
+                end
             end
         else
             UpdateLastViewedFolder(selected_folder)
@@ -8775,7 +9420,27 @@ local function FilterBox()
         r.ImGui_SetScrollY(ctx, 0)
         show_screenshot_window = true
         show_media_browser = false
-        selected_folder = config.default_folder
+        if config.default_folder == LAST_OPENED_SENTINEL and last_viewed_folder then
+            if IsNonFoldersSubgroup(last_viewed_folder) then
+                browser_panel_selected = last_viewed_folder
+                selected_folder = nil
+                    current_filtered_fx = GetFxListForSubgroup(last_viewed_folder) or {}
+                    if config.apply_type_priority then
+                        current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
+                    end
+                screenshot_search_results = {}
+                local cap = loaded_items_count or ITEMS_PER_BATCH or 30
+                for j = 1, math.min(cap, #current_filtered_fx) do
+                    table.insert(screenshot_search_results, {name = current_filtered_fx[j]})
+                end
+            else
+                browser_panel_selected = nil
+                selected_folder = last_viewed_folder
+            end
+        else
+            browser_panel_selected = nil
+            selected_folder = config.default_folder
+        end
 
     -- Voeg deze logica toe voor de speciale folders
     if config.default_folder == "Projects" then
@@ -8800,6 +9465,13 @@ local function FilterBox()
         ClearScreenshotCache()
         if selected_folder then
             local filtered_plugins = GetPluginsForFolder(selected_folder)
+            -- Prefill screenshot list for the restored folder
+            loaded_items_count = ITEMS_PER_BATCH or loaded_items_count or 30
+            screenshot_search_results = {}
+            for i = 1, math.min(loaded_items_count, #filtered_plugins) do
+                local plugin_name = filtered_plugins[i]
+                table.insert(screenshot_search_results, { name = plugin_name })
+            end
             for _, plugin_name in ipairs(filtered_plugins) do
                 local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                 local screenshot_file = screenshot_path .. safe_name .. ".png"
@@ -9322,6 +9994,7 @@ local function DrawBottomButtons()
             r.ImGui_PopItemWidth(ctx)
         end
     end
+    r.ImGui_PushFont(ctx, NormalFont, 10)
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
     -- Eerste rij knoppen
     local num_buttons_row1 = 3
@@ -9340,7 +10013,7 @@ local function DrawBottomButtons()
         r.ImGui_SetTooltip(ctx, "Copy All FX on the Selected Track")
     end
     r.ImGui_SameLine(ctx, 0, button_spacing)
-    if r.ImGui_Button(ctx, "PST", button_width_row1) then
+    if r.ImGui_Button(ctx, "PASTE", button_width_row1) then
         r.Main_OnCommand(r.NamedCommandLookup("_S&M_SMART_PST_FXCHAIN"), 0)
     end
     if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
@@ -9352,7 +10025,7 @@ local function DrawBottomButtons()
     local button_width_row2 = CalculateButtonWidths(track_info_width, num_buttons_row2, button_spacing)
     local bypass_state = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), bypass_state and 0x0080FFFF or config.button_background_color)
-    if r.ImGui_Button(ctx, "BYPS", button_width_row2) then
+    if r.ImGui_Button(ctx, "BYPASS", button_width_row2) then
         local new_state = bypass_state and 1 or 0
         r.SetMediaTrackInfo_Value(TRACK, "I_FXEN", new_state)
     end
@@ -9422,6 +10095,7 @@ local function DrawBottomButtons()
     if r.ImGui_Button(ctx, "ARM", button_width_row3) then
     ToggleArm(TRACK)
     end
+    r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleColor(ctx)
     if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
         r.ImGui_SetTooltip(ctx, "Arm selected Track")
@@ -9851,21 +10525,21 @@ local function CalculateTopHeight(config)
 end
 
 local function CalculateMenuHeight(config)
-    local height = 16
-    if config.show_favorites then height = height + 16 end
-    if config.show_all_plugins then height = height + 16 end
-    if config.show_developer then height = height + 16 end
-    if config.show_folders then height = height + 16 end
-    if config.show_fx_chains then height = height + 16 end
-    if config.show_track_templates then height = height + 16 end
-    if config.show_category then height = height + 16 end
-    if config.show_container then height = height + 16 end
-    if config.show_video_processor then height = height + 16 end
-    if config.show_projects then height = height + 16 end
-    if config.show_sends then height = height + 16 end
-    if config.show_actions then height = height + 16 end
-    if config.show_custom_folders and next(config.custom_folders) then height = height + 16 end  -- WIJZIG DEZE REGEL
-    if LAST_USED_FX then height = height + 16 end
+    local height = 18
+    if config.show_favorites then height = height + 18 end
+    if config.show_all_plugins then height = height + 18 end
+    if config.show_developer then height = height + 18 end
+    if config.show_folders then height = height + 18 end
+    if config.show_fx_chains then height = height + 18 end
+    if config.show_track_templates then height = height + 18 end
+    if config.show_category then height = height + 18 end
+    if config.show_container then height = height + 18 end
+    if config.show_video_processor then height = height + 18 end
+    if config.show_projects then height = height + 18 end
+    if config.show_sends then height = height + 18 end
+    if config.show_actions then height = height + 18 end
+    if config.show_custom_folders and next(config.custom_folders) then height = height + 18 end  -- WIJZIG DEZE REGEL
+    if LAST_USED_FX then height = height + 18 end
     return height
 end
 
@@ -10210,7 +10884,7 @@ end
         end
     end
 
-local function get_sws_colors()
+function get_sws_colors()
     local colors = {}
     local reaper_resource_path = reaper.GetResourcePath()
     local color_dir = reaper_resource_path .. "/Color/"
@@ -10248,11 +10922,11 @@ function moveTrackUp(track)
     end
 end
 
-local function getScriptsIniPath()
+function getScriptsIniPath()
     return r.GetResourcePath() .. "/Scripts/user_scripts.ini"
 end
 
-local function createEmptyUserScriptsIni()
+function createEmptyUserScriptsIni()
     local file = io.open(getScriptsIniPath(), "w")
     if file then
         file:write("# User defined scripts\n")
@@ -10260,7 +10934,7 @@ local function createEmptyUserScriptsIni()
     end
 end
 
-local function loadUserScripts()
+function loadUserScripts()
     local scripts = {}
     local file = io.open(getScriptsIniPath(), "r")
     if file then
@@ -10285,7 +10959,7 @@ local function loadUserScripts()
     return scripts
 end
 
-local function saveUserScript(name, command_id)
+function saveUserScript(name, command_id)
     local file = io.open(getScriptsIniPath(), "a")
     if file then
         file:write(string.format("\n[Script]\nname=%s\ncommand_id=%s\n", name, command_id))
@@ -10295,10 +10969,10 @@ local function saveUserScript(name, command_id)
     end
 end
 
-local show_add_script_popup = false
-local new_script_name = ""
-local new_command_id = ""
-local function showAddScriptPopup()
+show_add_script_popup = false
+new_script_name = ""
+new_command_id = ""
+function showAddScriptPopup()
     if r.ImGui_BeginPopupModal(ctx, "Add User Script", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar()) then
         r.ImGui_Text(ctx, "Enter script details:")
         _, new_script_name = r.ImGui_InputText(ctx, "Script Name", new_script_name)
@@ -10316,7 +10990,7 @@ local function showAddScriptPopup()
         r.ImGui_EndPopup(ctx)
     end
 end
-local function removeUserScript(index)
+function removeUserScript(index)
     table.remove(userScripts, index)
     local file = io.open(getScriptsIniPath(), "w")
     if file then
@@ -10493,12 +11167,15 @@ if visible then
             local track_color, text_color = GetTrackColorAndTextColor(TRACK)
             local track_name = GetTrackName(TRACK)
             local track_type = GetTrackType(TRACK)
+            local track_num_val = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") or 0
+            local track_num = math.floor(track_num_val)
+            local header_label = (track_num > 0) and (tostring(track_num) .. ": " .. (track_name or "")) or (track_name or "")
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 4)
             local window_width = r.ImGui_GetWindowWidth(ctx)
             local track_info_width = math.max(window_width - 10, 125)  -- Minimaal 125, of vensterbreedte - 20
             
-            if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 60) then
+            if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50) then
                 -- Stel de stijlen voor de knoppen in
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Transparante knop
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)
@@ -10513,24 +11190,11 @@ if visible then
                     GetPluginsForFolder(selected_folder)
                 end             
                 local window_width = r.ImGui_GetWindowWidth(ctx)                          
-                r.ImGui_SetCursorPos(ctx, 20, 0)
-                if r.ImGui_Button(ctx, show_settings and '\u{0047}' or '\u{0047}', 20, 20) then
-                    show_settings = not show_settings
-                end
-
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPos(ctx, window_width - 40, 0)
-                if r.ImGui_Button(ctx, "\u{0048}", 20, 20) then
-                    local command_id = r.NamedCommandLookup("_RS288e3cc7228dd8b05c5cd6394578cc42ca6b4940")  
-                    r.Main_OnCommand(command_id, 0)
-                end
                 
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPos(ctx, window_width - 20, 0)
-                if r.ImGui_Button(ctx, "\u{0045}", 20, 20) then
-                    change_dock = true 
-                    ClearScreenshotCache()
-                    ShowPluginScreenshot()
+                if r.ImGui_Button(ctx, show_settings and '\u{0047}' or '\u{0047}', 20, 20) then
+                    show_settings = not show_settings
                 end
                 
                 -- Herstel de stijlen
@@ -10541,7 +11205,7 @@ if visible then
                 r.ImGui_PopStyleColor(ctx, 4)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_PushFont(ctx, LargeFont, 15)
-                local text_width = r.ImGui_CalcTextSize(ctx, track_name)
+                local text_width = r.ImGui_CalcTextSize(ctx, header_label)
                 local window_width = r.ImGui_GetWindowWidth(ctx)
                 local pos_x = (window_width - text_width -7) * 0.5
                 local window_height = r.ImGui_GetWindowHeight(ctx)
@@ -10551,7 +11215,7 @@ if visible then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)  -- Licht grijs bij hover
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)  -- Donkerder grijs bij klik
                 r.ImGui_SetCursorPos(ctx, pos_x, pos_y)
-                if r.ImGui_Button(ctx, track_name) then
+                if r.ImGui_Button(ctx, header_label) then
                     show_rename_popup = true
                     new_track_name = track_name
                 end
@@ -10785,7 +11449,7 @@ if visible then
                 if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
                     r.ImGui_PopFont(ctx)
                 end
-                r.ImGui_PushFont(ctx, LargeFont, 15)
+                r.ImGui_PushFont(ctx, NormalFont, 11)
                 local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
                 local type_pos_x = (window_width - type_text_width) * 0.5
                 local type_pos_y = pos_y + text_height
@@ -10840,8 +11504,8 @@ if visible then
             -- tag sectie
             if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") and config.show_tags then
                 if r.ImGui_BeginChild(ctx, "TagSection", track_info_width, 45) then
-                    current_tag_window_height = r.ImGui_GetWindowHeight(ctx) 
-                    
+                    current_tag_window_height = r.ImGui_GetWindowHeight(ctx) + 20
+
                     if r.ImGui_Button(ctx, "+", 16, 16) then
                         r.ImGui_OpenPopup(ctx, "TagManager")
                     end
@@ -11616,7 +12280,7 @@ if visible then
                     r.ImGui_SetTooltip(ctx, "Show or hide Plugin Preview in item list")
                 end
                 r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRCK", button_width, 20) then
+                if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRACK", button_width, 20) then
                     ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
                 end
                 if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
