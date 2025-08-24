@@ -1,6 +1,6 @@
 -- @description Replace focused FX slot on all selected tracks (picker)
 -- @author TouristKiller
--- @version 0.0.1 
+-- @version 0.0.2
 -- @changelog Initial version
 
 -- THANX SEXAN FOR HIS FX PARSER
@@ -10,18 +10,27 @@ local r = reaper
 local SCRIPT_TITLE = 'Replace focused slot across selected (picker)'
 
 -- Load Sexan parser
-local function ensure_sexan_parser()
-  local path = r.GetResourcePath() .. '/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua'
+local function file_exists(path)
   local f = io.open(path, 'r')
-  if not f then return nil, 'Sexan FX Browser Parser V7 not found. Install via ReaPack.' end
-  f:close()
-  local ok, res = pcall(dofile, path)
-  if not ok then return nil, 'Sexan parser error: ' .. tostring(res) end
-  local parser = res or _G.FXB
-  if type(parser) ~= 'table' or type(parser.BuildFXList) ~= 'function' then
-    return nil, 'Sexan parser table (FXB) not found after loading.'
+  if f then f:close() return true end
+  return false
+end
+
+local function ensure_sexan_parser()
+  local fx_parser = r.GetResourcePath() .. '/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua'
+  if file_exists(fx_parser) then
+    local ok, err = pcall(dofile, fx_parser)
+    if not ok then
+      return false, 'Sexan parser error: ' .. tostring(err)
+    end
+    return true
+  else
+    if r.ReaPack_BrowsePackages then
+      r.ShowMessageBox('Sexan FX Browser Parser V7 is missing. Opening ReaPack to install.', SCRIPT_TITLE, 0)
+      r.ReaPack_BrowsePackages('"sexan fx browser parser v7"')
+    end
+    return false, 'Sexan FX Browser Parser V7 not found. Please install via ReaPack.'
   end
-  return parser
 end
 
 local function extract_fx_entry(entry)
@@ -58,42 +67,32 @@ local function flatten_plugins(obj, items, seen, depth)
 end
 
 local function load_plugin_items()
-  local parser, err = ensure_sexan_parser()
+  local okParser, err = ensure_sexan_parser()
+ 
+  local list = nil
+  if type(GetFXTbl) == 'function' then
+    local ok, res = pcall(GetFXTbl)
+    if ok then list = res end
+  end
+  if not list and type(ReadFXFile) == 'function' then
+    local FX_LIST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
+    if (not FX_LIST or not CAT_TEST or not FX_DEV_LIST_FILE) and type(MakeFXFiles) == 'function' then
+      FX_LIST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+    end
+    if type(GetFXTbl) == 'function' then
+      local ok, res = pcall(GetFXTbl)
+      if ok then list = res end
+    end
+  end
+  if not list and type(_G.FXB) == 'table' and type(_G.FXB.BuildFXList) == 'function' then
+    local okB, resB = pcall(_G.FXB.BuildFXList)
+    if okB then list = resB end
+  end
+  if not list then
+    return nil, err or 'Could not load plugin list from Sexan parser.'
+  end
   local items, seen = {}, {}
-  if parser then
-    local okBuild, list = pcall(parser.BuildFXList)
-    if okBuild then
-      flatten_plugins(list, items, seen, 0)
-      table.sort(items, function(a,b) return (a.display or ''):lower() < (b.display or ''):lower() end)
-      return items
-    else
-      err = 'Parser BuildFXList failed'
-    end
-  end
-  local prefixes = {
-    'VST3:', 'VSTi3:', 'VST:', 'VSTi:', 'CLAP:', 'JS:', 'JSFX:', 'AU:', 'DX:'
-  }
-  local tested = {}
-  for _, p in ipairs(prefixes) do
-    local candidates = {
-      p .. ' ReaEQ', p .. ' ReaComp', p .. ' ReaGate', p .. ' ReaDelay', p .. ' ReaLimit', p .. ' ReaXcomp',
-      p .. ' ReaFIR', p .. ' ReaTune', p .. ' ReaVerb', p .. ' ReaVerbate', p .. ' ReaSurround'
-    }
-    for _, name in ipairs(candidates) do
-      if not tested[name] then
-        tested[name] = true
-        local tr = r.GetMasterTrack(0)
-        local idx = r.TrackFX_AddByName(tr, name, false, -1)
-        if idx >= 0 then
-          r.TrackFX_Delete(tr, idx)
-          items[#items+1] = { display = name, addname = name }
-        end
-      end
-    end
-  end
-  if #items == 0 then
-    return nil, err or 'Sexan parser table (FXB) not found and no fallback items detected.'
-  end
+  flatten_plugins(list, items, seen, 0)
   table.sort(items, function(a,b) return (a.display or ''):lower() < (b.display or ''):lower() end)
   return items
 end
@@ -103,14 +102,6 @@ local function replace_across_selected(slotIdx, target)
   if selCount == 0 then
     r.ShowMessageBox('No selected tracks.', SCRIPT_TITLE, 0)
     return
-  end
-  local probeTrack = r.GetSelectedTrack(0, 0)
-  local probeIdx = r.TrackFX_AddByName(probeTrack, target, false, -1)
-  if probeIdx < 0 then
-    r.ShowMessageBox('FX not found: ' .. target, SCRIPT_TITLE, 0)
-    return
-  else
-    r.TrackFX_Delete(probeTrack, probeIdx)
   end
 
   r.Undo_BeginBlock()
@@ -129,11 +120,15 @@ local function replace_across_selected(slotIdx, target)
         local dest = (slotIdx >= 0 and slotIdx < curCount) and slotIdx or -1
         r.TrackFX_CopyToTrack(track, newIdx, track, dest, true)
         replaced = replaced + 1
+      else
       end
     end
   end
   r.PreventUIRefresh(-1)
   r.Undo_EndBlock(string.format('Replace slot %d on %d selected track(s) with %s', slotIdx + 1, replaced, target), -1)
+  if replaced == 0 then
+    r.ShowMessageBox('FX not found: ' .. tostring(target), SCRIPT_TITLE, 0)
+  end
 end
 
 local have_imgui = (r.ImGui_CreateContext ~= nil)
