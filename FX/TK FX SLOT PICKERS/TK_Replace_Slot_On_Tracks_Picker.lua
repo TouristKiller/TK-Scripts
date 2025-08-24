@@ -1,0 +1,309 @@
+-- @description Replace chosen FX slot on tracks (picker)
+-- @author TouristKiller
+-- @version 0.0.1
+-- @changelog Initial version
+
+-- THANX SEXAN FOR HIS FX PARSER
+-- Requirements: ReaImGui and Sexan's FX Browser Parser V7
+
+local r = reaper
+local SCRIPT_TITLE = 'Replace chosen slot on tracks (picker)'
+
+-- Basic file check
+local function file_exists(path)
+  local f = io.open(path, 'r')
+  if f then f:close() return true end
+  return false
+end
+
+-- Load Sexan parser from the fixed Scripts/Sexan_Scripts path (same as Slots Manager)
+local function ensure_sexan_parser()
+  local fx_parser = r.GetResourcePath() .. '/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua'
+  if file_exists(fx_parser) then
+    local ok, err = pcall(dofile, fx_parser)
+    if not ok then
+      return false, 'Sexan parser error: ' .. tostring(err)
+    end
+    return true
+  else
+    if r.ReaPack_BrowsePackages then
+      r.ShowMessageBox('Sexan FX Browser Parser V7 is missing. Opening ReaPack to install.', SCRIPT_TITLE, 0)
+      r.ReaPack_BrowsePackages('"sexan fx browser parser v7"')
+    end
+    return false, 'Sexan FX Browser Parser V7 not found. Please install via ReaPack.'
+  end
+end
+
+-- Helpers to normalize parser output to { display, addname }
+local function extract_fx_entry(entry)
+  local t = type(entry)
+  if t == 'string' then return entry, entry end
+  if t == 'table' then
+    local name = entry.name or entry.fxname or entry.fxName or entry.fname or entry.FX_NAME or entry[1]
+    local add  = entry.addname or entry.fullname or entry.name or entry.fxname or entry[2] or name
+    if name or add then return tostring(name or add), tostring(add or name) end
+  end
+  return nil, nil
+end
+
+local function flatten_plugins(obj, items, seen, depth)
+  if depth > 6 then return end
+  local t = type(obj)
+  if t == 'table' then
+    local disp, add = extract_fx_entry(obj)
+    if disp and add and not seen[add] then
+      items[#items+1] = { display = disp, addname = add }
+      seen[add] = true
+    end
+    for _, v in pairs(obj) do
+      if type(v) == 'table' or type(v) == 'string' then
+        flatten_plugins(v, items, seen, depth + 1)
+      end
+    end
+  elseif t == 'string' then
+    if not seen[obj] then
+      items[#items+1] = { display = obj, addname = obj }
+      seen[obj] = true
+    end
+  end
+end
+
+local function load_plugin_items()
+  local okParser, err = ensure_sexan_parser()
+  local list = nil
+  if type(GetFXTbl) == 'function' then
+    local ok, res = pcall(GetFXTbl)
+    if ok then list = res end
+  end
+  if not list and type(ReadFXFile) == 'function' then
+    local FX_LIST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
+    if (not FX_LIST or not CAT_TEST or not FX_DEV_LIST_FILE) and type(MakeFXFiles) == 'function' then
+      FX_LIST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+    end
+    if type(GetFXTbl) == 'function' then
+      local ok, res = pcall(GetFXTbl)
+      if ok then list = res end
+    end
+  end
+  if not list and type(_G.FXB) == 'table' and type(_G.FXB.BuildFXList) == 'function' then
+    local okB, resB = pcall(_G.FXB.BuildFXList)
+    if okB then list = resB end
+  end
+  if not list then
+    return nil, err or 'Could not load plugin list from Sexan parser.'
+  end
+  local items, seen = {}, {}
+  flatten_plugins(list, items, seen, 0)
+  table.sort(items, function(a,b) return (a.display or ''):lower() < (b.display or ''):lower() end)
+  return items
+end
+
+-- Replacement operations
+local function replace_on_selected(slotIdx, target)
+  local selCount = r.CountSelectedTracks(0)
+  if selCount == 0 then
+    r.ShowMessageBox('No selected tracks.', SCRIPT_TITLE, 0)
+    return
+  end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local replaced = 0
+  for i = 0, selCount - 1 do
+    local tr = r.GetSelectedTrack(0, i)
+    if tr then
+      local fxCount = r.TrackFX_GetCount(tr)
+      if slotIdx >= 0 and slotIdx < fxCount then
+        r.TrackFX_Delete(tr, slotIdx)
+      end
+      local newIdx = r.TrackFX_AddByName(tr, target, false, -1)
+      if newIdx >= 0 then
+        local curCount = r.TrackFX_GetCount(tr)
+        local dest = (slotIdx >= 0 and slotIdx < curCount) and slotIdx or -1
+        r.TrackFX_CopyToTrack(tr, newIdx, tr, dest, true)
+        replaced = replaced + 1
+      end
+    end
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock(string.format('Replace slot %d on %d selected track(s) with %s', slotIdx + 1, replaced, target), -1)
+  if replaced == 0 then
+    r.ShowMessageBox('FX not found: ' .. tostring(target), SCRIPT_TITLE, 0)
+  end
+end
+
+local function replace_on_all(slotIdx, target)
+  local total = r.CountTracks(0)
+  if total == 0 then
+    r.ShowMessageBox('No tracks in project.', SCRIPT_TITLE, 0)
+    return
+  end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local replaced = 0
+  for i = 0, total - 1 do
+    local tr = r.GetTrack(0, i)
+    if tr then
+      local fxCount = r.TrackFX_GetCount(tr)
+      if slotIdx >= 0 and slotIdx < fxCount then
+        r.TrackFX_Delete(tr, slotIdx)
+      end
+      local newIdx = r.TrackFX_AddByName(tr, target, false, -1)
+      if newIdx >= 0 then
+        local curCount = r.TrackFX_GetCount(tr)
+        local dest = (slotIdx >= 0 and slotIdx < curCount) and slotIdx or -1
+        r.TrackFX_CopyToTrack(tr, newIdx, tr, dest, true)
+        replaced = replaced + 1
+      end
+    end
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock(string.format('Replace slot %d on %d track(s) with %s', slotIdx + 1, replaced, target), -1)
+  if replaced == 0 then
+    r.ShowMessageBox('FX not found: ' .. tostring(target), SCRIPT_TITLE, 0)
+  end
+end
+
+-- UI setup
+local have_imgui = (r.ImGui_CreateContext ~= nil)
+if not have_imgui then
+  r.ShowMessageBox('ReaImGui is required. Install via ReaPack: ReaImGui - Dear ImGui bindings for ReaScript.', SCRIPT_TITLE, 0)
+  return
+end
+
+local ctx = r.ImGui_CreateContext(SCRIPT_TITLE)
+if r.ImGui_StyleColorsDark then pcall(function() r.ImGui_StyleColorsDark(ctx) end) end
+
+local state = {
+  items = nil,
+  err = nil,
+  filter = '',
+  chosenAdd = nil,
+  triedCache = false,
+  loadedFromCache = false,
+  slotNum = 1,
+}
+
+-- Cache lives in Scripts/TK Scripts/FX
+local function get_cache_path()
+  local sep = package.config:sub(1,1)
+  local base = r.GetResourcePath() .. sep .. 'Scripts' .. sep .. 'TK Scripts' .. sep .. 'FX'
+  return base .. sep .. 'TK_FX_Picker_Cache.tsv'
+end
+
+local function read_cache_items()
+  local path = get_cache_path()
+  local f = io.open(path, 'r')
+  if not f then return nil end
+  local items = {}
+  for line in f:lines() do
+    local add, disp = line:match('^(.-)\t(.*)$')
+    add = add or line
+    disp = disp or add
+    if add ~= '' then items[#items+1] = { addname = add, display = disp } end
+  end
+  f:close()
+  if #items == 0 then return nil end
+  table.sort(items, function(a,b) return (a.display or ''):lower() < (b.display or ''):lower() end)
+  return items
+end
+
+local function write_cache_items(items)
+  local path = get_cache_path()
+  local f = io.open(path, 'w')
+  if not f then return false end
+  for _, it in ipairs(items or {}) do
+    local add = tostring(it.addname or '')
+    local disp = tostring(it.display or it.addname or '')
+    if add ~= '' then f:write(add .. "\t" .. disp .. "\n") end
+  end
+  f:close()
+  return true
+end
+
+local function ensure_items()
+  if state.items or state.err then return end
+  if not state.triedCache then
+    state.triedCache = true
+    local cached = read_cache_items()
+    if cached then
+      state.items = cached
+      state.loadedFromCache = true
+      return
+    end
+  end
+end
+
+local function draw()
+  ensure_items()
+  r.ImGui_SetNextWindowSize(ctx, 720, 560, r.ImGui_Cond_Appearing())
+  local visible, open = r.ImGui_Begin(ctx, SCRIPT_TITLE, true, r.ImGui_WindowFlags_MenuBar())
+  if visible then
+    if r.ImGui_BeginMenuBar and r.ImGui_BeginMenuBar(ctx) then
+      if r.ImGui_MenuItem(ctx, 'Refresh list (build)') then
+        local items, err = load_plugin_items()
+        if items then
+          state.items, state.err = items, nil
+          state.loadedFromCache = false
+          write_cache_items(items)
+        else
+          state.err = err or 'Failed to build list'
+        end
+      end
+      if state.loadedFromCache then r.ImGui_Text(ctx, '  [cache]') end
+      r.ImGui_EndMenuBar(ctx)
+    end
+
+    if state.err then
+      r.ImGui_TextWrapped(ctx, state.err)
+    elseif not state.items then
+      r.ImGui_TextWrapped(ctx, 'Geen lijst geladen. Klik boven op "Refresh list (build)" om de lijst te bouwen en te cachen.')
+    else
+      -- Slot chooser (1-based)
+      r.ImGui_SetNextItemWidth(ctx, 140)
+      local changed, val = r.ImGui_InputInt(ctx, 'Slot # (1-based)', state.slotNum or 1)
+      if changed then
+        state.slotNum = math.max(1, math.floor(val or 1))
+      end
+      r.ImGui_SameLine(ctx)
+      r.ImGui_SetNextItemWidth(ctx, -1)
+      local fChanged, txt = r.ImGui_InputText(ctx, '##filter', state.filter or '')
+      if fChanged then state.filter = txt end
+
+      r.ImGui_BeginChild(ctx, 'list', -1, -38)
+      local fl = (state.filter or ''):lower()
+      for _, it in ipairs(state.items or {}) do
+        local disp = it.display or it.addname
+        local add  = it.addname or disp
+        if fl == '' or (disp and disp:lower():find(fl, 1, true)) or (add and add:lower():find(fl, 1, true)) then
+          local selected = (state.chosenAdd == add)
+          if r.ImGui_Selectable(ctx, disp, selected) then state.chosenAdd = add end
+          if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+            state.chosenAdd = add
+          end
+        end
+      end
+      r.ImGui_EndChild(ctx)
+
+      local disabled = not (state.chosenAdd and state.chosenAdd ~= '')
+      if disabled then r.ImGui_BeginDisabled(ctx) end
+      if r.ImGui_Button(ctx, 'Apply to selected tracks') then
+        local slotIdx = math.max(1, tonumber(state.slotNum) or 1) - 1
+        replace_on_selected(slotIdx, state.chosenAdd)
+      end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_Button(ctx, 'Apply to all tracks') then
+        local slotIdx = math.max(1, tonumber(state.slotNum) or 1) - 1
+        replace_on_all(slotIdx, state.chosenAdd)
+      end
+      if disabled then r.ImGui_EndDisabled(ctx) end
+    end
+  end
+  r.ImGui_End(ctx)
+  return open ~= false
+end
+
+local function main()
+  if draw() then r.defer(main) end
+end
+
+main()
