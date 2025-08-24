@@ -1,10 +1,12 @@
 -- @description TK FX SLOTS MANAGER
 -- @author TouristKiller
--- @version 0.0.2
+-- @version 0.0.3
 -- @changelog:
 --[[     
 ++ INITIAL LAUNCH FOR TESTING
-            
+
+== THNX TO MASTER SEXAN FOR HIS FX PARSER ==
+
 ]]--        
 --------------------------------------------------------------------------
 
@@ -131,8 +133,6 @@ local function safe_Begin(title, open, flags)
   return true, v, o
 end
 
--- no window helpers to avoid mismatches; use direct Begin/End
-
 local FX_END = 0x7fffffff 
 
 local state                 = {
@@ -149,19 +149,65 @@ local state                 = {
   autoRefresh               = true,
   lastRefreshTime           = 0,
   refreshInterval           = 0.5,
+  pendingJob                = nil,   
+  jobDelayFrames            = 0,    
+  gotoTrackInput            = 1,     
+  scrollToTrackNum          = nil,   
 
   -- Sexan parser (Goran rules!!)
   pluginList                = nil,
   showPicker                = false,
   pickerFilter              = '',
   replaceDisplay            = '',
+  favs                      = {},
+  dragging                  = nil,
 }
 
 local model = {
   tracks = {},
 }
 
--- Helpers
+local function favs_save()
+  local buf = {}
+  for i, it in ipairs(state.favs or {}) do
+    buf[#buf+1] = (it.addname or '') .. "\t" .. (it.display or it.addname or '')
+  end
+  r.SetExtState('TK_FX_SLOTS', 'FAVS', table.concat(buf, "\n"), true)
+end
+
+local function favs_load()
+  state.favs = {}
+  local s = r.GetExtState('TK_FX_SLOTS', 'FAVS') or ''
+  if s == '' then return end
+  for line in string.gmatch(s, '([^\n]+)') do
+    local add, disp = line:match('^(.-)\t(.*)$')
+    add = add or line
+    disp = disp or add
+    if add ~= '' then state.favs[#state.favs+1] = { addname = add, display = disp } end
+  end
+end
+
+local function favs_has(addname)
+  for _, it in ipairs(state.favs or {}) do if it.addname == addname then return true end end
+  return false
+end
+
+local function favs_add(addname, display)
+  if addname and addname ~= '' and not favs_has(addname) then
+    state.favs[#state.favs+1] = { addname = addname, display = display or addname }
+    favs_save()
+    state.pendingMessage = 'Added to short list'
+  end
+end
+
+local function favs_remove(addname)
+  for i = #state.favs, 1, -1 do
+    if state.favs[i].addname == addname then table.remove(state.favs, i) end
+  end
+  favs_save()
+  state.pendingMessage = 'Removed from short list'
+end
+
 local function printf(fmt, ...)
   r.ShowConsoleMsg(string.format(fmt, ...))
 end
@@ -209,7 +255,7 @@ local function flatten_plugins(obj, items, seen, depth)
   if depth > 6 then return end
   local t = type(obj)
   if t == 'table' then
-    -- try treat as leaf first
+  
     local disp, add = extract_fx_entry(obj)
     if disp and add then
       if not seen[add] then
@@ -217,7 +263,6 @@ local function flatten_plugins(obj, items, seen, depth)
         seen[add] = true
       end
     end
-    -- then traverse children
     for k, v in pairs(obj) do
       if type(v) == 'table' or type(v) == 'string' then
         flatten_plugins(v, items, seen, depth + 1)
@@ -234,13 +279,11 @@ end
 local function load_plugin_list()
   state.pluginList, state.pluginItems = nil, nil
   if not ensure_sexan_parser() then return end
-  -- Prefer GetFXTbl if available
   local list
   if type(GetFXTbl) == 'function' then
     local ok, res = pcall(GetFXTbl)
     if ok then list = res end
   end
-  -- If not, try ReadFXFile/MakeFXFiles sequence
   if not list and type(ReadFXFile) == 'function' then
     local FX_LIST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
     if (not FX_LIST or not CAT_TEST or not FX_DEV_LIST_FILE) and type(MakeFXFiles) == 'function' then
@@ -256,7 +299,6 @@ local function load_plugin_list()
     return
   end
   state.pluginList = list
-  -- Build flat items
   local items, seen = {}, {}
   flatten_plugins(list, items, seen, 0)
   table.sort(items, function(a,b) return tostring(a.display):lower() < tostring(b.display):lower() end)
@@ -280,8 +322,14 @@ local function draw_plugin_picker()
     if childVisible then
       local filter = (state.pickerFilter or ''):lower()
       local shown = 0
+      local idx = 0
       for _, it in ipairs(state.pluginItems or {}) do
         if filter == '' or tostring(it.display):lower():find(filter, 1, true) then
+          idx = idx + 1
+          if r.ImGui_SmallButton(ctx, '+##pick' .. idx) then
+            favs_add(it.addname, tostring(it.display))
+          end
+          r.ImGui_SameLine(ctx)
           if r.ImGui_Selectable(ctx, it.display, false) then
             state.replaceWith = it.addname
             state.replaceDisplay = tostring(it.display)
@@ -342,22 +390,46 @@ local function rebuild_model()
         local enabled = r.TrackFX_GetEnabled(tr, fx)
         table.insert(fxList, { idx = fx, name = name, enabled = enabled })
       end
-      table.insert(model.tracks, { track = tr, idx = ti, name = get_track_name(tr), fxList = fxList })
+      local guid = r.GetTrackGUID and r.GetTrackGUID(tr) or nil
+      table.insert(model.tracks, { track = tr, guid = guid, idx = ti, name = get_track_name(tr), fxList = fxList })
     end
   end
 end
 
+
+local function resolve_track_entry(trEntry)
+  if not trEntry then return nil end
+  local tr = trEntry.track
+  local ok = pcall(function() return r.GetTrackGUID and r.GetTrackGUID(tr) or nil end)
+  if not ok or tr == nil then
+    if trEntry.guid and find_track_by_guid then
+      local ntr = find_track_by_guid(trEntry.guid)
+      trEntry.track = ntr
+      return ntr
+    else
+      return nil
+    end
+  end
+  return tr
+end
+
 local function toggle_bypass(track, fx)
+  if not track then return end
+  local ok, _ = pcall(function() return r.TrackFX_GetEnabled(track, fx) end)
+  if not ok then state.pendingError = 'Track missing for bypass'; return end
   local enabled = r.TrackFX_GetEnabled(track, fx)
   r.TrackFX_SetEnabled(track, fx, not enabled)
 end
 
 local function delete_fx(track, fx)
-  r.TrackFX_Delete(track, fx)
+  if not track then return end
+  local ok = pcall(function() r.TrackFX_Delete(track, fx) end)
+  if not ok then state.pendingError = 'Track missing for delete' end
 end
 
 local function move_fx(track, fromIdx, toIdx)
   if fromIdx == toIdx then return end
+  if not track then return end
   local fxCount = r.TrackFX_GetCount(track)
   if fromIdx < 0 or fromIdx >= fxCount then return end
   if toIdx < 0 then toIdx = 0 end
@@ -365,7 +437,19 @@ local function move_fx(track, fromIdx, toIdx)
   r.TrackFX_CopyToTrack(track, fromIdx, track, toIdx, true)
 end
 
+local function find_track_by_guid(guid)
+  if not guid or guid == '' then return nil end
+  local cnt = r.CountTracks(0)
+  for i = 0, cnt - 1 do
+    local tr = r.GetTrack(0, i)
+    local g = r.GetTrackGUID and r.GetTrackGUID(tr)
+    if g == guid then return tr end
+  end
+  return nil
+end
+
 local function add_fx_at(track, fxName, atIdx)
+  if not track then return -1 end
   local fxIndex = r.TrackFX_AddByName(track, fxName, false, -1) 
   if fxIndex < 0 then return -1 end
   if atIdx == nil or atIdx == FX_END then return fxIndex end
@@ -374,6 +458,7 @@ local function add_fx_at(track, fxName, atIdx)
 end
 
 local function replace_fx_at(track, fxIdx, fxName, overridePos, newPos)
+  if not track then return false, 'Track missing' end
   local placeIdx = fxIdx
   if overridePos then
     if newPos == 'end' then
@@ -463,9 +548,23 @@ local function draw_replace_panel()
   end
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, 'Pick from list…') then state.showPicker = true end
-  if state.replaceDisplay ~= '' then
-    r.ImGui_SameLine(ctx)
-    r.ImGui_Text(ctx, 'Selected: ' .. state.replaceDisplay)
+  local bw, bh = r.ImGui_GetItemRectSize(ctx)
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, bw)
+  local preview = (state.replaceDisplay ~= '' and state.replaceDisplay) or 'Short list'
+  if r.ImGui_BeginCombo(ctx, '##shortlist', preview) then
+    local del_key
+    for i, it in ipairs(state.favs or {}) do
+      if r.ImGui_Selectable(ctx, tostring(it.display), false) then
+        state.replaceWith = it.addname
+        state.replaceDisplay = tostring(it.display)
+        state.pendingMessage = 'Chosen: ' .. state.replaceDisplay
+      end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_SmallButton(ctx, ('x##dropfav%d'):format(i)) then del_key = it.addname end
+    end
+    if del_key then favs_remove(del_key) end
+    r.ImGui_EndCombo(ctx)
   end
   if r.ImGui_Button(ctx, 'Replace all instances') then
     local count = 0
@@ -476,16 +575,19 @@ local function draw_replace_panel()
 end
 
 local function draw_track_fx_rows(trEntry)
-  local tr = trEntry.track
+  local tr = resolve_track_entry(trEntry)
+  if not tr then
+    r.ImGui_Text(ctx, '[Track missing]')
+    return
+  end
 
-    if r.ImGui_BeginTable(ctx, ('fx_table_%p'):format(tr), 6, FLAGS.Table_SizingStretchProp) then
-      r.ImGui_TableSetupColumn(ctx, '#', FLAGS.Col_WidthFixed, 30)
-      r.ImGui_TableSetupColumn(ctx, 'FX name', FLAGS.Col_WidthStretch)
-  r.ImGui_TableSetupColumn(ctx, 'Byp/Offl', FLAGS.Col_WidthFixed, 90)
-      r.ImGui_TableSetupColumn(ctx, 'Move', FLAGS.Col_WidthFixed, 80)
-      r.ImGui_TableSetupColumn(ctx, 'Actions', FLAGS.Col_WidthFixed, 200)
-      r.ImGui_TableSetupColumn(ctx, 'Source', FLAGS.Col_WidthFixed, 50)
-     r.ImGui_TableHeadersRow(ctx)
+  if r.ImGui_BeginTable(ctx, ('fx_table_%p'):format(tr), 5, FLAGS.Table_SizingStretchProp) then
+    r.ImGui_TableSetupColumn(ctx, '#', FLAGS.Col_WidthFixed, 30)
+    r.ImGui_TableSetupColumn(ctx, 'FX name', FLAGS.Col_WidthStretch)
+    r.ImGui_TableSetupColumn(ctx, 'Byp/Offl', FLAGS.Col_WidthFixed, 90)
+    r.ImGui_TableSetupColumn(ctx, 'Actions', FLAGS.Col_WidthFixed, 200)
+    r.ImGui_TableSetupColumn(ctx, 'Source', FLAGS.Col_WidthFixed, 50)
+    r.ImGui_TableHeadersRow(ctx)
 
     local filter = state.filter
     for i, fx in ipairs(trEntry.fxList) do
@@ -494,9 +596,86 @@ local function draw_track_fx_rows(trEntry)
 
         r.ImGui_TableSetColumnIndex(ctx, 0)
         r.ImGui_Text(ctx, tostring(fx.idx + 1))
+       
+         do
+          local dndType = 'TK_FXIDX'
+          local trackId = (r.GetTrackGUID and r.GetTrackGUID(tr)) or tostring(tr)
+          if r.ImGui_BeginDragDropTarget(ctx) then
+            local p1, p2 = r.ImGui_AcceptDragDropPayload(ctx, dndType)
+            local payload = nil
+            if type(p1) == 'string' then
+              payload = p1
+            elseif (p1 == true or p1 == 1) and type(p2) == 'string' then
+              payload = p2
+            end
+            if payload then
+              local dest = fx.idx
+              local pid, srcStr = payload:match('^(.-)|(.+)$')
+              local srcIdx = nil
+              if pid and srcStr then
+                srcIdx = tonumber(srcStr)
+              else
+                srcIdx = tonumber(payload)
+                pid = trackId 
+              end
+              if srcIdx ~= nil then
+    local sameTrack = (pid == trackId)
+    local toIdx = (sameTrack and srcIdx < dest) and (dest + 1) or dest
+  state.pendingMessage = 'Placing FX...'
+    state.pendingJob = { srcGuid = pid, srcIdx = srcIdx, destGuid = trackId, destIdx = toIdx, remove = sameTrack }
+    state.jobDelayFrames = 1
+              end
+            end
+            r.ImGui_EndDragDropTarget(ctx)
+          end
+        end
 
         r.ImGui_TableSetColumnIndex(ctx, 1)
-        r.ImGui_Text(ctx, fx.name)
+        local _sel = false
+        local label = ("%s##fx%d"):format(fx.name, fx.idx)
+  r.ImGui_Selectable(ctx, label, _sel)
+    local dndType = 'TK_FXIDX' 
+    local trackId = (r.GetTrackGUID and r.GetTrackGUID(tr)) or tostring(tr)
+    local canDrag = (r.ImGui_IsItemActive and r.ImGui_IsItemActive(ctx)) or (r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx)) or (r.ImGui_IsItemHovered and r.ImGui_IsItemHovered(ctx))
+  if canDrag and r.ImGui_BeginDragDropSource(ctx, 0) then
+          r.ImGui_SetDragDropPayload(ctx, dndType, trackId .. '|' .. tostring(fx.idx))
+          r.ImGui_Text(ctx, ("Move: %s"):format(fx.name))
+          r.ImGui_EndDragDropSource(ctx)
+        end
+        if r.ImGui_BeginDragDropTarget(ctx) then
+          do
+            local dl = r.ImGui_GetWindowDrawList(ctx)
+            local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+            local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+            r.ImGui_DrawList_AddRectFilled(dl, x1, y1, x1 + 3, y2, 0x20FFFFFF)
+          end
+          local p1, p2 = r.ImGui_AcceptDragDropPayload(ctx, dndType)
+          local payload = nil
+          if type(p1) == 'string' then
+            payload = p1
+          elseif (p1 == true or p1 == 1) and type(p2) == 'string' then
+            payload = p2
+          end
+          if payload then
+            local dest = fx.idx
+            local pid, srcStr = payload:match('^(.-)|(.+)$')
+            local srcIdx = nil
+            if pid and srcStr then
+              srcIdx = tonumber(srcStr)
+            else
+              srcIdx = tonumber(payload)
+              pid = trackId
+            end
+            if srcIdx ~= nil then
+      local sameTrack = (pid == trackId)
+      local toIdx = (sameTrack and srcIdx < dest) and (dest + 1) or dest
+  state.pendingMessage = 'Placing FX...'
+      state.pendingJob = { srcGuid = pid, srcIdx = srcIdx, destGuid = trackId, destIdx = toIdx, remove = sameTrack }
+      state.jobDelayFrames = 1
+            end
+          end
+          r.ImGui_EndDragDropTarget(ctx)
+        end
 
         r.ImGui_TableSetColumnIndex(ctx, 2)
         local btnLabel = fx.enabled and 'On' or 'Off'
@@ -513,32 +692,10 @@ local function draw_track_fx_rows(trEntry)
           r.Undo_BeginBlock()
           r.TrackFX_SetOffline(tr, fx.idx, not is_offline)
           r.Undo_EndBlock('Toggle FX offline', -1)
-          -- bypass state unchanged; rebuild for consistency
           rebuild_model()
         end
 
         r.ImGui_TableSetColumnIndex(ctx, 3)
-        if HAVE_StyleVar_FramePadding then
-          r.ImGui_PushStyleVar(ctx, ENUM.StyleVar_FramePadding, 2, 2)
-        end
-        if r.ImGui_SmallButton(ctx, 'Up##u' .. i) then
-          r.Undo_BeginBlock()
-          move_fx(tr, fx.idx, fx.idx - 1)
-          r.Undo_EndBlock('Move FX up', -1)
-          rebuild_model()
-        end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_SmallButton(ctx, 'Down##d' .. i) then
-          r.Undo_BeginBlock()
-          move_fx(tr, fx.idx, fx.idx + 2) 
-          r.Undo_EndBlock('Move FX down', -1)
-          rebuild_model()
-        end
-        if HAVE_StyleVar_FramePadding then
-          r.ImGui_PopStyleVar(ctx)
-        end
-
-        r.ImGui_TableSetColumnIndex(ctx, 4)
         if r.ImGui_SmallButton(ctx, 'Del##' .. i) then
           r.Undo_BeginBlock()
           delete_fx(tr, fx.idx)
@@ -558,7 +715,7 @@ local function draw_track_fx_rows(trEntry)
           end
         end
 
-        r.ImGui_TableSetColumnIndex(ctx, 5)
+        r.ImGui_TableSetColumnIndex(ctx, 4)
         if r.ImGui_SmallButton(ctx, 'Source##' .. i) then
           state.selectedSourceFXName = fx.name
         end
@@ -569,13 +726,34 @@ local function draw_track_fx_rows(trEntry)
   end
 end
 
-local function draw_tracks_panel()
+function draw_tracks_panel()
+  local filter = tostring(state.filter or '')
+  local fl = filter ~= '' and string.lower(filter) or ''
+  local shown = 0
+  local missingFound = false
   for _, trEntry in ipairs(model.tracks) do
-  local proj_idx = r.GetMediaTrackInfo_Value and r.GetMediaTrackInfo_Value(trEntry.track, 'IP_TRACKNUMBER') or (trEntry.idx + 1)
-  proj_idx = tonumber(proj_idx) and math.floor(proj_idx) or (trEntry.idx + 1)
-  local header = ("Track %d: %s"):format(proj_idx, trEntry.name)
-  local is_sel = r.IsTrackSelected and (r.IsTrackSelected(trEntry.track) == true)
-  local col = (r.GetTrackColor and r.GetTrackColor(trEntry.track)) or 0
+    local trOK = resolve_track_entry(trEntry)
+    if not trOK then
+      missingFound = true
+      goto continue_track
+    end
+    if fl ~= '' then
+      local hasMatch = false
+      for _, fx in ipairs(trEntry.fxList or {}) do
+        if string.find(string.lower(fx.name or ''), fl, 1, true) then
+          hasMatch = true
+          break
+        end
+      end
+      if not hasMatch then
+        goto continue_track
+      end
+    end
+    local proj_idx = r.GetMediaTrackInfo_Value and r.GetMediaTrackInfo_Value(trEntry.track, 'IP_TRACKNUMBER') or (trEntry.idx + 1)
+    proj_idx = tonumber(proj_idx) and math.floor(proj_idx) or (trEntry.idx + 1)
+    local header = ("Track %d: %s"):format(proj_idx, trEntry.name)
+    local is_sel = r.IsTrackSelected and (r.IsTrackSelected(trEntry.track) == true)
+    local col = (r.GetTrackColor and r.GetTrackColor(trEntry.track)) or 0
     local rr, gg, bb = 0, 0, 0
     if col ~= 0 then
       if r.ColorFromNative then
@@ -589,19 +767,30 @@ local function draw_tracks_panel()
     end
     local pushed = false
     if col ~= 0 and ENUM.Col_Header and ENUM.Col_HeaderHovered and ENUM.Col_HeaderActive then
-      -- Optionally make selected slightly stronger
       local a1, a2, a3 = (is_sel and 0.65 or 0.6), (is_sel and 0.8 or 0.75), (is_sel and 0.95 or 0.9)
       push_style_color(ENUM.Col_Header, rr, gg, bb, a1)
       push_style_color(ENUM.Col_HeaderHovered, rr, gg, bb, a2)
       push_style_color(ENUM.Col_HeaderActive, rr, gg, bb, a3)
       pushed = true
     end
-  if state.forceHeaders ~= nil and r.ImGui_SetNextItemOpen then r.ImGui_SetNextItemOpen(ctx, state.forceHeaders) end
-  local open = r.ImGui_CollapsingHeader(ctx, header)
-    if pushed and HAVE_PushStyleColor then r.ImGui_PopStyleColor(ctx, 3) end
-    if open then
-      draw_track_fx_rows(trEntry)
+    if state.forceHeaders ~= nil and r.ImGui_SetNextItemOpen then r.ImGui_SetNextItemOpen(ctx, state.forceHeaders) end
+    local open = r.ImGui_CollapsingHeader(ctx, header)
+    if state.scrollToTrackNum and proj_idx == tonumber(state.scrollToTrackNum) then
+      if r.ImGui_SetScrollHereY then
+        pcall(r.ImGui_SetScrollHereY, ctx, 0.25)
+      end
+      state.scrollToTrackNum = nil
     end
+    if pushed and HAVE_PushStyleColor then r.ImGui_PopStyleColor(ctx, 3) end
+    if open then draw_track_fx_rows(trEntry) end
+    shown = shown + 1
+    ::continue_track::
+  end
+  if fl ~= '' and shown == 0 then
+    r.ImGui_Text(ctx, 'No tracks match current filter')
+  end
+  if missingFound then
+    rebuild_model()
   end
 end
 
@@ -610,7 +799,14 @@ local function draw_status_bar()
     if push_text_color(0.1, 1.0, 0.1, 1.0) then end
     r.ImGui_Text(ctx, state.pendingMessage)
     if HAVE_PushStyleColor then r.ImGui_PopStyleColor(ctx) end
-    state.pendingMessage = ''
+    if not state.pendingJob then state.pendingMessage = '' end
+  end
+  if state.pendingJob then
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_SmallButton(ctx, 'Cancel') then
+      state.pendingJob = nil
+      state.pendingMessage = 'Drop canceled'
+    end
   end
   if state.pendingError ~= '' then
     if push_text_color(1.0, 0.2, 0.2, 1.0) then end
@@ -618,6 +814,27 @@ local function draw_status_bar()
     if HAVE_PushStyleColor then r.ImGui_PopStyleColor(ctx) end
     state.pendingError = ''
   end
+end
+
+local function process_pending_job()
+  if not state.pendingJob then return end
+  if state.jobDelayFrames and state.jobDelayFrames > 0 then
+    state.jobDelayFrames = state.jobDelayFrames - 1
+    return
+  end
+  local job = state.pendingJob
+  state.pendingJob = nil
+  local srcTr = find_track_by_guid(job.srcGuid)
+  local destTr = find_track_by_guid(job.destGuid)
+  if not srcTr or not destTr then return end
+  r.PreventUIRefresh(1)
+  r.Undo_BeginBlock()
+  local ok = pcall(function()
+    r.TrackFX_CopyToTrack(srcTr, job.srcIdx, destTr, job.destIdx, job.remove and true or false)
+  end)
+  r.Undo_EndBlock(job.remove and 'Move FX' or 'Copy FX to track', -1)
+  r.PreventUIRefresh(-1)
+  rebuild_model()
 end
 
 local function main_loop()
@@ -632,11 +849,35 @@ local function main_loop()
   local begunMain, visible, open = safe_Begin(SCRIPT_NAME, true, FLAGS.Window_MenuBar)
   if visible then
     if r.ImGui_BeginMenuBar(ctx) then
-      if r.ImGui_BeginMenu(ctx, 'Help') then
-        if r.ImGui_MenuItem(ctx, 'About') then
-          r.MB('FX Slots Manager\nUsage: choose scope (selected or all tracks).\nSelect a source FX and choose a replacement to replace all instances.\nPer FX you can bypass, move, delete, or replace.', SCRIPT_NAME, 0)
-        end
-        r.ImGui_EndMenu(ctx)
+      if r.ImGui_MenuItem(ctx, 'Help') then
+        r.MB((
+          'TK FX Slots Manager - Help\n\n' ..
+          'Scope & refresh:\n' ..
+          ' - Selected tracks only limits scope to selected tracks.\n' ..
+          ' - Hide empty tracks hides tracks without FX.\n' ..
+          ' - Auto refresh updates the list periodically; use Refresh for manual update.\n\n' ..
+          'Filter & headers:\n' ..
+          ' - Filter matches FX names; tracks without matches are hidden.\n' ..
+          ' - Reset filter clears it. Collapse/Expand all toggles all track headers.\n\n' ..
+          'Jump to track:\n' ..
+          ' - Enter Track # and press Go to scroll the list to that project track.\n\n' ..
+          'Replace panel:\n' ..
+          ' - Press Source on a row to choose the source FX.\n' ..
+          ' - Placement: Same slot / Start / End / Index (slot is 1-based).\n' ..
+          ' - Pick from list… uses Sexan\'s FX parser; Short list holds your favorites.\n' ..
+          ' - Replace all instances replaces the source FX across the current scope.\n\n' ..
+          'Per-FX row actions:\n' ..
+          ' - Drag the FX name to reorder within a track (move) or drop on another track (copy).\n' ..
+          ' - Drop is accepted on the # cell and the Name cell.\n' ..
+          ' - On/Off toggles bypass. Ofl/Onl toggles offline. Del deletes.\n' ..
+          ' - Replace.. replaces this FX with the chosen plugin.\n' ..
+          ' - Source marks this FX for batch Replace all instances.\n\n' ..
+          'Favorites:\n' ..
+          ' - In the picker, + adds to Short list; in the dropdown, x removes. Favorites persist.\n\n' ..
+          'Status & safety:\n' ..
+          ' - Progress and errors show at the bottom; you can Cancel long FX placements.\n' ..
+          ' - If tracks are deleted while open, the view auto-recovers.')
+          , SCRIPT_NAME, 0)
       end
       r.ImGui_EndMenuBar(ctx)
     end
@@ -650,19 +891,42 @@ local function main_loop()
   if r.ImGui_Button(ctx, 'Collapse all') then state.forceHeaders = false end
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, 'Expand all') then state.forceHeaders = true end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_Text(ctx, 'Track #')
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 60)
+  local chgNum, newNum = r.ImGui_InputInt(ctx, '##gotoTrack', tonumber(state.gotoTrackInput) or 1)
+  if chgNum then
+    state.gotoTrackInput = math.max(1, newNum or 1)
+  end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, 'Go') then
+    state.scrollToTrackNum = tonumber(state.gotoTrackInput) or 1
+  end
     r.ImGui_Separator(ctx)
     draw_replace_panel()
     r.ImGui_Separator(ctx)
-    draw_tracks_panel()
+    local aw, ah = r.ImGui_GetContentRegionAvail(ctx)
+    local status_h = 26 
+    local child_h = (tonumber(ah) and ah or 0) - status_h
+    if child_h < 0 then child_h = 0 end
+    if r.ImGui_BeginChild(ctx, 'tracks_panel_scroll', 0, child_h, 0) then
+      draw_tracks_panel()
+    end
+    r.ImGui_EndChild(ctx)
     r.ImGui_Separator(ctx)
     draw_status_bar()
   end
   if begunMain and visible then r.ImGui_End(ctx) end
   draw_plugin_picker()
+  process_pending_job()
   if open == nil or open then
     r.defer(main_loop)
   end
 end
 
 rebuild_model()
-r.defer(main_loop)
+r.defer(function()
+  favs_load()
+  main_loop()
+end)
