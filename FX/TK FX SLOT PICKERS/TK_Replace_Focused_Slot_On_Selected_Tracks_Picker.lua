@@ -1,6 +1,6 @@
 -- @description Replace focused FX slot on all selected tracks (picker)
 -- @author TouristKiller
--- @version 0.0.2
+-- @version 0.0.3
 -- @changelog Initial version
 
 -- THANX SEXAN FOR HIS FX PARSER
@@ -131,6 +131,38 @@ local function replace_across_selected(slotIdx, target)
   end
 end
 
+local function replace_across_all(slotIdx, target)
+  local total = r.CountTracks(0)
+  if total == 0 then
+    r.ShowMessageBox('No tracks in project.', SCRIPT_TITLE, 0)
+    return
+  end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local replaced = 0
+  for i = 0, total - 1 do
+    local track = r.GetTrack(0, i)
+    if track then
+      local fxCount = r.TrackFX_GetCount(track)
+      if slotIdx >= 0 and slotIdx < fxCount then
+        r.TrackFX_Delete(track, slotIdx)
+      end
+      local newIdx = r.TrackFX_AddByName(track, target, false, -1)
+      if newIdx >= 0 then
+        local curCount = r.TrackFX_GetCount(track)
+        local dest = (slotIdx >= 0 and slotIdx < curCount) and slotIdx or -1
+        r.TrackFX_CopyToTrack(track, newIdx, track, dest, true)
+        replaced = replaced + 1
+      end
+    end
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock(string.format('Replace slot %d on %d track(s) with %s', slotIdx + 1, replaced, target), -1)
+  if replaced == 0 then
+    r.ShowMessageBox('FX not found: ' .. tostring(target), SCRIPT_TITLE, 0)
+  end
+end
+
 local have_imgui = (r.ImGui_CreateContext ~= nil)
 if not have_imgui then
   r.ShowMessageBox('ReaImGui is required. Install via ReaPack: ReaImGui - Dear ImGui bindings for ReaScript.', SCRIPT_TITLE, 0)
@@ -147,6 +179,7 @@ local state = {
   chosenAdd = nil,
   triedCache = false,
   loadedFromCache = false,
+  intent = 'selected',
 }
 
 local function get_cache_path()
@@ -230,7 +263,7 @@ local function draw()
       local changed, txt = r.ImGui_InputText(ctx, '##filter', state.filter or '')
       if changed then state.filter = txt end
       
-      r.ImGui_BeginChild(ctx, 'list', -1, -38)
+      r.ImGui_BeginChild(ctx, 'list', -1, -66)
       local fl = (state.filter or ''):lower()
       for _, it in ipairs(state.items or {}) do
         local disp = it.display or it.addname
@@ -240,17 +273,25 @@ local function draw()
           if r.ImGui_Selectable(ctx, disp, selected) then state.chosenAdd = add end
           if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
             state.chosenAdd = add
+            state.intent = 'selected'
             open = false
           end
         end
       end
       r.ImGui_EndChild(ctx)
     
-      if r.ImGui_Button(ctx, 'Replace across selected') then
-        if state.chosenAdd and state.chosenAdd ~= '' then
-          open = false
-        end
+      local disabled = not (state.chosenAdd and state.chosenAdd ~= '')
+      if disabled then r.ImGui_BeginDisabled(ctx) end
+      if r.ImGui_Button(ctx, 'Apply to selected tracks') then
+        state.intent = 'selected'
+        open = false
       end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_Button(ctx, 'Apply to all tracks') then
+        state.intent = 'all'
+        open = false
+      end
+      if disabled then r.ImGui_EndDisabled(ctx) end
       r.ImGui_SameLine(ctx)
       if r.ImGui_Button(ctx, 'Cancel') then
         state.chosenAdd = nil
@@ -273,7 +314,11 @@ local function main_loop()
   else
     local target = state.chosenAdd
     if target and target ~= '' then
-      replace_across_selected(fx, target)
+      if state.intent == 'all' then
+        replace_across_all(fx, target)
+      else
+        replace_across_selected(fx, target)
+      end
     end
   end
 end
