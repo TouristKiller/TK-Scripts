@@ -64,7 +64,7 @@
 
     <reapack name="TK_Replace_Focused_Slot_On_Selected_Tracks_Picker.lua" type="script" desc="TK FX SLOTS PICKERS">
     <version name="0.0.2" author="TouristKiller" time="2025-08-24T21:50:00Z">
-    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20SLOTS%20PICKERS/TK_Replace_Focused_Slot_On_Selected_Tracks_Picker.lua</source>
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20SLOT%20PICKERS/TK_Replace_Focused_Slot_On_Selected_Tracks_Picker.lua</source>
                 <changelog><![CDATA[           
 ++ INITIAL RELEASE FOR TESTING
 
@@ -124,7 +124,6 @@
     <reapack name="TK_Item gridlines.lua" type="script" desc="TK_Item gridlines">
     <version name="0.1.4" author="TouristKiller" time="2025-02-16T12:15:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_Item%20gridlines.lua</source>
-     <source main="main" file="TK_Item gridlines.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_Item%gridlines.lua</source>
     </version>
     </reapack>
  </category>
