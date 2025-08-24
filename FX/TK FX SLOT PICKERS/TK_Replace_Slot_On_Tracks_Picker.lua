@@ -1,6 +1,6 @@
 -- @description Replace chosen FX slot on tracks (picker)
 -- @author TouristKiller
--- @version 0.0.1
+-- @version 0.0.2
 -- @changelog Initial version
 
 -- THANX SEXAN FOR HIS FX PARSER
@@ -9,14 +9,12 @@
 local r = reaper
 local SCRIPT_TITLE = 'Replace chosen slot on tracks (picker)'
 
--- Basic file check
 local function file_exists(path)
   local f = io.open(path, 'r')
   if f then f:close() return true end
   return false
 end
 
--- Load Sexan parser from the fixed Scripts/Sexan_Scripts path (same as Slots Manager)
 local function ensure_sexan_parser()
   local fx_parser = r.GetResourcePath() .. '/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua'
   if file_exists(fx_parser) then
@@ -34,7 +32,6 @@ local function ensure_sexan_parser()
   end
 end
 
--- Helpers to normalize parser output to { display, addname }
 local function extract_fx_entry(entry)
   local t = type(entry)
   if t == 'string' then return entry, entry end
@@ -98,7 +95,6 @@ local function load_plugin_items()
   return items
 end
 
--- Replacement operations
 local function replace_on_selected(slotIdx, target)
   local selCount = r.CountSelectedTracks(0)
   if selCount == 0 then
@@ -163,7 +159,6 @@ local function replace_on_all(slotIdx, target)
   end
 end
 
--- UI setup
 local have_imgui = (r.ImGui_CreateContext ~= nil)
 if not have_imgui then
   r.ShowMessageBox('ReaImGui is required. Install via ReaPack: ReaImGui - Dear ImGui bindings for ReaScript.', SCRIPT_TITLE, 0)
@@ -183,7 +178,6 @@ local state = {
   slotNum = 1,
 }
 
--- Cache lives in Scripts/TK Scripts/FX
 local function get_cache_path()
   local sep = package.config:sub(1,1)
   local base = r.GetResourcePath() .. sep .. 'Scripts' .. sep .. 'TK Scripts' .. sep .. 'FX'
@@ -258,7 +252,6 @@ local function draw()
     elseif not state.items then
       r.ImGui_TextWrapped(ctx, 'Geen lijst geladen. Klik boven op "Refresh list (build)" om de lijst te bouwen en te cachen.')
     else
-      -- Slot chooser (1-based)
       r.ImGui_SetNextItemWidth(ctx, 140)
       local changed, val = r.ImGui_InputInt(ctx, 'Slot # (1-based)', state.slotNum or 1)
       if changed then
