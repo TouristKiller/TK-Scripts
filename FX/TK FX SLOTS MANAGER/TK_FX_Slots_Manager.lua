@@ -1,10 +1,7 @@
 -- @author TouristKiller
--- @version 0.0.5
+-- @version 0.0.6
 -- @changelog:
 --[[     
-++ Added replace toggle functionality (replace /restore). Also easy for a/b plugin testing.
-
-+ New: Replace-by-slot across tracks. Choose a slot index and replace that slot on selected or all tracks with the chosen plugin.
 
 == THNX TO MASTER SEXAN FOR HIS FX PARSER ==
 
@@ -63,6 +60,7 @@ local ENUM = {
   StyleVar_FramePadding = enum(r.ImGui_StyleVar_FramePadding),
   StyleVar_WindowRounding = enum(r.ImGui_StyleVar_WindowRounding),
   StyleVar_FrameRounding = enum(r.ImGui_StyleVar_FrameRounding),
+  StyleVar_ItemSpacing = enum(r.ImGui_StyleVar_ItemSpacing),
   Col_Header = enum(r.ImGui_Col_Header),
   Col_HeaderHovered = enum(r.ImGui_Col_HeaderHovered),
   Col_HeaderActive = enum(r.ImGui_Col_HeaderActive),
@@ -105,6 +103,12 @@ local function push_style_var(idx, v)
   if not HAVE_PushStyleVar or not idx or v == nil then return false end
   local ok = pcall(r.ImGui_PushStyleVar, ctx, idx, v)
   return ok and true or false
+end
+
+local function push_style_var2(idx, v1, v2)
+  if not HAVE_PushStyleVar or not idx or v1 == nil or v2 == nil then return false end
+  if r.ImGui_PushStyleVar(ctx, idx, v1, v2) then return true end
+  return false
 end
 
 local function push_app_style()
@@ -150,6 +154,19 @@ local function recreate_ctx()
   if r.ImGui_StyleColorsDark then pcall(function() r.ImGui_StyleColorsDark(ctx) end) end
 end
 
+-- Small font for compact controls
+local font_small = nil
+local function ensure_small_font()
+  if font_small ~= nil then return end
+  if r.ImGui_CreateFont and r.ImGui_Attach then
+    local ok, f = pcall(r.ImGui_CreateFont, 'arial', 9)
+    if ok and f then
+      font_small = f
+      pcall(r.ImGui_Attach, ctx, font_small)
+    end
+  end
+end
+
 local function safe_call(f)
   local ok, a, b, c = pcall(f)
   if ok then return true, a, b, c end
@@ -181,6 +198,11 @@ local state                 = {
   insertPos                 = 'in_place',   
   insertIndex               = 0,          
   batchSlotIndex            = 0,          -- 0-based slot for batch replace across tracks
+  -- Placeholder (dummy) options
+  deleteInsertPlaceholder   = false,      -- when deleting all instances, insert a placeholder instead
+  placeholderAdd            = '',         -- addname of placeholder plugin
+  placeholderDisplay        = '',         -- display name of placeholder
+  placeholderCustomName     = '',         -- optional alias for inserted TK Blank instances
   selectedSourceFXName      = nil,
   showOnlyTracksWithFX      = false,
   pendingMessage            = '',
@@ -202,6 +224,8 @@ local state                 = {
   favs                      = {},
   dragging                  = nil,
   typeFilters               = nil, 
+  pickerMode                = 'replace',  -- 'replace' or 'placeholder'
+  tkBlankVariants           = nil,        -- cached list of existing TK Blank variants { {name, file, addname}, ... }
 }
 
 local model = {
@@ -354,6 +378,129 @@ local function print_plugin_list()
   return true, full
 end
 
+-- Ensure TK Blank (no-op) JSFX is available under Effects/TK and return its addname
+local function ensure_tk_blank_addname(customDesc)
+  local sep = package.config:sub(1,1)
+  local effectsDir = r.GetResourcePath() .. sep .. 'Effects' .. sep .. 'TK'
+  if r.RecursiveCreateDirectory then r.RecursiveCreateDirectory(effectsDir, 0) end
+  local baseFile = 'TK_Blank_NoOp.jsfx'
+  local target = effectsDir .. sep .. baseFile
+  local function file_exists(p)
+    local f = io.open(p, 'rb'); if f then f:close(); return true else return false end
+  end
+  if not file_exists(target) then
+    -- Try to copy from script folder (user placed it there)
+    local function copy_if_exists(src, dst)
+      local f = io.open(src, 'rb')
+      if not f then return false end
+      local data = f:read('*a'); f:close()
+      local wf = io.open(dst, 'wb'); if not wf then return false end
+      wf:write(data); wf:close(); return true
+    end
+    local scriptPath = (debug and debug.getinfo and debug.getinfo(1, 'S') and debug.getinfo(1, 'S').source) or ''
+    scriptPath = tostring(scriptPath):gsub('^@','')
+    local baseDir = scriptPath:match('^(.*[\\/])') or ''
+    local candidates = {
+      baseDir .. 'JSFX' .. sep .. 'TK_Blank_NoOp.jsfx',
+      baseDir .. '..' .. sep .. 'JSFX' .. sep .. 'TK_Blank_NoOp.jsfx',
+      baseDir .. 'TK_Blank_NoOp.jsfx',
+    }
+    local copied = false
+    for _, src in ipairs(candidates) do
+      if copy_if_exists(src, target) then copied = true; break end
+    end
+    if not copied then
+      -- As a last resort, write a minimal no-op JSFX
+      local content = [[desc: TK Blank (no-op)
+@sample
+// do nothing
+]]
+      local wf = io.open(target, 'wb')
+      if wf then wf:write(content) wf:close() end
+    end
+    -- Ask REAPER to refresh FX list
+    if r.Main_OnCommand then r.Main_OnCommand(40506, 0) end -- FX: Refresh FX
+  end
+  -- If a custom description is provided, create a named variant so REAPER shows the desired name
+  if customDesc and customDesc ~= '' then
+    local safe = tostring(customDesc):gsub('[^%w%-_ ]', ''):gsub('%s+', '_')
+    if safe == '' then safe = 'Custom' end
+    local variantFile = ('TK_Blank_NoOp_%s.jsfx'):format(safe)
+    local variantPath = effectsDir .. sep .. variantFile
+    if not file_exists(variantPath) then
+      local content = ('desc: %s\n@sample\n// do nothing\n'):format(customDesc)
+      local wf = io.open(variantPath, 'wb')
+      if wf then wf:write(content) wf:close() end
+      if r.Main_OnCommand then r.Main_OnCommand(40506, 0) end
+    end
+    -- invalidate cache so UI can see it
+    state.tkBlankVariants = nil
+    return 'JS: TK/' .. (variantFile:gsub('%.jsfx$', ''))
+  end
+  return 'JS: TK/TK_Blank_NoOp'
+end
+
+local function refresh_tk_blank_variants()
+  local sep = package.config:sub(1,1)
+  local dir = r.GetResourcePath() .. sep .. 'Effects' .. sep .. 'TK'
+  local list = {}
+  if r.EnumerateFiles then
+    local i = 0
+    while true do
+      local fn = r.EnumerateFiles(dir, i)
+      if not fn then break end
+      if fn:match('^TK_Blank_NoOp_.*%.jsfx$') then
+        local full = dir .. sep .. fn
+        local name = fn:gsub('^TK_Blank_NoOp_', ''):gsub('%.jsfx$', '')
+        -- try read desc for nicer name
+        local f = io.open(full, 'r')
+        if f then
+          local first = f:read('*l') or ''
+          f:close()
+          local desc = first:match('^%s*desc:%s*(.+)$')
+          if desc and desc ~= '' then name = desc end
+        end
+        list[#list+1] = { name = name, file = fn, addname = 'JS: TK/' .. fn:gsub('%.jsfx$', '') }
+      end
+      i = i + 1
+    end
+  end
+  state.tkBlankVariants = list
+end
+-- Ensure TK blank JSFX exists and is scanned by REAPER
+local function ensure_blank_jsfx()
+  local sep = package.config:sub(1,1)
+  local jsfxDir = r.GetResourcePath() .. sep .. 'Effects' .. sep .. 'TK'
+  if r.RecursiveCreateDirectory then r.RecursiveCreateDirectory(jsfxDir, 0) end
+  local path = jsfxDir .. sep .. 'TK_Blank_NoOp.jsfx'
+  local f = io.open(path, 'rb')
+  if not f then
+    local content = [[desc: TK Blank (no-op)
+author: TouristKiller
+version: 1.0
+license: MIT
+changelog: Initial no-op placeholder
+
+@init
+// no state
+
+@sample
+// passthrough for any channel count
+i = 0;
+loop(num_ch,
+  spl(i) = spl(i);
+  i += 1;
+);
+]]
+    local wf = io.open(path, 'wb')
+    if wf then wf:write(content) wf:close() end
+    -- ask REAPER to rescan JS
+    if r.Main_OnCommand then r.Main_OnCommand(40506, 0) end -- FX: Refresh FX
+  else
+    f:close()
+  end
+  return path
+end
 -- FX chain save helpers -------------------------------------------------
 local function sanitize_filename(name)
   name = tostring(name or 'FX Chain')
@@ -620,9 +767,11 @@ local function draw_plugin_picker()
   ensure_ctx()
   safe_SetNextWindowSize(520, 600, FLAGS.Cond_Appearing)
   local stylePush = push_app_style()
-  local begunPicker, visible, open = safe_Begin('Choose plugin (Sexan parser)', true, FLAGS.Window_MenuBar)
+  local title = (state.pickerMode == 'placeholder') and 'Choose placeholder plugin' or 'Choose plugin (Sexan parser)'
+  local begunPicker, visible, open = safe_Begin(title, true, FLAGS.Window_MenuBar)
   if visible then
-    r.ImGui_Text(ctx, 'Search and select a plugin to use as replacement:')
+    local prompt = (state.pickerMode == 'placeholder') and 'Pick a placeholder to insert on delete:' or 'Search and select a plugin to use as replacement:'
+    r.ImGui_Text(ctx, prompt)
     r.ImGui_SetNextItemWidth(ctx, 300)
     local chg, txt = r.ImGui_InputText(ctx, 'Filter##picker', state.pickerFilter)
     if chg then state.pickerFilter = txt end
@@ -667,9 +816,15 @@ local function draw_plugin_picker()
           end
           r.ImGui_SameLine(ctx)
           if r.ImGui_Selectable(ctx, disp, false) then
-            state.replaceWith = it.addname
-            state.replaceDisplay = disp
-            state.pendingMessage = 'Chosen: ' .. state.replaceDisplay
+            if state.pickerMode == 'placeholder' then
+              state.placeholderAdd = it.addname
+              state.placeholderDisplay = disp
+              state.pendingMessage = 'Placeholder: ' .. disp
+            else
+              state.replaceWith = it.addname
+              state.replaceDisplay = disp
+              state.pendingMessage = 'Chosen: ' .. disp
+            end
             state.showPicker = false
             break
           end
@@ -701,8 +856,24 @@ local function get_track_name(tr)
 end
 
 local function get_fx_name(track, fx)
+  -- Prefer per-instance alias if present
+  if r.TrackFX_GetNamedConfigParm then
+    local ok, alias = r.TrackFX_GetNamedConfigParm(track, fx, 'renamed')
+    if ok and alias and alias ~= '' then return alias end
+  end
   local rv, buf = r.TrackFX_GetFXName(track, fx, '')
   if rv then return buf else return ("FX %d"):format(fx+1) end
+end
+
+local function rename_fx_instance(track, fxIdx, name)
+  if not name or name == '' then return end
+  -- Set the alias; this is what REAPER uses for per-instance rename
+  if r.TrackFX_SetNamedConfigParm then
+    pcall(function() r.TrackFX_SetNamedConfigParm(track, fxIdx, 'renamed', tostring(name)) end)
+  end
+  -- Best-effort UI nudge
+  if r.TrackList_AdjustWindows then pcall(function() r.TrackList_AdjustWindows(false) end) end
+  if r.UpdateArrange then pcall(function() r.UpdateArrange() end) end
 end
 
 local function tracks_iter(selectedOnly)
@@ -900,7 +1071,7 @@ local function replace_all_instances(sourceName, replacementName)
   return replaced
 end
 
-local function delete_all_instances(sourceName)
+local function delete_all_instances(sourceName, placeholderAdd, placeholderAlias)
   if not sourceName or sourceName == '' then return 0, 'No source FX selected' end
   local deleted = 0
   r.Undo_BeginBlock()
@@ -914,10 +1085,22 @@ local function delete_all_instances(sourceName)
     table.sort(toDelete, function(a,b) return a>b end)
     for _, idx in ipairs(toDelete) do
       local okDel = pcall(function() r.TrackFX_Delete(tr, idx) end)
-      if okDel then deleted = deleted + 1 end
+      if okDel then
+        deleted = deleted + 1
+        if placeholderAdd and placeholderAdd ~= '' then
+          local newIdx = r.TrackFX_AddByName(tr, placeholderAdd, false, -1)
+          if newIdx >= 0 then
+            r.TrackFX_CopyToTrack(tr, newIdx, tr, idx, true)
+            if placeholderAlias and placeholderAlias ~= '' then
+              rename_fx_instance(tr, idx, placeholderAlias)
+            end
+          end
+        end
+      end
     end
   end
-  r.Undo_EndBlock(('Delete all instances of "%s"'):format(sourceName), -1)
+  local withPH = (placeholderAdd and placeholderAdd ~= '') and ' + placeholders' or ''
+  r.Undo_EndBlock(('Delete all instances of "%s"%s'):format(sourceName, withPH), -1)
   return deleted
 end
 
@@ -993,30 +1176,59 @@ local function draw_scope_row()
   r.ImGui_SameLine(ctx)
   changed, state.autoRefresh = r.ImGui_Checkbox(ctx, 'Auto refresh', state.autoRefresh)
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, 'Refresh') then rebuild_model() end
+  if r.ImGui_Button(ctx, 'Refresh', 80) then rebuild_model() end
+  r.ImGui_SameLine(ctx)
+  do
+    local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local label = 'Track #'
+    local labelW = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+    local inputW = 80
+    local goTextW = select(1, r.ImGui_CalcTextSize(ctx, 'Go')) or 0
+    -- Approximate padding around button text
+    local buttonW = goTextW + 20
+    -- Approximate spacing between inline items
+    local spacing = 6
+    local totalW = labelW + spacing + inputW + spacing + buttonW
+    local pad = math.max(0, (availW or 0) - totalW)
+    if pad > 0 then
+      -- Consume remaining width so the following controls end up at the right edge
+      r.ImGui_Dummy(ctx, pad, 0)
+      r.ImGui_SameLine(ctx)
+    end
+    r.ImGui_Text(ctx, label)
     r.ImGui_SameLine(ctx)
-  r.ImGui_Text(ctx, 'Track #')
-  r.ImGui_SameLine(ctx)
-  r.ImGui_SetNextItemWidth(ctx, 80)
-  local chgNum, newNum = r.ImGui_InputInt(ctx, '##gotoTrack', tonumber(state.gotoTrackInput) or 1)
-  if chgNum then
-    state.gotoTrackInput = math.max(1, newNum or 1)
-  end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, 'Go') then
-    state.scrollToTrackNum = tonumber(state.gotoTrackInput) or 1
+    r.ImGui_SetNextItemWidth(ctx, inputW)
+    local chgNum, newNum = r.ImGui_InputInt(ctx, '##gotoTrack', tonumber(state.gotoTrackInput) or 1)
+    if chgNum then
+      state.gotoTrackInput = math.max(1, newNum or 1)
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, 'Go') then
+      state.scrollToTrackNum = tonumber(state.gotoTrackInput) or 1
+    end
   end
 end
 local function draw_replace_panel()
   SeparatorText('Replace')
+  -- r.ImGui_PushFont(ctx, font_small, 9)
   if state.selectedSourceFXName then
     r.ImGui_Text(ctx, 'Selected source FX: ' .. state.selectedSourceFXName)
   else
-    r.ImGui_Text(ctx, 'First pick a source FX (press "Source" in the list below)')
+    r.ImGui_Text(ctx, 'Pick a source FX (press "Source" in the Track list)')
   end
+  -- r.ImGui_PopFont(ctx)
   r.ImGui_Text(ctx, 'Placement:')
   r.ImGui_SameLine(ctx)
   local sel = state.insertPos
+  local pushedVars = 0
+  if ENUM.StyleVar_FramePadding and push_style_var2(ENUM.StyleVar_FramePadding, 1.0, 1.0) then pushedVars = pushedVars + 1 end
+  if ENUM.StyleVar_ItemSpacing and push_style_var2(ENUM.StyleVar_ItemSpacing, 4.0, 1.0) then pushedVars = pushedVars + 1 end
+  ensure_small_font()
+  local pushedFont = false
+  if font_small and r.ImGui_PushFont then
+    local ok = pcall(r.ImGui_PushFont, ctx, font_small, 9)
+    pushedFont = ok and true or false
+  end
   if r.ImGui_RadioButton(ctx, 'Same slot', sel == 'in_place') then state.insertPos = 'in_place' end
   r.ImGui_SameLine(ctx)
   if r.ImGui_RadioButton(ctx, 'Start', sel == 'begin') then state.insertPos = 'begin' end
@@ -1024,10 +1236,12 @@ local function draw_replace_panel()
   if r.ImGui_RadioButton(ctx, 'End', sel == 'end') then state.insertPos = 'end' end
   r.ImGui_SameLine(ctx)
   if r.ImGui_RadioButton(ctx, 'Index', sel == 'index') then state.insertPos = 'index' end
+  if pushedFont and r.ImGui_PopFont then r.ImGui_PopFont(ctx) end
+  if pushedVars > 0 and r.ImGui_PopStyleVar then r.ImGui_PopStyleVar(ctx, pushedVars) end
   if state.insertPos == 'index' then
     r.ImGui_SameLine(ctx)
     r.ImGui_SetNextItemWidth(ctx, 80)
-    local changed2, val = r.ImGui_InputInt(ctx, 'Slot (1-based)', (tonumber(state.insertIndex) or 0) + 1)
+    local changed2, val = r.ImGui_InputInt(ctx, '##Slot (1-based)', (tonumber(state.insertIndex) or 0) + 1)
     if changed2 then state.insertIndex = math.max(0, (tonumber(val) or 1) - 1) end
   end
   r.ImGui_SameLine(ctx)
@@ -1061,20 +1275,72 @@ local function draw_replace_panel()
     if not state.selectedSourceFXName or state.selectedSourceFXName == '' then
       state.pendingError = 'First choose a source FX (use the Source button).'
     else
-      local count = select(1, delete_all_instances(state.selectedSourceFXName))
-      state.pendingMessage = ('Deleted %d instances.'):format(count)
+      local phAdd, phAlias = nil, nil
+      if state.deleteInsertPlaceholder then
+        phAdd = ensure_tk_blank_addname(state.placeholderCustomName)
+        phAlias = state.placeholderCustomName
+      end
+      local count = select(1, delete_all_instances(state.selectedSourceFXName, phAdd, phAlias))
+      if state.deleteInsertPlaceholder and (state.placeholderAdd or '') ~= '' then
+        state.pendingMessage = ('Deleted %d instances (with placeholders).'):format(count)
+      else
+        state.pendingMessage = ('Deleted %d instances.'):format(count)
+      end
       rebuild_model()
     end
   end
+  r.ImGui_SameLine(ctx)
+  local chgPH, ph = r.ImGui_Checkbox(ctx, 'placeholder', state.deleteInsertPlaceholder)
+  if chgPH then state.deleteInsertPlaceholder = ph end
+  if state.deleteInsertPlaceholder then
+    r.ImGui_SameLine(ctx)
+  local nameWidth = 110
+  r.ImGui_SetNextItemWidth(ctx, nameWidth)
+    local chgAlias, alias
+    if r.ImGui_InputTextWithHint then
+      chgAlias, alias = r.ImGui_InputTextWithHint(ctx, '##tkblank', 'type name...', state.placeholderCustomName)
+    else
+      chgAlias, alias = r.ImGui_InputText(ctx, '##tkblank', state.placeholderCustomName)
+      -- Fallback: draw a hint when empty
+      if (state.placeholderCustomName or '') == '' then
+        local x, y = r.ImGui_GetItemRectMin(ctx)
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local col
+        if r.ImGui_ColorConvertDouble4ToU32 then
+          col = r.ImGui_ColorConvertDouble4ToU32(0.70, 0.70, 0.70, 0.55)
+        else
+          col = 0x80B0B0B0
+        end
+        r.ImGui_DrawList_AddText(dl, x + 6, y + 2, col, 'type name...')
+      end
+    end
+    if chgAlias then state.placeholderCustomName = alias end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_Text(ctx, 'or')
+    r.ImGui_SameLine(ctx)
+    if not state.tkBlankVariants then refresh_tk_blank_variants() end
+  -- Match combo width to Name input
+  r.ImGui_SetNextItemWidth(ctx, nameWidth)
+  local label = '##Variants'
+  if r.ImGui_BeginCombo(ctx, label, 'Choose…') then
+      for i, v in ipairs(state.tkBlankVariants or {}) do
+        if r.ImGui_Selectable(ctx, v.name, false) then
+          state.placeholderCustomName = v.name
+          state.pendingMessage = 'Using variant: ' .. v.name
+        end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+  end
 
-  r.ImGui_Separator(ctx)
+  --r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, 'Replace by slot across tracks:')
   r.ImGui_SameLine(ctx)
   r.ImGui_SetNextItemWidth(ctx, 80)
-  local chgSlot, slot1 = r.ImGui_InputInt(ctx, 'Slot (1-based)##batch', (tonumber(state.batchSlotIndex) or 0) + 1)
+  local chgSlot, slot1 = r.ImGui_InputInt(ctx, '##Slot (1-based)##batch', (tonumber(state.batchSlotIndex) or 0) + 1)
   if chgSlot then state.batchSlotIndex = math.max(0, (tonumber(slot1) or 1) - 1) end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, 'Replace slot across tracks') then
+  if r.ImGui_Button(ctx, 'Replace across tracks', 130) then
     if not state.replaceWith or state.replaceWith == '' then
       state.pendingError = 'Pick a replacement plugin first.'
     else
@@ -1084,7 +1350,7 @@ local function draw_replace_panel()
     end
   end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, 'Add across tracks') then
+  if r.ImGui_Button(ctx, 'Add across tracks', 130) then
     if not state.replaceWith or state.replaceWith == '' then
       state.pendingError = 'Pick a plugin first.'
     else
@@ -1454,17 +1720,32 @@ local function main_loop()
       r.ImGui_EndMenuBar(ctx)
     end
     draw_scope_row()
-    r.ImGui_SetNextItemWidth(ctx, 307)
+    r.ImGui_SetNextItemWidth(ctx, 305)
     local chg, f = r.ImGui_InputText(ctx, 'Filter', state.filter)
     if chg then state.filter = f end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, 'Reset filter') then state.filter = '' end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, 'Collapse all') then state.forceHeaders = false end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, 'Expand all') then state.forceHeaders = true end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, 'Reset filter', 80) then state.filter = '' end
+    -- Push Collapse/Expand to the far right of this row
+    r.ImGui_SameLine(ctx)
+    do
+      local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+      local txtCollapse = 'Collapse all'
+      local txtExpand  = 'Expand all'
+      local wCollapse = (select(1, r.ImGui_CalcTextSize(ctx, txtCollapse)) or 0) + 22
+      local wExpand   = (select(1, r.ImGui_CalcTextSize(ctx, txtExpand)) or 0) + 22
+      local spacing = 6
+      local needed = wCollapse + spacing + wExpand
+      local pad = math.max(0, (availW or 0) - needed)
+      if pad > 0 then
+        r.ImGui_Dummy(ctx, pad, 0)
+        r.ImGui_SameLine(ctx)
+      end
+      if r.ImGui_Button(ctx, txtCollapse, 75) then state.forceHeaders = false end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_Button(ctx, txtExpand, 75) then state.forceHeaders = true end
+    end
 
-    r.ImGui_Separator(ctx)
+    -- r.ImGui_Separator(ctx)
     draw_replace_panel()
     r.ImGui_Separator(ctx)
     local aw, ah = r.ImGui_GetContentRegionAvail(ctx)
