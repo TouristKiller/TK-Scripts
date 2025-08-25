@@ -1,5 +1,5 @@
 -- @author TouristKiller
--- @version 0.0.6
+-- @version 0.0.7
 -- @changelog:
 --[[     
 
@@ -389,35 +389,26 @@ local function ensure_tk_blank_addname(customDesc)
     local f = io.open(p, 'rb'); if f then f:close(); return true else return false end
   end
   if not file_exists(target) then
-    -- Try to copy from script folder (user placed it there)
-    local function copy_if_exists(src, dst)
-      local f = io.open(src, 'rb')
-      if not f then return false end
-      local data = f:read('*a'); f:close()
-      local wf = io.open(dst, 'wb'); if not wf then return false end
-      wf:write(data); wf:close(); return true
-    end
-    local scriptPath = (debug and debug.getinfo and debug.getinfo(1, 'S') and debug.getinfo(1, 'S').source) or ''
-    scriptPath = tostring(scriptPath):gsub('^@','')
-    local baseDir = scriptPath:match('^(.*[\\/])') or ''
-    local candidates = {
-      baseDir .. 'JSFX' .. sep .. 'TK_Blank_NoOp.jsfx',
-      baseDir .. '..' .. sep .. 'JSFX' .. sep .. 'TK_Blank_NoOp.jsfx',
-      baseDir .. 'TK_Blank_NoOp.jsfx',
-    }
-    local copied = false
-    for _, src in ipairs(candidates) do
-      if copy_if_exists(src, target) then copied = true; break end
-    end
-    if not copied then
-      -- As a last resort, write a minimal no-op JSFX
-      local content = [[desc: TK Blank (no-op)
+    -- Always generate the no-op JSFX directly into Effects/TK
+    local content = [[desc: TK Blank (no-op)
+author: TouristKiller
+version: 1.0
+license: MIT
+changelog: Initial no-op placeholder
+
+@init
+// no state
+
 @sample
-// do nothing
+// passthrough for any channel count
+i = 0;
+loop(num_ch,
+  spl(i) = spl(i);
+  i += 1;
+);
 ]]
-      local wf = io.open(target, 'wb')
-      if wf then wf:write(content) wf:close() end
-    end
+    local wf = io.open(target, 'wb')
+    if wf then wf:write(content) wf:close() end
     -- Ask REAPER to refresh FX list
     if r.Main_OnCommand then r.Main_OnCommand(40506, 0) end -- FX: Refresh FX
   end
@@ -428,7 +419,7 @@ local function ensure_tk_blank_addname(customDesc)
     local variantFile = ('TK_Blank_NoOp_%s.jsfx'):format(safe)
     local variantPath = effectsDir .. sep .. variantFile
     if not file_exists(variantPath) then
-      local content = ('desc: %s\n@sample\n// do nothing\n'):format(customDesc)
+      local content = ('desc: %s\nauthor: TouristKiller\nversion: 1.0\nlicense: MIT\n\n@init\n// no state\n\n@sample\n// passthrough for any channel count\ni = 0;\nloop(num_ch,\n  spl(i) = spl(i);\n  i += 1;\n);\n'):format(customDesc)
       local wf = io.open(variantPath, 'wb')
       if wf then wf:write(content) wf:close() end
       if r.Main_OnCommand then r.Main_OnCommand(40506, 0) end
