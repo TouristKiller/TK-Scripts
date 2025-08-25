@@ -83,6 +83,17 @@
 
 </category>
 
+ <category name="JSFX">
+        <reapack name="TK_Blank_NoOp.jsfx" type="effect" desc="TK Blank (no-op)">
+            <version name="1.0.0" author="TouristKiller" time="2025-08-25T00:00:00Z">
+            <source file="Effects/TK/TK_Blank_NoOp.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/JSFX/TK_Blank_NoOp.jsfx</source>
+                <changelog><![CDATA[
+Initial release of a no-op placeholder JSFX used by FX Slots Manager.
+]]></changelog>
+            </version>
+        </reapack>
+    </category>
+
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
         <version name="0.3.5" author="TouristKiller" time="2026-08-21T16:20:00Z">

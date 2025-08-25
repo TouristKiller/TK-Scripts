@@ -1,0 +1,16 @@
+desc: TK Blank (no-op)
+author: TouristKiller
+version: 1.0.0
+license: MIT
+changelog: Initial release
+
+@init
+// no state
+
+@sample
+// passthrough for any channel count
+i = 0;
+loop(num_ch,
+  spl(i) = spl(i);
+  i += 1;
+);
