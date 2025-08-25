@@ -1,4 +1,4 @@
--- @version 0.1.1
+-- @version 0.1.2
 -- @changelog:
 
 --[[
@@ -232,6 +232,7 @@ local state                 = {
   selAnchorIdx              = nil,
   tooltips                  = true,
   slotUsePlaceholder        = false,
+  slotMatchSourceOnly       = false,
 }
 
 local model = {
@@ -1112,7 +1113,7 @@ local function delete_all_instances(sourceName, placeholderAdd, placeholderAlias
   return deleted
 end
 
-local function replace_by_slot_across_tracks(slotIndex0, replacementName, aliasName)
+local function replace_by_slot_across_tracks(slotIndex0, replacementName, aliasName, onlyIfName)
   if replacementName == nil or replacementName == '' then
     return 0, 'No replacement plugin selected'
   end
@@ -1125,12 +1126,17 @@ local function replace_by_slot_across_tracks(slotIndex0, replacementName, aliasN
   for tr, _ in tracks_iter(state.scopeSelectedOnly) do
     local fxCount = r.TrackFX_GetCount(tr)
     if fxCount > slot then
+      if onlyIfName and onlyIfName ~= '' then
+        local atName = get_fx_name(tr, slot)
+        if atName ~= onlyIfName then goto continue_track_slot end
+      end
       local ok, err = replace_fx_at(tr, slot, replacementName, true, 'in_place')
       if ok then replaced = replaced + 1 else state.pendingError = err end
       if ok and aliasName and aliasName ~= '' then
         rename_fx_instance(tr, slot, aliasName)
       end
     end
+    ::continue_track_slot::
   end
   r.Undo_EndBlock(('Replace slot #%d across tracks with "%s"'):format((slot or 0) + 1, replacementName), -1)
   return replaced
@@ -1252,6 +1258,9 @@ local function draw_replace_panel()
   r.ImGui_Dummy(ctx, 0, 4)
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, '2. Placement:')
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+    r.ImGui_SetTooltip(ctx, 'Choose where to put the replacement: Same slot replaces at the original index; Start inserts at slot 1; End inserts after the last FX; Index lets you enter a 1-based slot number.')
+  end
   -- r.ImGui_SameLine(ctx)
   local sel = state.insertPos
   local pushedVars = 0
@@ -1281,6 +1290,9 @@ local function draw_replace_panel()
   r.ImGui_Dummy(ctx, 0, 4)
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, '3. Select Replacement FX:')
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+    r.ImGui_SetTooltip(ctx, 'Pick the plugin to use as the replacement. Use “Pick from list…” or choose from your Short list.')
+  end
   if r.ImGui_Button(ctx, 'Pick from list…', 105) then state.showPicker = true end
   local bw, bh = r.ImGui_GetItemRectSize(ctx)
   r.ImGui_SameLine(ctx)
@@ -1304,6 +1316,9 @@ local function draw_replace_panel()
   r.ImGui_Dummy(ctx, 0, 4)
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, '4a. Replace all instances of source FX:')
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+    r.ImGui_SetTooltip(ctx, 'Replace or delete every occurrence of the Source FX on selected tracks. “placeholder” adds a named no-op TK_Blank instead of leaving a gap when deleting.')
+  end
   if r.ImGui_Button(ctx, 'Replace..', 60) then
     local count = 0
     count = select(1, replace_all_instances(state.selectedSourceFXName, state.replaceWith))
@@ -1372,11 +1387,14 @@ local function draw_replace_panel()
   r.ImGui_Dummy(ctx, 0, 4)
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, '4b. Replace by slot across tracks:')
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+    r.ImGui_SetTooltip(ctx, 'Operate on a specific slot across selected tracks: Replace or Add at the given 1-based slot. “Use Placeholder” inserts a named TK_Blank.')
+  end
   -- r.ImGui_SameLine(ctx)
   r.ImGui_SetNextItemWidth(ctx, 80)
   local chgSlot, slot1 = r.ImGui_InputInt(ctx, '##Slot (1-based)##batch', (tonumber(state.batchSlotIndex) or 0) + 1)
   if chgSlot then state.batchSlotIndex = math.max(0, (tonumber(slot1) or 1) - 1) end
- 
+
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, 'Replace', 60) then
     if (not state.slotUsePlaceholder) and (not state.replaceWith or state.replaceWith == '') then
@@ -1387,7 +1405,8 @@ local function draw_replace_panel()
         addName = ensure_tk_blank_addname(state.placeholderCustomName)
         alias = state.placeholderCustomName
       end
-      local count = select(1, replace_by_slot_across_tracks(state.batchSlotIndex, addName, alias))
+      local onlyIf = (state.slotMatchSourceOnly and state.selectedSourceFXName) or nil
+      local count = select(1, replace_by_slot_across_tracks(state.batchSlotIndex, addName, alias, onlyIf))
       state.pendingMessage = ('Replaced %d track slots.'):format(count)
       rebuild_model()
     end
@@ -1409,6 +1428,12 @@ local function draw_replace_panel()
   end
   local chgPH2, vPH2 = r.ImGui_Checkbox(ctx, 'Use Placeholder##slot', state.slotUsePlaceholder)
   if chgPH2 then state.slotUsePlaceholder = vPH2 end
+    r.ImGui_SameLine(ctx)
+  local chgMS, vMS = r.ImGui_Checkbox(ctx, 'Match source##slot', state.slotMatchSourceOnly)
+  if chgMS then state.slotMatchSourceOnly = vMS end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+    r.ImGui_SetTooltip(ctx, 'Only replace when the chosen slot already contains the selected Source FX; when off, the slot will be replaced regardless of its current FX.')
+  end
   r.ImGui_Dummy(ctx, 0, 6)
   r.ImGui_Separator(ctx)
   local chgTT, vTT = r.ImGui_Checkbox(ctx, 'Tooltips', state.tooltips)
@@ -1416,6 +1441,7 @@ local function draw_replace_panel()
     state.tooltips = vTT
     save_ui_prefs()
   end
+
 end
 
 local function draw_track_fx_rows(trEntry)
