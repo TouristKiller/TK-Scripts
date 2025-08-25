@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.5.5
+-- @version 1.5.6
 -- @changelog:
 --[[     
 ++ Added setting voor screenshotwindow to respect Plugin Manager exclusion settings
@@ -18,29 +18,26 @@
             
 ]]--        
 --------------------------------------------------------------------------
-local r                 = reaper
-local script_path       = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
-local os_separator      = package.config:sub(1, 1)
-package.path            = script_path .. "?.lua;"
-local json              = require("json")
-local screenshot_path   = script_path .. "Screenshots" .. os_separator
-StartBulkScreenshot     = function() end
-local DrawMeterModule   = dofile(script_path .. "DrawMeter.lua")
-local TKFXBVars         = dofile(script_path .. "TKFXBVariables.lua")
-local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
--- Sentinel for special default folder option
-local LAST_OPENED_SENTINEL = "__LAST_OPENED__"
+local r                     = reaper
+local script_path           = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
+local os_separator          = package.config:sub(1, 1)
+package.path                = script_path .. "?.lua;"
+local json                  = require("json")
+local screenshot_path       = script_path .. "Screenshots" .. os_separator
+StartBulkScreenshot         = function() end
+local DrawMeterModule       = dofile(script_path .. "DrawMeter.lua")
+local TKFXBVars             = dofile(script_path .. "TKFXBVariables.lua")
+local window_flags          = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
+
+local LAST_OPENED_SENTINEL  = "__LAST_OPENED__"
 
 -- Ratings:
-local plugin_ratings_path = script_path .. "plugin_ratings.json"
-local plugin_ratings = {}
+local plugin_ratings_path   = script_path .. "plugin_ratings.json"
+local plugin_ratings        = {}
 
--- Forward stub to prevent early calls failing before real definition later in file
 if not ClearScreenshotCache then function ClearScreenshotCache() end end
 
--- Flicker Guard helpers/state
 function _build_screenshot_signature()
-    -- Compose a lightweight signature of the screenshot context
     local cfg = rawget(_G, 'config') or {}
     local folder = tostring(selected_folder or "")
     local subgroup = tostring(browser_panel_selected or "")
@@ -52,6 +49,73 @@ function _build_screenshot_signature()
     local apply = tostring(cfg.apply_type_priority or false)
     local respect = tostring(cfg.respect_search_exclusions_in_screenshots or false)
     return table.concat({folder, subgroup, term, mode, stype, page, priority, apply, respect}, "|")
+end
+
+-- Voorwaards mars ;o)
+local SearchActions
+local CreateSmartMarker
+
+function RenderActionsSection()
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local button_h = r.ImGui_GetFrameHeight(ctx)
+    local button_w = button_h
+    r.ImGui_PushItemWidth(ctx, avail_w - (button_w * 2) - 10)
+    local changed, new_term = r.ImGui_InputTextWithHint(ctx, "##ActionSearch", "SEARCH ACTIONS", action_search_term or "")
+    if changed then action_search_term = new_term end
+    r.ImGui_PopItemWidth(ctx)
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, show_categories and "C" or "A", button_w, button_h) then
+        show_categories = not show_categories
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, show_only_active and "O" or "F", button_w, button_h) then
+        show_only_active = not show_only_active
+    end
+
+    local window_h = r.ImGui_GetWindowHeight(ctx)
+    local cur_y = r.ImGui_GetCursorPosY(ctx)
+    local footer = 50
+    local list_h = window_h - cur_y - footer
+    if r.ImGui_BeginChild(ctx, "ActionList", 0, list_h) then
+        if show_categories then
+            local filtered = SearchActions(action_search_term or "")
+            for category, actions in pairs(filtered) do
+                if #actions > 0 then
+                    if r.ImGui_TreeNode(ctx, string.format("%s (%d)", category, #actions)) then
+                        for _, action in ipairs(actions) do
+                            if action.state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF) end
+                            local prefix = action.state == 1 and "[ON] " or ""
+                            if r.ImGui_Selectable(ctx, prefix .. action.name) then
+                                r.Main_OnCommand(action.id, 0)
+                            elseif r.ImGui_IsItemClicked(ctx, 1) then
+                                CreateSmartMarker(action.id)
+                            end
+                            if action.state == 1 then r.ImGui_PopStyleColor(ctx) end
+                        end
+                        r.ImGui_TreePop(ctx)
+                    end
+                end
+            end
+        else
+            for _, action in ipairs(allActions) do
+                local state = r.GetToggleCommandState(action.id)
+                local matches = (not action_search_term or action_search_term == "") or action.name:lower():find((action_search_term or ""):lower(), 1, true)
+                if matches and (not show_only_active or state == 1) then
+                    if state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF) end
+                    local prefix = state == 1 and "[ON] " or ""
+                    if r.ImGui_Selectable(ctx, prefix .. action.name) then
+                        r.Main_OnCommand(action.id, 0)
+                    elseif r.ImGui_IsItemClicked(ctx, 1) then
+                        CreateSmartMarker(action.id)
+                    end
+                    if state == 1 then r.ImGui_PopStyleColor(ctx) end
+                end
+            end
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextWrapped(ctx, "Left-click: Execute action. Right-click: Create smart marker.")
 end
 
 _last_screenshot_signature = nil
@@ -347,7 +411,7 @@ local function SetDefaultConfig()
     } 
 end
 local config = SetDefaultConfig()    
-_G.config = config -- expose for early helpers defined before this local
+_G.config = config 
 local window_alpha_int = math.floor(config.window_alpha * 100)  
 local function SaveConfig()
     local file = io.open(script_path .. "config.json", "w")
@@ -367,39 +431,35 @@ local function LoadConfig()
             config[k] = v
         end
         config.folder_specific_sizes = loaded_config.folder_specific_sizes or {}
-    -- Zorg dat pinned_subgroups altijd bestaat
-    config.pinned_subgroups = loaded_config.pinned_subgroups or {}
-    -- Zorg dat pinned_custom_subfolders altijd bestaat
-    config.pinned_custom_subfolders = loaded_config.pinned_custom_subfolders or {}
-    -- Zorg dat flicker_guard_enabled bestaat
-    if loaded_config.flicker_guard_enabled == nil then
-        config.flicker_guard_enabled = false
-    end
+    
+        config.pinned_subgroups = loaded_config.pinned_subgroups or {}
+    
+        config.pinned_custom_subfolders = loaded_config.pinned_custom_subfolders or {}
+    
+        if loaded_config.flicker_guard_enabled == nil then
+            config.flicker_guard_enabled = false
+        end
    
-    legacy_scripts_launcher = loaded_config.scripts_launcher
+        legacy_scripts_launcher = loaded_config.scripts_launcher
     else
         SetDefaultConfig()
     end
 end
 LoadConfig()
--- Sync global last_viewed_folder from config if present
+
 if config and config.last_viewed_folder then
     last_viewed_folder = config.last_viewed_folder
 end
 PROJECTS_DIR = config.last_used_project_location
-
--- Ensure Type Priority is reflected immediately at startup for initial lists
 do
     local function ApplyStartupDedupe()
         if not config.apply_type_priority then return end
-        -- If we already have a selected subgroup/folder at init time, ensure deduped lists
         if browser_panel_selected and type(GetFxListForSubgroup) == 'function' then
             local list = GetFxListForSubgroup(browser_panel_selected) or {}
             current_filtered_fx = DedupeByTypePriority(list)
         elseif selected_folder and type(GetPluginsForFolder) == 'function' then
             current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
         end
-        -- Prefill screenshot_search_results if empty but we have a current list
         if (not screenshot_search_results or #screenshot_search_results == 0) and current_filtered_fx and #current_filtered_fx > 0 then
             screenshot_search_results = {}
             local cap = loaded_items_count or ITEMS_PER_BATCH or 30
@@ -443,22 +503,18 @@ local function ResetConfig()
     SaveConfig()
 end
 
-
 -- CUSTOM FOLDERS HELPERS
 local function IsPluginArray(folder_content)
     if type(folder_content) ~= "table" then return false end
     if next(folder_content) == nil then return true end 
     
-  
     for i, item in ipairs(folder_content) do
         if type(item) ~= "string" then return false end
     end
     
-   
     for key, value in pairs(folder_content) do
         if type(key) ~= "number" then return false end
     end
-    
     return true
 end
 
@@ -466,15 +522,12 @@ local function IsSubfolderStructure(folder_content)
     if type(folder_content) ~= "table" then return false end
     if next(folder_content) == nil then return false end 
     
-  
     for key, value in pairs(folder_content) do
         if type(key) ~= "string" then return false end
         if type(value) ~= "table" then return false end
     end
-    
     return true
 end
-
 
 local function CleanPluginName(name)
     if not name or name == '' then return name end
@@ -497,7 +550,6 @@ local function CleanPluginName(name)
     return name ~= '' and name or original
 end
 
-
 local function RemoveManufacturerSuffix(name)
     if not name or name == '' then return name end
     local base = CleanPluginName(name)
@@ -517,7 +569,6 @@ local function RemoveManufacturerSuffix(name)
     return base
 end
 
--- Helper om uiteindelijke display naam te bepalen op basis van flags.
 local function GetDisplayPluginName(raw_name)
     if not raw_name then return raw_name end
     local name = raw_name
@@ -530,7 +581,6 @@ local function GetDisplayPluginName(raw_name)
     return name
 end
 
--- Screenshot detectie helpers
 local function StripX86Markers(name)
     if not name then return '' end
     
@@ -554,7 +604,6 @@ local function NormalizePluginNameForMatch(name)
     return name
 end
 
--- Determine plugin type from name prefix
 local function GetPluginType(name)
     if not name or name == '' then return 'OTHER' end
     if name:match('^VST3i?:') then return 'VST3' end
@@ -566,7 +615,6 @@ local function GetPluginType(name)
     return 'OTHER'
 end
 
--- Build a priority index table from config.plugin_type_priority
 local function BuildTypePriorityIndex()
     local idx = {}
     if type(config.plugin_type_priority) == 'table' then
@@ -577,7 +625,6 @@ local function BuildTypePriorityIndex()
     return idx
 end
 
--- Dedupe multi-format plugins by base cleaned name using configured type priority
 local function DedupeByTypePriority(list)
     if not config.apply_type_priority or type(list) ~= 'table' then return list end
     local priority = BuildTypePriorityIndex()
@@ -646,17 +693,15 @@ local function HasScreenshot(plugin_name)
     return false
 end
 
--- Helper: split plugin list into those with screenshots and those missing
 local function SplitPluginsByScreenshot(plugin_list)
     local with_shot, missing = {}, {}
     if not plugin_list then return with_shot, missing end
     for _, name in ipairs(plugin_list) do
-        -- Sla uitgesloten plugins over indien gebruikersoptie actief is
         if config.respect_search_exclusions_in_screenshots and config.excluded_plugins and config.excluded_plugins[name] then
             goto continue_plugin
         end
         if name == "--Favorites End--" then
-            table.insert(with_shot, name) -- keep divider sentinel in screenshot section
+            table.insert(with_shot, name) 
         else
             if HasScreenshot(name) then
                 table.insert(with_shot, name)
@@ -669,11 +714,11 @@ local function SplitPluginsByScreenshot(plugin_list)
     return with_shot, missing
 end
 
--- Forward declaration (defined later) so we can call it inside RenderMissingList
+-- Forward
 local GetStarsString
 
 local function RenderMissingList(missing)
-    if not (config.show_missing_list ~= false) then return end -- standaard aan; uit als false
+    if not (config.show_missing_list ~= false) then return end 
     if missing and #missing > 0 then
         r.ImGui_Dummy(ctx, 0, 10)
         r.ImGui_Separator(ctx)
@@ -705,11 +750,10 @@ local function RenderMissingList(missing)
     end
 end
 
--- Top spacing helper for first screenshot row (grid modes use a dummy; masonry adjusts column heights)
 local top_screenshot_spacing_applied = false
 local function ApplyTopScreenshotSpacing()
     if not top_screenshot_spacing_applied then
-        r.ImGui_Dummy(ctx, 0, 6) -- small vertical gap above first row of screenshots
+        r.ImGui_Dummy(ctx, 0, 6) 
         top_screenshot_spacing_applied = true
     end
 end
@@ -856,7 +900,6 @@ local function LoadCustomFolders()
             end
         end
     else
-        -- File doesn't exist, initialize with empty structure
         config.custom_folders = {}
     end
 end
@@ -2838,24 +2881,20 @@ local function DisplayFolderTree(folders, path_prefix)
         r.ImGui_Separator(ctx)
         if r.ImGui_Button(ctx, "Rename", 100, 0) then
             if rename_folder_new_name and rename_folder_new_name ~= "" and rename_folder_path then
-                -- Parse the path
                 local parts = {}
                 for part in rename_folder_path:gmatch("[^/]+") do
                     table.insert(parts, part)
                 end
                 
                 if #parts > 0 then
-                    -- Navigate to parent
                     local current = config.custom_folders
                     for i = 1, #parts - 1 do
                         current = current[parts[i]]
                     end
                     
-                    -- Get the folder content
                     local old_name = parts[#parts]
                     local folder_content = current[old_name]
                     
-                    -- Remove old and add with new name
                     current[old_name] = nil
                     current[rename_folder_new_name] = folder_content
                     
@@ -2878,7 +2917,6 @@ local function DisplayFolderTree(folders, path_prefix)
         r.ImGui_EndPopup(ctx)
     end
     
-    -- Plugin browser popup
     if show_plugin_browser then
         r.ImGui_OpenPopup(ctx, "Plugin Browser")
     end
@@ -2899,7 +2937,6 @@ local function DisplayFolderTree(folders, path_prefix)
                 if not plugin_search_text or plugin_search_text == "" or 
                 plugin:lower():find(plugin_search_text:lower(), 1, true) then
                     
-                    -- Check if plugin is already in the folder
                     local already_in_folder = false
                     local folder_plugins = GetPluginsFromCustomFolder(selected_custom_folder_for_browse)
                     if folder_plugins then
@@ -2909,7 +2946,6 @@ local function DisplayFolderTree(folders, path_prefix)
                     if not already_in_folder then
                         local display_plugin = GetDisplayPluginName(plugin)
                         if r.ImGui_Selectable(ctx, display_plugin .. "  " .. GetStarsString(plugin)) then
-                            -- Add plugin to the custom folder
                             local parts = {}
                             for part in selected_custom_folder_for_browse:gmatch("[^/]+") do
                                 table.insert(parts, part)
@@ -2976,7 +3012,6 @@ local function EnsureTrackIconsFolderExists()
     if not r.file_exists(track_icons_path) then
         local success = r.RecursiveCreateDirectory(track_icons_path, 0)
         if success then
-            --log_to_file("Made TrackIcons Folder: " .. track_icons_path)
         else
             log_to_file("Error making TrackIcons Folder: " .. track_icons_path)
         end
@@ -2989,7 +3024,6 @@ local function EnsureScreenshotFolderExists()
     if not r.file_exists(screenshot_path) then
         local success = r.RecursiveCreateDirectory(screenshot_path, 0)
         if success then
-            --log_to_file("Made screenshot Folder: " .. screenshot_path)
         else
             log_to_file("Error making screenshot Folder: " .. screenshot_path)
         end
@@ -3109,7 +3143,6 @@ local function LoadTexture(file)
 end
     
 local function LoadSearchTexture(file, plugin_name)
-    -- Deferred (queued) texture loading to prevent excessive short-lived ImGui images
     local relative_path = file:gsub(screenshot_path, "")
     local unique_key = relative_path .. "_" .. (plugin_name or "unknown")
     local current_time = r.time_precise()
@@ -3121,7 +3154,6 @@ local function LoadSearchTexture(file, plugin_name)
         log_to_file("File does not exist: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
         return nil
     end
-    -- Queue the load if not already queued
     if not texture_load_queue[unique_key] then
         texture_load_queue[unique_key] = { file = file, queued_at = current_time, plugin = plugin_name }
         log_to_file("Queued texture load: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
@@ -3148,7 +3180,6 @@ end
         end
         texture_load_queue[unique_key] = nil
     end
-    -- Cache eviction (LRU-style based on last used time)
     local cache_size = 0
     for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
     if cache_size > config.max_cached_search_textures then
@@ -3372,7 +3403,7 @@ local function CaptureExistingFX(track, fx_index)
                     r.JS_GDI_ReleaseDC(hwnd, srcDC)
                     r.JS_LICE_DestroyBitmap(destBmp)
                 else
-                    h = top - bottom -- Oval (feedback vragen of dit werkt?)
+                    h = top - bottom 
                     ScreenshotOSX(filename, left, top, w, h)
                 end
             
@@ -3425,7 +3456,6 @@ local function CaptureARAScreenshot(track, fx_index, plugin_name)
                 local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
                 local w, h = right - left, bottom - top
                 
-                -- Maak screenshot van ARA interface
                 local srcDC = r.JS_GDI_GetClientDC(hwnd)
                 local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
                 local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
@@ -3434,7 +3464,6 @@ local function CaptureARAScreenshot(track, fx_index, plugin_name)
                 r.JS_GDI_ReleaseDC(hwnd, srcDC)
                 r.JS_LICE_DestroyBitmap(srcBmp)
                 
-                -- Sluit ARA interface
                 r.TrackFX_Show(track, fx_index, 2)
             end)
         end)
@@ -3621,7 +3650,6 @@ local function EnumerateInstalledFX()
                 end
                 FetchCustom(path)
             else
-                -- Legacy: standaard folder naam of oude custom pad zonder prefix
                 for i = 1, #CAT_TEST do
                     if CAT_TEST[i].name == "FOLDERS" then
                         for j = 1, #CAT_TEST[i].list do
@@ -3635,7 +3663,6 @@ local function EnumerateInstalledFX()
                         break
                     end
                 end
-                -- Probeer legacy custom pad
                 if next(bulk_folder_plugins) == nil and config.custom_folders then
                     local function LegacyFetch(path_in)
                         local parts = {}
@@ -3654,7 +3681,7 @@ local function EnumerateInstalledFX()
                 end
             end
             if bulk_folder_plugins and next(bulk_folder_plugins) == nil then
-                bulk_folder_plugins = nil -- fallback naar niets als leeg
+                bulk_folder_plugins = nil 
             end
         end
     end
@@ -3663,7 +3690,6 @@ local function EnumerateInstalledFX()
         local target_name = config.default_folder
         if target_name == LAST_OPENED_SENTINEL then target_name = last_viewed_folder end
         if target_name then
-            -- Search across known categories to find matching subfolder and collect its fx list
             local function CollectFxByGroupName(cat_name_pred)
                 for i = 1, #CAT_TEST do
                     local cat = CAT_TEST[i]
@@ -3680,9 +3706,7 @@ local function EnumerateInstalledFX()
                     end
                 end
             end
-            -- FOLDERS (My folders)
             local found = CollectFxByGroupName(function(n) return (n or ""):upper() == "FOLDERS" end)
-            -- If not found, try ALL PLUGINS/CATEGORY/DEVELOPER variants
             if not found then
                 local function IsAllPlugins(n) n = (n or ""):upper(); return n == "ALL PLUGINS" or n == "ALL" end
                 local function IsCategory(n) n = (n or ""):upper(); return n == "CATEGORY" or n:find("CATEG") ~= nil end
@@ -3725,7 +3749,6 @@ local function EnumerateInstalledFX()
                 include_fx = true
             end
         end
-        -- Respecteer Bulk* checkbox uit Plugin Manager (plugin_visibility == false => overslaan)
         if include_fx and config.plugin_visibility and config.plugin_visibility[fx_name] == false then
             include_fx = false
         end
@@ -3763,7 +3786,7 @@ local function ProcessFX(index, start_time)
                     r.defer(function() 
                         if r.time_precise() - start_time > 300 then -- 5 minuten timeout
                             log_to_file("Process timed out")
-                            ProcessFX(total_fx_count + 1) -- Forceer afsluiting
+                            ProcessFX(total_fx_count + 1) 
                         else
                             ProcessFX(index + 1) 
                         end
@@ -3780,11 +3803,8 @@ local function ProcessFX(index, start_time)
     end
 end
 
--- Single screenshot helper (afgeleid van bulk flow)
 function StartSingleScreenshotCapture(plugin_name, cb, force)
-    -- Valideer naam
     if not plugin_name or plugin_name == '' then if cb then cb(false) end return end
-    -- Sla x86 bridged over indien uitgeschakeld
     if IsX86Bridged(plugin_name) and config.include_x86_bridged == false then if cb then cb(false) end return end
     if not force then
         if config.screenshot_size_option ~= 1 and ScreenshotExists and ScreenshotExists(plugin_name, config.screenshot_size_option) then
@@ -3792,7 +3812,6 @@ function StartSingleScreenshotCapture(plugin_name, cb, force)
             return
         end
     end
-    -- Gebruik is_individual=true zodat bulk filters niet opnieuw toegepast worden
     local ok, err = pcall(function()
         MakeScreenshot(plugin_name, function()
             if cb then cb(true) end
@@ -3809,7 +3828,6 @@ local function ClearScreenshots()
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
         os.remove(screenshot_path .. file)
     end
-    -- BuildScreenshotDatabase() -- Update de database na het verwijderen van de screenshots
     print("All screenshots cleared.")
 end
 
@@ -3836,7 +3854,7 @@ StartBulkScreenshot = function()
     if not START then
         EnumerateInstalledFX()
         bulk_screenshot_progress = 0
-        loaded_fx_count = 0  -- Reset het aantal geladen plugins
+        loaded_fx_count = 0  
         START = true
         PROCESS = true
         STOP_REQUESTED = false
@@ -3846,13 +3864,11 @@ StartBulkScreenshot = function()
     end
 end
 
--- Geselecteerde ontbrekende screenshots alleen
 function StartSelectedMissingScreenshots()
     if START_SELECTED then
         STOP_SELECTED = true
         return
     end
-    -- Verzamel geselecteerde plugins (bulk checkbox = visibility true) die geen screenshot hebben
     selected_missing_queue = {}
     for _, p in ipairs(filtered_plugins) do
         if config.show_missing_screenshots_only and config.plugin_visibility[p.name] ~= false and not HasScreenshot(p.name) then
@@ -3867,19 +3883,15 @@ function StartSelectedMissingScreenshots()
 end
 
 
--- Capture screenshots for a folder/group. Optionally accept a pre-resolved plugin list.
 function StartFolderScreenshots(folder_name, explicit_plugin_list)
     if not folder_name or folder_name == '' then return end
 
-    -- 1) Prefer explicitly provided list (if any)
     local plugins = explicit_plugin_list
 
-    -- 2) Otherwise resolve via known folder resolvers (Favorites, Custom, FOLDERS)
     if plugins == nil then
         plugins = GetPluginsForFolder(folder_name)
     end
 
-    -- 3) If still empty, try resolving groups from other categories (ALL PLUGINS / CATEGORY / DEVELOPER)
     if (not plugins or #plugins == 0) and type(CAT_TEST) == 'table' then
         for i = 1, #CAT_TEST do
             local cat = CAT_TEST[i]
@@ -3901,10 +3913,8 @@ function StartFolderScreenshots(folder_name, explicit_plugin_list)
         return
     end
 
-    -- Apply type-priority dedupe for capture order (preserve first-seen order across keys)
     plugins = DedupeByTypePriority(plugins)
 
-    -- Reset / initialiseer voortgang (hergebruik bestaande bulk variabelen voor UI progress bar)
     loaded_fx_count = 0
     total_fx_count = #plugins
     bulk_screenshot_progress = 0
@@ -3912,7 +3922,6 @@ function StartFolderScreenshots(folder_name, explicit_plugin_list)
     local idx = 1
     local function nextShot()
         if idx > #plugins then
-            -- Klaar
             bulk_screenshot_progress = 0
             reaper.ShowMessageBox("Screenshots map klaar: " .. folder_name .. " (" .. loaded_fx_count .. "/" .. total_fx_count .. ")", "Map screenshots", 0)
             return
@@ -3928,7 +3937,6 @@ function StartFolderScreenshots(folder_name, explicit_plugin_list)
         end)
     end
 
-    -- Start sequentiële capture
     nextShot()
 end
 
@@ -4005,7 +4013,6 @@ function ShowPluginScreenshot()
                 local viewport_pos_x = r.ImGui_Viewport_GetPos(viewport)
                 local is_left_docked = (window_x - viewport_pos_x) < 20
                 
-                -- Bepaal positie op basis van dock status
                 local window_pos_x
                 if is_left_docked then
                     window_pos_x = mouse_x + 20  -- Toon rechts
@@ -4015,7 +4022,6 @@ function ShowPluginScreenshot()
                 
                 local window_pos_y = mouse_y + 20
                 
-                -- Check voor verticale ruimte
                 if window_pos_y + display_height > window_y + vp_height + 250 then
                     window_pos_y = mouse_y - display_height - 20
                 end
@@ -4111,7 +4117,7 @@ local function GetCurrentProjectFX()
                     track_name = track_name,
                     track_number = track_number,
                     track_color = track_color,
-                    fx_index = j,  -- Zorg dat deze correct is!
+                    fx_index = j,  
                     is_master = false,
                     unique_id = track_number .. "_" .. j
                 })
@@ -4126,7 +4132,7 @@ local function AddPluginToSelectedTracks(plugin_name)
     for i = 0, track_count - 1 do
         local track = r.GetSelectedTrack(0, i)
         local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - r.TrackFX_GetCount(track))
-        r.TrackFX_Show(track, fx_index, 2)  -- 2 sluit het venster
+        r.TrackFX_Show(track, fx_index, 2)  
     end
 end
 
@@ -4135,7 +4141,7 @@ local function AddPluginToAllTracks(plugin_name)
     for i = 0, track_count - 1 do
         local track = r.GetTrack(0, i)
         local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - r.TrackFX_GetCount(track))
-        r.TrackFX_Show(track, fx_index, 2)  -- 2 sluit het venster
+        r.TrackFX_Show(track, fx_index, 2)  
     end
 end
 
@@ -4176,7 +4182,6 @@ function CountProjectFolderFiles(project_path)
     return count - 1  -- -1 omdat de eerste tel 0 is
 end
 
--- Functie om send tracks te identificeren
 local function IsSendTrack(track)
     local parent = r.GetParentTrack(track)
     if parent then
@@ -4188,7 +4193,6 @@ local function IsSendTrack(track)
 end
 
 function ShowRoutingMatrix()
-    -- Bereken de maximale breedte voor de legenda
     local max_name_width = 0
     local track_count = r.CountTracks(0)
     for i = 0, track_count - 1 do
@@ -4206,7 +4210,6 @@ function ShowRoutingMatrix()
     local matrix_height = (track_count + 1) * cell_size + header_height
     r.ImGui_Separator(ctx)
     if r.ImGui_BeginChild(ctx, "RoutingMatrix", matrix_width, matrix_height) then
-        -- Kolom headers (alleen nummers)
         for i = 0, track_count - 1 do
             local x = (i + 1) * cell_size + left_margin
             local y = 20
@@ -4214,14 +4217,12 @@ function ShowRoutingMatrix()
             r.ImGui_Text(ctx, tostring(i + 1))
         end
         
-        -- Rij headers (alleen nummers)
         for i = 0, track_count - 1 do
             local y = (i + 1) * cell_size + header_height
             r.ImGui_SetCursorPos(ctx, 15, y + 2)
             r.ImGui_Text(ctx, tostring(i + 1))
         end
         
-        -- Matrix cellen
         for src = 0, track_count - 1 do
             local src_track = r.GetTrack(0, src)
             for dst = 0, track_count - 1 do
@@ -4271,8 +4272,6 @@ function ShowRoutingMatrix()
             end
         end
 
-        
-        -- Legenda
         local legend_x = (track_count + 1) * cell_size + left_margin + 20
         r.ImGui_SetCursorPos(ctx, legend_x, 20)
         r.ImGui_Text(ctx, "Track Legend:")
@@ -4345,7 +4344,7 @@ local function CategorizeActions()
     end
 end
 CategorizeActions()
-local function SearchActions(search_term)
+function SearchActions(search_term)
     local filteredActions = {}
     for category, actions in pairs(categories) do
         filteredActions[category] = {}
@@ -4360,7 +4359,7 @@ local function SearchActions(search_term)
     return filteredActions
 end
 
-local function CreateSmartMarker(action_id)
+function CreateSmartMarker(action_id)
     local cur_pos = reaper.GetCursorPosition()
     local marker_name = "!" .. action_id
     local _, num_markers, num_regions = reaper.CountProjectMarkers(0)
@@ -4425,7 +4424,6 @@ function ShowPluginContextMenu(plugin_name, menu_id)
         if next(config.custom_folders) then
             r.ImGui_Separator(ctx)
             if r.ImGui_BeginMenu(ctx, "Add to Custom Folder") then
-                -- Recursive functie om nested folders te tonen
                 local function ShowCustomFolderMenu(folders, path_prefix)
                     path_prefix = path_prefix or ""
                     
@@ -4433,9 +4431,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
                         
                         if IsPluginArray(folder_content) then
-                            -- Plugin folder - kan plugin toevoegen
                             if r.ImGui_MenuItem(ctx, folder_name .. " (" .. #folder_content .. ")") then
-                                -- Check if plugin already exists in folder
                                 if not table.contains(folder_content, plugin_name) then
                                     table.insert(folder_content, plugin_name)
                                     SaveCustomFolders()
@@ -4445,7 +4441,6 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                                 end
                             end
                         elseif IsSubfolderStructure(folder_content) then
-                            -- Parent folder - toon als submenu
                             if r.ImGui_BeginMenu(ctx, folder_name) then
                                 ShowCustomFolderMenu(folder_content, full_path)
                                 r.ImGui_EndMenu(ctx)
@@ -4473,7 +4468,6 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 local new_track = r.GetTrack(0, track_idx)
                 
                 if config.create_sends_folder then
-                    -- Existing send folder code
                     local folder_idx = -1
                     for k = 0, track_idx - 1 do
                         local track = r.GetTrack(0, k)
@@ -4571,7 +4565,6 @@ local function ShowFXContextMenu(plugin, menu_id)
             ShowPluginRatingUI(plugin.fx_name)
             r.ImGui_Separator(ctx)
 
-        -- Validatie voor plugin data
         if not plugin or not plugin.fx_name then
             r.ImGui_Text(ctx, "Invalid plugin data")
             r.ImGui_EndPopup(ctx)
@@ -4593,14 +4586,12 @@ local function ShowFXContextMenu(plugin, menu_id)
             end
         end
 
-        -- Valideer track voordat we verdergaan
         if not track or not r.ValidatePtr(track, "MediaTrack*") then
             r.ImGui_Text(ctx, "No valid track selected")
             r.ImGui_EndPopup(ctx)
             return
         end
 
-        -- Valideer fx_index
         if not fx_index or fx_index < 0 then
             r.ImGui_Text(ctx, "Plugin not found on track")
             r.ImGui_EndPopup(ctx)
@@ -4654,7 +4645,6 @@ local function ShowFXContextMenu(plugin, menu_id)
         if next(config.custom_folders) then
             r.ImGui_Separator(ctx)
             if r.ImGui_BeginMenu(ctx, "Add to Custom Folder") then
-                -- Recursive functie om nested folders te tonen
                 local function ShowCustomFolderMenu(folders, path_prefix)
                     path_prefix = path_prefix or ""
                     
@@ -4662,9 +4652,7 @@ local function ShowFXContextMenu(plugin, menu_id)
                         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
                         
                         if IsPluginArray(folder_content) then
-                            -- Plugin folder - kan plugin toevoegen
                             if r.ImGui_MenuItem(ctx, folder_name .. " (" .. #folder_content .. ")") then
-                                -- Check if plugin already exists in folder
                                 if not table.contains(folder_content, fx_name) then
                                     table.insert(folder_content, fx_name)
                                     SaveCustomFolders()
@@ -4674,7 +4662,6 @@ local function ShowFXContextMenu(plugin, menu_id)
                                 end
                             end
                         elseif IsSubfolderStructure(folder_content) then
-                            -- Parent folder - toon als submenu
                             if r.ImGui_BeginMenu(ctx, folder_name) then
                                 ShowCustomFolderMenu(folder_content, full_path)
                                 r.ImGui_EndMenu(ctx)
@@ -4715,13 +4702,10 @@ local function ShowFolderDropdown()
         local window_width = r.ImGui_GetContentRegionAvail(ctx)
         local dropdown_width = 110  
         r.ImGui_PushItemWidth(ctx, dropdown_width)
-        --r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)  
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 2)   
         
         if r.ImGui_BeginCombo(ctx, "##FolderDropdown", selected_folder or "Select Folder") then
-            --[[if r.ImGui_Selectable(ctx, "No Folder", selected_folder == nil) then
-                selected_folder = nil
-            end]]--
+        
                 if r.ImGui_Selectable(ctx, "Select Folder", selected_folder == nil) then
                     SelectFolderExclusive(nil)
                     screenshot_search_results = nil
@@ -4745,8 +4729,6 @@ local function ShowFolderDropdown()
                 RequestClearScreenshotCache()
                 GetPluginsForFolder("Current Track FX")
             end
-            
-            
             
             if r.ImGui_Selectable(ctx, "Current Project FX", selected_folder == "Current Project FX") then
                 SelectFolderExclusive("Current Project FX")
@@ -4877,12 +4859,10 @@ local function ShowCustomFolderDropdown()
                             ClearScreenshotCache()
                         end
                     elseif IsSubfolderStructure(folder_content) then
-                        -- Toon parent folder header
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
                         r.ImGui_Text(ctx, (prefix == "" and "" or "  ") .. folder_name .. " >")
                         r.ImGui_PopStyleColor(ctx)
                         
-                        -- Recursief tonen van subfolders
                         ShowNestedFolders(folder_content, full_path)
                     end
                 end
@@ -4915,7 +4895,6 @@ function SortScreenshotResults()
     end
 end
 
-
 local function SortPlainPluginList(list)
     if not list or #list == 0 then return end
     if screenshot_sort_mode == "rating" then
@@ -4928,7 +4907,7 @@ local function SortPlainPluginList(list)
                 return ra > rb
             end
         end)
-    else -- alphabet default
+    else 
         table.sort(list, function(a,b) return a:lower() < b:lower() end)
     end
 end
@@ -4947,7 +4926,6 @@ local function ShowScreenshotControls()
         r.ImGui_PopItemWidth(ctx)
         r.ImGui_SameLine(ctx)
 
-        -- Sorteerknop (toggle A/R)
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
         local sort_label = (screenshot_sort_mode == "alphabet") and "A" or "R"
         if r.ImGui_Button(ctx, sort_label, 20, 20) then
@@ -4966,13 +4944,11 @@ local function ShowScreenshotControls()
             end
         end
 
-        -- Global Search knop
         r.ImGui_SameLine(ctx)
         if browser_search_term == "" then
             r.ImGui_BeginDisabled(ctx)
         end
     if r.ImGui_Button(ctx, "All", 20, 20) then
-            -- Voer direct een globale zoekopdracht uit (met type-prioriteit dedupe)
             screenshot_search_results = {}
             local MAX_RESULTS = 200
             local term = browser_search_term:lower()
@@ -4982,7 +4958,6 @@ local function ShowScreenshotControls()
                     table.insert(matches, plugin)
                 end
             end
-            -- Dedupe per type-prioriteit indien ingeschakeld
             if config.apply_type_priority then
                 matches = DedupeByTypePriority(matches)
             end
@@ -5009,12 +4984,10 @@ local function ShowScreenshotControls()
             r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)")
         end
 
-        -- Zoekveld logica
         if changed then
             browser_search_term = new_search
             if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
             if browser_search_term == "" then
-                -- Zoekveld leeg: reset naar huidige context (category/dev/all uses current_filtered_fx)
                 screenshot_search_results = {}
                 search_warning_message = nil
                 if current_filtered_fx and #current_filtered_fx > 0 then
@@ -5031,7 +5004,6 @@ local function ShowScreenshotControls()
                 RequestClearScreenshotCache()
                 new_search_performed = true
             else
-                -- Normale zoekopdracht in folder of submap
                 screenshot_search_results = {}
                 loaded_items_count = ITEMS_PER_BATCH
                 search_warning_message = nil
@@ -5077,8 +5049,6 @@ local function ShowScreenshotControls()
    
     end
 
-
-        -- Overige menu/instellingenknoppen (ongewijzigd)
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local button_width = 20
     local button_height = 20
@@ -5139,7 +5109,6 @@ local function ShowScreenshotControls()
             end
             if r.ImGui_MenuItem(ctx, "Respect PM exclusion", "", config.respect_search_exclusions_in_screenshots) then
                 config.respect_search_exclusions_in_screenshots = not config.respect_search_exclusions_in_screenshots
-                -- Re-filter huidige resultaten / cache opschonen
                 ClearScreenshotCache()
                 if screenshot_search_results and #screenshot_search_results > 0 and config.respect_search_exclusions_in_screenshots then
                     local filtered = {}
@@ -5433,7 +5402,6 @@ end
 local ITEMS_PER_PAGE = 30
 
 local function DrawBrowserItems(tbl, main_cat_name)
-    -- Helpers voor pin-functionaliteit
     local function EnsurePinnedList(cat)
         if not config.pinned_subgroups then config.pinned_subgroups = {} end
         if not config.pinned_subgroups[cat] then config.pinned_subgroups[cat] = {} end
@@ -5453,17 +5421,14 @@ local function DrawBrowserItems(tbl, main_cat_name)
         for i=#lst,1,-1 do if lst[i] == name then table.remove(lst, i); SaveConfig(); break end end
     end
     local function BuildSubgroupDrawOrder(cat, items)
-        -- Map naam -> index (eerste match)
         local index_by_name = {}
         for i = 1, #items do index_by_name[items[i].name] = i end
         local order = {}
-        -- Eerst de gepinde in volgorde van de lijst
         local pinned = EnsurePinnedList(cat)
         for _, name in ipairs(pinned) do
             local idx = index_by_name[name]
             if idx then table.insert(order, idx) end
         end
-        -- Dan de rest in originele volgorde
         local pinned_set = {}
         for _, name in ipairs(pinned) do pinned_set[name] = true end
         for i = 1, #items do
@@ -5482,10 +5447,8 @@ local function DrawBrowserItems(tbl, main_cat_name)
             end
         end
 
-    -- Apply type-priority dedupe before sorting
     filtered_fx = DedupeByTypePriority(filtered_fx)
 
-        -- Pas dezelfde sortering toe als hoofd A/R toggle
         local sm = config.sort_mode or sort_mode or "alphabet"
         if sm == "alphabet" then
             table.sort(filtered_fx, function(a,b) return a:lower() < b:lower() end)
@@ -5514,7 +5477,6 @@ local function DrawBrowserItems(tbl, main_cat_name)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
             if r.ImGui_Selectable(ctx, header_text .. "##browseritem_" .. i, is_selected) then
-                -- Alleen screenshots tonen, NIET openklappen
                 SelectBrowserPanelItem(tbl[i].name)
                 UpdateLastViewedFolder(tbl[i].name)
                 loaded_items_count = ITEMS_PER_BATCH
@@ -5528,7 +5490,6 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     end
                 else
                     if view_mode == "list" then
-                        -- In list view: laad alles in één keer
                         for j = 1, #filtered_fx do
                             table.insert(screenshot_search_results, {name = filtered_fx[j]})
                         end
@@ -5545,7 +5506,6 @@ local function DrawBrowserItems(tbl, main_cat_name)
             if not tbl[i].current_page then tbl[i].current_page = 1 end
             local total_pages = math.ceil(#filtered_fx / ITEMS_PER_PAGE)
 
-            -- Rechtsklik: context menu voor togglen tussen list en screenshots
             if r.ImGui_IsItemClicked(ctx, 1) then
                 local popup_id = "browser_item_ctx_" .. tostring(main_cat_name or "") .. "_" .. i
                 r.ImGui_OpenPopup(ctx, popup_id)
@@ -5667,7 +5627,6 @@ end
 -- CUSTOM FOLDERS (NESTED)
 local function DisplayCustomFoldersInBrowser(folders, path_prefix)
     path_prefix = path_prefix or ""
-    -- Helpers: pin list management for custom subfolders (by full path)
     local function IsCustomPinned(full_path)
         if not config.pinned_custom_subfolders then return false end
         for _, p in ipairs(config.pinned_custom_subfolders) do if p == full_path then return true end end
@@ -5684,7 +5643,6 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
         end
     end
     
-    -- SORTEER: eerst gepinde subfolders (op pad) dan alfabetisch de rest
     local sorted_folder_names = {}
     for folder_name, _ in pairs(folders) do table.insert(sorted_folder_names, folder_name) end
     table.sort(sorted_folder_names, function(a, b)
@@ -5704,7 +5662,6 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
         if IsPluginArray(folder_content) then
             local is_selected = (selected_folder == full_path)
             local is_pinned = IsCustomPinned(full_path)
-            -- Custom background highlight (sterker zichtbaar) voor geselecteerde map
             if is_selected then
                 local dl = r.ImGui_GetWindowDrawList(ctx)
                 local x,y = r.ImGui_GetCursorScreenPos(ctx)
@@ -5737,10 +5694,8 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 end
                 ClearScreenshotCache()
             end
-            -- geen PopStyleColor nodig want we hebben drawlist gebruikt
 
             if r.ImGui_IsItemClicked(ctx, 1) then
-                -- Rechtsklik opent alleen menu, toggelt niet de open staat
                 r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
             end
             if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
@@ -5771,7 +5726,6 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
             for i, plugin in ipairs(folder_content) do
                 local display_plugin = GetDisplayPluginName(plugin)
                 if r.ImGui_Selectable(ctx, display_plugin .. "  " .. GetStarsString(plugin)) then
-                    -- Gedrag gelijk aan andere subfolders: folder deselecteren en alleen deze plugin tonen
                     selected_folder = nil
                     selected_individual_item = plugin
                     screenshot_search_results = {{name = plugin}}
@@ -5803,39 +5757,30 @@ local function DisplayCustomFoldersInBrowser(folders, path_prefix)
     end
 end
 
-
-
--- State vars voor soepele footer resizing
 footer_resize_active = footer_resize_active or false
 footer_last_mouse_y  = footer_last_mouse_y or 0
 
 local function ShowBrowserPanel()
     if not config.show_browser_panel then return end
 
-    -- Footer hoogte uit config (resizable). Init default indien nil.
     config.browser_footer_height = math.max(20, config.browser_footer_height or 150)
     local BROWSER_FOOTER_HEIGHT = config.browser_footer_height
-    -- Hoogte referentie van het hele browserpaneel (exclusief buitenste margins) eerst nulzetten; later meten
     local browser_panel_start_y = r.ImGui_GetCursorPosY(ctx)
     browser_footer_text = browser_footer_text or "INFO BOX"
-    -- Buitenste sectie: scrollbar verbergen via ScrollbarSize=0 (geen flags i.v.m. assert)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     r.ImGui_BeginChild(ctx, "BrowserSection", config.browser_panel_width, -1)
-    -- Meet totale hoogte van BrowserSection aan begin voor vaste 70%-berekening
     local section_pos_y = r.ImGui_GetCursorScreenPos(ctx)
     local section_start_y = section_pos_y -- screen pos not directly used; we will later compute height via window height minus pos diff
 
     -- Header
     r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 25 or 4)
     if config.show_browser_search then
-        -- Zelfde breedte als screenshot search (70)
         r.ImGui_PushItemWidth(ctx, 70)
         local changed_browser_search, new_browser_search = r.ImGui_InputTextWithHint(ctx, "##BrowserSearch", "Search...", browser_search_term)
         r.ImGui_PopItemWidth(ctx)
         if changed_browser_search then
             browser_search_term = new_browser_search
         end
-        -- Sorteer / Global knoppen (Toggle A/R, All)
         r.ImGui_SameLine(ctx)
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
         local sort_label = (screenshot_sort_mode == "alphabet") and "A" or "R"
@@ -5857,7 +5802,6 @@ local function ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
         if browser_search_term == "" then r.ImGui_BeginDisabled(ctx) end
         if r.ImGui_Button(ctx, "All", 20, 20) then
-            -- Zelfde globale zoekactie als in screenshot controls, met type-prioriteit dedupe
             local MAX_RESULTS = 250
             local too_many_results = false
             local term_l = browser_search_term:lower()
@@ -5888,20 +5832,15 @@ local function ShowBrowserPanel()
         if browser_search_term == "" then r.ImGui_EndDisabled(ctx) end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)") end
     else
-        -- kleine spacer zodat layout consistent blijft
         r.ImGui_Dummy(ctx, 0, 2)
     end
     r.ImGui_EndChild(ctx)
 
-    -- Verdeel resterende ruimte tussen content en footer
     local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-    -- Trek een kleine marge af (item spacing) zodat buitenste child geen overflow + scrollbar krijgt
     local spacing_fudge = 6
     local footer_space = (config.show_screenshot_info_box and BROWSER_FOOTER_HEIGHT or 0)
     local content_h = math.max(0, avail_h - footer_space - spacing_fudge)
 
-    -- Browser hoofd-inhoud (bestaande code behouden)
-    -- Scroll toestaan maar scrollbar onzichtbaar via ScrollbarSize=0 style var (stabieler dan flags in deze binding)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     local content_open = r.ImGui_BeginChild(ctx, "BrowserContent", -1, content_h)
     if content_open then
@@ -6040,7 +5979,6 @@ local function ShowBrowserPanel()
                         r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
                     end
                 end
-                -- Auto-open when a subgroup is selected
                 if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end
                 if r.ImGui_CollapsingHeader(ctx, header_label) then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
@@ -6117,7 +6055,6 @@ local function ShowBrowserPanel()
                     end
                 end
                 if r.ImGui_CollapsingHeader(ctx, "FOLDERS") then
-                    -- Helpers for pinning FOLDERS entries (top-level My Folders)
                     local function EnsurePinnedList()
                         if not config.pinned_subgroups then config.pinned_subgroups = {} end
                         if not config.pinned_subgroups["FOLDERS"] then config.pinned_subgroups["FOLDERS"] = {} end
@@ -6136,7 +6073,6 @@ local function ShowBrowserPanel()
                         local lst = EnsurePinnedList()
                         for k=#lst,1,-1 do if lst[k] == name then table.remove(lst, k); SaveConfig(); break end end
                     end
-                    -- Build order: pinned first (in pin order), then others in original order
                     local index_by_name = {}
                     for idx=1,#CAT_TEST[i].list do index_by_name[CAT_TEST[i].list[idx].name] = idx end
                     local order = {}
@@ -6395,20 +6331,16 @@ local function ShowBrowserPanel()
 
     -- Vaste footer optioneel
     if config.show_screenshot_info_box then
-        -- Spline / splitter stijl divider (zoals verticale splitter), met vloeiende Y delta
         do
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
             local x1, y1 = r.ImGui_GetCursorScreenPos(ctx)
             local avail_w = r.ImGui_GetContentRegionAvail(ctx)
             local x2 = x1 + avail_w
             local grab_h = 6
-            -- Visuele lijnen (centreren binnen grab zone)
             local mid_y = y1 + math.floor(grab_h/2)
             r.ImGui_DrawList_AddLine(draw_list, x1, mid_y-1, x2, mid_y-1, 0x666666FF, 2.0)
             r.ImGui_DrawList_AddLine(draw_list, x1, mid_y+1, x2, mid_y+1, 0x222222FF, 1.0)
-            -- Interactie zone
             r.ImGui_InvisibleButton(ctx, "##FooterResize", avail_w, grab_h)
-            -- Rechterklik op divider: minimaliseer footer naar 20px
             if r.ImGui_IsItemClicked(ctx, 1) then
                 BROWSER_FOOTER_HEIGHT = 20
                 config.browser_footer_height = 20
@@ -6430,11 +6362,9 @@ local function ShowBrowserPanel()
                 local _, my = r.ImGui_GetMousePos(ctx)
                 local delta = my - footer_last_mouse_y
                 if delta ~= 0 then
-                    -- Omgekeerd: sleep omhoog (delta negatief) vergroot footer, omlaag (delta positief) verkleint footer.
                     local new_height = BROWSER_FOOTER_HEIGHT - delta
                     local window_h = r.ImGui_GetWindowHeight(ctx)
                     local max_h = math.floor(window_h * 0.7) -- 70% van vensterhoogte
-                    -- Min hoogte verlaagd van 100 naar 20
                     new_height = math.max(20, math.min(new_height, max_h))
                     if new_height ~= BROWSER_FOOTER_HEIGHT then
                         config.browser_footer_height = new_height
@@ -6447,20 +6377,16 @@ local function ShowBrowserPanel()
             r.ImGui_Dummy(ctx, 0, 2)
         end
         if r.ImGui_BeginChild(ctx, "BrowserFooter", -1, BROWSER_FOOTER_HEIGHT) then
-            -- Dynamische project / track info
-            local proj = 0 -- current project
+            local proj = 0 
             local _, proj_name = r.EnumProjects(-1, "")
             if not proj_name or proj_name == "" then
                 proj_name = "(Unsaved Project)"
             else
-                -- Strip pad
                 proj_name = proj_name:match("[^/\\]+$") or proj_name
-                -- Strip extensie (.RPP)
                 proj_name = proj_name:gsub("%.RPP$","",1):gsub("%.rpp$","",1)
             end
             local sr = r.GetSetProjectInfo(proj, "PROJECT_SRATE", 0, false) or 0
             if sr == 0 then
-                -- 0 betekent 'use audio device rate'; probeer te lezen via GetAudioDeviceInfo
                 local dev_sr_ret, dev_sr = r.GetAudioDeviceInfo and r.GetAudioDeviceInfo("SRATE", "") or false, nil
                 if dev_sr_ret then sr = tonumber(dev_sr) or 0 end
             end
@@ -6515,10 +6441,8 @@ local function ShowBrowserPanel()
             r.ImGui_Text(ctx, string.format("Sample Rate: %s", sr > 0 and (tostring(math.floor(sr)) .. " Hz") or "Device"))
             r.ImGui_Text(ctx, string.format("BPM: %.2f", bpm))
             r.ImGui_Text(ctx, "Track #: " .. track_num_display)
-            -- Track name met rechtsklik rename
             do
                 local label = "Track Name: " .. track_name
-                -- Gebruik Selectable zodat we een ID/item hebben voor context click
                 if r.ImGui_Selectable(ctx, label .. "##footer_track_name_sel", false, r.ImGui_SelectableFlags_AllowDoubleClick() ) then
                     if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
                         new_track_name = track_name
@@ -6534,12 +6458,10 @@ local function ShowBrowserPanel()
                 end
             end
             r.ImGui_Text(ctx, "Items: " .. item_count_display .. item_type_suffix)
-            -- Tags in footer met zelfde rechtsklik menu als TagManager
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                 local guid = r.GetTrackGUID(TRACK)
                 local tags = guid and track_tags and track_tags[guid]
                 r.ImGui_Text(ctx, "Tags:")
-                -- + knop voor toevoegen tags (altijd zichtbaar)
                 r.ImGui_SameLine(ctx)
                 if r.ImGui_Button(ctx, "+", 16, 16) then
                     r.ImGui_OpenPopup(ctx, "FooterAddTagPopup")
@@ -6616,7 +6538,6 @@ local function ShowBrowserPanel()
                         local pressed = r.ImGui_Button(ctx, tag)
                         if tag_colors[tag] then r.ImGui_PopStyleColor(ctx, 3) end
                         if pressed then
-                            -- Toggle mute mode voorbeeld: selecteer alle tracks met tag
                             local tagged_tracks = FilterTracksByTag(tag)
                             r.Main_OnCommand(40297, 0)
                             for _, tr in ipairs(tagged_tracks) do r.SetTrackSelected(tr, true) end
@@ -6627,7 +6548,6 @@ local function ShowBrowserPanel()
                         end
                         if r.ImGui_BeginPopup(ctx, "footer_tag_ctx_" .. tag) then
                             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 2, 2)
-                            -- Zelfde opties als hoofdvenster TagOptions
                             if r.ImGui_MenuItem(ctx, "Remove Tag") then
                                 for g, tag_list in pairs(track_tags) do
                                     for i = #tag_list, 1, -1 do
@@ -6788,17 +6708,15 @@ local function ShowBrowserPanel()
             else
                 r.ImGui_Text(ctx, "Tags: -")
             end
-            -- Track FX list in Info Box (BrowserFooter)
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                 local fx_count = r.TrackFX_GetCount(TRACK)
-                r.ImGui_Dummy(ctx, 0, 6) -- extra ruimte tussen tags en divider
+                r.ImGui_Dummy(ctx, 0, 6) 
                 r.ImGui_Separator(ctx)
                 if fx_count > 0 then
                     r.ImGui_Text(ctx, string.format("Track FX (%d):", fx_count))
                     local list_height = math.min(120, fx_count * 18 + 4)
                     if r.ImGui_BeginChild(ctx, "FooterTrackFX", -1, list_height) then
                         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 2)
-            -- Eenvoudige lijst zonder drag & drop
                         for i = 0, fx_count - 1 do
                             local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                             if ok and fx_name ~= "" then
@@ -6856,7 +6774,6 @@ local function ShowBrowserPanel()
                                 end
                             end
                         end
-                        -- Geen eind-drop target meer nodig
                         r.ImGui_PopStyleVar(ctx)
                         r.ImGui_EndChild(ctx)
                     end
@@ -6869,7 +6786,6 @@ local function ShowBrowserPanel()
                 r.ImGui_Text(ctx, "Track FX: -")
             end
 
-            -- Item FX list (eerste geselecteerde item, actieve take)
             do
                 local sel_item = r.GetSelectedMediaItem(0, 0)
                 local take = sel_item and r.GetActiveTake(sel_item) or nil
@@ -6953,7 +6869,6 @@ local function ShowBrowserPanel()
     r.ImGui_EndChild(ctx) -- BrowserSection
     r.ImGui_PopStyleVar(ctx) -- outer ScrollbarSize
 
-    -- Splitter (ongewijzigd)
     r.ImGui_SameLine(ctx)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x666666FF)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x888888FF)
@@ -6980,7 +6895,6 @@ local function CheckScrollAndLoadMore(all_plugins)
             if current_scroll > 0 and current_scroll/max_scroll > 0.7 and loaded_items_count < #all_plugins then
                 local new_count = math.min(loaded_items_count + ITEMS_PER_BATCH, #all_plugins)
                 if new_count > loaded_items_count then
-                    -- Initialiseer screenshot_search_results als het nil is
                     if not screenshot_search_results then
                         screenshot_search_results = {}
                     end
@@ -7012,7 +6926,6 @@ local function ScaleScreenshotSize(width, height, max_display_size)
 end
 
 local function DrawMasonryLayout(screenshots)
-    -- Apply top spacing for masonry by offsetting initial column heights (dummy would be overridden by SetCursorPos)
     local initial_spacing = 0
     if not top_screenshot_spacing_applied then
         initial_spacing = 6 -- same visual gap as grid
@@ -7030,7 +6943,6 @@ local function DrawMasonryLayout(screenshots)
 
     for i, fx in ipairs(screenshots) do
         if fx.is_separator then
-            -- Force separator line below tallest column so far
             local max_h = 0
             for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
             r.ImGui_SetCursorPos(ctx, padding, max_h)
@@ -7041,14 +6953,12 @@ local function DrawMasonryLayout(screenshots)
             for c = 1, num_columns do column_heights[c] = max_h + sep_height end
             goto continue
         end
-        -- Controleer of dit een bericht is in plaats van een plugin
         if fx.is_message then
-            -- Toon bericht in gele tekst over de volledige breedte
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF) -- Gele tekst
             local display_name = GetDisplayPluginName(fx.name)
             r.ImGui_TextWrapped(ctx, display_name)
             r.ImGui_PopStyleColor(ctx)
-            goto continue -- Skip de rest van de loop voor dit item
+            goto continue 
         end
         
         local shortest_column = 1
@@ -7074,16 +6984,13 @@ local function DrawMasonryLayout(screenshots)
 
                     r.ImGui_BeginGroup(ctx)
 
-                    -- Image button
                     local masonry_clicked = r.ImGui_ImageButton(ctx, "masonry_" .. i, texture, display_width, display_height)
 
                     if config.enable_drag_add_fx then
-                        -- Start mogelijke drag bij mouse down
                         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
                             potential_drag_fx_name = fx.name
                             drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
                         end
-                        -- Escaleren naar echte drag na beweging
                         if potential_drag_fx_name == fx.name and r.ImGui_IsMouseDown(ctx,0) then
                             local mx,my = r.ImGui_GetMousePos(ctx)
                             if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
@@ -7091,16 +6998,13 @@ local function DrawMasonryLayout(screenshots)
                                 potential_drag_fx_name = nil
                             end
                         end
-                        -- Als muis los zonder voldoende beweging -> reset potential (click wordt verwerkt)
                         if potential_drag_fx_name == fx.name and r.ImGui_IsMouseReleased(ctx,0) then
                             potential_drag_fx_name = nil
                         end
                     end
 
-                    -- Klik gedrag afhankelijk van single/double click setting
                     local should_add = false
                     if config.add_fx_with_double_click then
-                        -- Alleen toevoegen bij echte double click (en niet tijdens drag)
                         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= fx.name then
                             should_add = true
                         end
@@ -7128,7 +7032,6 @@ local function DrawMasonryLayout(screenshots)
                         ShowPluginContextMenu(fx.name, "masonry_" .. i)
                     end
 
-                    -- Tekst onder screenshot: naam (textwrap) en sterren op aparte regel
                     local text_height = 0
                     if config.show_name_in_screenshot_window and not config.hidden_names[fx.name] then
                         local y_before = r.ImGui_GetCursorPosY(ctx)
@@ -7150,19 +7053,13 @@ local function DrawMasonryLayout(screenshots)
         end
         ::continue:: 
     end
-    -- Zorg dat de cursor onder de hoogste kolom komt zodat divider / missing lijst niet overlapt
     local max_height = 0
     for i = 1, #column_heights do
         if column_heights[i] > max_height then max_height = column_heights[i] end
     end
-    -- Extra marge onderaan
     r.ImGui_SetCursorPosY(ctx, max_height + (config.compact_screenshots and 4 or 16))
 end
 
-
-
-
--- Helper: Render de Scripts Launcher voor weergave in screenshotwindow
 local function RenderScriptsLauncherSection(popped_view_stylevars)
     
     ShowScreenshotControls()
@@ -7219,7 +7116,6 @@ local function RenderScriptsLauncherSection(popped_view_stylevars)
         r.ImGui_EndPopup(ctx)
     end
 
-    -- Scrollbare lijst (grid + editor) in child zodat scrollbar niet doorloopt tot boven
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local current_y = r.ImGui_GetCursorPosY(ctx)
     local footer_height = 0 -- (reserveer ruimte indien later nodig)
@@ -7276,7 +7172,6 @@ local function RenderScriptsLauncherSection(popped_view_stylevars)
             col_index = col_index + 1
             x = x + cell_w + spacing
         end
-        -- Inline editor onder het raster
         if edit_script_index then
             r.ImGui_Separator(ctx)
             r.ImGui_Text(ctx, "Edit Script:")
@@ -7319,7 +7214,6 @@ local function RenderScriptsLauncherSection(popped_view_stylevars)
             r.ImGui_SameLine(ctx)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xAA2222FF)
             if r.ImGui_Button(ctx, "All", 20, 20) then
-                -- Voer direct een globale zoekopdracht uit (met type-prioriteit dedupe)
                 screenshot_search_results = {}
                 local MAX_RESULTS = 200
                 local term = browser_search_term:lower()
@@ -7348,66 +7242,6 @@ local function RenderScriptsLauncherSection(popped_view_stylevars)
             end
             r.ImGui_PopStyleColor(ctx)
         end 
-    r.ImGui_PopItemWidth(ctx)
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, show_categories and "C" or "A", button_width, button_height) then
-        show_categories = not show_categories
-    end
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, show_only_active and "O" or "F", button_width, button_height) then
-        show_only_active = not show_only_active
-    end
-    local window_height = r.ImGui_GetWindowHeight(ctx)
-    local current_y = r.ImGui_GetCursorPosY(ctx)
-    local footer_height = 50
-    local available_height = window_height - current_y - footer_height
-    if r.ImGui_BeginChild(ctx, "ActionList", 0, available_height) then
-        local filteredActions = SearchActions(action_search_term)
-        if show_categories then
-            for category, actions in pairs(filteredActions) do
-                if #actions > 0 then
-                    if r.ImGui_TreeNode(ctx, category .. " (" .. #actions .. ")") then
-                        for _, action in ipairs(actions) do
-                            if action.state == 1 then
-                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF)
-                            end
-                            local prefix = action.state == 1 and "[ON] " or ""
-                            if r.ImGui_Selectable(ctx, prefix .. action.name) then
-                                r.Main_OnCommand(action.id, 0)
-                            elseif r.ImGui_IsItemClicked(ctx, 1) then
-                                CreateSmartMarker(action.id)
-                            end
-                            if action.state == 1 then
-                                r.ImGui_PopStyleColor(ctx)
-                            end
-                        end
-                        r.ImGui_TreePop(ctx)
-                    end
-                end
-            end
-        else
-            for _, action in ipairs(allActions) do
-                local state = r.GetToggleCommandState(action.id)
-                if (action_search_term == "" or action.name:lower():find(action_search_term:lower())) and (not show_only_active or state == 1) then
-                    if state == 1 then
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF)
-                    end
-                    local prefix = state == 1 and "[ON] " or ""
-                    if r.ImGui_Selectable(ctx, prefix .. action.name) then
-                        r.Main_OnCommand(action.id, 0)
-                    elseif r.ImGui_IsItemClicked(ctx, 1) then
-                        CreateSmartMarker(action.id)
-                    end
-                    if state == 1 then
-                        r.ImGui_PopStyleColor(ctx)
-                    end
-                end
-            end
-        end
-        r.ImGui_EndChild(ctx)
-    end
-    r.ImGui_Separator(ctx)
-    r.ImGui_TextWrapped(ctx, "Left-click: Execute action. Right-click: Create smart marker.")
     r.ImGui_EndChild(ctx)
 end
     return popped_view_stylevars
@@ -7418,7 +7252,6 @@ local function ShowScreenshotWindow()
         screenshot_search_results = {}
     end
 
-    -- Helper: filter search results op excluded plugins indien optie actief
     local function FilterSearchResults()
         if not config.respect_search_exclusions_in_screenshots or not config.excluded_plugins then return end
         if not screenshot_search_results or #screenshot_search_results == 0 then return end
@@ -7435,10 +7268,8 @@ local function ShowScreenshotWindow()
 
     FilterSearchResults()
 
-    -- reset spacing flag each frame of screenshot window
     top_screenshot_spacing_applied = false
 
-    -- Gebruik browser_panel_selected voor submappen, selected_folder voor folders
     local active_folder = browser_panel_selected or selected_folder
 
     if (not screenshot_search_results or #screenshot_search_results == 0) and (not active_folder) then
@@ -7514,11 +7345,9 @@ local function ShowScreenshotWindow()
         local viewport_width = r.ImGui_Viewport_GetWorkSize(viewport)
         local gap = 10
 
-        -- Check dock positie hoofdvenster
         local is_main_window_left_docked = (main_window_pos_x - viewport_pos_x) < 20
         local is_main_window_right_docked = (main_window_pos_x + main_window_width) > (viewport_pos_x + viewport_width - 20)
         
-        -- Forceer tegenovergestelde dock positie
         if is_main_window_left_docked then
             config.dock_screenshot_left = false
         elseif is_main_window_right_docked then
@@ -7526,12 +7355,10 @@ local function ShowScreenshotWindow()
         end
         
         if config.dock_screenshot_left then
-            -- Links docken: compenseer voor browser panel indien actief
             local browser_offset = (config.show_browser_panel and config.dock_screenshot_left) and (config.browser_panel_width + 5) or 0
             local left_pos = main_window_pos_x - config.screenshot_window_width - (2 * gap) - browser_offset
             r.ImGui_SetNextWindowPos(ctx, left_pos, main_window_pos_y, r.ImGui_Cond_Always())
         else
-            -- Rechts docken: gebruik de volledige rechterkant van het hoofdvenster
             local right_pos = main_window_pos_x + main_window_width + (gap / 2)
             r.ImGui_SetNextWindowPos(ctx, right_pos, main_window_pos_y, r.ImGui_Cond_Always())
         end
@@ -7555,35 +7382,22 @@ local function ShowScreenshotWindow()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
         local popped_view_stylevars = false
         r.ImGui_PushFont(ctx, NormalFont, 11)
-        --r.ImGui_SetCursorPosY(ctx, 5)
     
         if show_media_browser and not popped_view_stylevars then
             r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
-            --r.ImGui_Text(ctx, "PROJECTS:")
             r.ImGui_SameLine(ctx)
-            --ShowFolderDropdown()
         elseif show_sends_window and not popped_view_stylevars then
             r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
-           -- r.ImGui_Text(ctx, "SENDS /RECEIVES:")
             r.ImGui_SameLine(ctx)
-            --ShowFolderDropdown()
         elseif show_action_browser and not popped_view_stylevars then
             r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
-            --r.ImGui_Text(ctx, "ACTIONS:")
             r.ImGui_SameLine(ctx)
-           -- ShowFolderDropdown()
         else
-           -- r.ImGui_Text(ctx, "SCREENSHOTS: " .. (FILTER or ""))
             r.ImGui_SameLine(ctx)
-            --ShowFolderDropdown()
-
         end
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
-
-
-        --r.ImGui_Separator(ctx)
 
 --------------------------------------------------------------------------------------
         -- PROJECTS GEDEELTE:
@@ -7841,7 +7655,6 @@ local function ShowScreenshotWindow()
                     r.ImGui_PopItemWidth(ctx)
                 end
             
-                --r.ImGui_SameLine(ctx)
                 -- Progress Bar
                 local rv, position = r.CF_Preview_GetValue(current_preview, "D_POSITION")
                 local rv2, length = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
@@ -7871,9 +7684,7 @@ local function ShowScreenshotWindow()
             -- SEND/RECEIVE GEDEELTE:
             elseif show_sends_window then
                 ShowScreenshotControls()
-                --ShowFolderDropdown()
                 r.ImGui_Separator(ctx)
-                      -- Calculate available height
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local current_y = r.ImGui_GetCursorPosY(ctx)
                 local footer_height = 40
@@ -7886,7 +7697,6 @@ local function ShowScreenshotWindow()
                     else
                     -- SENDS SECTIE
                     r.ImGui_Text(ctx, "SENDS:")
-                    --r.ImGui_Separator(ctx)
                     
                     if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                         local num_sends = r.GetTrackNumSends(TRACK, 0)
@@ -7926,7 +7736,6 @@ local function ShowScreenshotWindow()
                                         r.SetTrackSendInfo_Value(TRACK, 0, i, "B_MUTE", new_mute and 1 or 0)
                                     end
                                     r.ImGui_SameLine(ctx)
-                                    -- Check of alle andere sends gemute zijn
                                     local all_others_muted = true
                                     local num_sends = r.GetTrackNumSends(TRACK, 0)
                                     for j = 0, num_sends - 1 do
@@ -7940,10 +7749,8 @@ local function ShowScreenshotWindow()
                                     if changed_solo then
                                         for j = 0, num_sends - 1 do
                                             if new_solo then
-                                                -- Als we solo-en, mute alle andere sends
                                                 r.SetTrackSendInfo_Value(TRACK, 0, j, "B_MUTE", j == i and 0 or 1)
                                             else
-                                                -- Als we unsolo-en, unmute alles
                                                 r.SetTrackSendInfo_Value(TRACK, 0, j, "B_MUTE", 0)
                                             end
                                         end
@@ -7960,7 +7767,6 @@ local function ShowScreenshotWindow()
                                     if changed_mono then
                                         r.SetTrackSendInfo_Value(TRACK, 0, i, "B_MONO", new_mono and 1 or 0)
                                     end
-                                    --r.ImGui_SameLine(ctx)
                                     local current_mode = r.GetTrackSendInfo_Value(TRACK, 0, i, "I_SENDMODE")
                                     local mode_names = {
                                         "Post-Fader/Post-Pan",  -- mode 0
@@ -8012,7 +7818,6 @@ local function ShowScreenshotWindow()
                                     local _, track_name = r.GetTrackName(dest_track)
                                     if r.ImGui_Selectable(ctx, track_name) then
                                         if config.create_sends_folder then
-                                            -- Zoek bestaande SEND TRACK folder of maak nieuwe
                                             local folder_idx = -1
                                             for j = 0, track_count - 1 do
                                                 local track = r.GetTrack(0, j)
@@ -8024,13 +7829,11 @@ local function ShowScreenshotWindow()
                                             end
                                             
                                             if folder_idx == -1 then
-                                                -- Maak nieuwe folder
                                                 r.InsertTrackAtIndex(track_count, true)
                                                 local folder_track = r.GetTrack(0, track_count)
                                                 r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
                                                 r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
                                                 
-                                                -- Verplaats de destination track naar de folder als laatste item
                                                 local last_track_in_folder = nil
                                                 for j = folder_idx + 1, track_count - 1 do
                                                     local track = r.GetTrack(0, j)
@@ -8063,7 +7866,6 @@ local function ShowScreenshotWindow()
                         -- RECEIVES SECTIE
                         r.ImGui_Separator(ctx)
                         r.ImGui_Text(ctx, "RECEIVES:")
-                        -- r.ImGui_Separator(ctx)
                         
                         local num_receives = r.GetTrackNumSends(TRACK, -1)
                         for i = 0, num_receives - 1 do
@@ -8103,7 +7905,6 @@ local function ShowScreenshotWindow()
                                     end
                         
                                     r.ImGui_SameLine(ctx)
-                                    -- Check of alle andere receives gemute zijn
                                     local all_others_muted = true
                                     local num_receives = r.GetTrackNumSends(TRACK, -1)
                                     for j = 0, num_receives - 1 do
@@ -8117,10 +7918,8 @@ local function ShowScreenshotWindow()
                                     if changed_solo then
                                         for j = 0, num_receives - 1 do
                                             if new_solo then
-                                                -- Als we solo-en, mute alle andere receives
                                                 r.SetTrackSendInfo_Value(TRACK, -1, j, "B_MUTE", j == i and 0 or 1)
                                             else
-                                                -- Als we unsolo-en, unmute alles
                                                 r.SetTrackSendInfo_Value(TRACK, -1, j, "B_MUTE", 0)
                                             end
                                         end
@@ -8138,7 +7937,6 @@ local function ShowScreenshotWindow()
                                         r.SetTrackSendInfo_Value(TRACK, -1, i, "B_MONO", new_mono and 1 or 0)
                                     end
 
-                                    --r.ImGui_SameLine(ctx)
                                     local current_mode = r.GetTrackSendInfo_Value(TRACK, -1, i, "I_SENDMODE")
                                     local mode_names = {
                                         "Post-Fader/Post-Pan",  -- mode 0
@@ -8197,11 +7995,8 @@ local function ShowScreenshotWindow()
                             r.ImGui_EndPopup(ctx)
                         end
                     end
-                    r.ImGui_Dummy(ctx, 0, 10)  -- Spacing tussen secties
-                    
-                    
-                        
-                       
+                    r.ImGui_Dummy(ctx, 0, 10) 
+                
                 if show_routing_matrix then
                     ShowRoutingMatrix()
                 end
@@ -8228,7 +8023,6 @@ local function ShowScreenshotWindow()
         else
         ShowScreenshotControls()
         local available_width = r.ImGui_GetContentRegionAvail(ctx)
-        --local display_size
         if config.use_global_screenshot_size then
             display_size = config.global_screenshot_size
         elseif config.resize_screenshots_with_window then
@@ -8239,7 +8033,6 @@ local function ShowScreenshotWindow()
         local num_columns = math.max(1, math.floor(available_width / display_size))
         local column_width = available_width / num_columns 
         
-        --warning
         if search_warning_message then
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF) -- Gele tekst
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x444400FF) -- Donkere achtergrond
@@ -8257,7 +8050,6 @@ local function ShowScreenshotWindow()
         end
    
     local folder_match_count = nil
-    -- Ondersteun ook subfolders via browser_panel_selected (All Plugins / Category / Developer view)
     local active_folder_for_tip = browser_panel_selected or selected_folder
     if (not search_warning_message) and browser_search_term ~= "" and active_folder_for_tip then
         local folder_plugins = current_filtered_fx and #current_filtered_fx > 0 and current_filtered_fx or GetPluginsForFolder(active_folder_for_tip)
@@ -8289,7 +8081,6 @@ local function ShowScreenshotWindow()
         end
 
         if r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0) then
-            -- Flicker Guard: coalesce clears/rebuilds on real state changes
             if config.flicker_guard_enabled then
                 local now = r.time_precise()
                 local sig = _build_screenshot_signature()
@@ -8327,25 +8118,20 @@ local function ShowScreenshotWindow()
                 
                 if selected_folder == "Favorites" then
                     filtered_plugins = favorite_plugins
-                    -- Filter alleen voor weergave
                     local display_plugins = {}
                     for _, plugin in ipairs(filtered_plugins) do
                         if plugin:lower():find(browser_search_term:lower(), 1, true) then
                             table.insert(display_plugins, plugin)
                         end
                     end
-                    -- Type-priority dedupe voor Favorites
                     if config.apply_type_priority then
                         display_plugins = DedupeByTypePriority(display_plugins)
                     end
                     filtered_plugins = display_plugins
-                    -- Pas A/R sortering toe op custom folder lijst
                     SortPlainPluginList(filtered_plugins)
 
-                    -- Pas A/R sortering toe op favorites lijst
                     SortPlainPluginList(filtered_plugins)
 
-                    -- RENDER FAVORITES (ontbrak eerder, daardoor geen screenshots)
                     if #filtered_plugins == 0 then
                         r.ImGui_Text(ctx, "No Favorites match search.")
                     else
@@ -8401,7 +8187,6 @@ local function ShowScreenshotWindow()
                             RenderMissingList(missing)
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
-                            -- top spacing before first favorites grid row
                             ApplyTopScreenshotSpacing()
                             for i, plugin_name in ipairs(with_shot) do
                                 if plugin_name == "--Favorites End--" then
@@ -8475,9 +8260,7 @@ local function ShowScreenshotWindow()
 
                 -- CUSTOM FOLDERS RENDERING
                 elseif (selected_folder and next(GetPluginsFromCustomFolder(selected_folder) or {}) ~= nil) then
-                    -- Haal plugins op uit custom folder
                     filtered_plugins = GetPluginsFromCustomFolder(selected_folder or "") or {}
-                    -- Filter voor zoekterm
                     local display_plugins = {}
                     if config.show_favorites_on_top then
                         local favorites, regular = {}, {}
@@ -8490,7 +8273,6 @@ local function ShowScreenshotWindow()
                                 end
                             end
                         end
-                        -- Dedupe per segment om VST/VST3/etc. dubbels te verwijderen
                         if config.apply_type_priority then
                             favorites = DedupeByTypePriority(favorites)
                             regular = DedupeByTypePriority(regular)
@@ -8569,7 +8351,6 @@ local function ShowScreenshotWindow()
                             RenderMissingList(missing)
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
-                            -- top spacing before first custom folder grid row
                             ApplyTopScreenshotSpacing()
                             for i, plugin_name in ipairs(with_shot) do
                                 if plugin_name == "--Favorites End--" then
@@ -8641,7 +8422,6 @@ local function ShowScreenshotWindow()
                     end
                 elseif selected_folder == "Current Project FX" then
                     filtered_plugins = GetCurrentProjectFX()
-                    -- Filter alleen voor weergave
                     local display_plugins = {}
                     for _, fx in ipairs(filtered_plugins) do
                         if fx.fx_name:lower():find(browser_search_term:lower(), 1, true) then
@@ -8650,12 +8430,10 @@ local function ShowScreenshotWindow()
                     end
                     filtered_plugins = display_plugins
                     
-                    -- Zorg ervoor dat screenshot_search_results bestaat voor Current Project FX
                     if not screenshot_search_results then
                         screenshot_search_results = {}
                     end
                     
-                    -- ALTIJD SCREENSHOTS VOOR CURRENT PROJECT FX (list mode uitgeschakeld)
                     if #filtered_plugins > 0 then
                         local current_track_identifier = nil
                         local column_width = available_width / num_columns
@@ -8663,7 +8441,6 @@ local function ShowScreenshotWindow()
                          for i, plugin in ipairs(filtered_plugins) do
                             local track_identifier
                             
-                            -- Gebruik verschillende identifiers voor master en normale tracks
                             if plugin.is_master then
                                 track_identifier = "master_track"
                             else
@@ -8673,7 +8450,6 @@ local function ShowScreenshotWindow()
                             if track_identifier ~= current_track_identifier then
                                 current_track_identifier = track_identifier
 
-                                -- Track header (inclusief master track)
                                 if plugin.is_master then
                                     -- MASTER TRACK HEADER
                                     r.ImGui_Separator(ctx)
@@ -8738,7 +8514,6 @@ local function ShowScreenshotWindow()
                                 end
                             end
                             
-                            -- Check of FX moet worden getoond (collapsed check)
                             local should_show_fx = true
                             if plugin.is_master then
                                 should_show_fx = not master_track_collapsed
@@ -8766,7 +8541,6 @@ local function ShowScreenshotWindow()
                                             local unique_id = "project_fx_" .. i .. "_" .. (plugin.track_number or 0) .. "_" .. (plugin.fx_index or 0)
 
                                             local clicked = r.ImGui_ImageButton(ctx, unique_id, texture, display_width, display_height)
-                                            -- Hersteld gedrag: single left click opent/toggelt altijd bestaande FX (double-click setting alleen voor toevoegen nieuwe FX elders)
                                             if clicked or (config.add_fx_with_double_click and r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0)) then
                                                 if plugin.is_master then
                                                     local master_track = r.GetMasterTrack(0)
@@ -8816,7 +8590,6 @@ local function ShowScreenshotWindow()
 
                 elseif selected_folder == "Current Track FX" then
                     filtered_plugins = GetCurrentTrackFX()
-                    -- Filter alleen voor weergave
                     local display_plugins = {}
                     for _, fx in ipairs(filtered_plugins) do
                         if fx.fx_name:lower():find(browser_search_term:lower(), 1, true) then
@@ -8825,7 +8598,6 @@ local function ShowScreenshotWindow()
                     end
                     filtered_plugins = display_plugins
 
-                    -- HEADER voor huidige track (kleur + naam + collapse)
                     if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
                         local track_color_u32, text_color_u32 = GetTrackColorAndTextColor(TRACK)
                         local track_number = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") or 0
@@ -8851,12 +8623,10 @@ local function ShowScreenshotWindow()
                         end
                         r.ImGui_PopStyleColor(ctx)
                         if current_track_fx_collapsed then
-                            -- Sla rendering van FX lijst over als collapsed
                             goto skip_current_track_fx_render
                         end
                     end
 
-                    -- ALTIJD SCREENSHOTS VOOR CURRENT TRACK FX (list mode uitgeschakeld)
 
                     -- NORMALE LAYOUT VOOR CURRENT TRACK FX (MASONRY UITGEZET)
                     local available_width = r.ImGui_GetContentRegionAvail(ctx)
@@ -8933,7 +8703,6 @@ local function ShowScreenshotWindow()
                                     local display_plugins = {}
                                     
                                     if config.show_favorites_on_top then
-                                        -- Favorites eerst (gesorteerd)
                                         local favorites = {}
                                         local regular = {}
                                         for _, plugin in ipairs(filtered_plugins) do
@@ -8945,7 +8714,6 @@ local function ShowScreenshotWindow()
                                                 end
                                             end
                                         end
-                                        -- Sorteer beide sets volgens huidige sorteer-modus
                                         SortPlainPluginList(favorites)
                                         SortPlainPluginList(regular)
                                         for _, plugin in ipairs(favorites) do display_plugins[#display_plugins+1] = plugin end
@@ -8960,7 +8728,6 @@ local function ShowScreenshotWindow()
                                         SortPlainPluginList(display_plugins)
                                     end
                                     
-                                    -- Type-priority dedupe voor standaard folders
                                     if config.apply_type_priority then
                                         display_plugins = DedupeByTypePriority(display_plugins)
                                     end
@@ -9037,7 +8804,6 @@ local function ShowScreenshotWindow()
                                 end
                             else
                                 local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
-                                -- top spacing before first standard folder grid row
                                 ApplyTopScreenshotSpacing()
                                 for i, plugin_name in ipairs(with_shot) do
                                     if plugin_name == "--Favorites End--" then
@@ -9063,7 +8829,6 @@ local function ShowScreenshotWindow()
                                                         potential_drag_fx_name = plugin_name
                                                         drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
                                                     end
-                                                    -- If mouse is held and movement beyond threshold, escalate to real drag
                                                     if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx,0) then
                                                         local mx,my = r.ImGui_GetMousePos(ctx)
                                                         if math.abs(mx - drag_start_x) > 3 or math.abs(my - drag_start_y) > 3 then
@@ -9071,7 +8836,6 @@ local function ShowScreenshotWindow()
                                                             potential_drag_fx_name = nil
                                                         end
                                                     end
-                                                    -- If released without movement -> treat as normal click (clear potential)
                                                     if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx,0) then
                                                         potential_drag_fx_name = nil
                                                     end
@@ -9114,7 +8878,6 @@ local function ShowScreenshotWindow()
                 end
     
             elseif screenshot_search_results and #screenshot_search_results > 0 then
-                -- Search results weergave
                 local available_width = r.ImGui_GetContentRegionAvail(ctx)
                 if config.use_global_screenshot_size then
                     display_size = config.global_screenshot_size
@@ -9124,7 +8887,6 @@ local function ShowScreenshotWindow()
                     display_size = config.folder_specific_sizes["SearchResults"] or config.screenshot_window_size
                 end
                 if view_mode == "list" then
-                    -- Eenvoudige lijstweergave (search results) met ratings
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
                     for i, fx in ipairs(screenshot_search_results) do
                         if fx.is_message then
@@ -9169,7 +8931,6 @@ local function ShowScreenshotWindow()
                             end
                         end
                         local with_shot, missing = SplitPluginsByScreenshot(plain_names)
-                        -- Bouw masonry_data: eerst messages, dan alle plugins met screenshot
                         local masonry_data = {}
                         for _, msg in ipairs(messages) do masonry_data[#masonry_data+1] = msg end
                         for _, plugin_name in ipairs(with_shot) do
@@ -9179,7 +8940,6 @@ local function ShowScreenshotWindow()
                         RenderMissingList(missing)
                     else
                         local num_columns = math.max(1, math.floor(available_width / display_size))
-                        -- Bouw aparte lijst van namen (exclusief message entries)
                         local plain_names = {}
                         local messages = {}
                         for _, fx in ipairs(screenshot_search_results) do
@@ -9190,16 +8950,13 @@ local function ShowScreenshotWindow()
                             end
                         end
                         local with_shot, missing = SplitPluginsByScreenshot(plain_names)
-                        -- Render eerst eventuele messages altijd bovenaan
                         for _, msg in ipairs(messages) do
                             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF)
                             local display_name = GetDisplayPluginName(msg.name)
                             r.ImGui_TextWrapped(ctx, display_name)
                             r.ImGui_PopStyleColor(ctx)
                         end
-                        -- top spacing before first search results grid row (after potential messages)
                         if #with_shot > 0 then ApplyTopScreenshotSpacing() end
-                        -- Render screenshots in grid
                         for i, plugin_name in ipairs(with_shot) do
                             local column = (i - 1) % num_columns
                             if column > 0 then r.ImGui_SameLine(ctx) end
@@ -9261,7 +9018,6 @@ local function ShowScreenshotWindow()
                                 r.ImGui_Dummy(ctx, 0, 5)
                             end
                         end
-                        -- Render missing list (divider + selectable items)
                         RenderMissingList(missing)
                     end
                 end
@@ -9278,7 +9034,6 @@ local function ShowScreenshotWindow()
     return visible 
     end
 end
-
 
 function FilterTracksByTag(tag)
     local matching_tracks = {}
@@ -9297,7 +9052,6 @@ function FilterTracksByTag(tag)
     end
     return matching_tracks
 end
-
 
 local function Filter_actions(filter_text)
     if old_filter == filter_text then return old_t end
@@ -9322,7 +9076,6 @@ local function Filter_actions(filter_text)
     return t
 end
 
-
 local function FilterBox()
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local window_height = r.ImGui_GetWindowHeight(ctx)
@@ -9331,10 +9084,8 @@ local function FilterBox()
     local margin = 3
     local search_width = track_info_width - (x_button_width * 3) - (margin * 2)
    
-    -- Sort
     local sort_mode = config.sort_mode or "score" -- "score", "alphabet", "rating"
 
-    -- Bereken hoogte van alle UI elementen
     local top_buttons_height = config.hideTopButtons and 5 or 30
     local tags_height = config.show_tags and current_tag_window_height or 0
     local meter_height = config.hideMeter and 0 or 90
@@ -9395,7 +9146,6 @@ local function FilterBox()
         SaveConfig()
     end
     r.ImGui_SameLine(ctx)
-    -- Sorteer toggle (A/R)
     local sort_label_main = (sort_mode == "alphabet") and "A" or ((sort_mode == "rating") and "R" or "A")
     if r.ImGui_Button(ctx, sort_label_main, x_button_width, button_height) then
         if sort_mode == "alphabet" then
@@ -9442,7 +9192,6 @@ local function FilterBox()
             selected_folder = config.default_folder
         end
 
-    -- Voeg deze logica toe voor de speciale folders
     if config.default_folder == "Projects" then
         show_media_browser = true
         show_sends_window = false
@@ -9465,7 +9214,6 @@ local function FilterBox()
         ClearScreenshotCache()
         if selected_folder then
             local filtered_plugins = GetPluginsForFolder(selected_folder)
-            -- Prefill screenshot list for the restored folder
             loaded_items_count = ITEMS_PER_BATCH or loaded_items_count or 30
             screenshot_search_results = {}
             for i = 1, math.min(loaded_items_count, #filtered_plugins) do
@@ -9517,7 +9265,6 @@ end
         if r.ImGui_BeginChild(ctx, "##popupp", -1, search_results_max_height) then
             if config.show_type_dividers then
                 
-                -- Organized view with type dividers
                 local types = {
                     VST = {}, VSTi = {}, 
                     VST3 = {}, VST3i = {}, 
@@ -9711,7 +9458,6 @@ local function DrawItems(tbl, main_cat_name)
        
         if r.ImGui_BeginMenu(ctx, tbl[i].name) then
             if main_cat_name == "FOLDERS" then
-                -- Sorteer plugins in favorites en reguliere items
                 local favorites = {}
                 local regular = {}
                 local all_plugins = {}
@@ -9764,7 +9510,6 @@ local function DrawItems(tbl, main_cat_name)
                     end
                 end
             else
-                -- Originele implementatie voor andere categorieën
                 if tbl[i] and tbl[i].fx then
                     for j = 1, #tbl[i].fx do
                         if tbl[i].fx[j] then
@@ -9825,9 +9570,6 @@ local function DrawItems(tbl, main_cat_name)
     end
 end
 
-
-
-
 local function DrawFavorites()
     for i, fav in ipairs(favorite_plugins) do
     local fav_display_global = GetDisplayPluginName(fav)
@@ -9853,9 +9595,7 @@ local function DrawFavorites()
             end
             is_screenshot_visible = true
          
-        end
-
-        
+        end      
         ShowPluginContextMenu(fav, "favorites_" .. i)
     end
     if not r.ImGui_IsWindowHovered(ctx) then
@@ -9881,13 +9621,8 @@ local function DrawBottomButtons()
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight - 42)
     -- volumeslider
     if not config.hideVolumeSlider then
-        -- Pan en Width sliders naast elkaar
         local half_width = (track_info_width - button_spacing) / 2
-        --r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), config.slider_grab_color)
-        --r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), config.slider_active_color)
-        --r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 4)
-        --r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
-        
+      
         -- Pan slider met context menu
         r.ImGui_PushItemWidth(ctx, half_width)
         local pan_mode = r.GetMediaTrackInfo_Value(TRACK, "I_PANMODE")
@@ -9952,7 +9687,6 @@ local function DrawBottomButtons()
             r.ImGui_EndPopup(ctx)
         end
 
-
         -- Width slider
         r.ImGui_SameLine(ctx)
         r.ImGui_PushItemWidth(ctx, half_width)
@@ -9966,7 +9700,6 @@ local function DrawBottomButtons()
             r.SetMediaTrackInfo_Value(TRACK, "D_WIDTH", new_width / 100)
         end
         
-
         -- volume slider
         local volume = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
         if volume and volume > 0 then
@@ -9990,7 +9723,6 @@ local function DrawBottomButtons()
                 local new_volume = 10^(new_volume_db/20)
                 r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
             end
-            --r.ImGui_PopStyleColor(ctx, 4)
             r.ImGui_PopItemWidth(ctx)
         end
     end
@@ -10236,7 +9968,6 @@ local function ShowTrackFX()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
 
-            -- Eerst de kleurknop
             if r.ImGui_ColorButton(ctx, "##notes_color", config.track_notes_color, 0, 13, 13) then
                 r.ImGui_OpenPopup(ctx, "NotesColorPopup")
             end
@@ -10251,7 +9982,6 @@ local function ShowTrackFX()
             r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Notes:")
 
-            -- Save knop rechts uitlijnen
             local window_width = r.ImGui_GetWindowWidth(ctx)
             local text_width = r.ImGui_CalcTextSize(ctx, "Save")
             r.ImGui_SameLine(ctx)
@@ -10260,7 +9990,6 @@ local function ShowTrackFX()
                 SaveNotes()
             end
 
-            -- Color picker popup
             if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
                 local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.track_notes_color)
                 if changed then
@@ -10443,12 +10172,10 @@ local function ShowItemFX()
 
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.item_notes_color) 
         if r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height) then
-            -- Rechtsklik check eerst
             if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
                 r.ImGui_OpenPopup(ctx, "NotesColorPopup")
             end
             
-            -- Color picker popup
             if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
                 local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", is_item and config.item_notes_color or config.track_notes_color)
                 if changed then
@@ -10462,7 +10189,6 @@ local function ShowItemFX()
                 r.ImGui_EndPopup(ctx)
             end
         
-            -- Dan pas de InputTextMultiline
             local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##itemnotes", notes[item_guid], -1, notes_height - 10)
             if changed then
                 notes[item_guid] = new_note
@@ -10512,8 +10238,6 @@ local function GetTrackType(track)
         return track_type .. "Empty"
     end
 end
-
-
 
 ----------------------------------------------------
 local function CalculateTopHeight(config)
@@ -10571,7 +10295,6 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
         
         if IsPluginArray(folder_content) then
-            -- Plugin folder - toon als menu met plugins
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
@@ -10599,7 +10322,6 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
                     r.ImGui_EndPopup(ctx)
                 end
                 
-                -- Toon alle plugins in deze folder (bestaande code)
                 local favorites = {}
                 local regular = {}
                 
@@ -10662,7 +10384,6 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PopStyleColor(ctx, 2)
             
         elseif IsSubfolderStructure(folder_content) then
-            -- Parent folder - toon als submenu (bestaande code)
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
@@ -10673,7 +10394,6 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
             
             if r.ImGui_BeginMenu(ctx, folder_name) then
-                -- Recursief tonen van subfolders
                 DrawCustomFoldersMenu(folder_content, full_path)
                 if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     r.ImGui_CloseCurrentPopup(ctx)
@@ -11030,7 +10750,6 @@ function EnsureWindowVisible()
             local vp_x, vp_y = r.ImGui_Viewport_GetPos(viewport)
             local vp_w, vp_h = r.ImGui_Viewport_GetWorkSize(viewport)
             
-            -- Aangepaste breedte naar 200
             local window_w = 200
             local window_h = 600
             local center_x = vp_x + (vp_w - window_w) * 0.5
@@ -11058,12 +10777,10 @@ function Main()
         elseif selected_track then
             TRACK = selected_track
         else
-            -- Fallback: gebruik eerste track of master
             local first_track = r.GetTrack(0, 0)
             TRACK = first_track or master_track
         end
     end
-
 
     if needs_font_update then
         UpdateFonts()
@@ -11127,17 +10844,14 @@ function Main()
             InitializeImGuiContext()
         end
 
--- FX lijst hoogte berekenen
 local fx_list_height = 0
 if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
     local fx_count = r.TrackFX_GetCount(TRACK)
     fx_list_height = fx_count * 15
 end
 
--- Totale minimale hoogte berekenen met nieuwe functies
 local min_window_height = CalculateTopHeight(config) + CalculateMenuHeight(config) + fx_list_height + CalculateBottomSectionHeight(config) + 60
 
--- Window constraints toepassen
 r.ImGui_SetNextWindowSizeConstraints(ctx, 140, min_window_height, 16384, 16384)
 ----------------------------------------------------------------------------------   
 handleDocking()
@@ -11176,12 +10890,10 @@ if visible then
             local track_info_width = math.max(window_width - 10, 125)  -- Minimaal 125, of vensterbreedte - 20
             
             if r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50) then
-                -- Stel de stijlen voor de knoppen in
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Transparante knop
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
-                -- Voeg de '+' knop toe linksboven
                 r.ImGui_SetCursorPos(ctx, 0, 0)
                 r.ImGui_PushFont(ctx, IconFont, 12)
                 if r.ImGui_Button(ctx, '\u{0050}', 20, 20) then
@@ -11197,7 +10909,6 @@ if visible then
                     show_settings = not show_settings
                 end
                 
-                -- Herstel de stijlen
                 if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
                     r.ImGui_PopFont(ctx)
                 end
@@ -11462,14 +11173,11 @@ if visible then
                 if r.ImGui_Button(ctx, "<", 20, 20) then
                     local current_track_number = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER")
                     if current_track_number == 1 then
-                        -- Bij eerste track, ga naar master
                         r.SetOnlyTrackSelected(r.GetMasterTrack(0))
                     elseif r.IsTrackSelected(r.GetMasterTrack(0)) then
-                        -- Bij master track, ga naar laatste track
                         local last_track = r.GetTrack(0, r.GetNumTracks() - 1)
                         if last_track then r.SetOnlyTrackSelected(last_track) end
                     else
-                        -- Anders ga naar vorige track
                         local prev_track = r.GetTrack(0, current_track_number - 2)
                         if prev_track then r.SetOnlyTrackSelected(prev_track) end
                     end
@@ -11478,7 +11186,6 @@ if visible then
                 r.ImGui_SetCursorPos(ctx, window_width - 16, window_height - 20)
                 if r.ImGui_Button(ctx, ">", 20, 20) then
                     if r.IsTrackSelected(r.GetMasterTrack(0)) then
-                        -- Bij master track, ga naar eerste track
                         local first_track = r.GetTrack(0, 0)
                         if first_track then r.SetOnlyTrackSelected(first_track) end
                     else
@@ -11486,7 +11193,6 @@ if visible then
                         if next_track then 
                             r.SetOnlyTrackSelected(next_track)
                         else
-                            -- Bij laatste track, ga naar master
                             r.SetOnlyTrackSelected(r.GetMasterTrack(0))
                         end
                     end
@@ -11501,7 +11207,6 @@ if visible then
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx)
             
-            -- tag sectie
             if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") and config.show_tags then
                 if r.ImGui_BeginChild(ctx, "TagSection", track_info_width, 45) then
                     current_tag_window_height = r.ImGui_GetWindowHeight(ctx) + 20
@@ -11528,7 +11233,6 @@ if visible then
                                 r.ImGui_SameLine(ctx)
                             end
                             
-                            -- Style and button rendering
                             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
                             local button_pressed = false
                             local tag_color = tag_colors[tag] or config.button_background_color
@@ -11543,12 +11247,10 @@ if visible then
                                 button_pressed = r.ImGui_Button(ctx, tag)
                             end
                             r.ImGui_PopStyleVar(ctx)
-                            -- Handle button click
                             if button_pressed then
 
                                 local tagged_tracks = FilterTracksByTag(tag)
                                 
-                                -- Check welke knop actief is en voer de bijbehorende actie uit
                                 if mute_mode then
                                     for _, track in ipairs(tagged_tracks) do
                                         r.SetMediaTrackInfo_Value(track, "B_MUTE", 1)
@@ -11592,19 +11294,16 @@ if visible then
                                 local tagged_tracks = FilterTracksByTag(tag)
 
                                 if hide_mode == 0 then
-                                    -- Show tagged tracks
                                     for _, track in ipairs(tagged_tracks) do
                                         r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
                                         r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
                                     end
                                 elseif hide_mode == 1 then
-                                    -- Hide tagged tracks
                                     for _, track in ipairs(tagged_tracks) do
                                         r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 0)
                                         r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 0)
                                     end
                                 elseif hide_mode == 3 then
-                                    -- Verberg alle tracks behalve die met deze tag
                                     for i = 0, r.CountTracks(0) - 1 do
                                         local track = r.GetTrack(0, i)
                                         local has_tag = false
@@ -11618,7 +11317,6 @@ if visible then
                                         r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", has_tag and 1 or 0)
                                     end
                                 else
-                                    -- Show all tracks
                                     for i = 0, r.CountTracks(0) - 1 do
                                         local track = r.GetTrack(0, i)
                                         r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
@@ -11808,12 +11506,10 @@ if visible then
 
                                 if r.ImGui_MenuItem(ctx, "Solo tracks with this tag") then
                                     local all_tracks = r.CountTracks(0)
-                                    -- Eerst unsolo alle tracks
                                     for i = 0, all_tracks - 1 do
                                         local track = r.GetTrack(0, i)
                                         r.SetMediaTrackInfo_Value(track, "I_SOLO", 0)
                                     end
-                                    -- Dan solo de tagged tracks
                                     local tracks = FilterTracksByTag(tag)
                                     for _, track in ipairs(tracks) do
                                         r.SetMediaTrackInfo_Value(track, "I_SOLO", 2) -- 2 = Solo
@@ -11879,7 +11575,6 @@ if visible then
                     end
                     
                     if r.ImGui_BeginPopup(ctx, "TagManager") then
-                        --r.ImGui_SetNextWindowSize(ctx, 150, 0)
                         r.ImGui_PushItemWidth(ctx, 110)
                         local changed, new_tag = r.ImGui_InputText(ctx, "##AddTag", new_tag_buffer)
                         if changed then
@@ -12105,12 +11800,10 @@ if visible then
 
                                 if r.ImGui_MenuItem(ctx, "Solo tracks with this tag") then
                                     local all_tracks = r.CountTracks(0)
-                                    -- Eerst unsolo alle tracks
                                     for i = 0, all_tracks - 1 do
                                         local track = r.GetTrack(0, i)
                                         r.SetMediaTrackInfo_Value(track, "I_SOLO", 0)
                                     end
-                                    -- Dan solo de tagged tracks
                                     local tracks = FilterTracksByTag(tag)
                                     for _, track in ipairs(tracks) do
                                         r.SetMediaTrackInfo_Value(track, "I_SOLO", 2) -- 2 = Solo
@@ -12177,7 +11870,6 @@ if visible then
                     
                     r.ImGui_EndChild(ctx)
                   
-                    
                     -- Mute knop
                     local mute_color_active = mute_mode
                     if mute_color_active then
@@ -12297,7 +11989,6 @@ if visible then
                     r.ImGui_SetTooltip(ctx, "Quit the script (You can also use ESC)")
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
-                -- reaper.ImGui_SameLine(ctx)
                 if WANT_REFRESH then
                     WANT_REFRESH = nil
                     UpdateChainsTrackTemplates(CAT)
@@ -12350,7 +12041,6 @@ if visible then
             r.ImGui_Separator(ctx)
             if r.ImGui_Button(ctx, "Create", 100, 0) then
                 if new_folder_name_input and new_folder_name_input ~= "" and new_folder_for_plugin and new_folder_for_plugin ~= "" then
-                    -- Create new folder and add plugin
                     config.custom_folders[new_folder_name_input] = {new_folder_for_plugin}
                     SaveCustomFolders()
                     r.ShowMessageBox("Folder '" .. new_folder_name_input .. "' created with plugin", "Success", 0)
@@ -12390,7 +12080,6 @@ if visible then
             r.ImGui_Separator(ctx)
             if r.ImGui_Button(ctx, "Create", 100, 0) then
                 if new_parent_folder_name and new_parent_folder_name ~= "" and selected_folder_for_parent then
-                    -- Parse the current folder path
                     local parts = {}
                     for part in selected_folder_for_parent:gmatch("[^/]+") do
                         table.insert(parts, part)
@@ -12399,17 +12088,14 @@ if visible then
                     if #parts > 0 then
                         local folder_name = parts[#parts]
                         
-                        -- Navigate to parent location
                         local current = config.custom_folders
                         for i = 1, #parts - 1 do
                             current = current[parts[i]]
                         end
                         
-                        -- Remove old folder and create new structure
                         local old_content = current[folder_name]
                         current[folder_name] = nil
                         
-                        -- Create new parent folder with old folder as subfolder
                         current[new_parent_folder_name] = {
                             [folder_name] = old_content
                         }
@@ -12437,20 +12123,15 @@ if visible then
         end
         
         if check_esc_key() then open = false end
-    -- debug overlay verwijderd
-        -- Close Screenshot child if it was opened
         if screenshot_child_open then
             r.ImGui_EndChild(ctx)
         end
         r.ImGui_End(ctx)
-        -- Overlay voor drag hint tekenen (buiten hoofdvenster)
         if config.enable_drag_add_fx then
             DrawDragOverlay()
         end
         end
- 
-       
-
+        
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
@@ -12462,7 +12143,6 @@ if visible then
     if SHOULD_CLOSE_SCRIPT then
         return
     end
-    -- Globale drop afhandeling als fallback (meer betrouwbaar buiten item code)
     if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
         local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
         if shift then
