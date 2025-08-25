@@ -1,13 +1,9 @@
--- @version 0.1.0
+-- @version 0.1.1
 -- @changelog:
---[[     
 
+--[[
 == THNX TO MASTER SEXAN FOR HIS FX PARSER ==
-
-]]--        
---------------------------------------------------------------------------
-
-
+]]--
 
 local SCRIPT_NAME = 'TK FX Slots Manager'
 local r = reaper
@@ -71,6 +67,7 @@ local ENUM = {
   Col_FrameBgHovered = enum(r.ImGui_Col_FrameBgHovered),
   Col_FrameBgActive = enum(r.ImGui_Col_FrameBgActive),
   Col_PopupBg = enum(r.ImGui_Col_PopupBg),
+  Col_CheckMark = enum(r.ImGui_Col_CheckMark),
 }
 
 local HAVE_StyleVar_FramePadding = ENUM.StyleVar_FramePadding ~= nil
@@ -115,13 +112,14 @@ local function push_app_style()
   local pushed = { colors = 0, vars = 0 }
   if ENUM.StyleVar_WindowRounding and push_style_var(ENUM.StyleVar_WindowRounding, 3.0) then pushed.vars = pushed.vars + 1 end
   if ENUM.StyleVar_FrameRounding and push_style_var(ENUM.StyleVar_FrameRounding, 3.0) then pushed.vars = pushed.vars + 1 end
-  if ENUM.Col_Button and push_style_color(ENUM.Col_Button, 0.28, 0.28, 0.28, 1.00) then pushed.colors = pushed.colors + 1 end
-  if ENUM.Col_ButtonHovered and push_style_color(ENUM.Col_ButtonHovered, 0.36, 0.36, 0.36, 1.00) then pushed.colors = pushed.colors + 1 end
-  if ENUM.Col_ButtonActive and push_style_color(ENUM.Col_ButtonActive, 0.22, 0.22, 0.22, 1.00) then pushed.colors = pushed.colors + 1 end
-  if ENUM.Col_FrameBg and push_style_color(ENUM.Col_FrameBg, 0.28, 0.28, 0.28, 1.00) then pushed.colors = pushed.colors + 1 end
-  if ENUM.Col_FrameBgHovered and push_style_color(ENUM.Col_FrameBgHovered, 0.36, 0.36, 0.36, 1.00) then pushed.colors = pushed.colors + 1 end
-  if ENUM.Col_FrameBgActive and push_style_color(ENUM.Col_FrameBgActive, 0.22, 0.22, 0.22, 1.00) then pushed.colors = pushed.colors + 1 end
-  if ENUM.Col_PopupBg and push_style_color(ENUM.Col_PopupBg, 0.16, 0.16, 0.16, 0.98) then pushed.colors = pushed.colors + 1 end
+  if ENUM.Col_Button and push_style_color(ENUM.Col_Button, 0.18, 0.18, 0.18, 1.00) then pushed.colors = pushed.colors + 1 end
+  if ENUM.Col_ButtonHovered and push_style_color(ENUM.Col_ButtonHovered, 0.26, 0.26, 0.26, 1.00) then pushed.colors = pushed.colors + 1 end
+  if ENUM.Col_ButtonActive and push_style_color(ENUM.Col_ButtonActive, 0.12, 0.12, 0.12, 1.00) then pushed.colors = pushed.colors + 1 end
+  if ENUM.Col_FrameBg and push_style_color(ENUM.Col_FrameBg, 0.20, 0.20, 0.20, 1.00) then pushed.colors = pushed.colors + 1 end
+  if ENUM.Col_FrameBgHovered and push_style_color(ENUM.Col_FrameBgHovered, 0.26, 0.26, 0.26, 1.00) then pushed.colors = pushed.colors + 1 end
+  if ENUM.Col_FrameBgActive and push_style_color(ENUM.Col_FrameBgActive, 0.14, 0.14, 0.14, 1.00) then pushed.colors = pushed.colors + 1 end
+  if ENUM.Col_PopupBg and push_style_color(ENUM.Col_PopupBg, 0.10, 0.10, 0.10, 0.98) then pushed.colors = pushed.colors + 1 end
+  if ENUM.Col_CheckMark and push_style_color(ENUM.Col_CheckMark, 0.92, 0.92, 0.92, 1.00) then pushed.colors = pushed.colors + 1 end
   return pushed
 end
 
@@ -228,7 +226,12 @@ local state                 = {
   typeFilters               = nil,
   pickerMode                = 'replace',
   tkBlankVariants           = nil,
-  sidebarWidth              = 260,
+  sidebarWidth              = 220,
+  hidePrefix                = false,
+  hideDeveloper             = false,
+  selAnchorIdx              = nil,
+  tooltips                  = true,
+  slotUsePlaceholder        = false,
 }
 
 local model = {
@@ -256,6 +259,29 @@ local function save_window_size(w, h)
   if not w or not h then return end
   r.SetExtState('TK_FX_SLOTS', 'WIN_W', tostring(math.floor(w)), true)
   r.SetExtState('TK_FX_SLOTS', 'WIN_H', tostring(math.floor(h)), true)
+end
+
+local function load_ui_prefs()
+  local hp = r.GetExtState('TK_FX_SLOTS', 'HIDE_PREFIX') or ''
+  local hd = r.GetExtState('TK_FX_SLOTS', 'HIDE_DEV') or ''
+  state.hidePrefix = (hp == '1' or hp == 'true') and true or false
+  state.hideDeveloper = (hd == '1' or hd == 'true') and true or false
+  local sw = tonumber(r.GetExtState('TK_FX_SLOTS', 'SIDEBAR_W') or '')
+  if sw and sw > 0 then
+    local clamped = math.max(220, math.min(480, math.floor(sw)))
+    state.sidebarWidth = clamped
+  end
+  local tt = r.GetExtState('TK_FX_SLOTS', 'TOOLTIPS') or ''
+  state.tooltips = (tt == '' and true) or (tt == '1' or tt == 'true')
+end
+
+local function save_ui_prefs()
+  r.SetExtState('TK_FX_SLOTS', 'HIDE_PREFIX', state.hidePrefix and '1' or '0', true)
+  r.SetExtState('TK_FX_SLOTS', 'HIDE_DEV', state.hideDeveloper and '1' or '0', true)
+  if state.sidebarWidth and state.sidebarWidth > 0 then
+    r.SetExtState('TK_FX_SLOTS', 'SIDEBAR_W', tostring(math.floor(state.sidebarWidth)), true)
+  end
+  r.SetExtState('TK_FX_SLOTS', 'TOOLTIPS', state.tooltips and '1' or '0', true)
 end
 
 local function favs_load()
@@ -1086,7 +1112,7 @@ local function delete_all_instances(sourceName, placeholderAdd, placeholderAlias
   return deleted
 end
 
-local function replace_by_slot_across_tracks(slotIndex0, replacementName)
+local function replace_by_slot_across_tracks(slotIndex0, replacementName, aliasName)
   if replacementName == nil or replacementName == '' then
     return 0, 'No replacement plugin selected'
   end
@@ -1101,6 +1127,9 @@ local function replace_by_slot_across_tracks(slotIndex0, replacementName)
     if fxCount > slot then
       local ok, err = replace_fx_at(tr, slot, replacementName, true, 'in_place')
       if ok then replaced = replaced + 1 else state.pendingError = err end
+      if ok and aliasName and aliasName ~= '' then
+        rename_fx_instance(tr, slot, aliasName)
+      end
     end
   end
   r.Undo_EndBlock(('Replace slot #%d across tracks with "%s"'):format((slot or 0) + 1, replacementName), -1)
@@ -1116,7 +1145,7 @@ local function normalize_fx_label(s)
   return t:lower()
 end
 
-local function add_by_slot_across_tracks(slotIndex0, pluginName)
+local function add_by_slot_across_tracks(slotIndex0, pluginName, aliasName)
   if not pluginName or pluginName == '' then return 0, 'No plugin selected' end
   local slot = tonumber(slotIndex0)
   if not slot or slot < 0 then return 0, 'Invalid slot index' end
@@ -1142,6 +1171,10 @@ local function add_by_slot_across_tracks(slotIndex0, pluginName)
       local newIdx = r.TrackFX_AddByName(tr, pluginName, false, -1)
       if newIdx >= 0 then
         r.TrackFX_CopyToTrack(tr, newIdx, tr, destIdx, true)
+        if aliasName and aliasName ~= '' then
+          local finalIdx = (destIdx == FX_END) and (r.TrackFX_GetCount(tr) - 1) or destIdx
+          rename_fx_instance(tr, finalIdx, aliasName)
+        end
         added = added + 1
       end
     end
@@ -1173,10 +1206,10 @@ local function draw_compact_toolbar()
   if pushedVars > 0 and r.ImGui_PopStyleVar then r.ImGui_PopStyleVar(ctx, pushedVars) end
   r.ImGui_SameLine(ctx)
   if r.ImGui_SmallButton(ctx, '-') then state.forceHeaders = false end
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Collapse all') end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Collapse all') end
   r.ImGui_SameLine(ctx)
   if r.ImGui_SmallButton(ctx, '+') then state.forceHeaders = true end
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Expand all') end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Expand all') end
   r.ImGui_SameLine(ctx)
   r.ImGui_Text(ctx, 'T#')
   r.ImGui_SameLine(ctx)
@@ -1199,16 +1232,20 @@ local function draw_compact_toolbar()
   r.ImGui_SameLine(ctx)
   if r.ImGui_SmallButton(ctx, 'Go') then state.scrollToTrackNum = tonumber(state.gotoTrackInput) or 1 end
   -- r.ImGui_NewLine(ctx)
-  local _, v1 = r.ImGui_Checkbox(ctx, 'Selected only', state.scopeSelectedOnly); if _ then state.scopeSelectedOnly = v1; rebuild_model() end
+  local _, v1 = r.ImGui_Checkbox(ctx, 'Selected', state.scopeSelectedOnly); if _ then state.scopeSelectedOnly = v1; rebuild_model() end
   r.ImGui_SameLine(ctx)
   local _, v2 = r.ImGui_Checkbox(ctx, 'Hide empty', state.showOnlyTracksWithFX); if _ then state.showOnlyTracksWithFX = v2; rebuild_model() end
+  r.ImGui_SameLine(ctx)
+  local chgHP, v3 = r.ImGui_Checkbox(ctx, 'Hide prefix', state.hidePrefix); if chgHP then state.hidePrefix = v3; save_ui_prefs() end
+  r.ImGui_SameLine(ctx)
+  local chgHD, v4 = r.ImGui_Checkbox(ctx, 'Hide dev', state.hideDeveloper); if chgHD then state.hideDeveloper = v4; save_ui_prefs() end
   
 end
 local function draw_replace_panel()
   SeparatorText('Replace')
   local label = state.selectedSourceFXName and ('Selected: ' .. state.selectedSourceFXName) or '1. Pick a Source FX First'
   r.ImGui_Text(ctx, label)
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
     local tip = state.selectedSourceFXName and 'Press "Source" in the track list to change the Source FX' or 'Press "Source" in the track list to set the Source FX'
     r.ImGui_SetTooltip(ctx, tip)
   end
@@ -1267,7 +1304,7 @@ local function draw_replace_panel()
   r.ImGui_Dummy(ctx, 0, 4)
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, '4a. Replace all instances of source FX:')
-  if r.ImGui_Button(ctx, 'Replace', 60) then
+  if r.ImGui_Button(ctx, 'Replace..', 60) then
     local count = 0
     count = select(1, replace_all_instances(state.selectedSourceFXName, state.replaceWith))
     state.pendingMessage = ('%d instances replaced.'):format(count)
@@ -1293,7 +1330,7 @@ local function draw_replace_panel()
     end
   end
   r.ImGui_SameLine(ctx)
-  local chgPH, ph = r.ImGui_Checkbox(ctx, 'placehlder', state.deleteInsertPlaceholder)
+  local chgPH, ph = r.ImGui_Checkbox(ctx, 'placeholder', state.deleteInsertPlaceholder)
   if chgPH then state.deleteInsertPlaceholder = ph end
   if state.deleteInsertPlaceholder then
 
@@ -1339,25 +1376,45 @@ local function draw_replace_panel()
   r.ImGui_SetNextItemWidth(ctx, 80)
   local chgSlot, slot1 = r.ImGui_InputInt(ctx, '##Slot (1-based)##batch', (tonumber(state.batchSlotIndex) or 0) + 1)
   if chgSlot then state.batchSlotIndex = math.max(0, (tonumber(slot1) or 1) - 1) end
+ 
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, 'Replace', 60) then
-    if not state.replaceWith or state.replaceWith == '' then
+    if (not state.slotUsePlaceholder) and (not state.replaceWith or state.replaceWith == '') then
       state.pendingError = 'Pick a replacement plugin first.'
     else
-  local count = select(1, replace_by_slot_across_tracks(state.batchSlotIndex, state.replaceWith))
+      local addName, alias = state.replaceWith, nil
+      if state.slotUsePlaceholder then
+        addName = ensure_tk_blank_addname(state.placeholderCustomName)
+        alias = state.placeholderCustomName
+      end
+      local count = select(1, replace_by_slot_across_tracks(state.batchSlotIndex, addName, alias))
       state.pendingMessage = ('Replaced %d track slots.'):format(count)
       rebuild_model()
     end
   end
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, 'Add', 60) then
-    if not state.replaceWith or state.replaceWith == '' then
+    if (not state.slotUsePlaceholder) and (not state.replaceWith or state.replaceWith == '') then
       state.pendingError = 'Pick a plugin first.'
     else
-      local count = select(1, add_by_slot_across_tracks(state.batchSlotIndex, state.replaceWith))
+      local addName, alias = state.replaceWith, nil
+      if state.slotUsePlaceholder then
+        addName = ensure_tk_blank_addname(state.placeholderCustomName)
+        alias = state.placeholderCustomName
+      end
+      local count = select(1, add_by_slot_across_tracks(state.batchSlotIndex, addName, alias))
       state.pendingMessage = ('Added on %d tracks.'):format(count)
       rebuild_model()
     end
+  end
+  local chgPH2, vPH2 = r.ImGui_Checkbox(ctx, 'Use Placeholder##slot', state.slotUsePlaceholder)
+  if chgPH2 then state.slotUsePlaceholder = vPH2 end
+  r.ImGui_Dummy(ctx, 0, 6)
+  r.ImGui_Separator(ctx)
+  local chgTT, vTT = r.ImGui_Checkbox(ctx, 'Tooltips', state.tooltips)
+  if chgTT then
+    state.tooltips = vTT
+    save_ui_prefs()
   end
 end
 
@@ -1373,16 +1430,16 @@ local function draw_track_fx_rows(trEntry)
     r.ImGui_TableSetupColumn(ctx, 'FX name', FLAGS.Col_WidthStretch)
     r.ImGui_TableSetupColumn(ctx, 'Byp/Offl', FLAGS.Col_WidthFixed, 60)
     r.ImGui_TableSetupColumn(ctx, 'Actions', FLAGS.Col_WidthFixed, 100)
-    r.ImGui_TableSetupColumn(ctx, 'Source', FLAGS.Col_WidthFixed, 50)
-    r.ImGui_TableHeadersRow(ctx)
+  r.ImGui_TableSetupColumn(ctx, 'Source', FLAGS.Col_WidthFixed, 50)
 
     local filter = state.filter
     for i, fx in ipairs(trEntry.fxList) do
       if filter == '' or string.find(string.lower(fx.name), string.lower(filter), 1, true) then
         r.ImGui_TableNextRow(ctx)
 
-        r.ImGui_TableSetColumnIndex(ctx, 0)
-        r.ImGui_Text(ctx, tostring(fx.idx + 1))
+  r.ImGui_TableSetColumnIndex(ctx, 0)
+  r.ImGui_Text(ctx, tostring(fx.idx + 1))
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Drop here to place/copy an FX to this slot') end
        
          do
           local dndType = 'TK_FXIDX'
@@ -1417,10 +1474,14 @@ local function draw_track_fx_rows(trEntry)
           end
         end
 
-        r.ImGui_TableSetColumnIndex(ctx, 1)
-        local _sel = false
-        local label = ("%s##fx%d"):format(fx.name, fx.idx)
+    r.ImGui_TableSetColumnIndex(ctx, 1)
+  local _sel = false
+  local nameToShow = tostring(fx.name)
+  if state.hidePrefix then nameToShow = nameToShow:gsub('^[^:]+:%s*', '') end
+  if state.hideDeveloper then nameToShow = nameToShow:gsub('%s*%b()%s*$', '') end
+  local label = ("%s##fx%d"):format(nameToShow, fx.idx)
     r.ImGui_Selectable(ctx, label, _sel)
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Drag to move within this track. Drop on another track to copy. Drop on the # or Name cell to place.') end
     local dndType = 'TK_FXIDX' 
     local trackId = (r.GetTrackGUID and r.GetTrackGUID(tr)) or tostring(tr)
     local canDrag = (r.ImGui_IsItemActive and r.ImGui_IsItemActive(ctx)) or (r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx)) or (r.ImGui_IsItemHovered and r.ImGui_IsItemHovered(ctx))
@@ -1469,22 +1530,24 @@ local function draw_track_fx_rows(trEntry)
             if ENUM and ENUM.Col_Button then
               _pushedBtnStyle = push_style_color(ENUM.Col_Button, 0, 0, 0, 0)
             end
-        local btnLabel = fx.enabled and 'On' or 'Off'
-        if r.ImGui_SmallButton(ctx, btnLabel .. '##b' .. i) then
+  local btnLabel = fx.enabled and 'On' or 'Off'
+  if r.ImGui_SmallButton(ctx, btnLabel .. '##b' .. i) then
           r.Undo_BeginBlock()
           toggle_bypass(tr, fx.idx)
           r.Undo_EndBlock('Toggle FX bypass', -1)
           rebuild_model()
-        end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Toggle bypass for this FX') end
         r.ImGui_SameLine(ctx)
         local is_offline = r.TrackFX_GetOffline(tr, fx.idx)
         local offLabel = is_offline and 'Ofl' or 'Onl'
-        if r.ImGui_SmallButton(ctx, offLabel .. '##o' .. i) then
+  if r.ImGui_SmallButton(ctx, offLabel .. '##o' .. i) then
           r.Undo_BeginBlock()
           r.TrackFX_SetOffline(tr, fx.idx, not is_offline)
           r.Undo_EndBlock('Toggle FX offline', -1)
           rebuild_model()
-        end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Toggle offline (unloads/loads the plugin)') end
 
         r.ImGui_TableSetColumnIndex(ctx, 3)
         if r.ImGui_SmallButton(ctx, 'Del##' .. i) then
@@ -1493,6 +1556,7 @@ local function draw_track_fx_rows(trEntry)
           r.Undo_EndBlock('Delete FX', -1)
           rebuild_model()
         end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Delete this FX from the track') end
         r.ImGui_SameLine(ctx)
         do
           local isToggled = has_toggle_for(trEntry.guid, fx.idx)
@@ -1500,18 +1564,22 @@ local function draw_track_fx_rows(trEntry)
           if r.ImGui_SmallButton(ctx, btnLabel) then
             toggle_replace_fx(tr, trEntry.guid, fx.idx)
           end
+          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+            if isToggled then r.ImGui_SetTooltip(ctx, 'Restore the original FX in this slot') else r.ImGui_SetTooltip(ctx, 'Replace this FX with the chosen plugin (toggle)') end
+          end
         end
 
         r.ImGui_TableSetColumnIndex(ctx, 4)
         local _sp = 0
         if ENUM and ENUM.Col_Button and ENUM.Col_ButtonHovered and ENUM.Col_ButtonActive then
-          if push_style_color(ENUM.Col_Button, 0.20, 0.20, 0.20, 1.0) then _sp = _sp + 1 end
-          if push_style_color(ENUM.Col_ButtonHovered, 0.30, 0.30, 0.30, 1.0) then _sp = _sp + 1 end
-          if push_style_color(ENUM.Col_ButtonActive, 0.15, 0.15, 0.15, 1.0) then _sp = _sp + 1 end
+          if push_style_color(ENUM.Col_Button, 0.14, 0.14, 0.14, 1.0) then _sp = _sp + 1 end
+          if push_style_color(ENUM.Col_ButtonHovered, 0.22, 0.22, 0.22, 1.0) then _sp = _sp + 1 end
+          if push_style_color(ENUM.Col_ButtonActive, 0.10, 0.10, 0.10, 1.0) then _sp = _sp + 1 end
         end
-        if r.ImGui_SmallButton(ctx, 'Source##' .. i) then
+  if r.ImGui_SmallButton(ctx, 'Source##' .. i) then
           state.selectedSourceFXName = fx.name
-        end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Set this FX as the Source for batch replace/delete') end
         if _sp > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, _sp) end
             if _pushedBtnStyle and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, 1) end
       end
@@ -1528,6 +1596,7 @@ local function draw_track_fx_rows(trEntry)
       if okS then state.pendingMessage = 'Saved FX chain: ' .. tostring(pathS) else state.pendingError = pathS end
     end
   end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Save the whole FX chain of this track to an .rfxchain file') end
   r.ImGui_SameLine(ctx)
   if r.ImGui_SmallButton(ctx, ('Replace chain##%s'):format(tostring(trEntry.guid or trEntry.idx))) then
     local sep = package.config:sub(1,1)
@@ -1540,6 +1609,7 @@ local function draw_track_fx_rows(trEntry)
   state.jobDelayFrames = 1
     end
   end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Load an .rfxchain and replace the whole FX chain on this track') end
 end
 
 function draw_tracks_panel()
@@ -1580,6 +1650,57 @@ function draw_tracks_panel()
         gg = ((col >> 8 ) & 0xFF) / 255.0
         bb = ((col >> 16) & 0xFF) / 255.0
       end
+    end
+    
+    do
+      local selId = ('##sel_%s'):format(tostring(trEntry.guid or trEntry.idx))
+      local changedSel, vSel = r.ImGui_Checkbox(ctx, selId, is_sel)
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+        r.ImGui_SetTooltip(ctx, 'Select/deselect this track\nShift+click (on empty): select range from last anchor\nShift+click (on checked): deselect upward until first unchecked')
+      end
+      if changedSel then
+        local shiftDown = false
+        if r.ImGui_GetKeyMods and r.ImGui_Mod_Shift then
+          local mods = r.ImGui_GetKeyMods(ctx)
+          local mshift = r.ImGui_Mod_Shift()
+          if type(mods) == 'number' and type(mshift) == 'number' then
+            shiftDown = (mods & mshift) ~= 0
+          end
+        end
+        if shiftDown and vSel then
+          local anchor = tonumber(state.selAnchorIdx or proj_idx) or proj_idx
+          local s = math.min(anchor, proj_idx)
+          local e = math.max(anchor, proj_idx)
+          for i = s, e do
+            local trk = r.GetTrack(0, i - 1)
+            if trk then pcall(function() r.SetTrackSelected(trk, true) end) end
+          end
+          if r.TrackList_AdjustWindows then pcall(function() r.TrackList_AdjustWindows(false) end) end
+          if r.UpdateArrange then pcall(function() r.UpdateArrange() end) end
+          is_sel = true
+        elseif shiftDown and (not vSel) then
+          local i = proj_idx
+          while i >= 1 do
+            local trk = r.GetTrack(0, i - 1)
+            if not trk then break end
+            local sel = r.IsTrackSelected and (r.IsTrackSelected(trk) == true) or false
+            if (not sel) and i ~= proj_idx then break end
+            pcall(function() r.SetTrackSelected(trk, false) end)
+            i = i - 1
+          end
+          if r.TrackList_AdjustWindows then pcall(function() r.TrackList_AdjustWindows(false) end) end
+          if r.UpdateArrange then pcall(function() r.UpdateArrange() end) end
+          is_sel = false
+        else
+          pcall(function() r.SetTrackSelected(trEntry.track, vSel) end)
+          if r.TrackList_AdjustWindows then pcall(function() r.TrackList_AdjustWindows(false) end) end
+          if r.UpdateArrange then pcall(function() r.UpdateArrange() end) end
+          is_sel = vSel
+          if vSel then state.selAnchorIdx = proj_idx end
+        end
+        rebuild_model()
+      end
+      r.ImGui_SameLine(ctx)
     end
     local pushed = false
     if col ~= 0 and ENUM.Col_Header and ENUM.Col_HeaderHovered and ENUM.Col_HeaderActive then
@@ -1742,7 +1863,7 @@ local function main_loop()
   r.ImGui_EndMenuBar(ctx)
     end
     local fullW, fullH = r.ImGui_GetContentRegionAvail(ctx)
-    local sidebarW = math.max(220, math.min(480, state.sidebarWidth or 260))
+  local sidebarW = math.max(220, math.min(480, state.sidebarWidth or 220))
 
     local leftVisible = r.ImGui_BeginChild(ctx, 'left_sidebar', sidebarW, 0, 1)
     if leftVisible then
@@ -1777,7 +1898,7 @@ local function main_loop()
         local mdx = select(1, r.ImGui_GetMouseDelta(ctx)) or 0
         dx = mdx
       end
-      local newW = math.max(180, math.min(520, (state.sidebarWidth or 260) + dx))
+  local newW = math.max(180, math.min(520, (state.sidebarWidth or 220) + dx))
   local contentW = (select(1, r.ImGui_GetWindowSize(ctx)) or 0) - 24
       if newW < contentW - 220 then state.sidebarWidth = newW end
     end
@@ -1811,6 +1932,7 @@ local function main_loop()
   if not (open == nil or open) then
     local cw, ch = state.winW or 0, state.winH or 0
     if (cw or 0) > 0 and (ch or 0) > 0 then save_window_size(cw, ch) end
+  save_ui_prefs()
   end
   if open == nil or open then
     r.defer(main_loop)
@@ -1821,5 +1943,6 @@ rebuild_model()
 r.defer(function()
   favs_load()
   load_window_size()
+  load_ui_prefs()
   main_loop()
 end)
