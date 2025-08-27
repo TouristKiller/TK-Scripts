@@ -1,4 +1,4 @@
--- @version 0.0.1
+-- @version 0.0.2
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -64,6 +64,9 @@ local state = {
   abOrigGUID = nil,
   abReplGUID = nil,
   abActiveIsRepl = false,
+  screenshotTex = nil,
+  screenshotKey = nil,
+  screenshotFound = false,
 }
 
 local FX_END = -1
@@ -915,6 +918,83 @@ local function ensure_picker_items()
   end
 end
 
+local function get_screenshots_dir()
+  local sep = package.config:sub(1,1)
+  return r.GetResourcePath() .. sep .. 'Scripts' .. sep .. 'TK Scripts' .. sep .. 'FX' .. sep .. 'Screenshots'
+end
+
+local function sanitize_filename(s)
+  local t = tostring(s or '')
+  t = t:gsub('[\\/:%*%?"<>|]', ' ')
+  t = t:gsub('%s+', ' ')
+  t = t:gsub('^%s+', ''):gsub('%s+$', '')
+  return t
+end
+
+local function parse_name_vendor(add)
+  local s = tostring(add or '')
+  local name, vendor = s:match('^%w+:%s*(.-)%s*%((.-)%)')
+  if not name then
+    name = s:match('^%w+:%s*(.+)$') or s
+  end
+  return name, vendor
+end
+
+local function build_screenshot_candidates(add)
+  local typ = parse_addname_type(add)
+  local name, vendor = parse_name_vendor(add)
+  name = sanitize_filename(name)
+  local list = {}
+  if vendor and vendor ~= '' then
+    local vend = sanitize_filename(vendor)
+    list[#list+1] = string.format('%s_ %s _%s_.png', typ, name, vend)
+    list[#list+1] = string.format('%s_ %s _%s_.jpg', typ, name, vend)
+  end
+  list[#list+1] = string.format('%s_ %s.png', typ, name)
+  list[#list+1] = string.format('%s_ %s.jpg', typ, name)
+  list[#list+1] = string.format('%s.png', name)
+  list[#list+1] = string.format('%s.jpg', name)
+  return list
+end
+
+local function find_screenshot_path(add)
+  local dir = get_screenshots_dir()
+  local sep = package.config:sub(1,1)
+  for _, fn in ipairs(build_screenshot_candidates(add)) do
+    local p = dir .. sep .. fn
+    if file_exists(p) then return p end
+  end
+  return nil
+end
+
+local function release_screenshot()
+  if state.screenshotTex and r.ImGui_DestroyImage then
+    pcall(function() r.ImGui_DestroyImage(state.screenshotTex) end)
+  end
+  state.screenshotTex = nil
+  state.screenshotFound = false
+  state.screenshotKey = nil
+end
+
+local function ensure_source_screenshot(add)
+  if not add or add == '' then release_screenshot(); return end
+  if state.screenshotKey == add and (state.screenshotTex or state.screenshotFound) then return end
+  release_screenshot()
+  if not r.ImGui_CreateImage then state.screenshotKey = add; state.screenshotFound = false; return end
+  local path = find_screenshot_path(add)
+  if path then
+    local ok, tex = pcall(function() return r.ImGui_CreateImage(path) end)
+    if ok and tex then
+      state.screenshotTex = tex
+      state.screenshotFound = true
+      state.screenshotKey = add
+      return
+    end
+  end
+  state.screenshotKey = add
+  state.screenshotFound = false
+end
+
 
 local function delete_all_instances(sourceName, placeholderAdd, placeholderAlias)
   if not sourceName or sourceName == '' then return 0, 'No source FX selected' end
@@ -1299,8 +1379,12 @@ local function draw_replace_panel()
   r.ImGui_Dummy(ctx, 0, 10)
   do
     if state.sourceHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
+    local prevOpen = state.sourceHeaderOpen
     local open = r.ImGui_CollapsingHeader(ctx, 'Source Controls', 0)
     if open ~= nil and open ~= state.sourceHeaderOpen then state.sourceHeaderOpen = open; save_user_settings() end
+    if open ~= nil and open ~= prevOpen then
+      release_screenshot()
+    end
     if not open then return end
   end
   local tr = get_selected_track()
@@ -1429,6 +1513,38 @@ local function draw_replace_panel()
       r.ImGui_SetCursorPosY(ctx, curY)
     end
     if changed then set_fx_overall_wet(tr, srcCtrlIdx, v) end
+  r.ImGui_Dummy(ctx, 0, 30)
+    do
+      local _, addname = r.TrackFX_GetFXName(tr, srcCtrlIdx, '')
+      ensure_source_screenshot(addname)
+      local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+      local maxW = math.max(120, math.min(280, availW - 8))
+      local imgW, imgH = maxW, math.floor(maxW * 0.56)
+      if state.screenshotTex then
+        local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+        local left = curX + math.max(0, (availW - imgW) * 0.5)
+        r.ImGui_SetCursorPosX(ctx, left)
+        if r.ImGui_Image then
+          local ok = pcall(function() r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end)
+          if not ok then
+            release_screenshot()
+            local label = 'no image'
+            local tw2 = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+            local curX2 = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+            local left2 = curX2 + math.max(0, (availW - tw2) * 0.5)
+            r.ImGui_SetCursorPosX(ctx, left2)
+            r.ImGui_TextDisabled(ctx, label)
+          end
+        end
+      else
+        local label = 'no image'
+        local tw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+        local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+        local left = curX + math.max(0, (availW - tw) * 0.5)
+        r.ImGui_SetCursorPosX(ctx, left)
+        r.ImGui_TextDisabled(ctx, label)
+      end
+    end
   else
     r.ImGui_Text(ctx, 'Pick a Source')
   end
