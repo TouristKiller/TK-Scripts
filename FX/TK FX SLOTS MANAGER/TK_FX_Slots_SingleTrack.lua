@@ -1,4 +1,4 @@
--- @version 0.0.2
+-- @version 0.0.3
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -66,7 +66,14 @@ local state = {
   abActiveIsRepl = false,
   screenshotTex = nil,
   screenshotKey = nil,
+  -- one-shot deletion request (defer until after table render)
+  _pendingDelGUID = nil,
+  _pendingDelTrack = nil,
+  _pendingDelArmed = false,
+  showScreenshot = true,
+  fxChainHeaderOpen = true,
   screenshotFound = false,
+  showRMSButtons = true,
 }
 
 local FX_END = -1
@@ -97,6 +104,12 @@ local function load_user_settings()
   if ao ~= nil and ao ~= '' then state.actionHeaderOpen = (ao == '1') end
   local so = r.GetExtState(EXT_NS, 'SRC_OPEN')
   if so ~= nil and so ~= '' then state.sourceHeaderOpen = (so == '1') end
+  local im = r.GetExtState(EXT_NS, 'IMG_SHOW')
+  if im ~= nil and im ~= '' then state.showScreenshot = (im == '1') end
+  local fxco = r.GetExtState(EXT_NS, 'FXC_OPEN')
+  if fxco ~= nil and fxco ~= '' then state.fxChainHeaderOpen = (fxco == '1') end
+  local rms = r.GetExtState(EXT_NS, 'SHOW_RMS')
+  if rms ~= nil and rms ~= '' then state.showRMSButtons = (rms == '1') end
 end
 local function save_user_settings()
   r.SetExtState(EXT_NS, 'TOOLTIPS', state.tooltips and '1' or '0', true)
@@ -106,6 +119,9 @@ local function save_user_settings()
   r.SetExtState(EXT_NS, 'REPL_OPEN', state.replHeaderOpen and '1' or '0', true)
   r.SetExtState(EXT_NS, 'ACT_OPEN', state.actionHeaderOpen and '1' or '0', true)
   r.SetExtState(EXT_NS, 'SRC_OPEN', state.sourceHeaderOpen and '1' or '0', true)
+  r.SetExtState(EXT_NS, 'IMG_SHOW', state.showScreenshot and '1' or '0', true)
+  r.SetExtState(EXT_NS, 'FXC_OPEN', state.fxChainHeaderOpen and '1' or '0', true)
+  r.SetExtState(EXT_NS, 'SHOW_RMS', state.showRMSButtons and '1' or '0', true)
 end
 
 local PICKER_TYPE_OPTIONS = {
@@ -148,6 +164,64 @@ end
 local function lighten(rf,gf,bf, amt)
   local function clamp(x) if x < 0 then return 0 elseif x > 1 then return 1 else return x end end
   return clamp(rf + amt), clamp(gf + amt), clamp(bf + amt)
+end
+
+
+local function is_alt_down()
+ 
+  if r.ImGui_GetKeyMods and r.ImGui_Mod_Alt then
+    local mods = r.ImGui_GetKeyMods(ctx)
+    if mods and (mods & r.ImGui_Mod_Alt()) ~= 0 then return true end
+  end
+  
+  if r.ImGui_IsKeyDown then
+    if r.ImGui_Key_ModAlt and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_ModAlt()) then return true end
+    if r.ImGui_Key_Alt and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_Alt()) then return true end
+    if r.ImGui_Key_LeftAlt and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftAlt()) then return true end
+    if r.ImGui_Key_RightAlt and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightAlt()) then return true end
+  end
+  
+  if r.ImGui_GetIO then
+    local io = r.ImGui_GetIO(ctx)
+    if io and io.KeyAlt then return true end
+  end
+  return false
+end
+
+-- Robust Shift modifier detection
+local function is_shift_down()
+  if r.ImGui_GetKeyMods and r.ImGui_Mod_Shift then
+    local mods = r.ImGui_GetKeyMods(ctx)
+    if mods and (mods & r.ImGui_Mod_Shift()) ~= 0 then return true end
+  end
+  if r.ImGui_IsKeyDown then
+    if r.ImGui_Key_ModShift and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_ModShift()) then return true end
+    if r.ImGui_Key_LeftShift and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) then return true end
+    if r.ImGui_Key_RightShift and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift()) then return true end
+  end
+  if r.ImGui_GetIO then
+    local io = r.ImGui_GetIO(ctx)
+    if io and io.KeyShift then return true end
+  end
+  return false
+end
+
+-- Robust Ctrl modifier detection
+local function is_ctrl_down()
+  if r.ImGui_GetKeyMods and r.ImGui_Mod_Ctrl then
+    local mods = r.ImGui_GetKeyMods(ctx)
+    if mods and (mods & r.ImGui_Mod_Ctrl()) ~= 0 then return true end
+  end
+  if r.ImGui_IsKeyDown then
+    if r.ImGui_Key_ModCtrl and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_ModCtrl()) then return true end
+    if r.ImGui_Key_LeftCtrl and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftCtrl()) then return true end
+    if r.ImGui_Key_RightCtrl and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightCtrl()) then return true end
+  end
+  if r.ImGui_GetIO then
+    local io = r.ImGui_GetIO(ctx)
+    if io and io.KeyCtrl then return true end
+  end
+  return false
 end
 
 local function get_selected_track()
@@ -1162,12 +1236,12 @@ local function draw_replace_panel()
     if open ~= nil and open ~= state.replHeaderOpen then state.replHeaderOpen = open; save_user_settings() end
   if open then
 
-  local chgSel, vSel = r.ImGui_Checkbox(ctx, 'Selected tracks only', state.scopeSelectedOnly)
+  local chgSel, vSel = r.ImGui_Checkbox(ctx, 'Selected tracks', state.scopeSelectedOnly)
   if chgSel then state.scopeSelectedOnly = vSel end
   if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Limit to selected tracks, otherwise all tracks') end
 
-  
-  local chgDummy, vDummy = r.ImGui_Checkbox(ctx, 'Use placeholder', state.useDummyReplace)
+  r.ImGui_SameLine(ctx)
+  local chgDummy, vDummy = r.ImGui_Checkbox(ctx, 'placeholder', state.useDummyReplace)
   if chgDummy then state.useDummyReplace = vDummy end
   if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Use a dummy "TK Blank" FX as the replacement') end
   if state.useDummyReplace then
@@ -1385,11 +1459,11 @@ local function draw_replace_panel()
     if open ~= nil and open ~= prevOpen then
       release_screenshot()
     end
-    if not open then return end
   end
   local tr = get_selected_track()
   local srcIdx = tonumber(state.selectedSourceFXIndex)
-  if tr and srcIdx then
+  if state.sourceHeaderOpen then
+    if tr and srcIdx then
     if state.abSlotIndex and state.abSlotIndex ~= srcIdx then
 
       if state.abActiveIsRepl then ab_cancel() else
@@ -1516,37 +1590,53 @@ local function draw_replace_panel()
   r.ImGui_Dummy(ctx, 0, 30)
     do
       local _, addname = r.TrackFX_GetFXName(tr, srcCtrlIdx, '')
-      ensure_source_screenshot(addname)
-      local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
-      local maxW = math.max(120, math.min(280, availW - 8))
-      local imgW, imgH = maxW, math.floor(maxW * 0.56)
-      if state.screenshotTex then
-        local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
-        local left = curX + math.max(0, (availW - imgW) * 0.5)
-        r.ImGui_SetCursorPosX(ctx, left)
-        if r.ImGui_Image then
-          local ok = pcall(function() r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end)
-          if not ok then
-            release_screenshot()
-            local label = 'no image'
-            local tw2 = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
-            local curX2 = select(1, r.ImGui_GetCursorPos(ctx)) or 0
-            local left2 = curX2 + math.max(0, (availW - tw2) * 0.5)
-            r.ImGui_SetCursorPosX(ctx, left2)
-            r.ImGui_TextDisabled(ctx, label)
+      if state.showScreenshot then
+        ensure_source_screenshot(addname)
+        local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+        local maxW = math.max(120, math.min(280, availW - 8))
+        local imgW, imgH = maxW, math.floor(maxW * 0.56)
+        if state.screenshotTex then
+          local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+          local left = curX + math.max(0, (availW - imgW) * 0.5)
+          r.ImGui_SetCursorPosX(ctx, left)
+          if r.ImGui_Image then
+            local ok = pcall(function() r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end)
+            if not ok then
+              release_screenshot()
+              local label = 'no image'
+              local tw2 = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+              local curX2 = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+              local left2 = curX2 + math.max(0, (availW - tw2) * 0.5)
+              r.ImGui_SetCursorPosX(ctx, left2)
+              r.ImGui_TextDisabled(ctx, label)
+            end
           end
+        else
+          local label = 'no image'
+          local tw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+          local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+          local left = curX + math.max(0, (availW - tw) * 0.5)
+          r.ImGui_SetCursorPosX(ctx, left)
+          r.ImGui_TextDisabled(ctx, label)
         end
       else
-        local label = 'no image'
-        local tw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
-        local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
-        local left = curX + math.max(0, (availW - tw) * 0.5)
-        r.ImGui_SetCursorPosX(ctx, left)
-        r.ImGui_TextDisabled(ctx, label)
+        release_screenshot()
       end
     end
-  else
-    r.ImGui_Text(ctx, 'Pick a Source')
+    else
+      r.ImGui_Text(ctx, 'Pick a Source')
+    end
+  end
+
+  -- FXChain Controls: separate block, independent from Source Controls
+  do
+    local openFxC = r.ImGui_CollapsingHeader(ctx, 'FXChain Controls', 0)
+    if openFxC ~= nil and openFxC ~= state.fxChainHeaderOpen then
+      state.fxChainHeaderOpen = openFxC; save_user_settings()
+    end
+    if openFxC then
+      r.ImGui_TextDisabled(ctx, '(coming soon)')
+    end
   end
 end
 
@@ -1642,7 +1732,12 @@ local function draw()
         if state.trackHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_Always()) end
         state.hdrInitApplied = true
       end
-      local openHdr = r.ImGui_CollapsingHeader(ctx, hdr .. '##seltrack', 0)
+      local hdrFlags = 0
+      if r.ImGui_TreeNodeFlags_AllowItemOverlap then
+        hdrFlags = hdrFlags | r.ImGui_TreeNodeFlags_AllowItemOverlap()
+      end
+      local openHdr = r.ImGui_CollapsingHeader(ctx, hdr .. '##seltrack', hdrFlags)
+      if r.ImGui_SetItemAllowOverlap then r.ImGui_SetItemAllowOverlap(ctx) end
       if openHdr ~= nil then
         if state.trackHeaderOpen ~= openHdr then
           state.trackHeaderOpen = openHdr
@@ -1652,6 +1747,95 @@ local function draw()
       if pushedHdr > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushedHdr) end
       if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
         r.ImGui_SetTooltip(ctx, 'Click to expand/collapse the selected track\'s FX list')
+      end
+
+  
+      if state.showRMSButtons then
+        local trRec = tr and (r.GetMediaTrackInfo_Value(tr, 'I_RECARM') or 0) or 0
+        local trMute = tr and (r.GetMediaTrackInfo_Value(tr, 'B_MUTE') or 0) or 0
+        local trSolo = tr and (r.GetMediaTrackInfo_Value(tr, 'I_SOLO') or 0) or 0
+
+  local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+  local widthEstimate = 54 -- ~3 small buttons
+  local rightOffset = 10
+  r.ImGui_SameLine(ctx, math.max(0, availW - widthEstimate + rightOffset))
+
+   
+        local spacingX = 4
+        local pushedSV = 0
+        if r.ImGui_PushStyleVar then
+          if r.ImGui_StyleVar_FramePadding then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2); pushedSV = pushedSV + 1 end
+          if r.ImGui_StyleVar_ItemSpacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), spacingX, 0); pushedSV = pushedSV + 1 end
+        end
+        local fontPushed = false
+        if r.ImGui_GetFont and r.ImGui_PushFont and r.ImGui_PopFont then
+          local df = r.ImGui_GetFont(ctx)
+          if df then
+            local ok = pcall(function() r.ImGui_PushFont(ctx, df, 10) end)
+            fontPushed = ok
+          end
+        end
+
+        
+        do
+          local isOn = (trRec or 0) > 0
+          local pushed = 0
+          if isOn and r.ImGui_PushStyleColor then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.70, 0.20, 0.20, 1.0)); pushed = pushed + 1
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.85, 0.30, 0.30, 1.0)); pushed = pushed + 1
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.60, 0.15, 0.15, 1.0)); pushed = pushed + 1
+          end
+          r.ImGui_SmallButton(ctx, 'R') -- left-click ignored to avoid header conflicts
+          if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Right-click: Record arm on/off') end
+          if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1) then
+            r.Undo_BeginBlock('Toggle record arm')
+            r.SetMediaTrackInfo_Value(tr, 'I_RECARM', isOn and 0 or 1)
+            r.Undo_EndBlock('Toggle record arm', -1)
+          end
+          if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
+        end
+
+        r.ImGui_SameLine(ctx)
+        -- Mute (M)
+        do
+          local isOn = (trMute or 0) > 0
+          local pushed = 0
+          if isOn and r.ImGui_PushStyleColor then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.75, 0.55, 0.20, 1.0)); pushed = pushed + 1
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.85, 0.65, 0.25, 1.0)); pushed = pushed + 1
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.65, 0.45, 0.18, 1.0)); pushed = pushed + 1
+          end
+          r.ImGui_SmallButton(ctx, 'M')
+          if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Right-click: Mute on/off') end
+          if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1) then
+            r.Undo_BeginBlock('Toggle mute')
+            r.SetMediaTrackInfo_Value(tr, 'B_MUTE', isOn and 0 or 1)
+            r.Undo_EndBlock('Toggle mute', -1)
+          end
+          if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
+        end
+
+        r.ImGui_SameLine(ctx)
+        -- Solo (S)
+        do
+          local isOn = (trSolo or 0) > 0
+          local pushed = 0
+          if isOn and r.ImGui_PushStyleColor then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.25, 0.60, 0.25, 1.0)); pushed = pushed + 1
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.30, 0.70, 0.30, 1.0)); pushed = pushed + 1
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.20, 0.50, 0.20, 1.0)); pushed = pushed + 1
+          end
+          r.ImGui_SmallButton(ctx, 'S')
+          if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Right-click: Solo on/off') end
+          if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1) then
+            r.Undo_BeginBlock('Toggle solo')
+            r.SetMediaTrackInfo_Value(tr, 'I_SOLO', isOn and 0 or 1)
+            r.Undo_EndBlock('Toggle solo', -1)
+          end
+          if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
+  end
+  if fontPushed and r.ImGui_PopFont then r.ImGui_PopFont(ctx) end
+  if pushedSV > 0 and r.ImGui_PopStyleVar then r.ImGui_PopStyleVar(ctx, pushedSV) end
       end
 
       if openHdr then
@@ -1703,7 +1887,7 @@ local function draw()
               local clicked = r.ImGui_Selectable(ctx, (disp .. '##fxrow' .. i), false)
               if pushedTxt > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushedTxt) end
               if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-                r.ImGui_SetTooltip(ctx, 'Click to open FX; drag to reorder')
+                r.ImGui_SetTooltip(ctx, 'Click: open | Alt+Click: delete | Shift+Click: bypass | Ctrl+Shift+Click: offline | Drag: reorder')
               end
               if r.ImGui_BeginDragDropSource and r.ImGui_BeginDragDropTarget and r.ImGui_AcceptDragDropPayload and r.ImGui_SetDragDropPayload then
                 if r.ImGui_BeginDragDropSource(ctx, 0) then
@@ -1728,17 +1912,59 @@ local function draw()
                 end
               end
 
-              if clicked and r.TrackFX_Show then
-                local hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
-                local uiOpen = r.TrackFX_GetOpen and r.TrackFX_GetOpen(tr, i) or false
-                if hwnd and hwnd ~= 0 then
-                  r.TrackFX_Show(tr, i, 2)
-                elseif uiOpen then
-                  r.TrackFX_Show(tr, i, 0)
-                else
-                  r.TrackFX_Show(tr, i, 3)
-                  hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
-                  if not (hwnd and hwnd ~= 0) then r.TrackFX_Show(tr, i, 1) end
+              local altClick = false
+              local anyClick = false
+              if r.ImGui_IsItemClicked then
+                anyClick = r.ImGui_IsItemClicked(ctx, 0)
+                if anyClick and is_alt_down() then altClick = true end
+              else
+                anyClick = clicked
+              end
+        if (clicked or anyClick or altClick) and not state._pendingDelArmed then
+                local altDown = is_alt_down()
+                local shiftDown = is_shift_down()
+                local ctrlDown = is_ctrl_down()
+                if altDown then
+                
+                  local guid = r.TrackFX_GetFXGUID and r.TrackFX_GetFXGUID(tr, i) or nil
+                  state._pendingDelGUID = guid
+                  state._pendingDelTrack = tr
+                  state._pendingDelDisp = disp
+                  state._pendingDelIndex = i
+          state._pendingDelArmed = true
+                  break
+                elseif shiftDown and ctrlDown then
+                  
+                  r.Undo_BeginBlock('Toggle FX Offline')
+                  local off = get_fx_offline(tr, i)
+                  set_fx_offline(tr, i, off == nil and true or (not off))
+                  r.Undo_EndBlock('Toggle FX Offline', -1)
+                  state.pendingMessage = string.format('Offline: %s (%s)', (get_fx_offline(tr, i) and 'On' or 'Off'), disp)
+                  state._pendingDelArmed = true
+                  break
+                elseif shiftDown then
+            
+                  r.Undo_BeginBlock('Toggle FX Bypass')
+                  local en = get_fx_enabled(tr, i)
+                  set_fx_enabled(tr, i, en == nil and false or (not en))
+                  r.Undo_EndBlock('Toggle FX Bypass', -1)
+                  local newEn = get_fx_enabled(tr, i)
+                  state.pendingMessage = string.format('Bypass: %s (%s)', (newEn == false) and 'On' or 'Off', disp)
+                  state._pendingDelArmed = true
+                  break
+                elseif r.TrackFX_Show then
+            
+                  local hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
+                  local uiOpen = r.TrackFX_GetOpen and r.TrackFX_GetOpen(tr, i) or false
+                  if hwnd and hwnd ~= 0 then
+                    r.TrackFX_Show(tr, i, 2)
+                  elseif uiOpen then
+                    r.TrackFX_Show(tr, i, 0)
+                  else
+                    r.TrackFX_Show(tr, i, 3)
+                    hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
+                    if not (hwnd and hwnd ~= 0) then r.TrackFX_Show(tr, i, 1) end
+                  end
                 end
               end
 
@@ -1761,6 +1987,37 @@ local function draw()
               end
             end
             r.ImGui_EndTable(ctx)
+            -- Handle deferred Alt+Click deletion once per frame (after table render)
+            if state._pendingDelGUID and state._pendingDelTrack then
+              local delTr = state._pendingDelTrack
+              local delGuid = state._pendingDelGUID
+              local delIdx = find_fx_index_by_guid(delTr, delGuid)
+              r.Undo_BeginBlock('Delete FX')
+              local ok = false
+              if delIdx and delIdx >= 0 then
+                ok = pcall(function() r.TrackFX_Delete(delTr, delIdx) end)
+              end
+              r.Undo_EndBlock('Delete FX', -1)
+              if ok then
+                -- Adjust selection index if needed (only for this track)
+                if delTr == tr then
+                  local sel = tonumber(state.selectedSourceFXIndex)
+                  if sel ~= nil then
+                    if sel == delIdx then
+                      state.selectedSourceFXIndex = nil
+                      state.selectedSourceFXName = nil
+                    elseif sel > delIdx then
+                      state.selectedSourceFXIndex = sel - 1
+                    end
+                  end
+                end
+                state.pendingMessage = string.format('Deleted "%s" (slot %d)', tostring(state._pendingDelDisp or ''), (delIdx or 0) + 1)
+              else
+                state.pendingError = 'Failed to delete FX'
+              end
+              -- clear request
+              state._pendingDelGUID, state._pendingDelTrack, state._pendingDelDisp, state._pendingDelIndex = nil, nil, nil, nil
+            end
           end
         end
       end
@@ -1790,6 +2047,21 @@ local function draw()
   r.ImGui_End(ctx)
   pop_app_style(stylePush)
 
+  -- Reset the Alt+Click latch when the left mouse is released
+  if r.ImGui_IsMouseDown and r.ImGui_IsMouseReleased then
+    if r.ImGui_IsMouseReleased(ctx, 0) then
+      state._pendingDelArmed = false
+    end
+  else
+    -- Fallback using IO if available
+    if r.ImGui_GetIO then
+      local io = r.ImGui_GetIO(ctx)
+      if io and not (io.MouseDown and io.MouseDown[1]) then
+        state._pendingDelArmed = false
+      end
+    end
+  end
+
   
   if state.showSettings and ctx then
     if state.showSettingsPending then
@@ -1811,6 +2083,13 @@ local function draw()
         if c2 then state.nameNoPrefix = v2; changed = true end
         local c3, v3 = r.ImGui_Checkbox(ctx, 'Hide developer name', state.nameHideDeveloper)
         if c3 then state.nameHideDeveloper = v3; changed = true end
+        local c4, v4 = r.ImGui_Checkbox(ctx, 'Plugin image', state.showScreenshot)
+        if c4 then
+          state.showScreenshot = v4; changed = true
+          if not v4 then release_screenshot() end
+        end
+  local c5, v5 = r.ImGui_Checkbox(ctx, 'Show R/M/S buttons', state.showRMSButtons)
+  if c5 then state.showRMSButtons = v5; changed = true end
         if changed then save_user_settings() end
         if r.ImGui_Button(ctx, 'Close') then state.showSettings = false end
       end
