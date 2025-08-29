@@ -1,14 +1,12 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.5.6
+-- @version 1.6.0
 -- @changelog:
 --[[     
-++ Added setting voor screenshotwindow to respect Plugin Manager exclusion settings
-++ added priority settings in main settings window (to avoid display of duplicate plugins of different types)
-++ Added option to choose last opened folder as default folder
-++ Added option to pin favorite subfolders on top of list
-++ Implemented Flicker Guard (to prevent screenshot window flickering)
-++ Some cosmetic tweaks
+++ Added "Pinned On Top" checkbox to settings - pin favorite plugins to top of lists
+++ Optimized plugin type priority sorting for better performance with large plugin lists
+++ Fixed favorites visibility consistency between main window and browser panel
+++ Fixed Bug in Actions folder 
 
 ---------------------TODO (sometime in the future ;o) )-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin
@@ -34,6 +32,45 @@ local LAST_OPENED_SENTINEL  = "__LAST_OPENED__"
 -- Ratings:
 local plugin_ratings_path   = script_path .. "plugin_ratings.json"
 local plugin_ratings        = {}
+local DedupeByTypePriority
+
+-- Performance caches
+local favorite_set          = {}
+local pinned_set            = {}
+local plugin_lower_name     = {}
+local normalized_name_cache = {}
+local plugin_type_cache     = {}
+local type_priority_cache   = nil
+
+-- ACTION BROWSER
+local allActions = {}
+local action_search_term = ""
+local categories = {
+    ["Appearance and Themes"] = {},
+    ["Automation"] = {},
+    ["Editing"] = {},
+    ["Markers and Regions"] = {},
+    ["MIDI"] = {},
+    ["Miscellaneous"] = {},
+    ["Mixing and Effects"] = {},
+    ["Project Management"] = {},
+    ["Recording and Playback"] = {},
+    ["Scripting and Customization"] = {},
+    ["Synchronization and Tempo"] = {},
+    ["Track and Item Management"] = {},
+    ["Transport"] = {},
+    ["View and Zoom"] = {}
+}
+
+
+function GetLowerName(name)
+    if not name then return "" end
+    local lower = plugin_lower_name[name]
+    if lower then return lower end
+    lower = name:lower()
+    plugin_lower_name[name] = lower
+    return lower
+end
 
 if not ClearScreenshotCache then function ClearScreenshotCache() end end
 
@@ -137,11 +174,90 @@ function RequestClearScreenshotCache()
     _pending_clear_cache = true
     MarkScreenshotsDirty()
 end
+
+-- FW
+local GetFxListForSubgroup
+
+function RefreshCurrentScreenshotView()
+    RequestClearScreenshotCache()
+    search_warning_message = nil
+    local term = (browser_search_term or "")
+
+    if term ~= "" then
+        local term_l = term:lower()
+        if browser_panel_selected then
+            current_filtered_fx = GetFxListForSubgroup(browser_panel_selected) or {}
+            local filtered = {}
+            for _, p in ipairs(current_filtered_fx) do
+                if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
+            end
+            if config.apply_type_priority then
+                filtered = DedupeByTypePriority(filtered)
+            end
+            current_filtered_fx = filtered
+        elseif selected_folder then
+            local base = GetPluginsForFolder(selected_folder) or {}
+            local filtered = {}
+            for _, p in ipairs(base) do
+                if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
+            end
+            if config.apply_type_priority then
+                filtered = DedupeByTypePriority(filtered)
+            end
+            current_filtered_fx = filtered
+        else
+           
+            local matches = {}
+            for _, plugin in ipairs(PLUGIN_LIST or {}) do
+                if plugin:lower():find(term_l, 1, true) then matches[#matches+1] = plugin end
+            end
+            if config.apply_type_priority then
+                matches = DedupeByTypePriority(matches)
+            end
+            screenshot_search_results = {}
+            local MAX_RESULTS = 200
+            for i = 1, math.min(MAX_RESULTS, #matches) do
+                screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+            end
+            if #matches > MAX_RESULTS then
+                search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
+            end
+            SortScreenshotResults()
+            new_search_performed = true
+            return
+        end
+    else
+        
+        if browser_panel_selected then
+            current_filtered_fx = GetFxListForSubgroup(browser_panel_selected) or {}
+            if config.apply_type_priority then
+                current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
+            end
+        elseif selected_folder then
+            current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
+        else
+            return
+        end
+    end
+
+
+    loaded_items_count = ITEMS_PER_BATCH or loaded_items_count or 30
+    screenshot_search_results = {}
+    if view_mode == "list" then
+        for i = 1, #current_filtered_fx do
+            screenshot_search_results[#screenshot_search_results+1] = { name = current_filtered_fx[i] }
+        end
+    else
+        for i = 1, math.min(loaded_items_count, #current_filtered_fx) do
+            screenshot_search_results[#screenshot_search_results+1] = { name = current_filtered_fx[i] }
+        end
+    end
+  
+    SortScreenshotResults()
+    new_search_performed = true
+end
 if not BuildScreenshotIndex then function BuildScreenshotIndex() end end
 
-
-
--- Drag/drop state
 dragging_fx_name = dragging_fx_name or nil
 potential_drag_fx_name = potential_drag_fx_name or nil
 drag_start_x, drag_start_y = drag_start_x or 0, drag_start_y or 0
@@ -152,14 +268,28 @@ last_selected_folder_before_global = nil
 
 view_mode = view_mode or "screenshots" 
 
-local function SelectBrowserPanelItem(name)
+search_texture_cache = search_texture_cache or {}
+texture_last_used    = texture_last_used    or {}
+texture_load_queue   = texture_load_queue   or {}
+
+function SelectBrowserPanelItem(name)
     browser_panel_selected = name
     if name ~= nil then selected_folder = nil end
 end
 
-local function SelectFolderExclusive(name)
+function SelectFolderExclusive(name)
     selected_folder = name
-    if name ~= nil then browser_panel_selected = nil end
+    if name ~= nil then
+        browser_panel_selected = nil
+    
+        local seeded = GetPluginsForFolder(name) or {}
+        if config and config.apply_type_priority and type(seeded) == 'table' then
+            seeded = DedupeByTypePriority(seeded)
+        end
+        current_filtered_fx = seeded
+       
+        screenshot_search_results = nil
+    end
 end
 
 function GenerateUniqueID(base_name)
@@ -218,25 +348,6 @@ else
     error("Sexan FX Browser Parser not found. Please run the script again to install dependencies.")
 end
 --------------------------------------------------------------------------
--- ACTION BROWSER
-local allActions = {}
-local action_search_term = ""
-local categories = {
-    ["Appearance and Themes"] = {},
-    ["Automation"] = {},
-    ["Editing"] = {},
-    ["Markers and Regions"] = {},
-    ["MIDI"] = {},
-    ["Miscellaneous"] = {},
-    ["Mixing and Effects"] = {},
-    ["Project Management"] = {},
-    ["Recording and Playback"] = {},
-    ["Scripting and Customization"] = {},
-    ["Synchronization and Tempo"] = {},
-    ["Track and Item Management"] = {},
-    ["Transport"] = {},
-    ["View and Zoom"] = {}
-}
 
 --------------------------------------------------------------------------
 ctx = r.ImGui_CreateContext('TK FX BROWSER')
@@ -249,12 +360,12 @@ if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
 end
 local PLUGIN_LIST = GetFXTbl()
 
-local function get_safe_name(name)
+function get_safe_name(name)
     return (name or ""):gsub("[^%w%s-]", "_")
 end
 -- LOG
 local log_file_path = script_path .. "screenshot_log.txt"
-local function log_to_file(message)
+function log_to_file(message)
     local file = io.open(log_file_path, "a")
     if file then
         file:write(message .. "\n")
@@ -276,7 +387,7 @@ function CheckPluginCrashHistory(plugin_name)
 end
 --------------------------------------------------------------------------
 -- CONFIG
-local function SetDefaultConfig()
+function SetDefaultConfig()
     return {
         srcx = 0,
         srcy = 27,
@@ -391,9 +502,13 @@ local function SetDefaultConfig()
         screenshot_section_width = screenshot_section_width or 600, 
         use_pagination = true,
         use_masonry_layout = false,
-        show_favorites_on_top = true,
+    show_favorites_on_top = true,
+    show_pinned_on_top = true,
+    show_pinned_overlay = true,
+    show_favorite_overlay = true,
         open_floating_after_adding = false, 
         custom_folders = {},
+    pinned_plugins = {},
         pinned_subgroups = {},
         pinned_custom_subfolders = {},
         show_custom_folders = true,
@@ -413,15 +528,40 @@ end
 local config = SetDefaultConfig()    
 _G.config = config 
 local window_alpha_int = math.floor(config.window_alpha * 100)  
-local function SaveConfig()
+function ClearPerformanceCaches()
+    normalized_name_cache = {}
+    plugin_type_cache = {}
+    type_priority_cache = nil
+    if config then
+        config._current_version = (config._current_version or 0) + 1
+    end
+end
+
+-- Periodic cache cleanup to prevent memory bloat
+local cache_cleanup_counter = 0
+function MaybeClearCaches()
+    cache_cleanup_counter = cache_cleanup_counter + 1
+    -- Clear caches every 1000 calls or if they get too large
+    if cache_cleanup_counter > 1000 or 
+       (normalized_name_cache and #normalized_name_cache > 5000) or
+       (plugin_type_cache and #plugin_type_cache > 5000) then
+        normalized_name_cache = {}
+        plugin_type_cache = {}
+        cache_cleanup_counter = 0
+    end
+end
+
+function SaveConfig()
     local file = io.open(script_path .. "config.json", "w")
     if file then
         file:write(json.encode(config))
         file:close()
+        -- Clear caches when config changes
+        ClearPerformanceCaches()
     end
 end
 
-local function LoadConfig()
+function LoadConfig()
     local file = io.open(script_path .. "config.json", "r")
     if file then
         local content = file:read("*all")
@@ -430,8 +570,22 @@ local function LoadConfig()
         for k, v in pairs(loaded_config) do
             config[k] = v
         end
+        if loaded_config.show_pinned_overlay == nil and config.show_pinned_overlay == nil then
+            config.show_pinned_overlay = true
+        end
+        if loaded_config.show_favorite_overlay == nil and config.show_favorite_overlay == nil then
+            config.show_favorite_overlay = true
+        end
         config.folder_specific_sizes = loaded_config.folder_specific_sizes or {}
     
+        config.pinned_plugins = loaded_config.pinned_plugins or config.pinned_plugins or {}
+        pinned_set = {}
+        for _, name in ipairs(config.pinned_plugins) do
+            if type(name) == 'string' and name ~= '' then
+                pinned_set[name] = true
+            end
+        end
+
         config.pinned_subgroups = loaded_config.pinned_subgroups or {}
     
         config.pinned_custom_subfolders = loaded_config.pinned_custom_subfolders or {}
@@ -474,7 +628,7 @@ end
 local scripts_launcher_path = script_path .. "scripts_launcher.json"
 local scripts_launcher = {}
 
-local function LoadScriptsLauncher()
+function LoadScriptsLauncher()
     local f = io.open(scripts_launcher_path, "r")
     if f then
         local content = f:read("*all"); f:close()
@@ -490,21 +644,21 @@ local function LoadScriptsLauncher()
     end
 end
 
-local function SaveScriptsLauncher()
+function SaveScriptsLauncher()
     local f = io.open(scripts_launcher_path, "w")
     if f then f:write(json.encode(scripts_launcher)); f:close() end
 end
 
 LoadScriptsLauncher()
 
-local function ResetConfig()
+function ResetConfig()
     config = SetDefaultConfig()
     _G.config = config
     SaveConfig()
 end
 
 -- CUSTOM FOLDERS HELPERS
-local function IsPluginArray(folder_content)
+function IsPluginArray(folder_content)
     if type(folder_content) ~= "table" then return false end
     if next(folder_content) == nil then return true end 
     
@@ -518,7 +672,7 @@ local function IsPluginArray(folder_content)
     return true
 end
 
-local function IsSubfolderStructure(folder_content)
+function IsSubfolderStructure(folder_content)
     if type(folder_content) ~= "table" then return false end
     if next(folder_content) == nil then return false end 
     
@@ -529,7 +683,7 @@ local function IsSubfolderStructure(folder_content)
     return true
 end
 
-local function CleanPluginName(name)
+function CleanPluginName(name)
     if not name or name == '' then return name end
     local original = name
    
@@ -550,7 +704,7 @@ local function CleanPluginName(name)
     return name ~= '' and name or original
 end
 
-local function RemoveManufacturerSuffix(name)
+function RemoveManufacturerSuffix(name)
     if not name or name == '' then return name end
     local base = CleanPluginName(name)
     
@@ -569,7 +723,7 @@ local function RemoveManufacturerSuffix(name)
     return base
 end
 
-local function GetDisplayPluginName(raw_name)
+function GetDisplayPluginName(raw_name)
     if not raw_name then return raw_name end
     local name = raw_name
     if config.clean_plugin_names then
@@ -581,7 +735,7 @@ local function GetDisplayPluginName(raw_name)
     return name
 end
 
-local function StripX86Markers(name)
+function StripX86Markers(name)
     if not name then return '' end
     
     name = name
@@ -592,67 +746,131 @@ local function StripX86Markers(name)
     return name
 end
 
-local function NormalizePluginNameForMatch(name)
+function NormalizePluginNameForMatch(name)
     if not name then return '' end
-    name = name:lower()
-    name = name:gsub('^vst3i?:%s*',''):gsub('^vsti?:%s*',''):gsub('^vst3:%s*',''):gsub('^vst:%s*',''):gsub('^js:%s*',''):gsub('^clapi?:%s*',''):gsub('^clap:%s*',''):gsub('^lv2:%s*','')
-    name = name:gsub('%s*%(%d+%s*ch%)$',''):gsub('%s*%(%d+in%s*%d+out%)$','')
-    name = StripX86Markers(name)
-    name = CleanPluginName(name)
-    name = name:gsub('%s+',' ')
-    name = name:gsub('[^%w]+','')
-    return name
+    
+    -- Check cache first
+    local cached = normalized_name_cache[name]
+    if cached then return cached end
+    
+    -- Perform normalization
+    local result = name:lower()
+    result = result:gsub('^vst3i?:%s*',''):gsub('^vsti?:%s*',''):gsub('^vst3:%s*',''):gsub('^vst:%s*',''):gsub('^js:%s*',''):gsub('^clapi?:%s*',''):gsub('^clap:%s*',''):gsub('^lv2:%s*','')
+    result = result:gsub('%s*%(%d+%s*ch%)$',''):gsub('%s*%(%d+in%s*%d+out%)$','')
+    result = StripX86Markers(result)
+    result = CleanPluginName(result)
+    result = result:gsub('%s+',' ')
+    result = result:gsub('[^%w]+','')
+    
+    -- Cache the result
+    normalized_name_cache[name] = result
+    return result
 end
 
-local function GetPluginType(name)
+function GetPluginType(name)
     if not name or name == '' then return 'OTHER' end
-    if name:match('^VST3i?:') then return 'VST3' end
-    if name:match('^VSTi?:') then return 'VST' end
-    if name:match('^CLAPi?:') then return 'CLAP' end
-    if name:match('^JSFX:') or name:match('^JS:') then return 'JS' end
-    if name:match('^AU:') or name:match('^AUi:') then return 'AU' end
-    if name:match('^LV2i?:') then return 'LV2' end
-    return 'OTHER'
+    
+    -- Check cache first
+    local cached = plugin_type_cache[name]
+    if cached then return cached end
+    
+    -- Determine type
+    local result = 'OTHER'
+    if name:match('^VST3i?:') then 
+        result = 'VST3' 
+    elseif name:match('^VSTi?:') then 
+        result = 'VST' 
+    elseif name:match('^CLAPi?:') then 
+        result = 'CLAP' 
+    elseif name:match('^JSFX:') or name:match('^JS:') then 
+        result = 'JS' 
+    elseif name:match('^AU:') or name:match('^AUi:') then 
+        result = 'AU' 
+    elseif name:match('^LV2i?:') then 
+        result = 'LV2' 
+    end
+    
+    -- Cache the result
+    plugin_type_cache[name] = result
+    return result
 end
 
-local function BuildTypePriorityIndex()
+function BuildTypePriorityIndex()
+    -- Use cached version if available and config hasn't changed
+    if type_priority_cache and config._priority_cache_version == config._current_version then
+        return type_priority_cache
+    end
+    
     local idx = {}
     if type(config.plugin_type_priority) == 'table' then
         for i, t in ipairs(config.plugin_type_priority) do
             idx[t] = i
         end
     end
+    
+    -- Cache the result
+    type_priority_cache = idx
+    config._priority_cache_version = config._current_version or 1
     return idx
 end
 
-local function DedupeByTypePriority(list)
-    if not config.apply_type_priority or type(list) ~= 'table' then return list end
+DedupeByTypePriority = function(list)
+    if not config.apply_type_priority or type(list) ~= 'table' or #list == 0 then 
+        return list 
+    end
+    
+    -- Early exit for small lists
+    if #list <= 1 then return list end
+    
     local priority = BuildTypePriorityIndex()
     local best_by_key = {}
     local order = {}
-    for _, fx in ipairs(list) do
+    local seen_keys = {}
+    local has_duplicates = false
+    
+    for i = 1, #list do
+        local fx = list[i]
         local key = NormalizePluginNameForMatch(fx)
-        local t = GetPluginType(fx)
-        local p = priority[t] or math.huge
-        if not best_by_key[key] then
-            best_by_key[key] = {name = fx, prio = p, type = t}
-            table.insert(order, key)
-        else
-            local cur = best_by_key[key]
-            if p < cur.prio then
+        
+        -- Skip empty keys
+        if key ~= '' then
+            if not seen_keys[key] then
+                -- First occurrence of this key
+                local t = GetPluginType(fx)
+                local p = priority[t] or math.huge
                 best_by_key[key] = {name = fx, prio = p, type = t}
+                order[#order + 1] = key
+                seen_keys[key] = true
+            else
+                -- We found a duplicate
+                has_duplicates = true
+                local t = GetPluginType(fx)
+                local p = priority[t] or math.huge
+                local cur = best_by_key[key]
+                if p < cur.prio then
+                    best_by_key[key] = {name = fx, prio = p, type = t}
+                end
             end
         end
     end
-    local out = {}
-    for _, key in ipairs(order) do
-        table.insert(out, best_by_key[key].name)
+    
+    -- If no duplicates were found, return original list
+    if not has_duplicates and #order == #list then
+        return list
     end
+    
+    -- Build result list
+    local out = {}
+    for i = 1, #order do
+        local key = order[i]
+        out[#out + 1] = best_by_key[key].name
+    end
+    
     return out
 end
 
 local screenshot_index_norm = nil
-local function BuildScreenshotIndex(force)
+function BuildScreenshotIndex(force)
     if screenshot_index_norm and not force then return end
     screenshot_index_norm = {}
     local i = 0
@@ -668,7 +886,43 @@ local function BuildScreenshotIndex(force)
     end
 end
 
-local function HasScreenshot(plugin_name)
+-- Pinned plugins helpers
+function EnsurePinnedPluginsList()
+    if type(config.pinned_plugins) ~= 'table' then config.pinned_plugins = {} end
+end
+
+function IsPluginPinned(name)
+    return not not pinned_set[name]
+end
+
+function PinPlugin(name)
+    if not name or name == '' then return end
+    EnsurePinnedPluginsList()
+    if not pinned_set[name] then
+        pinned_set[name] = true
+        table.insert(config.pinned_plugins, name)
+    SaveConfig()
+    if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+    end
+end
+
+function UnpinPlugin(name)
+    if not name or name == '' then return end
+    if pinned_set[name] then
+        pinned_set[name] = nil
+        if type(config.pinned_plugins) == 'table' then
+            for i = #config.pinned_plugins, 1, -1 do
+                if config.pinned_plugins[i] == name then
+                    table.remove(config.pinned_plugins, i)
+                end
+            end
+        end
+    SaveConfig()
+    if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+    end
+end
+
+function HasScreenshot(plugin_name)
     BuildScreenshotIndex()
     local norm = NormalizePluginNameForMatch(plugin_name)
     if screenshot_index_norm[norm] then return true end
@@ -693,14 +947,14 @@ local function HasScreenshot(plugin_name)
     return false
 end
 
-local function SplitPluginsByScreenshot(plugin_list)
+function SplitPluginsByScreenshot(plugin_list)
     local with_shot, missing = {}, {}
     if not plugin_list then return with_shot, missing end
     for _, name in ipairs(plugin_list) do
         if config.respect_search_exclusions_in_screenshots and config.excluded_plugins and config.excluded_plugins[name] then
             goto continue_plugin
         end
-        if name == "--Favorites End--" then
+        if name == "--Favorites End--" or name == "--Pinned End--" then
             table.insert(with_shot, name) 
         else
             if HasScreenshot(name) then
@@ -714,51 +968,51 @@ local function SplitPluginsByScreenshot(plugin_list)
     return with_shot, missing
 end
 
--- Forward
+-- FW
 local GetStarsString
 
-local function RenderMissingList(missing)
+function RenderMissingList(missing)
     if not (config.show_missing_list ~= false) then return end 
     if missing and #missing > 0 then
         r.ImGui_Dummy(ctx, 0, 10)
         r.ImGui_Separator(ctx)
         r.ImGui_Text(ctx, string.format("Missing Screenshots (%d)", #missing))
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
-        for i, name in ipairs(missing) do
-            local display_name = GetDisplayPluginName(name)
-            local stars = GetStarsString(name)
-            local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##missing_" .. i, false)
-            local do_add = false
-            if config.add_fx_with_double_click then
-                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-                    do_add = true
+            for i, name in ipairs(missing) do
+                local display_name = GetDisplayPluginName(name)
+                local stars = GetStarsString(name)
+                local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##missing_" .. i, false)
+                local do_add = false
+                if config.add_fx_with_double_click then
+                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                        do_add = true
+                    end
+                else
+                    if activated then do_add = true end
                 end
-            else
-                if activated then do_add = true end
-            end
-            if do_add then
-                local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
-                if target_track then
-                    r.TrackFX_AddByName(target_track, name, false, -1000 - r.TrackFX_GetCount(target_track))
-                    LAST_USED_FX = name
-                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                if do_add then
+                    local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                    if target_track then
+                        r.TrackFX_AddByName(target_track, name, false, -1000 - r.TrackFX_GetCount(target_track))
+                        LAST_USED_FX = name
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
                 end
-            end
-            ShowPluginContextMenu(name, "missing_ctx_" .. i)
+                ShowPluginContextMenu(name, "missing_ctx_" .. i)
         end
         r.ImGui_PopStyleVar(ctx)
     end
 end
 
 local top_screenshot_spacing_applied = false
-local function ApplyTopScreenshotSpacing()
+function ApplyTopScreenshotSpacing()
     if not top_screenshot_spacing_applied then
         r.ImGui_Dummy(ctx, 0, 6) 
         top_screenshot_spacing_applied = true
     end
 end
 
-local function GetPluginsFromCustomFolder(folder_path)
+function GetPluginsFromCustomFolder(folder_path)
     local parts = {}
     for part in folder_path:gmatch("[^/]+") do
         table.insert(parts, part)
@@ -780,7 +1034,7 @@ local function GetPluginsFromCustomFolder(folder_path)
     end
 end
 
-local function CreateNestedFolder(folder_path, is_subfolder_of)
+function CreateNestedFolder(folder_path, is_subfolder_of)
     local parts = {}
     if is_subfolder_of then
         for part in is_subfolder_of:gmatch("[^/]+") do
@@ -804,7 +1058,7 @@ local function CreateNestedFolder(folder_path, is_subfolder_of)
     end
 end
 
-local function SaveCustomFolders()
+function SaveCustomFolders()
     
     local function convertForJSON(folders)
         local result = {}
@@ -843,13 +1097,12 @@ local function SaveCustomFolders()
     end
 end
 
-local function LoadCustomFolders()
+function LoadCustomFolders()
     local file = io.open(script_path .. "custom_folders.json", "r")
     if file then
         local content = file:read("*all")
         file:close()
         
-      
         if not content or content == "" or content:match("^%s*$") then
            
             config.custom_folders = {}
@@ -908,7 +1161,7 @@ LoadCustomFolders()
 
 -------------------------------------------------------------
 -- RATING
-local function LoadPluginRatings()
+function LoadPluginRatings()
     local file = io.open(plugin_ratings_path, "r")
     if file then
         local content = file:read("*all")
@@ -924,7 +1177,7 @@ local function LoadPluginRatings()
     end
 end
 
-local function SavePluginRatings()
+function SavePluginRatings()
     local file = io.open(plugin_ratings_path, "w")
     if file then
         file:write(json.encode(plugin_ratings))
@@ -934,7 +1187,7 @@ end
 
 LoadPluginRatings()
 
-local function ShowPluginRatingUI(plugin_name)
+function ShowPluginRatingUI(plugin_name)
     local rating = plugin_ratings[plugin_name] or 0
     local changed = false
     for i = 1, 5 do
@@ -957,7 +1210,7 @@ local function ShowPluginRatingUI(plugin_name)
     return changed
 end
 
-local function DrawPluginWithRating(plugin_name)
+function DrawPluginWithRating(plugin_name)
     local rating = plugin_ratings[plugin_name] or 0
     local stars = ""
     for i = 1, 5 do
@@ -976,7 +1229,7 @@ GetStarsString = function(plugin_name)
 end
 
 -- voor lijsten
-local function SortPluginsByRating(plugins)
+function SortPluginsByRating(plugins)
     table.sort(plugins, function(a, b)
         local ra = plugin_ratings[a] or 0
         local rb = plugin_ratings[b] or 0
@@ -989,7 +1242,7 @@ local function SortPluginsByRating(plugins)
 end
 
 -- voor tabellen
-local function SortPluginTableByRating(tbl)
+function SortPluginTableByRating(tbl)
     table.sort(tbl, function(a, b)
         local ra = plugin_ratings[a.name] or 0
         local rb = plugin_ratings[b.name] or 0
@@ -1041,7 +1294,7 @@ function exit()
 end
 r.atexit(exit)
 
-local function DrawDragOverlay()
+function DrawDragOverlay()
     if dragging_fx_name then
         local imx, imy = r.ImGui_GetMousePos(ctx)
         local sx, sy = r.GetMousePosition()
@@ -1105,7 +1358,7 @@ r.ImGui_Attach(ctx, TinyFont)
 r.ImGui_Attach(ctx, IconFont)
 
 ---------------------------------------------------------------------
-local function EnsureFileExists(filepath)
+function EnsureFileExists(filepath)
     local file = io.open(filepath, "r")
     if not file then
         file = io.open(filepath, "w")
@@ -1119,7 +1372,7 @@ EnsureFileExists(script_path .. "tknotes.txt")
 
 
 
-local function load_projects_info()
+function load_projects_info()
     local file = io.open(PROJECTS_INFO_FILE, "r")
     if file then
         local section = ""
@@ -1150,7 +1403,7 @@ local function load_projects_info()
 end
 
 
-local function get_all_projects()
+function get_all_projects()
     local projects = {}
     local current_project_dir = config.last_used_project_location or PROJECTS_DIR
     local stack = {{path = current_project_dir, depth = 0}}
@@ -1187,10 +1440,10 @@ local function get_all_projects()
     table.sort(projects, function(a, b) return a.name:lower() < b.name:lower() end)
     return projects
 end
-local function open_project(project_path)
+function open_project(project_path)
     r.Main_openProject(project_path)
 end
-local function save_projects_info(projects)
+function save_projects_info(projects)
     local file = io.open(PROJECTS_INFO_FILE, "w")
     if file then
         file:write("[SETTINGS]\n")
@@ -1212,8 +1465,7 @@ local function save_projects_info(projects)
     end
 end
 
-
-local function LoadProjects()
+function LoadProjects()
     projects = {}  
     filtered_projects = {} 
     projects = get_all_projects()  
@@ -1226,7 +1478,7 @@ if #project_locations == 0 then
     table.insert(project_locations, PROJECTS_DIR)
 end
 
-local function SaveFavorites()
+function SaveFavorites()
     local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
     local file = io.open(script_path .. "favorite_plugins.txt", "w")
     if file then
@@ -1237,19 +1489,20 @@ local function SaveFavorites()
     end
 end
 
-local function LoadFavorites()
+function LoadFavorites()
     local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
     local file = io.open(script_path .. "favorite_plugins.txt", "r")
     if file then
         for line in file:lines() do
             table.insert(favorite_plugins, line)
+            favorite_set[line] = true
         end
         file:close()
     end
 end
 LoadFavorites()
 
-local function LoadNotes()
+function LoadNotes()
     local notes = {}
     local file = io.open(script_path .. "tknotes.txt", "r")
     if file then
@@ -1263,7 +1516,7 @@ local function LoadNotes()
 end
 notes = LoadNotes()
 
-local function SaveNotes()
+function SaveNotes()
     local file = io.open(script_path .. "tknotes.txt", "w")
     if file then
         for guid, note in pairs(notes) do
@@ -1275,8 +1528,7 @@ local function SaveNotes()
     end
 end
 
-
-local function SaveTags()
+function SaveTags()
     local tags_data = {
         tracks = track_tags,
         colors = tag_colors,
@@ -1292,7 +1544,7 @@ local function SaveTags()
     end
 end
 
-local function LoadTags()
+function LoadTags()
     local file = io.open(script_path .. "track_tags.json", "r")
     if file then
         local content = file:read("*all")
@@ -1315,7 +1567,7 @@ function table.contains(tbl, item)
     end
     return false
 end
-local function ClearScreenshotCache(periodic_cleanup)
+function ClearScreenshotCache(periodic_cleanup)
     local current_time = r.time_precise()
     
     if periodic_cleanup then
@@ -1347,7 +1599,7 @@ local function ClearScreenshotCache(periodic_cleanup)
 end
 
 local folders_category = {}
-local function initFoldersCategory()
+function initFoldersCategory()
     for i = 1, #CAT_TEST do
         if CAT_TEST[i].name == "FOLDERS" then
             folders_category = CAT_TEST[i].list
@@ -1357,21 +1609,20 @@ local function initFoldersCategory()
 end
 initFoldersCategory()
 
-local function UpdateLastViewedFolder(new_folder)
+function UpdateLastViewedFolder(new_folder)
     if not new_folder or new_folder == "" then return end
     if 
        new_folder ~= "Projects" and 
         new_folder ~= "Actions" and 
         new_folder ~= "Sends/Receives" then
-        last_viewed_folder = new_folder -- Update last viewed folder
-        -- Persist in config so we can restore across sessions
+        last_viewed_folder = new_folder 
+       
         config.last_viewed_folder = new_folder
         SaveConfig()
     end
 end
 
--- Helpers to work with non-FOLDERS groups (ALL PLUGINS / CATEGORY / DEVELOPER)
-local function IsNonFoldersSubgroup(name)
+function IsNonFoldersSubgroup(name)
     if not name or not CAT_TEST then return false end
     for i = 1, #CAT_TEST do
         local cat = CAT_TEST[i]
@@ -1384,7 +1635,7 @@ local function IsNonFoldersSubgroup(name)
     return false
 end
 
-local function GetFxListForSubgroup(name)
+GetFxListForSubgroup = function(name)
     if not name or not CAT_TEST then return nil end
     for i = 1, #CAT_TEST do
         local cat = CAT_TEST[i]
@@ -1400,19 +1651,18 @@ local function GetFxListForSubgroup(name)
     return nil
 end
 
-
 function IsPluginVisible(plugin_name)
     return config.plugin_visibility[plugin_name] ~= false
 end
 
-local function GetTrackName(track)
+function GetTrackName(track)
     if not track then return "No Track Selected" end
     if track == r.GetMasterTrack(0) then return "Master Track" end
     local _, name = r.GetTrackName(track)
     return name
 end
 
-local function GetCurrentProjectFX()
+function GetCurrentProjectFX()
     local fx_list = {}
     local track_count = reaper.CountTracks(0)
     for i = 0, track_count - 1 do
@@ -1438,7 +1688,7 @@ local function GetCurrentProjectFX()
     return fx_list
 end
 
-local function GetCurrentTrackFX()
+function GetCurrentTrackFX()
     local fx_list = {}
     if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
         local fx_count = reaper.TrackFX_GetCount(TRACK)
@@ -1459,13 +1709,12 @@ end
 
 local search_filter = ""
 local filtered_plugins = {}
-local function InitializeFilteredPlugins()
+function InitializeFilteredPlugins()
     filtered_plugins = {}
     if not config then return end
     config.plugin_visibility = config.plugin_visibility or {}
     config.excluded_plugins = config.excluded_plugins or {}
 
-    -- Zorg dat screenshot index beschikbaar is voor HasScreenshot test
     if type(BuildScreenshotIndex) == 'function' then
         pcall(BuildScreenshotIndex) -- geen force, normale lazy build
     end
@@ -1495,7 +1744,6 @@ local function InitializeFilteredPlugins()
     table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
 end
 
--- Initialiseer meteen indien we in modus 'alleen ontbrekende screenshots' zitten zodat eerste weergave klopt
 if config.show_missing_screenshots_only then
     InitializeFilteredPlugins()
 end
@@ -1503,7 +1751,7 @@ end
 local CHECKBOX_WIDTH = 15
 local last_clicked_plugin_index = nil
 local last_clicked_column = nil 
-local function ShowPluginManagerTab()
+function ShowPluginManagerTab()
     
     if #filtered_plugins == 0 or type(filtered_plugins[1]) ~= 'table' or not filtered_plugins[1].name then
         InitializeFilteredPlugins()
@@ -1572,7 +1820,6 @@ local function ShowPluginManagerTab()
         local column2_width = 45  -- Voor "Search" checkbox
         local column3_width = window_width - column1_width - column2_width - 20  -- Voor plugin naam
 
-        -- Koppen
         r.ImGui_SetCursorPosX(ctx, column1_width / 2 - r.ImGui_CalcTextSize(ctx, "Bulk") / 2)
         r.ImGui_Text(ctx, "Bulk*")
         r.ImGui_SameLine(ctx)
@@ -1587,7 +1834,7 @@ local function ShowPluginManagerTab()
         r.ImGui_Separator(ctx)
     if r.ImGui_BeginChild(ctx, "PluginList", 0, -25) then
         for i, plugin in ipairs(filtered_plugins) do
-            -- Normaliseer item indien het per ongeluk een string is geworden
+         
             if type(plugin) ~= 'table' or not plugin.name then
                 local pname = (type(plugin) == 'string') and plugin or tostring(plugin or ("plugin_"..i))
                 filtered_plugins[i] = {
@@ -1598,8 +1845,7 @@ local function ShowPluginManagerTab()
                 plugin = filtered_plugins[i]
             end
             r.ImGui_SetCursorPosX(ctx, (column1_width - 35) / 2)
-            
-            -- Bulk checkbox
+        
             local checkbox_visible_changed, new_visible = r.ImGui_Checkbox(ctx, "##Visible"..plugin.name, config.plugin_visibility[plugin.name])
             if checkbox_visible_changed then
                 if r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) and last_clicked_plugin_index and last_clicked_column == 1 then
@@ -1638,7 +1884,8 @@ local function ShowPluginManagerTab()
             r.ImGui_SameLine(ctx)
             
             r.ImGui_SetCursorPosX(ctx, column1_width + column2_width + 2)
-            r.ImGui_Text(ctx, plugin.name)
+            local disp = GetDisplayPluginName(plugin.name)
+            r.ImGui_Text(ctx, disp)
         end
         r.ImGui_EndChild(ctx)
     end
@@ -1677,10 +1924,8 @@ local function ShowPluginManagerTab()
 end
 
 function GetPluginsForFolder(folder_name)
-    -- Normalize and guard
     if not folder_name or folder_name == '' then return {} end
 
-    -- Special folders
     if folder_name == "Favorites" then
         return DedupeByTypePriority(favorite_plugins or {})
     end
@@ -1701,7 +1946,6 @@ function GetPluginsForFolder(folder_name)
     return DedupeByTypePriority(list)
     end
 
-    -- Custom folders: nested path or top-level array
     if folder_name:find("/") then
     return DedupeByTypePriority(GetPluginsFromCustomFolder(folder_name))
     elseif config.custom_folders and config.custom_folders[folder_name] then
@@ -1709,7 +1953,6 @@ function GetPluginsForFolder(folder_name)
     if IsPluginArray(folder_content) then return DedupeByTypePriority(folder_content) else return {} end
     end
 
-    -- Only search REAPER's My folders (FOLDERS), avoid cross-category name collisions
     if folders_category and #folders_category > 0 then
         for i = 1, #folders_category do
             if folders_category[i].name == folder_name then
@@ -1717,7 +1960,6 @@ function GetPluginsForFolder(folder_name)
             end
         end
     else
-        -- Fallback: scan CAT_TEST but restrict to FOLDERS category
         for i = 1, #CAT_TEST do
             if CAT_TEST[i].name == "FOLDERS" then
                 for j = 1, #CAT_TEST[i].list do
@@ -1732,7 +1974,7 @@ function GetPluginsForFolder(folder_name)
     return {}
 end
 
-local function OpenScreenshotsFolder()
+function OpenScreenshotsFolder()
     local os_name = reaper.GetOS()
     if os_name:match("Win") then
         os.execute('start "" "' .. screenshot_path .. '"')
@@ -1743,7 +1985,7 @@ local function OpenScreenshotsFolder()
     end
 end
 
-local function ShowConfigWindow()
+function ShowConfigWindow()
     local function NewSection(title)
         r.ImGui_Spacing(ctx)
         r.ImGui_PushFont(ctx, NormalFont, 11)
@@ -2024,9 +2266,8 @@ local function ShowConfigWindow()
             _, config.hideMeter = r.ImGui_Checkbox(ctx, "Hide Meter", config.hideMeter)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.show_favorites_on_top = r.ImGui_Checkbox(ctx, "Show Favorites On Top", config.show_favorites_on_top)
+            
+            
             r.ImGui_Dummy(ctx, 0, 5)
  
             NewSection("SCREENSHOT WINDOW:")
@@ -2091,9 +2332,27 @@ local function ShowConfigWindow()
              if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click.")
             end
+            -- r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local fg_changed, fg_val = r.ImGui_Checkbox(ctx, "Flicker Guard", config.flicker_guard_enabled)
+            if fg_changed then
+                config.flicker_guard_enabled = fg_val
+                RequestClearScreenshotCache()
+                SaveConfig()
+            end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Reduces flicker by clearing/rebuilding caches only on real state changes and by debouncing typing.")
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.show_pinned_on_top = r.ImGui_Checkbox(ctx, "Pinned On Top", config.show_pinned_on_top)
+            r.ImGui_SameLine(ctx)
+             r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.show_favorites_on_top = r.ImGui_Checkbox(ctx, "Favorites On Top", config.show_favorites_on_top)
 
-            -- Nieuwe optie: respecteer search exclusions in screenshot window
-            r.ImGui_Dummy(ctx, 0, 5)
+
+
+            --r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local rses_changed, rses_val = r.ImGui_Checkbox(ctx, "Respect Plugin Manager Search Exclusions", config.respect_search_exclusions_in_screenshots)
             if rses_changed then
@@ -2105,19 +2364,11 @@ local function ShowConfigWindow()
                 r.ImGui_SetTooltip(ctx, "When enabled, plugins you excluded from search in Plugin Manager won't appear in the screenshot window.")
             end
 
-            -- Flicker Guard toggle naast de exclusions checkbox
             r.ImGui_SameLine(ctx)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            local fg_changed, fg_val = r.ImGui_Checkbox(ctx, "Flicker Guard", config.flicker_guard_enabled)
-            if fg_changed then
-                config.flicker_guard_enabled = fg_val
-                -- Bij aanzetten direct een cache refresh forceren om in sync te komen
-                RequestClearScreenshotCache()
-                SaveConfig()
-            end
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.resize_screenshots_with_window = r.ImGui_Checkbox(ctx, "Auto Resize Screenshots", config.resize_screenshots_with_window)
             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Reduces flicker by clearing/rebuilding caches only on real state changes and by debouncing typing.")
+                r.ImGui_SetTooltip(ctx, "When enabled, screenshots will automatically resize to fit the window.")
             end
 
             r.ImGui_Dummy(ctx, 0, 5)
@@ -2173,14 +2424,13 @@ local function ShowConfigWindow()
             if r.ImGui_IsItemHovered(ctx) then
                 local wheel_delta = r.ImGui_GetMouseWheel(ctx)
                 if wheel_delta ~= 0 then
-                    -- Build the list of options for scrolling, including special entries
                     local options = { nil, LAST_OPENED_SENTINEL, "Favorites", "Current Project FX", "Current Track FX", "Projects", "Sends/Receives", "Actions" }
                     for i = 1, #folders_category do options[#options+1] = folders_category[i].name end
                     local current_index = 1
                     for i, opt in ipairs(options) do
                         if opt == config.default_folder then current_index = i; break end
                     end
-                    -- Mouse wheel: positive when scrolling up in ImGui, we invert to match previous logic
+                   
                     local new_index = current_index - wheel_delta
                     if new_index < 1 then new_index = 1 end
                     if new_index > #options then new_index = #options end
@@ -2188,20 +2438,34 @@ local function ShowConfigWindow()
                     SaveConfig()
                 end
             end
+
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.resize_screenshots_with_window = r.ImGui_Checkbox(ctx, "Auto Resize Screenshots", config.resize_screenshots_with_window)
 
-            -- Type priority UI (checkbox + 4 dropdowns on one line)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Font:")
+            r.ImGui_SameLine(ctx, 0, 10)
+            if r.ImGui_BeginCombo(ctx, "##Font", TKFXfonts[config.selected_font]) then
+                for i, font_name in ipairs(TKFXfonts) do
+                    local is_selected = (config.selected_font == i)
+                    if r.ImGui_Selectable(ctx, font_name, is_selected) then
+                        config.selected_font = i
+                        needs_font_update = true
+                        SaveConfig()
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+
+
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            -- Helper to refresh the current screenshot/search view after priority changes
+
             local function RefreshAfterTypePriorityChange()
                 RequestClearScreenshotCache()
                 search_warning_message = nil
                 local term = (browser_search_term or "")
-                -- If there is a search term, rebuild results within current scope or global
+        
                 if term ~= "" then
                     local term_l = term:lower()
                     if browser_panel_selected then
@@ -2210,7 +2474,6 @@ local function ShowConfigWindow()
                         for _, p in ipairs(current_filtered_fx) do
                             if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
                         end
-                        -- Apply type-priority dedupe immediately so UI reflects the change without extra toggles
                         if config.apply_type_priority then
                             filtered = DedupeByTypePriority(filtered)
                         end
@@ -2221,13 +2484,11 @@ local function ShowConfigWindow()
                         for _, p in ipairs(base) do
                             if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
                         end
-                        -- Apply type-priority dedupe immediately so UI reflects the change without extra toggles
                         if config.apply_type_priority then
                             filtered = DedupeByTypePriority(filtered)
                         end
                         current_filtered_fx = filtered
                     else
-                        -- Global ALL search
                         local matches = {}
                         for _, plugin in ipairs(PLUGIN_LIST or {}) do
                             if plugin:lower():find(term_l, 1, true) then matches[#matches+1] = plugin end
@@ -2248,7 +2509,6 @@ local function ShowConfigWindow()
                         return
                     end
                 else
-                    -- No search term: refresh active folder/subgroup listing
                     if browser_panel_selected then
                         current_filtered_fx = GetFxListForSubgroup(browser_panel_selected) or {}
                         if config.apply_type_priority then
@@ -2260,7 +2520,6 @@ local function ShowConfigWindow()
                         return
                     end
                 end
-                -- Prefill screenshot_search_results from current_filtered_fx
                 loaded_items_count = ITEMS_PER_BATCH or loaded_items_count or 30
                 screenshot_search_results = {}
                 if view_mode == "list" then
@@ -2310,22 +2569,8 @@ local function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             drawTypeComboInline(4)
             
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            r.ImGui_Text(ctx, "Font:")
-            r.ImGui_SameLine(ctx, 0, 10)
-            if r.ImGui_BeginCombo(ctx, "##Font", TKFXfonts[config.selected_font]) then
-                for i, font_name in ipairs(TKFXfonts) do
-                    local is_selected = (config.selected_font == i)
-                    if r.ImGui_Selectable(ctx, font_name, is_selected) then
-                        config.selected_font = i
-                        needs_font_update = true
-                        SaveConfig()
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end
+
             
-            -- Bottom Buttons (Save, Cancel, Reset)
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
             r.ImGui_Separator(ctx)
             local button_width = (window_width - 20) / 3
@@ -2462,7 +2707,6 @@ local function ShowConfigWindow()
             _, config.screenshot_default_folder_only = r.ImGui_Checkbox(ctx, "Default Only", config.screenshot_default_folder_only)
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_Separator(ctx)
-            -- Keuze: specifieke map voor bulk screenshots
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Bulk Folder")
             r.ImGui_SameLine(ctx)
@@ -2480,12 +2724,10 @@ local function ShowConfigWindow()
                 elseif sel:match("^CUST::") then
                     current_label = "Custom: " .. sel:sub(7)
                 else
-                    current_label = sel -- standaard folder naam of legacy custom path
+                    current_label = sel 
                 end
             end
-            -- Vervang combo + treeview door popup met hover submenus
             local popup_id = "BulkFolderPopup"
-            -- Trigger knop (zelfde plek als combo). Gebruik vaste breedte voor consistentie
             local btn_w = slider_width * 2
             if r.ImGui_Button(ctx, current_label .. "##BulkFolderBtn", btn_w, 0) then
                 r.ImGui_OpenPopup(ctx, popup_id)
@@ -2498,13 +2740,11 @@ local function ShowConfigWindow()
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
 
-                -- All plugins direct item
                 if r.ImGui_MenuItem(ctx, (config.bulk_selected_folder == "__ALL_PLUGINS" and "[All Plugins]" or "All Plugins")) then
                     SetAndClose("__ALL_PLUGINS")
                 end
                 r.ImGui_Separator(ctx)
 
-                -- Helpers
                 local function BeginGroupMenu(label)
                     return r.ImGui_BeginMenu(ctx, label)
                 end
@@ -2691,8 +2931,7 @@ if r.ImGui_BeginTabItem(ctx, "CUSTOM FOLDERS") then
     
     r.ImGui_Separator(ctx)
     
-    -- Recursive folder display function
-local function DisplayFolderTree(folders, path_prefix)
+function DisplayFolderTree(folders, path_prefix)
     path_prefix = path_prefix or ""
     
     -- SORTEER DE FOLDER NAMEN ALFABETISCH
@@ -3005,9 +3244,7 @@ end
 return config_open
 end
 
-
-
-local function EnsureTrackIconsFolderExists()
+function EnsureTrackIconsFolderExists()
     local track_icons_path = script_path .. "TrackIcons" .. os_separator
     if not r.file_exists(track_icons_path) then
         local success = r.RecursiveCreateDirectory(track_icons_path, 0)
@@ -3020,7 +3257,7 @@ local function EnsureTrackIconsFolderExists()
 end
 EnsureTrackIconsFolderExists()
 
-local function EnsureScreenshotFolderExists()
+function EnsureScreenshotFolderExists()
     if not r.file_exists(screenshot_path) then
         local success = r.RecursiveCreateDirectory(screenshot_path, 0)
         if success then
@@ -3031,14 +3268,14 @@ local function EnsureScreenshotFolderExists()
 end
 EnsureScreenshotFolderExists()
 
-local function check_esc_key() 
+function check_esc_key() 
     if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
         return true
     end
     return false
 end
 
-local function handleDocking()
+function handleDocking()
     if change_dock then
         r.ImGui_SetNextWindowDockID(ctx, ~dock)
         change_dock = nil
@@ -3046,7 +3283,7 @@ local function handleDocking()
     end
 end
 
-local function IsX86Bridged(plugin_name)
+function IsX86Bridged(plugin_name)
     if not plugin_name then return false end
     return (plugin_name:match('%(x86%)')
         or plugin_name:match('%[x86%]')
@@ -3055,7 +3292,7 @@ local function IsX86Bridged(plugin_name)
         or plugin_name:match('x86:')) and true or false
 end
 
-local function ScreenshotExists(plugin_name, size_option)
+function ScreenshotExists(plugin_name, size_option)
     if screenshot_database[plugin_name] ~= nil then
         return true
     end
@@ -3072,49 +3309,49 @@ local function ScreenshotExists(plugin_name, size_option)
 end
 
 -- bodem knoppen
-local function IsMuted(track)
+function IsMuted(track)
     if track and reaper.ValidatePtr(track, "MediaTrack*") then
         return r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
     end
     return false
 end
 
-local function ToggleMute(track)
+function ToggleMute(track)
     if track and reaper.ValidatePtr(track, "MediaTrack*") then
         local mute = r.GetMediaTrackInfo_Value(track, "B_MUTE")
         r.SetMediaTrackInfo_Value(track, "B_MUTE", mute == 0 and 1 or 0)
     end
 end
 
-local function IsSoloed(track)
+function IsSoloed(track)
     if track and reaper.ValidatePtr(track, "MediaTrack*") then
         return r.GetMediaTrackInfo_Value(track, "I_SOLO") ~= 0
     end
     return false
 end
 
-local function ToggleSolo(track)
+function ToggleSolo(track)
     if track and reaper.ValidatePtr(track, "MediaTrack*") then
         local solo = r.GetMediaTrackInfo_Value(track, "I_SOLO")
         r.SetMediaTrackInfo_Value(track, "I_SOLO", solo == 0 and 1 or 0)
     end
 end
 
-local function ToggleArm(track)
+function ToggleArm(track)
     if track and reaper.ValidatePtr(track, "MediaTrack*") then
         local armed = r.GetMediaTrackInfo_Value(track, "I_RECARM")
         r.SetMediaTrackInfo_Value(track, "I_RECARM", armed == 0 and 1 or 0)
     end
 end
 
-local function IsArmed(track)
+function IsArmed(track)
     if track and reaper.ValidatePtr(track, "MediaTrack*") then
         return r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
     end
     return false
 end
 
-local function AddFXToItem(fx_name)
+function AddFXToItem(fx_name)
     local item = r.GetSelectedMediaItem(0, 0)
     if item then
         local take = r.GetActiveTake(item)
@@ -3124,7 +3361,7 @@ local function AddFXToItem(fx_name)
     end
 end
 
-local function CreateFXChain()
+function CreateFXChain()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local fx_count = r.TrackFX_GetCount(TRACK)
     if fx_count == 0 then return end
@@ -3134,15 +3371,21 @@ local function CreateFXChain()
     r.ShowMessageBox("FX Chain created successfully!", "Success", 0)
 end
 
-local function LoadTexture(file)
+-- Debug toggle for texture I/O logging (set true only for diagnostics)
+local DEBUG_TEX_LOG = false
+function tex_log(msg)
+    if DEBUG_TEX_LOG then log_to_file(msg) end
+end
+
+function LoadTexture(file)
     local texture = r.ImGui_CreateImage(file)
     if texture == nil then
-        log_to_file("Failed to load texture: " .. file)
+        tex_log("Failed to load texture: " .. file)
     end
     return texture
 end
     
-local function LoadSearchTexture(file, plugin_name)
+function LoadSearchTexture(file, plugin_name)
     local relative_path = file:gsub(screenshot_path, "")
     local unique_key = relative_path .. "_" .. (plugin_name or "unknown")
     local current_time = r.time_precise()
@@ -3151,17 +3394,68 @@ local function LoadSearchTexture(file, plugin_name)
         return search_texture_cache[unique_key]
     end
     if not r.file_exists(file) then
-        log_to_file("File does not exist: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
+        tex_log("File does not exist: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
         return nil
     end
     if not texture_load_queue[unique_key] then
         texture_load_queue[unique_key] = { file = file, queued_at = current_time, plugin = plugin_name }
-        log_to_file("Queued texture load: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
+        tex_log("Queued texture load: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
     end
     return nil
 end
 
     local function ProcessTextureLoadQueue()
+    
+    if not (config and config.show_screenshot_window) then return end
+    if not texture_load_queue or next(texture_load_queue) == nil then return end
+   
+    local VISIBLE_BUFFER = 30
+    local keep_set = {}
+    local cap = (loaded_items_count or ITEMS_PER_BATCH or 30) + VISIBLE_BUFFER
+
+    if selected_folder and type(current_filtered_fx) == 'table' and #current_filtered_fx > 0 then
+        for i = 1, math.min(cap, #current_filtered_fx) do
+            local name = current_filtered_fx[i]
+            if type(name) == 'string' then keep_set[name] = true end
+        end
+    end
+   
+    if type(screenshot_search_results) == 'table' and #screenshot_search_results > 0 then
+        local added = 0
+        for _, fx in ipairs(screenshot_search_results) do
+            if added >= cap then break end
+            if fx and not fx.is_separator and not fx.is_message and fx.name then
+                keep_set[fx.name] = true
+                added = added + 1
+            end
+        end
+    elseif (not selected_folder) and type(current_filtered_fx) == 'table' and #current_filtered_fx > 0 then
+        
+        for i = 1, math.min(cap, #current_filtered_fx) do
+            local name = current_filtered_fx[i]
+            if type(name) == 'string' then keep_set[name] = true end
+        end
+    end
+    if next(keep_set) ~= nil then
+        for key, info in pairs(texture_load_queue) do
+            local pname = info and info.plugin
+            if not pname or not keep_set[pname] then
+                texture_load_queue[key] = nil
+            end
+        end
+    end
+
+    local original_max_per_frame = config.max_textures_per_frame
+    local original_cache_max = config.max_cached_search_textures
+    local original_min_cache = config.min_cached_textures
+    local is_all_plugins_context = (not selected_folder and (browser_panel_selected == "ALL PLUGINS" or browser_panel_selected == nil))
+    local visible_targets = loaded_items_count or ITEMS_PER_BATCH or 30
+    if is_all_plugins_context and visible_targets > 60 then
+        config.max_textures_per_frame = math.max(2, math.floor(original_max_per_frame * 0.5))
+        config.max_cached_search_textures = math.max(40, math.floor(original_cache_max * 0.7))
+        config.min_cached_textures = math.min(config.min_cached_textures, math.floor(config.max_cached_search_textures * 0.4))
+    end
+
     local textures_loaded = 0
     local current_time = r.time_precise()
     for unique_key, info in pairs(texture_load_queue) do
@@ -3173,13 +3467,14 @@ end
                 search_texture_cache[unique_key] = texture
                 texture_last_used[unique_key] = current_time
                 textures_loaded = textures_loaded + 1
-                log_to_file("Texture loaded (deferred): " .. file .. " for plugin: " .. (info.plugin or "unknown"))
+                tex_log("Texture loaded (deferred): " .. file .. " for plugin: " .. (info.plugin or "unknown"))
             else
-                log_to_file("Error loading texture: " .. file)
+                tex_log("Error loading texture: " .. file)
             end
         end
         texture_load_queue[unique_key] = nil
     end
+  
     local cache_size = 0
     for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
     if cache_size > config.max_cached_search_textures then
@@ -3196,18 +3491,24 @@ end
             end
             search_texture_cache[key] = nil
             texture_last_used[key] = nil
-            log_to_file("Texture removed: " .. key)
+            tex_log("Texture removed: " .. key)
         end
     end
-end  --
+    
+    if is_all_plugins_context and visible_targets > 60 then
+        config.max_textures_per_frame = original_max_per_frame
+        config.max_cached_search_textures = original_cache_max
+        config.min_cached_textures = original_min_cache
+    end
+end  
 
-local function Lead_Trim_ws(s) return s:match '^%s*(.*)' end
+function Lead_Trim_ws(s) return s:match '^%s*(.*)' end
 
-local function SetMinMax(Input, Min, Max)
+function SetMinMax(Input, Min, Max)
     return math.max(Min, math.min(Input, Max))
 end
 
-local function SortTable(tab, val1, val2)
+function SortTable(tab, val1, val2)
     table.sort(tab, function(a, b)
         if (a[val1] < b[val1]) then return true
         elseif (a[val1] > b[val1]) then return false
@@ -3215,7 +3516,7 @@ local function SortTable(tab, val1, val2)
     end)
 end
 
-local function GetTrackColorAndTextColor(track)
+function GetTrackColorAndTextColor(track)
     if not track or not reaper.ValidatePtr(track, "MediaTrack*") then
         return r.ImGui_ColorConvertDouble4ToU32(0.5, 0.5, 0.5, 1), 0xFFFFFFFF
     end
@@ -3232,7 +3533,7 @@ local function GetTrackColorAndTextColor(track)
     end
 end
 
-local function GetTagColorAndTextColor(tag_color)
+function GetTagColorAndTextColor(tag_color)
     local red, g, b, a = r.ImGui_ColorConvertU32ToDouble4(tag_color)
     local brightness = (red * 299 + g * 587 + b * 114) / 1000
     local text_color = brightness > 0.5 
@@ -3241,16 +3542,16 @@ local function GetTagColorAndTextColor(tag_color)
     return tag_color, text_color
 end
 
-local function GetBounds(hwnd)
+function GetBounds(hwnd)
     local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
     return left, top, right-left, bottom-top
 end
 
-local function Literalize(str)
+function Literalize(str)
     return str:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%1")
 end
 
-local function GetFileContext(filename)
+function GetFileContext(filename)
     local file = io.open(filename, "r")
     if file then
         local content = file:read("*all")
@@ -3260,19 +3561,19 @@ local function GetFileContext(filename)
     return nil
 end
 
-local function GetTrackName(track)
+function GetTrackName(track)
     if not track or not reaper.ValidatePtr(track, "MediaTrack*") then
         return "No Track Selected"
     end
     local _, name = r.GetTrackName(track)
     return name
 end
-local function IsOSX()
+function IsOSX()
     local platform = reaper.GetOS()
     return platform:match("OSX") or platform:match("macOS")
 end
 
-local function ScreenshotOSX(path, x, y, w, h)
+function ScreenshotOSX(path, x, y, w, h)
     x, y = r.ImGui_PointConvertNative(ctx, x, y, false)
     local command = 'screencapture -x -R %d,%d,%d,%d -t png "%s"'
     os.execute(command:format(x, y, w, h, path))
@@ -3281,7 +3582,7 @@ end
 
 ------------
 local wait_time = config.screenshot_delay 
-local function Wait(callback, start_time)
+function Wait(callback, start_time)
     start_time = start_time or r.time_precise()
     local function check()
         if r.time_precise() - start_time >= wait_time then
@@ -3293,11 +3594,11 @@ local function Wait(callback, start_time)
     r.defer(check)
 end
 -----------
-local function IsPluginClosed(fx_index)
+function IsPluginClosed(fx_index)
     return not r.TrackFX_GetFloatingWindow(TRACK, fx_index)
 end
 
-local function EnsurePluginRemoved(fx_index, callback)
+function EnsurePluginRemoved(fx_index, callback)
     local function check()
         if IsPluginClosed(fx_index) then
             if callback then
@@ -3312,7 +3613,7 @@ local function EnsurePluginRemoved(fx_index, callback)
     r.defer(check)
 end
 
-local function CaptureScreenshot(plugin_name, fx_index)
+function CaptureScreenshot(plugin_name, fx_index)
     local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
     if hwnd then
         local safe_name = plugin_name:gsub("[^%w%s-]", "_")
@@ -3378,7 +3679,7 @@ local function CaptureScreenshot(plugin_name, fx_index)
     r.TrackFX_Delete(TRACK, fx_index)
 end
 
-local function CaptureExistingFX(track, fx_index)
+function CaptureExistingFX(track, fx_index)
     local retval, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
     if retval then
         Wait(function()
@@ -3427,7 +3728,7 @@ local function CaptureExistingFX(track, fx_index)
         end)
     end
 end
-local function CaptureFirstTrackFX()
+function CaptureFirstTrackFX()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     
     local fx_count = r.TrackFX_GetCount(TRACK)
@@ -3438,17 +3739,15 @@ local function CaptureFirstTrackFX()
     end
 end
 
-local function IsARAPlugin(track, fx_index)
+function IsARAPlugin(track, fx_index)
     return r.TrackFX_GetNamedConfigParm(track, fx_index, "ARA")
 end
 
-local function CaptureARAScreenshot(track, fx_index, plugin_name)
+function CaptureARAScreenshot(track, fx_index, plugin_name)
     local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
     if hwnd then
-        -- Open ARA interface
         r.TrackFX_Show(track, fx_index, 3)
         r.defer(function()
-            -- Geef de ARA interface tijd om te openen
             r.time_precise()
             r.defer(function()
                 local safe_name = plugin_name:gsub("[^%w%s-]", "_")
@@ -3470,7 +3769,7 @@ local function CaptureARAScreenshot(track, fx_index, plugin_name)
     end
 end
 
-local function GetNextPlugin(current_plugin)
+function GetNextPlugin(current_plugin)
     for i, plugin in ipairs(FX_LIST_TEST) do
         if plugin == current_plugin then
             if i < #FX_LIST_TEST then
@@ -3481,7 +3780,7 @@ local function GetNextPlugin(current_plugin)
     return "None - This is the last plugin"
 end
 
-local function MakeScreenshot(plugin_name, callback, is_individual)
+function MakeScreenshot(plugin_name, callback, is_individual)
     if not plugin_name then
         log_to_file("Error: Attempted to make screenshot with nil plugin name")
         if callback then callback() end
@@ -3584,7 +3883,7 @@ local bulk_screenshot_progress = 0
 local total_fx_count = 0
 local loaded_fx_count = 0  
 local fx_list = {}
-local function EnumerateInstalledFX()
+function EnumerateInstalledFX()
     fx_list = {}
     total_fx_count = 0
     local default_folder_plugins = {}
@@ -3763,7 +4062,7 @@ end
 
 local PROCESS = false
 local START = false
-local function ProcessFX(index, start_time)
+function ProcessFX(index, start_time)
     start_time = start_time or r.time_precise()
     if STOP_REQUESTED or index > total_fx_count then
         log_to_file("Process completed or stopped at index: " .. index)
@@ -3824,14 +4123,14 @@ function StartSingleScreenshotCapture(plugin_name, cb, force)
 end
 
 
-local function ClearScreenshots()
+function ClearScreenshots()
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
         os.remove(screenshot_path .. file)
     end
     print("All screenshots cleared.")
 end
 
-local function ShowConfirmClearPopup()
+function ShowConfirmClearPopup()
     local popup_open = true
     r.ImGui_OpenPopup(ctx, "Confirm Clear Screenshots")
     if r.ImGui_BeginPopupModal(ctx, "Confirm Clear Screenshots", popup_open, r.ImGui_WindowFlags_AlwaysAutoResize()) then
@@ -4056,7 +4355,8 @@ function ShowPluginScreenshot()
                         local text_pos_y = display_height + 1
                            
                         r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
-                        r.ImGui_Text(ctx, current_hovered_plugin)
+                        local display_name = GetDisplayPluginName(current_hovered_plugin)
+                        r.ImGui_Text(ctx, display_name)
                         local stars = GetStarsString(current_hovered_plugin)
                         local stars_width = r.ImGui_CalcTextSize(ctx, stars)
                         local stars_pos_x = (display_width - stars_width) * 0.5
@@ -4080,7 +4380,7 @@ function ShowPluginScreenshot()
     end
 end
 
-local function GetCurrentProjectFX()
+function GetCurrentProjectFX()
     local fx_list = {}
     local track_count = reaper.CountTracks(0)
     
@@ -4127,7 +4427,7 @@ local function GetCurrentProjectFX()
     return fx_list
 end
 
-local function AddPluginToSelectedTracks(plugin_name)
+function AddPluginToSelectedTracks(plugin_name)
     local track_count = r.CountSelectedTracks(0)
     for i = 0, track_count - 1 do
         local track = r.GetSelectedTrack(0, i)
@@ -4136,7 +4436,7 @@ local function AddPluginToSelectedTracks(plugin_name)
     end
 end
 
-local function AddPluginToAllTracks(plugin_name)
+function AddPluginToAllTracks(plugin_name)
     local track_count = r.CountTracks(0)
     for i = 0, track_count - 1 do
         local track = r.GetTrack(0, i)
@@ -4145,16 +4445,21 @@ local function AddPluginToAllTracks(plugin_name)
     end
 end
 
-local function AddToFavorites(plugin_name)
+function AddToFavorites(plugin_name)
+    if favorite_set[plugin_name] then return end
     table.insert(favorite_plugins, plugin_name)
+    favorite_set[plugin_name] = true
     SaveFavorites()
+    if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
 end
 
-local function RemoveFromFavorites(plugin_name)
+function RemoveFromFavorites(plugin_name)
     for i, fav in ipairs(favorite_plugins) do
         if fav == plugin_name then
             table.remove(favorite_plugins, i)
+            favorite_set[plugin_name] = nil
             SaveFavorites()
+            if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
             break
         end
     end
@@ -4182,7 +4487,7 @@ function CountProjectFolderFiles(project_path)
     return count - 1  -- -1 omdat de eerste tel 0 is
 end
 
-local function IsSendTrack(track)
+function IsSendTrack(track)
     local parent = r.GetParentTrack(track)
     if parent then
         local _, name = r.GetTrackName(parent)
@@ -4296,20 +4601,37 @@ function GetSendIndex(src_track, dst_track)
     return -1
 end
 
-local function FilterActions()
+function FilterActions()
     if #allActions == 0 then
-        local i = 0
-        repeat
-            local retval, name = reaper.CF_EnumerateActions(0, i)
-            if retval > 0 and name and name ~= "" then
-                table.insert(allActions, {name = name, id = retval})
+        -- Check if SWS extension is available
+        if reaper.CF_EnumerateActions then
+            local i = 0
+            repeat
+                local retval, name = reaper.CF_EnumerateActions(0, i)
+                if retval > 0 and name and name ~= "" then
+                    table.insert(allActions, {name = name, id = retval})
+                end
+                i = i + 1
+            until retval <= 0
+        else
+            -- Fallback: Add some basic actions manually if SWS is not available
+            local basic_actions = {
+                {name = "Transport: Play/stop", id = 40044},
+                {name = "Transport: Record", id = 1013},
+                {name = "Edit: Copy items/tracks/envelope points", id = 40698},
+                {name = "Edit: Paste items/tracks", id = 40058},
+                {name = "Track: Insert new track", id = 40001},
+                {name = "Item: Split items at edit cursor", id = 40746},
+                {name = "View: Zoom to fit all in window", id = 40031}
+            }
+            for _, action in ipairs(basic_actions) do
+                table.insert(allActions, action)
             end
-            i = i + 1
-        until retval <= 0
+        end
     end
 end
 FilterActions()
-local function CategorizeActions()
+function CategorizeActions()
     for _, action in ipairs(allActions) do
         local name = action.name:lower()
         if name:find("project") or name:find("file") or name:find("save") or name:find("open") then
@@ -4345,11 +4667,15 @@ local function CategorizeActions()
 end
 CategorizeActions()
 function SearchActions(search_term)
+    if not search_term or search_term == "" then
+        return categories
+    end
+    
     local filteredActions = {}
     for category, actions in pairs(categories) do
         filteredActions[category] = {}
         for _, action in ipairs(actions) do
-            if action.name:lower():find(search_term:lower()) then
+            if action and action.name and action.name:lower():find(search_term:lower(), 1, true) then
                 local state = reaper.GetToggleCommandState(action.id)
                 action.state = state
                 table.insert(filteredActions[category], action)
@@ -4405,7 +4731,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
             end
         end
         
-        local is_favorite = table.contains(favorite_plugins, plugin_name)
+    local is_favorite = not not favorite_set[plugin_name]
         if is_favorite then
             if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                 RemoveFromFavorites(plugin_name)
@@ -4417,6 +4743,18 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 AddToFavorites(plugin_name)
                 GetPluginsForFolder(selected_folder)
                 ClearScreenshotCache()
+            end
+        end
+
+        -- Pin/unpin plugin
+        local is_pinned = IsPluginPinned(plugin_name)
+        if is_pinned then
+            if r.ImGui_MenuItem(ctx, "Unpin Plugin") then
+                UnpinPlugin(plugin_name)
+            end
+        else
+            if r.ImGui_MenuItem(ctx, "Pin Plugin") then
+                PinPlugin(plugin_name)
             end
         end
 
@@ -4552,7 +4890,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
     end
 end
 
-local function ShowFXContextMenu(plugin, menu_id)
+function ShowFXContextMenu(plugin, menu_id)
     if r.ImGui_IsItemClicked(ctx, 1) then
         r.ImGui_OpenPopup(ctx, "FXContextMenu_" .. menu_id)
     end
@@ -4630,8 +4968,8 @@ local function ShowFXContextMenu(plugin, menu_id)
             r.TrackFX_SetEnabled(track, fx_index, not is_enabled)
         end
 
-        local fx_name = plugin.fx_name
-        if table.contains(favorite_plugins, fx_name) then
+    local fx_name = plugin.fx_name
+    if favorite_set[fx_name] then
             if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                 RemoveFromFavorites(fx_name)
             end
@@ -4686,7 +5024,7 @@ local function ShowFXContextMenu(plugin, menu_id)
     end
 end
 
-local function ShowFolderDropdown()
+function ShowFolderDropdown()
     if config.screenshot_view_type == 3 then return end
     
     local folders_category
@@ -4822,7 +5160,7 @@ local function ShowFolderDropdown()
     end
 end
 
-local function ShowCustomFolderDropdown()
+function ShowCustomFolderDropdown()
     if next(config.custom_folders) then
         r.ImGui_SameLine(ctx)
         r.ImGui_PushItemWidth(ctx, 110)
@@ -4875,13 +5213,71 @@ local function ShowCustomFolderDropdown()
     end
 end
 
+-- Forward declare helper so functions above can reference it as a local upvalue
+local SortPlainPluginList
+
 function SortScreenshotResults()
     if screenshot_search_results and #screenshot_search_results > 0 then
-        if screenshot_sort_mode == "alphabet" then
+        -- When browsing a non-folder subgroup (ALL/DEVELOPER/CATEGORY), keep pinned-first and optional favorites-on-top
+        if browser_panel_selected then
+            local mode = (config and config.sort_mode) or screenshot_sort_mode or "alphabet"
+            local names = {}
+            for _, e in ipairs(screenshot_search_results) do
+                if type(e) == 'table' and e.name and not e.is_message then
+                    names[#names+1] = e.name
+                end
+            end
+            -- Partition
+            local pinned, favorites, others = {}, {}, {}
+            for _, n in ipairs(names) do
+                if pinned_set and pinned_set[n] then
+                    pinned[#pinned+1] = n
+                elseif favorite_set and favorite_set[n] then
+                    favorites[#favorites+1] = n
+                else
+                    others[#others+1] = n
+                end
+            end
+            SortPlainPluginList(pinned, mode)
+            if config and config.show_favorites_on_top then
+                SortPlainPluginList(favorites, mode)
+            end
+            SortPlainPluginList(others, mode)
+            local ordered = {}
+            
+            -- Add pinned plugins first if show_pinned_on_top is enabled
+            if config and config.show_pinned_on_top then
+                for _, n in ipairs(pinned) do ordered[#ordered+1] = {name = n} end
+                if #pinned > 0 and ((config and config.show_favorites_on_top and (#favorites>0 or #others>0)) or (not (config and config.show_favorites_on_top) and #others>0)) then
+                    ordered[#ordered+1] = { is_separator = true, kind = "pinned_end" }
+                end
+            end
+            
+            if config and config.show_favorites_on_top then
+                for _, n in ipairs(favorites) do ordered[#ordered+1] = {name = n} end
+                if #favorites > 0 and #others > 0 then
+                    ordered[#ordered+1] = { is_separator = true, kind = "favorites_end" }
+                end
+            else
+                for _, n in ipairs(favorites) do others[#others+1] = n end
+            end
+            
+            -- Add pinned plugins to others if show_pinned_on_top is disabled
+            if not (config and config.show_pinned_on_top) then
+                for _, n in ipairs(pinned) do others[#others+1] = n end
+            end
+            
+            for _, n in ipairs(others) do ordered[#ordered+1] = {name = n} end
+            screenshot_search_results = ordered
+            return
+        end
+
+        local mode = (config and config.sort_mode) or screenshot_sort_mode or "alphabet"
+        if mode == "alphabet" then
             table.sort(screenshot_search_results, function(a, b)
                 return a.name:lower() < b.name:lower()
             end)
-        elseif screenshot_sort_mode == "rating" then
+        elseif mode == "rating" then
             table.sort(screenshot_search_results, function(a, b)
                 local ra = plugin_ratings[a.name] or 0
                 local rb = plugin_ratings[b.name] or 0
@@ -4895,9 +5291,10 @@ function SortScreenshotResults()
     end
 end
 
-local function SortPlainPluginList(list)
+function SortPlainPluginList(list, mode)
     if not list or #list == 0 then return end
-    if screenshot_sort_mode == "rating" then
+    local effective_mode = mode or screenshot_sort_mode or "alphabet"
+    if effective_mode == "rating" then
         table.sort(list, function(a,b)
             local ra = plugin_ratings[a] or 0
             local rb = plugin_ratings[b] or 0
@@ -4912,7 +5309,7 @@ local function SortPlainPluginList(list)
     end
 end
 
-local function ShowScreenshotControls()
+function ShowScreenshotControls()
     r.ImGui_SameLine(ctx)
     ShowFolderDropdown()
     if not config.hide_custom_dropdown then
@@ -4927,17 +5324,20 @@ local function ShowScreenshotControls()
         r.ImGui_SameLine(ctx)
 
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
-        local sort_label = (screenshot_sort_mode == "alphabet") and "A" or "R"
+        local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
+        local sort_label = (effective_mode == "alphabet") and "A" or "R"
         if r.ImGui_Button(ctx, sort_label, 20, 20) then
-            if screenshot_sort_mode == "alphabet" then
-                screenshot_sort_mode = "rating"
+            -- Toggle the main sort when available to keep UI in sync
+            if config then
+                config.sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                if SaveConfig then SaveConfig() end
             else
-                screenshot_sort_mode = "alphabet"
+                screenshot_sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
             end
             SortScreenshotResults()
         end
         if r.ImGui_IsItemHovered(ctx) then
-            if screenshot_sort_mode == "alphabet" then
+            if effective_mode == "alphabet" then
                 r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
             else
                 r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
@@ -5030,6 +5430,51 @@ local function ShowScreenshotControls()
                     if config.apply_type_priority then
                         matches = DedupeByTypePriority(matches)
                     end
+                    -- When browsing a non-folder subgroup (ALL/DEVELOPER/CATEGORY), apply pinned/favorites-first ordering
+                    if browser_panel_selected then
+                        local pinned, favorites, others = {}, {}, {}
+                        for _, p in ipairs(matches) do
+                            if pinned_set and pinned_set[p] then
+                                pinned[#pinned+1] = p
+                            elseif favorite_set and favorite_set[p] then
+                                favorites[#favorites+1] = p
+                            else
+                                others[#others+1] = p
+                            end
+                        end
+                        SortPlainPluginList(pinned, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                        if config and config.show_favorites_on_top then
+                            SortPlainPluginList(favorites, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                        end
+                        SortPlainPluginList(others, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                        local ordered = {}
+                        
+                        -- Add pinned plugins first if show_pinned_on_top is enabled
+                        if config and config.show_pinned_on_top then
+                            for _, p in ipairs(pinned) do ordered[#ordered+1] = p end
+                            if #pinned > 0 and ((config and config.show_favorites_on_top and (#favorites>0 or #others>0)) or (not (config and config.show_favorites_on_top) and #others>0)) then
+                                ordered[#ordered+1] = "--Pinned End--"
+                            end
+                        end
+                        
+                        if config and config.show_favorites_on_top then
+                            for _, p in ipairs(favorites) do ordered[#ordered+1] = p end
+                            if #favorites > 0 and #others > 0 then
+                                ordered[#ordered+1] = "--Favorites End--"
+                            end
+                        else
+                            for _, p in ipairs(favorites) do others[#others+1] = p end
+                        end
+                        
+                        -- Add pinned plugins to others if show_pinned_on_top is disabled
+                        if not (config and config.show_pinned_on_top) then
+                            for _, p in ipairs(pinned) do others[#others+1] = p end
+                        end
+                        
+                        for _, p in ipairs(others) do ordered[#ordered+1] = p end
+                        matches = ordered
+                    end
+
                     for i = 1, math.min(MAX_RESULTS, #matches) do
                         screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
                     end
@@ -5037,7 +5482,10 @@ local function ShowScreenshotControls()
                     too_many_results = (count > MAX_RESULTS)
                 end
 
-                SortScreenshotResults()
+                -- Keep explicit subgroup ordering; only apply generic sort when not in a subgroup
+                if not browser_panel_selected then
+                    SortScreenshotResults()
+                end
                 RequestClearScreenshotCache()
                 if too_many_results then
                     search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
@@ -5179,7 +5627,7 @@ local function ShowScreenshotControls()
     end
 end
 
-local function DrawFxChains(tbl, path)
+function DrawFxChains(tbl, path)
     local extension = ".RfxChain"
     path = path or ""
     local i = 1
@@ -5338,7 +5786,7 @@ function LoadTemplate(template_path)
     end
 end
 
-local function DrawTrackTemplates(tbl, path)
+function DrawTrackTemplates(tbl, path)
     local extension = ".RTrackTemplate"
     path = path or ""
     local deleted = false
@@ -5401,7 +5849,7 @@ end
 
 local ITEMS_PER_PAGE = 30
 
-local function DrawBrowserItems(tbl, main_cat_name)
+function DrawBrowserItems(tbl, main_cat_name)
     local function EnsurePinnedList(cat)
         if not config.pinned_subgroups then config.pinned_subgroups = {} end
         if not config.pinned_subgroups[cat] then config.pinned_subgroups[cat] = {} end
@@ -5449,16 +5897,49 @@ local function DrawBrowserItems(tbl, main_cat_name)
 
     filtered_fx = DedupeByTypePriority(filtered_fx)
 
-        local sm = config.sort_mode or sort_mode or "alphabet"
-        if sm == "alphabet" then
-            table.sort(filtered_fx, function(a,b) return a:lower() < b:lower() end)
-        elseif sm == "rating" then
-            table.sort(filtered_fx, function(a,b)
-                local ra = plugin_ratings[a] or 0
-                local rb = plugin_ratings[b] or 0
-                if ra == rb then return a:lower() < b:lower() else return ra > rb end
-            end)
+    -- Apply subgroup ordering: pinned first, then favorites (optional), then others
+    do
+        local pinned = {}
+        local favorites = {}
+        local others = {}
+        for _, fx in ipairs(filtered_fx) do
+            if pinned_set and pinned_set[fx] then
+                pinned[#pinned+1] = fx
+            elseif favorite_set and favorite_set[fx] then
+                favorites[#favorites+1] = fx
+            else
+                others[#others+1] = fx
+            end
         end
+        -- Sort each bucket by current sort mode (alphabet or rating)
+        SortPlainPluginList(pinned, (config and config.sort_mode) or sort_mode or "alphabet")
+        if config and config.show_favorites_on_top then
+            SortPlainPluginList(favorites, (config and config.sort_mode) or sort_mode or "alphabet")
+        end
+        SortPlainPluginList(others, (config and config.sort_mode) or sort_mode or "alphabet")
+
+        local reordered = {}
+        
+        -- Add pinned plugins first if show_pinned_on_top is enabled
+        if config and config.show_pinned_on_top then
+            for _, fx in ipairs(pinned) do reordered[#reordered+1] = fx end
+        end
+        
+        if config and config.show_favorites_on_top then
+            for _, fx in ipairs(favorites) do reordered[#reordered+1] = fx end
+        else
+            -- If not showing favorites on top, merge favorites into others
+            for _, fx in ipairs(favorites) do others[#others+1] = fx end
+        end
+        
+        -- Add pinned plugins to others if show_pinned_on_top is disabled
+        if not (config and config.show_pinned_on_top) then
+            for _, fx in ipairs(pinned) do others[#others+1] = fx end
+        end
+        
+        for _, fx in ipairs(others) do reordered[#reordered+1] = fx end
+        filtered_fx = reordered
+    end
 
         if #filtered_fx > 0 then
             r.ImGui_PushID(ctx, i)
@@ -5488,6 +5969,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     for j = start_idx, end_idx do
                         table.insert(screenshot_search_results, {name = filtered_fx[j]})
                     end
+                    SortScreenshotResults()
                 else
                     if view_mode == "list" then
                         for j = 1, #filtered_fx do
@@ -5498,6 +5980,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                             table.insert(screenshot_search_results, {name = filtered_fx[j]})
                         end
                     end
+                    SortScreenshotResults()
                 end
                 ClearScreenshotCache()
             end
@@ -5559,6 +6042,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     for j = new_start, new_end do
                         table.insert(screenshot_search_results, {name = filtered_fx[j]})
                     end
+                    SortScreenshotResults()
                     RequestClearScreenshotCache()
                 end
                 r.ImGui_SameLine(ctx)
@@ -5576,6 +6060,7 @@ local function DrawBrowserItems(tbl, main_cat_name)
                     for j = new_start, new_end do
                         table.insert(screenshot_search_results, {name = filtered_fx[j]})
                     end
+                    SortScreenshotResults()
                     RequestClearScreenshotCache()
                 end
                 r.ImGui_Unindent(ctx, 20)
@@ -5618,14 +6103,14 @@ end
 
 
 
-local function ItemMatchesSearch(item_name, search_term)
+function ItemMatchesSearch(item_name, search_term)
     search_term = search_term or ""
     if search_term == "" then return true end
     return item_name:lower():find(search_term:lower(), 1, true)
 end
 
 -- CUSTOM FOLDERS (NESTED)
-local function DisplayCustomFoldersInBrowser(folders, path_prefix)
+function DisplayCustomFoldersInBrowser(folders, path_prefix)
     path_prefix = path_prefix or ""
     local function IsCustomPinned(full_path)
         if not config.pinned_custom_subfolders then return false end
@@ -5760,7 +6245,7 @@ end
 footer_resize_active = footer_resize_active or false
 footer_last_mouse_y  = footer_last_mouse_y or 0
 
-local function ShowBrowserPanel()
+function ShowBrowserPanel()
     if not config.show_browser_panel then return end
 
     config.browser_footer_height = math.max(20, config.browser_footer_height or 150)
@@ -5773,7 +6258,8 @@ local function ShowBrowserPanel()
     local section_start_y = section_pos_y -- screen pos not directly used; we will later compute height via window height minus pos diff
 
     -- Header
-    r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 25 or 4)
+    local header_open = r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 25 or 4)
+    if header_open then
     if config.show_browser_search then
         r.ImGui_PushItemWidth(ctx, 70)
         local changed_browser_search, new_browser_search = r.ImGui_InputTextWithHint(ctx, "##BrowserSearch", "Search...", browser_search_term)
@@ -5783,17 +6269,19 @@ local function ShowBrowserPanel()
         end
         r.ImGui_SameLine(ctx)
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
-        local sort_label = (screenshot_sort_mode == "alphabet") and "A" or "R"
+        local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
+        local sort_label = (effective_mode == "alphabet") and "A" or "R"
         if r.ImGui_Button(ctx, sort_label, 20, 20) then
-            if screenshot_sort_mode == "alphabet" then
-                screenshot_sort_mode = "rating"
+            if config then
+                config.sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                if SaveConfig then SaveConfig() end
             else
-                screenshot_sort_mode = "alphabet"
+                screenshot_sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
             end
             SortScreenshotResults()
         end
         if r.ImGui_IsItemHovered(ctx) then
-            if screenshot_sort_mode == "alphabet" then
+            if effective_mode == "alphabet" then
                 r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
             else
                 r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
@@ -5834,10 +6322,13 @@ local function ShowBrowserPanel()
     else
         r.ImGui_Dummy(ctx, 0, 2)
     end
-    r.ImGui_EndChild(ctx)
+    end
+    if header_open then
+        r.ImGui_EndChild(ctx)
+    end
 
     local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-    local spacing_fudge = 6
+    local spacing_fudge = 20
     local footer_space = (config.show_screenshot_info_box and BROWSER_FOOTER_HEIGHT or 0)
     local content_h = math.max(0, avail_h - footer_space - spacing_fudge)
 
@@ -5849,53 +6340,55 @@ local function ShowBrowserPanel()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
 
-        -- FAVORITES (ongewijzigd)
-        local fav_is_selected = (selected_folder == "Favorites")
-        if fav_is_selected then
-            local dl = r.ImGui_GetWindowDrawList(ctx)
-            local x,y = r.ImGui_GetCursorScreenPos(ctx)
-            local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-            local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-            r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
-        end
-        r.ImGui_Selectable(ctx, "FAVORITES", fav_is_selected)
-        if r.ImGui_IsItemClicked(ctx, 1) then
-            r.ImGui_OpenPopup(ctx, "folder_mode_ctx_favorites")
-        end
-    if r.ImGui_BeginPopup(ctx, "folder_mode_ctx_favorites") then
-            local toggle_label = (view_mode == "screenshots" and "Show List" or "Show Screenshots")
-            if r.ImGui_MenuItem(ctx, toggle_label) then
-                local prev = view_mode
-                view_mode = (view_mode == "screenshots" and "list" or "screenshots")
-                if view_mode == "screenshots" and prev ~= "screenshots" then RequestClearScreenshotCache() end
+        -- FAVORITES (respect config setting)
+        if config.show_favorites then
+            local fav_is_selected = (selected_folder == "Favorites")
+            if fav_is_selected then
+                local dl = r.ImGui_GetWindowDrawList(ctx)
+                local x,y = r.ImGui_GetCursorScreenPos(ctx)
+                local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-            if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-                StartFolderScreenshots("Favorites")
+            r.ImGui_Selectable(ctx, "FAVORITES", fav_is_selected)
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "folder_mode_ctx_favorites")
             end
-            r.ImGui_EndPopup(ctx)
-        end
-            if r.ImGui_IsItemClicked(ctx, 0) then
-            SelectFolderExclusive("Favorites")
-            UpdateLastViewedFolder("Favorites")
-            browser_panel_selected = nil
-            show_media_browser = false
-            show_sends_window = false
-            show_action_browser = false
-            screenshot_search_results = {}
-            local term_l = browser_search_term:lower()
-            local matches = {}
-            for _, fav in ipairs(favorite_plugins) do
-                if fav:lower():find(term_l, 1, true) then
-                    matches[#matches+1] = fav
+            if r.ImGui_BeginPopup(ctx, "folder_mode_ctx_favorites") then
+                local toggle_label = (view_mode == "screenshots" and "Show List" or "Show Screenshots")
+                if r.ImGui_MenuItem(ctx, toggle_label) then
+                    local prev = view_mode
+                    view_mode = (view_mode == "screenshots" and "list" or "screenshots")
+                    if view_mode == "screenshots" and prev ~= "screenshots" then RequestClearScreenshotCache() end
                 end
+                if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
+                    StartFolderScreenshots("Favorites")
+                end
+                r.ImGui_EndPopup(ctx)
             end
-            if config.apply_type_priority then
-                matches = DedupeByTypePriority(matches)
+            if r.ImGui_IsItemClicked(ctx, 0) then
+                SelectFolderExclusive("Favorites")
+                UpdateLastViewedFolder("Favorites")
+                browser_panel_selected = nil
+                show_media_browser = false
+                show_sends_window = false
+                show_action_browser = false
+                screenshot_search_results = {}
+                local term_l = GetLowerName(browser_search_term)
+                local matches = {}
+                for _, fav in ipairs(favorite_plugins) do
+                    if GetLowerName(fav):find(term_l, 1, true) then
+                        matches[#matches+1] = fav
+                    end
+                end
+                if config.apply_type_priority then
+                    matches = DedupeByTypePriority(matches)
+                end
+                for i = 1, #matches do
+                    screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+                end
+                RequestClearScreenshotCache()
             end
-            for i = 1, #matches do
-                screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
-            end
-            RequestClearScreenshotCache()
         end
    
         if config.show_custom_folders then
@@ -6101,7 +6594,8 @@ local function ShowBrowserPanel()
                             local folder_name = CAT_TEST[i].list[j].name
                             local is_pinned = IsPinned(folder_name)
                             local header_text = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_name
-                            local folder_is_selected = (selected_folder == header_text)
+                            
+                            local folder_is_selected = (selected_folder == folder_name)
                             if folder_is_selected then
                                 local dl = r.ImGui_GetWindowDrawList(ctx)
                                 local x,y = r.ImGui_GetCursorScreenPos(ctx)
@@ -6113,7 +6607,7 @@ local function ShowBrowserPanel()
                             r.ImGui_Unindent(ctx, 10)
                             if r.ImGui_IsItemClicked(ctx, 0) then
                                 selected_folder = folder_name
-                                browser_panel_selected = nil -- deselect CATEGORY/DEVELOPER/ALL
+                                browser_panel_selected = nil 
                                 selected_plugin = nil
                                 UpdateLastViewedFolder(selected_folder)
                                 screenshot_search_results = nil
@@ -6376,7 +6870,10 @@ local function ShowBrowserPanel()
             end
             r.ImGui_Dummy(ctx, 0, 2)
         end
-        if r.ImGui_BeginChild(ctx, "BrowserFooter", -1, BROWSER_FOOTER_HEIGHT) then
+        local browser_footer_open = false
+        if config.show_screenshot_info_box then
+            browser_footer_open = r.ImGui_BeginChild(ctx, "BrowserFooter", -1, BROWSER_FOOTER_HEIGHT)
+            if browser_footer_open then
             local proj = 0 
             local _, proj_name = r.EnumProjects(-1, "")
             if not proj_name or proj_name == "" then
@@ -6721,7 +7218,7 @@ local function ShowBrowserPanel()
                             local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
                             if ok and fx_name ~= "" then
                                 if config.clean_plugin_names or config.remove_manufacturer_names then
-                                    fx_name = CleanPluginName(fx_name)
+                                    fx_name = GetDisplayPluginName(fx_name)
                                 end
                 local clicked = r.ImGui_Selectable(ctx, fx_name .. "##footerfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
                 if clicked then
@@ -6802,7 +7299,7 @@ local function ShowBrowserPanel()
                                 local ok, ifx_name = r.TakeFX_GetFXName(take, i, "")
                                 if ok and ifx_name ~= "" then
                                     if config.clean_plugin_names or config.remove_manufacturer_names then
-                                        ifx_name = CleanPluginName(ifx_name)
+                                        ifx_name = GetDisplayPluginName(ifx_name)
                                     end
                                     local clicked = r.ImGui_Selectable(ctx, ifx_name .. "##footeritemfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
                                     if clicked then
@@ -6862,7 +7359,10 @@ local function ShowBrowserPanel()
                 end
             end
             r.ImGui_PopStyleColor(ctx)
-            r.ImGui_EndChild(ctx)
+        end
+        if browser_footer_open then
+            r.ImGui_EndChild(ctx)  -- Close BrowserFooter
+        end
         end
     end
 
@@ -6886,7 +7386,7 @@ local function ShowBrowserPanel()
     r.ImGui_SameLine(ctx)
 end
 
-local function CheckScrollAndLoadMore(all_plugins)
+function CheckScrollAndLoadMore(all_plugins)
     if not config.use_pagination and all_plugins and #all_plugins > ITEMS_PER_BATCH then
         if r.ImGui_BeginChild(ctx, "ScreenshotList") then
             local current_scroll = r.ImGui_GetScrollY(ctx)
@@ -6912,7 +7412,7 @@ local function CheckScrollAndLoadMore(all_plugins)
     end
 end
 
-local function ScaleScreenshotSize(width, height, max_display_size)
+function ScaleScreenshotSize(width, height, max_display_size)
     local max_height = max_display_size * 1.2 -- 120% van de ingestelde breedte
     local display_width = max_display_size
     local display_height = display_width * (height / width)
@@ -6925,7 +7425,65 @@ local function ScaleScreenshotSize(width, height, max_display_size)
     return display_width, display_height
 end
 
-local function DrawMasonryLayout(screenshots)
+-- Draw a simple "pin" overlay at the top-right of a tile (screen coordinates)
+function DrawPinnedOverlayAt(tlx, tly, w, h)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    -- Fixed size icon independent of screenshot size - made smaller
+    local size = (config and config.overlay_icon_size) or 14
+    local pad = 5
+    local x2 = tlx + w - pad
+    local y1 = tly + pad
+    local x1 = x2 - size
+    local y2 = y1 + size
+    local head_col = 0xFFD700FF -- gold
+    local shadow_col = 0x00000088
+    -- head with subtle shadow
+    r.ImGui_DrawList_AddRectFilled(dl, x1+1, y1+1, x2+1, y2+1, shadow_col, 2)
+    r.ImGui_DrawList_AddRectFilled(dl, x1,   y1,   x2,   y2,   head_col, 2)
+    -- stem
+    local stem_w = math.max(2, math.floor(size * 0.2))
+    local stem_h = math.floor(size * 0.7)
+    local sx1 = x1 + math.floor(size * 0.5) - math.floor(stem_w * 0.5)
+    local sy1 = y2 - math.floor(stem_w * 0.5)
+    local sx2 = sx1 + stem_w
+    local sy2 = sy1 + stem_h
+    r.ImGui_DrawList_AddRectFilled(dl, sx1+1, sy1+1, sx2+1, sy2+1, shadow_col, 1)
+    r.ImGui_DrawList_AddRectFilled(dl, sx1,   sy1,   sx2,   sy2,   head_col, 1)
+end
+
+
+function DrawFavoriteOverlayAt(tlx, tly, w, h)
+    if not config.show_favorite_overlay then return end
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    -- Fixed size icon independent of screenshot size - made smaller and same gold color as pinned
+    local size = (config and config.overlay_icon_size) or 14
+    local pad = 5
+    local x1 = tlx + pad
+    local y1 = tly + pad
+    local x2 = x1 + size
+    local y2 = y1 + size
+    local badge_col = 0xFFD700FF -- same gold as pinned overlay
+    local shadow_col = 0x00000088
+    
+    local rounding = math.floor(size * 0.5)
+    r.ImGui_DrawList_AddRectFilled(dl, x1+1, y1+1, x2+1, y2+1, shadow_col, rounding)
+    r.ImGui_DrawList_AddRectFilled(dl, x1,   y1,   x2,   y2,   badge_col, rounding)
+end
+
+-- Draw a thin horizontal bar across the window's content region at current cursor Y
+function DrawHorizontalSeparatorBar(thickness, color)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local x1 = sx + 2
+    local x2 = sx + math.max(0, avail_w - 2)
+    local t = thickness or ((config and config.compact_screenshots) and 2 or 3)
+    local col = color or 0x606060FF
+    r.ImGui_DrawList_AddRectFilled(dl, x1, sy, x2, sy + t, col, 2)
+    r.ImGui_Dummy(ctx, 0, t + ((config and config.compact_screenshots) and 4 or 8))
+end
+
+function DrawMasonryLayout(screenshots)
     local initial_spacing = 0
     if not top_screenshot_spacing_applied then
         initial_spacing = 6 -- same visual gap as grid
@@ -6943,13 +7501,29 @@ local function DrawMasonryLayout(screenshots)
 
     for i, fx in ipairs(screenshots) do
         if fx.is_separator then
+            -- Draw a thin, full-width horizontal bar across the masonry area
             local max_h = 0
             for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
             r.ImGui_SetCursorPos(ctx, padding, max_h)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-            r.ImGui_Text(ctx, fx.label or "---")
-            r.ImGui_PopStyleColor(ctx)
-            local sep_height = r.ImGui_GetTextLineHeightWithSpacing(ctx) + (config.compact_screenshots and 2 or 10)
+            -- draw full-width bar using cursor position and available width
+            local dl = r.ImGui_GetWindowDrawList(ctx)
+            local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
+            local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            local x1 = sx + 2
+            local x2 = sx + math.max(0, avail_w - 2)
+            local thickness = (config.compact_screenshots and 2) or 3
+            local col = 0x606060FF
+            r.ImGui_DrawList_AddRectFilled(dl, x1, sy, x2, sy + thickness, col, 2)
+            -- optional glyph
+            if fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
+                local glyph = (fx.kind == 'pinned_end') and '📌' or '★'
+                r.ImGui_SetCursorPos(ctx, padding + 4, max_h - (config.compact_screenshots and 0 or 2))
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                r.ImGui_Text(ctx, glyph)
+                r.ImGui_PopStyleColor(ctx)
+            end
+            -- Add a bit more bottom margin so items do not sit on the line
+            local sep_height = thickness + (config.compact_screenshots and 8 or 14)
             for c = 1, num_columns do column_heights[c] = max_h + sep_height end
             goto continue
         end
@@ -6971,7 +7545,8 @@ local function DrawMasonryLayout(screenshots)
         local pos_x = (shortest_column - 1) * column_width + padding
         local pos_y = column_heights[shortest_column]
 
-        r.ImGui_SetCursorPos(ctx, pos_x, pos_y)
+    r.ImGui_SetCursorPos(ctx, pos_x, pos_y)
+    local item_tlx, item_tly = r.ImGui_GetCursorScreenPos(ctx)
 
         local safe_name = fx.name:gsub("[^%w%s-]", "_")
         local screenshot_file = screenshot_path .. safe_name .. ".png"
@@ -6985,6 +7560,8 @@ local function DrawMasonryLayout(screenshots)
                     r.ImGui_BeginGroup(ctx)
 
                     local masonry_clicked = r.ImGui_ImageButton(ctx, "masonry_" .. i, texture, display_width, display_height)
+                    if pinned_set and pinned_set[fx.name] then DrawPinnedOverlayAt(item_tlx, item_tly, display_width, display_height) end
+                    if favorite_set and favorite_set[fx.name] then DrawFavoriteOverlayAt(item_tlx, item_tly, display_width, display_height) end
 
                     if config.enable_drag_add_fx then
                         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -7060,7 +7637,7 @@ local function DrawMasonryLayout(screenshots)
     r.ImGui_SetCursorPosY(ctx, max_height + (config.compact_screenshots and 4 or 16))
 end
 
-local function RenderScriptsLauncherSection(popped_view_stylevars)
+function RenderScriptsLauncherSection(popped_view_stylevars)
     
     ShowScreenshotControls()
     r.ImGui_Separator(ctx)
@@ -7247,7 +7824,7 @@ end
     return popped_view_stylevars
 end
 
-local function ShowScreenshotWindow()
+function ShowScreenshotWindow()
     if not screenshot_search_results then
         screenshot_search_results = {}
     end
@@ -8118,19 +8695,47 @@ local function ShowScreenshotWindow()
                 
                 if selected_folder == "Favorites" then
                     filtered_plugins = favorite_plugins
-                    local display_plugins = {}
+                    local pinned, others = {}, {}
+                    local term = browser_search_term:lower()
                     for _, plugin in ipairs(filtered_plugins) do
-                        if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                            table.insert(display_plugins, plugin)
+                        if plugin:lower():find(term, 1, true) then
+                            if pinned_set[plugin] then pinned[#pinned+1] = plugin else others[#others+1] = plugin end
                         end
                     end
                     if config.apply_type_priority then
-                        display_plugins = DedupeByTypePriority(display_plugins)
+                        pinned = DedupeByTypePriority(pinned)
+                        others = DedupeByTypePriority(others)
                     end
+                    SortPlainPluginList(pinned, config.sort_mode)
+                    SortPlainPluginList(others, config.sort_mode)
+                    local display_plugins = {}
+                    
+                    -- Add pinned plugins first if show_pinned_on_top is enabled
+                    if config and config.show_pinned_on_top then
+                        for _, p in ipairs(pinned) do display_plugins[#display_plugins+1] = p end
+                        if #pinned > 0 and #others > 0 then display_plugins[#display_plugins+1] = "--Pinned End--" end
+                    else
+                        -- Add pinned plugins to others if show_pinned_on_top is disabled
+                        for _, p in ipairs(pinned) do others[#others+1] = p end
+                        SortPlainPluginList(others, config.sort_mode)
+                    end
+                    
+                    for _, p in ipairs(others) do display_plugins[#display_plugins+1] = p end
                     filtered_plugins = display_plugins
-                    SortPlainPluginList(filtered_plugins)
-
-                    SortPlainPluginList(filtered_plugins)
+                    -- Sync visible names for texture pruning (Current Track FX)
+                    current_filtered_fx = {}
+                    for _, fx in ipairs(display_plugins) do
+                        if type(fx) == 'table' and fx.fx_name then
+                            current_filtered_fx[#current_filtered_fx+1] = fx.fx_name
+                        end
+                    end
+                    -- Sync visible list for texture pruning (custom folders)
+                    current_filtered_fx = {}
+                    for _, name in ipairs(display_plugins) do
+                        if type(name) == 'string' and name ~= "--Favorites End--" and name ~= "--Pinned End--" then
+                            current_filtered_fx[#current_filtered_fx+1] = name
+                        end
+                    end
 
                     if #filtered_plugins == 0 then
                         r.ImGui_Text(ctx, "No Favorites match search.")
@@ -8138,9 +8743,14 @@ local function ShowScreenshotWindow()
                         if view_mode == "list" then
                             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
                             for i, plugin_name in ipairs(filtered_plugins) do
-                                local display_name = GetDisplayPluginName(plugin_name)
-                                local stars = GetStarsString(plugin_name)
-                                local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##fav_list_" .. i, false)
+                                if plugin_name == "--Pinned End--" then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                                    r.ImGui_Text(ctx, "--- Pinned End ---")
+                                    r.ImGui_PopStyleColor(ctx)
+                                else
+                                    local display_name = GetDisplayPluginName(plugin_name)
+                                    local stars = GetStarsString(plugin_name)
+                                    local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##fav_list_" .. i, false)
                                 local do_add = false
                                 if config.add_fx_with_double_click then
                                     if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
@@ -8158,28 +8768,18 @@ local function ShowScreenshotWindow()
                                     end
                                 end
                                 ShowPluginContextMenu(plugin_name, "favorites_list_ctx_" .. i)
+                                end
                             end
                             r.ImGui_PopStyleVar(ctx)
                         elseif config.use_masonry_layout then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
-                            local fav_end_index
-                            for idx, plugin in ipairs(with_shot) do
+                            for _, plugin in ipairs(with_shot) do
                                 if plugin == "--Favorites End--" then
-                                    fav_end_index = idx
-                                    break
-                                end
-                            end
-                            if fav_end_index then
-                                for i = 1, fav_end_index - 1 do
-                                    masonry_data[#masonry_data+1] = {name = with_shot[i]}
-                                end
-                                masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Favorites End ---"}
-                                for i = fav_end_index + 1, #with_shot do
-                                    masonry_data[#masonry_data+1] = {name = with_shot[i]}
-                                end
-                            else
-                                for _, plugin in ipairs(with_shot) do
+                                    masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Favorites End ---"}
+                                elseif plugin == "--Pinned End--" then
+                                    masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Pinned End ---"}
+                                else
                                     masonry_data[#masonry_data+1] = {name = plugin}
                                 end
                             end
@@ -8189,10 +8789,9 @@ local function ShowScreenshotWindow()
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             ApplyTopScreenshotSpacing()
                             for i, plugin_name in ipairs(with_shot) do
-                                if plugin_name == "--Favorites End--" then
-                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                    r.ImGui_Text(ctx, "--- Favorites End ---")
-                                    r.ImGui_PopStyleColor(ctx)
+                                if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
+                                    DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
+                                    r.ImGui_Dummy(ctx, 0, (config.compact_screenshots and 6 or 10))
                                 else
                                     local column = (i - 1) % num_columns
                                     if column > 0 then r.ImGui_SameLine(ctx) end
@@ -8205,6 +8804,16 @@ local function ShowScreenshotWindow()
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "fav_" .. i, texture, dw, dh)
+                                            if pinned_set and pinned_set[plugin_name] then
+                                                local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawPinnedOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                            end
+                                            if favorite_set and favorite_set[plugin_name] then
+                                                local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                            end
                                             if config.enable_drag_add_fx then
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
                                                     potential_drag_fx_name = plugin_name
@@ -8241,7 +8850,8 @@ local function ShowScreenshotWindow()
                                             ShowPluginContextMenu(plugin_name, "favorites_win_" .. i)
                                             if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
                                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + dw)
-                                                r.ImGui_Text(ctx, plugin_name)
+                                                local display_name = GetDisplayPluginName(plugin_name)
+                                                r.ImGui_Text(ctx, display_name)
                                                 r.ImGui_PopTextWrapPos(ctx)
                                                 r.ImGui_Text(ctx, GetStarsString(plugin_name))
                                             end
@@ -8263,10 +8873,13 @@ local function ShowScreenshotWindow()
                     filtered_plugins = GetPluginsFromCustomFolder(selected_folder or "") or {}
                     local display_plugins = {}
                     if config.show_favorites_on_top then
-                        local favorites, regular = {}, {}
+                        local term_l = GetLowerName(browser_search_term)
+                        local pinned, favorites, regular = {}, {}, {}
                         for _, plugin in ipairs(filtered_plugins) do
-                            if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                                if table.contains(favorite_plugins, plugin) then
+                            if GetLowerName(plugin):find(term_l, 1, true) then
+                                if pinned_set[plugin] then
+                                    pinned[#pinned+1] = plugin
+                                elseif favorite_set[plugin] then
                                     favorites[#favorites+1] = plugin
                                 else
                                     regular[#regular+1] = plugin
@@ -8274,26 +8887,63 @@ local function ShowScreenshotWindow()
                             end
                         end
                         if config.apply_type_priority then
+                            pinned = DedupeByTypePriority(pinned)
                             favorites = DedupeByTypePriority(favorites)
                             regular = DedupeByTypePriority(regular)
                         end
-                        SortPlainPluginList(favorites)
-                        SortPlainPluginList(regular)
+                        SortPlainPluginList(pinned, config.sort_mode)
+                        SortPlainPluginList(favorites, config.sort_mode)
+                        SortPlainPluginList(regular, config.sort_mode)
+                        
+                        -- Add pinned plugins first if show_pinned_on_top is enabled
+                        if config and config.show_pinned_on_top then
+                            for _, p in ipairs(pinned) do display_plugins[#display_plugins+1] = p end
+                            if #pinned>0 and (#favorites>0 or #regular>0) then display_plugins[#display_plugins+1] = "--Pinned End--" end
+                        else
+                            -- Add pinned plugins to regular if show_pinned_on_top is disabled
+                            for _, p in ipairs(pinned) do regular[#regular+1] = p end
+                            SortPlainPluginList(regular, config.sort_mode)
+                        end
+                        
                         for _, p in ipairs(favorites) do display_plugins[#display_plugins+1] = p end
                         if #favorites>0 and #regular>0 then display_plugins[#display_plugins+1] = "--Favorites End--" end
                         for _, p in ipairs(regular) do display_plugins[#display_plugins+1] = p end
                     else
+                        -- show_favorites_on_top is false: still check pinned-on-top setting
+                        local term_l = GetLowerName(browser_search_term)
+                        local pinned, others = {}, {}
                         for _, plugin in ipairs(filtered_plugins) do
-                            if plugin:lower():find(browser_search_term:lower(),1,true) then
-                                display_plugins[#display_plugins+1] = plugin
+                            if GetLowerName(plugin):find(term_l,1,true) then
+                                if pinned_set[plugin] then pinned[#pinned+1] = plugin else others[#others+1] = plugin end
                             end
                         end
                         if config.apply_type_priority then
-                            display_plugins = DedupeByTypePriority(display_plugins)
+                            pinned = DedupeByTypePriority(pinned)
+                            others = DedupeByTypePriority(others)
                         end
-                        SortPlainPluginList(display_plugins)
+                        SortPlainPluginList(pinned, config.sort_mode)
+                        SortPlainPluginList(others, config.sort_mode)
+                        
+                        -- Add pinned plugins first if show_pinned_on_top is enabled
+                        if config and config.show_pinned_on_top then
+                            for _, p in ipairs(pinned) do display_plugins[#display_plugins+1] = p end
+                            if #pinned>0 and #others>0 then display_plugins[#display_plugins+1] = "--Pinned End--" end
+                        else
+                            -- Add pinned plugins to others if show_pinned_on_top is disabled
+                            for _, p in ipairs(pinned) do others[#others+1] = p end
+                            SortPlainPluginList(others, config.sort_mode)
+                        end
+                        
+                        for _, p in ipairs(others) do display_plugins[#display_plugins+1] = p end
                     end
                     filtered_plugins = display_plugins
+                    -- Sync visible names for texture pruning (Current Project FX)
+                    current_filtered_fx = {}
+                    for _, plugin in ipairs(display_plugins) do
+                        if type(plugin) == 'table' and plugin.fx_name then
+                            current_filtered_fx[#current_filtered_fx+1] = plugin.fx_name
+                        end
+                    end
 
                     if #filtered_plugins == 0 then
                         r.ImGui_Text(ctx, "No Custom Folder plugins match search.")
@@ -8305,10 +8955,21 @@ local function ShowScreenshotWindow()
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
                                     r.ImGui_Text(ctx, "--- Favorites End ---")
                                     r.ImGui_PopStyleColor(ctx)
+                                elseif plugin_name == "--Pinned End--" then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                                    r.ImGui_Text(ctx, "--- Pinned End ---")
+                                    r.ImGui_PopStyleColor(ctx)
                                 else
                                     local display_name = GetDisplayPluginName(plugin_name)
                                     local stars = GetStarsString(plugin_name)
-                                    local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##custom_list_" .. i, false)
+                                    local prefix = ""
+                                    if config.show_pinned_overlay and pinned_set and pinned_set[plugin_name] then
+                                        prefix = prefix .. "📌 "
+                                    end
+                                    if config.show_favorite_overlay and favorite_set and favorite_set[plugin_name] then
+                                        prefix = prefix .. "★ "
+                                    end
+                                    local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##custom_list_" .. i, false)
                                     local do_add = false
                                     if config.add_fx_with_double_click then
                                         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
@@ -8330,21 +8991,14 @@ local function ShowScreenshotWindow()
                         elseif config.use_masonry_layout then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
-                            local fav_end_index
-                            for idx, plugin in ipairs(with_shot) do
-                                if plugin == "--Favorites End--" then fav_end_index = idx break end
-                            end
-                            if fav_end_index then
-                                for i = 1, fav_end_index - 1 do
-                                    masonry_data[#masonry_data+1] = {name = with_shot[i]}
-                                end
-                                masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Favorites End ---"}
-                                for i = fav_end_index + 1, #with_shot do
-                                    masonry_data[#masonry_data+1] = {name = with_shot[i]}
-                                end
-                            else
-                                for _, plugin in ipairs(with_shot) do
-                                    masonry_data[#masonry_data+1] = {name = plugin}
+                            
+                            for _, plugin in ipairs(with_shot) do
+                                if plugin == "--Favorites End--" then
+                                    masonry_data[#masonry_data+1] = { is_separator = true, kind = "favorites_end" }
+                                elseif plugin == "--Pinned End--" then
+                                    masonry_data[#masonry_data+1] = { is_separator = true, kind = "pinned_end" }
+                                else
+                                    masonry_data[#masonry_data+1] = { name = plugin }
                                 end
                             end
                             DrawMasonryLayout(masonry_data)
@@ -8353,10 +9007,9 @@ local function ShowScreenshotWindow()
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             ApplyTopScreenshotSpacing()
                             for i, plugin_name in ipairs(with_shot) do
-                                if plugin_name == "--Favorites End--" then
-                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                    r.ImGui_Text(ctx, "--- Favorites End ---")
-                                    r.ImGui_PopStyleColor(ctx)
+                                if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
+                                    DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
+                                    r.ImGui_Dummy(ctx, 0, (config.compact_screenshots and 6 or 10))
                                 else
                                     local column = (i - 1) % num_columns
                                     if column > 0 then r.ImGui_SameLine(ctx) end
@@ -8369,6 +9022,16 @@ local function ShowScreenshotWindow()
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "custom_" .. i, texture, dw, dh)
+                                            if pinned_set and pinned_set[plugin_name] then
+                                                local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawPinnedOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                            end
+                                            if favorite_set and favorite_set[plugin_name] then
+                                                local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                            end
                                             if config.enable_drag_add_fx then
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
                                                     potential_drag_fx_name = plugin_name
@@ -8405,7 +9068,8 @@ local function ShowScreenshotWindow()
                                             ShowPluginContextMenu(plugin_name, "custom_win_" .. i)
                                             if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
                                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + dw)
-                                                r.ImGui_Text(ctx, plugin_name)
+                                                local display_name = GetDisplayPluginName(plugin_name)
+                                                r.ImGui_Text(ctx, display_name)
                                                 r.ImGui_PopTextWrapPos(ctx)
                                                 r.ImGui_Text(ctx, GetStarsString(plugin_name))
                                             end
@@ -8703,35 +9367,78 @@ local function ShowScreenshotWindow()
                                     local display_plugins = {}
                                     
                                     if config.show_favorites_on_top then
+                                        local pinned = {}
                                         local favorites = {}
                                         local regular = {}
+                                        local term_l = GetLowerName(browser_search_term)
                                         for _, plugin in ipairs(filtered_plugins) do
-                                            if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                                                if table.contains(favorite_plugins, plugin) then
+                                            if GetLowerName(plugin):find(term_l, 1, true) then
+                                                if pinned_set[plugin] then
+                                                    pinned[#pinned+1] = plugin
+                                                elseif favorite_set[plugin] then
                                                     favorites[#favorites+1] = plugin
                                                 else
                                                     regular[#regular+1] = plugin
                                                 end
                                             end
                                         end
-                                        SortPlainPluginList(favorites)
-                                        SortPlainPluginList(regular)
+                                        SortPlainPluginList(pinned, config.sort_mode)
+                                        SortPlainPluginList(favorites, config.sort_mode)
+                                        SortPlainPluginList(regular, config.sort_mode)
+                                        
+                                        -- Add pinned plugins first if show_pinned_on_top is enabled
+                                        if config and config.show_pinned_on_top then
+                                            for _, plugin in ipairs(pinned) do display_plugins[#display_plugins+1] = plugin end
+                                            if #pinned>0 and (#favorites>0 or #regular>0) then display_plugins[#display_plugins+1] = "--Pinned End--" end
+                                        else
+                                            -- Add pinned plugins to regular if show_pinned_on_top is disabled
+                                            for _, plugin in ipairs(pinned) do regular[#regular+1] = plugin end
+                                            SortPlainPluginList(regular, config.sort_mode)
+                                        end
+                                        
                                         for _, plugin in ipairs(favorites) do display_plugins[#display_plugins+1] = plugin end
                                         if #favorites>0 and #regular>0 then display_plugins[#display_plugins+1] = "--Favorites End--" end
                                         for _, plugin in ipairs(regular) do display_plugins[#display_plugins+1] = plugin end
                                     else
+                                        -- show_favorites_on_top is false: still check pinned-on-top setting
+                                        local term_l = GetLowerName(browser_search_term)
+                                        local pinned, others = {}, {}
                                         for _, plugin in ipairs(filtered_plugins) do
-                                            if plugin:lower():find(browser_search_term:lower(), 1, true) then
-                                                display_plugins[#display_plugins+1] = plugin
+                                            if GetLowerName(plugin):find(term_l, 1, true) then
+                                                if pinned_set[plugin] then pinned[#pinned+1] = plugin else others[#others+1] = plugin end
                                             end
                                         end
-                                        SortPlainPluginList(display_plugins)
+                                        if config.apply_type_priority then
+                                            pinned = DedupeByTypePriority(pinned)
+                                            others = DedupeByTypePriority(others)
+                                        end
+                                        SortPlainPluginList(pinned, config.sort_mode)
+                                        SortPlainPluginList(others, config.sort_mode)
+                                        
+                                        -- Add pinned plugins first if show_pinned_on_top is enabled
+                                        if config and config.show_pinned_on_top then
+                                            for _, p in ipairs(pinned) do display_plugins[#display_plugins+1] = p end
+                                            if #pinned>0 and #others>0 then display_plugins[#display_plugins+1] = "--Pinned End--" end
+                                        else
+                                            -- Add pinned plugins to others if show_pinned_on_top is disabled
+                                            for _, p in ipairs(pinned) do others[#others+1] = p end
+                                            SortPlainPluginList(others, config.sort_mode)
+                                        end
+                                        
+                                        for _, p in ipairs(others) do display_plugins[#display_plugins+1] = p end
                                     end
                                     
                                     if config.apply_type_priority then
                                         display_plugins = DedupeByTypePriority(display_plugins)
                                     end
                                     filtered_plugins = display_plugins
+                                    -- Keep the global visible list in sync so texture queue pruning includes folder items
+                                    current_filtered_fx = {}
+                                    for _, name in ipairs(display_plugins) do
+                                        if type(name) == 'string' and name ~= "--Favorites End--" and name ~= "--Pinned End--" then
+                                            current_filtered_fx[#current_filtered_fx+1] = name
+                                        end
+                                    end
                                     break
                                 end
                             end
@@ -8748,10 +9455,21 @@ local function ShowScreenshotWindow()
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
                                     r.ImGui_Text(ctx, "--- Favorites End ---")
                                     r.ImGui_PopStyleColor(ctx)
+                                elseif plugin_name == "--Pinned End--" then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                                    r.ImGui_Text(ctx, "--- Pinned End ---")
+                                    r.ImGui_PopStyleColor(ctx)
                                 else
                                     local display_name = GetDisplayPluginName(plugin_name)
                                     local stars = GetStarsString(plugin_name)
-                                    local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##folder_list_" .. i, false)
+                                    local prefix = ""
+                                    if config.show_pinned_overlay and pinned_set and pinned_set[plugin_name] then
+                                        prefix = prefix .. "📌 "
+                                    end
+                                    if config.show_favorite_overlay and favorite_set and favorite_set[plugin_name] then
+                                        prefix = prefix .. "★ "
+                                    end
+                                    local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##folder_list_" .. i, false)
                                     local do_add = false
                                     if config.add_fx_with_double_click then
                                         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
@@ -8782,20 +9500,12 @@ local function ShowScreenshotWindow()
                                 if filtered_plugins then
                                     local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                                     local masonry_data = {}
-                                    local fav_end_index
-                                    for idx, plugin in ipairs(with_shot) do
-                                        if plugin == "--Favorites End--" then fav_end_index = idx break end
-                                    end
-                                    if fav_end_index then
-                                        for i = 1, fav_end_index - 1 do
-                                            masonry_data[#masonry_data+1] = {name = with_shot[i]}
-                                        end
-                                        masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Favorites End ---"}
-                                        for i = fav_end_index + 1, #with_shot do
-                                            masonry_data[#masonry_data+1] = {name = with_shot[i]}
-                                        end
-                                    else
-                                        for _, plugin in ipairs(with_shot) do
+                                    for _, plugin in ipairs(with_shot) do
+                                        if plugin == "--Favorites End--" then
+                                            masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Favorites End ---"}
+                                        elseif plugin == "--Pinned End--" then
+                                            masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Pinned End ---"}
+                                        else
                                             masonry_data[#masonry_data+1] = {name = plugin}
                                         end
                                     end
@@ -8806,10 +9516,10 @@ local function ShowScreenshotWindow()
                                 local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                                 ApplyTopScreenshotSpacing()
                                 for i, plugin_name in ipairs(with_shot) do
-                                    if plugin_name == "--Favorites End--" then
-                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                        r.ImGui_Text(ctx, "--- Favorites End ---")
-                                        r.ImGui_PopStyleColor(ctx)
+                                    if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
+                                        DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
+                                        -- Extra breathing room below the divider in grid view for Folders
+                                        r.ImGui_Dummy(ctx, 0, (config.compact_screenshots and 6 or 10))
                                     else
                                         local column = (i - 1) % num_columns
                                         if column > 0 then r.ImGui_SameLine(ctx) end
@@ -8822,6 +9532,16 @@ local function ShowScreenshotWindow()
                                             if width and height then
                                                 local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                                 local folder_clicked = r.ImGui_ImageButton(ctx, "folder_plugin_" .. i, texture, display_width, display_height)
+                                                if pinned_set and pinned_set[plugin_name] then
+                                                    local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                    local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                    DrawPinnedOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                                end
+                                                if favorite_set and favorite_set[plugin_name] then
+                                                    local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                    local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                    DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                                end
                                                 local do_add = false
                                                 if config.enable_drag_add_fx then
                                                     -- On initial mouse press over the image, mark as potential drag source
@@ -8859,7 +9579,8 @@ local function ShowScreenshotWindow()
                                                 ShowPluginContextMenu(plugin_name, "folder_" .. i)
                                                 if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
                                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                                    r.ImGui_Text(ctx, plugin_name)
+                                                    local display_name = GetDisplayPluginName(plugin_name)
+                                                    r.ImGui_Text(ctx, display_name)
                                                     r.ImGui_PopTextWrapPos(ctx)
                                                     r.ImGui_Text(ctx, GetStarsString(plugin_name))
                                                 end
@@ -8894,10 +9615,22 @@ local function ShowScreenshotWindow()
                             local msg_name = GetDisplayPluginName(fx.name)
                             r.ImGui_TextWrapped(ctx, msg_name)
                             r.ImGui_PopStyleColor(ctx)
+                        elseif fx.is_separator then
+                            local label = (fx.kind == 'pinned_end') and "--- Pinned End ---" or "--- Favorites End ---"
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                            r.ImGui_Text(ctx, label)
+                            r.ImGui_PopStyleColor(ctx)
                         else
                             local display_name = GetDisplayPluginName(fx.name)
                             local stars = GetStarsString(fx.name)
-                            local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##list_" .. i, false)
+                            local prefix = ""
+                            if config.show_pinned_overlay and pinned_set and pinned_set[fx.name] then
+                                prefix = prefix .. "📌 "
+                            end
+                            if config.show_favorite_overlay and favorite_set and favorite_set[fx.name] then
+                                prefix = prefix .. "★ "
+                            end
+                            local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##list_" .. i, false)
                             local do_add = false
                             if config.add_fx_with_double_click then
                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
@@ -8920,12 +9653,19 @@ local function ShowScreenshotWindow()
                     r.ImGui_PopStyleVar(ctx)
                 else
                     if config.use_masonry_layout then
-                     
+                        -- Build a list of names while preserving special separators for subgroup dividers
                         local plain_names = {}
                         local messages = {}
                         for _, fx in ipairs(screenshot_search_results) do
                             if fx.is_message then
                                 messages[#messages+1] = fx -- behoud originele tabel (heeft is_message + name)
+                            elseif fx.is_separator then
+                                -- Convert structured separator to the string marker expected downstream
+                                if fx.kind == 'pinned_end' then
+                                    plain_names[#plain_names+1] = "--Pinned End--"
+                                else
+                                    plain_names[#plain_names+1] = "--Favorites End--"
+                                end
                             else
                                 plain_names[#plain_names+1] = fx.name
                             end
@@ -8934,17 +9674,30 @@ local function ShowScreenshotWindow()
                         local masonry_data = {}
                         for _, msg in ipairs(messages) do masonry_data[#masonry_data+1] = msg end
                         for _, plugin_name in ipairs(with_shot) do
-                            masonry_data[#masonry_data+1] = {name = plugin_name}
+                            if plugin_name == "--Favorites End--" then
+                                masonry_data[#masonry_data+1] = {is_separator = true, kind = "favorites_end"}
+                            elseif plugin_name == "--Pinned End--" then
+                                masonry_data[#masonry_data+1] = {is_separator = true, kind = "pinned_end"}
+                            else
+                                masonry_data[#masonry_data+1] = {name = plugin_name}
+                            end
                         end
                         DrawMasonryLayout(masonry_data)
                         RenderMissingList(missing)
                     else
                         local num_columns = math.max(1, math.floor(available_width / display_size))
+                        -- Build a list of names while preserving special separators for subgroup dividers
                         local plain_names = {}
                         local messages = {}
                         for _, fx in ipairs(screenshot_search_results) do
                             if fx.is_message then
                                 messages[#messages+1] = fx
+                            elseif fx.is_separator then
+                                if fx.kind == 'pinned_end' then
+                                    plain_names[#plain_names+1] = "--Pinned End--"
+                                else
+                                    plain_names[#plain_names+1] = "--Favorites End--"
+                                end
                             else
                                 plain_names[#plain_names+1] = fx.name
                             end
@@ -8958,6 +9711,11 @@ local function ShowScreenshotWindow()
                         end
                         if #with_shot > 0 then ApplyTopScreenshotSpacing() end
                         for i, plugin_name in ipairs(with_shot) do
+                            if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
+                                -- Draw the divider line and add breathing room below it
+                                DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
+                                r.ImGui_Dummy(ctx, 0, (config.compact_screenshots and 6 or 10))
+                            else
                             local column = (i - 1) % num_columns
                             if column > 0 then r.ImGui_SameLine(ctx) end
                             r.ImGui_BeginGroup(ctx)
@@ -8970,6 +9728,16 @@ local function ShowScreenshotWindow()
                                     if width and height then
                                         local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                         local clicked = r.ImGui_ImageButton(ctx, "search_result_" .. i, texture, display_width, display_height)
+                                        if pinned_set and pinned_set[plugin_name] then
+                                            local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                            local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                            DrawPinnedOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                        end
+                                        if favorite_set and favorite_set[plugin_name] then
+                                            local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                            local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                            DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                        end
                                         if config.enable_drag_add_fx then
                                             if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
                                                 potential_drag_fx_name = plugin_name
@@ -9006,7 +9774,8 @@ local function ShowScreenshotWindow()
                                         ShowPluginContextMenu(plugin_name, "search_" .. i)
                                         if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
                                             r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                            r.ImGui_Text(ctx, plugin_name)
+                                            local display_name = GetDisplayPluginName(plugin_name)
+                                            r.ImGui_Text(ctx, display_name)
                                             r.ImGui_PopTextWrapPos(ctx)
                                             r.ImGui_Text(ctx, GetStarsString(plugin_name))
                                         end
@@ -9017,6 +9786,7 @@ local function ShowScreenshotWindow()
                             if column == num_columns - 1 and not config.compact_screenshots then
                                 r.ImGui_Dummy(ctx, 0, 5)
                             end
+                                end
                         end
                         RenderMissingList(missing)
                     end
@@ -9053,7 +9823,7 @@ function FilterTracksByTag(tag)
     return matching_tracks
 end
 
-local function Filter_actions(filter_text)
+function Filter_actions(filter_text)
     if old_filter == filter_text then return old_t end
     filter_text = Lead_Trim_ws(filter_text)
     local t = {}
@@ -9076,7 +9846,7 @@ local function Filter_actions(filter_text)
     return t
 end
 
-local function FilterBox()
+function FilterBox()
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local track_info_width = math.max(window_width - 10, 125)
@@ -9220,7 +9990,10 @@ local function FilterBox()
                 local plugin_name = filtered_plugins[i]
                 table.insert(screenshot_search_results, { name = plugin_name })
             end
-            for _, plugin_name in ipairs(filtered_plugins) do
+            -- Prefetch only the first visible batch to avoid massive queue spikes in very large folders
+            local prefetch_cap = math.min(#filtered_plugins, loaded_items_count or ITEMS_PER_BATCH or 30)
+            for i = 1, prefetch_cap do
+                local plugin_name = filtered_plugins[i]
                 local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                 local screenshot_file = screenshot_path .. safe_name .. ".png"
                 if r.file_exists(screenshot_file) then
@@ -9334,7 +10107,7 @@ end
                         r.ImGui_Separator(ctx)
                         
                         for _, plugin in ipairs(plugins) do
-                            local display_name = plugin.name:gsub("^(%S+:)", "")
+                            local display_name = GetDisplayPluginName(plugin.name)
                             if r.ImGui_Selectable(ctx, display_name .. "  " .. GetStarsString(plugin.name) .. "##search_" .. global_idx, global_idx == ADDFX_Sel_Entry) then
                                 local fx_index = r.TrackFX_AddByName(TRACK, plugin.name, false, -1000 - r.TrackFX_GetCount(TRACK))
                                 r.ImGui_CloseCurrentPopup(ctx)
@@ -9356,7 +10129,8 @@ end
                                 is_screenshot_visible = true
                                 if not config.show_screenshot_in_search or not ScreenshotExists(plugin.name) then
                                     r.ImGui_BeginTooltip(ctx)
-                                    r.ImGui_Text(ctx, plugin.name)
+                                    local disp = GetDisplayPluginName(plugin.name)
+                                    r.ImGui_Text(ctx, disp)
                                     r.ImGui_EndTooltip(ctx)
                                 end
                             end
@@ -9443,7 +10217,7 @@ end
     return #filtered_fx ~= 0
 end
 
-local function DrawItems(tbl, main_cat_name)
+function DrawItems(tbl, main_cat_name)
     if menu_direction_right then
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_SelectableTextAlign(), 1, 0.5)
     end
@@ -9458,22 +10232,65 @@ local function DrawItems(tbl, main_cat_name)
        
         if r.ImGui_BeginMenu(ctx, tbl[i].name) then
             if main_cat_name == "FOLDERS" then
+                local pinned = {}
                 local favorites = {}
                 local regular = {}
-                local all_plugins = {}
+                local all_unpinned = {}
            
                 for j = 1, #tbl[i].fx do
-                    if table.contains(favorite_plugins, tbl[i].fx[j]) then
-                        table.insert(favorites, {index = j, name = tbl[i].fx[j]})
+                    local name = tbl[i].fx[j]
+                    if pinned_set[name] then
+                        table.insert(pinned, {index = j, name = name})
+                    elseif favorite_set[name] then
+                        table.insert(favorites, {index = j, name = name})
+                        table.insert(all_unpinned, {index = j, name = name})
                     else
-                        table.insert(regular, {index = j, name = tbl[i].fx[j]})
+                        table.insert(regular, {index = j, name = name})
+                        table.insert(all_unpinned, {index = j, name = name})
                     end
-                    table.insert(all_plugins, {index = j, name = tbl[i].fx[j], is_favorite = table.contains(favorite_plugins, tbl[i].fx[j])})
                 end
            
-                local plugins_to_show = config.show_favorites_on_top and {favorites, regular} or {all_plugins}
+                -- Sorteer helpers voor popuplijsten
+                local function sort_group(group)
+                    table.sort(group, function(a, b)
+                        if config.sort_mode == "rating" then
+                            local ra = plugin_ratings[a.name] or 0
+                            local rb = plugin_ratings[b.name] or 0
+                            if ra == rb then
+                                return a.name:lower() < b.name:lower()
+                            else
+                                return ra > rb
+                            end
+                        else
+                            return a.name:lower() < b.name:lower()
+                        end
+                    end)
+                end
+
+                sort_group(pinned)
+                if config.show_favorites_on_top then
+                    sort_group(favorites)
+                    sort_group(regular)
+                else
+                    sort_group(all_unpinned)
+                end
+
+                local plugins_to_show
+                if config.show_favorites_on_top then
+                    plugins_to_show = {
+                        {key = "pinned", list = pinned},
+                        {key = "favorites", list = favorites},
+                        {key = "regular", list = regular},
+                    }
+                else
+                    plugins_to_show = {
+                        {key = "pinned", list = pinned},
+                        {key = "others", list = all_unpinned},
+                    }
+                end
        
-                for _, plugin_group in ipairs(plugins_to_show) do
+                for group_idx, group in ipairs(plugins_to_show) do
+                    local plugin_group = group.list
                     for _, plugin in ipairs(plugin_group) do
                         local list_display = GetDisplayPluginName(plugin.name)
                         if r.ImGui_Selectable(ctx, list_display .. "  " .. GetStarsString(plugin.name) .. "##plugin_list_" .. i .. "_" .. plugin.index) then
@@ -9504,52 +10321,113 @@ local function DrawItems(tbl, main_cat_name)
                        
                         ShowPluginContextMenu(plugin.name, "folders_" .. i .. "_" .. plugin.index)
                     end
-                   
-                    if config.show_favorites_on_top and _ == 1 and #favorites > 0 and #regular > 0 then
+                    -- separators between groups
+                    if group.key == "pinned" and #plugin_group > 0 then
+                        -- show pinned end if any following group has items
+                        local has_following = false
+                        for k = group_idx + 1, #plugins_to_show do
+                            if #plugins_to_show[k].list > 0 then has_following = true break end
+                        end
+                        if has_following then
+                            if r.ImGui_Selectable(ctx, "--Pinned End--", false, r.ImGui_SelectableFlags_Disabled()) then end
+                        end
+                    elseif group.key == "favorites" and #favorites > 0 and #regular > 0 then
                         if r.ImGui_Selectable(ctx, "--Favorites End--", false, r.ImGui_SelectableFlags_Disabled()) then end
                     end
                 end
             else
                 if tbl[i] and tbl[i].fx then
+                    -- Bouw entries met display- en originele naam, met pinned eerst
+                    local pinned_entries = {}
+                    local other_entries = {}
                     for j = 1, #tbl[i].fx do
-                        if tbl[i].fx[j] then
-                            local name = tbl[i].fx[j]
+                        local original = tbl[i].fx[j]
+                        if original then
+                            local name_for_display = original
                             if main_cat_name == "ALL PLUGINS" and tbl[i].name ~= "INSTRUMENTS" then
-                                name = name:gsub("^(%S+:)", "")
+                                name_for_display = name_for_display:gsub("^(%S+:)", "")
                             elseif main_cat_name == "DEVELOPER" then
-                                name = name:gsub(' %(' .. Literalize(tbl[i].name) .. '%)', "")
+                                name_for_display = name_for_display:gsub(' %(' .. Literalize(tbl[i].name) .. '%)', "")
                             end
+                            local cat_display = GetDisplayPluginName(name_for_display)
+                            local entry = { display = cat_display, original = original, index = j }
+                            if pinned_set[original] then table.insert(pinned_entries, entry) else table.insert(other_entries, entry) end
+                        end
+                    end
 
-                            local cat_display = GetDisplayPluginName(name)
-                            if r.ImGui_Selectable(ctx, cat_display .. "  " .. GetStarsString(tbl[i].fx[j]) .. "##plugin_list_" .. i .. "_" .. j) then
-                                if ADD_FX_TO_ITEM then
-                                    AddFXToItem(tbl[i].fx[j])
-                                else
-                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                        local fx_index = r.TrackFX_AddByName(TRACK, tbl[i].fx[j], false, -1000 - r.TrackFX_GetCount(TRACK))
-                                        
-                                        -- OPEN FLOATING ALS OPTIE ENABLED IS
-                                        if config.open_floating_after_adding and fx_index >= 0 then
-                                            r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
-                                        end
+                    local function sort_entries(entries)
+                        table.sort(entries, function(a, b)
+                        if config.sort_mode == "rating" then
+                            local ra = plugin_ratings[a.original] or 0
+                            local rb = plugin_ratings[b.original] or 0
+                            if ra == rb then
+                                return a.display:lower() < b.display:lower()
+                            else
+                                return ra > rb
+                            end
+                        else
+                            return a.display:lower() < b.display:lower()
+                        end
+                    end)
+                    end
+                    sort_entries(pinned_entries)
+                    sort_entries(other_entries)
+
+                    for _, e in ipairs(pinned_entries) do
+                        if r.ImGui_Selectable(ctx, e.display .. "  " .. GetStarsString(e.original) .. "##plugin_list_" .. i .. "_" .. e.index) then
+                            if ADD_FX_TO_ITEM then
+                                AddFXToItem(e.original)
+                            else
+                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                    local fx_index = r.TrackFX_AddByName(TRACK, e.original, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                    if config.open_floating_after_adding and fx_index >= 0 then
+                                        r.TrackFX_Show(TRACK, fx_index, 3)
                                     end
                                 end
-                                LAST_USED_FX = tbl[i].fx[j]
-                                if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
-                                    SHOULD_CLOSE_SCRIPT = true
-                                end
                             end
-                           
-                            if r.ImGui_IsItemHovered(ctx) then
-                                if tbl[i].fx[j] ~= current_hovered_plugin then
-                                    current_hovered_plugin = tbl[i].fx[j]
-                                    LoadPluginScreenshot(current_hovered_plugin)
-                                end
-                                is_screenshot_visible = true
+                            LAST_USED_FX = e.original
+                            if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
+                                SHOULD_CLOSE_SCRIPT = true
                             end
-                           
-                            ShowPluginContextMenu(tbl[i].fx[j], "category_" .. i .. "_" .. j)
                         end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            if e.original ~= current_hovered_plugin then
+                                current_hovered_plugin = e.original
+                                LoadPluginScreenshot(current_hovered_plugin)
+                            end
+                            is_screenshot_visible = true
+                        end
+                        ShowPluginContextMenu(e.original, "category_" .. i .. "_" .. e.index)
+                    end
+                    -- Separator if we also have others
+                    if #pinned_entries > 0 and #other_entries > 0 then
+                        if r.ImGui_Selectable(ctx, "--Pinned End--", false, r.ImGui_SelectableFlags_Disabled()) then end
+                    end
+                    for _, e in ipairs(other_entries) do
+                        if r.ImGui_Selectable(ctx, e.display .. "  " .. GetStarsString(e.original) .. "##plugin_list_" .. i .. "_" .. e.index) then
+                            if ADD_FX_TO_ITEM then
+                                AddFXToItem(e.original)
+                            else
+                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                    local fx_index = r.TrackFX_AddByName(TRACK, e.original, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                    if config.open_floating_after_adding and fx_index >= 0 then
+                                        r.TrackFX_Show(TRACK, fx_index, 3)
+                                    end
+                                end
+                            end
+                            LAST_USED_FX = e.original
+                            if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
+                                SHOULD_CLOSE_SCRIPT = true
+                            end
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            if e.original ~= current_hovered_plugin then
+                                current_hovered_plugin = e.original
+                                LoadPluginScreenshot(current_hovered_plugin)
+                            end
+                            is_screenshot_visible = true
+                        end
+                        ShowPluginContextMenu(e.original, "category_" .. i .. "_" .. e.index)
                     end
                 end
             end
@@ -9570,10 +10448,36 @@ local function DrawItems(tbl, main_cat_name)
     end
 end
 
-local function DrawFavorites()
-    for i, fav in ipairs(favorite_plugins) do
-    local fav_display_global = GetDisplayPluginName(fav)
-    if r.ImGui_Selectable(ctx, fav_display_global .. "  " .. GetStarsString(fav) .. "##favorites_" .. i) then
+function DrawFavorites()
+    -- Pinned-first ordering inside the favorites menu (if enabled)
+    local pinned, others = {}, {}
+    for _, fav in ipairs(favorite_plugins) do
+        if pinned_set[fav] then pinned[#pinned+1] = fav else others[#others+1] = fav end
+    end
+    SortPlainPluginList(pinned, config.sort_mode)
+    SortPlainPluginList(others, config.sort_mode)
+    local merged = {}
+    
+    -- Add pinned plugins first if show_pinned_on_top is enabled
+    if config and config.show_pinned_on_top then
+        for _, p in ipairs(pinned) do merged[#merged+1] = p end
+        if #pinned>0 and #others>0 then merged[#merged+1] = "--Pinned End--" end
+    else
+        -- Add pinned plugins to others if show_pinned_on_top is disabled
+        for _, p in ipairs(pinned) do others[#others+1] = p end
+        SortPlainPluginList(others, config.sort_mode)
+    end
+    
+    for _, p in ipairs(others) do merged[#merged+1] = p end
+
+    for i, fav in ipairs(merged) do
+        if fav == "--Pinned End--" then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+            r.ImGui_Text(ctx, "--- Pinned End ---")
+            r.ImGui_PopStyleColor(ctx)
+        else
+            local fav_display_global = GetDisplayPluginName(fav)
+            if r.ImGui_Selectable(ctx, fav_display_global .. "  " .. GetStarsString(fav) .. "##favorites_" .. i) then
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                 local fx_index = r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
                 
@@ -9586,17 +10490,17 @@ local function DrawFavorites()
             if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
                 SHOULD_CLOSE_SCRIPT = true
             end
-        end
-   
-        if r.ImGui_IsItemHovered(ctx) then
-            if fav ~= current_hovered_plugin then
-                current_hovered_plugin = fav
-                LoadPluginScreenshot(current_hovered_plugin)
             end
-            is_screenshot_visible = true
-         
-        end      
-        ShowPluginContextMenu(fav, "favorites_" .. i)
+   
+            if r.ImGui_IsItemHovered(ctx) then
+                if fav ~= current_hovered_plugin then
+                    current_hovered_plugin = fav
+                    LoadPluginScreenshot(current_hovered_plugin)
+                end
+                is_screenshot_visible = true
+            end
+            ShowPluginContextMenu(fav, "favorites_" .. i)
+        end
     end
     if not r.ImGui_IsWindowHovered(ctx) then
         is_screenshot_visible = false
@@ -9605,12 +10509,12 @@ local function DrawFavorites()
     end
 end
 
-local function CalculateButtonWidths(total_width, num_buttons, spacing)
+function CalculateButtonWidths(total_width, num_buttons, spacing)
     local available_width = total_width - (spacing * (num_buttons - 1))
     return available_width / num_buttons
 end
 
-local function DrawBottomButtons()
+function DrawBottomButtons()
     if not config.hideBottomButtons then
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local window_width = r.ImGui_GetWindowWidth(ctx)
@@ -9836,7 +10740,7 @@ local function DrawBottomButtons()
     end
 end
 
-local function ShowTrackFX()
+function ShowTrackFX()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then
         r.ImGui_Text(ctx, "No track selected")
         return
@@ -9923,7 +10827,7 @@ local function ShowTrackFX()
                     if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
                         r.TrackFX_SetEnabled(TRACK, i, not is_enabled)
                     end
-                    if table.contains(favorite_plugins, fx_name) then
+                    if favorite_set[fx_name] then
                         if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                             RemoveFromFavorites(fx_name)
                         end
@@ -10022,7 +10926,7 @@ local function ShowTrackFX()
     end
 end
 
-local function ShowItemFX()
+function ShowItemFX()
     local item = r.GetSelectedMediaItem(0, 0)
     if not item then return end
     local take = r.GetActiveTake(item)
@@ -10201,7 +11105,7 @@ local function ShowItemFX()
     end
 end
 
-local function GetTrackType(track)
+function GetTrackType(track)
     if not track or not reaper.ValidatePtr(track, "MediaTrack*") then
         return "No Track"
     end
@@ -10240,7 +11144,7 @@ local function GetTrackType(track)
 end
 
 ----------------------------------------------------
-local function CalculateTopHeight(config)
+function CalculateTopHeight(config)
     local height = 0
     if not config.hideTopButtons then height = height + 30 end
     height = height + 50  -- track info header
@@ -10248,7 +11152,7 @@ local function CalculateTopHeight(config)
     return height
 end
 
-local function CalculateMenuHeight(config)
+function CalculateMenuHeight(config)
     local height = 18
     if config.show_favorites then height = height + 18 end
     if config.show_all_plugins then height = height + 18 end
@@ -10267,7 +11171,7 @@ local function CalculateMenuHeight(config)
     return height
 end
 
-local function CalculateBottomSectionHeight(config)
+function CalculateBottomSectionHeight(config)
     local height = 0
     if not config.hideBottomButtons then height = height + 70 end
     if not config.hideVolumeSlider then
@@ -10277,7 +11181,7 @@ local function CalculateBottomSectionHeight(config)
     return height
 end
 
-local function DrawCustomFoldersMenu(folders, path_prefix)
+function DrawCustomFoldersMenu(folders, path_prefix)
     path_prefix = path_prefix or ""
     
     -- SORTEER DE FOLDER NAMEN ALFABETISCH
@@ -10326,7 +11230,7 @@ local function DrawCustomFoldersMenu(folders, path_prefix)
                 local regular = {}
                 
                 for _, plugin_name in ipairs(folder_content) do
-                    if table.contains(favorite_plugins, plugin_name) then
+                    if favorite_set[plugin_name] then
                         table.insert(favorites, plugin_name)
                     else
                         table.insert(regular, plugin_name)
@@ -10765,6 +11669,9 @@ end
 
 -----------------------------------------------------------------------------------------
 function Main()
+    -- Periodic cache cleanup to prevent memory bloat
+    MaybeClearCaches()
+    
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         InitializeImGuiContext()
         return r.defer(Main)
