@@ -187,9 +187,9 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.9.3" author="TouristKiller" time="2025-08-14T18:40:00Z">
+        <version name="0.9.4" author="TouristKiller" time="2025-08-29T15:40:00Z">
             <changelog><![CDATA[           
-+ Bugfix: no longer crashes when no track is selected
++ Added option to set standard label length
 ]]>
             </changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>

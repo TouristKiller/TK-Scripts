@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.3
+-- @version 0.9.4
 -- @changelog 
 --[[
 + Bugfix: no longer crashes when no track is selected
@@ -188,6 +188,8 @@ local default_settings              = {
     gradient_start_alpha            = 1.0,
     gradient_end_alpha              = 0.0,
     track_name_length               = 1,
+    fixed_label_length              = 10,
+    fixed_length_padding_char       = "·",  -- Use middot for better visual consistency
     all_text_enabled                = true,
     folder_border                   = false,
     folder_border_left              = true,
@@ -259,7 +261,7 @@ function CreateFonts()
         table.insert(font_objects, font)
         r.ImGui_Attach(ctx, font)
     end
-    settings_font = r.ImGui_CreateFont('Arial', 14)
+    settings_font = r.ImGui_CreateFont('Arial', 12)
     r.ImGui_Attach(ctx, settings_font)
 end
 if old_text_size ~= settings.text_size then CreateFonts()end 
@@ -923,7 +925,8 @@ function ShowSettingsWindow()
         r.ImGui_SetNextItemWidth(ctx, 90)
         if r.ImGui_BeginCombo(ctx, "##Track name length", 
             settings.track_name_length == 1 and " Full length" or
-            settings.track_name_length == 2 and " Max 16 chars" or " Max 32 chars") then
+            settings.track_name_length == 2 and " Max 16 chars" or 
+            settings.track_name_length == 3 and " Max 32 chars" or " Fixed length") then
             if r.ImGui_Selectable(ctx, " Full length", settings.track_name_length == 1) then
                 settings.track_name_length = 1
             end
@@ -933,24 +936,37 @@ function ShowSettingsWindow()
             if r.ImGui_Selectable(ctx, " Max 32 chars", settings.track_name_length == 3) then
                 settings.track_name_length = 3
             end
+            if r.ImGui_Selectable(ctx, " Fixed length", settings.track_name_length == 4) then
+                settings.track_name_length = 4
+            end
             r.ImGui_EndCombo(ctx)
         end
-        r.ImGui_SameLine(ctx, column_width * 4)
+        
+        if settings.track_name_length == 4 then
+            r.ImGui_SameLine(ctx, column_width * 4)  
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 80)  
+            local changed, new_length = r.ImGui_InputInt(ctx, "##FixedLength", settings.fixed_label_length)
+            if changed then
+                settings.fixed_label_length = math.max(1, math.min(100, new_length)) -- Limit between 1-100
+            end
+        end
         if r.ImGui_RadioButton(ctx, "Env Names", settings.show_envelope_names) then
             settings.show_envelope_names = not settings.show_envelope_names
         end
+        r.ImGui_SameLine(ctx, column_width)
         if r.ImGui_RadioButton(ctx, "Hide text for selected tracks", settings.text_hover_hide) then
             settings.text_hover_hide = not settings.text_hover_hide
         end
-        r.ImGui_SameLine(ctx, column_width * 2)
+        r.ImGui_SameLine(ctx, column_width * 3)
         if r.ImGui_RadioButton(ctx, "Hide on hover", settings.text_hover_enabled) then
             settings.text_hover_enabled = not settings.text_hover_enabled
         end
-        r.ImGui_SameLine(ctx, column_width * 3)
+        r.ImGui_SameLine(ctx, column_width * 4)
         if r.ImGui_RadioButton(ctx, "Show button", settings.show_settings_button) then
             settings.show_settings_button = not settings.show_settings_button
         end
-        r.ImGui_SameLine(ctx, column_width * 4)
+        --r.ImGui_SameLine(ctx, column_width * 4)
         if r.ImGui_RadioButton(ctx, "Autosave", settings.autosave_enabled) then
             settings.autosave_enabled = not settings.autosave_enabled
         end
@@ -1341,6 +1357,29 @@ function TruncateTrackName(name, mode)
         return name:sub(1, 13) .. "..."
     elseif mode == 3 and #name > 32 then
         return name:sub(1, 29) .. "..."
+    elseif mode == 4 then
+        local fixed_length = settings.fixed_label_length
+        local reference_string = string.rep("n", fixed_length)
+        local target_width = r.ImGui_CalcTextSize(ctx, reference_string)
+        local current_width = r.ImGui_CalcTextSize(ctx, name)
+        
+        if current_width > target_width then
+            local truncated = name
+            while r.ImGui_CalcTextSize(ctx, truncated) > target_width and #truncated > 0 do
+                truncated = truncated:sub(1, -2)
+            end
+            return truncated
+        elseif current_width < target_width then
+            local padded = name
+            local padding_char = " "
+            while r.ImGui_CalcTextSize(ctx, padded) < target_width do
+                padded = padded .. padding_char
+                if #padded > fixed_length * 3 then break end
+            end
+            return padded
+        else
+            return name
+        end
     end
     return name
 end
