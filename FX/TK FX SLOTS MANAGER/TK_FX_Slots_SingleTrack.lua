@@ -2472,10 +2472,12 @@ local function find_screenshot_path(add)
 end
 
 local function release_screenshot()
-  if state.screenshotTex and r.ImGui_DestroyImage then
-    pcall(function() r.ImGui_DestroyImage(state.screenshotTex) end)
+  if state.screenshotTex then
+    if r.ImGui_DestroyImage and type(state.screenshotTex) == "userdata" then
+      pcall(function() r.ImGui_DestroyImage(state.screenshotTex) end)
+    end
+    state.screenshotTex = nil
   end
-  state.screenshotTex = nil
   state.screenshotFound = false
   state.screenshotKey = nil
 end
@@ -2488,7 +2490,7 @@ local function ensure_source_screenshot(add)
   local path = find_screenshot_path(add)
   if path then
     local ok, tex = pcall(function() return r.ImGui_CreateImage(path) end)
-    if ok and tex then
+    if ok and tex and type(tex) == "userdata" then
       state.screenshotTex = tex
       state.screenshotFound = true
       state.screenshotKey = add
@@ -3039,19 +3041,24 @@ local function draw_replace_panel()
         local maxW = math.max(120, math.min(280, availW - 8))
         local imgW, imgH = maxW, math.floor(maxW * 0.56)
         if state.screenshotTex then
-          local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
-          local left = curX + math.max(0, (availW - imgW) * 0.5)
-          r.ImGui_SetCursorPosX(ctx, left)
-          if r.ImGui_Image then
-            local ok = pcall(function() r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end)
-            if not ok then
-              release_screenshot()
-              local label = 'no image'
-              local tw2 = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
-              local curX2 = select(1, r.ImGui_GetCursorPos(ctx)) or 0
-              local left2 = curX2 + math.max(0, (availW - tw2) * 0.5)
-              r.ImGui_SetCursorPosX(ctx, left2)
-              r.ImGui_TextDisabled(ctx, label)
+          -- Extra validation to prevent crashes
+          if not state.screenshotTex or state.screenshotTex == 0 or type(state.screenshotTex) ~= "userdata" then
+            release_screenshot()
+          else
+            local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+            local left = curX + math.max(0, (availW - imgW) * 0.5)
+            r.ImGui_SetCursorPosX(ctx, left)
+            if r.ImGui_Image then
+              local ok, err = pcall(function() r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end)
+              if not ok then
+                release_screenshot()
+                local label = 'no image'
+                local tw2 = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+                local curX2 = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+                local left2 = curX2 + math.max(0, (availW - tw2) * 0.5)
+                r.ImGui_SetCursorPosX(ctx, left2)
+                r.ImGui_TextDisabled(ctx, label)
+              end
             end
           end
         else

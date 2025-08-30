@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="1.6.0" author="TouristKiller" time="2025-08-29T13:55:00Z">
+    <version name="1.6.1" author="TouristKiller" time="2025-08-30T14:55:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -42,6 +42,24 @@
     <source file="Icons-Regular.otf">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/Icons-Regular.otf</source>
                 <changelog><![CDATA[           
 ++ BUGZZZZ
+]]></changelog>
+    </version>
+    </reapack>
+
+    <reapack name="TK_FX_BROWSER_TOGGLE_VISIBILITY.lua" type="script" desc="TK FX BROWSER - Toggle Visibility">
+    <version name="1.0.0" author="TouristKiller" time="2025-08-30T14:50:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER_TOGGLE_VISIBILITY.lua</source>
+                <changelog><![CDATA[           
++ Initial release - Toggle FX Browser window visibility while keeping it running in background
+]]></changelog>
+    </version>
+    </reapack>
+
+    <reapack name="TK_FX_BROWSER_SHOW_WINDOW.lua" type="script" desc="TK FX BROWSER - Show Window">
+    <version name="1.0.0" author="TouristKiller" time="2025-08-30T14:50:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER_SHOW_WINDOW.lua</source>
+                <changelog><![CDATA[           
++ Initial release - Force show FX Browser window (fallback script)
 ]]></changelog>
     </version>
     </reapack>

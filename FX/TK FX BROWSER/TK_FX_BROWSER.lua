@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.6.0
+-- @version 1.6.1
 -- @changelog:
 --[[     
 ++ Added "Pinned On Top" checkbox to settings - pin favorite plugins to top of lists
@@ -86,6 +86,27 @@ function _build_screenshot_signature()
     local apply = tostring(cfg.apply_type_priority or false)
     local respect = tostring(cfg.respect_search_exclusions_in_screenshots or false)
     return table.concat({folder, subgroup, term, mode, stype, page, priority, apply, respect}, "|")
+end
+
+local last_visibility_state = nil
+local function CheckVisibilityState()
+    local visibility_state = r.GetExtState("TK_FX_BROWSER", "visibility")
+    local is_visible = visibility_state ~= "hidden"
+    
+  
+    if last_visibility_state == "hidden" and visibility_state ~= "hidden" then
+        ClearScreenshotCache()
+        if selected_folder then
+            GetPluginsForFolder(selected_folder)
+        end
+    end
+    
+    last_visibility_state = visibility_state
+    return is_visible
+end
+
+local function SetRunningState(running)
+    r.SetExtState("TK_FX_BROWSER", "running", running and "true" or "false", true)
 end
 
 -- Voorwaards mars ;o)
@@ -11669,6 +11690,9 @@ end
 
 -----------------------------------------------------------------------------------------
 function Main()
+    -- Set running state to indicate FX Browser is active
+    SetRunningState(true)
+    
     -- Periodic cache cleanup to prevent memory bloat
     MaybeClearCaches()
     
@@ -11763,6 +11787,41 @@ r.ImGui_SetNextWindowSizeConstraints(ctx, 140, min_window_height, 16384, 16384)
 ----------------------------------------------------------------------------------   
 handleDocking()
 EnsureWindowVisible()
+
+-- Check visibility state and hide window if needed
+local should_show_window = CheckVisibilityState()
+if not should_show_window then
+    -- Window is hidden but script keeps running
+    -- Clean up any pushed styles before creating hidden window
+    if pushed_main_styles then
+        r.ImGui_PopFont(ctx)
+        r.ImGui_PopStyleColor(ctx, 13) -- 13 StyleColors
+        r.ImGui_PopStyleVar(ctx, 6)    -- 6 StyleVars
+    end
+    
+    -- Create a minimal invisible window to keep the script active
+    local invisible_flags = r.ImGui_WindowFlags_NoTitleBar() | 
+                           r.ImGui_WindowFlags_NoResize() | 
+                           r.ImGui_WindowFlags_NoMove() | 
+                           r.ImGui_WindowFlags_NoScrollbar() | 
+                           r.ImGui_WindowFlags_NoScrollWithMouse() | 
+                           r.ImGui_WindowFlags_NoCollapse() | 
+                           r.ImGui_WindowFlags_NoFocusOnAppearing()
+    
+    r.ImGui_SetNextWindowPos(ctx, -1000, -1000)
+    r.ImGui_SetNextWindowSize(ctx, 1, 1)
+    local hidden_visible, hidden_open = r.ImGui_Begin(ctx, 'TK FX BROWSER (Hidden)', true, invisible_flags)
+    if hidden_visible then
+        r.ImGui_Text(ctx, "") -- Empty content
+    end
+    r.ImGui_End(ctx)
+    
+    -- Continue the defer loop to keep script running
+    if hidden_open then
+        r.defer(Main)
+    end
+    return
+end
 
 local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoScrollbar())
 dock = r.ImGui_GetWindowDockID(ctx)
@@ -13048,6 +13107,8 @@ if visible then
     end
     
     if SHOULD_CLOSE_SCRIPT then
+        -- Clear running state when script closes
+        SetRunningState(false)
         return
     end
     if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
@@ -13087,5 +13148,11 @@ if visible then
     end
     
 end
+-- Initialize visibility state if not set
+local initial_visibility = r.GetExtState("TK_FX_BROWSER", "visibility")
+if initial_visibility == "" then
+    r.SetExtState("TK_FX_BROWSER", "visibility", "visible", true)
+end
+
 InitializeImGuiContext()
 Main()
