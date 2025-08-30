@@ -1,4 +1,4 @@
--- @version 0.2.0
+-- @version 0.2.1
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -1645,10 +1645,53 @@ local function load_fx_chain(track, chain_path, replace_existing)
   local sep = package.config:sub(1,1)
   local full_path = resource_path .. sep .. "FXChains" .. sep .. chain_path .. ".RfxChain"
   
-  r.TrackFX_AddByName(track, full_path, false, -1000 - r.TrackFX_GetCount(track))
+  local file = io.open(full_path, "r")
+  if not file then
+    return false, string.format('FX Chain file not found: "%s"', full_path)
+  end
+  file:close()
   
-  local action = replace_existing and "replaced with" or "loaded"
-  return true, string.format('FX Chain %s "%s"', action, chain_path)
+  local fx_count_before = r.TrackFX_GetCount(track)
+  local method_used = "unknown"
+  
+  if type(ParseFXChain) == 'function' then
+    method_used = "ParseFXChain"
+    local chain_data = ParseFXChain(full_path)
+    if chain_data and #chain_data > 0 then
+      for _, fx_info in ipairs(chain_data) do
+        if fx_info.name then
+          r.TrackFX_AddByName(track, fx_info.name, false, -1)
+        end
+      end
+    end
+  elseif type(ReadFXChainFile) == 'function' then
+    method_used = "ReadFXChainFile"
+    local fx_list = ReadFXChainFile(full_path)
+    if fx_list and #fx_list > 0 then
+      for _, fx_name in ipairs(fx_list) do
+        r.TrackFX_AddByName(track, fx_name, false, -1)
+      end
+    end
+  else
+    method_used = "TrackFX_AddByName"
+  
+    local success = r.TrackFX_AddByName(track, full_path, false, -1000 - r.TrackFX_GetCount(track))
+    
+    if r.TrackFX_GetCount(track) == fx_count_before then
+      success = r.TrackFX_AddByName(track, chain_path .. ".RfxChain", false, -1000 - r.TrackFX_GetCount(track))
+      if r.TrackFX_GetCount(track) == fx_count_before then
+        success = r.TrackFX_AddByName(track, sep .. chain_path .. ".RfxChain", false, -1000 - r.TrackFX_GetCount(track))
+      end
+    end
+  end
+  
+  local fx_count_after = r.TrackFX_GetCount(track)
+  
+  if fx_count_after > fx_count_before then
+    return true, string.format('FX Chain loaded "%s" (%d FX added) using %s', chain_path, fx_count_after - fx_count_before, method_used)
+  else
+    return false, string.format('No FX added from chain "%s" (tried %s)', chain_path, method_used)
+  end
 end
 
 local function delete_fx_chain(chain_path)
@@ -3176,7 +3219,7 @@ local function draw_replace_panel()
         if state.selectedFxChain then
           r.ImGui_Text(ctx, 'Load to:')
           
-          local changed, new_current = r.ImGui_Checkbox(ctx, 'Current Track', state.fxChainLoadToCurrent)
+          local changed, new_current = r.ImGui_Checkbox(ctx, 'Current', state.fxChainLoadToCurrent)
           if changed then 
             state.fxChainLoadToCurrent = new_current
             if new_current then
@@ -3186,7 +3229,7 @@ local function draw_replace_panel()
           end
           
           r.ImGui_SameLine(ctx)
-          local changed2, new_selected = r.ImGui_Checkbox(ctx, 'Selected Tracks', state.fxChainLoadToSelected)
+          local changed2, new_selected = r.ImGui_Checkbox(ctx, 'Selected', state.fxChainLoadToSelected)
           if changed2 then 
             state.fxChainLoadToSelected = new_selected
             if new_selected then
@@ -3196,7 +3239,7 @@ local function draw_replace_panel()
           end
           
           r.ImGui_SameLine(ctx)
-          local changed3, new_all = r.ImGui_Checkbox(ctx, 'All Tracks', state.fxChainLoadToAll)
+          local changed3, new_all = r.ImGui_Checkbox(ctx, 'All', state.fxChainLoadToAll)
           if changed3 then 
             state.fxChainLoadToAll = new_all
             if new_all then
@@ -3215,6 +3258,11 @@ local function draw_replace_panel()
             local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
             
             if r.ImGui_Button(ctx, 'Add', button_width, 0) then
+              if not state.selectedFxChain or state.selectedFxChain == '' then
+                state.pendingError = 'No FX chain selected'
+                goto skip_add
+              end
+              
               local success = false
               local msg = ''
               
@@ -3241,6 +3289,8 @@ local function draw_replace_panel()
               else
                 state.pendingError = msg
               end
+              
+              ::skip_add::
             end
             
             if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
@@ -3253,6 +3303,11 @@ local function draw_replace_panel()
             r.ImGui_SameLine(ctx)
             
             if r.ImGui_Button(ctx, 'Replace', button_width, 0) then
+              if not state.selectedFxChain or state.selectedFxChain == '' then
+                state.pendingError = 'No FX chain selected'
+                goto skip_replace
+              end
+              
               local confirm_msg = ''
               local track_count = 0
               
