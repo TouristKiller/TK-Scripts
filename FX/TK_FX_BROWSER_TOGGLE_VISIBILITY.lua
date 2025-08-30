@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER - Toggle Visibility
 -- @author TouristKiller
--- @version 1.0.1
+-- @version 1.0.2
 -- @about Toggle visibility of TK FX BROWSER window (hide/show while keeping it running)
 
 local r = reaper

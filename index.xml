@@ -47,7 +47,7 @@
     </reapack>
 
     <reapack name="TK_FX_BROWSER_TOGGLE_VISIBILITY.lua" type="script" desc="TK FX BROWSER - Toggle Visibility">
-    <version name="1.0.1" author="TouristKiller" time="2025-08-30T15:00:00Z">
+    <version name="1.0.2" author="TouristKiller" time="2025-08-30T15:10:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER_TOGGLE_VISIBILITY.lua</source>
                 <changelog><![CDATA[           
 + Initial release - Toggle FX Browser window visibility while keeping it running in background
