@@ -1,5 +1,5 @@
 -- @description TK Automation Item Manager (AIM)
--- @version 0.0.1
+-- @version 0.0.2
 -- @author TouristKiller
 -- @about
 --   Automation Item Manager with visual previews
@@ -17,7 +17,7 @@ end
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 package.path = script_path .. "?.lua;" .. package.path
 
-local json_ok, json = pcall(require, "json")
+local json_ok, json = pcall(require, "json_aim")
 if not json_ok then
     json = {
         encode = function(t) return "" end,
