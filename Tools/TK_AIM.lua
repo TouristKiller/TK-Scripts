@@ -1,10 +1,13 @@
 -- @description TK Automation Item Manager (AIM)
--- @version 0.0.2
+-- @version 0.0.3
 -- @author TouristKiller
 -- @about
 --   Automation Item Manager with visual previews
 -- @changelog:
 --   - Initial release
+
+-- THANX TO MPL FOR ALL THE THINGS HE DOES FOR THE REAPER COMMUNITY!!
+-- I Used code inspired by MPL to do the conversions
 -------------------------------------------------------------------------------------------------------
 local r = reaper
 local script_name = "TK AIM"
