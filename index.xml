@@ -167,6 +167,12 @@
     <source file="json_aim.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/json_aim.lua</source>
     </version>
     </reapack>
+
+    <reapack name="TK_RAW_audio editor.lua" type="script" desc="TK RAW Audio Editor">
+    <version name="0.0.1" author="TouristKiller" time="2025-09-07T01:30:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_RAW_audio%20editor.lua</source>
+    </version>
+    </reapack>
  </category>
 
  <category name="Media">
