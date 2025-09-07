@@ -1,5 +1,5 @@
 -- TK RAW Audio Editor - Reaper Audio Workstation
--- Version: 0.0.1 ALPHA
+-- Version: 0.0.2 ALPHA
 -- Author: TouristKiller
 ----------------------------------------------------------------------------------
 -- WORK AND TEST VERSION
@@ -102,6 +102,7 @@ SETTINGS = {
         show_edit_cursor = true,
         show_play_cursor = true,
         show_db_scale = true,
+        show_footer = true,
         db_alpha = 0.55,
         db_labels_mirrored = true,
         draw_channels_separately = true,
@@ -130,6 +131,7 @@ SETTINGS = {
         prefer_sws_normalize = true,
         sws_norm_named_cmd = "",
         show_env_overlay = false,
+        show_fades = true,
         show_dc_overlay = false,
         show_pan_overlay = false,
         show_vol_points = false,
@@ -273,6 +275,7 @@ function RunCommandOnItemWithTemporarySelection(item, cmd)
     local proj = 0
     local n = r.CountMediaItems(proj)
     local prev = {}
+    local current_item = item
     for i = 0, n - 1 do
         local it = r.GetMediaItem(proj, i)
         prev[#prev+1] = { it = it, sel = r.IsMediaItemSelected(it) }
@@ -295,6 +298,7 @@ function EnsureTakeVolEnv(take, item)
     local _, takeGUID = r.GetSetMediaItemTakeInfo_String(take, "GUID", "", false)
     if not takeGUID or takeGUID == "" then return nil end
     local ok, chunk = r.GetItemStateChunk(item, "", false)
+    local current_item = item
     if not ok or not chunk then return nil end
     local lines = {}
     for ln in string.gmatch(chunk, "[^\n]+") do lines[#lines+1] = ln end
@@ -1489,6 +1493,8 @@ local function SaveSettings()
     r.SetExtState(EXT_SECTION, "spectral_max_zcr_hz", tostring(spectral_max_zcr_hz or 8000), true)
     r.SetExtState(EXT_SECTION, "draw_channels_separately", draw_channels_separately and "1" or "0", true)
     r.SetExtState(EXT_SECTION, "show_db_scale", show_db_scale and "1" or "0", true)
+    r.SetExtState(EXT_SECTION, "show_footer", show_footer and "1" or "0", true)
+    r.SetExtState(EXT_SECTION, "show_fades", show_fades and "1" or "0", true)
     r.SetExtState(EXT_SECTION, "show_env_overlay", show_env_overlay and "1" or "0", true)
     r.SetExtState(EXT_SECTION, "show_dc_overlay", show_dc_overlay and "1" or "0", true)
     r.SetExtState(EXT_SECTION, "show_pan_overlay", show_pan_overlay and "1" or "0", true)
@@ -1598,6 +1604,10 @@ local function LoadSettings()
     if dcs ~= nil and dcs ~= "" then draw_channels_separately = (dcs == "1" or dcs == "true") end
     local sdb = r.GetExtState(EXT_SECTION, "show_db_scale")
     if sdb ~= nil and sdb ~= "" then show_db_scale = (sdb == "1" or sdb == "true") end
+    local sft = r.GetExtState(EXT_SECTION, "show_footer")
+    if sft ~= nil and sft ~= "" then show_footer = (sft == "1" or sft == "true") else show_footer = true end
+    local sfd = r.GetExtState(EXT_SECTION, "show_fades")
+    if sfd ~= nil and sfd ~= "" then show_fades = (sfd == "1" or sfd == "true") else show_fades = true end
     local seov = r.GetExtState(EXT_SECTION, "show_env_overlay")
     if seov ~= nil and seov ~= "" then show_env_overlay = (seov == "1" or seov == "true") end
     local sdcov = r.GetExtState(EXT_SECTION, "show_dc_overlay")
@@ -3680,20 +3690,6 @@ local function DrawWaveform(draw_list, x, y, w, h)
             end
         end
     end
-    if current_item and IsItemPolarityInverted and IsItemPolarityInverted(current_item) then
-        local label = "Ø"
-        local tw, th = r.ImGui_CalcTextSize(ctx, label)
-        local pad = 4.0
-        local margin = 6.0
-        local bx2 = x + w - margin
-        local by1 = y + margin
-        local bx1 = bx2 - (tw + pad * 2)
-        local by2 = by1 + (th + pad * 1.2)
-        local bg_col = 0xD94A4ACC 
-        local text_col = 0xFFFFFFFF
-        r.ImGui_DrawList_AddRectFilled(draw_list, bx1, by1, bx2, by2, bg_col)
-        r.ImGui_DrawList_AddText(draw_list, bx1 + pad, by1 + pad * 0.2, text_col, label)
-    end
     r.ImGui_DrawList_PopClipRect(draw_list)
 end
 
@@ -3945,6 +3941,8 @@ local function Loop()
             if r.ImGui_MenuItem(ctx, "Play cursor", nil, show_play_cursor, true) then show_play_cursor = not show_play_cursor; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "dB scale", nil, show_db_scale, true) then show_db_scale = not show_db_scale; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "dB labels mirrored", nil, db_labels_mirrored, true) then db_labels_mirrored = not db_labels_mirrored; SaveSettings() end
+            if r.ImGui_MenuItem(ctx, "Show fades", nil, show_fades, true) then show_fades = not show_fades; SaveSettings() end
+            if r.ImGui_MenuItem(ctx, "Show footer", nil, show_footer, true) then show_footer = not show_footer; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Draw channels separately (stereo)", nil, draw_channels_separately, channels >= 2) then draw_channels_separately = not draw_channels_separately; view_cache_valid = false; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Show Pan overlay (take Pan)", nil, show_pan_overlay, (channels or 1) >= 1) then show_pan_overlay = not show_pan_overlay; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Show Transport overlay", nil, show_transport_overlay, true) then show_transport_overlay = not show_transport_overlay; SaveSettings() end
@@ -4412,7 +4410,11 @@ local function Loop()
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local canvas_x, canvas_y = r.ImGui_GetCursorScreenPos(ctx)
     local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-    avail_h = math.max(avail_h - 20, 100)
+    if show_footer then
+        avail_h = math.max(avail_h - 20, 100)
+    else
+        avail_h = math.max(avail_h, 100)
+    end
     local ruler_h = show_ruler and 22 or 0
     local wave_y = canvas_y + ruler_h
     local wave_h = math.max(1, avail_h - ruler_h)
@@ -4650,10 +4652,10 @@ local function Loop()
         if clicked then r.Main_OnCommand(40043, 0) end 
         tx = tx + w + gap
 
-        r.ImGui_SetCursorScreenPos(ctx, tx, ty); clicked, w = DrawTransButton("##ts_start", "<<TS", "Go to start of time selection")
+        r.ImGui_SetCursorScreenPos(ctx, tx, ty); clicked, w = DrawTransButton("##ts_start", "<<", "Go to start of time selection")
         if clicked then r.Main_OnCommand(40630, 0) end 
         tx = tx + w + gap
-        r.ImGui_SetCursorScreenPos(ctx, tx, ty); clicked, w = DrawTransButton("##ts_end", "TS>>", "Go to end of time selection")
+        r.ImGui_SetCursorScreenPos(ctx, tx, ty); clicked, w = DrawTransButton("##ts_end", ">>", "Go to end of time selection")
         if clicked then r.Main_OnCommand(40631, 0) end 
         tx = tx + w + gap
 
@@ -4769,7 +4771,7 @@ local function Loop()
 
     local item_px_start, item_px_end = nil, nil
         local handle_hover = nil -- 'in' | 'out' | nil
-        if current_item and current_item_len > 0 and view_len > 0 then
+    if show_fades and current_item and current_item_len > 0 and view_len > 0 then
             local vt0 = view_start
             local vt1 = view_start + view_len
             item_px_start = content_x + ((current_item_start - vt0) / (vt1 - vt0)) * wave_w
@@ -4796,7 +4798,7 @@ local function Loop()
             end
         end
 
-        if hovered and current_item and current_item_len > 0 and wheel ~= 0 then
+    if hovered and current_item and current_item_len > 0 and wheel ~= 0 then
             is_interacting = true; last_interaction_time = r.time_precise()
             local mx, _ = r.ImGui_GetMousePos(ctx)
             local relx = (mx - content_x) / math.max(1, wave_w)
@@ -5173,6 +5175,21 @@ local function Loop()
         if current_item and (current_item_len or 0) > 0 then
             DrawWaveform(draw_list, content_x, wave_y, wave_w, wave_h)
             DrawItemInfoPanel(draw_list, content_x, wave_y, wave_w, wave_h)
+            if IsItemPolarityInverted and current_item and IsItemPolarityInverted(current_item) then
+                local label = "Ø"
+                local pad = 4.0
+                local margin = 2.0
+                local gx_left = content_x - LEFT_GUTTER_W
+                local tw, th = r.ImGui_CalcTextSize(ctx, label)
+                local bh = (th + pad * 1.2)
+                local by1 = show_ruler and (canvas_y + math.max(0.0, (ruler_h - bh) * 0.5)) or (wave_y + margin)
+                local bx1 = gx_left + margin
+                local bx2 = bx1 + (tw + pad * 2)
+                local by2 = by1 + (th + pad * 1.2)
+                local text_col = 0xFFFFFFFF
+                local dlp = (r.ImGui_GetForegroundDrawList and r.ImGui_GetForegroundDrawList(ctx)) or draw_list
+                r.ImGui_DrawList_AddText(dlp, bx1 + pad, by1 + pad * 0.2, text_col, label)
+            end
         else
             local txt = "Select audio-item"
             local tw, th = r.ImGui_CalcTextSize(ctx, txt)
@@ -5567,10 +5584,16 @@ local function Loop()
                     local fout = r.GetMediaItemInfo_Value(current_item, 'D_FADEOUTLEN') or 0.0
                     if fin < 0 then fin = 0 end; if fin > current_item_len then fin = current_item_len end
                     if fout < 0 then fout = 0 end; if fout > current_item_len then fout = current_item_len end
-                    local start_x = (fin > 0) and (item_px_start2 + (fin / math.max(1e-12, view_len)) * wave_w) or item_px_start2
-                    local end_x   = (fout > 0) and (item_px_end2   - (fout / math.max(1e-12, view_len)) * wave_w) or item_px_end2
-                    start_x = math.max(content_x, start_x)
-                    end_x   = math.min(content_x + wave_w, end_x)
+                    local start_x, end_x
+                    if not show_fades then
+                        start_x = math.max(content_x, item_px_start2)
+                        end_x   = math.min(content_x + wave_w, item_px_end2)
+                    else
+                        start_x = (fin > 0) and (item_px_start2 + (fin / math.max(1e-12, view_len)) * wave_w) or item_px_start2
+                        end_x   = (fout > 0) and (item_px_end2   - (fout / math.max(1e-12, view_len)) * wave_w) or item_px_end2
+                        start_x = math.max(content_x, start_x)
+                        end_x   = math.min(content_x + wave_w, end_x)
+                    end
                     local has_span = (end_x - start_x) > 1.0
                     local mx, my = r.ImGui_GetMousePos(ctx)
                     vol_hover = has_span and (mx >= start_x and mx <= end_x and my >= (vol_y - VOL_HIT_PAD_Y) and my <= (vol_y + VOL_HIT_PAD_Y)) or false
@@ -5612,7 +5635,7 @@ local function Loop()
             end
         end
         do
-            if current_item and current_item_len > 0 and view_len > 0 then
+            if show_fades and current_item and current_item_len > 0 and view_len > 0 then
                 local vt0 = view_start
                 local vt1 = view_start + view_len
                 local item_px_start2 = content_x + ((current_item_start - vt0) / (vt1 - vt0)) * wave_w
@@ -5627,6 +5650,7 @@ local function Loop()
                     local amp = r.GetMediaItemInfo_Value(current_item, 'D_VOL') or 1.0
                     local db  = amp_to_db(amp)
                     local vol_y = vol_db_to_y(db, wave_y, wave_y + wave_h)
+                    r.ImGui_DrawList_PushClipRect(draw_list, content_x, wave_y, content_x + wave_w, wave_y + wave_h, true)
                     if fin > 0 then
                         local fin_x = item_px_start2 + (fin / math.max(1e-12, view_len)) * wave_w
                         local shape = r.GetMediaItemInfo_Value(current_item, 'C_FADEINSHAPE') or 0
@@ -5683,6 +5707,7 @@ local function Loop()
                     r.ImGui_DrawList_AddCircle(draw_list, fin_x, vol_y, FADE_HANDLE_RADIUS, COLOR_FADE_HANDLE_BORDER, 16, 1.5)
                     r.ImGui_DrawList_AddCircleFilled(draw_list, fout_x, vol_y, FADE_HANDLE_RADIUS, col_out)
                     r.ImGui_DrawList_AddCircle(draw_list, fout_x, vol_y, FADE_HANDLE_RADIUS, COLOR_FADE_HANDLE_BORDER, 16, 1.5)
+                    r.ImGui_DrawList_PopClipRect(draw_list)
                 end
             end
         end
@@ -6514,7 +6539,7 @@ local function Loop()
             end
         end
 
-    r.ImGui_SetCursorScreenPos(ctx, canvas_x, canvas_y + avail_h + 4)
+    if show_footer then r.ImGui_SetCursorScreenPos(ctx, canvas_x, canvas_y + avail_h + 4) end
     local base = string.format("Canvas: %.0fx%.0f | Loaded: %s |", wave_w, avail_h, is_loaded and "Yes" or "No")
     local zf = 1.0
     if current_item and current_item_len > 0 and view_len > 0 then zf = current_item_len / view_len end
@@ -6522,7 +6547,7 @@ local function Loop()
     local fx, fy = r.ImGui_GetCursorScreenPos(ctx)
     local avail_w_foot = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
     local spacing = 8.0
-    if current_item then
+    if show_footer and current_item then
         local tech_left = base
         local cov_txt = ""
         if spectral_peaks then
@@ -6568,15 +6593,17 @@ local function Loop()
         local rx = fx + (avail_w_foot or 0) - rw
         if rx < fx + left_space + spacing then rx = fx + left_space + spacing end
         r.ImGui_DrawList_AddText(dl_foot, rx, fy, 0xFFFFFFFF, right_text)
-        r.ImGui_SetCursorScreenPos(ctx, fx, fy)
-        r.ImGui_Dummy(ctx, avail_w_foot or 0, lh)
-    else
+        if show_footer then
+            r.ImGui_SetCursorScreenPos(ctx, fx, fy)
+            r.ImGui_Dummy(ctx, avail_w_foot or 0, lh)
+        end
+    elseif show_footer then
         local left_text = base .. " | No item selected"
         local lw, lh = r.ImGui_CalcTextSize(ctx, left_text)
         r.ImGui_DrawList_PushClipRect(dl_foot, fx, fy, fx + (avail_w_foot or 0), fy + lh, true)
         r.ImGui_DrawList_AddText(dl_foot, fx, fy, 0xFFFFFFFF, left_text)
         r.ImGui_DrawList_PopClipRect(dl_foot)
-        r.ImGui_Dummy(ctx, avail_w_foot, lh)
+    r.ImGui_Dummy(ctx, avail_w_foot, lh)
     end
     end
     
