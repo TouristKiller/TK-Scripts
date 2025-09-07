@@ -169,7 +169,7 @@
     </reapack>
 
     <reapack name="TK_RAW_audio editor.lua" type="script" desc="TK RAW Audio Editor">
-    <version name="0.0.2" author="TouristKiller" time="2025-09-07T04:00:00Z">
+    <version name="0.0.3" author="TouristKiller" time="2025-09-07T04:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_RAW_audio%20editor.lua</source>
     </version>
     </reapack>

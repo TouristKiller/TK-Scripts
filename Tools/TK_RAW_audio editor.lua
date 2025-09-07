@@ -1,5 +1,5 @@
 -- TK RAW Audio Editor - Reaper Audio Workstation
--- Version: 0.0.2 ALPHA
+-- Version: 0.0.3 ALPHA
 -- Author: TouristKiller
 ----------------------------------------------------------------------------------
 -- WORK AND TEST VERSION
@@ -4434,7 +4434,7 @@ local function Loop()
         local pad = 10.0
         local px = content_x + pad
     local stack_gap = 6.0
-    local transport_h = (show_transport_overlay and 58.0) or 0.0
+    local transport_h = (show_transport_overlay and 42.0) or 0.0
     local py = wave_y + wave_h - panel_h - pad - transport_h - (show_transport_overlay and stack_gap or 0.0)
     local dlp = (r.ImGui_GetForegroundDrawList and r.ImGui_GetForegroundDrawList(ctx)) or r.ImGui_GetWindowDrawList(ctx)
     local bg_col = 0x000000AA
@@ -4592,20 +4592,19 @@ local function Loop()
     end
 
     if show_transport_overlay then
-    local panel_w, panel_h = 360.0, 58.0
+    local panel_w, panel_h = 340.0, 42.0
         local pad = 10.0
         local px = content_x + 10.0
     local py = wave_y + wave_h - panel_h - pad
         local dlp = (r.ImGui_GetForegroundDrawList and r.ImGui_GetForegroundDrawList(ctx)) or r.ImGui_GetWindowDrawList(ctx)
         r.ImGui_DrawList_AddRectFilled(dlp, px, py, px + panel_w, py + panel_h, 0x000000AA, 6.0)
         r.ImGui_DrawList_AddRect(dlp, px, py, px + panel_w, py + panel_h, 0xFFFFFFFF, 6.0, 0, 1.0)
-        r.ImGui_DrawList_AddTextEx(dlp, font_big, 16, px + 8.0, py + 6.0, 0xFFD24DFF, "Transport")
 
     local btn_h = 20.0
     local btn_w = 26.0
     local gap = 6.0
     local tx = px + 8.0
-    local ty = py + 28.0
+    local ty = py + 11.0
         r.ImGui_SetCursorScreenPos(ctx, tx, ty)
         local function DrawTransButton(id, label, tooltip)
             local tw, th = r.ImGui_CalcTextSize(ctx, label)
@@ -6170,8 +6169,12 @@ local function Loop()
                 local scroll_h = math.max(1.0, child_h - footer_h)
                 r.ImGui_SetCursorScreenPos(ctx, sb_x, child_y)
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 8.0)
+                -- Right sidebar scroll area (no child flags)
+                local sb_disabled_active = false
                 local scroll_started = r.ImGui_BeginChild(ctx, "RightSidebarScroll", sidebar_w, scroll_h)
                 if scroll_started then
+                    -- During the mini-game, disable sidebar interactions so arrow keys don't navigate/select
+                    if game_active and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true); sb_disabled_active = true end
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        0x2A2A2AFF)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x343434FF)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  0x1E1E1EFF)
@@ -6443,6 +6446,7 @@ local function Loop()
                     end
 
                     r.ImGui_Dummy(ctx, 1, side_spacing)
+                    if sb_disabled_active and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx); sb_disabled_active = false end
                     r.ImGui_SetCursorPosX(ctx, side_margin)
                     if SidebarButton("game_play", "🎮", "Play", btn_w) then
                         is_interacting = true; last_interaction_time = r.time_precise()
@@ -6466,10 +6470,14 @@ local function Loop()
                         end
                         r.ImGui_EndPopup(ctx)
                     end
+                    if game_active and r.ImGui_BeginDisabled and not sb_disabled_active then r.ImGui_BeginDisabled(ctx, true); sb_disabled_active = true end
 
                     r.ImGui_PopStyleColor(ctx, 4)
                 end
-                if scroll_started then r.ImGui_EndChild(ctx) end
+                if scroll_started then
+                    if sb_disabled_active and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+                    r.ImGui_EndChild(ctx)
+                end
                 r.ImGui_PopStyleVar(ctx) -- ScrollbarSize
 
                 do
@@ -6504,7 +6512,9 @@ local function Loop()
 
                 r.ImGui_SetCursorScreenPos(ctx, sb_x, footer_y)
                 local footer_started = r.ImGui_BeginChild(ctx, "RightSidebarFooter", sidebar_w, math.max(1.0, (sb_y + avail_h) - footer_y))
+                local foot_disable_scope = false
                 if footer_started then
+                    if game_active and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true); foot_disable_scope = true end
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        0x2A2A2AFF)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x343434FF)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  0x1E1E1EFF)
@@ -6533,6 +6543,7 @@ local function Loop()
                         GotoNextItemOnTrack()
                     end
 
+                    if foot_disable_scope and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
                     r.ImGui_PopStyleColor(ctx, 4)
                 end
                 if footer_started then r.ImGui_EndChild(ctx) end
