@@ -1,5 +1,5 @@
 -- TK RAW Audio Editor - Reaper Audio Workstation
--- Version: 0.0.3 ALPHA
+-- Version: 0.0.4 ALPHA
 -- Author: TouristKiller
 ----------------------------------------------------------------------------------
 -- WORK AND TEST VERSION
@@ -135,6 +135,7 @@ SETTINGS = {
         show_dc_overlay = false,
         show_pan_overlay = false,
         show_vol_points = false,
+    show_sample_points = false,
         show_transport_overlay = true,
         transport_item_only = false,
         pencil_target = "dc_offset", 
@@ -217,8 +218,20 @@ STATE = {
         game_starfield_w = 0,
         game_starfield_h = 0,
 
-        ts_user_override = false,
+    ts_user_override = false,
 }
+
+local VIEWS = {}
+local VIEWS_PER_PROJECT_LIMIT = 300
+
+local last_view_sig_guid, last_view_sig_proj, last_view_sig_off, last_view_sig_len, last_view_sig_amp = nil, nil, nil, nil, nil
+
+local grid_alpha_dirty = false
+local db_alpha_dirty = false
+local th_slider_dirty = false
+local fa_slider_dirty = false
+local sws_norm_dirty = false
+local spectral_max_zcr_dirty = false
 
 local info_open = false
 local info_stats = nil
@@ -268,6 +281,20 @@ local function ValidItem(it)
     if not it then return false end
     if reaper.ValidatePtr2 then return reaper.ValidatePtr2(0, it, 'MediaItem*') end
     return true
+end
+
+local function ValidEnvelope(env)
+    if not env then return false end
+    if reaper.ValidatePtr2 then return reaper.ValidatePtr2(0, env, 'TrackEnvelope*') end
+    return true
+end
+
+local function SafeEnvelopeMode(env)
+    if not env or not ValidEnvelope(env) then return 0 end
+    if r.GetEnvelopeScalingMode then
+        return r.GetEnvelopeScalingMode(env) or 0
+    end
+    return 0
 end
 
 function RunCommandOnItemWithTemporarySelection(item, cmd)
@@ -331,7 +358,7 @@ function VToEnvelopeValue(env, v)
     local db
     if vv >= 0 then db = vv * (VOL_DB_MAX or 12.0) else db = vv * math.abs(VOL_DB_MIN or -24.0) end
     local amp = db_to_amp(db)
-    local mode = r.GetEnvelopeScalingMode and r.GetEnvelopeScalingMode(env) or 0
+    local mode = SafeEnvelopeMode(env)
     if r.ScaleToEnvelopeMode then
         return r.ScaleToEnvelopeMode(mode, amp)
     else
@@ -633,7 +660,7 @@ function CommitStrokeToMuteRange(take, item, points, item_pos, view_len_px, view
     if v_end ~= nil then r.InsertEnvelopePoint(env, t1_in, v_end, 0, 0, 0, true) end
     if v_post ~= nil then r.InsertEnvelopePoint(env, post_time, v_post, 0, 0, 0, true) end
 
-    local mode = r.GetEnvelopeScalingMode and r.GetEnvelopeScalingMode(env) or 0
+    local mode = SafeEnvelopeMode(env)
     local zero_amp = 0.0
     local zero_val = r.ScaleToEnvelopeMode and r.ScaleToEnvelopeMode(mode, zero_amp) or zero_amp
     r.InsertEnvelopePoint(env, t0_in, zero_val, 0, 0, 0, true)
@@ -1463,189 +1490,185 @@ local MAX_SAMPLES_IDLE = 500000
 local MAX_SAMPLES_INTERACTIVE = 300000
 
 local EXT_SECTION = "TK_Audio_Editor"
+local EXT_BLOB_KEY = "settings"
+
+local function CurrentProjectKey()
+    local proj = r.EnumProjects(-1, "")
+    if not proj then return "global" end
+    local _, fn = r.EnumProjects(-1, "")
+    if not fn or fn == "" then return "untitled" end
+    return fn
+end
+
+local function EncodeViews(map)
+    local parts = {}
+    for proj, items in pairs(map or {}) do
+        for guid, v in pairs(items or {}) do
+            parts[#parts+1] = string.format("%s|%s|%.9f|%.9f|%.9f|%d", proj, guid, v.off or 0, v.len or 0, v.amp or 1, v.ts or 0)
+        end
+    end
+    return table.concat(parts, "\n")
+end
+
+local function DecodeViews(s)
+    local map = {}
+    if not s or s == "" then return map end
+    for line in s:gmatch("[^\r\n]+") do
+        local proj, guid, off, len, amp, ts = line:match("^(.-)%|(.-)%|([%-%d%.]+)%|([%-%d%.]+)%|([%-%d%.]+)%|(%d+)$")
+        if proj and guid then
+            map[proj] = map[proj] or {}
+            map[proj][guid] = { off = tonumber(off) or 0, len = tonumber(len) or 0, amp = tonumber(amp) or 1.0, ts = tonumber(ts) or 0 }
+        end
+    end
+    return map
+end
+
+local function SettingsToBlob()
+    local t = {}
+    local function add(k, v) t[#t+1] = k .. "=" .. tostring(v) end
+    add("show_grid", show_grid and 1 or 0)
+    add("show_ruler", show_ruler and 1 or 0)
+    add("grid_alpha", grid_alpha or 0.9)
+    add("db_alpha", db_alpha or 0.55)
+    add("ruler_beats", ruler_beats and 1 or 0)
+    add("show_edit_cursor", show_edit_cursor and 1 or 0)
+    add("show_play_cursor", show_play_cursor and 1 or 0)
+    add("click_sets_edit_cursor", click_sets_edit_cursor and 1 or 0)
+    add("click_seeks_playback", click_seeks_playback and 1 or 0)
+    add("snap_click_to_grid", snap_click_to_grid and 1 or 0)
+    add("require_shift_for_selection", require_shift_for_selection and 1 or 0)
+    add("show_tooltips", show_tooltips and 1 or 0)
+    add("amp_zoom", amp_zoom or 1.0)
+    add("view_oversample", view_oversample or 4)
+    add("view_detail_mode", view_detail_mode or "fixed")
+    add("waveform_soft_edges", waveform_soft_edges and 1 or 0)
+    add("waveform_outline_paths", waveform_outline_paths and 1 or 0)
+    add("waveform_centerline_thickness", waveform_centerline_thickness or 1.25)
+    add("waveform_fill_alpha", waveform_fill_alpha or 0.18)
+    add("transport_item_only", transport_item_only and 1 or 0)
+    add("sidebar_collapsed", sidebar_collapsed and 1 or 0)
+    add("ripple_item", ripple_item and 1 or 0)
+    add("glue_include_touching", glue_include_touching and 1 or 0)
+    add("spectral_peaks", spectral_peaks and 1 or 0)
+    add("spectral_lock_sr", spectral_lock_sr and 1 or 0)
+    add("spectral_max_zcr_hz", spectral_max_zcr_hz or 8000)
+    add("draw_channels_separately", draw_channels_separately and 1 or 0)
+    add("show_db_scale", show_db_scale and 1 or 0)
+    add("show_footer", show_footer and 1 or 0)
+    add("show_fades", show_fades and 1 or 0)
+    add("show_env_overlay", show_env_overlay and 1 or 0)
+    add("show_dc_overlay", show_dc_overlay and 1 or 0)
+    add("show_pan_overlay", show_pan_overlay and 1 or 0)
+    add("show_vol_points", show_vol_points and 1 or 0)
+    add("show_sample_points", show_sample_points and 1 or 0)
+    add("show_transport_overlay", show_transport_overlay and 1 or 0)
+    add("pan_color_overlay", pan_color_overlay and 1 or 0)
+    add("pan_visual_waveform", pan_visual_waveform and 1 or 0)
+    add("glue_after_normalize_sel", glue_after_normalize_sel and 1 or 0)
+    add("prefer_sws_normalize", prefer_sws_normalize and 1 or 0)
+    add("sws_norm_named_cmd", sws_norm_named_cmd or "")
+    add("pencil_target", pencil_target or "dc_offset")
+    add("draw_min_px_step", draw_min_px_step or 1.0)
+    add("dc_link_lr", dc_link_lr and 1 or 0)
+    add("game_starfield", game_starfield and 1 or 0)
+    add("views_map", EncodeViews(VIEWS))
+    return table.concat(t, "\n")
+end
+
+local function ParseSettingsBlob(s)
+    if not s or s == "" then return nil end
+    local m = {}
+    local current_k = nil
+    for line in s:gmatch("[^\r\n]+") do
+        local k, v = line:match("^([^=]+)=(.*)$")
+        if k then
+            current_k = k
+            m[k] = v
+        else
+            if current_k == "views_map" then
+                m[current_k] = (m[current_k] or "") .. "\n" .. line
+            end
+        end
+    end
+    return m
+end
+
+local function SaveSettingsFlush()
+    r.SetExtState(EXT_SECTION, EXT_BLOB_KEY, SettingsToBlob(), true)
+end
+
+local settings_pending_save = false
+local settings_save_due = 0.0
+local settings_save_delay = 0.2
 
 local function SaveSettings()
-    r.SetExtState(EXT_SECTION, "show_grid", show_grid and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_ruler", show_ruler and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "grid_alpha", tostring(grid_alpha or 0.9), true)
-    r.SetExtState(EXT_SECTION, "db_alpha", tostring(db_alpha or 0.55), true)
-    r.SetExtState(EXT_SECTION, "ruler_beats", ruler_beats and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_edit_cursor", show_edit_cursor and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_play_cursor", show_play_cursor and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "click_sets_edit_cursor", click_sets_edit_cursor and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "click_seeks_playback", click_seeks_playback and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "snap_click_to_grid", snap_click_to_grid and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "require_shift_for_selection", require_shift_for_selection and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_tooltips", show_tooltips and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "amp_zoom", tostring(amp_zoom or 1.0), true)
-    r.SetExtState(EXT_SECTION, "view_oversample", tostring(view_oversample or 4), true)
-    r.SetExtState(EXT_SECTION, "view_detail_mode", view_detail_mode or "fixed", true)
-    r.SetExtState(EXT_SECTION, "waveform_soft_edges", waveform_soft_edges and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "waveform_outline_paths", waveform_outline_paths and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "waveform_centerline_thickness", tostring(waveform_centerline_thickness or 1.25), true)
-    r.SetExtState(EXT_SECTION, "waveform_fill_alpha", tostring(waveform_fill_alpha or 0.18), true)
-    r.SetExtState(EXT_SECTION, "transport_item_only", transport_item_only and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "sidebar_collapsed", sidebar_collapsed and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "ripple_item", ripple_item and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "glue_include_touching", glue_include_touching and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "spectral_peaks", spectral_peaks and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "spectral_lock_sr", spectral_lock_sr and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "spectral_max_zcr_hz", tostring(spectral_max_zcr_hz or 8000), true)
-    r.SetExtState(EXT_SECTION, "draw_channels_separately", draw_channels_separately and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_db_scale", show_db_scale and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_footer", show_footer and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_fades", show_fades and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_env_overlay", show_env_overlay and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_dc_overlay", show_dc_overlay and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_pan_overlay", show_pan_overlay and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_vol_points", show_vol_points and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "show_transport_overlay", show_transport_overlay and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "pan_color_overlay", pan_color_overlay and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "pan_visual_waveform", pan_visual_waveform and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "glue_after_normalize_sel", glue_after_normalize_sel and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "prefer_sws_normalize", prefer_sws_normalize and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "sws_norm_named_cmd", sws_norm_named_cmd or "", true)
-    r.SetExtState(EXT_SECTION, "pencil_target", pencil_target or "dc_offset", true)
-    r.SetExtState(EXT_SECTION, "draw_min_px_step", tostring(draw_min_px_step or 1.0), true)
-    r.SetExtState(EXT_SECTION, "dc_link_lr", dc_link_lr and "1" or "0", true)
-    r.SetExtState(EXT_SECTION, "game_starfield", game_starfield and "1" or "0", true)
+    settings_pending_save = true
+    settings_save_due = r.time_precise() + settings_save_delay
 end
 
 local function LoadSettings()
-    local sg = r.GetExtState(EXT_SECTION, "show_grid")
-    if sg ~= nil and sg ~= "" then
-        show_grid = (sg == "1" or sg == "true")
+    local blob = r.GetExtState(EXT_SECTION, EXT_BLOB_KEY)
+    local cfg = ParseSettingsBlob(blob)
+    local function get(k)
+        if cfg and cfg[k] ~= nil then return cfg[k] end
+        local v = r.GetExtState(EXT_SECTION, k)
+        if v ~= nil and v ~= "" then return v end
+        return nil
     end
-    local sr = r.GetExtState(EXT_SECTION, "show_ruler")
-    if sr ~= nil and sr ~= "" then
-        show_ruler = (sr == "1" or sr == "true")
-    end
-    local ga = r.GetExtState(EXT_SECTION, "grid_alpha")
-    local dba = r.GetExtState(EXT_SECTION, "db_alpha")
-    if ga ~= nil and ga ~= "" then
-        local v = tonumber(ga)
-        if v then grid_alpha = math.max(0.05, math.min(1.0, v)) end
-    end
-    if dba ~= nil and dba ~= "" then
-        local v = tonumber(dba)
-        if v then db_alpha = math.max(0.05, math.min(1.0, v)) end
-    end
-    local rb = r.GetExtState(EXT_SECTION, "ruler_beats")
-    if rb ~= nil and rb ~= "" then
-        ruler_beats = (rb == "1" or rb == "true")
-    end
-    local sec = r.GetExtState(EXT_SECTION, "show_edit_cursor")
-    if sec ~= nil and sec ~= "" then
-        show_edit_cursor = (sec == "1" or sec == "true")
-    end
-    local spc = r.GetExtState(EXT_SECTION, "show_play_cursor")
-    if spc ~= nil and spc ~= "" then
-        show_play_cursor = (spc == "1" or spc == "true")
-    end
-    local csec = r.GetExtState(EXT_SECTION, "click_sets_edit_cursor")
-    if csec ~= nil and csec ~= "" then
-        click_sets_edit_cursor = (csec == "1" or csec == "true")
-    end
-    local csp = r.GetExtState(EXT_SECTION, "click_seeks_playback")
-    if csp ~= nil and csp ~= "" then
-        click_seeks_playback = (csp == "1" or csp == "true")
-    end
-    local scg = r.GetExtState(EXT_SECTION, "snap_click_to_grid")
-    if scg ~= nil and scg ~= "" then
-        snap_click_to_grid = (scg == "1" or scg == "true")
-    end
-    local rss = r.GetExtState(EXT_SECTION, "require_shift_for_selection")
-    if rss ~= nil and rss ~= "" then
-        require_shift_for_selection = (rss == "1" or rss == "true")
-    end
-    local stt = r.GetExtState(EXT_SECTION, "show_tooltips")
-    if stt ~= nil and stt ~= "" then
-        show_tooltips = (stt == "1" or stt == "true")
-    end
-    local az = r.GetExtState(EXT_SECTION, "amp_zoom")
-    if az ~= nil and az ~= "" then
-        local v = tonumber(az)
-        if v then amp_zoom = math.max(0.1, math.min(10.0, v)) end
-    end
-    local vo = r.GetExtState(EXT_SECTION, "view_oversample")
-    if vo ~= nil and vo ~= "" then
-        local ov = tonumber(vo)
-        if ov == 1 or ov == 2 or ov == 4 or ov == 8 or ov == 16 then view_oversample = ov end
-    end
-    local vdm = r.GetExtState(EXT_SECTION, "view_detail_mode")
-    if vdm ~= nil and vdm ~= "" then
-        if vdm == "auto" then view_detail_mode = "auto" else view_detail_mode = "fixed" end
-    end
-    local wse = r.GetExtState(EXT_SECTION, "waveform_soft_edges")
-    if wse ~= nil and wse ~= "" then waveform_soft_edges = (wse == "1" or wse == "true") end
-    local wop = r.GetExtState(EXT_SECTION, "waveform_outline_paths")
-    if wop ~= nil and wop ~= "" then waveform_outline_paths = (wop == "1" or wop == "true") end
-    local wct = r.GetExtState(EXT_SECTION, "waveform_centerline_thickness")
-    if wct ~= nil and wct ~= "" then
-        local v = tonumber(wct); if v then waveform_centerline_thickness = math.max(0.6, math.min(3.0, v)) end
-    end
-    local wfa = r.GetExtState(EXT_SECTION, "waveform_fill_alpha")
-    if wfa ~= nil and wfa ~= "" then
-        local v = tonumber(wfa); if v then waveform_fill_alpha = math.max(0.05, math.min(0.40, v)) end
-    end
-    local sc = r.GetExtState(EXT_SECTION, "sidebar_collapsed")
-    if sc ~= nil and sc ~= "" then sidebar_collapsed = (sc == "1" or sc == "true") end
-    local ri = r.GetExtState(EXT_SECTION, "ripple_item")
-    if ri ~= nil and ri ~= "" then ripple_item = (ri == "1" or ri == "true") end
-    local git = r.GetExtState(EXT_SECTION, "glue_include_touching")
-    if git ~= nil and git ~= "" then glue_include_touching = (git == "1" or git == "true") end
-    local sp = r.GetExtState(EXT_SECTION, "spectral_peaks")
-    if sp ~= nil and sp ~= "" then spectral_peaks = (sp == "1" or sp == "true") end
-    local sl = r.GetExtState(EXT_SECTION, "spectral_lock_sr")
-    if sl ~= nil and sl ~= "" then spectral_lock_sr = (sl == "1" or sl == "true") end
-    local mz = tonumber(r.GetExtState(EXT_SECTION, "spectral_max_zcr_hz"))
-    if mz and mz > 1000 and mz < 20000 then spectral_max_zcr_hz = mz end
-    local dcs = r.GetExtState(EXT_SECTION, "draw_channels_separately")
-    if dcs ~= nil and dcs ~= "" then draw_channels_separately = (dcs == "1" or dcs == "true") end
-    local sdb = r.GetExtState(EXT_SECTION, "show_db_scale")
-    if sdb ~= nil and sdb ~= "" then show_db_scale = (sdb == "1" or sdb == "true") end
-    local sft = r.GetExtState(EXT_SECTION, "show_footer")
-    if sft ~= nil and sft ~= "" then show_footer = (sft == "1" or sft == "true") else show_footer = true end
-    local sfd = r.GetExtState(EXT_SECTION, "show_fades")
-    if sfd ~= nil and sfd ~= "" then show_fades = (sfd == "1" or sfd == "true") else show_fades = true end
-    local seov = r.GetExtState(EXT_SECTION, "show_env_overlay")
-    if seov ~= nil and seov ~= "" then show_env_overlay = (seov == "1" or seov == "true") end
-    local sdcov = r.GetExtState(EXT_SECTION, "show_dc_overlay")
-    if sdcov ~= nil and sdcov ~= "" then show_dc_overlay = (sdcov == "1" or sdcov == "true") end
-    local span = r.GetExtState(EXT_SECTION, "show_pan_overlay")
-    if span ~= nil and span ~= "" then show_pan_overlay = (span == "1" or span == "true") end
-    local svp = r.GetExtState(EXT_SECTION, "show_vol_points")
-    if svp ~= nil and svp ~= "" then show_vol_points = (svp == "1" or svp == "true") end
-    local strov = r.GetExtState(EXT_SECTION, "show_transport_overlay")
-    if strov ~= nil and strov ~= "" then show_transport_overlay = (strov == "1" or strov == "true") else show_transport_overlay = true end
-    local pco = r.GetExtState(EXT_SECTION, "pan_color_overlay")
-    if pco ~= nil and pco ~= "" then pan_color_overlay = (pco == "1" or pco == "true") else pan_color_overlay = true end
-    local pvw = r.GetExtState(EXT_SECTION, "pan_visual_waveform")
-    if pvw ~= nil and pvw ~= "" then pan_visual_waveform = (pvw == "1" or pvw == "true") else pan_visual_waveform = true end
-    local gan = r.GetExtState(EXT_SECTION, "glue_after_normalize_sel")
-    if gan ~= nil and gan ~= "" then glue_after_normalize_sel = (gan == "1" or gan == "true") end
-    local psn = r.GetExtState(EXT_SECTION, "prefer_sws_normalize")
-    if psn ~= nil and psn ~= "" then prefer_sws_normalize = (psn == "1" or psn == "true") end
-    local snc = r.GetExtState(EXT_SECTION, "sws_norm_named_cmd")
-    if snc ~= nil then sws_norm_named_cmd = snc end
-    if not sws_norm_named_cmd or sws_norm_named_cmd == "" then
-        sws_norm_named_cmd = "_BR_NORMALIZE_LOUDNESS_ITEMS" 
-    end
-    local ptg = r.GetExtState(EXT_SECTION, "pencil_target")
+
+    local sg = get("show_grid"); if sg then show_grid = (sg == "1" or sg == "true") end
+    local sr = get("show_ruler"); if sr then show_ruler = (sr == "1" or sr == "true") end
+    local ga = get("grid_alpha"); if ga then local v = tonumber(ga); if v then grid_alpha = math.max(0.05, math.min(1.0, v)) end end
+    local dba = get("db_alpha"); if dba then local v = tonumber(dba); if v then db_alpha = math.max(0.05, math.min(1.0, v)) end end
+    local rb = get("ruler_beats"); if rb then ruler_beats = (rb == "1" or rb == "true") end
+    local sec = get("show_edit_cursor"); if sec then show_edit_cursor = (sec == "1" or sec == "true") end
+    local spc = get("show_play_cursor"); if spc then show_play_cursor = (spc == "1" or spc == "true") end
+    local csec = get("click_sets_edit_cursor"); if csec then click_sets_edit_cursor = (csec == "1" or csec == "true") end
+    local csp = get("click_seeks_playback"); if csp then click_seeks_playback = (csp == "1" or csp == "true") end
+    local scg = get("snap_click_to_grid"); if scg then snap_click_to_grid = (scg == "1" or scg == "true") end
+    local rss = get("require_shift_for_selection"); if rss then require_shift_for_selection = (rss == "1" or rss == "true") end
+    local stt = get("show_tooltips"); if stt then show_tooltips = (stt == "1" or stt == "true") end
+    local az = get("amp_zoom"); if az then local v = tonumber(az); if v then amp_zoom = math.max(0.1, math.min(20.0, v)) end end
+    local vo = get("view_oversample"); if vo then local ov = tonumber(vo); if ov == 1 or ov == 2 or ov == 4 or ov == 8 or ov == 16 then view_oversample = ov end end
+    local vdm = get("view_detail_mode"); if vdm then if vdm == "auto" then view_detail_mode = "auto" else view_detail_mode = "fixed" end end
+    local wse = get("waveform_soft_edges"); if wse then waveform_soft_edges = (wse == "1" or wse == "true") end
+    local wop = get("waveform_outline_paths"); if wop then waveform_outline_paths = (wop == "1" or wop == "true") end
+    local wct = get("waveform_centerline_thickness"); if wct then local v = tonumber(wct); if v then waveform_centerline_thickness = math.max(0.6, math.min(3.0, v)) end end
+    local wfa = get("waveform_fill_alpha"); if wfa then local v = tonumber(wfa); if v then waveform_fill_alpha = math.max(0.05, math.min(0.40, v)) end end
+    local sc = get("sidebar_collapsed"); if sc then sidebar_collapsed = (sc == "1" or sc == "true") end
+    local ri = get("ripple_item"); if ri then ripple_item = (ri == "1" or ri == "true") end
+    local git = get("glue_include_touching"); if git then glue_include_touching = (git == "1" or git == "true") end
+    local sp = get("spectral_peaks"); if sp then spectral_peaks = (sp == "1" or sp == "true") end
+    local sl = get("spectral_lock_sr"); if sl then spectral_lock_sr = (sl == "1" or sl == "true") end
+    local mz = get("spectral_max_zcr_hz"); if mz then local v = tonumber(mz); if v and v > 1000 and v < 20000 then spectral_max_zcr_hz = v end end
+    local dcs = get("draw_channels_separately"); if dcs then draw_channels_separately = (dcs == "1" or dcs == "true") end
+    local sdb = get("show_db_scale"); if sdb then show_db_scale = (sdb == "1" or sdb == "true") end
+    local sft = get("show_footer"); if sft ~= nil and sft ~= "" then show_footer = (sft == "1" or sft == "true") else show_footer = true end
+    local sfd = get("show_fades"); if sfd ~= nil and sfd ~= "" then show_fades = (sfd == "1" or sfd == "true") else show_fades = true end
+    local seov = get("show_env_overlay"); if seov then show_env_overlay = (seov == "1" or seov == "true") end
+    local sdcov = get("show_dc_overlay"); if sdcov then show_dc_overlay = (sdcov == "1" or sdcov == "true") end
+    local span = get("show_pan_overlay"); if span then show_pan_overlay = (span == "1" or span == "true") end
+    local svp = get("show_vol_points"); if svp then show_vol_points = (svp == "1" or svp == "true") end
+    local ssp = get("show_sample_points"); if ssp then show_sample_points = (ssp == "1" or ssp == "true") end
+    local strov = get("show_transport_overlay"); if strov ~= nil and strov ~= "" then show_transport_overlay = (strov == "1" or strov == "true") else show_transport_overlay = true end
+    local pco = get("pan_color_overlay"); if pco ~= nil and pco ~= "" then pan_color_overlay = (pco == "1" or pco == "true") else pan_color_overlay = true end
+    local pvw = get("pan_visual_waveform"); if pvw ~= nil and pvw ~= "" then pan_visual_waveform = (pvw == "1" or pvw == "true") else pan_visual_waveform = true end
+    local gan = get("glue_after_normalize_sel"); if gan then glue_after_normalize_sel = (gan == "1" or gan == "true") end
+    local psn = get("prefer_sws_normalize"); if psn then prefer_sws_normalize = (psn == "1" or psn == "true") end
+    local snc = get("sws_norm_named_cmd"); if snc ~= nil then sws_norm_named_cmd = snc end
+    if not sws_norm_named_cmd or sws_norm_named_cmd == "" then sws_norm_named_cmd = "_BR_NORMALIZE_LOUDNESS_ITEMS" end
+    local ptg = get("pencil_target")
     if ptg ~= nil and ptg ~= "" then
         if ptg == "gum" then ptg = "eraser" end
-    if ptg == "dc_offset" or ptg == "eraser" or ptg == "item_vol" or ptg == "item_pan" then pencil_target = ptg end
+        if ptg == "dc_offset" or ptg == "eraser" or ptg == "item_vol" or ptg == "item_pan" then pencil_target = ptg end
     end
-    local dll = r.GetExtState(EXT_SECTION, "dc_link_lr")
-    if dll ~= nil and dll ~= "" then dc_link_lr = (dll == "1" or dll == "true") end
-    local tio = r.GetExtState(EXT_SECTION, "transport_item_only")
-    if tio ~= nil and tio ~= "" then transport_item_only = (tio == "1" or tio == "true") end
-    local dmps = r.GetExtState(EXT_SECTION, "draw_min_px_step")
-    if dmps ~= nil and dmps ~= "" then
-    local v = tonumber(dmps); if v then draw_min_px_step = math.max(0.1, math.min(20.0, v)) end
-    end
-    local gsf = r.GetExtState(EXT_SECTION, "game_starfield")
-    if gsf ~= nil and gsf ~= "" then game_starfield = (gsf == "1" or gsf == "true") else game_starfield = false end
+    local dll = get("dc_link_lr"); if dll then dc_link_lr = (dll == "1" or dll == "true") end
+    local tio = get("transport_item_only"); if tio then transport_item_only = (tio == "1" or tio == "true") end
+    local dmps = get("draw_min_px_step"); if dmps then local v = tonumber(dmps); if v then draw_min_px_step = math.max(0.1, math.min(20.0, v)) end end
+    local gsf = get("game_starfield"); if gsf ~= nil and gsf ~= "" then game_starfield = (gsf == "1" or gsf == "true") else game_starfield = false end
+    local vm = get("views_map"); if vm then VIEWS = DecodeViews(vm) end
+
+    if not cfg then SaveSettings() end
 end
 
 local function CurrentOversample()
@@ -2483,6 +2506,24 @@ local function LoadPeaks(item_override, keep_view)
     ApplyItemTimeSelection(false)
     view_start = current_item_start
     view_len = current_item_len
+    do
+        local _, guid_now = r.GetSetMediaItemInfo_String(current_item, "GUID", "", false)
+        local proj_key = CurrentProjectKey()
+        local proj_map = VIEWS and VIEWS[proj_key]
+        local ent = proj_map and guid_now and proj_map[guid_now] or nil
+        if ent and (ent.len or 0) > 0 then
+            local rel_off = math.max(0.0, math.min(ent.off or 0.0, math.max(0.0, (current_item_len or 0.0) - (ent.len or 0.0))))
+            view_start = (current_item_start or 0.0) + rel_off
+            view_len = math.max(1e-6, math.min(ent.len or 0.0, current_item_len or 0.0))
+            amp_zoom = math.max(0.1, math.min(20.0, ent.amp or amp_zoom or 1.0))
+            view_cache_valid = false
+            last_view_sig_guid = guid_now
+            last_view_sig_proj = proj_key
+            last_view_sig_off = rel_off
+            last_view_sig_len = view_len
+            last_view_sig_amp = amp_zoom
+        end
+    end
     if keep_view and prev_item_ref and item == prev_item_ref then
         local rel_start = (prev_view_start or current_item_start) - (prev_item_start or current_item_start)
         local use_len = math.max(0.0, math.min(prev_view_len or current_item_len or 0.0, current_item_len or 0.0))
@@ -2491,7 +2532,7 @@ local function LoadPeaks(item_override, keep_view)
         view_start = (current_item_start or 0.0) + rel_start
         view_len = use_len
     end
-    amp_zoom = math.max(0.1, math.min(10.0, amp_zoom or 1.0))
+    amp_zoom = math.max(0.1, math.min(20.0, amp_zoom or 1.0))
     local desired_points = 2048
     if current_item_len <= 0 then is_loaded = false; peaks = {}; return end
 
@@ -3162,6 +3203,227 @@ local function DrawWaveform(draw_list, x, y, w, h)
 
     if current_item and peak_pyr and peak_pyr.built and view_len > 0 then
         local pixels = math.max(1, math.floor(w + 0.5))
+        if show_sample_points and current_accessor and sample_rate and sample_rate > 0 then
+            local sec_per_px = view_len / pixels
+            local samples_per_px = sample_rate * sec_per_px
+            local spp_threshold = 0.85
+            local max_samples = is_interacting and MAX_SAMPLES_INTERACTIVE or MAX_SAMPLES_IDLE
+            if samples_per_px <= spp_threshold then
+                local numch = math.max(1, channels or 1)
+                local t0 = view_start
+                local t1 = view_start + view_len
+                local n_samps = math.min(max_samples, math.max(1, math.floor((t1 - t0) * sample_rate + 0.5)))
+                n_samps = math.min(n_samps, pixels * 2)
+                local ok = true
+                if n_samps > 0 then
+                    local buf = r.new_array(n_samps * numch)
+                    local acc_start = (t0 or 0) - (current_item_start or 0)
+                    ok = r.GetAudioAccessorSamples(current_accessor, sample_rate, numch, acc_start, n_samps, buf)
+                        if ok then
+                            local is_stereo_lanes = (draw_channels_separately and (channels or 1) >= 2)
+                            
+                            local mono_center_y = y + (h * 0.5)
+                            local lane_h = is_stereo_lanes and (h * 0.5) or h
+                            local lane_center_L = y + (lane_h * 0.5)
+                            local lane_center_R = y + (lane_h * 1.5)
+                            local mono_scale = (h * 0.5) * 0.9 * (amp_zoom or 1.0)
+                            local lane_scale = (lane_h * 0.5) * 0.9 * (amp_zoom or 1.0)
+                            if is_stereo_lanes and show_grid then
+                                local sep_y = y + (h * 0.5)
+                                r.ImGui_DrawList_AddLine(draw_list, x, sep_y, x + w, sep_y, ColorWithAlpha(COLOR_GRID_BASE, 0.6), 2.0)
+                                r.ImGui_DrawList_AddLine(draw_list, x, sep_y, x + w, sep_y, zero_col, 1.0)
+                                r.ImGui_DrawList_AddLine(draw_list, x, lane_center_L, x + w, lane_center_L, zero_col, 1.0)
+                                r.ImGui_DrawList_AddLine(draw_list, x, lane_center_R, x + w, lane_center_R, zero_col, 1.0)
+                            end
+                        local dc_envL, dc_envR
+                        do
+                            if current_take and ValidTake(current_take) and ValidItem(current_item) then
+                                local fxidx = r.TakeFX_AddByName(current_take, 'JS: DC_offset_sampleaccurate.jsfx', 0)
+                                if fxidx == -1 and pencil_mode and pencil_target == 'dc_offset' then
+                                    fxidx = EnsureTakeDCOffsetFX(current_take)
+                                end
+                                if fxidx ~= -1 then
+                                    dc_envL = r.TakeFX_GetEnvelope(current_take, fxidx, 0, true)
+                                    dc_envR = r.TakeFX_GetEnvelope(current_take, fxidx, 1, true)
+                                    local function ensureBaseline(env)
+                                        if not env then return end
+                                        local cnt = r.CountEnvelopePoints(env) or 0
+                                        if cnt == 0 then
+                                            local itlen = current_item_len or 0
+                                            r.InsertEnvelopePoint(env, 0.0, 0.0, 0, 0, 0, true)
+                                            if itlen > 0 then r.InsertEnvelopePoint(env, itlen, 0.0, 0, 0, 0, true) end
+                                            r.Envelope_SortPoints(env)
+                                        end
+                                    end
+                                    ensureBaseline(dc_envL)
+                                    ensureBaseline(dc_envR)
+                                end
+                            end
+                        end
+                        local dc_cntL = (dc_envL and (r.CountEnvelopePoints(dc_envL) or 0)) or 0
+                        local dc_cntR = (dc_envR and (r.CountEnvelopePoints(dc_envR) or 0)) or 0
+                        local function env_is_raw_sp(env)
+                            if not env then return false end
+                            local cnt = r.CountEnvelopePoints(env) or 0
+                            if cnt == 0 then return false end
+                            local seenNonZero = false
+                            local max_check = math.min(cnt, 64)
+                            for i = 0, max_check - 1 do
+                                local okp, _, v = r.GetEnvelopePoint(env, i)
+                                if okp then
+                                    if v < 0.0 or v > 1.0 then return true end
+                                    if math.abs(v or 0.0) > 1e-12 then seenNonZero = true end
+                                end
+                            end
+                            if not seenNonZero then return true end
+                            return false
+                        end
+                        local dc_is_raw_L = env_is_raw_sp(dc_envL)
+                        local dc_is_raw_R = env_is_raw_sp(dc_envR)
+                        local function env_to_dc(val, is_raw)
+                            if val == nil then return nil end
+                            local v = tonumber(val) or 0.0
+                            if is_raw then
+                                if v < -1.0 then v = -1.0 elseif v > 1.0 then v = 1.0 end
+                                return v
+                            else
+                                v = (v * 2.0) - 1.0
+                                if v < -1.0 then v = -1.0 elseif v > 1.0 then v = 1.0 end
+                                return v
+                            end
+                        end
+                        local function DCAtSP(t)
+                            if not dc_envL and not dc_envR then return 0.0, 0.0 end
+                            local t_in = t - (current_item_start or 0)
+                            if t_in < 0 then t_in = 0 end
+                            if t_in > (current_item_len or 0) then t_in = current_item_len or 0 end
+                            local l, rch = 0.0, 0.0
+                            if dc_envL then
+                                if dc_cntL == 0 then
+                                    l = 0.0
+                                else
+                                    local _, t0e, v0 = r.GetEnvelopePoint(dc_envL, 0)
+                                    local _, t1e, v1 = r.GetEnvelopePoint(dc_envL, math.max(0, dc_cntL - 1))
+                                    if t_in <= (t0e or 0) then
+                                        l = env_to_dc((v0 ~= nil) and v0 or (dc_is_raw_L and 0.0 or 0.5), dc_is_raw_L) or 0.0
+                                    elseif t_in >= (t1e or 0) then
+                                        l = env_to_dc((v1 ~= nil) and v1 or (dc_is_raw_L and 0.0 or 0.5), dc_is_raw_L) or 0.0
+                                    else
+                                        local _, v = r.Envelope_Evaluate(dc_envL, t_in, 0, 0)
+                                        l = env_to_dc((v ~= nil) and v or (dc_is_raw_L and 0.0 or 0.5), dc_is_raw_L) or 0.0
+                                    end
+                                end
+                            end
+                            if dc_envR then
+                                if dc_cntR == 0 then
+                                    rch = 0.0
+                                else
+                                    local _, t0e, v0 = r.GetEnvelopePoint(dc_envR, 0)
+                                    local _, t1e, v1 = r.GetEnvelopePoint(dc_envR, math.max(0, dc_cntR - 1))
+                                    if t_in <= (t0e or 0) then
+                                        rch = env_to_dc((v0 ~= nil) and v0 or (dc_is_raw_R and 0.0 or 0.5), dc_is_raw_R) or 0.0
+                                    elseif t_in >= (t1e or 0) then
+                                        rch = env_to_dc((v1 ~= nil) and v1 or (dc_is_raw_R and 0.0 or 0.5), dc_is_raw_R) or 0.0
+                                    else
+                                        local _, v2 = r.Envelope_Evaluate(dc_envR, t_in, 0, 0)
+                                        rch = env_to_dc((v2 ~= nil) and v2 or (dc_is_raw_R and 0.0 or 0.5), dc_is_raw_R) or 0.0
+                                    end
+                                end
+                            end
+                            return l, rch
+                        end
+                        local env_t0 = current_item_start or view_start
+                        local env_t1 = env_t0 + (current_item_len or view_len)
+                        local env_fin  = (current_item and r.GetMediaItemInfo_Value(current_item, 'D_FADEINLEN'))  or 0.0
+                        local env_fout = (current_item and r.GetMediaItemInfo_Value(current_item, 'D_FADEOUTLEN')) or 0.0
+                        local env_sin  = (current_item and r.GetMediaItemInfo_Value(current_item, 'C_FADEINSHAPE'))  or 0
+                        local env_sout = (current_item and r.GetMediaItemInfo_Value(current_item, 'C_FADEOUTSHAPE')) or 0
+                        local env_din  = (current_item and r.GetMediaItemInfo_Value(current_item, 'D_FADEINDIR'))  or 0.0
+                        local env_dout = (current_item and r.GetMediaItemInfo_Value(current_item, 'D_FADEOUTDIR')) or 0.0
+                        local env_vol  = (current_item and r.GetMediaItemInfo_Value(current_item, 'D_VOL')) or 1.0
+                        if env_vol < 1e-6 then env_vol = 1e-6 end
+                        local vol_env = (current_take and ValidTake(current_take) and ValidItem(current_item)) and r.GetTakeEnvelopeByName(current_take, "Volume") or nil
+                        local vol_env_mode = vol_env and (r.GetEnvelopeScalingMode and r.GetEnvelopeScalingMode(vol_env) or 0) or nil
+                        local function EnvelopeGainAtFast(t)
+                            if not t then return env_vol end
+                            local base
+                            if env_fin and env_fin > 0 and t >= env_t0 and t <= (env_t0 + env_fin) then
+                                local u = (t - env_t0) / env_fin
+                                local f = EvalFadeIn and EvalFadeIn(env_sin, env_din, u) or u
+                                base = env_vol * f
+                            elseif env_fout and env_fout > 0 and t >= (env_t1 - env_fout) and t <= env_t1 then
+                                local u = (t - (env_t1 - env_fout)) / env_fout
+                                local f = EvalFadeOut and EvalFadeOut(env_sout, env_dout, u) or (1 - u)
+                                base = env_vol * f
+                            else
+                                base = env_vol
+                            end
+                            if vol_env then
+                                local t_in = t - env_t0
+                                if t_in < 0 then t_in = 0 end
+                                if t_in > (current_item_len or 0) then t_in = current_item_len or 0 end
+                                local _, v = r.Envelope_Evaluate(vol_env, t_in, 0, 0)
+                                if v ~= nil then
+                                    if r.ScaleFromEnvelopeMode and vol_env_mode ~= nil then
+                                        local amp = r.ScaleFromEnvelopeMode(vol_env_mode, v)
+                                        if amp and amp > 0 then base = base * amp else base = base * 0 end
+                                    else
+                                        base = base * v
+                                    end
+                                end
+                            end
+                            return base
+                        end
+
+                        local x_scale = pixels / math.max(1e-12, view_len)
+                        local dt = 1.0 / sample_rate
+                        local tick_half = 2.0   -- half height in pixels (was ~1)
+                        local tick_th   = 1.6   -- line thickness
+                        for i = 0, n_samps - 1 do
+                            local t = t0 + i * dt
+                            local rel = (t - view_start)
+                            local px = x + rel * x_scale
+                            if px >= x - 1 and px <= x + w + 1 then
+                                if draw_channels_separately and channels >= 2 then
+                                    local base = i * numch
+                                    local vL = (buf[base + 1] or 0.0)
+                                    local vR = (buf[base + 2] or 0.0)
+                                    local dcL, dcR = DCAtSP(t)
+                                    local g = EnvelopeGainAtFast(t)
+                                    vL = (vL + dcL) * g
+                                    vR = (vR + dcR) * g
+                                    local yL = lane_center_L - (vL * lane_scale)
+                                    local yR = lane_center_R - (vR * lane_scale)
+                                    yL = math.floor(yL + 0.5)
+                                    yR = math.floor(yR + 0.5)
+                                    local col = ColorWithAlpha(COLOR_WAVEFORM, 0.95)
+                                    r.ImGui_DrawList_AddLine(draw_list, px, yL - tick_half, px, yL + tick_half, col, tick_th)
+                                    r.ImGui_DrawList_AddLine(draw_list, px, yR - tick_half, px, yR + tick_half, col, tick_th)
+                                else
+                                    local base = i * numch
+                                    local v = 0.0
+                                    if numch >= 2 then
+                                        v = ((buf[base + 1] or 0.0) + (buf[base + 2] or 0.0)) * 0.5
+                                    else
+                                        v = (buf[base + 1] or 0.0)
+                                    end
+                                    local dcL, dcR = DCAtSP(t)
+                                    local dc = (numch >= 2) and ((dcL + dcR) * 0.5) or dcL
+                                    local g = EnvelopeGainAtFast(t)
+                                    v = (v + dc) * g
+                                    local yy = mono_center_y - (v * mono_scale)
+                                    yy = math.floor(yy + 0.5)
+                                    local col = ColorWithAlpha(COLOR_WAVEFORM, 0.95)
+                                    r.ImGui_DrawList_AddLine(draw_list, px, yy - tick_half, px, yy + tick_half, col, tick_th)
+                                end
+                            end
+                        end
+                        r.ImGui_DrawList_PopClipRect(draw_list)
+                        return
+                    end
+                end
+            end
+        end
         local level = ChoosePyrLevel(pixels)
         if level then
             local scale = (h / 2) * 0.9 * amp_zoom
@@ -3943,6 +4205,7 @@ local function Loop()
             if r.ImGui_MenuItem(ctx, "dB labels mirrored", nil, db_labels_mirrored, true) then db_labels_mirrored = not db_labels_mirrored; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Show fades", nil, show_fades, true) then show_fades = not show_fades; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Show footer", nil, show_footer, true) then show_footer = not show_footer; SaveSettings() end
+            if r.ImGui_MenuItem(ctx, "Show sample points (high zoom)", nil, show_sample_points, true) then show_sample_points = not show_sample_points; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Draw channels separately (stereo)", nil, draw_channels_separately, channels >= 2) then draw_channels_separately = not draw_channels_separately; view_cache_valid = false; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Show Pan overlay (take Pan)", nil, show_pan_overlay, (channels or 1) >= 1) then show_pan_overlay = not show_pan_overlay; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Show Transport overlay", nil, show_transport_overlay, true) then show_transport_overlay = not show_transport_overlay; SaveSettings() end
@@ -3962,7 +4225,8 @@ local function Loop()
                 r.ImGui_PushItemWidth(ctx, 180)
                 local changed, newv = r.ImGui_SliderDouble(ctx, "##maxzcr", spectral_max_zcr_hz or 8000, 1000, 16000, "%.0f")
                 r.ImGui_PopItemWidth(ctx)
-                if changed then spectral_max_zcr_hz = newv; view_cache_valid = false; SaveSettings() end
+                if changed then spectral_max_zcr_hz = newv; view_cache_valid = false; spectral_max_zcr_dirty = true end
+                if spectral_max_zcr_dirty and (not r.ImGui_IsMouseDown(ctx, 0)) then spectral_max_zcr_dirty = false; SaveSettings() end
             end
             r.ImGui_EndPopup(ctx)
         end
@@ -3997,7 +4261,8 @@ local function Loop()
                 r.ImGui_PushItemWidth(ctx, 220)
                 local changed, newtxt = r.ImGui_InputText(ctx, "##swsnormcmd", sws_norm_named_cmd or "")
                 r.ImGui_PopItemWidth(ctx)
-                if newtxt ~= nil then sws_norm_named_cmd = newtxt; SaveSettings() end
+                if newtxt ~= nil then sws_norm_named_cmd = newtxt; sws_norm_dirty = true end
+                if sws_norm_dirty and not r.ImGui_IsItemActive(ctx) then sws_norm_dirty = false; SaveSettings() end
                 r.ImGui_SameLine(ctx)
                 if r.ImGui_Button(ctx, "Test") then
                     local id = (sws_norm_named_cmd and sws_norm_named_cmd ~= "") and r.NamedCommandLookup(sws_norm_named_cmd) or 0
@@ -4112,12 +4377,12 @@ local function Loop()
             tnorm = (grid_alpha - 0.05) / (1.0 - 0.05)
             if tnorm < 0.0 then tnorm = 0.0 elseif tnorm > 1.0 then tnorm = 1.0 end
         end
-        local function set_alpha_from_fraction(f)
+    local function set_alpha_from_fraction(f)
             if f < 0.0 then f = 0.0 elseif f > 1.0 then f = 1.0 end
             local new_val = 0.05 + f * (1.0 - 0.05)
             if math.abs((new_val or 0) - (grid_alpha or 0)) > 1e-6 then
                 grid_alpha = new_val
-                SaveSettings()
+        grid_alpha_dirty = true
             end
             return f
         end
@@ -4137,7 +4402,8 @@ local function Loop()
         local knob_border = 0x000000AA
         r.ImGui_DrawList_AddCircleFilled(dl, knob_x, cy, 5.0, knob_fill)
         r.ImGui_DrawList_AddCircle(dl, knob_x, cy, 5.0, knob_border, 12, 1.2)
-        if show_tooltips and hovered_slider then
+    if (not r.ImGui_IsMouseDown(ctx, 0)) and grid_alpha_dirty then grid_alpha_dirty = false; SaveSettings() end
+    if show_tooltips and hovered_slider then
             r.ImGui_BeginTooltip(ctx)
             r.ImGui_Text(ctx, string.format("Grid intensity: %.2f", grid_alpha or 0.0))
             r.ImGui_EndTooltip(ctx)
@@ -4161,12 +4427,12 @@ local function Loop()
             tnormb = (db_alpha - 0.05) / (1.0 - 0.05)
             if tnormb < 0.0 then tnormb = 0.0 elseif tnormb > 1.0 then tnormb = 1.0 end
         end
-        local function set_db_alpha_from_fraction(f)
+    local function set_db_alpha_from_fraction(f)
             if f < 0.0 then f = 0.0 elseif f > 1.0 then f = 1.0 end
             local new_val = 0.05 + f * (1.0 - 0.05)
             if math.abs((new_val or 0) - (db_alpha or 0)) > 1e-6 then
                 db_alpha = new_val
-                SaveSettings()
+        db_alpha_dirty = true
             end
             return f
         end
@@ -4186,7 +4452,8 @@ local function Loop()
         local knob_borderb = 0x000000AA
         r.ImGui_DrawList_AddCircleFilled(dl2, knob_xb, cyb, 5.0, knob_fillb)
         r.ImGui_DrawList_AddCircle(dl2, knob_xb, cyb, 5.0, knob_borderb, 12, 1.2)
-        if show_tooltips and hovered_slider2 then
+    if (not r.ImGui_IsMouseDown(ctx, 0)) and db_alpha_dirty then db_alpha_dirty = false; SaveSettings() end
+    if show_tooltips and hovered_slider2 then
             r.ImGui_BeginTooltip(ctx)
             r.ImGui_Text(ctx, string.format("dB lines intensity: %.2f", db_alpha or 0.0))
             r.ImGui_EndTooltip(ctx)
@@ -4232,9 +4499,11 @@ local function Loop()
             local wop1, wop2 = r.ImGui_Checkbox(ctx, "Use continuous outlines (PathStroke)", waveform_outline_paths)
             if wop2 ~= nil then waveform_outline_paths = wop2; SaveSettings() elseif wop1 ~= nil then waveform_outline_paths = wop1; SaveSettings() end
             local th_changed, th_val = r.ImGui_SliderDouble(ctx, "Centerline thickness", waveform_centerline_thickness, 0.6, 4.0, "%.2f")
-            if th_val ~= nil then waveform_centerline_thickness = th_val; SaveSettings() elseif th_changed ~= nil then waveform_centerline_thickness = th_changed; SaveSettings() end
+            if th_val ~= nil then waveform_centerline_thickness = th_val; th_slider_dirty = true elseif th_changed ~= nil then waveform_centerline_thickness = th_changed; th_slider_dirty = true end
+            if th_slider_dirty and (not r.ImGui_IsMouseDown(ctx, 0)) then th_slider_dirty = false; SaveSettings() end
             local fa_changed, fa_val = r.ImGui_SliderDouble(ctx, "Fill alpha", waveform_fill_alpha, 0.05, 0.40, "%.2f")
-            if fa_val ~= nil then waveform_fill_alpha = fa_val; SaveSettings() elseif fa_changed ~= nil then waveform_fill_alpha = fa_changed; SaveSettings() end
+            if fa_val ~= nil then waveform_fill_alpha = fa_val; fa_slider_dirty = true elseif fa_changed ~= nil then waveform_fill_alpha = fa_changed; fa_slider_dirty = true end
+            if fa_slider_dirty and (not r.ImGui_IsMouseDown(ctx, 0)) then fa_slider_dirty = false; SaveSettings() end
 
             r.ImGui_Separator(ctx)
             r.ImGui_Text(ctx, "Detail")
@@ -4807,7 +5076,7 @@ local function Loop()
             local mt = vt0 + relx * (vt1 - vt0)
             local factor = (1.15 ^ wheel)
             if hasCtrl then
-                amp_zoom = math.max(0.1, math.min(10.0, amp_zoom * factor))
+                amp_zoom = math.max(0.1, math.min(30.0, amp_zoom * factor))
                 SaveSettings()
             elseif hasShift then
                 local delta = -(wheel) * view_len * 0.15
@@ -5166,10 +5435,14 @@ local function Loop()
         end
     if draw_channels_separately and channels == 2 then
             local lr_col = 0xFF4444FF
-            local gx = content_x - LEFT_GUTTER_W + 6
-            local cy = wave_y + wave_h * 0.5
-            r.ImGui_DrawList_AddText(draw_list, gx, wave_y + 4, lr_col, 'L')
-            r.ImGui_DrawList_AddText(draw_list, gx, cy + 4,      lr_col, 'R')
+            local gutter_left = content_x - LEFT_GUTTER_W
+            local gx = gutter_left + 6.0 
+            local lane_h = wave_h * 0.5
+            local center_L = wave_y + lane_h * 0.5
+            local center_R = wave_y + lane_h * 1.5
+            local label_size = 16.0 
+            r.ImGui_DrawList_AddTextEx(draw_list, font_big, label_size, gx, center_L - label_size * 0.5, lr_col, 'L')
+            r.ImGui_DrawList_AddTextEx(draw_list, font_big, label_size, gx, center_R - label_size * 0.5, lr_col, 'R')
         end
         if current_item and (current_item_len or 0) > 0 then
             DrawWaveform(draw_list, content_x, wave_y, wave_w, wave_h)
@@ -5235,7 +5508,7 @@ local function Loop()
                     end
                 end
             else
-                local mode = r.GetEnvelopeScalingMode and r.GetEnvelopeScalingMode(env) or 0
+                local mode = SafeEnvelopeMode(env)
                 if not has_env or cnt < 2 then
                     local vol_y = vol_db_to_y(0.0, top_y, bot_y)
                     r.ImGui_DrawList_AddLine(draw_list, content_x, vol_y, content_x + wave_w, vol_y, COLOR_ENV_VOL_OVERLAY, 1.6)
@@ -6169,11 +6442,9 @@ local function Loop()
                 local scroll_h = math.max(1.0, child_h - footer_h)
                 r.ImGui_SetCursorScreenPos(ctx, sb_x, child_y)
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 8.0)
-                -- Right sidebar scroll area (no child flags)
                 local sb_disabled_active = false
                 local scroll_started = r.ImGui_BeginChild(ctx, "RightSidebarScroll", sidebar_w, scroll_h)
                 if scroll_started then
-                    -- During the mini-game, disable sidebar interactions so arrow keys don't navigate/select
                     if game_active and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true); sb_disabled_active = true end
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        0x2A2A2AFF)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x343434FF)
@@ -6627,6 +6898,49 @@ local function Loop()
         is_interacting = false
     end
     
+    do
+        local it = current_item
+        if it and current_item_len and current_item_len > 0 and view_len and view_len > 0 then
+            local _, guid_now = r.GetSetMediaItemInfo_String(it, "GUID", "", false)
+            local proj_key = CurrentProjectKey()
+            if guid_now and proj_key then
+                local rel_off = (view_start or 0) - (current_item_start or 0)
+                local clamp_len = math.max(1e-6, math.min(view_len or 0, current_item_len or 0))
+                local clamp_off = math.max(0.0, math.min(rel_off or 0.0, math.max(0.0, (current_item_len or 0.0) - clamp_len)))
+                local az = math.max(0.1, math.min(20.0, amp_zoom or 1.0))
+                if guid_now ~= last_view_sig_guid or proj_key ~= last_view_sig_proj or math.abs((last_view_sig_off or -1) - clamp_off) > 1e-9 or math.abs((last_view_sig_len or -1) - clamp_len) > 1e-9 or math.abs((last_view_sig_amp or -1) - az) > 1e-9 then
+                    VIEWS[proj_key] = VIEWS[proj_key] or {}
+                    local proj_map = VIEWS[proj_key]
+                    proj_map[guid_now] = { off = clamp_off, len = clamp_len, amp = az, ts = os.time() }
+                    local count = 0
+                    for _ in pairs(proj_map) do count = count + 1 end
+                    if count > VIEWS_PER_PROJECT_LIMIT then
+                        local oldest_guid, oldest_ts = nil, math.huge
+                        for g, v in pairs(proj_map) do
+                            local ts = (type(v) == 'table' and v.ts) or 0
+                            if ts < oldest_ts then oldest_ts = ts; oldest_guid = g end
+                        end
+                        if oldest_guid and proj_map[oldest_guid] then proj_map[oldest_guid] = nil end
+                    end
+                    last_view_sig_guid = guid_now
+                    last_view_sig_proj = proj_key
+                    last_view_sig_off = clamp_off
+                    last_view_sig_len = clamp_len
+                    last_view_sig_amp = az
+                    SaveSettings()
+                end
+            end
+        end
+    end
+
+    if settings_pending_save then
+        local now2 = r.time_precise()
+        if now2 >= (settings_save_due or 0) and not is_interacting then
+            settings_pending_save = false
+            SaveSettingsFlush()
+        end
+    end
+
     if open then
         r.defer(Loop)
     else
@@ -6637,7 +6951,7 @@ local function Loop()
             r.ImGui_Detach(ctx, font_big)
         end
     if current_accessor then r.DestroyAudioAccessor(current_accessor) current_accessor = nil end
-    SaveSettings()
+    if settings_pending_save then SaveSettingsFlush(); settings_pending_save = false end
     end
 end
 r.defer(Loop)
