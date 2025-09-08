@@ -1,11 +1,9 @@
 -- @description TK_Set selected MIDI item shape and view
 -- @author TouristKiller
--- @version 0.2.2
+-- @version 0.3.0
 -- @changelog 
 --[[
-+ Removed toggle script. 
-+ Start stop monitor from settings window
-+ If set to menu butten it wil show if monitor is active or not
++ View, shape and grid can now be set per track or per take
 ]]--
 ---------------------------------------------------------
 local r                     = reaper
@@ -16,6 +14,13 @@ r.ImGui_Attach(ctx, font)
 
 local monitor_active        = r.GetExtState("TK_MIDI_SHAPE_VIEW", "monitor_active") == "1"
 local last_track_guid       = nil
+local last_take_ptr         = nil
+local shape_scope           = r.GetExtState("TK_MIDI_SHAPE_VIEW", "shape_scope")
+shape_scope                 = (shape_scope == "take" or shape_scope == "track") and shape_scope or "track" -- default
+local view_scope            = r.GetExtState("TK_MIDI_SHAPE_VIEW", "view_scope")
+view_scope                  = (view_scope == "take" or view_scope == "track") and view_scope or "track" -- default
+local grid_scope            = r.GetExtState("TK_MIDI_SHAPE_VIEW", "grid_scope")
+grid_scope                  = (grid_scope == "take" or grid_scope == "track") and grid_scope or "track" -- default
 local settings_visible      = true
 
 local window_flags          = r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoTitleBar()
@@ -64,18 +69,33 @@ local function SaveTrackView(track, cmd)
     r.SetProjExtState(0, "ViewSettings", key, tostring(cmd))
 end
 
-local function ProcessItems(cmd, isView)
+local function ProcessItems(cmd, kind)
     local num_items = r.CountSelectedMediaItems(0)
     local selected_items = {}
     
     for i = 0, num_items-1 do
         selected_items[i] = r.GetSelectedMediaItem(0, i)
         local track = r.GetMediaItem_Track(selected_items[i])
-        
-        if isView then
-            r.GetSetMediaTrackInfo_String(track, "P_EXT:TKVIEW", tostring(cmd), true)
-        else
-            r.GetSetMediaTrackInfo_String(track, "P_EXT:TKSHAPE", tostring(cmd), true)
+        local take  = r.GetActiveTake(selected_items[i])
+
+        if kind == "view" then
+            if view_scope == "take" and take and r.TakeIsMIDI(take) then
+                r.GetSetMediaItemTakeInfo_String(take, "P_EXT:TKVIEW", tostring(cmd), true)
+            else
+                r.GetSetMediaTrackInfo_String(track, "P_EXT:TKVIEW", tostring(cmd), true)
+            end
+        elseif kind == "shape" then
+            if shape_scope == "take" and take and r.TakeIsMIDI(take) then
+                r.GetSetMediaItemTakeInfo_String(take, "P_EXT:TKSHAPE", tostring(cmd), true)
+            else
+                r.GetSetMediaTrackInfo_String(track, "P_EXT:TKSHAPE", tostring(cmd), true)
+            end
+        elseif kind == "grid" then
+            if grid_scope == "take" and take and r.TakeIsMIDI(take) then
+                r.GetSetMediaItemTakeInfo_String(take, "P_EXT:TKGRID", tostring(cmd), true)
+            else
+                r.GetSetMediaTrackInfo_String(track, "P_EXT:TKGRID", tostring(cmd), true)
+            end
         end
     end
     
@@ -119,6 +139,7 @@ local function ResetAllSettings()
     for guid, track in pairs(processed_tracks) do
         r.GetSetMediaTrackInfo_String(track, "P_EXT:TKVIEW", "40042", true)
         r.GetSetMediaTrackInfo_String(track, "P_EXT:TKSHAPE", "40449", true)
+        r.GetSetMediaTrackInfo_String(track, "P_EXT:TKGRID",  "40192", true)
         
         local item_count = r.GetTrackNumMediaItems(track)
         for i = 0, item_count-1 do
@@ -129,9 +150,9 @@ local function ResetAllSettings()
         end
     end
     
-    ProcessItems(40042, true)   -- Piano Roll
-    ProcessItems(40449, false)  -- Normal shape
-    ProcessItems(40192, false)  -- 1/16 grid
+    ProcessItems(40042, "view")   -- Piano Roll
+    ProcessItems(40449, "shape")  -- Normal shape
+    ProcessItems(40192, "grid")   -- 1/16 grid
     
     selected_shape = 0
     selected_view = 1
@@ -142,9 +163,27 @@ function GetTrackSettings(track)
     local guid = r.GetTrackGUID(track)
     local _, shape = r.GetSetMediaTrackInfo_String(track, "P_EXT:TKSHAPE", "", false)
     local _, view = r.GetSetMediaTrackInfo_String(track, "P_EXT:TKVIEW", "", false)
-    return shape, view
+    local _, grid = r.GetSetMediaTrackInfo_String(track, "P_EXT:TKGRID", "", false)
+    return shape, view, grid
 end
 
+local function GetTakeShape(take)
+    if not take then return "" end
+    local _, shape = r.GetSetMediaItemTakeInfo_String(take, "P_EXT:TKSHAPE", "", false)
+    return shape or ""
+end
+
+local function GetTakeView(take)
+    if not take then return "" end
+    local _, view = r.GetSetMediaItemTakeInfo_String(take, "P_EXT:TKVIEW", "", false)
+    return view or ""
+end
+
+local function GetTakeGrid(take)
+    if not take then return "" end
+    local _, grid = r.GetSetMediaItemTakeInfo_String(take, "P_EXT:TKGRID", "", false)
+    return grid or ""
+end
 
 function MonitorSettings()
     if not monitor_active then return end
@@ -156,16 +195,35 @@ function MonitorSettings()
             local item = r.GetMediaItemTake_Item(take)
             local track = r.GetMediaItem_Track(item)
             local current_guid = r.GetTrackGUID(track)
-            
+
             if current_guid ~= last_track_guid then
-                local shape, view = GetTrackSettings(track)
-                if shape ~= "" then
-                    r.MIDIEditor_LastFocused_OnCommand(tonumber(shape), 0)
+                local track_shape, track_view, grid = GetTrackSettings(track)
+                if shape_scope == "track" and track_shape ~= "" then
+                    r.MIDIEditor_LastFocused_OnCommand(tonumber(track_shape), 0)
                 end
-                if view ~= "" then
-                    r.MIDIEditor_LastFocused_OnCommand(tonumber(view), 0)
+                if view_scope == "track" and track_view ~= "" then
+                    r.MIDIEditor_LastFocused_OnCommand(tonumber(track_view), 0)
+                end
+                if grid_scope == "track" and grid ~= "" then
+                    r.MIDIEditor_LastFocused_OnCommand(tonumber(grid), 0)
                 end
                 last_track_guid = current_guid
+            end
+
+            if take ~= last_take_ptr then
+                if shape_scope == "take" then
+                    local s = GetTakeShape(take)
+                    if s ~= "" then r.MIDIEditor_LastFocused_OnCommand(tonumber(s), 0) end
+                end
+                if view_scope == "take" then
+                    local v = GetTakeView(take)
+                    if v ~= "" then r.MIDIEditor_LastFocused_OnCommand(tonumber(v), 0) end
+                end
+                if grid_scope == "take" then
+                    local g = GetTakeGrid(take)
+                    if g ~= "" then r.MIDIEditor_LastFocused_OnCommand(tonumber(g), 0) end
+                end
+                last_take_ptr = take
             end
         end
     end
@@ -177,14 +235,12 @@ local function loop()
     if settings_visible then
         r.ImGui_PushFont(ctx, font, 0)
 
-        -- Style setup
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 6.0)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 12.0)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 8.0)
 
-        -- Colors setup
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x111111D9)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x333333FF)        
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x444444FF)
@@ -201,7 +257,6 @@ local function loop()
         if visible then
             r.ImGui_SetWindowSize(ctx, WINDOW_WIDTH, 0, r.ImGui_Cond_Always())
 
-            -- Header
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
             r.ImGui_Text(ctx, "TK")
             r.ImGui_PopStyleColor(ctx)
@@ -209,7 +264,6 @@ local function loop()
             r.ImGui_Text(ctx, "MIDI ITEM SHAPE AND VIEW")
             r.ImGui_Separator(ctx)
 
-            -- Close button
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, WINDOW_WIDTH - 25)
             r.ImGui_SetCursorPosY(ctx, 6)
@@ -222,34 +276,68 @@ local function loop()
             end
             r.ImGui_PopStyleColor(ctx, 3)   
 ---------------------------------------------------------
-        r.ImGui_Text(ctx, 'Select shape (per item):')
-        r.ImGui_SameLine(ctx, column_width)
-        r.ImGui_Text(ctx, 'Select view (per track):')
-        for i = 1, math.max(#shapes, #views) do
-
-            if i <= #shapes then
-                if r.ImGui_RadioButton(ctx, shapes[i].name, selected_shape == i-1) then
-                    selected_shape = i-1
-                end
-            end      
-
-            if i <= #views then
-                r.ImGui_SameLine(ctx, column_width)
-                if r.ImGui_RadioButton(ctx, views[i].name, selected_view == i-1) then
-                    selected_view = i-1
-                end
+        r.ImGui_Text(ctx, ('Select shape (per %s):'):format(shape_scope))
+        for i = 1, #shapes do
+            if r.ImGui_RadioButton(ctx, shapes[i].name, selected_shape == i-1) then
+                selected_shape = i-1
             end
         end
-        
-        if r.ImGui_Button(ctx, 'Apply Shape', column_width-15) then
-            ProcessItems(shapes[selected_shape + 1].cmd, false)
+        r.ImGui_Text(ctx, 'Shape scope:')
+        r.ImGui_SameLine(ctx)
+        local sel_track = (shape_scope == 'track')
+        local sel_take  = (shape_scope == 'take')
+        if r.ImGui_RadioButton(ctx, 'Track', sel_track) then
+            shape_scope = 'track'
+            r.SetExtState("TK_MIDI_SHAPE_VIEW", "shape_scope", shape_scope, true)
         end
         r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, 'Apply View', column_width-15) then
-            ProcessItems(views[selected_view + 1].cmd, true)
+        if r.ImGui_RadioButton(ctx, 'Take', sel_take) then
+            shape_scope = 'take'
+            r.SetExtState("TK_MIDI_SHAPE_VIEW", "shape_scope", shape_scope, true)
+        end
+        if r.ImGui_Button(ctx, 'Apply Shape', WINDOW_WIDTH-15) then
+            ProcessItems(shapes[selected_shape + 1].cmd, "shape")
+        end
+
+        r.ImGui_Separator(ctx)
+
+        r.ImGui_Text(ctx, ('Select view (per %s):'):format(view_scope))
+        for i = 1, #views do
+            if r.ImGui_RadioButton(ctx, views[i].name, selected_view == i-1) then
+                selected_view = i-1
+            end
+        end
+        r.ImGui_Text(ctx, 'View scope:')
+        r.ImGui_SameLine(ctx)
+        local v_sel_track = (view_scope == 'track')
+        local v_sel_take  = (view_scope == 'take')
+        if r.ImGui_RadioButton(ctx, 'Track##vscope', v_sel_track) then
+            view_scope = 'track'
+            r.SetExtState("TK_MIDI_SHAPE_VIEW", "view_scope", view_scope, true)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, 'Take##vscope', v_sel_take) then
+            view_scope = 'take'
+            r.SetExtState("TK_MIDI_SHAPE_VIEW", "view_scope", view_scope, true)
+        end
+        if r.ImGui_Button(ctx, 'Apply View', WINDOW_WIDTH-15) then
+            ProcessItems(views[selected_view + 1].cmd, "view")
         end
         
-        r.ImGui_Text(ctx, '\nSelect grid (per track):')
+        r.ImGui_Text(ctx, ('\nSelect grid (per %s):'):format(grid_scope))
+        r.ImGui_Text(ctx, 'Grid scope:')
+        r.ImGui_SameLine(ctx)
+        local g_sel_track = (grid_scope == 'track')
+        local g_sel_take  = (grid_scope == 'take')
+        if r.ImGui_RadioButton(ctx, 'Track##gscope', g_sel_track) then
+            grid_scope = 'track'
+            r.SetExtState("TK_MIDI_SHAPE_VIEW", "grid_scope", grid_scope, true)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, 'Take##gscope', g_sel_take) then
+            grid_scope = 'take'
+            r.SetExtState("TK_MIDI_SHAPE_VIEW", "grid_scope", grid_scope, true)
+        end
         for i = 1, 5 do
             if r.ImGui_RadioButton(ctx, grid_options[i].name, selected_grid == i-1) then
                 selected_grid = i-1
@@ -261,17 +349,17 @@ local function loop()
         end
 
         if r.ImGui_Button(ctx, 'Apply Grid', column_width-15) then
-            ProcessItems(grid_options[selected_grid + 1].cmd, false)
+            ProcessItems(grid_options[selected_grid + 1].cmd, "grid")
         end
-        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_Separator(ctx)
+
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF8C00FF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF9933FF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFFAD66FF)
-        if r.ImGui_Button(ctx, 'Reset All (per track)', column_width-15) then
+        if r.ImGui_Button(ctx, 'Reset All (per track)', WINDOW_WIDTH-15) then
             ResetAllSettings()
         end
         r.ImGui_PopStyleColor(ctx, 3)
-        r.ImGui_Separator(ctx)
 
         if r.ImGui_Button(ctx, monitor_active and 'Stop Monitor' or 'Start Monitor', WINDOW_WIDTH-15) then
             monitor_active = not monitor_active
@@ -298,7 +386,6 @@ end
 
 end
 
--- Start het script
 monitor_active = r.GetExtState("TK_MIDI_SHAPE_VIEW", "monitor_active") == "1"
 settings_visible = true
 SetButtonState(monitor_active and 1 or 0)
@@ -307,7 +394,6 @@ if monitor_active then
     MonitorSettings()
 end
 
--- Cleanup bij afsluiten
 r.atexit(function()
     SetButtonState(0)
 end)

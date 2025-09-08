@@ -231,11 +231,9 @@
     </reapack>
 
     <reapack name="TK_Set selected MIDI item shape and view.lua" type="script" desc="TK_Set selected MIDI item shape and view">
-        <version name="0.2.2" author="TouristKiller" time="2025-08-21T22:20:00Z">
+        <version name="0.3.0" author="TouristKiller" time="2025-09-08T11:45:00Z">
             <changelog><![CDATA[           
-+ Removed toggle script. 
-+ Start stop monitor from settings window
-+ If set to menu butten it wil show if monitor is active or not
++  View, shape and grid can now be set per track or per take
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Set%20selected%20MIDI%20item%20shape%20and%20view.lua</source>
         </version>
