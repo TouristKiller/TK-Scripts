@@ -1,12 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.6.1
+-- @version 1.6.3
 -- @changelog:
 --[[     
-++ Added "Pinned On Top" checkbox to settings - pin favorite plugins to top of lists
-++ Optimized plugin type priority sorting for better performance with large plugin lists
-++ Fixed favorites visibility consistency between main window and browser panel
-++ Fixed Bug in Actions folder 
+++ Pinned plugins now persist and appear on top after restart (including Developer), using type-agnostic matching (VST/VST3/CLAP) and applying startup sorting.
+++ Added setting "Add instruments at top" to place VSTi/VST3i/CLAPi/AUi/LV2i at the top of the FX chain when adding.
 
 ---------------------TODO (sometime in the future ;o) )-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin
@@ -37,6 +35,7 @@ local DedupeByTypePriority
 -- Performance caches
 local favorite_set          = {}
 local pinned_set            = {}
+local pinned_norm_set       = {}
 local plugin_lower_name     = {}
 local normalized_name_cache = {}
 local plugin_type_cache     = {}
@@ -489,6 +488,7 @@ function SetDefaultConfig()
         folder_specific_sizes = {},
         include_x86_bridged = false,
         hide_default_titlebar_menu_items = false,
+        add_instruments_on_top = false, -- new: place instrument FX at the top of the chain when adding
         show_name_in_screenshot_window = true,
         show_name_in_main_window = true,
         clean_plugin_names = false, 
@@ -523,13 +523,13 @@ function SetDefaultConfig()
         screenshot_section_width = screenshot_section_width or 600, 
         use_pagination = true,
         use_masonry_layout = false,
-    show_favorites_on_top = true,
-    show_pinned_on_top = true,
-    show_pinned_overlay = true,
-    show_favorite_overlay = true,
+        show_favorites_on_top = true,
+        show_pinned_on_top = true,
+        show_pinned_overlay = true,
+        show_favorite_overlay = true,
         open_floating_after_adding = false, 
         custom_folders = {},
-    pinned_plugins = {},
+        pinned_plugins = {},
         pinned_subgroups = {},
         pinned_custom_subfolders = {},
         show_custom_folders = true,
@@ -558,11 +558,11 @@ function ClearPerformanceCaches()
     end
 end
 
--- Periodic cache cleanup to prevent memory bloat
+
 local cache_cleanup_counter = 0
 function MaybeClearCaches()
     cache_cleanup_counter = cache_cleanup_counter + 1
-    -- Clear caches every 1000 calls or if they get too large
+    
     if cache_cleanup_counter > 1000 or 
        (normalized_name_cache and #normalized_name_cache > 5000) or
        (plugin_type_cache and #plugin_type_cache > 5000) then
@@ -577,7 +577,6 @@ function SaveConfig()
     if file then
         file:write(json.encode(config))
         file:close()
-        -- Clear caches when config changes
         ClearPerformanceCaches()
     end
 end
@@ -604,6 +603,15 @@ function LoadConfig()
         for _, name in ipairs(config.pinned_plugins) do
             if type(name) == 'string' and name ~= '' then
                 pinned_set[name] = true
+            end
+        end
+        if type(NormalizePluginNameForMatch) == 'function' then
+            pinned_norm_set = {}
+            for name, v in pairs(pinned_set) do
+                if v and type(name) == 'string' then
+                    local k = NormalizePluginNameForMatch(name)
+                    if k ~= '' then pinned_norm_set[k] = true end
+                end
             end
         end
 
@@ -641,6 +649,7 @@ do
             for i = 1, math.min(cap, #current_filtered_fx) do
                 screenshot_search_results[#screenshot_search_results+1] = { name = current_filtered_fx[i] }
             end
+            if type(SortScreenshotResults) == 'function' then SortScreenshotResults() end
         end
     end
     ApplyStartupDedupe()
@@ -816,6 +825,29 @@ function GetPluginType(name)
     return result
 end
 
+-- Determine if a plugin is an instrument (VSTi/VST3i/CLAPi/AUi/LV2i)
+function IsInstrumentPlugin(name)
+    if not name or name == '' then return false end
+    return name:match('^VSTi:')
+        or name:match('^VST3i:')
+        or name:match('^CLAPi:')
+        or name:match('^AUi:')
+        or name:match('^LV2i:')
+        or false
+end
+
+-- Add FX with optional instrument-on-top behavior
+function AddFXToTrack(track, plugin_name)
+    if not track or not plugin_name or plugin_name == '' then return -1 end
+    local dest_index = r.TrackFX_GetCount(track)
+    local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - dest_index)
+    if fx_index and fx_index >= 0 and config and config.add_instruments_on_top and IsInstrumentPlugin(plugin_name) then
+        r.TrackFX_CopyToTrack(track, fx_index, track, 0, true)
+        fx_index = 0
+    end
+    return fx_index or -1
+end
+
 function BuildTypePriorityIndex()
     -- Use cached version if available and config hasn't changed
     if type_priority_cache and config._priority_cache_version == config._current_version then
@@ -913,7 +945,10 @@ function EnsurePinnedPluginsList()
 end
 
 function IsPluginPinned(name)
-    return not not pinned_set[name]
+    if not name or name == '' then return false end
+    if pinned_set[name] then return true end
+    local key = (type(NormalizePluginNameForMatch) == 'function') and NormalizePluginNameForMatch(name) or ''
+    return key ~= '' and pinned_norm_set[key] == true
 end
 
 function PinPlugin(name)
@@ -922,6 +957,11 @@ function PinPlugin(name)
     if not pinned_set[name] then
         pinned_set[name] = true
         table.insert(config.pinned_plugins, name)
+        -- keep normalized pins in sync
+        if type(NormalizePluginNameForMatch) == 'function' then
+            local k = NormalizePluginNameForMatch(name)
+            if k ~= '' then pinned_norm_set[k] = true end
+        end
     SaveConfig()
     if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
     end
@@ -937,6 +977,11 @@ function UnpinPlugin(name)
                     table.remove(config.pinned_plugins, i)
                 end
             end
+        end
+        -- keep normalized pins in sync
+        if type(NormalizePluginNameForMatch) == 'function' then
+            local k = NormalizePluginNameForMatch(name)
+            if k ~= '' then pinned_norm_set[k] = nil end
         end
     SaveConfig()
     if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
@@ -1014,7 +1059,7 @@ function RenderMissingList(missing)
                 if do_add then
                     local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                     if target_track then
-                        r.TrackFX_AddByName(target_track, name, false, -1000 - r.TrackFX_GetCount(target_track))
+                        AddFXToTrack(target_track, name)
                         LAST_USED_FX = name
                         if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                     end
@@ -2020,7 +2065,7 @@ function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 680
+    local window_height = 700
     local column1_width = 10
     local column2_width = 120
     local column3_width = 250
@@ -2199,7 +2244,7 @@ function ShowConfigWindow()
                 config.slider_active_color = r.ImGui_ColorConvertDouble4ToU32(new_slider_active_gray/255, new_slider_active_gray/255, new_slider_active_gray/255, 1)
             end
             r.ImGui_Dummy(ctx, 0, 5)
-            NewSection("MAIN WINDOW (Effects Browser Panel and Dropdown menu as well):")
+            NewSection("OVERALL VIEW OPTIONS:")
             local changed, new_value
             r.ImGui_SetCursorPosX(ctx, column1_width)
             changed, new_value = r.ImGui_Checkbox(ctx, "All Plugins", config.show_all_plugins)
@@ -2255,38 +2300,44 @@ function ShowConfigWindow()
             _, config.show_custom_folders = r.ImGui_Checkbox(ctx, "Custom Folders", config.show_custom_folders)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_Dummy(ctx, 0, 5)
-            r.ImGui_Separator(ctx)
-            r.ImGui_Dummy(ctx, 0, 5)
-         
+             _, config.show_tooltips = r.ImGui_Checkbox(ctx, "Show Tooltips", config.show_tooltips)
+
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.show_tooltips = r.ImGui_Checkbox(ctx, "Show Tooltips", config.show_tooltips)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.add_instruments_on_top = r.ImGui_Checkbox(ctx, "Add instruments at top", config.add_instruments_on_top)
+            r.ImGui_Dummy(ctx, 0, 5)
+
+            NewSection("MAIN WINDOW OPTIONS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.show_name_in_main_window = r.ImGui_Checkbox(ctx, "Show Plugin Names", config.show_name_in_main_window)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Show screenshots in Search", config.show_screenshot_in_search)
-            
-            r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.hideTopButtons = r.ImGui_Checkbox(ctx, "No Top Buttons", config.hideTopButtons)
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
             _, config.hideBottomButtons = r.ImGui_Checkbox(ctx, "No Bottom Buttons", config.hideBottomButtons)
+            
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Show screenshots in Search", config.show_screenshot_in_search)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
-          
-            r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.show_tags = r.ImGui_Checkbox(ctx, "Show Tags", config.show_tags)
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
             _, config.show_notes_widget = r.ImGui_Checkbox(ctx, "Show Notes", config.show_notes_widget)
+          
+
+             r.ImGui_SetCursorPosX(ctx, column1_width)
+             _, config.hideMeter = r.ImGui_Checkbox(ctx, "Hide Meter", config.hideMeter)
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
+            r.ImGui_SameLine(ctx)
+            
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.hideMeter = r.ImGui_Checkbox(ctx, "Hide Meter", config.hideMeter)
-            r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
+
             
             
             r.ImGui_Dummy(ctx, 0, 5)
@@ -3869,7 +3920,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
         end
 
         if not IsX86Bridged(plugin_name) or config.include_x86_bridged then
-            local fx_index = r.TrackFX_AddByName(TRACK, plugin_name, false, -1)
+            local fx_index = AddFXToTrack(TRACK, plugin_name)
             r.TrackFX_Show(TRACK, fx_index, 3)
            
             Wait(function()
@@ -4452,7 +4503,7 @@ function AddPluginToSelectedTracks(plugin_name)
     local track_count = r.CountSelectedTracks(0)
     for i = 0, track_count - 1 do
         local track = r.GetSelectedTrack(0, i)
-        local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - r.TrackFX_GetCount(track))
+    local fx_index = AddFXToTrack(track, plugin_name)
         r.TrackFX_Show(track, fx_index, 2)  
     end
 end
@@ -4461,7 +4512,7 @@ function AddPluginToAllTracks(plugin_name)
     local track_count = r.CountTracks(0)
     for i = 0, track_count - 1 do
         local track = r.GetTrack(0, i)
-        local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - r.TrackFX_GetCount(track))
+    local fx_index = AddFXToTrack(track, plugin_name)
         r.TrackFX_Show(track, fx_index, 2)  
     end
 end
@@ -4861,7 +4912,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                     r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
                 end
                 
-                r.TrackFX_AddByName(new_track, plugin_name, false, -1000)
+                AddFXToTrack(new_track, plugin_name)
                 r.CreateTrackSend(TRACK, new_track)
                 r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name .. " Send", true)
             end
@@ -4869,7 +4920,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
 
         if r.ImGui_MenuItem(ctx, "Add with Multi-Output Setup") then
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                r.TrackFX_AddByName(TRACK, plugin_name, false, -1000)
+                AddFXToTrack(TRACK, plugin_name)
                 
                 local num_outputs = tonumber(plugin_name:match("%((%d+)%s+out%)")) or 0
                 local num_receives = math.floor(num_outputs / 2) - 1
@@ -4980,7 +5031,7 @@ function ShowFXContextMenu(plugin, menu_id)
         if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
             if copied_plugin then
                 local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
-                r.TrackFX_AddByName(track, orig_name, false, -1000)
+                AddFXToTrack(track, orig_name)
             end
         end
 
@@ -5251,7 +5302,7 @@ function SortScreenshotResults()
             -- Partition
             local pinned, favorites, others = {}, {}, {}
             for _, n in ipairs(names) do
-                if pinned_set and pinned_set[n] then
+                if IsPluginPinned and IsPluginPinned(n) then
                     pinned[#pinned+1] = n
                 elseif favorite_set and favorite_set[n] then
                     favorites[#favorites+1] = n
@@ -5455,7 +5506,7 @@ function ShowScreenshotControls()
                     if browser_panel_selected then
                         local pinned, favorites, others = {}, {}, {}
                         for _, p in ipairs(matches) do
-                            if pinned_set and pinned_set[p] then
+                            if IsPluginPinned and IsPluginPinned(p) then
                                 pinned[#pinned+1] = p
                             elseif favorite_set and favorite_set[p] then
                                 favorites[#favorites+1] = p
@@ -5678,8 +5729,7 @@ function DrawFxChains(tbl, path)
                     end
                 else
                     if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                        r.TrackFX_AddByName(TRACK, table.concat({ path, os_separator, item, extension }), false,
-                            -1000 - r.TrackFX_GetCount(TRACK))
+                        AddFXToTrack(TRACK, table.concat({ path, os_separator, item, extension }))
                         if config.close_after_adding_fx then
                             SHOULD_CLOSE_SCRIPT = true
                         end
@@ -5735,8 +5785,7 @@ function DrawFxChains(tbl, path)
                             end
                         else
                             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                r.TrackFX_AddByName(TRACK, table.concat({ path, os_separator, item[j], extension }), false,
-                                    -1000 - r.TrackFX_GetCount(TRACK))
+                                AddFXToTrack(TRACK, table.concat({ path, os_separator, item[j], extension }))
                                 if config.close_after_adding_fx then
                                     SHOULD_CLOSE_SCRIPT = true
                                 end
@@ -5924,7 +5973,7 @@ function DrawBrowserItems(tbl, main_cat_name)
         local favorites = {}
         local others = {}
         for _, fx in ipairs(filtered_fx) do
-            if pinned_set and pinned_set[fx] then
+            if IsPluginPinned and IsPluginPinned(fx) then
                 pinned[#pinned+1] = fx
             elseif favorite_set and favorite_set[fx] then
                 favorites[#favorites+1] = fx
@@ -6706,14 +6755,14 @@ function ShowBrowserPanel()
         -- Extra opties (ongewijzigd)
         if config.show_container then
             if r.ImGui_Selectable(ctx, "CONTAINER") then
-                r.TrackFX_AddByName(TRACK, "Container", false, -1000 - r.TrackFX_GetCount(TRACK))
+                AddFXToTrack(TRACK, "Container")
                 LAST_USED_FX = "Container"
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
         end
         if config.show_video_processor then
             if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
-                r.TrackFX_AddByName(TRACK, "Video processor", false, -1000 - r.TrackFX_GetCount(TRACK))
+                AddFXToTrack(TRACK, "Video processor")
                 LAST_USED_FX = "Video processor"
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
@@ -6835,7 +6884,7 @@ function ShowBrowserPanel()
         if LAST_USED_FX and r.ValidatePtr(TRACK, "MediaTrack*") then
             r.ImGui_Separator(ctx)
             if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
-                r.TrackFX_AddByName(TRACK, LAST_USED_FX, false, -1000 - r.TrackFX_GetCount(TRACK))
+                AddFXToTrack(TRACK, LAST_USED_FX)
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
         end
@@ -7581,7 +7630,7 @@ function DrawMasonryLayout(screenshots)
                     r.ImGui_BeginGroup(ctx)
 
                     local masonry_clicked = r.ImGui_ImageButton(ctx, "masonry_" .. i, texture, display_width, display_height)
-                    if pinned_set and pinned_set[fx.name] then DrawPinnedOverlayAt(item_tlx, item_tly, display_width, display_height) end
+                    if IsPluginPinned and IsPluginPinned(fx.name) then DrawPinnedOverlayAt(item_tlx, item_tly, display_width, display_height) end
                     if favorite_set and favorite_set[fx.name] then DrawFavoriteOverlayAt(item_tlx, item_tly, display_width, display_height) end
 
                     if config.enable_drag_add_fx then
@@ -7614,7 +7663,7 @@ function DrawMasonryLayout(screenshots)
                     if should_add then
                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                         if target_track then
-                            r.TrackFX_AddByName(target_track, fx.name, false, -1000 - r.TrackFX_GetCount(target_track))
+                            AddFXToTrack(target_track, fx.name)
                             LAST_USED_FX = fx.name
                             if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                         end
@@ -8720,7 +8769,7 @@ function ShowScreenshotWindow()
                     local term = browser_search_term:lower()
                     for _, plugin in ipairs(filtered_plugins) do
                         if plugin:lower():find(term, 1, true) then
-                            if pinned_set[plugin] then pinned[#pinned+1] = plugin else others[#others+1] = plugin end
+                            if IsPluginPinned and IsPluginPinned(plugin) then pinned[#pinned+1] = plugin else others[#others+1] = plugin end
                         end
                     end
                     if config.apply_type_priority then
@@ -8783,7 +8832,7 @@ function ShowScreenshotWindow()
                                 if do_add then
                                     local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                     if target_track then
-                                        r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                        AddFXToTrack(target_track, plugin_name)
                                         LAST_USED_FX = plugin_name
                                         if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                                     end
@@ -8825,7 +8874,7 @@ function ShowScreenshotWindow()
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "fav_" .. i, texture, dw, dh)
-                                            if pinned_set and pinned_set[plugin_name] then
+                                            if IsPluginPinned and IsPluginPinned(plugin_name) then
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawPinnedOverlayAt(tlx, tly, brx - tlx, bry - tly)
@@ -8860,7 +8909,7 @@ function ShowScreenshotWindow()
                                             if do_add then
                                                 local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                                 if target_track then
-                                                    local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                                    local fx_index = AddFXToTrack(target_track, plugin_name)
                                                     LAST_USED_FX = plugin_name
                                                     if config.open_floating_after_adding and fx_index >= 0 then
                                                         r.TrackFX_Show(target_track, fx_index, 3)
@@ -8898,7 +8947,7 @@ function ShowScreenshotWindow()
                         local pinned, favorites, regular = {}, {}, {}
                         for _, plugin in ipairs(filtered_plugins) do
                             if GetLowerName(plugin):find(term_l, 1, true) then
-                                if pinned_set[plugin] then
+                                if IsPluginPinned and IsPluginPinned(plugin) then
                                     pinned[#pinned+1] = plugin
                                 elseif favorite_set[plugin] then
                                     favorites[#favorites+1] = plugin
@@ -8935,7 +8984,7 @@ function ShowScreenshotWindow()
                         local pinned, others = {}, {}
                         for _, plugin in ipairs(filtered_plugins) do
                             if GetLowerName(plugin):find(term_l,1,true) then
-                                if pinned_set[plugin] then pinned[#pinned+1] = plugin else others[#others+1] = plugin end
+                                if IsPluginPinned and IsPluginPinned(plugin) then pinned[#pinned+1] = plugin else others[#others+1] = plugin end
                             end
                         end
                         if config.apply_type_priority then
@@ -8984,7 +9033,7 @@ function ShowScreenshotWindow()
                                     local display_name = GetDisplayPluginName(plugin_name)
                                     local stars = GetStarsString(plugin_name)
                                     local prefix = ""
-                                    if config.show_pinned_overlay and pinned_set and pinned_set[plugin_name] then
+                                    if config.show_pinned_overlay and IsPluginPinned and IsPluginPinned(plugin_name) then
                                         prefix = prefix .. "📌 "
                                     end
                                     if config.show_favorite_overlay and favorite_set and favorite_set[plugin_name] then
@@ -9000,7 +9049,7 @@ function ShowScreenshotWindow()
                                     if do_add then
                                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                         if target_track then
-                                            r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                            AddFXToTrack(target_track, plugin_name)
                                             LAST_USED_FX = plugin_name
                                             if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                                         end
@@ -9078,7 +9127,7 @@ function ShowScreenshotWindow()
                                             if do_add then
                                                 local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                                 if target_track then
-                                                    local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                                    local fx_index = AddFXToTrack(target_track, plugin_name)
                                                     LAST_USED_FX = plugin_name
                                                     if config.open_floating_after_adding and fx_index >= 0 then
                                                         r.TrackFX_Show(target_track, fx_index, 3)
@@ -9484,7 +9533,7 @@ function ShowScreenshotWindow()
                                     local display_name = GetDisplayPluginName(plugin_name)
                                     local stars = GetStarsString(plugin_name)
                                     local prefix = ""
-                                    if config.show_pinned_overlay and pinned_set and pinned_set[plugin_name] then
+                                    if config.show_pinned_overlay and IsPluginPinned and IsPluginPinned(plugin_name) then
                                         prefix = prefix .. "📌 "
                                     end
                                     if config.show_favorite_overlay and favorite_set and favorite_set[plugin_name] then
@@ -9502,7 +9551,7 @@ function ShowScreenshotWindow()
                                     if do_add then
                                         local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                         if target_track then
-                                            r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                            AddFXToTrack(target_track, plugin_name)
                                             LAST_USED_FX = plugin_name
                                             if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                                         end
@@ -9553,7 +9602,7 @@ function ShowScreenshotWindow()
                                             if width and height then
                                                 local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                                 local folder_clicked = r.ImGui_ImageButton(ctx, "folder_plugin_" .. i, texture, display_width, display_height)
-                                                if pinned_set and pinned_set[plugin_name] then
+                                                if IsPluginPinned and IsPluginPinned(plugin_name) then
                                                     local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                     local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                     DrawPinnedOverlayAt(tlx, tly, brx - tlx, bry - tly)
@@ -9589,7 +9638,7 @@ function ShowScreenshotWindow()
                                                 if do_add then
                                                     local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                                     if target_track then
-                                                        local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                                        local fx_index = AddFXToTrack(target_track, plugin_name)
                                                         LAST_USED_FX = plugin_name
                                                         if config.open_floating_after_adding and fx_index >= 0 then
                                                             r.TrackFX_Show(target_track, fx_index, 3)
@@ -9645,7 +9694,7 @@ function ShowScreenshotWindow()
                             local display_name = GetDisplayPluginName(fx.name)
                             local stars = GetStarsString(fx.name)
                             local prefix = ""
-                            if config.show_pinned_overlay and pinned_set and pinned_set[fx.name] then
+                            if config.show_pinned_overlay and IsPluginPinned and IsPluginPinned(fx.name) then
                                 prefix = prefix .. "📌 "
                             end
                             if config.show_favorite_overlay and favorite_set and favorite_set[fx.name] then
@@ -9663,7 +9712,7 @@ function ShowScreenshotWindow()
                             if do_add then
                                 local plugin_name = fx.name
                                 if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                    AddFXToTrack(TRACK, plugin_name)
                                     LAST_USED_FX = plugin_name
                                     if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                                 end
@@ -9784,7 +9833,7 @@ function ShowScreenshotWindow()
                                         if do_add then
                                             local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
                                             if target_track then
-                                                local fx_index = r.TrackFX_AddByName(target_track, plugin_name, false, -1000 - r.TrackFX_GetCount(target_track))
+                                                local fx_index = AddFXToTrack(target_track, plugin_name)
                                                 LAST_USED_FX = plugin_name
                                                 if config.open_floating_after_adding and fx_index and fx_index >= 0 then
                                                     r.TrackFX_Show(target_track, fx_index, 3)
@@ -10130,7 +10179,7 @@ end
                         for _, plugin in ipairs(plugins) do
                             local display_name = GetDisplayPluginName(plugin.name)
                             if r.ImGui_Selectable(ctx, display_name .. "  " .. GetStarsString(plugin.name) .. "##search_" .. global_idx, global_idx == ADDFX_Sel_Entry) then
-                                local fx_index = r.TrackFX_AddByName(TRACK, plugin.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                local fx_index = AddFXToTrack(TRACK, plugin.name)
                                 r.ImGui_CloseCurrentPopup(ctx)
                                 LAST_USED_FX = plugin.name
                                 
@@ -10170,7 +10219,7 @@ end
                 for i = 1, #filtered_fx do
                     local search_display = GetDisplayPluginName(filtered_fx[i].name)
                     if r.ImGui_Selectable(ctx, search_display .. "  " .. GetStarsString(filtered_fx[i].name) .. "##search_" .. i, i == ADDFX_Sel_Entry) then
-                    local fx_index = r.TrackFX_AddByName(TRACK, filtered_fx[i].name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                    local fx_index = AddFXToTrack(TRACK, filtered_fx[i].name)
                     r.ImGui_CloseCurrentPopup(ctx)
                     LAST_USED_FX = filtered_fx[i].name
                     
@@ -10210,7 +10259,7 @@ end
     
         if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
             if ADDFX_Sel_Entry and ADDFX_Sel_Entry > 0 and ADDFX_Sel_Entry <= #filtered_fx then
-                local fx_index = r.TrackFX_AddByName(TRACK, filtered_fx[ADDFX_Sel_Entry].name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                local fx_index = AddFXToTrack(TRACK, filtered_fx[ADDFX_Sel_Entry].name)
                 LAST_USED_FX = filtered_fx[ADDFX_Sel_Entry].name
                 
                 -- OPEN FLOATING ALS OPTIE ENABLED IS
@@ -10319,7 +10368,7 @@ function DrawItems(tbl, main_cat_name)
                                 AddFXToItem(plugin.name)
                             else
                                 if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    local fx_index = r.TrackFX_AddByName(TRACK, plugin.name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                    local fx_index = AddFXToTrack(TRACK, plugin.name)
                                     
                                     -- OPEN FLOATING ALS OPTIE ENABLED IS
                                     if config.open_floating_after_adding and fx_index >= 0 then
@@ -10400,7 +10449,7 @@ function DrawItems(tbl, main_cat_name)
                                 AddFXToItem(e.original)
                             else
                                 if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    local fx_index = r.TrackFX_AddByName(TRACK, e.original, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                    local fx_index = AddFXToTrack(TRACK, e.original)
                                     if config.open_floating_after_adding and fx_index >= 0 then
                                         r.TrackFX_Show(TRACK, fx_index, 3)
                                     end
@@ -10430,7 +10479,7 @@ function DrawItems(tbl, main_cat_name)
                                 AddFXToItem(e.original)
                             else
                                 if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    local fx_index = r.TrackFX_AddByName(TRACK, e.original, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                    local fx_index = AddFXToTrack(TRACK, e.original)
                                     if config.open_floating_after_adding and fx_index >= 0 then
                                         r.TrackFX_Show(TRACK, fx_index, 3)
                                     end
@@ -10500,7 +10549,7 @@ function DrawFavorites()
             local fav_display_global = GetDisplayPluginName(fav)
             if r.ImGui_Selectable(ctx, fav_display_global .. "  " .. GetStarsString(fav) .. "##favorites_" .. i) then
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                local fx_index = r.TrackFX_AddByName(TRACK, fav, false, -1000 - r.TrackFX_GetCount(TRACK))
+                local fx_index = AddFXToTrack(TRACK, fav)
                 
                 -- OPEN FLOATING ALS OPTIE ENABLED IS
                 if config.open_floating_after_adding and fx_index >= 0 then
@@ -10842,7 +10891,7 @@ function ShowTrackFX()
                     if r.ImGui_MenuItem(ctx, "Paste Plugin", nil, copied_plugin ~= nil) then
                         if copied_plugin then
                             local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
-                            r.TrackFX_AddByName(TRACK, orig_name, false, -1000)
+                            AddFXToTrack(TRACK, orig_name)
                         end
                     end                   
                     if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
@@ -11269,7 +11318,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                                     AddFXToItem(plugin_name)
                                 else
                                     if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                        local fx_index = r.TrackFX_AddByName(TRACK, plugin_name, false, -1000 - r.TrackFX_GetCount(TRACK))
+                                        local fx_index = AddFXToTrack(TRACK, plugin_name)
                                         
                                         if config.open_floating_after_adding and fx_index >= 0 then
                                             r.TrackFX_Show(TRACK, fx_index, 3)
@@ -11426,8 +11475,7 @@ end
     end
         if config.show_container then
             if r.ImGui_Selectable(ctx, "CONTAINER") then
-                r.TrackFX_AddByName(TRACK, "Container", false,
-                    -1000 - r.TrackFX_GetCount(TRACK))
+                AddFXToTrack(TRACK, "Container")
                 LAST_USED_FX = "Container"
                 if config.close_after_adding_fx then
                     SHOULD_CLOSE_SCRIPT = true
@@ -11436,8 +11484,7 @@ end
         end
         if config.show_video_processor then
             if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
-                r.TrackFX_AddByName(TRACK, "Video processor", false,
-                    -1000 - r.TrackFX_GetCount(TRACK))
+                AddFXToTrack(TRACK, "Video processor")
                 LAST_USED_FX = "Video processor"
                 if config.close_after_adding_fx then
                     SHOULD_CLOSE_SCRIPT = true
@@ -11504,8 +11551,8 @@ end
 
         if LAST_USED_FX and r.ValidatePtr(TRACK, "MediaTrack*") then
             if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
-                r.TrackFX_AddByName(TRACK, LAST_USED_FX, false,
-                    -1000 - r.TrackFX_GetCount(TRACK))
+                AddFXToTrack(TRACK, LAST_USED_FX)
+                   
                 if config.close_after_adding_fx then
                     SHOULD_CLOSE_SCRIPT = true
                 end
@@ -13133,7 +13180,7 @@ if visible then
                 track = r.GetSelectedTrack(0,0) or r.GetTrack(0,0) or r.GetMasterTrack(0)
             end
             if track then
-                local fx_index = r.TrackFX_AddByName(track, dragging_fx_name, false, -1000 - r.TrackFX_GetCount(track))
+                local fx_index = AddFXToTrack(track, dragging_fx_name)
                 LAST_USED_FX = dragging_fx_name
                 if config.open_floating_after_adding and fx_index and fx_index >= 0 then
                     r.TrackFX_Show(track, fx_index, 3)
