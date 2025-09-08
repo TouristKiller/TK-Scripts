@@ -1,5 +1,5 @@
 -- @description TK Automation Item Manager (AIM)
--- @version 0.0.4
+-- @version 0.0.5
 -- @author TouristKiller
 -- @about
 --   Automation Item Manager with visual previews
@@ -1159,6 +1159,12 @@ function DrawMainWindow()
             local mec_changed, mec_value = r.ImGui_Checkbox(ctx, "▶ Move Edit Cursor", move_edit_cursor)
             if mec_changed then
                 move_edit_cursor = mec_value
+                SaveSettings()
+            end
+            
+            local slo_changed, slo_value = r.ImGui_Checkbox(ctx, "Lines Only", show_lines_only)
+            if slo_changed then
+                show_lines_only = slo_value
                 SaveSettings()
             end
             if r.ImGui_ColorButton(ctx, "##curve_color_btn", curve_color, 0, 20, 20) then
