@@ -231,7 +231,7 @@
     </reapack>
 
     <reapack name="TK_Set selected MIDI item shape and view.lua" type="script" desc="TK_Set selected MIDI item shape and view">
-        <version name="0.3.0" author="TouristKiller" time="2025-09-08T11:45:00Z">
+        <version name="0.3.1" author="TouristKiller" time="2025-09-08T12:00:00Z">
             <changelog><![CDATA[           
 +  View, shape and grid can now be set per track or per take
 ]]></changelog>

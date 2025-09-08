@@ -1,6 +1,6 @@
 -- @description TK_Set selected MIDI item shape and view
 -- @author TouristKiller
--- @version 0.3.0
+-- @version 0.3.1
 -- @changelog 
 --[[
 + View, shape and grid can now be set per track or per take
@@ -24,7 +24,7 @@ grid_scope                  = (grid_scope == "take" or grid_scope == "track") an
 local settings_visible      = true
 
 local window_flags          = r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoTitleBar()
-local WINDOW_WIDTH          = 300
+local WINDOW_WIDTH          = 250
 local column_width          = WINDOW_WIDTH / 2
 
 local selected_shape        = 0
@@ -325,6 +325,17 @@ local function loop()
         end
         
         r.ImGui_Text(ctx, ('\nSelect grid (per %s):'):format(grid_scope))
+        for i = 1, 5 do
+            if r.ImGui_RadioButton(ctx, grid_options[i].name, selected_grid == i-1) then
+                selected_grid = i-1
+            end
+            r.ImGui_SameLine(ctx, column_width)
+            if r.ImGui_RadioButton(ctx, grid_options[i+5].name, selected_grid == (i+5)-1) then
+                selected_grid = (i+5)-1
+            end
+        end
+
+        -- Move grid scope selector below the grid options
         r.ImGui_Text(ctx, 'Grid scope:')
         r.ImGui_SameLine(ctx)
         local g_sel_track = (grid_scope == 'track')
@@ -338,17 +349,8 @@ local function loop()
             grid_scope = 'take'
             r.SetExtState("TK_MIDI_SHAPE_VIEW", "grid_scope", grid_scope, true)
         end
-        for i = 1, 5 do
-            if r.ImGui_RadioButton(ctx, grid_options[i].name, selected_grid == i-1) then
-                selected_grid = i-1
-            end
-            r.ImGui_SameLine(ctx, column_width)
-            if r.ImGui_RadioButton(ctx, grid_options[i+5].name, selected_grid == (i+5)-1) then
-                selected_grid = (i+5)-1
-            end
-        end
 
-        if r.ImGui_Button(ctx, 'Apply Grid', column_width-15) then
+        if r.ImGui_Button(ctx, 'Apply Grid', WINDOW_WIDTH-15) then
             ProcessItems(grid_options[selected_grid + 1].cmd, "grid")
         end
         r.ImGui_Separator(ctx)
