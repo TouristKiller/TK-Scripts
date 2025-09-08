@@ -238,6 +238,16 @@
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Set%20selected%20MIDI%20item%20shape%20and%20view.lua</source>
         </version>
     </reapack>
+
+    <reapack name="TK_Paint_Layer.lua" type="script" desc="TK Paint Layer">
+        <version name="0.0.1" author="TouristKiller" time="2025-09-09T10:00:00Z">
+            <changelog><![CDATA[           
+ + Initial release
+ ]]></changelog>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Paint_Layer.lua</source>
+            <source file="paint_json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/paint_json.lua</source>
+        </version>
+    </reapack>
 </category>
 
 <metadata>
