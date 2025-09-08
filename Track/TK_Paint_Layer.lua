@@ -3,31 +3,35 @@
 -- @version 0.0.2
 -- @changelog 
 --[[
-+ 0.0.2
-	+ Added json fallback (paint_json -> json) with user message
-	+ Added js_ReaScriptAPI presence check with instructions
-	+ Prevent silent exit when JSON missing
-+ 0.0.1
-	+ Initial release
+++ testing
 ]]--
 
 -- inspired by an idea from FerroPop
 ----------------------------------------------------------------------------------
 local r                             = reaper
 local SCRIPT_DIR                    = debug.getinfo(1, 'S').source:match('^@?(.*[\\/])') or ''
-package.path                        = SCRIPT_DIR .. '?.lua;' .. package.path
-local ok_json, json = pcall(require, 'paint_json')
-if not ok_json or type(json) ~= 'table' then
-	ok_json, json = pcall(require, 'json')
+-- Load JSON via dofile like other TK scripts (prefer paint_json.lua)
+local json
+do
+	local ok, mod = pcall(dofile, SCRIPT_DIR .. 'paint_json.lua')
+	if ok and type(mod) == 'table' and mod.encode and mod.decode then
+		json = mod
+	else
+		local ok2, mod2 = pcall(dofile, SCRIPT_DIR .. 'json.lua')
+		if ok2 and type(mod2) == 'table' and mod2.encode and mod2.decode then
+			json = mod2
+		end
+	end
 end
-if not ok_json or type(json) ~= 'table' then
-	r.ShowMessageBox('TK Paint Layer: Missing paint_json.lua (JSON library). Reinstall/update via ReaPack.', 'TK Paint Layer', 0)
+if not json then
+	r.ShowMessageBox('TK Paint Layer: Could not load paint_json.lua (or fallback json.lua).', 'TK Paint Layer', 0)
 	return
 end
 if not r.JS_Window_Find then
-	r.ShowMessageBox('TK Paint Layer needs the js_ReaScriptAPI extension.\nInstall via ReaPack (search: js_ReaScriptAPI).', 'TK Paint Layer', 0)
+	r.ShowMessageBox('TK Paint Layer requires js_ReaScriptAPI (install via ReaPack).', 'TK Paint Layer', 0)
 	return
 end
+package.path = r.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
 package.path                        = r.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
 local im                            = require 'imgui' '0.9.3'
 

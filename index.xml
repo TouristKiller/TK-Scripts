@@ -240,18 +240,9 @@
     </reapack>
 
     <reapack name="TK_Paint_Layer.lua" type="script" desc="TK Paint Layer">
-        <version name="0.0.2" author="TouristKiller" time="2025-09-09T00:52:00Z">
+        <version name="0.0.2" author="TouristKiller" time="2025-09-09T12:00:00Z">
             <changelog><![CDATA[           
-+ Added dependency fallback (paint_json -> json)
-+ Added js_ReaScriptAPI check with user guidance
-+ More explicit error messages instead of silent exit
-]]></changelog>
-            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Paint_Layer.lua</source>
-            <source file="paint_json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/paint_json.lua</source>
-        </version>
-        <version name="0.0.1" author="TouristKiller" time="2025-09-09T10:00:00Z">
-            <changelog><![CDATA[           
- + Initial release
++ testing
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Paint_Layer.lua</source>
             <source file="paint_json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/paint_json.lua</source>
