@@ -1,5 +1,5 @@
 -- @description TK Automation Item Manager (AIM)
--- @version 0.0.5
+-- @version 0.0.6
 -- @author TouristKiller
 -- @about
 --   Automation Item Manager with visual previews
@@ -11,6 +11,7 @@
 --   Added Drag&Drop (testing needed!!)
 --   Added color pickers for curve and points
 --   Added buttons for pool and unpool
+--   Added some extra checks and messages
 
 -- THANX TO MPL FOR ALL THE THINGS HE DOES FOR THE REAPER COMMUNITY!! (I Used code inspired by MPL to do the conversions)
 -------------------------------------------------------------------------------------------------------
@@ -35,6 +36,7 @@ end
 
 local ctx = r.ImGui_CreateContext(script_name)
 local automation_items = {}
+local startup_warnings = {}
 
 function VF_CheckReaperVrs(rvrs, showmsg) 
     local vrs_num = r.GetAppVersion()
@@ -49,6 +51,7 @@ end
 local cache_file = script_path .. "automation_cache.json"
 local settings_file = script_path .. "automation_settings.json"
 local automation_folder = r.GetResourcePath() .. "/AutomationItems"
+local automation_folder_exists = false
 
 local preview_width = 120
 local preview_height = 60
@@ -83,6 +86,7 @@ end
 ---------------------------------------------------
 
 function SaveCache()
+    if not json_ok then return end
     local file = io.open(cache_file, "w")
     if file then
         file:write(json.encode(automation_items))
@@ -208,13 +212,14 @@ function IsVolumeEnvelope(envelope)
 end
 
 function LoadCache()
+    if not json_ok then return false end
     local file = io.open(cache_file, "r")
     if file then
         local content = file:read("*all")
         file:close()
         
         local cached_items = json.decode(content)
-        if cached_items and type(cached_items) == "table" then
+        if cached_items and type(cached_items) == "table" and next(cached_items) ~= nil then
             automation_items = cached_items
             
             table.sort(automation_items, function(a, b)
@@ -260,6 +265,7 @@ local function dirname(p)
 end
 local function walk_autoitem_files(root)
     local results = {}
+    -- quick existence probe: if parent doesn't contain root as a subdir, treat as missing
     local function walk(dir)
         local i = 0
         while true do
@@ -282,12 +288,61 @@ local function walk_autoitem_files(root)
     return results
 end
 
+local function AutomationFolderExists()
+    local parent = dirname(automation_folder)
+    local target = basename(automation_folder):lower()
+    if not parent or parent == "" then return false end
+    local j = 0
+    while true do
+        local sub = r.EnumerateSubdirectories(parent, j)
+        if not sub then break end
+        if sub:lower() == target then return true end
+        j = j + 1
+    end
+    return false
+end
+
+local function OpenPathInExplorer(path)
+    local osn = r.GetOS()
+    if osn:match('^Win') then
+        local win = path:gsub('/', '\\')
+        os.execute('explorer /e,"' .. win .. '"')
+    elseif osn:match('^OSX') then
+        os.execute('open "' .. path .. '"')
+    else
+        os.execute('xdg-open "' .. path .. '"')
+    end
+end
+
+local function EnsureAutomationFolderExists()
+    automation_folder_exists = AutomationFolderExists()
+    if automation_folder_exists then return true end
+    local ret = r.ShowMessageBox("AutomationItems folder not found:\n" .. automation_folder .. "\n\nWil je deze nu aanmaken?", script_name, 4)
+    if ret == 6 then -- Yes
+        local ok = r.RecursiveCreateDirectory and (r.RecursiveCreateDirectory(automation_folder, 0) == 1)
+        if ok then
+            automation_folder_exists = true
+            SetFooterMessage("AutomationItems folder aangemaakt")
+            return true
+        else
+            SetFooterMessage("Kon AutomationItems folder niet aanmaken")
+            return false
+        end
+    end
+    return false
+end
+
 ---------------------------------------------------
 -- Automation Item functies
 ---------------------------------------------------
 
 function ScanAutomationItems()
     automation_items = {}
+    automation_folder_exists = AutomationFolderExists()
+    if not automation_folder_exists then
+        SetFooterMessage("AutomationItems folder not found at: " .. automation_folder .. " — save an automation item first or create this folder")
+        return
+    end
     local files = walk_autoitem_files(automation_folder)
     local norm_root = normalize_path(automation_folder)
     for _, full_path in ipairs(files) do
@@ -1516,7 +1571,8 @@ function DrawStatusBar()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 2, 2)
     
     local spacing_x = 4
-    local top_btn_w = math.max(60, math.floor((available_width - spacing_x) / 3))
+    local top_cols = 4
+    local top_btn_w = math.max(60, math.floor((available_width - spacing_x) / top_cols))
     
     if r.ImGui_Button(ctx, "Refresh", top_btn_w, 0) then
         ScanAutomationItems()
@@ -1539,6 +1595,13 @@ function DrawStatusBar()
     if r.ImGui_Button(ctx, "Save", top_btn_w, 0) then
         r.Main_OnCommand(42092, 0)  
         SetFooterMessage("Save automation item command executed")
+    end
+
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Open AI Folder", top_btn_w, 0) then
+        if EnsureAutomationFolderExists() then
+            OpenPathInExplorer(automation_folder)
+        end
     end
 
     local bottom_col_w = math.max(80, math.floor((available_width - spacing_x) / 2))
@@ -1582,8 +1645,19 @@ function Main()
 end
 LoadSettings()
 
+if not json_ok then
+    footer_message = "json_aim.lua not found — cache disabled; scanning filesystem each time"
+    footer_message_time = r.time_precise()
+end
+
+automation_folder_exists = AutomationFolderExists()
+
 if not LoadCache() then
-    ScanAutomationItems()
+    if automation_folder_exists then
+        ScanAutomationItems()
+    else
+        SetFooterMessage("AutomationItems folder not found at: " .. automation_folder .. " — save an automation item first or create this folder")
+    end
 end
 
 Main()

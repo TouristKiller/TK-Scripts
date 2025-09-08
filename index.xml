@@ -162,7 +162,7 @@
     </reapack>
 
     <reapack name="TK_AIM.lua" type="script" desc="TK Automation Item Manager (AIM)">
-    <version name="0.0.5" author="TouristKiller" time="2025-09-08T15:45:00Z">
+    <version name="0.0.6" author="TouristKiller" time="2025-09-08T21:24:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_AIM.lua</source>
     <source file="json_aim.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/json_aim.lua</source>
     </version>
