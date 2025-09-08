@@ -1,13 +1,18 @@
 -- @description TK Automation Item Manager (AIM)
--- @version 0.0.3
+-- @version 0.0.4
 -- @author TouristKiller
 -- @about
 --   Automation Item Manager with visual previews
 -- @changelog:
---   - Initial release
+--   Attempt to make cross platform (Windows/Linux/Mac) by avoiding OS-specific commands (need user feedback on this)
+--   Added insert Automation Item at cursor position (time selection)
+--   Added insert end points (if not present) to avoid issues with some envelopes
+--   Made move edit cursor optional
+--   Added Drag&Drop (testing needed!!)
+--   Added color pickers for curve and points
+--   Added buttons for pool and unpool
 
--- THANX TO MPL FOR ALL THE THINGS HE DOES FOR THE REAPER COMMUNITY!!
--- I Used code inspired by MPL to do the conversions
+-- THANX TO MPL FOR ALL THE THINGS HE DOES FOR THE REAPER COMMUNITY!! (I Used code inspired by MPL to do the conversions)
 -------------------------------------------------------------------------------------------------------
 local r = reaper
 local script_name = "TK AIM"
@@ -35,7 +40,7 @@ function VF_CheckReaperVrs(rvrs, showmsg)
     local vrs_num = r.GetAppVersion()
     vrs_num = tonumber(vrs_num:match('[%d%.]+'))
     if rvrs > vrs_num then 
-        if showmsg then r.MB('Update REAPER to newer version '..'('..rvrs..' or newer)', '', 0) end
+    if showmsg then SetFooterMessage('Update REAPER to newer version ('..rvrs..' or newer)') end
         return
     else
         return true
@@ -47,14 +52,26 @@ local automation_folder = r.GetResourcePath() .. "/AutomationItems"
 
 local preview_width = 120
 local preview_height = 60
+local FOOTER_H = 120  
+local INFO_H = 45     
 
 local enable_loop = false
 local color_scheme = "green_yellow"  
 local show_lines_only = false  
+local move_edit_cursor = false
+
+local curve_color = 0x00FF00FF   
+local points_color = 0xFFFF00FF  
 
 local footer_message = ""
 local footer_message_time = 0
-local footer_message_duration = 3.0  
+local footer_message_duration = 4.0  
+local has_sws = reaper and reaper.BR_GetMouseCursorContext ~= nil
+local is_dragging = false
+local drag_item = nil
+local drag_hover_env = nil
+local drag_hover_pos = nil
+local drag_hover_name = nil
 
 function SetFooterMessage(msg)
     footer_message = msg
@@ -77,7 +94,10 @@ function SaveSettings()
     local settings = {
         enable_loop = enable_loop,
         color_scheme = color_scheme,
-        show_lines_only = show_lines_only
+        show_lines_only = show_lines_only,
+        move_edit_cursor = move_edit_cursor,
+        curve_color = curve_color,
+        points_color = points_color
     }
     
     local file = io.open(settings_file, "w")
@@ -98,6 +118,9 @@ function LoadSettings()
             enable_loop = settings.enable_loop or false
             color_scheme = settings.color_scheme or "green_yellow"
             show_lines_only = settings.show_lines_only or false
+            move_edit_cursor = settings.move_edit_cursor or false
+            if settings.curve_color then curve_color = settings.curve_color end
+            if settings.points_color then points_color = settings.points_color end
             return true
         end
     end
@@ -215,83 +238,96 @@ function LoadCache()
     return false
 end
 
+local dir_sep = package.config:sub(1,1)
+local function path_join(a,b)
+    if a:sub(-1) == '/' or a:sub(-1) == '\\' then return a..b end
+    return a..dir_sep..b
+end
+local function normalize_path(p)
+    local n = p:gsub('\\', '/')
+    if n:sub(-1) == '/' then n = n:sub(1, -2) end
+    return n
+end
+local function basename(p)
+    local name = p:match("([^/\\]+)$")
+    return name or p
+end
+local function dirname(p)
+    local d = p:match("^(.*[/\\])")
+    if not d then return '' end
+    if d:sub(-1) == '/' or d:sub(-1) == '\\' then d = d:sub(1, -2) end
+    return d
+end
+local function walk_autoitem_files(root)
+    local results = {}
+    local function walk(dir)
+        local i = 0
+        while true do
+            local f = r.EnumerateFiles(dir, i)
+            if not f then break end
+            if f:lower():sub(-15) == ".reaperautoitem" then
+                table.insert(results, path_join(dir, f))
+            end
+            i = i + 1
+        end
+        local j = 0
+        while true do
+            local sub = r.EnumerateSubdirectories(dir, j)
+            if not sub then break end
+            walk(path_join(dir, sub))
+            j = j + 1
+        end
+    end
+    walk(root)
+    return results
+end
+
 ---------------------------------------------------
 -- Automation Item functies
 ---------------------------------------------------
 
 function ScanAutomationItems()
     automation_items = {}
-    
-    local handle = io.popen('dir "' .. automation_folder .. '\\*.ReaperAutoItem" /s /b 2>nul')
-    if not handle then
-        SetFooterMessage("Error: Could not scan automation folder")
-        return
-    end
-    
-    local file_count = 0
-    for full_path in handle:lines() do
-        if full_path and full_path ~= "" then
-            file_count = file_count + 1
-
-            local filename = full_path:match("([^\\]+)$")
-         
-            local norm_automation_folder = automation_folder:gsub("/", "\\"):lower()
-            local norm_full_path = full_path:gsub("/", "\\"):lower()
-            
-            local automation_end = norm_full_path:find(norm_automation_folder:gsub("([%-%^%$%(%)%%%.%[%]%*%+%?])", "%%%1"), 1, true)
-            local relative_path = ""
-            local folder_path = ""
-            
-            if automation_end then
-                local start_pos = automation_end + #norm_automation_folder + 1
-                relative_path = full_path:sub(start_pos)
-                folder_path = relative_path:match("^(.*)\\[^\\]+$") or ""
-            end
-            
-            local display_folder = ""
-            if folder_path ~= "" then
-                local first_subfolder = folder_path:match("^([^\\]+)")
-                if first_subfolder then
-                    display_folder = first_subfolder
-                else
-                    display_folder = "Home"
-                end
-            else
-                display_folder = "Home"
-            end
-            
-            local item_data = ParseAutomationFile(full_path)
-            if item_data then
-                item_data.name = filename:gsub("%.ReaperAutoItem$", "")
-                item_data.filename = filename
-                item_data.path = full_path
-                item_data.folder = folder_path
-                item_data.display_folder = display_folder
-                item_data.relative_path = relative_path
-                item_data.preview = GeneratePreview(item_data)
-                
-                table.insert(automation_items, item_data)
-            end
+    local files = walk_autoitem_files(automation_folder)
+    local norm_root = normalize_path(automation_folder)
+    for _, full_path in ipairs(files) do
+        local filename = basename(full_path)
+        local norm_full = normalize_path(full_path)
+        local relative_path = ""
+        local prefix = norm_root .. "/"
+        if norm_full:sub(1, #prefix) == prefix then
+            relative_path = norm_full:sub(#prefix + 1)
+        else
+            relative_path = filename
+        end
+        local folder_path = relative_path:match("^(.*)/[^/]+$") or ""
+        local display_folder = "Home"
+        local first = folder_path:match("^([^/]+)")
+        if first and first ~= "" then display_folder = first end
+        local item_data = ParseAutomationFile(full_path)
+        if item_data then
+            item_data.name = filename:gsub("%.ReaperAutoItem$", "")
+            item_data.filename = filename
+            item_data.path = full_path
+            item_data.folder = folder_path
+            item_data.display_folder = display_folder
+            item_data.relative_path = relative_path
+            item_data.preview = GeneratePreview(item_data)
+            table.insert(automation_items, item_data)
         end
     end
-    
-    handle:close()
-    
     table.sort(automation_items, function(a, b)
         local folder_a = (a.display_folder or "Home"):lower()
         local folder_b = (b.display_folder or "Home"):lower()
-        
         if folder_a ~= folder_b then
             if folder_a == "home" then return true end
             if folder_b == "home" then return false end
             return folder_a < folder_b
         end
-        
         local name_a = (a.name or ""):lower()
         local name_b = (b.name or ""):lower()
         return name_a < name_b
     end)
-    
     SaveCache()
 end
 
@@ -571,7 +607,7 @@ function InsertAutomationItemAtCursor(item_data)
 
     local selected_env = r.GetSelectedEnvelope(0)
     if not selected_env then
-        r.ShowMessageBox("Please select an envelope lane first!", "No Envelope Selected", 0)
+        SetFooterMessage("Please select an envelope lane first")
         return false
     end
 
@@ -596,13 +632,13 @@ end
 function ApplyParsedDataAsEnvelopePoints(item_data, target_position, replace_existing)
     
     if not item_data or not item_data.points or #item_data.points == 0 then
-        r.ShowMessageBox("No valid automation data to apply!", "Invalid Data", 0)
+    SetFooterMessage("No valid automation data to apply")
         return false
     end
     
     local env = r.GetSelectedEnvelope(0)
     if not env then
-        r.ShowMessageBox("Please select an envelope first!", "No Envelope Selected", 0)
+    SetFooterMessage("Please select an envelope first")
         return false
     end
     
@@ -702,7 +738,7 @@ function ApplyParsedDataAsEnvelopePoints(item_data, target_position, replace_exi
                 end
                 
             elseif source_envelope_type == "pan_or_bipolar" then
-                scaled_value = math.abs(point.value)  -- Absolute waarde
+                scaled_value = math.abs(point.value)  
                 
             elseif source_envelope_type == "volume_or_gain" then
                 scaled_value = point.value
@@ -752,13 +788,13 @@ function ApplyParsedDataAsEnvelopePoints(item_data, target_position, replace_exi
     r.UpdateArrange()
     r.Undo_EndBlock("Apply parsed automation as envelope points (" .. points_added .. " points)", -1)
     
-    r.ShowMessageBox("Applied " .. points_added .. " envelope points from parsed data!", "Success", 0)
+    SetFooterMessage("Applied " .. points_added .. " envelope points from parsed data")
     
     return true
 end
 
-function TK_ConvertSelectedEnvelopePointsToAutomationItem()
-    local env = r.GetSelectedEnvelope(0)
+function TK_ConvertSelectedEnvelopePointsToAutomationItem(target_env)
+    local env = target_env or r.GetSelectedEnvelope(0)
     if not env then return false end
     if r.CountEnvelopePoints(env) == 0 then return false end
     
@@ -774,27 +810,27 @@ function TK_ConvertSelectedEnvelopePointsToAutomationItem()
         end
     end
     
-    if has_selected_points and endpos - position > 0 and math.abs(endpos - position) > 0.1 then 
+    if has_selected_points and endpos - position > 0 and math.abs(endpos - position) > 0.01 then 
         r.InsertAutomationItem(env, -1, position, endpos - position)
         return true
     end
     return false
 end
 
-function ApplyAndCreateAutomationItem(item_data)
+function ApplyAndCreateAutomationItem(item_data, target_env, target_time)
     
     if not item_data or not item_data.points or #item_data.points == 0 then
-        r.ShowMessageBox("No valid automation data found!", "Invalid Data", 0)
+    SetFooterMessage("No valid automation data found")
         return false
     end
     
-    local env = r.GetSelectedEnvelope(0)
+    local env = target_env or r.GetSelectedEnvelope(0)
     if not env then
-        r.ShowMessageBox("Please select an envelope lane first!", "No Envelope Selected", 0)
+    SetFooterMessage("Please select an envelope lane first")
         return false
     end
     
-    local cursor_pos = r.GetCursorPosition()
+    local cursor_pos = (target_time ~= nil) and target_time or r.GetCursorPosition()
     local max_time = 0
     for i, point in ipairs(item_data.points) do
         if point.time > max_time then
@@ -864,21 +900,16 @@ function ApplyAndCreateAutomationItem(item_data)
     local selected_count = 0
     for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
         local retval, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
-        if retval and time >= first_time and time <= last_time then  -- INCLUSIEF laatste punt
+        if retval and time >= first_time and time <= last_time then  
             r.SetEnvelopePointEx(env, -1, ptidx, time, value, shape, tension, true, false)
             selected_count = selected_count + 1
          
         end
     end
      
-    local conversion_success = TK_ConvertSelectedEnvelopePointsToAutomationItem()
-    
+    local conversion_success = TK_ConvertSelectedEnvelopePointsToAutomationItem(env)
     if not conversion_success then
-        r.ShowConsoleMsg("conversion failed, trying fallback method...\n")
-        r.Main_OnCommand(42197, 0)  
-        if r.CountAutomationItems(env) == 0 then
-            r.Main_OnCommand(42094, 0)  
-        end
+        SetFooterMessage("Conversion failed (span too short)")
     end
     
     local automation_count_after = r.CountAutomationItems(env)
@@ -949,9 +980,51 @@ function ApplyAndCreateAutomationItem(item_data)
     local final_items = r.CountAutomationItems(env)
 
     local end_position = cursor_pos + corrected_length
-    r.SetEditCurPos(end_position, true, false)
+    if move_edit_cursor then r.SetEditCurPos(end_position, true, false) end
     
     return true
+end
+
+---------------------------------------------------
+-- Drag & Drop (requires SWS for context)
+---------------------------------------------------
+function HandleDragAndDrop()
+    if not is_dragging or not drag_item then return end
+    if has_sws then
+        r.BR_GetMouseCursorContext()
+        local env = r.BR_GetMouseCursorContext_Envelope()
+        local pos = r.BR_GetMouseCursorContext_Position and r.BR_GetMouseCursorContext_Position() or nil
+        if env and pos then
+            drag_hover_env = env
+            drag_hover_pos = pos
+            local ok, name = r.GetEnvelopeName(env)
+            drag_hover_name = ok and name or nil
+        end
+    end
+    if r.ImGui_IsMouseReleased(ctx, r.ImGui_MouseButton_Left()) then
+        local placed = false
+        if has_sws then
+            r.BR_GetMouseCursorContext()
+            local env = r.BR_GetMouseCursorContext_Envelope() or drag_hover_env
+            local pos = (r.BR_GetMouseCursorContext_Position and r.BR_GetMouseCursorContext_Position()) or drag_hover_pos
+            if env and pos then
+                ApplyAndCreateAutomationItem(drag_item, env, pos)
+                placed = true
+            end
+        end
+        if not placed then
+            if not has_sws then
+                SetFooterMessage("Drag&Drop needs SWS extension installed")
+            else
+                SetFooterMessage("Drop on an envelope lane to place item")
+            end
+        end
+        is_dragging = false
+        drag_item = nil
+        drag_hover_env = nil
+        drag_hover_pos = nil
+        drag_hover_name = nil
+    end
 end
 
 function InsertActualAutomationItem(item_data)  
@@ -962,7 +1035,7 @@ function InsertActualAutomationItem(item_data)
     
     local selected_env = r.GetSelectedEnvelope(0)
     if not selected_env then
-        r.ShowMessageBox("Please select an envelope lane first!", "No Envelope Selected", 0)
+    SetFooterMessage("Please select an envelope lane first")
         return false
     end
     
@@ -973,7 +1046,7 @@ function InsertActualAutomationItem(item_data)
     
     local success = false
 
-    r.SetEditCurPos(cursor_pos, true, false)
+    if move_edit_cursor then r.SetEditCurPos(cursor_pos, true, false) end
   
     local ai_idx = r.InsertAutomationItem(selected_env, -1, cursor_pos, item_data.srclen or 1.0)
     if ai_idx >= 0 then
@@ -984,19 +1057,11 @@ function InsertActualAutomationItem(item_data)
     if success then
         r.UpdateArrange()
         r.Undo_EndBlock("Insert automation item: " .. (item_data.name or "Unknown"), -1)
-        r.ShowMessageBox("Basic automation item created!\n\nNote: Source data loading is limited by REAPER API.\nFor full functionality, use 'Load as Envelope Points' instead.", "Partial Success", 0)
+        SetFooterMessage("Basic automation item created; for full source data use 'Load as Envelope Points'")
         return true
     else
         r.Undo_EndBlock()
-
- 
-        r.ShowMessageBox("Automation item loading via API is limited.\n\n" ..
-                        "Recommended approach:\n" ..
-                        "1. Use 'Load as Envelope Points' (right-click menu)\n" ..
-                        "2. This creates the exact same automation curve\n" ..
-                        "3. Then optionally convert to automation item\n\n" ..
-                        "Or manually load from:\n" .. item_data.path, 
-                        "API Limitation", 0)
+        SetFooterMessage("Automation item loading via API is limited; use 'Load as Envelope Points' or load from: " .. (item_data.path or ""))
         return false
     end
 end
@@ -1004,12 +1069,12 @@ end
 function ConvertSelectedEnvelopePointsToAutomationItem()
     local env = r.GetSelectedEnvelope(0)
     if not env then 
-        r.ShowMessageBox("Please select an envelope first!", "No Envelope Selected", 0)
+    SetFooterMessage("Please select an envelope first")
         return false
     end
     
     if r.CountEnvelopePoints(env) == 0 then 
-        r.ShowMessageBox("No envelope points found!", "No Points", 0)
+    SetFooterMessage("No envelope points found")
         return false
     end
     
@@ -1026,7 +1091,7 @@ function ConvertSelectedEnvelopePointsToAutomationItem()
     end
     
     if selected_count == 0 then
-        r.ShowMessageBox("Please select envelope points first!", "No Points Selected", 0)
+        SetFooterMessage("Please select envelope points first")
         return false
     end
     
@@ -1034,11 +1099,10 @@ function ConvertSelectedEnvelopePointsToAutomationItem()
         r.InsertAutomationItem(env, -1, position, endpos - position)
         
         ScanAutomationItems()
-        
-        r.ShowMessageBox("Automation item created from " .. selected_count .. " envelope points!", "Success", 0)
+        SetFooterMessage("Automation item created from " .. selected_count .. " envelope points")
         return true
     else
-        r.ShowMessageBox("Selected points span is too small (< 0.1s)!", "Invalid Selection", 0)
+        SetFooterMessage("Selected points span is too small (< 0.1s)")
         return false
     end
 end
@@ -1048,19 +1112,19 @@ end
 ---------------------------------------------------
 
 function DrawMainWindow()
-    local window_flags = r.ImGui_WindowFlags_None()
+    local window_flags = r.ImGui_WindowFlags_NoScrollbar() + r.ImGui_WindowFlags_NoScrollWithMouse()
     r.ImGui_SetNextWindowSize(ctx, 800, 600, r.ImGui_Cond_FirstUseEver())
     
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBg(), 0x000000FF)          -- Zwarte titelbar
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBgActive(), 0x000000FF)    -- Zwarte titelbar (actief)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBgCollapsed(), 0x000000FF) -- Zwarte titelbar (ingeklapt)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBg(), 0x000000FF)          
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBgActive(), 0x000000FF)   
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBgCollapsed(), 0x000000FF) 
     
     local visible, open = r.ImGui_Begin(ctx, script_name, true, window_flags)
     
     if visible then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x444444FF)        -- Donkerder grijs
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x555555FF)  -- Donkerder hover
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x333333FF)   -- Donkerder active
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x444444FF)      
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x555555FF)  
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x333333FF)  
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 8.0)
         
         r.ImGui_Text(ctx, "Automation Items: " .. #automation_items)
@@ -1092,40 +1156,41 @@ function DrawMainWindow()
                 SaveSettings()
             end
             
-            r.ImGui_Text(ctx, "🎨 Preview Colors:")
-            if r.ImGui_RadioButton(ctx, "🟢 Green/Yellow", color_scheme == "green_yellow") then
-                color_scheme = "green_yellow"
+            local mec_changed, mec_value = r.ImGui_Checkbox(ctx, "▶ Move Edit Cursor", move_edit_cursor)
+            if mec_changed then
+                move_edit_cursor = mec_value
                 SaveSettings()
             end
-            if r.ImGui_RadioButton(ctx, "🔵 Blue/White", color_scheme == "blue_white") then
-                color_scheme = "blue_white"
-                SaveSettings()
+            if r.ImGui_ColorButton(ctx, "##curve_color_btn", curve_color, 0, 20, 20) then
+                r.ImGui_OpenPopup(ctx, "curve_color_picker")
             end
-            if r.ImGui_RadioButton(ctx, "⚪ Pure White", color_scheme == "pure_white") then
-                color_scheme = "pure_white"
-                SaveSettings()
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Line")
+            if r.ImGui_BeginPopup(ctx, "curve_color_picker") then
+                local ok, col = r.ImGui_ColorPicker4(ctx, "##curve_picker", curve_color, r.ImGui_ColorEditFlags_NoSidePreview())
+                if ok then
+                    curve_color = col
+                    SaveSettings()
+                end
+                r.ImGui_EndPopup(ctx)
             end
-            
-            local lines_changed, lines_value = r.ImGui_Checkbox(ctx, "📏 Lines Only", show_lines_only)
-            if lines_changed then
-                show_lines_only = lines_value
-                SaveSettings()
+            r.ImGui_Spacing(ctx)
+            if r.ImGui_ColorButton(ctx, "##points_color_btn", points_color, 0, 20, 20) then
+                r.ImGui_OpenPopup(ctx, "points_color_picker")
             end
-            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Dots")
+            if r.ImGui_BeginPopup(ctx, "points_color_picker") then
+                local ok2, col2 = r.ImGui_ColorPicker4(ctx, "##points_picker", points_color, r.ImGui_ColorEditFlags_NoSidePreview())
+                if ok2 then
+                    points_color = col2
+                    SaveSettings()
+                end
+                r.ImGui_EndPopup(ctx)
+            end
             r.ImGui_Separator(ctx)
-            
-            if r.ImGui_MenuItem(ctx, "🔧 Preferences") then
-                r.ShowMessageBox("Settings feature coming soon!", "Settings", 0)
-            end
-            
-            if r.ImGui_MenuItem(ctx, "📊 Statistics") then
-                r.ShowMessageBox("Statistics feature coming soon!", "Statistics", 0)
-            end
-            
-            r.ImGui_Separator(ctx)
-            
             if r.ImGui_MenuItem(ctx, "ℹ️ About") then
-                r.ShowMessageBox("TK Automation Item Manager\nVersion 1.0.0\nBy TouristKiller", "About", 0)
+                SetFooterMessage("TK Automation Item Manager - Version 0.0.4")
             end
             
             r.ImGui_EndPopup(ctx)
@@ -1133,11 +1198,14 @@ function DrawMainWindow()
         
         r.ImGui_Separator(ctx)
 
-        if #automation_items > 0 then
-            DrawItemsGrid()
-        else
-            r.ImGui_TextWrapped(ctx, "No automation items found.")
-            r.ImGui_TextWrapped(ctx, "Create some automation items in REAPER first, then click Refresh.")
+        if r.ImGui_BeginChild(ctx, "ItemsScroll", 0, -FOOTER_H) then
+            if #automation_items > 0 then
+                DrawItemsGrid()
+            else
+                r.ImGui_TextWrapped(ctx, "No automation items found.")
+                r.ImGui_TextWrapped(ctx, "Create some automation items in REAPER first, then click Refresh.")
+            end
+            r.ImGui_EndChild(ctx)
         end
 
         DrawStatusBar()
@@ -1180,8 +1248,11 @@ function DrawItemsGrid()
             if r.ImGui_InvisibleButton(ctx, "item_" .. i, preview_width, preview_height) then
                 ApplyAndCreateAutomationItem(item)
             end
+            if r.ImGui_IsItemActive(ctx) and r.ImGui_IsMouseDragging(ctx, r.ImGui_MouseButton_Left(), 5.0) then
+                is_dragging = true
+                drag_item = item
+            end
             
-            -- Rechtsklik context menu
             if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
                 r.ImGui_OpenPopup(ctx, "context_menu_" .. i)
             end
@@ -1218,6 +1289,12 @@ function DrawItemsGrid()
                 r.ImGui_EndTooltip(ctx)
             end
             
+            if is_dragging and drag_item == item then
+                r.ImGui_BeginTooltip(ctx)
+                r.ImGui_Text(ctx, "Drop on an envelope lane in Arrange")
+                r.ImGui_EndTooltip(ctx)
+            end
+
             r.ImGui_Text(ctx, item.name or "Unknown")
             
             if item.display_folder then
@@ -1245,54 +1322,48 @@ end
 
 function DeleteAutomationItem(item, index)
     if not item or not item.path then
-        r.ShowMessageBox("Cannot delete: invalid item data", "Error", 0)
+        SetFooterMessage("Cannot delete: invalid item data")
         return
     end
-    
-    local filename = item.filename or "Unknown"
-    local result = r.ShowMessageBox(
-        "Are you sure you want to delete:\n\n" .. filename .. "\n\nThis action cannot be undone!",
-        "Confirm Delete", 4 
-    )
-    if result == 6 then  
-        local success = os.remove(item.path)
-        if success then
-
-            table.remove(automation_items, index)
-            
-            SaveCache()
-            
-            r.ShowMessageBox("Successfully deleted: " .. filename, "Deleted", 0)
-        else
-            r.ShowMessageBox("Failed to delete file:\n" .. item.path, "Delete Error", 0)
-        end
+    local ok, err = os.remove(item.path)
+    if ok then
+        table.remove(automation_items, index)
+        SaveCache()
+        SetFooterMessage("Deleted: " .. (item.filename or ""))
+    else
+        SetFooterMessage("Failed to delete: " .. (item.path or ""))
     end
 end
 
 function ShowItemInExplorer(item)
     if not item or not item.path then
-        r.ShowMessageBox("Cannot show: invalid item path", "Error", 0)
+    SetFooterMessage("Cannot show: invalid item path")
         return
     end
-    local command = 'explorer /select,"' .. item.path .. '"'
-    os.execute(command)
+    local osn = r.GetOS()
+    if osn:match('^Win') then
+        os.execute('explorer /select,"' .. item.path .. '"')
+    elseif osn:match('^OSX') then
+        os.execute('open -R "' .. item.path .. '"')
+    else
+        local dir = dirname(item.path)
+        if dir == '' then dir = '.' end
+        os.execute('xdg-open "' .. dir .. '"')
+    end
 end
 
 function CopyItemPath(item)
     if not item or not item.path then
-        r.ShowMessageBox("Cannot copy: invalid item path", "Error", 0)
+        SetFooterMessage("Cannot copy: invalid item path")
         return
     end
-    
-    local command = 'echo "' .. item.path .. '" | clip'
-    os.execute(command)
-    
-    r.ShowMessageBox("Path copied to clipboard!", "Copied", 0)
+    r.ImGui_SetClipboardText(ctx, item.path)
+    SetFooterMessage("Path copied to clipboard")
 end
 
 function RenameAutomationItem(item, index)
     if not item or not item.path then
-        r.ShowMessageBox("Cannot rename: invalid item data", "Error", 0)
+    SetFooterMessage("Cannot rename: invalid item data")
         return
     end
     
@@ -1308,51 +1379,38 @@ function RenameAutomationItem(item, index)
         local file = io.open(new_path, "r")
         if file then
             file:close()
-            r.ShowMessageBox("File already exists:\n" .. new_filename, "Rename Error", 0)
+            SetFooterMessage("File already exists: " .. new_filename)
             return
         end
         
-        local old_path_quoted = '"' .. item.path .. '"'
-        local new_path_quoted = '"' .. new_path .. '"'
-        local command = 'Move-Item -Path ' .. old_path_quoted .. ' -Destination ' .. new_path_quoted
-        
-        local result = os.execute('powershell -Command "' .. command .. '"')
-        
-        local renamed_file = io.open(new_path, "r")
-        if renamed_file then
-            renamed_file:close()
-            
+        local ok, err = os.rename(item.path, new_path)
+        if ok then
             automation_items[index].name = new_name
             automation_items[index].filename = new_filename
             automation_items[index].path = new_path
-            
             table.sort(automation_items, function(a, b)
                 local folder_a = (a.display_folder or "Home"):lower()
                 local folder_b = (b.display_folder or "Home"):lower()
-                
                 if folder_a ~= folder_b then
                     if folder_a == "home" then return true end
                     if folder_b == "home" then return false end
                     return folder_a < folder_b
                 end
-                
                 local name_a = (a.name or ""):lower()
                 local name_b = (b.name or ""):lower()
                 return name_a < name_b
             end)
-            
             SaveCache()
-            
-            r.ShowMessageBox("Successfully renamed to:\n" .. new_filename, "Renamed", 0)
+            SetFooterMessage("Successfully renamed to: " .. new_filename)
         else
-            r.ShowMessageBox("Failed to rename file:\n" .. old_filename, "Rename Error", 0)
+            SetFooterMessage("Failed to rename file: " .. old_filename)
         end
     end
 end
 
 function RenameAutomationItem(item, index)
     if not item or not item.path then
-        r.ShowMessageBox("Cannot rename: invalid item data", "Error", 0)
+    SetFooterMessage("Cannot rename: invalid item data")
         return
     end
     
@@ -1370,29 +1428,19 @@ function RenameAutomationItem(item, index)
         local file = io.open(new_path, "r")
         if file then
             file:close()
-            r.ShowMessageBox("File already exists:\n" .. new_filename, "Rename Error", 0)
+            SetFooterMessage("File already exists: " .. new_filename)
             return
         end
         
-        local old_path_quoted = '"' .. item.path .. '"'
-        local new_path_quoted = '"' .. new_path .. '"'
-        local command = 'Move-Item -Path ' .. old_path_quoted .. ' -Destination ' .. new_path_quoted
-        
-        local result = os.execute('powershell -Command "' .. command .. '"')
-
-        local renamed_file = io.open(new_path, "r")
-        if renamed_file then
-            renamed_file:close()
-            
+        local ok, err = os.rename(item.path, new_path)
+        if ok then
             automation_items[index].name = new_name
             automation_items[index].filename = new_filename
             automation_items[index].path = new_path
-
             SaveCache()
-            
-            r.ShowMessageBox("Successfully renamed to:\n" .. new_filename, "Renamed", 0)
+            SetFooterMessage("Successfully renamed to: " .. new_filename)
         else
-            r.ShowMessageBox("Failed to rename file:\n" .. old_filename, "Rename Error", 0)
+            SetFooterMessage("Failed to rename file: " .. old_filename)
         end
     end
 end
@@ -1402,87 +1450,76 @@ end
 ---------------------------------------------------
 
 function GetPreviewColors()
+    local bg, br
     if color_scheme == "blue_white" then
-        return {
-            curve = 0x4DAFB2FF,      -- Lichtblauw voor curve
-            points = 0xFFFFFFFF,     -- Wit voor punten
-            background = 0x1A1A2EFF, -- Donkerblauw background
-            border = 0x4DAFB2FF      -- Lichtblauw border
-        }
+        bg, br = 0x1A1A2EFF, 0x4DAFB2FF
     elseif color_scheme == "pure_white" then
-        return {
-            curve = 0xFFFFFFFF,      -- Wit voor curve
-            points = 0xFFFFFFFF,     -- Wit voor punten
-            background = 0x111111FF, -- Zeer donkere background voor contrast
-            border = 0x888888FF      -- Lichtgrijs border
-        }
-    else -- green_yellow (default)
-        return {
-            curve = 0x00FF00FF,      -- Groen voor curve
-            points = 0xFFFF00FF,     -- Geel voor punten  
-            background = 0x222222FF, -- Donkergrijs background
-            border = 0x666666FF      -- Grijs border
-        }
+        bg, br = 0x111111FF, 0x888888FF
+    else
+        bg, br = 0x222222FF, 0x666666FF
     end
+    return {
+        curve = curve_color,
+        points = points_color,
+        background = bg,
+        border = br
+    }
 end
 
 function DrawStatusBar()
-    local window_height = r.ImGui_GetWindowHeight(ctx)
-    local cursor_y = r.ImGui_GetCursorPosY(ctx)
-
-    r.ImGui_SetCursorPosY(ctx, window_height - 90)
-    
+    if not r.ImGui_BeginChild(ctx, "Footer", -1, FOOTER_H) then return end
     r.ImGui_Separator(ctx)
-
-    local env = r.GetSelectedEnvelope(0)
-    if env then
-        local retval, env_name = r.GetEnvelopeName(env)
-        local env_type = GetEnvelopeType(env)
-        
-        r.ImGui_Text(ctx, "Selected envelope: " .. (env_name or "Unknown"))
-        r.ImGui_SameLine(ctx)
-        
-        if env_type == "volume" then
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4400FF)  
-            r.ImGui_Text(ctx, "⚠️ [Volume]")
-            r.ImGui_PopStyleColor(ctx)
+    if r.ImGui_BeginChild(ctx, "FooterInfo", -1, INFO_H) then
+        local env = r.GetSelectedEnvelope(0)
+        if env then
+            local retval, env_name = r.GetEnvelopeName(env)
+            local env_type = GetEnvelopeType(env)
+            r.ImGui_Text(ctx, "Selected envelope: " .. (env_name or "Unknown"))
+            r.ImGui_SameLine(ctx)
+            if env_type == "volume" then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4400FF)
+                r.ImGui_Text(ctx, "⚠️ [Volume]")
+                r.ImGui_PopStyleColor(ctx)
+            else
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00FF00FF)
+                r.ImGui_Text(ctx, "✓ [" .. (env_type or "unknown") .. " - OK]")
+                r.ImGui_PopStyleColor(ctx)
+            end
         else
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00FF00FF) 
-            r.ImGui_Text(ctx, "✓ [" .. (env_type or "unknown") .. " - OK]")
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+            r.ImGui_Text(ctx, "No envelope selected - Select envelope lane first")
             r.ImGui_PopStyleColor(ctx)
         end
-    else
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF) 
-        r.ImGui_Text(ctx, "No envelope selected - Select envelope lane first")
-        r.ImGui_PopStyleColor(ctx)
+        if footer_message ~= "" and r.time_precise() - footer_message_time < footer_message_duration then
+            r.ImGui_Spacing(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00AAFFFF)
+            r.ImGui_TextWrapped(ctx, "ℹ️ " .. footer_message)
+            r.ImGui_PopStyleColor(ctx)
+        end
+        r.ImGui_EndChild(ctx)
     end
-    
-    if footer_message ~= "" and r.time_precise() - footer_message_time < footer_message_duration then
-        r.ImGui_Spacing(ctx)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00AAFFFF)  
-        r.ImGui_Text(ctx, "ℹ️ " .. footer_message)
-        r.ImGui_PopStyleColor(ctx)
-    end
-    
-    r.ImGui_Spacing(ctx)
     r.ImGui_Separator(ctx)
     
-        local available_width = r.ImGui_GetContentRegionAvail(ctx)
-    local button_width = (available_width - 15) / 3 
+    local available_width = r.ImGui_GetContentRegionAvail(ctx)
     
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x444444FF)      
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x555555FF)  
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x333333FF)   
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 8.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(),2.0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 2, 2)
     
-    if r.ImGui_Button(ctx, "Refresh", button_width, 0) then
+    local spacing_x = 4
+    local top_btn_w = math.max(60, math.floor((available_width - spacing_x) / 3))
+    
+    if r.ImGui_Button(ctx, "Refresh", top_btn_w, 0) then
         ScanAutomationItems()
         SetFooterMessage("Automation items refreshed! Found " .. #automation_items .. " items")
     end
     
     r.ImGui_SameLine(ctx)
 
-    if r.ImGui_Button(ctx, "Convert Points", button_width, 0) then
+    if r.ImGui_Button(ctx, "Convert Points", top_btn_w, 0) then
         local success = ConvertSelectedEnvelopePointsToAutomationItem()
         if success then
             SetFooterMessage("Successfully converted envelope points to automation item")
@@ -1493,13 +1530,36 @@ function DrawStatusBar()
     
     r.ImGui_SameLine(ctx)
 
-    if r.ImGui_Button(ctx, "Save AI", button_width, 0) then
+    if r.ImGui_Button(ctx, "Save", top_btn_w, 0) then
         r.Main_OnCommand(42092, 0)  
         SetFooterMessage("Save automation item command executed")
     end
+
+    local bottom_col_w = math.max(80, math.floor((available_width - spacing_x) / 2))
+
+    if r.ImGui_Button(ctx, "Insert New", bottom_col_w, 0) then
+        r.Main_OnCommand(42082, 0)
+        SetFooterMessage("Inserted automation item")
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Edge points", bottom_col_w, 0) then
+        r.Main_OnCommand(42209, 0)
+        SetFooterMessage("Added edge points")
+    end
     
-    r.ImGui_PopStyleVar(ctx, 1)
+    if r.ImGui_Button(ctx, "Pool (duplicate)", bottom_col_w, 0) then
+        r.Main_OnCommand(42085, 0)
+        SetFooterMessage("Pooled duplicate created")
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Unpool (sel)", bottom_col_w, 0) then
+        r.Main_OnCommand(42084, 0)
+        SetFooterMessage("Unpooled selected item(s)")
+    end
+    
+    r.ImGui_PopStyleVar(ctx, 3)
     r.ImGui_PopStyleColor(ctx, 3)
+    r.ImGui_EndChild(ctx)
 end
 
 ---------------------------------------------------
@@ -1508,6 +1568,7 @@ end
 
 function Main()
     local open = DrawMainWindow()
+    HandleDragAndDrop()
     
     if open then
         r.defer(Main)
