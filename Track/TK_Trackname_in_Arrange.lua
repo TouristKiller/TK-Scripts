@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.4
+-- @version 0.9.5
 -- @changelog 
 --[[
-+ Bugfix: no longer crashes when no track is selected
++ Set track name length and FX name length to be independent
 ]]--
 
 local r                  = reaper
@@ -29,9 +29,6 @@ local hasDrawingFocusBeenHandled = false
 
 local color_cache        = {}
 local cached_bg_color    = nil
-
---[[local profiler = dofile(reaper.GetResourcePath() .. '/Scripts/ReaTeam Scripts/Development/cfillion_Lua profiler.lua')
-reaper.defer = profiler.defer]]--
 
 local flags              = r.ImGui_WindowFlags_NoTitleBar() |
                            r.ImGui_WindowFlags_NoResize() |
@@ -84,7 +81,6 @@ end
 local function handleDrawingFocus()
     if hasDrawingFocusBeenHandled then return end
     local windowsToFocus = {}
-    -- Check all top-level windows
     local arr = r.new_array({}, 1024)
     local ret = r.JS_Window_ArrayAllTop(arr)
     if ret >= 1 then
@@ -93,11 +89,10 @@ local function handleDrawingFocus()
             local hwnd = r.JS_Window_HandleFromAddress(childs[j])
             if r.JS_Window_IsVisible(hwnd) then
                 local className = r.JS_Window_GetClassName(hwnd)
-                -- Capture all REAPER windows
-                if className:match("^REAPER") or  -- Captures all REAPER* classes
-                className == "#32770" or       -- Captures all native dialogs
-                className:match("Lua_LICE") or -- Captures all Lua script windows
-                className:match("^WDL")        -- Captures all WDL components
+                if className:match("^REAPER") or  
+                className == "#32770" or       
+                className:match("Lua_LICE") or 
+                className:match("^WDL")       
                 then
                     table.insert(windowsToFocus, hwnd)
                 end
@@ -189,7 +184,7 @@ local default_settings              = {
     gradient_end_alpha              = 0.0,
     track_name_length               = 1,
     fixed_label_length              = 10,
-    fixed_length_padding_char       = "·",  -- Use middot for better visual consistency
+    fixed_length_padding_char       = "·",  
     all_text_enabled                = true,
     folder_border                   = false,
     folder_border_left              = true,
@@ -230,6 +225,8 @@ local default_settings              = {
     text_hover_hide                 = false,
     text_hover_enabled              = false,
     auto_center                     = false,
+    fx_name_length                  = 1,
+    fx_fixed_label_length           = 10,
 }
 
 local settings = {}
@@ -267,20 +264,18 @@ end
 if old_text_size ~= settings.text_size then CreateFonts()end 
 
 function GetTextColor(track, is_child, is_parent_label)
-    -- Direct witte tekst voor parent labels
     if is_parent_label then
         if settings.show_label then
-            return 0xFFFFFFFF -- Wit bij label aan
+            return 0xFFFFFFFF 
         else
-            -- Gebruik gekozen tekstkleur bij label uit
             if settings.color_mode == 1 then
-                return 0xFFFFFFFF -- Wit
+                return 0xFFFFFFFF 
             elseif settings.color_mode == 2 then
-                return 0x000000FF -- Zwart
+                return 0x000000FF 
             elseif settings.color_mode == 3 then
                 local track_color = r.GetTrackColor(track)
                 return track_color == 0 and 0xFFFFFFFF or GetCachedColor(track_color, 1.0)
-            else -- Complementair
+            else 
                 local track_color = r.GetTrackColor(track)
                 if track_color == 0 then return 0xFFFFFFFF end
                 
@@ -489,9 +484,9 @@ function LoadPreset(name)
         end
         
         if settings.custom_colors_enabled then
-            UpdateGridColors()    -- Direct updaten van grid kleuren
+            UpdateGridColors()   
             UpdateArrangeBG()
-    	    UpdateTrackColors() -- Direct updaten van achtergrond kleuren
+    	    UpdateTrackColors() 
         end
         
         if old_text_size ~= settings.text_size then
@@ -582,7 +577,6 @@ function ToggleColors()
         UpdateArrangeBG()
         UpdateTrackColors()
     else
-        -- Reset colors
         reaper.SetThemeColor("col_gridlines", -1, 0)
         reaper.SetThemeColor("col_gridlines2", -1, 0)
         reaper.SetThemeColor("col_gridlines3", -1, 0)
@@ -594,7 +588,6 @@ function ToggleColors()
         reaper.SetThemeColor("col_tr1_divline", -1, 0)
         reaper.SetThemeColor("col_tr2_divline", -1, 0)
         
-        -- Restore grid divide state if it was on
         if grid_divide_state == 1 then
             r.Main_OnCommand(42331, 0)
         end
@@ -640,7 +633,7 @@ function BlendColor(track, blend, mode)
     local nb_r, nb_g, nb_b = normalize(base_r), normalize(base_g), normalize(base_b)
     local nbl_r, nbl_g, nbl_b = normalize(blend_r), normalize(blend_g), normalize(blend_b)
 
-    if mode == 1 then -- Normal
+    if mode == 1 then 
         return blend
     elseif mode == 2 then -- Multiply
         result_r = denormalize(nb_r * nbl_r)
@@ -738,21 +731,19 @@ function ShowSettingsWindow()
     
     -- Use Sexan's positioning
     local _, DPI_RPR = r.get_config_var_string("uiscale")
-    local window_x = LEFT + (RIGHT - LEFT - 520) / 2  -- Center horizontally
-    local window_y = TOP + (BOT - TOP - 520) / 2      -- Center vertically
+    local window_x = LEFT + (RIGHT - LEFT - 520) / 2  
+    local window_y = TOP + (BOT - TOP - 620) / 2      
     
     r.ImGui_SetNextWindowPos(ctx, window_x, window_y, r.ImGui_Cond_FirstUseEver())
-    r.ImGui_SetNextWindowSize(ctx, 520, -1)
+    r.ImGui_SetNextWindowSize(ctx, 520, 620)
     
-    -- Style setup
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 6.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 8.0)
 
-    -- Colors setup
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x111111D9)  -- D9 = 85% opaque
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x111111D9) 
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x333333FF)        
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x444444FF)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x555555FF)  
@@ -766,7 +757,7 @@ function ShowSettingsWindow()
     local visible, open = r.ImGui_Begin(ctx, 'Track Names Settings', true, settings_flags)
     
     if visible then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)  -- Helder rood
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF) 
         r.ImGui_Text(ctx, "TK")
         r.ImGui_PopStyleColor(ctx)
         r.ImGui_SameLine(ctx)
@@ -867,6 +858,10 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Info Line", settings.show_info_line) then
             settings.show_info_line = not settings.show_info_line
         end
+        r.ImGui_SameLine(ctx, column_width * 4)
+        if r.ImGui_RadioButton(ctx, "Autosave", settings.autosave_enabled) then
+            settings.autosave_enabled = not settings.autosave_enabled
+        end
 
         if r.ImGui_RadioButton(ctx, "Track Label", settings.show_label) then
             settings.show_label = not settings.show_label
@@ -948,7 +943,40 @@ function ShowSettingsWindow()
             r.ImGui_SetNextItemWidth(ctx, 80)  
             local changed, new_length = r.ImGui_InputInt(ctx, "##FixedLength", settings.fixed_label_length)
             if changed then
-                settings.fixed_label_length = math.max(1, math.min(100, new_length)) -- Limit between 1-100
+                settings.fixed_label_length = math.max(1, math.min(100, new_length)) 
+            end
+        end
+
+    r.ImGui_Dummy(ctx, 0, 4)
+    r.ImGui_SameLine(ctx, column_width * 2)
+        r.ImGui_Text(ctx, "FX length:")
+        r.ImGui_SameLine(ctx, column_width * 3)
+        r.ImGui_SetNextItemWidth(ctx, 90)
+        if r.ImGui_BeginCombo(ctx, "##FX name length", 
+            settings.fx_name_length == 1 and " Full length" or
+            settings.fx_name_length == 2 and " Max 16 chars" or 
+            settings.fx_name_length == 3 and " Max 32 chars" or " Fixed length") then
+            if r.ImGui_Selectable(ctx, " Full length", settings.fx_name_length == 1) then
+                settings.fx_name_length = 1
+            end
+            if r.ImGui_Selectable(ctx, " Max 16 chars", settings.fx_name_length == 2) then
+                settings.fx_name_length = 2
+            end
+            if r.ImGui_Selectable(ctx, " Max 32 chars", settings.fx_name_length == 3) then
+                settings.fx_name_length = 3
+            end
+            if r.ImGui_Selectable(ctx, " Fixed length", settings.fx_name_length == 4) then
+                settings.fx_name_length = 4
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        if settings.fx_name_length == 4 then
+            r.ImGui_SameLine(ctx, column_width * 4)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 80)
+            local changed, new_fx_length = r.ImGui_InputInt(ctx, "##FixedFXLength", settings.fx_fixed_label_length)
+            if changed then
+                settings.fx_fixed_label_length = math.max(1, math.min(100, new_fx_length))
             end
         end
         if r.ImGui_RadioButton(ctx, "Env Names", settings.show_envelope_names) then
@@ -966,10 +994,7 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Show button", settings.show_settings_button) then
             settings.show_settings_button = not settings.show_settings_button
         end
-        --r.ImGui_SameLine(ctx, column_width * 4)
-        if r.ImGui_RadioButton(ctx, "Autosave", settings.autosave_enabled) then
-            settings.autosave_enabled = not settings.autosave_enabled
-        end
+    -- Autosave moved next to Info Line
 
         r.ImGui_Dummy(ctx, 0, 2)
         r.ImGui_Separator(ctx)
@@ -1350,7 +1375,7 @@ function GetAllParentTracks(track)
     return parents
 end
 
-function TruncateTrackName(name, mode)
+function TruncateTrackName(name, mode, fixed_len_override)
     if mode == 1 then
         return name 
     elseif mode == 2 and #name > 16 then
@@ -1358,23 +1383,45 @@ function TruncateTrackName(name, mode)
     elseif mode == 3 and #name > 32 then
         return name:sub(1, 29) .. "..."
     elseif mode == 4 then
-        local fixed_length = settings.fixed_label_length
+    local fixed_length = fixed_len_override or settings.fixed_label_length
         local reference_string = string.rep("n", fixed_length)
-        local target_width = r.ImGui_CalcTextSize(ctx, reference_string)
-        local current_width = r.ImGui_CalcTextSize(ctx, name)
+        
+        local target_width = 0
+        local current_width = 0
+        
+        if ctx then
+            target_width = r.ImGui_CalcTextSize(ctx, reference_string)
+            current_width = r.ImGui_CalcTextSize(ctx, name)
+        end
+        
+        if target_width == 0 or current_width == 0 then
+            if #name > fixed_length then
+                return name:sub(1, fixed_length)
+            elseif #name < fixed_length then
+                return name .. string.rep(" ", fixed_length - #name)
+            else
+                return name
+            end
+        end
         
         if current_width > target_width then
             local truncated = name
-            while r.ImGui_CalcTextSize(ctx, truncated) > target_width and #truncated > 0 do
-                truncated = truncated:sub(1, -2)
+            local truncated_width = current_width
+            local attempts = 0
+            while truncated_width > target_width and #truncated > 1 and attempts < 100 do
+                truncated = truncated:sub(1, #truncated - 1)
+                truncated_width = r.ImGui_CalcTextSize(ctx, truncated)
+                attempts = attempts + 1
             end
             return truncated
         elseif current_width < target_width then
             local padded = name
-            local padding_char = " "
-            while r.ImGui_CalcTextSize(ctx, padded) < target_width do
-                padded = padded .. padding_char
-                if #padded > fixed_length * 3 then break end
+            local padded_width = current_width
+            local attempts = 0
+            while padded_width < target_width and attempts < 100 do
+                padded = padded .. " "
+                padded_width = r.ImGui_CalcTextSize(ctx, padded)
+                attempts = attempts + 1
             end
             return padded
         else
@@ -1432,7 +1479,6 @@ function RenderSolidOverlay(draw_list, track, track_y, track_height, color, wind
         color
     )
     
-    -- Envelope overlay
     local track_env_cnt = r.CountTrackEnvelopes(track)
     if track_env_cnt > 0 and settings.show_envelope_colors then
         local env_y = track_y + track_height
@@ -1577,7 +1623,6 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
     if depth == 1 then
         local start_idx, end_idx = GetFolderBoundaries(track)
         if start_idx and end_idx then
-            -- Check voor zichtbare child tracks
             local has_visible_children = false
             for i = start_idx + 1, end_idx do
                 local child = r.GetTrack(0, i)
@@ -1589,7 +1634,6 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
             end
             
             if has_visible_children then
-                -- Originele code voor uitgeklapte folder met zichtbare children
                 local end_track = r.GetTrack(0, end_idx)
                 local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
                 local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
@@ -1643,7 +1687,6 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                     )
                 end
             else
-                -- Code voor ingeklapte folder
                 if settings.folder_border_top then
                     DrawFolderBorderLine(
                         draw_list,
@@ -1916,7 +1959,6 @@ function loop()
                 local is_child = r.GetParentTrack(track) ~= nil
                 local track_color = r.GetTrackColor(track)
                 
-                -- Folder borders altijd tekenen als de optie aan staat
                 if settings.show_track_colors and settings.folder_border and (is_parent or is_child) then
                     local border_base_color = r.GetTrackColor(track)
                     if is_child then
@@ -1930,7 +1972,6 @@ function loop()
                     DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
                 end
                 
-                -- Normale track rendering alleen voor zichtbare tracks
                 local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
                 if track_visible and IsTrackVisible(track) then
                     local is_armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
@@ -1941,7 +1982,6 @@ function loop()
                     local text_width = r.ImGui_CalcTextSize(ctx, track_name)
                     max_width = math.max(max_width, text_width)
             
-                    -- Track colors
                     if settings.show_track_colors then
                         if ((is_parent and settings.show_parent_colors) or
                             (is_child and settings.show_child_colors) or
@@ -1950,9 +1990,7 @@ function loop()
                             local base_color = track_color
                             local main_parent = nil
                             
-                            -- Deep inherit logica
                             if settings.deep_inherit_color then
-                                -- Deep inherit + gradient logica blijft als hoogste prioriteit
                                 local current = track
                                 while r.GetParentTrack(current) do
                                     current = r.GetParentTrack(current)
@@ -1973,7 +2011,6 @@ function loop()
                                     end
                                 end
                             elseif settings.color_gradient_enabled and not is_parent then
-                                -- Gradient krijgt nu voorrang op normal inherit
                                 local parent = r.GetParentTrack(track)
                                 if parent then
                                     base_color = r.GetTrackColor(parent)
@@ -1999,7 +2036,6 @@ function loop()
                                     end
                                 end
                             elseif settings.inherit_parent_color and not is_parent then
-                                -- Normal inherit heeft nu laagste prioriteit
                                 local parent = r.GetParentTrack(track)
                                 if parent then
                                     track_color = r.GetTrackColor(parent)
@@ -2049,7 +2085,6 @@ function loop()
                         end
                     end
 
-                    -- Track name processing
                     local should_show_track = false
                     local should_show_name = false
 
@@ -2073,21 +2108,28 @@ function loop()
 
                     if should_show_track then
                         local _, track_name = r.GetTrackName(track)
-                        local display_name = TruncateTrackName(track_name, settings.track_name_length)
-                        
+                        local display_name
+
+                        -- Build track and FX parts with independent lengths
+                        local track_display = TruncateTrackName(track_name, settings.track_name_length, settings.fixed_label_length)
+                        local fx_display = nil
                         if settings.show_first_fx then
                             local fx_count = r.TrackFX_GetCount(track)
                             if fx_count > 0 then
                                 local _, fx_name = r.TrackFX_GetFXName(track, 0, "")
                                 fx_name = fx_name:gsub("^[^:]+:%s*", "")
-                                display_name = display_name .. " - " .. fx_name
+                                fx_display = TruncateTrackName(fx_name, settings.fx_name_length, settings.fx_fixed_label_length)
                             end
+                        end
+                        if fx_display then
+                            display_name = track_display .. " - " .. fx_display
+                        else
+                            display_name = track_display
                         end
 
                         local vertical_offset = (track_height * settings.vertical_offset) / 100
                         local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5) + vertical_offset
 
-                        -- Parent label processing
                         if is_child and settings.show_parent_label then
                             local parents = GetAllParentTracks(track)
                             if #parents > 0 then
@@ -2110,20 +2152,19 @@ function loop()
                                 if settings.text_centered then
                                     if settings.auto_center then
                                         local window_width = RIGHT - LEFT - scroll_size
-                                        if should_show_name then
-                                            local total_spacing = (BASE_SPACING * 5) + TEXT_SIZE_FACTOR  -- Verdubbel de base spacing
-                                            if settings.show_track_numbers then
-                                                total_spacing = total_spacing + NUMBER_SPACING
+                                        if should_show_track then
+                                            local _, track_name = r.GetTrackName(track)
+                                            local track_display = TruncateTrackName(track_name, settings.track_name_length, settings.fixed_label_length)
+                                            local fx_display = nil
+                                            if settings.show_first_fx then
+                                                local fx_count = r.TrackFX_GetCount(track)
+                                                if fx_count > 0 then
+                                                    local _, fx_name = r.TrackFX_GetFXName(track, 0, "")
+                                                    local fx_name_clean = fx_name:gsub("^[^:]+:%s*", "")
+                                                    fx_display = TruncateTrackName(fx_name_clean, settings.fx_name_length, settings.fx_fixed_label_length)
+                                                end
                                             end
-                                            
-                                            local total_width = track_text_width + parent_text_width + total_spacing
-                                            local start_x = LEFT + (window_width / 2) - (total_width / 2)
-                                            parent_text_pos = start_x + track_text_width + total_spacing
-                                        else
-                                            parent_text_pos = LEFT + (window_width / 2) - (parent_text_width / 2)
-                                        end
-                                    else
-                                        if should_show_name then
+                                            local display_name = fx_display and (track_display .. " - " .. fx_display) or track_display
                                             local total_spacing = BASE_SPACING + TEXT_SIZE_FACTOR
                                             if settings.show_track_numbers then
                                                 total_spacing = total_spacing + NUMBER_SPACING /2
@@ -2188,7 +2229,6 @@ function loop()
                             end
                         end
 
-                        -- Track name rendering
                         if should_show_name then
                             local modified_display_name = display_name
                             
@@ -2233,9 +2273,7 @@ function loop()
                             local text_color = GetTextColor(track, is_child)
                             text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
                             r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, modified_display_name)
-
-                            
-                            -- Info line na de track naam
+                          
                             if settings.show_info_line and not r.GetParentTrack(track) then
                                 local info_text = GetFolderInfo(track)
                                 local track_text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
@@ -2250,7 +2288,6 @@ function loop()
                                 r.ImGui_DrawList_AddText(draw_list, info_text_x, text_y, text_color, info_text)
                             end
 
-                            -- Track state indicators
                             local dot_size = 4
                             local dot_spacing = 1
                             local total_dots_height = (dot_size * 3) + (dot_spacing * 2)
@@ -2381,8 +2418,6 @@ function loop()
     end
 end
 
--- Script initialization and cleanup
--- In de initialisatie code
 local success = pcall(function()
     color_cache = {}
     cached_bg_color = nil
@@ -2396,11 +2431,9 @@ local success = pcall(function()
             r.Main_OnCommand(42331, 0)
         end
 
-        -- Alleen als Grid radio button aan staat
         if settings.grid_color_enabled then
             UpdateGridColors()
         else
-            -- Gebruik standaard theme grid kleur
             r.SetThemeColor("col_gridlines", -1, 0)
             r.SetThemeColor("col_gridlines2", -1, 0)
             r.SetThemeColor("col_gridlines3", -1, 0)
@@ -2408,12 +2441,10 @@ local success = pcall(function()
             r.SetThemeColor("col_tr2_divline", -1, 0)
         end
 
-        -- Alleen als BG radio button aan staat
         if settings.bg_brightness_enabled then
             UpdateArrangeBG()
         UpdateTrackColors()
         else
-            -- Gebruik standaard theme achtergrond kleur
             r.SetThemeColor("col_arrangebg", -1, 0)
         end
     end
@@ -2430,7 +2461,6 @@ r.atexit(function()
         SaveSettings()
     end
     
-    -- Reset ALL theme colors
     r.SetThemeColor("col_gridlines", -1, 0)
     r.SetThemeColor("col_gridlines2", -1, 0)
     r.SetThemeColor("col_gridlines3", -1, 0)
@@ -2442,7 +2472,6 @@ r.atexit(function()
     r.SetThemeColor("col_tr1_divline", -1, 0)
     r.SetThemeColor("col_tr2_divline", -1, 0)
     
-    -- Restore grid divide if it was on
     if grid_divide_state == 1 then
         r.Main_OnCommand(42331, 0)
     end
