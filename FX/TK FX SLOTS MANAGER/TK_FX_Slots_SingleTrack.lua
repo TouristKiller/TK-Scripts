@@ -1,4 +1,4 @@
--- @version 0.3.0
+-- @version 0.3.1
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -12,7 +12,7 @@ A Lot of changes... hahahaha!
 
 local r = reaper
 local SCRIPT_NAME = 'TK FX Slots Single Track'
-local SCRIPT_VERSION = '0.2.0'
+local SCRIPT_VERSION = '0.3.1'
 
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator = package.config:sub(1, 1)
