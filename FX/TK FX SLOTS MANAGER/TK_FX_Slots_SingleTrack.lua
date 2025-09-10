@@ -1,4 +1,4 @@
--- @version 0.2.1
+-- @version 0.3.0
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -37,6 +37,8 @@ local function init_fx_parser()
     end
 end
 
+init_fx_parser()
+
 local ctx = nil
 local DND_FX_PAYLOAD = 'TK_FX_ROW_SINGLE'
 
@@ -45,76 +47,48 @@ local styleStackDepth = {colors = 0, vars = 0}
 
 local function debug_stack_state(location)
   if styleStackDepth.colors > 0 or styleStackDepth.vars > 0 then
-    r.ShowConsoleMsg(string.format("[%s] Stack depth: colors=%d, vars=%d\n", 
-      location or "Unknown", styleStackDepth.colors, styleStackDepth.vars))
-  end
+    end
 end
 
-local function is_context_valid(ctx)
-  if not ctx then return false end
-  
-  local success = pcall(function()
+local function is_context_valid(c)
+  if not c then return false end
+  local ok = pcall(function()
     if r.ImGui_ValidatePtr then
-      return r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')
+      return r.ImGui_ValidatePtr(c, 'ImGui_Context*')
     else
-      if r.ImGui_GetVersion then 
-        r.ImGui_GetVersion()
-      end
+      if r.ImGui_GetVersion then r.ImGui_GetVersion() end
       return true
     end
   end)
-  
-  return success
+  return ok
 end
 
 local function cleanup_resources()
-  if ctx then
-    if styleStackDepth.colors > 0 and r.ImGui_PopStyleColor then
-      pcall(r.ImGui_PopStyleColor, ctx, styleStackDepth.colors)
-      styleStackDepth.colors = 0
-    end
-    if styleStackDepth.vars > 0 and r.ImGui_PopStyleVar then  
-      pcall(r.ImGui_PopStyleVar, ctx, styleStackDepth.vars)
-      styleStackDepth.vars = 0
-    end
-    
-    if r.ImGui_DestroyContext then
-      r.ImGui_DestroyContext(ctx)
-    end
-    ctx = nil
+  if not ctx then return end
+  if styleStackDepth.colors > 0 and r.ImGui_PopStyleColor then
+    pcall(r.ImGui_PopStyleColor, ctx, styleStackDepth.colors)
+    styleStackDepth.colors = 0
+  end
+  if styleStackDepth.vars > 0 and r.ImGui_PopStyleVar then
+    pcall(r.ImGui_PopStyleVar, ctx, styleStackDepth.vars)
+    styleStackDepth.vars = 0
   end
 end
 
 local function init_context()
-  if ctx then
-    if r.ImGui_DestroyContext then
-      pcall(r.ImGui_DestroyContext, ctx)
-    end
-    ctx = nil
-  end
-  
+  if ctx and is_context_valid(ctx) then return true end
   styleStackDepth.colors = 0
   styleStackDepth.vars = 0
-  
-  if not ctx then
-    if r.ImGui_CreateContext then
-      ctx = r.ImGui_CreateContext(SCRIPT_NAME)
-      if not ctx then
-        r.ShowMessageBox('Failed to create ImGui context. Please check your ReaImGui installation.', 'Error', 0)
-        return false
-      end
-    else
-      r.ShowMessageBox('ReaImGui extension not found. Please install ReaImGui to use this script.', 'Error', 0)
-      return false
-    end
-  end
-  
-  if is_context_valid(ctx) then
-    return true
+  if r.ImGui_CreateContext then
+    ctx = r.ImGui_CreateContext(SCRIPT_NAME)
   else
-    r.ShowMessageBox('ImGui context is invalid. Please restart the script.', 'Error', 0)
+    ctx = r.ImGui_CreateContext(SCRIPT_NAME)
+  end
+  if not ctx or not is_context_valid(ctx) then
+    r.ShowMessageBox('Failed to create ImGui context. Check ReaImGui installation.', 'Error', 0)
     return false
   end
+  return true
 end
 
 if not init_context() then
@@ -129,8 +103,12 @@ local state = {
   tooltips = true,
   showScreenshot = true,
   showRMSButtons = true,
+  showTrackList = true,          
+  showTrackNavButtons = true,   
+  showTopPanelToggleBar = true,  
   nameNoPrefix = false,
   nameHideDeveloper = false,
+  hideWetControl = false,        
   
   -- Header states (collapsible sections)
   trackHeaderOpen = true,
@@ -139,14 +117,18 @@ local state = {
   sourceHeaderOpen = true,
   fxChainHeaderOpen = true,
   trackVersionHeaderOpen = false,
+  -- Panel visibility (new)
+  showPanelReplacement = true,
+  showPanelSource = true,
+  showPanelFXChain = true,
+  showPanelTrackVersion = true,
   hdrInitApplied = false,
   
   -- Operation settings
-  scopeSelectedOnly = true,
+  scopeSelectedOnly = false,
   insertOverride = true,
   insertPos = 'in_place',
   insertIndex = 0,
-  batchSlotIndex = 0,
   actionType = 'replace_all',
   useDummyReplace = false,
   
@@ -154,6 +136,7 @@ local state = {
   replaceWith = '',
   replaceDisplay = '',
   selectedSourceFXName = nil,
+  lastTrackGUID = nil,
   selectedSourceFXIndex = nil,
   
   -- Placeholder settings
@@ -247,6 +230,11 @@ local state = {
   _pendingDelGUID = nil,
   _pendingDelTrack = nil,
   _pendingDelArmed = false,
+  trackVersions = {},
+  trackVersionsCurrentIndex = {},
+  _versionsLoaded = false,
+  _tvSelected = nil,
+  autoApplySnapshots = false,
 }
 
 -- Constants and configuration
@@ -332,7 +320,7 @@ local function load_user_settings()
   state.tooltips = get_bool_setting('TOOLTIPS', state.tooltips)
   state.nameNoPrefix = get_bool_setting('NAME_NOPREFIX', state.nameNoPrefix)
   state.nameHideDeveloper = get_bool_setting('NAME_HIDEDEV', state.nameHideDeveloper)
-  state.trackHeaderOpen = get_bool_setting('HDR_OPEN', state.trackHeaderOpen)
+  state.trackHeaderOpen = get_bool_setting('HDR_OPEN', state.trackHeaderOpen) and true or false
   state.replHeaderOpen = get_bool_setting('REPL_OPEN', state.replHeaderOpen)
   state.actionHeaderOpen = get_bool_setting('ACT_OPEN', state.actionHeaderOpen)
   state.sourceHeaderOpen = get_bool_setting('SRC_OPEN', state.sourceHeaderOpen)
@@ -340,42 +328,57 @@ local function load_user_settings()
   state.fxChainHeaderOpen = get_bool_setting('FXC_OPEN', state.fxChainHeaderOpen)
   state.trackVersionHeaderOpen = get_bool_setting('TRV_OPEN', state.trackVersionHeaderOpen)
   state.showRMSButtons = get_bool_setting('SHOW_RMS', state.showRMSButtons)
-  
-  state.styleRounding = get_float_setting('STYLE_ROUNDING', state.styleRounding)
-  state.styleButtonRounding = get_float_setting('STYLE_BTN_ROUNDING', state.styleButtonRounding)
-  state.styleWindowRounding = get_float_setting('STYLE_WIN_ROUNDING', state.styleWindowRounding)
-  state.styleFrameRounding = get_float_setting('STYLE_FRAME_ROUNDING', state.styleFrameRounding)
-  state.styleGrabRounding = get_float_setting('STYLE_GRAB_ROUNDING', state.styleGrabRounding)
-  state.styleTabRounding = get_float_setting('STYLE_TAB_ROUNDING', state.styleTabRounding)
-  
-  state.styleButtonColorR = get_float_setting('STYLE_BTN_R', state.styleButtonColorR)
-  state.styleButtonColorG = get_float_setting('STYLE_BTN_G', state.styleButtonColorG)
-  state.styleButtonColorB = get_float_setting('STYLE_BTN_B', state.styleButtonColorB)
-  state.styleButtonHoveredR = get_float_setting('STYLE_BTN_HOV_R', state.styleButtonHoveredR)
-  state.styleButtonHoveredG = get_float_setting('STYLE_BTN_HOV_G', state.styleButtonHoveredG)
-  state.styleButtonHoveredB = get_float_setting('STYLE_BTN_HOV_B', state.styleButtonHoveredB)
-  state.styleButtonActiveR = get_float_setting('STYLE_BTN_ACT_R', state.styleButtonActiveR)
-  state.styleButtonActiveG = get_float_setting('STYLE_BTN_ACT_G', state.styleButtonActiveG)
-  state.styleButtonActiveB = get_float_setting('STYLE_BTN_ACT_B', state.styleButtonActiveB)
-  
-  state.styleWindowBgR = get_float_setting('STYLE_WIN_BG_R', state.styleWindowBgR)
-  state.styleWindowBgG = get_float_setting('STYLE_WIN_BG_G', state.styleWindowBgG)
-  state.styleWindowBgB = get_float_setting('STYLE_WIN_BG_B', state.styleWindowBgB)
-  state.styleWindowBgA = get_float_setting('STYLE_WIN_BG_A', state.styleWindowBgA)
-  
-  state.styleFrameBgR = get_float_setting('STYLE_FRAME_BG_R', state.styleFrameBgR)
-  state.styleFrameBgG = get_float_setting('STYLE_FRAME_BG_G', state.styleFrameBgG)
-  state.styleFrameBgB = get_float_setting('STYLE_FRAME_BG_B', state.styleFrameBgB)
-  state.styleFrameBgA = get_float_setting('STYLE_FRAME_BG_A', state.styleFrameBgA)
-  state.styleFrameBgHoveredR = get_float_setting('STYLE_FRAME_HOV_R', state.styleFrameBgHoveredR)
-  state.styleFrameBgHoveredG = get_float_setting('STYLE_FRAME_HOV_G', state.styleFrameBgHoveredG)
-  state.styleFrameBgHoveredB = get_float_setting('STYLE_FRAME_HOV_B', state.styleFrameBgHoveredB)
-  state.styleFrameBgHoveredA = get_float_setting('STYLE_FRAME_HOV_A', state.styleFrameBgHoveredA)
+  state.showTrackList = get_bool_setting('SHOW_TRK_LIST', state.showTrackList)
+  state.showTopPanelToggleBar = get_bool_setting('SHOW_TOP_PANEL_TOGGLES', state.showTopPanelToggleBar == nil and true or state.showTopPanelToggleBar)
+  state.showTrackNavButtons = get_bool_setting('SHOW_TRK_NAV', state.showTrackNavButtons)
+  state.showPanelReplacement = get_bool_setting('PANEL_REPLACEMENT', state.showPanelReplacement == nil and true or state.showPanelReplacement)
+  state.showPanelSource = get_bool_setting('PANEL_SOURCE', state.showPanelSource == nil and true or state.showPanelSource)
+  state.showPanelFXChain = get_bool_setting('PANEL_FXCHAIN', state.showPanelFXChain == nil and true or state.showPanelFXChain)
+  state.showPanelTrackVersion = get_bool_setting('PANEL_TRKVER', state.showPanelTrackVersion == nil and true or state.showPanelTrackVersion)
+  -- Style numeric settings
+  state.styleRounding         = get_float_setting('STYLE_ROUNDING', state.styleRounding)
+  state.styleButtonRounding   = get_float_setting('STYLE_BTN_ROUNDING', state.styleButtonRounding)
+  state.styleWindowRounding   = get_float_setting('STYLE_WIN_ROUNDING', state.styleWindowRounding)
+  state.styleFrameRounding    = get_float_setting('STYLE_FRAME_ROUNDING', state.styleFrameRounding)
+  state.styleGrabRounding     = get_float_setting('STYLE_GRAB_ROUNDING', state.styleGrabRounding)
+  state.styleTabRounding      = get_float_setting('STYLE_TAB_ROUNDING', state.styleTabRounding)
+  -- Button colors
+  state.styleButtonColorR     = get_float_setting('STYLE_BTN_R', state.styleButtonColorR)
+  state.styleButtonColorG     = get_float_setting('STYLE_BTN_G', state.styleButtonColorG)
+  state.styleButtonColorB     = get_float_setting('STYLE_BTN_B', state.styleButtonColorB)
+  state.styleButtonHoveredR   = get_float_setting('STYLE_BTN_HOV_R', state.styleButtonHoveredR)
+  state.styleButtonHoveredG   = get_float_setting('STYLE_BTN_HOV_G', state.styleButtonHoveredG)
+  state.styleButtonHoveredB   = get_float_setting('STYLE_BTN_HOV_B', state.styleButtonHoveredB)
+  state.styleButtonActiveR    = get_float_setting('STYLE_BTN_ACT_R', state.styleButtonActiveR)
+  state.styleButtonActiveG    = get_float_setting('STYLE_BTN_ACT_G', state.styleButtonActiveG)
+  state.styleButtonActiveB    = get_float_setting('STYLE_BTN_ACT_B', state.styleButtonActiveB)
+  -- Window background
+  state.styleWindowBgR        = get_float_setting('STYLE_WIN_BG_R', state.styleWindowBgR)
+  state.styleWindowBgG        = get_float_setting('STYLE_WIN_BG_G', state.styleWindowBgG)
+  state.styleWindowBgB        = get_float_setting('STYLE_WIN_BG_B', state.styleWindowBgB)
+  state.styleWindowBgA        = get_float_setting('STYLE_WIN_BG_A', state.styleWindowBgA)
+  -- Frame background + hovered + active
+  state.styleFrameBgR         = get_float_setting('STYLE_FRAME_BG_R', state.styleFrameBgR)
+  state.styleFrameBgG         = get_float_setting('STYLE_FRAME_BG_G', state.styleFrameBgG)
+  state.styleFrameBgB         = get_float_setting('STYLE_FRAME_BG_B', state.styleFrameBgB)
+  state.styleFrameBgA         = get_float_setting('STYLE_FRAME_BG_A', state.styleFrameBgA)
+  state.styleFrameBgHoveredR  = get_float_setting('STYLE_FRAME_HOV_R', state.styleFrameBgHoveredR)
+  state.styleFrameBgHoveredG  = get_float_setting('STYLE_FRAME_HOV_G', state.styleFrameBgHoveredG)
+  state.styleFrameBgHoveredB  = get_float_setting('STYLE_FRAME_HOV_B', state.styleFrameBgHoveredB)
+  state.styleFrameBgHoveredA  = get_float_setting('STYLE_FRAME_HOV_A', state.styleFrameBgHoveredA)
   state.styleFrameBgActiveR = get_float_setting('STYLE_FRAME_ACT_R', state.styleFrameBgActiveR)
   state.styleFrameBgActiveG = get_float_setting('STYLE_FRAME_ACT_G', state.styleFrameBgActiveG)
   state.styleFrameBgActiveB = get_float_setting('STYLE_FRAME_ACT_B', state.styleFrameBgActiveB)
   state.styleFrameBgActiveA = get_float_setting('STYLE_FRAME_ACT_A', state.styleFrameBgActiveA)
-end
+  if get_bool_setting then
+    state.hideWetControl = get_bool_setting('HIDE_WET', state.hideWetControl)
+  end
+end 
+
+local load_track_versions
+
+state.trackVersions = state.trackVersions
+state.trackVersionsCurrentIndex = state.trackVersionsCurrentIndex
 
 local function save_user_settings()
   set_bool_setting('TOOLTIPS', state.tooltips)
@@ -389,6 +392,14 @@ local function save_user_settings()
   set_bool_setting('FXC_OPEN', state.fxChainHeaderOpen)
   set_bool_setting('TRV_OPEN', state.trackVersionHeaderOpen)
   set_bool_setting('SHOW_RMS', state.showRMSButtons)
+  set_bool_setting('SHOW_TRK_LIST', state.showTrackList ~= false)
+  set_bool_setting('SHOW_TOP_PANEL_TOGGLES', state.showTopPanelToggleBar ~= false)
+  set_bool_setting('SHOW_TRK_NAV', state.showTrackNavButtons ~= false)
+  set_bool_setting('HIDE_WET', state.hideWetControl == true)
+  set_bool_setting('PANEL_REPLACEMENT', state.showPanelReplacement ~= false)
+  set_bool_setting('PANEL_SOURCE', state.showPanelSource ~= false)
+  set_bool_setting('PANEL_FXCHAIN', state.showPanelFXChain ~= false)
+  set_bool_setting('PANEL_TRKVER', state.showPanelTrackVersion ~= false)
   
   set_float_setting('STYLE_ROUNDING', state.styleRounding)
   set_float_setting('STYLE_BTN_ROUNDING', state.styleButtonRounding)
@@ -528,6 +539,29 @@ local function darken(rf, gf, bf, amt)
   return lighten(rf, gf, bf, -(amt or 0.1))
 end
 
+local function truncate_text_to_width(ctxRef, text, maxWidth)
+  if not text or text == '' then return '' end
+  if not ctxRef or not r.ImGui_CalcTextSize then return text end
+  if not maxWidth or maxWidth <= 0 then return '' end
+  local w = select(1, r.ImGui_CalcTextSize(ctxRef, text)) or 0
+  if w <= maxWidth then return text end
+  local ell = '…'
+  local left, right = 1, #text
+  local best = ell
+  while left <= right do
+    local mid = math.floor((left + right) / 2)
+    local candidate = text:sub(1, mid) .. ell
+    local cw = select(1, r.ImGui_CalcTextSize(ctxRef, candidate)) or 0
+    if cw <= maxWidth then
+      best = candidate
+      left = mid + 1
+    else
+      right = mid - 1
+    end
+  end
+  return best
+end
+
 
 local function is_modifier_down(mod_type)
   if not ctx then return false end
@@ -584,7 +618,7 @@ end
 
 local function navigate_to_previous_track()
   local current_track = get_selected_track()
-  if not current_track then return false, 'No track selected' end
+            pcall(r.ImGui_DestroyContext, ctx)
   local current_number = get_track_number(current_track)
   if not current_number or current_number <= 1 then
     return false, 'Already at first track'
@@ -640,9 +674,9 @@ local function get_text_color_for_background(r, g, b)
   local luminance = 0.299 * r + 0.587 * g + 0.114 * b
   
   if luminance > 0.5 then
-    return 0.0, 0.0, 0.0 -- Black text
+    return 0.0, 0.0, 0.0 
   else
-    return 1.0, 1.0, 1.0 -- White text
+    return 1.0, 1.0, 1.0 
   end
 end
 
@@ -993,10 +1027,10 @@ local function sanitize_jsfx_name(name)
   if not name or name == '' then return 'Blank' end
   
   name = tostring(name)
-  name = name:gsub('[<>:"/\\|?*]', '_') -- Replace invalid filename chars
-  name = name:gsub('%.%.+', '.') -- Collapse multiple dots
-  name = name:gsub('^%.', ''):gsub('%.$', '') -- Remove leading/trailing dots
-  name = name:gsub('^%s+', ''):gsub('%s+$', '') -- Trim whitespace
+  name = name:gsub('[<>:"/\\|?*]', '_') 
+  name = name:gsub('%.%.+', '.') 
+  name = name:gsub('^%.', ''):gsub('%.$', '') 
+  name = name:gsub('^%s+', ''):gsub('%s+$', '') 
   
   if name == '' then name = 'Blank' end
   return name
@@ -1172,7 +1206,7 @@ local function move_all_instances_up(sourceName)
   local moved = 0
   r.Undo_BeginBlock('Move all instances up')
   
-  for tr, _ in tracks_iter(state.scopeSelectedOnly) do
+  for tr, _ in tracks_iter(false) do
     local fxCount = r.TrackFX_GetCount(tr)
     local toMove = {}
     
@@ -1201,7 +1235,7 @@ local function move_all_instances_down(sourceName)
   local moved = 0
   r.Undo_BeginBlock('Move all instances down')
   
-  for tr, _ in tracks_iter(state.scopeSelectedOnly) do
+  for tr, _ in tracks_iter(false) do
     local fxCount = r.TrackFX_GetCount(tr)
     local toMove = {}
     
@@ -1623,6 +1657,165 @@ local function get_fx_chains_list()
   return chains
 end
 
+local CHUNK_DEBUG = false -- Debug uitgezet 
+local function dbg(msg)
+  if CHUNK_DEBUG then r.ShowConsoleMsg('[FXCHAIN CHUNK] '..tostring(msg)..'\n') end
+end
+
+local function extract_fxchain_block(fullChunk)
+  if not fullChunk then dbg('No fullChunk'); return nil end
+  local startPos = fullChunk:find('<FXCHAIN') or fullChunk:find('%s<FXCHAIN')
+  if not startPos then dbg('No <FXCHAIN found'); return nil end
+  local pos, len, depth, capturing = startPos, #fullChunk, 0, false
+  local endPos
+  while pos <= len do
+    local lineEnd = fullChunk:find('\n', pos) or (len+1)
+    local line = fullChunk:sub(pos, lineEnd-1)
+    if line:find('^%s*<') then
+      if not capturing and line:find('^%s*<FXCHAIN') then capturing = true end
+      if capturing then depth = depth + 1 end
+    elseif capturing and line:match('^%s*>%s*$') then
+      depth = depth - 1
+      if depth == 0 then endPos = lineEnd; break end
+    end
+    pos = lineEnd + 1
+  end
+  if not endPos then dbg('Did not close FXCHAIN depth='..depth) return nil end
+  local block = fullChunk:sub(startPos, endPos)
+  return block, startPos, endPos
+end
+
+local function set_track_fxchain_chunk(track, newFxChainChunk)
+  if not (track and newFxChainChunk and newFxChainChunk:find('<FXCHAIN')) then dbg('Bad args to set_track_fxchain_chunk'); return false end
+  _G.__TK_LAST_FXCHAIN_HASHES = _G.__TK_LAST_FXCHAIN_HASHES or {}
+  local ptrStr = tostring(track)
+  local h = r.genGuid and r.genGuid() or (#newFxChainChunk .. ':' .. (newFxChainChunk:match('<VST.-%(') or '')) -- fallback pseudo hash
+  local hashNum = 2166136261
+  for i=1,#newFxChainChunk, math.max(1, math.floor(#newFxChainChunk/4000)) do
+    hashNum = hashNum ~ newFxChainChunk:byte(i);
+    hashNum = (hashNum * 16777619) % 4294967295
+  end
+  local finalHash = string.format('%08x', hashNum)
+  if _G.__TK_LAST_FXCHAIN_HASHES[ptrStr] == finalHash then
+    if CHUNK_DEBUG then dbg('Skip duplicate FXCHAIN apply hash '..finalHash) end
+    return true
+  end
+  local ok, full = r.GetTrackStateChunk(track, '', false)
+  if not ok or not full then dbg('GetTrackStateChunk failed'); return false end
+  local oldBlock, s, e = extract_fxchain_block(full)
+  if not oldBlock or not s or not e then dbg('Existing FXCHAIN block not found'); return false end
+  local merged = full:sub(1, s-1) .. newFxChainChunk .. full:sub(e+1)
+  local setOk = r.SetTrackStateChunk(track, merged, false)
+  if CHUNK_DEBUG then dbg('SetTrackStateChunk result '..tostring(setOk)..' newLen='..#merged) end
+  if setOk then _G.__TK_LAST_FXCHAIN_HASHES[ptrStr] = finalHash end
+  return setOk
+end
+
+local function read_fxchain_file_block(chain_path)
+  if not chain_path or chain_path == '' then return nil end
+  local sep = package.config:sub(1,1)
+  local rel = chain_path:gsub('/', sep)
+  local full_path = r.GetResourcePath() .. sep .. 'FXChains' .. sep .. rel .. '.RfxChain'
+  local f = io.open(full_path,'r'); if not f then return nil end
+  local txt = f:read('*a') or ''
+  f:close()
+  if txt == '' then return nil end
+  txt = txt:gsub('^\239\187\191','')
+  if CHUNK_DEBUG then dbg('Loaded chain file '..full_path..' size '..#txt) end
+  if not txt:find('<FXCHAIN') then
+    if CHUNK_DEBUG then dbg('No <FXCHAIN in file; synthesizing wrapper') end
+    if txt:find('\n<') or txt:find('^<') then
+      local body = txt
+      if not body:match('\n$') then body = body .. '\n' end
+      txt = table.concat({
+        '<FXCHAIN',
+        'SHOW 0',
+        'LASTSEL 0',
+        'DOCKED 0',
+        body,
+        '>'
+      }, '\n') .. '\n'
+      if CHUNK_DEBUG then dbg('Synth wrapper body length '..#body) end
+    end
+  end
+  return extract_fxchain_block(txt)
+end
+
+local function get_track_fx_blocks(track)
+  local ok, full = r.GetTrackStateChunk(track, '', false)
+  if not ok or not full then return nil end
+  local block, s, e = extract_fxchain_block(full)
+  if not block then return nil end
+  local headerLineEnd = block:find('\n') or (#block+1)
+  local header = block:sub(1, headerLineEnd-1)
+  local body = block:sub(headerLineEnd+1)
+  local fxRanges = {}
+  local pos, len = 1, #body
+  while pos <= len do
+    local lineEnd = body:find('\n', pos) or (len+1)
+    local line = body:sub(pos, lineEnd-1)
+    if line:find('^<') and not line:find('^<FXCHAIN') then
+      local d = 0
+      local startFx = pos
+      local p2 = pos
+      while p2 <= len do
+        local le2 = body:find('\n', p2) or (len+1)
+        local l2 = body:sub(p2, le2-1)
+        if l2:find('^<') then d = d + 1 end
+        if l2:match('^>%s*$') then d = d - 1; if d == 0 then
+          fxRanges[#fxRanges+1] = {start=startFx, finish=le2-1}
+          pos = le2
+          break
+        end end
+        p2 = le2 + 1
+      end
+    end
+    pos = (body:find('\n', pos) or (len+1)) + 1
+  end
+  return {full=full, block=block, startPos=s, endPos=e, header=header, body=body, fxRanges=fxRanges}
+end
+
+local function rebuild_block_from_ranges(info, newOrder)
+  local parts = {}
+  parts[#parts+1] = info.header
+  local cursor = 1
+  for _, rIdx in ipairs(newOrder) do
+    local rDef = info.fxRanges[rIdx]
+    if rDef then
+      parts[#parts+1] = info.body:sub(rDef.start, rDef.finish)
+    end
+  end
+  parts[#parts+1] = '>'
+  return table.concat(parts, '\n') .. '\n'
+end
+
+local function swap_fx_via_chunk(track, a, b)
+  if a == b then return false end
+  local info = get_track_fx_blocks(track)
+  if not info or not info.fxRanges or not info.fxRanges[a+1] or not info.fxRanges[b+1] then return false end
+  local count = #info.fxRanges
+  local order = {}
+  for i=1,count do order[i]=i end
+  order[a+1], order[b+1] = order[b+1], order[a+1]
+  local newFxChain = rebuild_block_from_ranges(info, order)
+  return set_track_fxchain_chunk(track, newFxChain)
+end
+
+local function move_fx_drag_chunk(track, src, dest)
+  local info = get_track_fx_blocks(track)
+  if not info then return false end
+  local count = #info.fxRanges
+  if src < 0 or dest < 0 or src >= count or dest > count then return false end
+  if dest > src then dest = dest - 1 end
+  if src == dest then return false end
+  local order = {}
+  for i=1,count do order[i]=i end
+  local grabbed = table.remove(order, src+1)
+  table.insert(order, dest+1, grabbed)
+  local newFxChain = rebuild_block_from_ranges(info, order)
+  return set_track_fxchain_chunk(track, newFxChain)
+end
+
 local function load_fx_chain(track, chain_path, replace_existing)
   if not track or not r.ValidatePtr(track, "MediaTrack*") then 
     return false, 'Invalid track'
@@ -1632,66 +1825,69 @@ local function load_fx_chain(track, chain_path, replace_existing)
     return false, 'No chain path provided'
   end
   
-  r.SetOnlyTrackSelected(track)
-  
-  if replace_existing then
-    local fx_count = r.TrackFX_GetCount(track)
-    for i = fx_count - 1, 0, -1 do
-      r.TrackFX_Delete(track, i)
-    end
-  end
-  
   local resource_path = r.GetResourcePath()
   local sep = package.config:sub(1,1)
-  local full_path = resource_path .. sep .. "FXChains" .. sep .. chain_path .. ".RfxChain"
-  
-  local file = io.open(full_path, "r")
-  if not file then
-    return false, string.format('FX Chain file not found: "%s"', full_path)
+  local rel = chain_path:gsub('/', sep)
+  local full_path = resource_path .. sep .. 'FXChains' .. sep .. rel .. '.RfxChain'
+  local file = io.open(full_path,'r'); if not file then return false, string.format('FX Chain file not found: "%s"', full_path) end; file:close()
+  local before = r.TrackFX_GetCount(track)
+  if replace_existing then
+    local chunkFailReason
+    local fileBlock = read_fxchain_file_block(chain_path)
+    if fileBlock then
+      if CHUNK_DEBUG then dbg('File block length '..#fileBlock) end
+      local okChunk = set_track_fxchain_chunk(track, fileBlock)
+      if okChunk then
+        local after = r.TrackFX_GetCount(track)
+        return true, string.format('FX Chain replaced "%s" (%d FX) via chunk', chain_path, after)
+      else
+        chunkFailReason = 'set_chunk_failed'
+        if CHUNK_DEBUG then dbg('Chunk replace failed; falling back to delete path') end
+      end
+    else
+      chunkFailReason = 'file_block_nil'
+      if CHUNK_DEBUG then dbg('fileBlock nil for '..tostring(chain_path)) end
+    end
+    local fx_count = r.TrackFX_GetCount(track)
+    for i=fx_count-1,0,-1 do r.TrackFX_Delete(track,i) end
+    if chunkFailReason and CHUNK_DEBUG then dbg('Fallback after reason '..chunkFailReason) end
   end
+  local success = r.TrackFX_AddByName(track, full_path, false, -1000 - r.TrackFX_GetCount(track))
+  if r.TrackFX_GetCount(track) == before then
+    success = r.TrackFX_AddByName(track, chain_path .. '.RfxChain', false, -1000 - r.TrackFX_GetCount(track))
+    if r.TrackFX_GetCount(track) == before then
+      success = r.TrackFX_AddByName(track, sep .. chain_path .. '.RfxChain', false, -1000 - r.TrackFX_GetCount(track))
+    end
+  end
+  local after = r.TrackFX_GetCount(track)
+  if after > before then
+  local tail = ''
+  if replace_existing then tail = ' (fallback add)' end
+  return true, string.format('FX Chain loaded "%s" (%d FX)%s', chain_path, after - before, tail)
+  end
+  return false, string.format('No FX added from chain "%s"', chain_path)
+end
+
+local function add_chain_file_to_track(track, chain_path)
+  if not track then return false, 'Invalid track' end
+  if not chain_path or chain_path=='' then return false, 'No chain path' end
+  local before = r.TrackFX_GetCount(track)
+  local resource_path = r.GetResourcePath()
+  local sep = package.config:sub(1,1)
+  local full_path = resource_path .. sep .. 'FXChains' .. sep .. chain_path .. '.RfxChain'
+  local file = io.open(full_path,'r')
+  if not file then return false, 'Chain file not found' end
   file:close()
-  
-  local fx_count_before = r.TrackFX_GetCount(track)
-  local method_used = "unknown"
-  
-  if type(ParseFXChain) == 'function' then
-    method_used = "ParseFXChain"
-    local chain_data = ParseFXChain(full_path)
-    if chain_data and #chain_data > 0 then
-      for _, fx_info in ipairs(chain_data) do
-        if fx_info.name then
-          r.TrackFX_AddByName(track, fx_info.name, false, -1)
-        end
-      end
-    end
-  elseif type(ReadFXChainFile) == 'function' then
-    method_used = "ReadFXChainFile"
-    local fx_list = ReadFXChainFile(full_path)
-    if fx_list and #fx_list > 0 then
-      for _, fx_name in ipairs(fx_list) do
-        r.TrackFX_AddByName(track, fx_name, false, -1)
-      end
-    end
-  else
-    method_used = "TrackFX_AddByName"
-  
-    local success = r.TrackFX_AddByName(track, full_path, false, -1000 - r.TrackFX_GetCount(track))
-    
-    if r.TrackFX_GetCount(track) == fx_count_before then
-      success = r.TrackFX_AddByName(track, chain_path .. ".RfxChain", false, -1000 - r.TrackFX_GetCount(track))
-      if r.TrackFX_GetCount(track) == fx_count_before then
-        success = r.TrackFX_AddByName(track, sep .. chain_path .. ".RfxChain", false, -1000 - r.TrackFX_GetCount(track))
-      end
-    end
+  r.TrackFX_AddByName(track, full_path, false, -1000 - r.TrackFX_GetCount(track))
+  if r.TrackFX_GetCount(track) == before then
+    r.TrackFX_AddByName(track, chain_path .. '.RfxChain', false, -1000 - r.TrackFX_GetCount(track))
   end
-  
-  local fx_count_after = r.TrackFX_GetCount(track)
-  
-  if fx_count_after > fx_count_before then
-    return true, string.format('FX Chain loaded "%s" (%d FX added) using %s', chain_path, fx_count_after - fx_count_before, method_used)
-  else
-    return false, string.format('No FX added from chain "%s" (tried %s)', chain_path, method_used)
+  if r.TrackFX_GetCount(track) == before then
+    local sep = package.config:sub(1,1)
+    r.TrackFX_AddByName(track, sep .. chain_path .. '.RfxChain', false, -1000 - r.TrackFX_GetCount(track))
   end
+  local after = r.TrackFX_GetCount(track)
+  return after > before, (after>before) and (after-before) or 0
 end
 
 local function delete_fx_chain(chain_path)
@@ -1765,23 +1961,17 @@ local function load_fx_chain_to_selected_tracks(chain_path, replace_existing)
   r.Undo_BeginBlock()
   
   local success_count = 0
-  for i = 0, selected_count - 1 do
-    local track = r.GetSelectedTrack(0, i)
+  local fileBlock = replace_existing and read_fxchain_file_block(chain_path) or nil
+  for i=0, selected_count-1 do
+    local track = r.GetSelectedTrack(0,i)
     if track then
-      if replace_existing then
-        local fx_count = r.TrackFX_GetCount(track)
-        for fx = fx_count - 1, 0, -1 do
-          r.TrackFX_Delete(track, fx)
-        end
+      if replace_existing and fileBlock then
+        if set_track_fxchain_chunk(track, fileBlock) then success_count = success_count + 1 goto continue_sel end
       end
-      
-      local resource_path = r.GetResourcePath()
-      local sep = package.config:sub(1,1)
-      local full_path = resource_path .. sep .. "FXChains" .. sep .. chain_path .. ".RfxChain"
-      
-      r.TrackFX_AddByName(track, full_path, false, -1000 - r.TrackFX_GetCount(track))
-      success_count = success_count + 1
+      local ok = select(1, add_chain_file_to_track(track, chain_path))
+      if ok then success_count = success_count + 1 end
     end
+    ::continue_sel::
   end
   
   local action = replace_existing and "replaced with" or "loaded to"
@@ -1802,23 +1992,17 @@ local function load_fx_chain_to_all_tracks(chain_path, replace_existing)
   r.Undo_BeginBlock()
   
   local success_count = 0
-  for i = 0, track_count - 1 do
-    local track = r.GetTrack(0, i)
+  local fileBlock = replace_existing and read_fxchain_file_block(chain_path) or nil
+  for i=0, track_count-1 do
+    local track = r.GetTrack(0,i)
     if track then
-      if replace_existing then
-        local fx_count = r.TrackFX_GetCount(track)
-        for fx = fx_count - 1, 0, -1 do
-          r.TrackFX_Delete(track, fx)
-        end
+      if replace_existing and fileBlock then
+        if set_track_fxchain_chunk(track, fileBlock) then success_count = success_count + 1 goto continue_all end
       end
-      
-      local resource_path = r.GetResourcePath()
-      local sep = package.config:sub(1,1)
-      local full_path = resource_path .. sep .. "FXChains" .. sep .. chain_path .. ".RfxChain"
-      
-      r.TrackFX_AddByName(track, full_path, false, -1000 - r.TrackFX_GetCount(track))
-      success_count = success_count + 1
+      local ok = select(1, add_chain_file_to_track(track, chain_path))
+      if ok then success_count = success_count + 1 end
     end
+    ::continue_all::
   end
   
   local action = replace_existing and "replaced with" or "loaded to"
@@ -2080,6 +2264,7 @@ local function snapshot_fx(track, fxIdx)
   snap.offline = get_fx_offline(track, fxIdx)
   local _, fxname = r.TrackFX_GetFXName(track, fxIdx, '')
   snap.srcAddName = fxname
+  snap.name = fxname
   local ok, renamed = pcall(function() return select(2, r.TrackFX_GetNamedConfigParm(track, fxIdx, 'renamed')) end)
   if ok and renamed and renamed ~= '' then snap.renamed = renamed end
   local pc = r.TrackFX_GetNumParams(track, fxIdx) or 0
@@ -2254,7 +2439,7 @@ local function replace_all_instances(sourceName, replacementName)
   if not replacementName or replacementName == '' then return 0, 'No replacement FX specified' end
   local replaced = 0
   r.Undo_BeginBlock()
-  for tr, _ in tracks_iter(state.scopeSelectedOnly) do
+  for tr, _ in tracks_iter(false) do
     local fxCount = r.TrackFX_GetCount(tr)
     local idxs = {}
     for i = 0, fxCount - 1 do
@@ -2400,25 +2585,17 @@ end
 
 local function ensure_picker_items()
   if state.pickerItems and type(state.pickerItems) == 'table' and #state.pickerItems > 0 then return end
- 
-  local items, err = read_cache_items()
-  if items then
-    state.pickerItems = items
-    state.pickerLoadedFromCache = true
-    state.pickerErr = nil
+  if not state.pickerTriedCache then
+    local items, err = read_cache_items()
     state.pickerTriedCache = true
-    return
-  end
-  state.pickerTriedCache = true
- 
-  local built, perr = load_plugin_items()
-  if built then
-    state.pickerItems = built
-    state.pickerLoadedFromCache = false
-    state.pickerErr = nil
-    pcall(write_cache_items, built)
-  else
-    state.pickerErr = perr or 'Failed to load plugin list'
+    if items then
+      state.pickerItems = items
+      state.pickerLoadedFromCache = true
+      state.pickerErr = nil
+      return
+    else
+      state.pickerErr = 'No cached list (press Refresh)'
+    end
   end
 end
 
@@ -2480,12 +2657,27 @@ local function release_screenshot()
   end
   state.screenshotFound = false
   state.screenshotKey = nil
+  state.screenshotNeedsRefresh = true
+  state.deferScreenshotDraw = 0
+end
+
+local function validate_screenshot_ptr()
+  if state.screenshotTex and r.ImGui_ValidatePtr then
+    local ok = false
+    pcall(function() ok = r.ImGui_ValidatePtr(state.screenshotTex, 'ImGui_Image*') end)
+    if not ok then
+      state.screenshotTex = nil
+      state.screenshotFound = false
+      state.screenshotNeedsRefresh = true
+      state.deferScreenshotDraw = 0
+    end
+  end
 end
 
 local function ensure_source_screenshot(add)
   if not add or add == '' then release_screenshot(); return end
-  if state.screenshotKey == add and (state.screenshotTex or state.screenshotFound) then return end
-  release_screenshot()
+  if state.screenshotNeedsRefresh ~= true and state.screenshotKey == add and (state.screenshotTex or state.screenshotFound) then return end
+  release_screenshot() 
   if not r.ImGui_CreateImage then state.screenshotKey = add; state.screenshotFound = false; return end
   local path = find_screenshot_path(add)
   if path then
@@ -2494,11 +2686,15 @@ local function ensure_source_screenshot(add)
       state.screenshotTex = tex
       state.screenshotFound = true
       state.screenshotKey = add
+      state.screenshotNeedsRefresh = false
+      state.deferScreenshotDraw = 1 
       return
     end
   end
   state.screenshotKey = add
   state.screenshotFound = false
+  state.screenshotNeedsRefresh = false
+  state.deferScreenshotDraw = 0
 end
 
 
@@ -2506,7 +2702,7 @@ local function delete_all_instances(sourceName, placeholderAdd, placeholderAlias
   if not sourceName or sourceName == '' then return 0, 'No source FX selected' end
   local deleted = 0
   r.Undo_BeginBlock()
-  for tr, _ in tracks_iter(state.scopeSelectedOnly) do
+  for tr, _ in tracks_iter(false) do
     local fxCount = r.TrackFX_GetCount(tr)
     local idxs = {}
     for i = 0, fxCount - 1 do
@@ -2538,7 +2734,8 @@ local function replace_by_slot_across_tracks(slotIndex0, replacementName, aliasN
   if slot < 0 then return 0, 'Invalid slot index' end
   local replaced = 0
   r.Undo_BeginBlock()
-  for tr, _ in tracks_iter(state.scopeSelectedOnly) do
+  local scopeSelected = state.replScopeSelected or state.scopeSelectedOnly
+  for tr, _ in tracks_iter(scopeSelected) do
     local fxCount = r.TrackFX_GetCount(tr)
     if fxCount > slot then
       if onlyIfName and onlyIfName ~= '' then
@@ -2586,7 +2783,8 @@ local function add_by_slot_across_tracks(slotIndex0, pluginName, aliasName)
   if slot < 0 then return 0, 'Invalid slot index' end
   local added = 0
   r.Undo_BeginBlock()
-  for tr, _ in tracks_iter(state.scopeSelectedOnly) do
+  local scopeSelected = state.replScopeSelected or state.scopeSelectedOnly
+  for tr, _ in tracks_iter(scopeSelected) do
     local fxCount = r.TrackFX_GetCount(tr)
     local destIdx
     if slot < fxCount then
@@ -2611,7 +2809,7 @@ local function add_by_slot_across_tracks(slotIndex0, pluginName, aliasName)
 end
 
 local function compute_preview()
-  local scopeSel = state.scopeSelectedOnly
+  local scopeSel = false 
   local source = state.selectedSourceFXName or ''
   local act = state.actionType or 'replace_all'
   local slot = tonumber(state.batchSlotIndex) or 0
@@ -2662,28 +2860,44 @@ end
 
  
 local function draw_replace_panel()
-  do
-    r.ImGui_Dummy(ctx, 0, 4)
-    if state.replHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
-    local open = r.ImGui_CollapsingHeader(ctx, 'Replacement', 0)
-    if open ~= nil and open ~= state.replHeaderOpen then state.replHeaderOpen = open; save_user_settings() end
+  if state.showPanelReplacement == false then return end
+  if state.replHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
+  local open = r.ImGui_CollapsingHeader(ctx, 'Replacement:', 0)
+  if open ~= nil and open ~= state.replHeaderOpen then state.replHeaderOpen = open; save_user_settings() end
   if open then
-    local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
-    
-    local chgSel, vSel = r.ImGui_Checkbox(ctx, 'Selected tracks', state.scopeSelectedOnly)
-    if chgSel then state.scopeSelectedOnly = vSel end
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Limit to selected tracks') end
+  local halfWidth = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
+    do
+      local label = (state.replaceDisplay and state.replaceDisplay ~= '') and tostring(state.replaceDisplay) or 'choose replacement plugin'
+      local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+      local textW = 0
+      if r.ImGui_CalcTextSize then textW = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0 end
+      local padX = math.max(0, (availW - textW) * 0.5)
+      local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+      if r.ImGui_GetWindowDrawList then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        if dl and r.ImGui_GetCursorScreenPos then
+          local startX, startY = r.ImGui_GetCursorScreenPos(ctx)
+          local bgX1 = startX
+          local bgY1 = startY
+          local bgX2 = startX + availW
+            local lineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
+          local bgY2 = bgY1 + lineH
+          local selCol = col_u32(0.24,0.38,0.55,0.90)
+          if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl, bgX1, bgY1, bgX2, bgY2, selCol, 4) end
+        end
+      end
+      r.ImGui_SetCursorPosX(ctx, curX + padX)
+      if state.replaceDisplay and state.replaceDisplay ~= '' then
+        r.ImGui_Text(ctx, label)
+      else
+        r.ImGui_TextDisabled(ctx, label)
+      end
+      r.ImGui_Dummy(ctx, 0, 4)
+    end
 
-    r.ImGui_SameLine(ctx, button_width + 8) 
-    local chgDummy, vDummy = r.ImGui_Checkbox(ctx, 'Use placeholder', state.useDummyReplace)
-    if chgDummy then state.useDummyReplace = vDummy end
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Use TK Blank FX as replacement') end
-    
-    r.ImGui_Dummy(ctx, 0, 2)
-    
-    if state.useDummyReplace then
+  if state.useDummyReplace then
       if not state.tkBlankVariants then refresh_tk_blank_variants() end
-      r.ImGui_SetNextItemWidth(ctx, button_width)
+      r.ImGui_SetNextItemWidth(ctx, halfWidth)
       local openedDV = r.ImGui_BeginCombo(ctx, '##dvariants', state.placeholderVariantName or 'Variant…')
       if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Choose preset variant') end
       if openedDV then
@@ -2700,8 +2914,8 @@ local function draw_replace_panel()
         end
         r.ImGui_EndCombo(ctx)
       end
-      r.ImGui_SameLine(ctx)
-      r.ImGui_SetNextItemWidth(ctx, button_width)
+  r.ImGui_SameLine(ctx, 0, gap)
+    r.ImGui_SetNextItemWidth(ctx, halfWidth)
       local chgAlias, alias
       local flags = 0
       if r.ImGui_InputTextFlags_EnterReturnsTrue then flags = flags | r.ImGui_InputTextFlags_EnterReturnsTrue() end
@@ -2726,34 +2940,130 @@ local function draw_replace_panel()
         if blanks_add then blanks_add(alias) end
       end
       if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Custom display name') end
-  else
-    local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
-    
-    r.ImGui_SetNextItemWidth(ctx, button_width)
-    local preview = (state.replaceDisplay ~= '' and state.replaceDisplay) or 'My Favorites'
-    local openedSL = r.ImGui_BeginCombo(ctx, '##shortlist', preview)
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Pick from favorites') end
-    if openedSL then
-      local del_key
-      for i, it in ipairs(state.favs or {}) do
-        if r.ImGui_Selectable(ctx, tostring(it.display), false) then
-          state.replaceWith = it.addname
-          state.replaceDisplay = tostring(it.display)
-          state.pendingMessage = 'Chosen: ' .. state.replaceDisplay
+    else
+      local button_width = r.ImGui_GetContentRegionAvail(ctx)
+      do
+        local active = state.showPicker == true
+        if active then
+          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x33AA33AA)
+          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x33CC33DD)
+          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x229922FF)
         end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_SmallButton(ctx, ('x##dropfav%d'):format(i)) then del_key = it.addname end
+        local label = active and 'Pick from list (on)' or 'Pick from list'
+        if r.ImGui_Button(ctx, label, button_width, 0) then
+          state.showPicker = not active
+        end
+        if active then r.ImGui_PopStyleColor(ctx, 3) end
       end
-      if del_key then favs_remove(del_key) end
-      r.ImGui_EndCombo(ctx)
+      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Open volledige FX browser') end
     end
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, 'Pick from list', button_width, 0) then state.showPicker = true end
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Open full FX list with search') end
-  end
+    do
+  r.ImGui_Dummy(ctx,0,3)
+  local availW = r.ImGui_GetContentRegionAvail(ctx)
+  local halfW = (availW - 8) * 0.5
+  local startX = select(1, r.ImGui_GetCursorPos(ctx))
+  r.ImGui_PushItemWidth(ctx, halfW)
+  local chgDummy2, vDummy2 = r.ImGui_Checkbox(ctx, 'Use placeholder', state.useDummyReplace)
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Use a blank placeholder plugin name instead of the real replacement FX') end
+  if chgDummy2 then state.useDummyReplace = vDummy2 end
+  r.ImGui_PopItemWidth(ctx)
+  r.ImGui_SameLine(ctx)
+  local gapAlign = 6 
+  local curX, curY = r.ImGui_GetCursorPos(ctx)
+  local targetX = startX + halfW + gapAlign
+  if curX < targetX then r.ImGui_SetCursorPosX(ctx, targetX) end
+  local chgSel, valSel = r.ImGui_Checkbox(ctx, 'Selected track(s) Only', state.replScopeSelected or false)
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Limit replace operation to currently selected tracks') end
+  if chgSel then state.replScopeSelected = valSel; save_user_settings() end
+    end
 
-    r.ImGui_Dummy(ctx, 0, 4)
+   do
+      local sourceValid = state.selectedSourceFXIndex ~= nil
+      local hasReplacement = (state.useDummyReplace and state.placeholderCustomName and state.placeholderCustomName ~= '') or (state.replaceWith and state.replaceWith ~= '')
+      local abEnabled = sourceValid and hasReplacement
+      local rowAvail = r.ImGui_GetContentRegionAvail(ctx)
+      local gapRow = 6
+      local abW = (rowAvail - gapRow) * 0.5
+      local replW = rowAvail - gapRow - abW
+      if not abEnabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+      if r.ImGui_Button(ctx, 'A/B Replace', abW, 0) then
+        local srcIdx = tonumber(state.selectedSourceFXIndex)
+        if srcIdx then if not (state.abSlotIndex == srcIdx and state.abSnap) then ensure_ab_pair() else ab_toggle() end end
+      end
+      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+        if not (state.abSlotIndex == tonumber(state.selectedSourceFXIndex) and state.abSnap) then
+          r.ImGui_SetTooltip(ctx, 'Prepare A/B pair (source & replacement) for quick toggling')
+        else
+          r.ImGui_SetTooltip(ctx, 'Toggle between original (A) and replacement (B)')
+        end
+      end
+      if not abEnabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+      r.ImGui_SameLine(ctx,0,gapRow)
+     
+      local pushedTight = false
+      if r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 6, 2) 
+        pushedTight = true
+      end
 
+  local rowW = r.ImGui_GetContentRegionAvail(ctx)
+  local btnW = rowW
+      local srcIdx = tonumber(state.selectedSourceFXIndex)
+      local selectedTrackCount = r.CountSelectedTracks(0)
+      local hasReplacementCurrent = sourceValid and hasReplacement
+      local canDo = (srcIdx ~= nil) and hasReplacementCurrent and ((state.replScopeSelected and selectedTrackCount>0) or (not state.replScopeSelected))
+      if not canDo and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+  if r.ImGui_Button(ctx, 'Replace Source', btnW, 0) then
+        local addName = state.useDummyReplace and ensure_tk_blank_addname(state.placeholderCustomName) or state.replaceWith
+        if addName and addName ~= '' then
+          if state.replScopeSelected then
+            local replacedCount = 0
+            r.Undo_BeginBlock2(0)
+            for t = 0, selectedTrackCount - 1 do
+              local tr = r.GetSelectedTrack(0, t)
+              if tr and r.ValidatePtr(tr, 'MediaTrack*') then
+                local fxCount = r.TrackFX_GetCount(tr)
+                local matchIdx = {}
+                for i = 0, fxCount - 1 do if get_fx_name(tr, i) == state.selectedSourceFXName then matchIdx[#matchIdx+1]=i end end
+                table.sort(matchIdx, function(a,b) return a>b end)
+                for _, idx in ipairs(matchIdx) do
+                  local deletedOK = pcall(function() r.TrackFX_Delete(tr, idx) end)
+                  if deletedOK then
+                    local newIdx = r.TrackFX_AddByName(tr, addName, false, -1)
+                    if newIdx and newIdx >= 0 then
+                      if newIdx ~= idx then pcall(function() r.TrackFX_CopyToTrack(tr, newIdx, tr, idx, true) end) end
+                      replacedCount = replacedCount + 1
+                      if state.useDummyReplace and state.placeholderCustomName and state.placeholderCustomName ~= '' then rename_fx_instance(tr, idx, state.placeholderCustomName) end
+                    end
+                  end
+                end
+              end
+            end
+            r.Undo_EndBlock2(0, 'Replace FX on selected tracks', -1)
+            if replacedCount > 0 then state.selectedSourceFXName = addName; state.pendingMessage = string.format('Replaced %d instance(s).', replacedCount) else state.pendingError = 'No matching FX found.' end
+          else
+            local source = state.selectedSourceFXName
+            local cnt = select(1, replace_all_instances(source, addName))
+            state.pendingMessage = string.format('%d instances replaced.', cnt)
+          end
+        else
+          state.pendingError = 'No replacement FX name.'
+        end
+      end
+      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+        if state.replScopeSelected then
+          r.ImGui_SetTooltip(ctx, 'Replace the source FX with the replacement on selected track(s)')
+        else
+          r.ImGui_SetTooltip(ctx, 'Replace every instance of the source FX with the replacement across all tracks')
+        end
+      end
+      if not canDo and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+
+  if pushedTight and r.ImGui_PopStyleVar then r.ImGui_PopStyleVar(ctx,1) end
+  r.ImGui_Dummy(ctx,0,1)
+   end
+    
+   
     local tracksAffected, changes = compute_preview()
     
     local canExecute = true
@@ -2765,763 +3075,989 @@ local function draw_replace_panel()
 
     if not canExecute and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
     
-    local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
+  if not canExecute and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
     
-    if r.ImGui_Button(ctx, 'Replace all', button_width, 0) then
-      state.actionType = 'replace_all'
-      local source = state.selectedSourceFXName
-      local addName = state.useDummyReplace and ensure_tk_blank_addname(state.placeholderCustomName) or state.replaceWith
-      local cnt = select(1, replace_all_instances(source, addName))
-      state.pendingMessage = string.format('%d instances replaced.', cnt)
-    end
-    
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-      r.ImGui_SetTooltip(ctx, 'Replace all instances of source FX everywhere')
-    end
-    
-    r.ImGui_SameLine(ctx)
-    
-    if r.ImGui_Button(ctx, 'Delete all', button_width, 0) then
-      state.actionType = 'delete_all'
-      local source = state.selectedSourceFXName
-      local cnt = select(1, delete_all_instances(source, nil, nil))
-      state.pendingMessage = string.format('%d instances deleted.', cnt)
-    end
-    
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-      r.ImGui_SetTooltip(ctx, 'Delete all instances of source FX')
-    end
-    
-    if not canExecute and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+  local gap = 6
+  local availRowW = r.ImGui_GetContentRegionAvail(ctx)
+  local colW = (availRowW - gap) * 0.5
+  if colW < 90 then colW = 90 end
+  local rowStartX = r.ImGui_GetCursorPosX(ctx)
+  r.ImGui_PushItemWidth(ctx, 70)
+  local chgSlot, slot1 = r.ImGui_InputInt(ctx, '##slot_inline', (tonumber(state.batchSlotIndex) or 0) + 1)
+  if chgSlot then state.batchSlotIndex = math.max(0, (tonumber(slot1) or 1) - 1) end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Slot number (1-based)') end
+  r.ImGui_PopItemWidth(ctx)
 
-    -- r.ImGui_Dummy(ctx, 0, 4)
+  local secondX = rowStartX + colW + gap
+  r.ImGui_SameLine(ctx, 0, 0)
+  r.ImGui_SetCursorPosX(ctx, secondX)
+  local chgMS, vMS = r.ImGui_Checkbox(ctx, 'Only if slot is source', state.slotMatchSourceOnly)
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Apply only when the slot currently contains the chosen source FX') end
+  if chgMS then state.slotMatchSourceOnly = vMS end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'When enabled: replace/add only if this slot currently holds the selected source FX') end
 
-    local move_button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
-    local hasSelection = state.selectedSourceFXName ~= nil and state.selectedSourceFXName ~= ''
-    
-    if not hasSelection then r.ImGui_BeginDisabled(ctx) end
-    if r.ImGui_Button(ctx, 'Move Up All', move_button_width, 0) then
-      local source = state.selectedSourceFXName
-      local cnt, msg = move_all_instances_up(source)
-      if cnt > 0 then
-        state.pendingMessage = msg
-      else
-        state.pendingError = msg or 'No instances moved up'
-      end
-    end
-    if not hasSelection then r.ImGui_EndDisabled(ctx) end
-    
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-      r.ImGui_SetTooltip(ctx, 'Move all instances of source FX up in their chains')
-    end
-    
-    r.ImGui_SameLine(ctx)
-    
-    if not hasSelection then r.ImGui_BeginDisabled(ctx) end
-    if r.ImGui_Button(ctx, 'Move Down All', move_button_width, 0) then
-      local source = state.selectedSourceFXName
-      local cnt, msg = move_all_instances_down(source)
-      if cnt > 0 then
-        state.pendingMessage = msg
-      else
-        state.pendingError = msg or 'No instances moved down'
-      end
-    end
-    if not hasSelection then r.ImGui_EndDisabled(ctx) end
-    
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-      r.ImGui_SetTooltip(ctx, 'Move all instances of source FX down in their chains')
-    end
-
-    r.ImGui_Dummy(ctx, 0, 2)
-    r.ImGui_Separator(ctx)
-    
-    r.ImGui_SetNextItemWidth(ctx,80)
-    local chgSlot, slot1 = r.ImGui_InputInt(ctx, '##slot', (tonumber(state.batchSlotIndex) or 0) + 1)
-    if chgSlot then state.batchSlotIndex = math.max(0, (tonumber(slot1) or 1) - 1) end
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Slot number for slot actions') end
-    
-    r.ImGui_SameLine(ctx)
-    local chgMS, vMS = r.ImGui_Checkbox(ctx, 'Match source', state.slotMatchSourceOnly)
-    if chgMS then state.slotMatchSourceOnly = vMS end
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Only replace when slot contains source FX') end
-    
-    -- Slot action buttons
-    r.ImGui_Dummy(ctx, 0, 2)
-    local slot_button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
-    
-    if not canExecute and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
-    
-    if r.ImGui_Button(ctx, 'Replace slot', slot_button_width, 0) then
-      state.actionType = 'replace_slot'
-      local source = state.selectedSourceFXName
-      local addName = state.useDummyReplace and ensure_tk_blank_addname(state.placeholderCustomName) or state.replaceWith
-      local alias = state.useDummyReplace and state.placeholderCustomName or nil
-      local onlyIf = (state.slotMatchSourceOnly and source) or nil
-      local cnt = select(1, replace_by_slot_across_tracks(state.batchSlotIndex, addName, alias, onlyIf))
-      state.pendingMessage = string.format('Replaced on %d track(s).', cnt)
-    end
-    
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-      r.ImGui_SetTooltip(ctx, string.format('Replace slot #%d across tracks', (state.batchSlotIndex or 0) + 1))
-    end
-    
-    r.ImGui_SameLine(ctx)
-    
-    if r.ImGui_Button(ctx, 'Add at slot', slot_button_width, 0) then
-      state.actionType = 'add_slot'
-      local addName = state.useDummyReplace and ensure_tk_blank_addname(state.placeholderCustomName) or state.replaceWith
-      local alias = state.useDummyReplace and state.placeholderCustomName or nil
-      local cnt = select(1, add_by_slot_across_tracks(state.batchSlotIndex, addName, alias))
-      state.pendingMessage = string.format('Added on %d track(s).', cnt)
-    end
-    
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-      r.ImGui_SetTooltip(ctx, string.format('Add replacement at slot #%d across tracks', (state.batchSlotIndex or 0) + 1))
-    end
-    
-    if not canExecute and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
-    
-    -- Preview text at bottom, centered
-    r.ImGui_Dummy(ctx, 0, 8)
-    local preview_text = string.format('Preview: %d change(s) on %d track(s)', changes, tracksAffected)
-    local text_width = r.ImGui_CalcTextSize(ctx, preview_text)
-    local avail_width = r.ImGui_GetContentRegionAvail(ctx)
-    local offset = math.max(0, (avail_width - text_width) * 0.5)
-    r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + offset)
-    r.ImGui_TextDisabled(ctx, preview_text)
-    
-    r.ImGui_Dummy(ctx, 0, 4)
-  end 
-
-  do
-    if state.sourceHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
-    local prevOpen = state.sourceHeaderOpen
-    local open = r.ImGui_CollapsingHeader(ctx, 'Source Controls', 0)
-    if open ~= nil and open ~= state.sourceHeaderOpen then state.sourceHeaderOpen = open; save_user_settings() end
-    if open ~= nil and open ~= prevOpen then
-      release_screenshot()
-    end
+  local btnW = colW
+  if btnW < 90 then btnW = 90 end
+  local beforeBtnX = r.ImGui_GetCursorPosX(ctx)
+  if not canExecute and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+  if r.ImGui_Button(ctx, 'Replace slot', btnW, 0) then
+    state.actionType = 'replace_slot'
+    local source = state.selectedSourceFXName
+    local addName = state.useDummyReplace and ensure_tk_blank_addname(state.placeholderCustomName) or state.replaceWith
+    local alias = state.useDummyReplace and state.placeholderCustomName or nil
+    local onlyIf = (state.slotMatchSourceOnly and source) or nil
+    local cnt = select(1, replace_by_slot_across_tracks(state.batchSlotIndex, addName, alias, onlyIf))
+    state.pendingMessage = string.format('Replaced on %d track(s).', cnt)
   end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, string.format('Replace slot #%d across tracks', (state.batchSlotIndex or 0) + 1)) end
+
+  r.ImGui_SameLine(ctx, 0, gap)
+  if r.ImGui_Button(ctx, 'Add at slot', btnW, 0) then
+    state.actionType = 'add_slot'
+    local addName = state.useDummyReplace and ensure_tk_blank_addname(state.placeholderCustomName) or state.replaceWith
+    local alias = state.useDummyReplace and state.placeholderCustomName or nil
+    local cnt = select(1, add_by_slot_across_tracks(state.batchSlotIndex, addName, alias))
+    state.pendingMessage = string.format('Added on %d track(s).', cnt)
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, string.format('Add replacement at slot #%d across tracks', (state.batchSlotIndex or 0) + 1)) end
+  if not canExecute and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+
+      if changes and tracksAffected and changes >= 0 then
+      state.previewPending = string.format('Preview: %d change(s) on %d track(s)', changes, tracksAffected)
+    end
+  r.ImGui_Dummy(ctx, 0, 2)
+  r.ImGui_Separator(ctx)
+    
+  end 
+end 
+
+local function draw_source_panel()
+  if state.showPanelSource == false then return end
+  if state.sourceHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
+  local prevOpen = state.sourceHeaderOpen
+  local open = r.ImGui_CollapsingHeader(ctx, 'Source:', 0)
+  if open ~= nil and open ~= state.sourceHeaderOpen then state.sourceHeaderOpen = open; save_user_settings() end
+  if open ~= nil and open ~= prevOpen then
+    state.deferScreenshotDraw = 1
+  end
+  if not (state.sourceHeaderOpen and open) then return end
   local tr = get_selected_track()
   local srcIdx = tonumber(state.selectedSourceFXIndex)
-  if state.sourceHeaderOpen then
-    if tr and srcIdx then
-    if state.abSlotIndex and state.abSlotIndex ~= srcIdx then
-
-      if state.abActiveIsRepl then ab_cancel() else
- 
-        state.abSlotIndex, state.abSnap, state.abActiveIsRepl = nil, nil, false
-      end
-    end
-    local prepared = (state.abSlotIndex == srcIdx) and (state.abSnap ~= nil)
-    local srcCtrlIdx = srcIdx
-
-    do
-      local sname = state.selectedSourceFXName
-      if not sname or sname == '' then local _, nm = r.TrackFX_GetFXName(tr, srcIdx, ''); sname = nm end
-      local disp = format_fx_display_name(sname)
-      r.ImGui_Text(ctx, 'Source: ' .. tostring(disp or ''))
-    end
-
-    local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
-    
-    do
-      local en = get_fx_enabled(tr, srcCtrlIdx)
-      local bypassActive = (en ~= nil) and (not en)
-      local pushed = 0
-      if bypassActive and r.ImGui_PushStyleColor then
-        local br,bg,bb = 0.45, 0.35, 0.10
-        local hr,hg,hb = lighten(br,bg,bb, 0.10)
-        local ar,ag,ab = lighten(br,bg,bb, -0.08)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(br,bg,bb,1.0)); pushed = pushed + 1
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushed = pushed + 1
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(ar,ag,ab,1.0)); pushed = pushed + 1
-      end
-      if r.ImGui_Button(ctx, 'Bypass', button_width, 0) then
-        local en2 = get_fx_enabled(tr, srcCtrlIdx)
-        set_fx_enabled(tr, srcCtrlIdx, en2 == nil and false or (not en2))
-      end
-      if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
-      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Toggle bypass for source FX') end
-    end
-    
-    r.ImGui_SameLine(ctx)
-    
-    do
-      local off = get_fx_offline(tr, srcCtrlIdx)
-      local offActive = (off ~= nil) and off
-      local pushed = 0
-      if offActive and r.ImGui_PushStyleColor then
-        local br,bg,bb = 0.38, 0.20, 0.20
-        local hr,hg,hb = lighten(br,bg,bb, 0.10)
-        local ar,ag,ab = lighten(br,bg,bb, -0.08)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(br,bg,bb,1.0)); pushed = pushed + 1
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushed = pushed + 1
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(ar,ag,ab,1.0)); pushed = pushed + 1
-      end
-      if r.ImGui_Button(ctx, 'Offline', button_width, 0) then
-        local off2 = get_fx_offline(tr, srcCtrlIdx)
-        set_fx_offline(tr, srcCtrlIdx, off2 == nil and true or (not off2))
-      end
-      if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
-      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Toggle offline for source FX') end
-    end
-
-    do
-      local dstate = get_fx_delta_active(tr, srcCtrlIdx)
-      local pushed = 0
-      if dstate ~= nil and dstate and r.ImGui_PushStyleColor then
-        local br,bg,bb = 0.20, 0.38, 0.20
-        local hr,hg,hb = lighten(br,bg,bb, 0.10)
-        local ar,ag,ab = lighten(br,bg,bb, -0.08)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(br,bg,bb,1.0)); pushed = pushed + 1
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushed = pushed + 1
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(ar,ag,ab,1.0)); pushed = pushed + 1
-      end
-      local disabled = (dstate == nil)
-      if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
-      if r.ImGui_Button(ctx, 'Delta', button_width, 0) then toggle_fx_delta(tr, srcCtrlIdx) end
-      if disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
-      if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
-      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Toggle Delta solo (if plugin supports it)') end
-    end
-    
-    r.ImGui_SameLine(ctx)
-    
-    local abEnabled = true
-    if not state.useDummyReplace and (not state.replaceWith or state.replaceWith == '') then abEnabled = false end
-    if not abEnabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
-    local abPush = 0
-    if r.ImGui_PushStyleColor then
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.22, 0.40, 0.62, 1.0)); abPush = abPush + 1
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.28, 0.50, 0.75, 1.0)); abPush = abPush + 1
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.18, 0.34, 0.54, 1.0)); abPush = abPush + 1
-    end
-    if r.ImGui_Button(ctx, 'A/B (Replace)', button_width, 0) then
-      if not (state.abSlotIndex == srcIdx and state.abSnap) then ensure_ab_pair() else ab_toggle() end
-    end
-    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Switch between Source and Replacement. First press prepares the pair, next presses toggle.') end
-    if abPush > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, abPush) end
-    if not abEnabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
-
-    r.ImGui_Dummy(ctx, 0, 6)
-    local mixVal = get_fx_overall_wet(tr, srcCtrlIdx)
-    local size = 36
-    local initVal = mixVal or 1.0
-    local knobLeft, knobTop
-    do
-      local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
-      local curX, curY = r.ImGui_GetCursorPos(ctx)
-      local left = curX + math.max(0, (availW - size) * 0.5)
-      r.ImGui_SetCursorPosX(ctx, left)
-      knobLeft, knobTop = left, curY
-    end
-    local changed, v = knob_widget('##mix_knob', initVal, size)
-    if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then
-      r.ImGui_SetTooltip(ctx, 'Overall Wet: ' .. tostring(math.floor((v or 0)*100+0.5)) .. '%')
-    end
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0) then v, changed = 1.0, true end
-  if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1) then v, changed = 0.5, true end
-    do
-      local tw = select(1, r.ImGui_CalcTextSize(ctx, 'Wet: 100%')) or 60
-      local centerX = (knobLeft or 0) + size * 0.5
-      local curX, curY = r.ImGui_GetCursorPos(ctx)
-      r.ImGui_SetCursorPos(ctx, centerX - tw * 0.5, (knobTop or curY) + size + 6)
-      r.ImGui_Text(ctx, ('Wet: %d%%'):format(math.floor((v or 0)*100+0.5)))
-      r.ImGui_SetCursorPosY(ctx, curY)
-    end
-    if changed then set_fx_overall_wet(tr, srcCtrlIdx, v) end
-  r.ImGui_Dummy(ctx, 0, 30)
-    do
-      local _, addname = r.TrackFX_GetFXName(tr, srcCtrlIdx, '')
-      if state.showScreenshot then
-        ensure_source_screenshot(addname)
-        local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
-        local maxW = math.max(120, math.min(280, availW - 8))
-        local imgW, imgH = maxW, math.floor(maxW * 0.56)
-        if state.screenshotTex then
-          -- Extra validation to prevent crashes
-          if not state.screenshotTex or state.screenshotTex == 0 or type(state.screenshotTex) ~= "userdata" then
-            release_screenshot()
-          else
-            local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
-            local left = curX + math.max(0, (availW - imgW) * 0.5)
-            r.ImGui_SetCursorPosX(ctx, left)
-            if r.ImGui_Image then
-              local ok, err = pcall(function() r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end)
-              if not ok then
-                release_screenshot()
-                local label = 'no image'
-                local tw2 = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
-                local curX2 = select(1, r.ImGui_GetCursorPos(ctx)) or 0
-                local left2 = curX2 + math.max(0, (availW - tw2) * 0.5)
-                r.ImGui_SetCursorPosX(ctx, left2)
-                r.ImGui_TextDisabled(ctx, label)
-              end
-            end
-          end
-        else
-          local label = 'no image'
-          local tw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
-          local curX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
-          local left = curX + math.max(0, (availW - tw) * 0.5)
-          r.ImGui_SetCursorPosX(ctx, left)
-          r.ImGui_TextDisabled(ctx, label)
+  if not (tr and srcIdx) then r.ImGui_Text(ctx, 'Pick a Source'); return end
+  if state.abSlotIndex and state.abSlotIndex ~= srcIdx then
+    if state.abActiveIsRepl then ab_cancel() else state.abSlotIndex, state.abSnap, state.abActiveIsRepl = nil, nil, false end
+  end
+  local srcCtrlIdx = srcIdx
+  local sname = state.selectedSourceFXName
+  if not sname or sname == '' then local _, nm = r.TrackFX_GetFXName(tr, srcIdx, ''); sname = nm end
+  local disp = format_fx_display_name(sname)
+  do
+    local label = tostring(disp or '')
+    local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local textW = 0
+    if r.ImGui_CalcTextSize then textW = select(1,r.ImGui_CalcTextSize(ctx,label)) or 0 end
+    local padX = math.max(0,(availW - textW)*0.5)
+    local curX, curY = select(1,r.ImGui_GetCursorPos(ctx)) or 0, select(2,r.ImGui_GetCursorPos(ctx)) or 0
+    if r.ImGui_GetWindowDrawList then
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      if dl and r.ImGui_GetCursorScreenPos then
+        local startX, startY = r.ImGui_GetCursorScreenPos(ctx)
+        local bgX1 = startX
+        local bgY1 = startY
+        local bgX2 = startX + availW
+        local lineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
+        local bgY2 = bgY1 + lineH
+        local selCol = col_u32(0.24,0.38,0.55,0.90)
+        if r.ImGui_DrawList_AddRectFilled then
+          r.ImGui_DrawList_AddRectFilled(dl, bgX1, bgY1, bgX2, bgY2, selCol, 4)
         end
-      else
-        release_screenshot()
       end
     end
+    r.ImGui_SetCursorPosX(ctx, curX + padX)
+    r.ImGui_Text(ctx, label)
+  end
+  r.ImGui_Dummy(ctx,0,2)
+  local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+  if state.showScreenshot then
+    local _, addname = r.TrackFX_GetFXName(tr, srcCtrlIdx, '')
+    validate_screenshot_ptr()
+    if state.screenshotNeedsRefresh or state.screenshotKey ~= addname or not state.screenshotTex then
+      state.screenshotNeedsRefresh = true
+      ensure_source_screenshot(addname)
+    end
+    local maxW = math.max(120, math.min(280, availW - 8))
+    local imgW, imgH = maxW, math.floor(maxW * 0.56)
+    local pad, spacing = 8, 8
+    local knobSize = math.floor(math.min(imgW, imgH) * 0.30); if knobSize < 34 then knobSize = 34 end
+    local deltaBtnH, labelH = 18, 16
+    local mixValPreview = get_fx_overall_wet(tr, srcCtrlIdx) or 1.0
+    local previewTxt = ('Wet %d%%'):format(math.floor(mixValPreview*100+0.5))
+    local labelW = 0; if r.ImGui_CalcTextSize then labelW = select(1, r.ImGui_CalcTextSize(ctx, previewTxt)) or 0 end
+    local neededInnerW = math.max(knobSize, 64, labelW)
+    local ctrlBoxW = neededInnerW + pad * 2 + 6
+    local ctrlBoxH = pad + deltaBtnH + 2 + knobSize + 2 + labelH + pad
+    local imgBoxW = imgW + pad * 2
+    local imgBoxH = imgH + pad * 2
+    local frameH = math.max(imgBoxH, ctrlBoxH)
+    local totalW = imgBoxW + spacing + ctrlBoxW
+    if not state.hideWetControl and imgBoxH > ctrlBoxH * 1.35 then
+      local desiredImgH = math.max(ctrlBoxH - pad * 2, 40)
+      local scale = desiredImgH / imgH
+      if scale < 1.0 then
+        imgW = math.max(80, math.floor(imgW * scale))
+        imgH = math.floor(imgH * scale)
+        imgBoxW = imgW + pad * 2
+        imgBoxH = imgH + pad * 2
+        frameH = math.max(imgBoxH, ctrlBoxH)
+      end
+    end
+    if totalW > availW - 4 then
+      local maxImgAllowed = math.max(80, (availW - ctrlBoxW - spacing - pad * 2))
+      if maxImgAllowed < imgW then
+        imgW = maxImgAllowed; imgH = math.floor(imgW * 0.56)
+        imgBoxW = imgW + pad * 2; imgBoxH = imgH + pad * 2
+        frameH = math.max(imgBoxH, ctrlBoxH)
+        totalW = imgBoxW + spacing + ctrlBoxW
+      end
+    end
+    local startX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+    local startY = select(2, r.ImGui_GetCursorPos(ctx)) or 0
+  totalW = imgBoxW + spacing + ctrlBoxW
+  state.lastSourceBlockWidth = totalW 
+    if totalW < 0 then totalW = 0 end
+    local offset
+    if totalW >= availW then
+      offset = 0 
     else
-      r.ImGui_Text(ctx, 'Pick a Source')
+      offset = math.floor((availW - totalW) * 0.5 + 0.5)
+    end
+    local imgX = startX + offset
+    local ctrlX = imgX + imgBoxW + spacing
+    if state.hideWetControl then
+      frameH = imgBoxH
+      imgX = startX + math.max(0,(availW - imgBoxW) * 0.5)
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX, startY) end
+      if r.ImGui_GetWindowDrawList then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local x1,y1 = r.ImGui_GetCursorScreenPos(ctx)
+        local x2,y2 = x1 + imgBoxW, y1 + frameH
+        if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl, x1,y1,x2,y2, col_u32(0.05,0.05,0.05,0.45), 6) end
+        if r.ImGui_DrawList_AddRect then r.ImGui_DrawList_AddRect(dl, x1,y1,x2,y2, col_u32(0.8,0.8,0.8,0.25), 6,0,1.1) end
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX + pad, startY + pad) end
+      if state.deferScreenshotDraw and state.deferScreenshotDraw > 0 then
+        state.deferScreenshotDraw = state.deferScreenshotDraw - 1
+        local placeholder = 'Loading...'
+        local tw,th = 0,0
+        if r.ImGui_CalcTextSize then tw,th = r.ImGui_CalcTextSize(ctx, placeholder) end
+        local offX = (imgW - tw) * 0.5
+        local offY = (imgH - th) * 0.5
+        r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
+        r.ImGui_TextDisabled(ctx, placeholder)
+      elseif state.screenshotTex and type(state.screenshotTex)=='userdata' then
+        local ok = pcall(function() if r.ImGui_Image then r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end end)
+        if not ok then release_screenshot() end
+      else
+        local placeholder = 'No Image'
+        local tw,th = 0,0
+        if r.ImGui_CalcTextSize then tw,th = r.ImGui_CalcTextSize(ctx, placeholder) end
+        local offX = (imgW - tw) * 0.5
+        local offY = (imgH - th) * 0.5
+        r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
+        r.ImGui_TextDisabled(ctx, placeholder)
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX, startY + frameH + 6) end
+    else
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX, startY) end
+      if r.ImGui_GetWindowDrawList then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local x1,y1 = r.ImGui_GetCursorScreenPos(ctx)
+        local x2,y2 = x1 + imgBoxW, y1 + frameH
+        if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl, x1,y1,x2,y2, col_u32(0.05,0.05,0.05,0.45), 6) end
+        if r.ImGui_DrawList_AddRect then r.ImGui_DrawList_AddRect(dl, x1,y1,x2,y2, col_u32(0.8,0.8,0.8,0.25), 6,0,1.1) end
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX + pad, startY + pad) end
+      if state.deferScreenshotDraw and state.deferScreenshotDraw > 0 then
+        state.deferScreenshotDraw = state.deferScreenshotDraw - 1
+        local placeholder = 'Loading...'
+        local tw,th = 0,0
+        if r.ImGui_CalcTextSize then tw,th = r.ImGui_CalcTextSize(ctx, placeholder) end
+        local offX = (imgW - tw) * 0.5
+        local offY = (imgH - th) * 0.5
+        r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
+        r.ImGui_TextDisabled(ctx, placeholder)
+      elseif state.screenshotTex and type(state.screenshotTex)=='userdata' then
+        local ok = pcall(function() if r.ImGui_Image then r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end end)
+        if not ok then release_screenshot() end
+      else
+        local placeholder = 'No Image'
+        local tw,th = 0,0
+        if r.ImGui_CalcTextSize then tw,th = r.ImGui_CalcTextSize(ctx, placeholder) end
+        local offX = (imgW - tw) * 0.5
+        local offY = (imgH - th) * 0.5
+        r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
+        r.ImGui_TextDisabled(ctx, placeholder)
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, ctrlX, startY) end
+      if r.ImGui_GetWindowDrawList then
+        local dl2 = r.ImGui_GetWindowDrawList(ctx)
+        local cx1,cy1 = r.ImGui_GetCursorScreenPos(ctx)
+        local cx2,cy2 = cx1 + ctrlBoxW, cy1 + frameH
+        if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl2, cx1,cy1,cx2,cy2, col_u32(0.05,0.05,0.05,0.55), 6) end
+        if r.ImGui_DrawList_AddRect then r.ImGui_DrawList_AddRect(dl2, cx1,cy1,cx2,cy2, col_u32(0.9,0.9,0.9,0.30), 6,0,1.2) end
+      end
+      local innerX, innerY = ctrlX + pad, startY + pad
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, innerX + (ctrlBoxW - pad*2 - 64)*0.5, innerY) end
+      local dstate = get_fx_delta_active(tr, srcCtrlIdx)
+      do
+        local pushed=0
+        if dstate and r.ImGui_PushStyleColor then
+          local br,bg,bb=0.20,0.38,0.20; local hr,hg,hb=lighten(br,bg,bb,0.10); local ar,ag,ab=lighten(br,bg,bb,-0.08)
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_Button(),col_u32(br,bg,bb,1.0)); pushed=pushed+1
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_ButtonHovered(),col_u32(hr,hg,hb,1.0)); pushed=pushed+1
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_ButtonActive(),col_u32(ar,ag,ab,1.0)); pushed=pushed+1
+        end
+        local disabled = (dstate == nil)
+        if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+        if r.ImGui_Button(ctx,'Delta',64,deltaBtnH) then toggle_fx_delta(tr, srcCtrlIdx) end
+        if disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        if pushed>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushed) end
+        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle Delta solo (if plugin supports it)') end
+      end
+      local knobPosX = innerX + (ctrlBoxW - pad*2 - knobSize)*0.5
+      local knobPosY = innerY + deltaBtnH + 2
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, knobPosX, knobPosY) end
+      local mixVal = get_fx_overall_wet(tr, srcCtrlIdx) or 1.0
+      local changedOV, newVal = knob_widget('##mix_knob_overlay', mixVal, knobSize)
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, ('Overall Wet: %d%% (Double-click=100, Right-click=50)'):format(math.floor(((newVal or mixVal) or 0)*100+0.5))) end
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx,0) then newVal,changedOV=1.0,true end
+      if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx,1) then newVal,changedOV=0.5,true end
+      if changedOV then set_fx_overall_wet(tr, srcCtrlIdx, newVal) end
+      if r.ImGui_CalcTextSize then
+        local pctLabel = ('Wet %d%%'):format(math.floor(((newVal or mixVal))*100+0.5))
+        local tw = select(1, r.ImGui_CalcTextSize(ctx, pctLabel)) or 0
+        local labelX = innerX + (ctrlBoxW - pad*2 - tw)*0.5
+  if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, labelX, knobPosY + knobSize + 2) end
+        r.ImGui_Text(ctx, pctLabel)
+      end
+    end
+    do
+      local afterY = (startY or 0) + frameH + 2
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX or 0, afterY) end
+    end
+  else
+    if not state.hideWetControl then
+      local pad = 8
+      local deltaBtnH, labelH = 18, 16
+      local baseImgW = math.max(120, math.min(280, availW - 8))
+      local baseImgH = math.floor(baseImgW * 0.56)
+      local knobSize = math.floor(math.min(baseImgW, baseImgH) * 0.30); if knobSize < 34 then knobSize = 34 end
+      local mixValPreview = get_fx_overall_wet(tr, srcCtrlIdx) or 1.0
+      local previewTxt = ('Wet %d%%'):format(math.floor(mixValPreview*100+0.5))
+      local labelW = 0; if r.ImGui_CalcTextSize then labelW = select(1, r.ImGui_CalcTextSize(ctx, previewTxt)) or 0 end
+      local neededInnerW = math.max(knobSize, 64, labelW)
+      local ctrlBoxW = neededInnerW + pad * 2 + 6
+      local ctrlBoxH = pad + deltaBtnH + 2 + knobSize + 2 + labelH + pad
+      local startX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+      local startY = select(2, r.ImGui_GetCursorPos(ctx)) or 0
+      local ctrlX = startX + math.max(0,(availW - ctrlBoxW) * 0.5)
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, ctrlX, startY) end
+      if r.ImGui_GetWindowDrawList then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local x1,y1 = r.ImGui_GetCursorScreenPos(ctx)
+        local x2,y2 = x1 + ctrlBoxW, y1 + ctrlBoxH
+        if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl, x1,y1,x2,y2, col_u32(0.05,0.05,0.05,0.55), 6) end
+        if r.ImGui_DrawList_AddRect then r.ImGui_DrawList_AddRect(dl, x1,y1,x2,y2, col_u32(0.9,0.9,0.9,0.30), 6,0,1.2) end
+      end
+      local innerX, innerY = ctrlX + pad, startY + pad
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, innerX + (ctrlBoxW - pad*2 - 64)*0.5, innerY) end
+      local dstate = get_fx_delta_active(tr, srcCtrlIdx)
+      do
+        local pushed=0
+        if dstate and r.ImGui_PushStyleColor then
+          local br,bg,bb=0.20,0.38,0.20; local hr,hg,hb=lighten(br,bg,bb,0.10); local ar,ag,ab=lighten(br,bg,bb,-0.08)
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_Button(),col_u32(br,bg,bb,1.0)); pushed=pushed+1
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_ButtonHovered(),col_u32(hr,hg,hb,1.0)); pushed=pushed+1
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_ButtonActive(),col_u32(ar,ag,ab,1.0)); pushed=pushed+1
+        end
+        local disabled = (dstate == nil)
+        if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+        if r.ImGui_Button(ctx,'Delta',64,deltaBtnH) then toggle_fx_delta(tr, srcCtrlIdx) end
+        if disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        if pushed>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushed) end
+        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle Delta solo (if plugin supports it)') end
+      end
+      local knobPosX = innerX + (ctrlBoxW - pad*2 - knobSize)*0.5
+      local knobPosY = innerY + deltaBtnH + 2
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, knobPosX, knobPosY) end
+      local mixVal = mixValPreview
+      local changedOV, newVal = knob_widget('##mix_knob_centered', mixVal, knobSize)
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, ('Overall Wet: %d%% (Double-click=100, Right-click=50)'):format(math.floor(((newVal or mixVal))*100+0.5))) end
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx,0) then newVal,changedOV=1.0,true end
+      if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx,1) then newVal,changedOV=0.5,true end
+      if changedOV then set_fx_overall_wet(tr, srcCtrlIdx, newVal) end
+      if r.ImGui_CalcTextSize then
+        local pctLabel = ('Wet %d%%'):format(math.floor(((newVal or mixVal))*100+0.5))
+        local tw = select(1, r.ImGui_CalcTextSize(ctx, pctLabel)) or 0
+        local labelX = innerX + (ctrlBoxW - pad*2 - tw)*0.5
+        if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, labelX, knobPosY + knobSize + 4) end
+        r.ImGui_Text(ctx, pctLabel)
+      end
+  if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX, startY + ctrlBoxH + 2) end
     end
   end
-
-  do
-    local openFxC = r.ImGui_CollapsingHeader(ctx, 'FXChain Controls', 0)
-    if openFxC ~= nil and openFxC ~= state.fxChainHeaderOpen then
-      state.fxChainHeaderOpen = openFxC; save_user_settings()
+  r.ImGui_Dummy(ctx,0,4)
+  local hasSelName = state.selectedSourceFXName and state.selectedSourceFXName ~= ''
+  if r.ImGui_Checkbox then
+  local changed, val = r.ImGui_Checkbox(ctx, 'Only selected track(s)', state.scopeSelectedOnly or false)
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'When enabled: operations target only the single selected track context') end
+    if changed then state.scopeSelectedOnly = val; save_user_settings() end
+  end
+  r.ImGui_Dummy(ctx,0,2)
+  local fullW = r.ImGui_GetContentRegionAvail(ctx)
+  local gap = 6
+  local btnW = (fullW - gap*2) / 3
+  local dis = (not hasSelName) and r.ImGui_BeginDisabled and r.ImGui_BeginDisabled(ctx)
+  local source = state.selectedSourceFXName
+  local scopeSel = state.scopeSelectedOnly == true
+  if r.ImGui_Button(ctx,'Move up', btnW, 0) then
+    if scopeSel then
+      local tr = get_selected_track(); local idx = tonumber(state.selectedSourceFXIndex)
+      if tr and idx and idx>0 then
+        if not swap_fx_via_chunk(tr, idx, idx-1) then
+          r.TrackFX_CopyToTrack(tr, idx, tr, idx-1, true)
+        end
+        state.selectedSourceFXIndex = idx-1; state.pendingMessage='Moved up (selected track).'
+      end
+    else
+      local cnt,msg = move_all_instances_up(source); if cnt>0 then state.pendingMessage=msg else state.pendingError=msg or 'No instances moved up' end
     end
-    if openFxC and tr then
-      local sws_available = is_sws_available()
-      
-      if not sws_available then
-        r.ImGui_TextColored(ctx, 1.0, 0.5, 0.0, 1.0, 'SWS extension required for FX Chain operations')
-        r.ImGui_TextDisabled(ctx, 'Please install SWS/S&M extension from sws-extension.org')
-      else
-        local fx_count = r.TrackFX_GetCount(tr) or 0
-        local track_name = get_track_name(tr)
-        
-        if r.ImGui_Button(ctx, 'Save FX Chain', -1, 0) then
-          local success, msg = create_fx_chain(tr)
-          if success then
-            state.pendingMessage = msg
-            refresh_fx_chains_list(true) 
-          else
-            state.pendingError = msg
-          end
-        end
-        
-        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-          r.ImGui_SetTooltip(ctx, string.format('Save all FX from: %s (%d FX) as a new FX Chain', track_name, fx_count))
-        end
-        
-        r.ImGui_Dummy(ctx, 0, 4)
-        r.ImGui_Separator(ctx)
-        r.ImGui_Dummy(ctx, 0, 4)
-        
-        r.ImGui_Text(ctx, 'Load FX Chain:')
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, scopeSel and 'Move this FX one position up on the selected track' or 'Move every matching FX instance up by one slot on all tracks') end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx,'Move down', btnW, 0) then
+    if scopeSel then
+      local tr = get_selected_track(); local idx = tonumber(state.selectedSourceFXIndex)
+  if tr and idx then local fxCount = r.TrackFX_GetCount(tr); if idx < fxCount-1 then if not swap_fx_via_chunk(tr, idx, idx+1) then r.TrackFX_CopyToTrack(tr, idx, tr, idx+1, true) end; state.selectedSourceFXIndex=idx+1; state.pendingMessage='Moved down (selected track).' end end
+    else
+      local cnt,msg = move_all_instances_down(source); if cnt>0 then state.pendingMessage=msg else state.pendingError=msg or 'No instances moved down' end
+    end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, scopeSel and 'Move this FX one position down on the selected track' or 'Move every matching FX instance down by one slot on all tracks') end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx,'Delete', btnW, 0) then
+    if scopeSel then
+      local tr = get_selected_track(); local idx = tonumber(state.selectedSourceFXIndex)
+      if tr and idx then r.TrackFX_Delete(tr, idx); state.pendingMessage='Deleted (selected track)'; state.selectedSourceFXIndex, state.selectedSourceFXName=nil,nil end
+    else
+      local cnt = select(1, delete_all_instances(source, nil, nil)); state.pendingMessage=string.format('%d instances deleted (all tracks).', cnt); state.selectedSourceFXIndex, state.selectedSourceFXName=nil,nil
+    end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, scopeSel and 'Delete this FX from the selected track' or 'Delete every matching FX instance from all tracks') end
+  if dis and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+  r.ImGui_Dummy(ctx,0,4)
+  r.ImGui_Separator(ctx)
+end
 
-        if not state.fxChains then
-          refresh_fx_chains_list()
-        end
-        
-        local chain_count = state.fxChains and #state.fxChains or 0
-        r.ImGui_SameLine(ctx)
-        local status_text = string.format('Found %d chains', chain_count)
-        if state.fxChainsFromCache then
-          status_text = status_text .. ' (cached)'
-        end
-        r.ImGui_TextDisabled(ctx, status_text)
-        
-        local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.3
-        if r.ImGui_Button(ctx, 'Refresh', button_width, 0) then
-          refresh_fx_chains_list(true)  
-          state.pendingMessage = 'FX Chains list refreshed from disk'
-        end
-        
-        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-          r.ImGui_SetTooltip(ctx, 'Force refresh FX chains list from disk (cached otherwise)')
-        end
-        
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetNextItemWidth(ctx, -1)
-        local changed, new_filter = r.ImGui_InputText(ctx, '##fxchain_filter', state.fxChainFilter)
-        if changed then
-          state.fxChainFilter = new_filter
-        end
-        
-        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-          r.ImGui_SetTooltip(ctx, 'Filter FX chains by name')
-        end
-        
-        r.ImGui_Dummy(ctx, 0, 2)
-        
-        if r.ImGui_BeginChild(ctx, '##fxchains_list', -1, 120) then
-          if state.fxChains and #state.fxChains > 0 then
-            local filter = state.fxChainFilter:lower()
-            
-            for i, chain in ipairs(state.fxChains) do
-              local show_chain = filter == '' or chain.display_name:lower():find(filter, 1, true)
-              
-              if show_chain then
-                local selected = state.selectedFxChain == chain.path
-                if r.ImGui_Selectable(ctx, chain.display_name, selected) then
-                  state.selectedFxChain = chain.path
-                end
-                
-                if r.ImGui_IsItemClicked(ctx, 1) then
-                  r.ImGui_OpenPopup(ctx, 'FXChainContext_' .. i)
-                end
-                
-                if r.ImGui_BeginPopup(ctx, 'FXChainContext_' .. i) then
-                  if r.ImGui_MenuItem(ctx, 'Load (Add to existing)') then
-                    local success, msg = load_fx_chain(tr, chain.path, false)
-                    if success then
-                      state.pendingMessage = msg
-                    else
-                      state.pendingError = msg
-                    end
-                  end
-                  
-                  if r.ImGui_MenuItem(ctx, 'Load (Replace all FX)') then
-                    local success, msg = load_fx_chain(tr, chain.path, true)
-                    if success then
-                      state.pendingMessage = msg
-                    else
-                      state.pendingError = msg
-                    end
-                  end
-                  
-                  r.ImGui_Separator(ctx)
-                  
-                  if r.ImGui_MenuItem(ctx, 'Rename Chain') then
-                    local retval, new_name = r.GetUserInputs("Rename FX Chain", 1, "New name:", chain.name)
-                    if retval and new_name ~= '' and new_name ~= chain.name then
-                      local success, msg = rename_fx_chain(chain.path, new_name)
-                      if success then
-                        state.pendingMessage = msg
-                        refresh_fx_chains_list(true)  
-                        state.selectedFxChain = nil
-                      else
-                        state.pendingError = msg
-                      end
-                    end
-                  end
-                  
-                  if r.ImGui_MenuItem(ctx, 'Delete Chain') then
-                    local success, msg = delete_fx_chain(chain.path)
-                    if success then
-                      state.pendingMessage = msg
-                      refresh_fx_chains_list(true)  
-                    else
-                      state.pendingError = msg
-                    end
-                  end
-                  
-                  r.ImGui_EndPopup(ctx)
+local function draw_fxchain_panel()
+  if state.showPanelFXChain == false then return end
+  local tr = get_selected_track()
+  local openFxC = r.ImGui_CollapsingHeader(ctx, 'FXChain:', 0)
+  if openFxC ~= nil and openFxC ~= state.fxChainHeaderOpen then state.fxChainHeaderOpen = openFxC; save_user_settings() end
+  if not (openFxC and tr) then
+    if openFxC and not tr then r.ImGui_TextDisabled(ctx,'Select a track to use FX Chain controls') end
+    return
+  end
+  local sws_available = is_sws_available()
+  if not sws_available then
+    r.ImGui_TextColored(ctx,1.0,0.5,0.0,1.0,'SWS extension required for FX Chain operations')
+    r.ImGui_TextDisabled(ctx,'Please install SWS/S&M extension from sws-extension.org')
+    return
+  end
+  local fx_count = r.TrackFX_GetCount(tr) or 0
+  local track_name = get_track_name(tr)
+  if r.ImGui_Button(ctx, 'Save FX Chain', -1, 0) then
+    local success, msg = create_fx_chain(tr)
+    if success then state.pendingMessage = msg; refresh_fx_chains_list(true) else state.pendingError = msg end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+    r.ImGui_SetTooltip(ctx, string.format('Save all FX from: %s (%d FX) as a new FX Chain', track_name, fx_count))
+  end
+  r.ImGui_Dummy(ctx,0,4); 
+  r.ImGui_Text(ctx,'Load FX Chain:')
+  if not state.fxChains then refresh_fx_chains_list() end
+  local chain_count = state.fxChains and #state.fxChains or 0
+  r.ImGui_SameLine(ctx)
+  local status_text = string.format('Found %d chains', chain_count)
+  if state.fxChainsFromCache then status_text = status_text .. ' (cached)' end
+  r.ImGui_TextDisabled(ctx,status_text)
+  local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.3
+  if r.ImGui_Button(ctx, 'Refresh', button_width, 0) then refresh_fx_chains_list(true); state.pendingMessage='FX Chains list refreshed from disk' end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Force refresh FX chains list from disk (cached otherwise)') end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx,-1)
+  local changedFilter, new_filter = r.ImGui_InputText(ctx,'##fxchain_filter', state.fxChainFilter)
+  if changedFilter then state.fxChainFilter = new_filter end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Filter FX chains by name') end
+  r.ImGui_Dummy(ctx,0,2)
+  if r.ImGui_BeginChild(ctx,'##fxchains_list', -1, 70) then
+    if state.fxChains and #state.fxChains > 0 then
+      local filter = state.fxChainFilter:lower()
+      for i, chain in ipairs(state.fxChains) do
+        local show_chain = filter == '' or chain.display_name:lower():find(filter,1,true)
+        if show_chain then
+          local selected = state.selectedFxChain == chain.path
+            if r.ImGui_Selectable(ctx, chain.display_name, selected) then state.selectedFxChain = chain.path end
+            if r.ImGui_IsItemClicked(ctx,1) then r.ImGui_OpenPopup(ctx,'FXChainContext_'..i) end
+            if r.ImGui_BeginPopup(ctx,'FXChainContext_'..i) then
+              if r.ImGui_MenuItem(ctx,'Load (Add to existing)') then local success,msg=load_fx_chain(tr, chain.path,false); if success then state.pendingMessage=msg else state.pendingError=msg end end
+              if r.ImGui_MenuItem(ctx,'Load (Replace all FX)') then local success,msg=load_fx_chain(tr, chain.path,true); if success then state.pendingMessage=msg else state.pendingError=msg end end
+              r.ImGui_Separator(ctx)
+              if r.ImGui_MenuItem(ctx,'Rename Chain') then
+                local retval,new_name = r.GetUserInputs('Rename FX Chain',1,'New name:', chain.name)
+                if retval and new_name ~= '' and new_name ~= chain.name then
+                  local success,msg = rename_fx_chain(chain.path,new_name)
+                  if success then state.pendingMessage=msg; refresh_fx_chains_list(true); state.selectedFxChain=nil else state.pendingError=msg end
                 end
               end
-            end
-          else
-            r.ImGui_TextDisabled(ctx, 'No FX chains found')
-            r.ImGui_TextDisabled(ctx, 'Save some FX chains to see them here')
-          end
-          r.ImGui_EndChild(ctx)
-        end
-        
-        r.ImGui_Dummy(ctx, 0, 4)
-        
-        if state.selectedFxChain then
-          r.ImGui_Text(ctx, 'Load to:')
-          
-          local changed, new_current = r.ImGui_Checkbox(ctx, 'Current', state.fxChainLoadToCurrent)
-          if changed then 
-            state.fxChainLoadToCurrent = new_current
-            if new_current then
-              state.fxChainLoadToSelected = false
-              state.fxChainLoadToAll = false
-            end
-          end
-          
-          r.ImGui_SameLine(ctx)
-          local changed2, new_selected = r.ImGui_Checkbox(ctx, 'Selected', state.fxChainLoadToSelected)
-          if changed2 then 
-            state.fxChainLoadToSelected = new_selected
-            if new_selected then
-              state.fxChainLoadToCurrent = false
-              state.fxChainLoadToAll = false
-            end
-          end
-          
-          r.ImGui_SameLine(ctx)
-          local changed3, new_all = r.ImGui_Checkbox(ctx, 'All', state.fxChainLoadToAll)
-          if changed3 then 
-            state.fxChainLoadToAll = new_all
-            if new_all then
-              state.fxChainLoadToCurrent = false
-              state.fxChainLoadToSelected = false
-            end
-          end
-          
-          local any_target_selected = state.fxChainLoadToCurrent or state.fxChainLoadToSelected or state.fxChainLoadToAll
-          
-          if not any_target_selected then
-            r.ImGui_TextColored(ctx, 1.0, 0.5, 0.0, 1.0, 'Select a target (Current/Selected/All)')
-          else
-            r.ImGui_Dummy(ctx, 0, 4)
-            
-            local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
-            
-            if r.ImGui_Button(ctx, 'Add', button_width, 0) then
-              if not state.selectedFxChain or state.selectedFxChain == '' then
-                state.pendingError = 'No FX chain selected'
-                goto skip_add
+              if r.ImGui_MenuItem(ctx,'Delete Chain') then
+                local success,msg = delete_fx_chain(chain.path)
+                if success then state.pendingMessage=msg; refresh_fx_chains_list(true) else state.pendingError=msg end
               end
-              
-              local success = false
-              local msg = ''
-              
-              if state.fxChainLoadToCurrent then
-                success, msg = load_fx_chain(tr, state.selectedFxChain, false)
-              elseif state.fxChainLoadToSelected then
-                local count
-                count, msg = load_fx_chain_to_selected_tracks(state.selectedFxChain, false)
-                success = count > 0
-              elseif state.fxChainLoadToAll then
-                local track_count = r.CountTracks(0)
-                local result = r.MB(string.format('Add FX chain to ALL %d tracks?', track_count), 'Confirm Add to All', 4)
-                if result == 6 then
-                  local count
-                  count, msg = load_fx_chain_to_all_tracks(state.selectedFxChain, false)
-                  success = count > 0
-                else
-                  msg = 'Add to all tracks cancelled'
-                end
-              end
-              
-              if success then
-                state.pendingMessage = msg
-              else
-                state.pendingError = msg
-              end
-              
-              ::skip_add::
+              r.ImGui_EndPopup(ctx)
             end
-            
-            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-              local target = state.fxChainLoadToCurrent and 'current track' or 
-                            state.fxChainLoadToSelected and 'selected tracks' or 
-                            state.fxChainLoadToAll and 'all tracks' or 'target'
-              r.ImGui_SetTooltip(ctx, string.format('Add FX chain to %s (keeps existing FX)', target))
-            end
-            
-            r.ImGui_SameLine(ctx)
-            
-            if r.ImGui_Button(ctx, 'Replace', button_width, 0) then
-              if not state.selectedFxChain or state.selectedFxChain == '' then
-                state.pendingError = 'No FX chain selected'
-                goto skip_replace
-              end
-              
-              local confirm_msg = ''
-              local track_count = 0
-              
-              if state.fxChainLoadToCurrent then
-                confirm_msg = 'Replace ALL existing FX on current track?'
-                track_count = 1
-              elseif state.fxChainLoadToSelected then
-                track_count = r.CountSelectedTracks(0)
-                if track_count == 0 then
-                  state.pendingError = 'No tracks selected'
-                  goto skip_replace
-                end
-                confirm_msg = string.format('Replace ALL FX on %d selected track(s)?', track_count)
-              elseif state.fxChainLoadToAll then
-                track_count = r.CountTracks(0)
-                confirm_msg = string.format('Replace ALL FX on ALL %d tracks?\n\nPERMANENT deletion of existing FX!', track_count)
-              end
-              
-              local result = r.MB(confirm_msg, 'Confirm Replace', 4)
-              if result == 6 then
-                local success = false
-                local msg = ''
-                
-                if state.fxChainLoadToCurrent then
-                  success, msg = load_fx_chain(tr, state.selectedFxChain, true)
-                elseif state.fxChainLoadToSelected then
-                  local count
-                  count, msg = load_fx_chain_to_selected_tracks(state.selectedFxChain, true)
-                  success = count > 0
-                elseif state.fxChainLoadToAll then
-                  local count
-                  count, msg = load_fx_chain_to_all_tracks(state.selectedFxChain, true)
-                  success = count > 0
-                end
-                
-                if success then
-                  state.pendingMessage = msg
-                else
-                  state.pendingError = msg
-                end
-              end
-              
-              ::skip_replace::
-            end
-            
-            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-              local target = state.fxChainLoadToCurrent and 'current track' or 
-                            state.fxChainLoadToSelected and 'selected tracks' or 
-                            state.fxChainLoadToAll and 'all tracks' or 'target'
-              r.ImGui_SetTooltip(ctx, string.format('Replace ALL FX on %s (DANGER!)', target))
-            end
-          end
         end
-        r.ImGui_Dummy(ctx, 0, 8)
-        r.ImGui_Separator(ctx)
-        r.ImGui_Dummy(ctx, 0, 4)
-        
-        r.ImGui_Text(ctx, 'FX Chain Copy/Paste:')
-        
-        if r.ImGui_Button(ctx, 'Copy FX from current track', -1, 0) then
-          if fx_count > 0 then
-            local success, msg = copy_fx_chain_from_track(tr)
-            if success then
-              state.pendingMessage = msg
-            else
-              state.pendingError = msg
-            end
-          else
-            state.pendingError = 'Current track has no FX to copy'
-          end
+      end
+    else
+      r.ImGui_TextDisabled(ctx,'No FX chains found')
+      r.ImGui_TextDisabled(ctx,'Save some FX chains to see them here')
+    end
+    r.ImGui_EndChild(ctx)
+  end
+  r.ImGui_Dummy(ctx,0,4)
+  if state.selectedFxChain then
+    r.ImGui_Text(ctx,'Load to:')
+    local changedC, new_current = r.ImGui_Checkbox(ctx,'Current', state.fxChainLoadToCurrent)
+    if changedC then state.fxChainLoadToCurrent = new_current; if new_current then state.fxChainLoadToSelected=false; state.fxChainLoadToAll=false end end
+    r.ImGui_SameLine(ctx)
+    local changedS, new_selected = r.ImGui_Checkbox(ctx,'Selected', state.fxChainLoadToSelected)
+    if changedS then state.fxChainLoadToSelected = new_selected; if new_selected then state.fxChainLoadToCurrent=false; state.fxChainLoadToAll=false end end
+    r.ImGui_SameLine(ctx)
+    local changedA, new_all = r.ImGui_Checkbox(ctx,'All', state.fxChainLoadToAll)
+    if changedA then state.fxChainLoadToAll = new_all; if new_all then state.fxChainLoadToCurrent=false; state.fxChainLoadToSelected=false end end
+    local any_target_selected = state.fxChainLoadToCurrent or state.fxChainLoadToSelected or state.fxChainLoadToAll
+    if not any_target_selected then
+      r.ImGui_TextColored(ctx,1.0,0.5,0.0,1.0,'Select a target (Current/Selected/All)')
+    else
+      r.ImGui_Dummy(ctx,0,4)
+      local bw = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
+      if r.ImGui_Button(ctx,'Add', bw,0) then
+        if not state.selectedFxChain or state.selectedFxChain == '' then state.pendingError='No FX chain selected' else
+          local success,msg=false,''
+          if state.fxChainLoadToCurrent then success,msg=load_fx_chain(tr,state.selectedFxChain,false)
+          elseif state.fxChainLoadToSelected then local count; count,msg=load_fx_chain_to_selected_tracks(state.selectedFxChain,false); success = count>0
+          elseif state.fxChainLoadToAll then local track_count=r.CountTracks(0); local result=r.MB(string.format('Add FX chain to ALL %d tracks?',track_count),'Confirm Add to All',4); if result==6 then local count; count,msg=load_fx_chain_to_all_tracks(state.selectedFxChain,false); success=count>0 else msg='Add to all tracks cancelled' end end
+          if success then state.pendingMessage=msg else state.pendingError=msg end
         end
-        
-        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-          r.ImGui_SetTooltip(ctx, string.format('Copy all FX from: %s (%d FX)', track_name, fx_count))
-        end
-        
-        r.ImGui_Dummy(ctx, 0, 2)
-        
-        local has_copied_chain = copied_fx_chain_info ~= nil
-        if has_copied_chain then
-          local age_minutes = math.floor((os.time() - copied_fx_chain_info.timestamp) / 60)
-          r.ImGui_TextDisabled(ctx, string.format('%s (%d FX, %dm ago)', 
-            copied_fx_chain_info.source_track_name, copied_fx_chain_info.fx_count, age_minutes))
-        else
-          r.ImGui_TextDisabled(ctx, 'No FX chain copied yet')
-        end
-        
-        if not has_copied_chain and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
-        
-        local button_width = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
-        
-        if r.ImGui_Button(ctx, 'Add to selected', button_width, 0) then
-          local count, msg = paste_fx_chain_to_selected_tracks()
-          if count > 0 then
-            state.pendingMessage = msg
-          else
-            state.pendingError = msg or 'Failed to add to selected tracks'
-          end
-        end
-        
-        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-          r.ImGui_SetTooltip(ctx, 'Add FX to selected tracks (keeps existing)')
-        end
-        
-        r.ImGui_SameLine(ctx)
-        
-        if r.ImGui_Button(ctx, 'Replace selected', button_width, 0) then
-          local selected_count = r.CountSelectedTracks(0)
-          if selected_count > 0 then
-            local result = r.MB(string.format('Replace ALL FX on %d selected track(s)?', selected_count), 
-              'Confirm Replace', 4)
-            if result == 6 then
-              local count, msg = replace_fx_chain_to_selected_tracks()
-              if count > 0 then
-                state.pendingMessage = msg
-              else
-                state.pendingError = msg or 'Failed to replace on selected tracks'
-              end
-            end
-          else
-            state.pendingError = 'No tracks selected'
-          end
-        end
-        
-        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-          r.ImGui_SetTooltip(ctx, 'Replace ALL FX on selected tracks')
-        end
-        
-        if r.ImGui_Button(ctx, 'Add to all tracks', button_width, 0) then
-          local track_count = r.CountTracks(0)
-          local result = r.MB(string.format('Add FX chain to ALL %d tracks?', track_count), 
-            'Confirm Add to All', 4)
-          if result == 6 then
-            local count, msg = paste_fx_chain_to_all_tracks()
-            if count > 0 then
-              state.pendingMessage = msg
-            else
-              state.pendingError = msg or 'Failed to add to all tracks'
-            end
-          end
-        end
-        
-        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-          r.ImGui_SetTooltip(ctx, 'Add FX to ALL tracks (keeps existing)')
-        end
-        
-        r.ImGui_SameLine(ctx)
-        
-        if r.ImGui_Button(ctx, 'Replace all tracks', button_width, 0) then
-          local track_count = r.CountTracks(0)
-          local result = r.MB(string.format('Replace ALL FX on ALL %d tracks?\n\nPERMANENT deletion of existing FX!', track_count), 
-            'CONFIRM REPLACE ALL', 4)
-          if result == 6 then
-            local count, msg = replace_fx_chain_to_all_tracks()
-            if count > 0 then
-              state.pendingMessage = msg
-            else
-              state.pendingError = msg or 'Failed to replace all tracks'
-            end
-          end
-        end
-        
-        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-          r.ImGui_SetTooltip(ctx, 'Replace ALL FX on ALL tracks (DANGER!)')
-        end
-        
-        if not has_copied_chain and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
-        
-        if has_copied_chain then
-          r.ImGui_Dummy(ctx, 0, 2)
-          r.ImGui_Separator(ctx)
-          r.ImGui_TextDisabled(ctx, 'Add: keeps existing • Replace: deletes existing first')
-          if r.ImGui_SmallButton(ctx, 'Clear') then
-            copied_fx_chain_info = nil
-            state.pendingMessage = 'Cleared copied FX chain'
-          end
-          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-            r.ImGui_SetTooltip(ctx, 'Clear copied FX chain from memory')
+      end
+      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+        local target = state.fxChainLoadToCurrent and 'current track' or state.fxChainLoadToSelected and 'selected tracks' or state.fxChainLoadToAll and 'all tracks' or 'target'
+        r.ImGui_SetTooltip(ctx,string.format('Add FX chain to %s (keeps existing FX)', target))
+      end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_Button(ctx,'Replace!', bw,0) then
+        if not state.selectedFxChain or state.selectedFxChain == '' then state.pendingError='No FX chain selected' else
+          local confirm_msg=''
+          local track_count=0
+          if state.fxChainLoadToCurrent then confirm_msg='Replace ALL existing FX on current track?'; track_count=1
+          elseif state.fxChainLoadToSelected then track_count=r.CountSelectedTracks(0); if track_count==0 then state.pendingError='No tracks selected' else confirm_msg=string.format('Replace ALL FX on %d selected track(s)?',track_count) end
+          elseif state.fxChainLoadToAll then track_count=r.CountTracks(0); confirm_msg=string.format('Replace ALL FX on ALL %d tracks?\n\nPERMANENT deletion of existing FX!',track_count) end
+          local result = r.MB(confirm_msg,'Confirm Replace',4)
+          if result==6 then
+            local success,msg=false,''
+            if state.fxChainLoadToCurrent then success,msg=load_fx_chain(tr,state.selectedFxChain,true)
+            elseif state.fxChainLoadToSelected then local count; count,msg=load_fx_chain_to_selected_tracks(state.selectedFxChain,true); success=count>0
+            elseif state.fxChainLoadToAll then local count; count,msg=load_fx_chain_to_all_tracks(state.selectedFxChain,true); success=count>0 end
+            if success then state.pendingMessage=msg else state.pendingError=msg end
           end
         end
       end
-    elseif openFxC and not tr then
-      r.ImGui_TextDisabled(ctx, 'Select a track to use FX Chain controls')
+      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+        local target = state.fxChainLoadToCurrent and 'current track' or state.fxChainLoadToSelected and 'selected tracks' or state.fxChainLoadToAll and 'all tracks' or 'target'
+        r.ImGui_SetTooltip(ctx,string.format('Replace ALL FX on %s (DANGER!)', target))
+      end
     end
   end
+  r.ImGui_Dummy(ctx,0,8); r.ImGui_Separator(ctx); 
+  local fx_count2 = r.TrackFX_GetCount(tr) or 0
+  if r.ImGui_Button(ctx,'Copy FX from current track', -1,0) then
+    if fx_count2 > 0 then local success,msg = copy_fx_chain_from_track(tr); if success then state.pendingMessage=msg else state.pendingError=msg end else state.pendingError='Current track has no FX to copy' end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,string.format('Copy all FX from: %s (%d FX)', track_name, fx_count2)) end
+  r.ImGui_Dummy(ctx,0,2)
+  local has_copied_chain = copied_fx_chain_info ~= nil
+  if has_copied_chain then
+    local age_minutes = math.floor((os.time() - copied_fx_chain_info.timestamp) / 60)
+    r.ImGui_TextDisabled(ctx, string.format('%s (%d FX, %dm ago)', copied_fx_chain_info.source_track_name, copied_fx_chain_info.fx_count, age_minutes))
+  else
+    r.ImGui_TextDisabled(ctx,'No FX chain copied yet')
+  end
+  if not has_copied_chain and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+  local bw2 = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
+  if r.ImGui_Button(ctx,'Add to selected', bw2,0) then local count,msg=paste_fx_chain_to_selected_tracks(); if count>0 then state.pendingMessage=msg else state.pendingError=msg or 'Failed to add to selected tracks' end end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Add FX to selected tracks (keeps existing)') end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx,'Replace selected', bw2,0) then
+    local selected_count = r.CountSelectedTracks(0)
+    if selected_count>0 then
+      local result = r.MB(string.format('Replace ALL FX on %d selected track(s)?', selected_count),'Confirm Replace',4)
+      if result==6 then local count,msg=replace_fx_chain_to_selected_tracks(); if count>0 then state.pendingMessage=msg else state.pendingError=msg or 'Failed to replace on selected tracks' end end
+    else state.pendingError='No tracks selected' end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Replace ALL FX on selected tracks') end
+  if r.ImGui_Button(ctx,'Add to all tracks', bw2,0) then local track_count=r.CountTracks(0); local result=r.MB(string.format('Add FX chain to ALL %d tracks?',track_count),'Confirm Add to All',4); if result==6 then local count,msg=paste_fx_chain_to_all_tracks(); if count>0 then state.pendingMessage=msg else state.pendingError=msg or 'Failed to add to all tracks' end end end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Add FX to ALL tracks (keeps existing)') end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx,'Replace all tracks', bw2,0) then local track_count=r.CountTracks(0); local result=r.MB(string.format('Replace ALL FX on ALL %d tracks?\n\nPERMANENT deletion of existing FX!',track_count),'CONFIRM REPLACE ALL',4); if result==6 then local count,msg=replace_fx_chain_to_all_tracks(); if count>0 then state.pendingMessage=msg else state.pendingError=msg or 'Failed to replace all tracks' end end end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Replace ALL FX on ALL tracks (DANGER!)') end
+  if not has_copied_chain and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+  if has_copied_chain then
+    r.ImGui_Dummy(ctx,0,2); r.ImGui_Separator(ctx); r.ImGui_TextDisabled(ctx,'Add: keeps existing • Replace: deletes existing first')
+    if r.ImGui_SmallButton(ctx,'Clear') then copied_fx_chain_info=nil; state.pendingMessage='Cleared copied FX chain' end
+  end
+  r.ImGui_Separator(ctx)
+end
 
-
-  do
-    if state.trackVersionHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
-    local open = r.ImGui_CollapsingHeader(ctx, 'Track Version Controls', 0)
-    if open ~= nil and open ~= state.trackVersionHeaderOpen then state.trackVersionHeaderOpen = open; save_user_settings() end
-    if open then
-      r.ImGui_Dummy(ctx, 0, 4)
-      r.ImGui_TextDisabled(ctx, 'Track version controls will be implemented here')
-      r.ImGui_Text(ctx, 'Coming soon:')
-      r.ImGui_BulletText(ctx, 'Create track versions/snapshots')
-      r.ImGui_BulletText(ctx, 'Switch between versions')  
-      r.ImGui_BulletText(ctx, 'Compare versions')
-      r.ImGui_BulletText(ctx, 'Merge version changes')
-      r.ImGui_Dummy(ctx, 0, 4)
+local function track_guid(tr) return tr and r.GetTrackGUID(tr) or nil end
+local function capture_full_track_snapshot(tr)
+  local fxCount = r.TrackFX_GetCount(tr)
+  local list = {}
+  for i=0, fxCount-1 do list[#list+1] = snapshot_fx(tr, i) end
+  return list
+end
+local function snapshot_storage_candidates()
+  local sep = package.config:sub(1,1)
+  local resPath = r.GetResourcePath and r.GetResourcePath() or script_path
+  local dataDir = resPath .. sep .. 'Data' .. sep .. 'TK_FX_Slots'
+  return {
+    {dir=dataDir, file='ChainSnapshots.dat'},            
+    {dir=script_path, file='ChainSnapshots.dat'},        
+    {dir=script_path, file='TK_TrackVersions.dat'},      
+  }
+end
+local function ensure_dir(path)
+  if not path or path=='' then return end
+  if r.RecursiveCreateDirectory then r.RecursiveCreateDirectory(path,0) end
+end
+local function save_track_versions()
+  local list = snapshot_storage_candidates()
+  local f, targetPath
+  for _,c in ipairs(list) do
+    ensure_dir(c.dir)
+    local p = c.dir .. (c.dir:sub(-1) == '/' or c.dir:sub(-1) == '\\' and '' or package.config:sub(1,1)) .. c.file
+    f = io.open(p,'w')
+    if f then targetPath = p break end
+  end
+  if not f then state.pendingError = 'Could not save snapshots (no writable path)'; return end
+  state.lastSnapshotSavePath = targetPath
+  f:write('VER1\n')
+  for guid, versions in pairs(state.trackVersions or {}) do
+    if type(guid)=='string' and #guid>5 and guid:find('{',1,true) then
+      f:write('T\t',guid,'\n')
+      for i, ver in ipairs(versions) do
+        f:write('V\t',ver.name or ('v'..i),'\t',tostring(ver.time or 0),'\n')
+        if ver.fxchainChunk and ver.fxchainChunk:find('<FXCHAIN') then
+          f:write('R\t', tostring(#ver.fxchainChunk),'\n')
+          f:write(ver.fxchainChunk)
+          if ver.fxchainChunk:sub(-1) ~= '\n' then f:write('\n') end
+          f:write('RAW_END\n')
+        end
+        for _, fx in ipairs(ver.fx or {}) do
+          f:write('F\t',fx.name or '', '\t', tostring(fx.enabled and 1 or 0), '\t', tostring(fx.offline and 1 or 0), '\t', (fx.renamed or ''), '\t', tostring(fx.paramCount or 0), '\n')
+          if fx.params then
+            for p=0,(fx.paramCount or 0)-1 do
+              local v = fx.params[p]
+              if v then f:write('P\t',p,'\t',string.format('%.9f',v),'\n') end
+            end
+          end
+        end
+        f:write('E\n')
+      end
+      local cur = state.trackVersionsCurrentIndex[guid]
+      if cur then f:write('C\t',guid,'\t',cur,'\n') end
+      f:write('X\n')
     end
+  end
+  f:close()
+end
+function load_track_versions()
+  local candidates = snapshot_storage_candidates()
+  state.trackVersions = {}
+  state.trackVersionsCurrentIndex = {}
+  local totalFiles, parsedFiles, totalSnapshots, trackCount = 0,0,0,0
+  local debugLines = {}
+  local function parse_file(path)
+    local fh = io.open(path,'r'); if not fh then debugLines[#debugLines+1] = ('MISS %s'):format(path); return 0,0,false end
+    local content = fh:read('*a') or ''
+    fh:close()
+    local size = #content
+    if size == 0 then debugLines[#debugLines+1] = ('EMPTY %s'):format(path); return 0,0,true end
+    content = content:gsub('\r\n','\n'):gsub('\r','\n')
+    if content:sub(1,3) == '\239\187\191' then content = content:sub(4) end
+    local addedTracks, addedSnaps = 0,0
+    local curTrack, curVer, mode
+    local lineIndex = 0
+    local linesIter = content:gmatch('([^\n]+)')
+    local rawMode = false
+    local sawHeader = false
+    local previewLines = {}
+    for line in linesIter do
+      lineIndex = lineIndex + 1
+      line = line:gsub('^%s+','')
+      if lineIndex <= 8 then previewLines[#previewLines+1] = line end
+      if rawMode then
+        if line == 'RAW_END' then
+          rawMode = false
+        else
+          if curVer then curVer._rawBuf[#curVer._rawBuf+1] = line .. '\n' end
+        end
+      else
+        if line == 'VER1' then
+          sawHeader = true
+        else
+          local tag,a,b,c,d,e = line:match('^(%S+)\t?(.-)\t?(.-)\t?(.-)\t?(.-)\t?(.-)$')
+          if (tag == 'T' or tag == 'V') and (a == nil or a == '' or (tag=='T' and (not a:find('{',1,true)))) then
+            local parts = {}
+            for token in line:gmatch('%S+') do parts[#parts+1]=token end
+            if parts[1] == 'T' and parts[2] then a = parts[2] end
+            if parts[1] == 'V' and parts[2] then a = parts[2]; b = parts[3] end
+          end
+        if tag == 'T' then
+          if a and a ~= '' then
+            curTrack = a
+            if not state.trackVersions[curTrack] then state.trackVersions[curTrack] = {}; addedTracks = addedTracks + 1 end
+          else
+            curTrack,curVer,mode=nil,nil,nil
+          end
+        elseif tag == 'V' and curTrack then
+          curVer = { name = (a and a ~= '' and a or ('snap'..tostring(#state.trackVersions[curTrack]+1))), time=tonumber(b) or 0, fx={} }
+          table.insert(state.trackVersions[curTrack], curVer)
+          addedSnaps = addedSnaps + 1
+        elseif tag == 'R' and curTrack then
+          if curVer then curVer._rawBuf = {}; rawMode = true end
+        elseif tag == 'F' and curVer then
+          local fxname = a ~= '' and a or nil
+          local fx = { name=fxname, enabled=(b=='1'), offline=(c=='1'), renamed=d~='' and d or nil, paramCount=tonumber(e) or 0, params={} }
+          if fx.name then fx.srcAddName = fx.name end
+          table.insert(curVer.fx, fx); mode = fx
+        elseif tag == 'P' and mode then
+          local pi=tonumber(a); local val=tonumber(b); if pi and val then mode.params[pi]=val end
+        elseif tag == 'E' then mode=nil
+        elseif tag == 'X' then curTrack,curVer,mode=nil,nil,nil
+        elseif tag == 'C' then
+          local g=a; local idx=tonumber(b); if g and idx and state.trackVersions[g] then state.trackVersionsCurrentIndex[g]=idx end
+        end
+        end
+      end
+    end
+    for _,vers in pairs(state.trackVersions) do
+      for _,v in ipairs(vers) do
+        if v._rawBuf then v.fxchainChunk = table.concat(v._rawBuf); v._rawBuf=nil end
+      end
+    end
+    debugLines[#debugLines+1] = ('PARSED %s size=%d tracks+%d snaps+%d'):format(path,size,addedTracks,addedSnaps)
+  if #previewLines>0 then debugLines[#debugLines+1] = 'FIRSTLINES '..table.concat(previewLines,' | ') end
+    return addedTracks, addedSnaps, true
+  end
+  for _,c in ipairs(candidates) do
+    local sep = package.config:sub(1,1)
+    local path = c.dir .. (c.dir:sub(-1) == '/' or c.dir:sub(-1) == '\\' and '' or sep) .. c.file
+    totalFiles = totalFiles + 1
+    local tracks,snaps,ok = parse_file(path)
+    if ok then
+      if tracks>0 or snaps>0 then parsedFiles = parsedFiles + 1 end
+      totalSnapshots = totalSnapshots + snaps
+    end
+  end
+  for _ in pairs(state.trackVersions) do trackCount = trackCount + 1 end
+  if trackCount==0 and totalSnapshots==0 then
+  else
   end
 end
+local function create_track_version(tr,name)
+  if not tr then return false,'No track' end
+  local guid = track_guid(tr); if not guid then return false,'No GUID' end
+  local versions = state.trackVersions[guid]; if not versions then versions={}; state.trackVersions[guid]=versions end
+  local vName = (name and name~='') and name or ('v'..(#versions+1))
+  local fxList = capture_full_track_snapshot(tr)
+  local fxNames = {}
+  for i,s in ipairs(fxList) do fxNames[i] = s.srcAddName or s.name end
+  local okChunk, fullChunk = r.GetTrackStateChunk(tr, '', false)
+  local fxchainChunk
+  if okChunk and fullChunk then
+    local startPos = fullChunk:find('<FXCHAIN')
+    if startPos then
+      local pos = startPos
+      local len = #fullChunk
+      local depth = 0
+      local capturing = false
+      while pos <= len do
+        local lineEnd = fullChunk:find('\n', pos) or (len+1)
+        local line = fullChunk:sub(pos, lineEnd-1)
+        if line:find('^<') then
+          if not capturing and line:find('^<FXCHAIN') then capturing = true end
+          if capturing then depth = depth + 1 end
+        elseif line:match('^>%s*$') and capturing then
+          depth = depth - 1
+          if depth == 0 then
+            fxchainChunk = fullChunk:sub(startPos, lineEnd)
+            break
+          end
+        end
+        pos = lineEnd + 1
+      end
+    end
+  end
+  versions[#versions+1] = { name=vName, time=os.time(), fx=fxList, fxNames=fxNames, fxchainChunk=fxchainChunk }
+  state.trackVersionsCurrentIndex[guid] = #versions
+  save_track_versions()
+  return true,vName
+end
+local function apply_track_version(tr,index)
+  if not tr then return false,'No track' end
+  local guid = track_guid(tr); if not guid then return false,'No GUID' end
+  local versions = state.trackVersions[guid]; if not versions or not versions[index] then return false,'Invalid version' end
+  local ver = versions[index]
+  r.Undo_BeginBlock('Apply snapshot')
+  local fastApplied = false
+  local snapNames = ver.fxNames
+  if snapNames and #snapNames > 0 then
+    local curCount = r.TrackFX_GetCount(tr)
+    if curCount == #snapNames then
+      local match = true
+      for i=0, curCount-1 do
+        local _, curName = r.TrackFX_GetFXName(tr, i, '')
+        if curName ~= snapNames[i+1] then match = false break end
+      end
+      if match then
+        for i,snap in ipairs(ver.fx or {}) do
+          local idx = i-1
+          if snap.enabled ~= nil then set_fx_enabled(tr, idx, snap.enabled) end
+          if snap.offline ~= nil then set_fx_offline(tr, idx, snap.offline) end
+          local pc = r.TrackFX_GetNumParams(tr, idx) or 0
+          local maxp = math.min(pc, snap.paramCount or 0)
+          for p=0, maxp-1 do
+            local val = snap.params and snap.params[p]
+            if val then r.TrackFX_SetParamNormalized(tr, idx, p, val) end
+          end
+          if snap.renamed then rename_fx_instance(tr, idx, snap.renamed) end
+        end
+        fastApplied = true
+      end
+    end
+  end
+  local usedChunk = fastApplied
+  if (not usedChunk) and ver.fxchainChunk and ver.fxchainChunk:find('<FXCHAIN') then
+    local okOrig, origChunk = r.GetTrackStateChunk(tr, '', false)
+    if okOrig and origChunk then
+      local startPos = origChunk:find('<FXCHAIN')
+      if startPos then
+        local pos = startPos
+        local len = #origChunk
+        local depth = 0
+        local capturing = false
+        local endPos
+        while pos <= len do
+          local lineEnd = origChunk:find('\n', pos) or (len+1)
+          local line = origChunk:sub(pos, lineEnd-1)
+          if line:find('^<') then
+            if not capturing and line:find('^<FXCHAIN') then capturing = true end
+            if capturing then depth = depth + 1 end
+          elseif line:match('^>%s*$') and capturing then
+            depth = depth - 1
+            if depth == 0 then endPos = lineEnd; break end
+          end
+          pos = lineEnd + 1
+        end
+        if endPos then
+          local newChunk = origChunk:sub(1,startPos-1) .. ver.fxchainChunk .. origChunk:sub(endPos+1)
+          r.SetTrackStateChunk(tr, newChunk, false)
+          usedChunk = true
+        end
+      end
+    end
+  end
+  if not usedChunk then
+    for i=r.TrackFX_GetCount(tr)-1,0,-1 do r.TrackFX_Delete(tr,i) end
+    for _,snap in ipairs(ver.fx or {}) do
+      local addName = snap.srcAddName or snap.name
+      if addName and addName ~= '' then
+        local idx = r.TrackFX_AddByName(tr, addName, false, -1)
+        if idx >= 0 then
+          local pc = r.TrackFX_GetNumParams(tr, idx) or 0
+            local maxp = math.min(pc, snap.paramCount or 0)
+            for p=0,maxp-1 do
+              local val = snap.params and snap.params[p]
+              if val then r.TrackFX_SetParamNormalized(tr, idx, p, val) end
+            end
+            if snap.renamed then rename_fx_instance(tr, idx, snap.renamed) end
+            if snap.enabled ~= nil then set_fx_enabled(tr, idx, snap.enabled) end
+            if snap.offline ~= nil then set_fx_offline(tr, idx, snap.offline) end
+        end
+      end
+    end
+  end
+  r.Undo_EndBlock('Apply snapshot', -1)
+  state.trackVersionsCurrentIndex[guid] = index
+  save_track_versions()
+  return true,ver.name
+end
+local function delete_track_version(tr,index)
+  if not tr then return false,'No track' end
+  local guid = track_guid(tr); if not guid then return false,'No GUID' end
+  local versions = state.trackVersions[guid]; if not versions or not versions[index] then return false,'Invalid version' end
+  table.remove(versions,index)
+  if #versions==0 then
+    state.trackVersions[guid]=nil
+    state.trackVersionsCurrentIndex[guid]=nil
+  else
+    local cur = state.trackVersionsCurrentIndex[guid] or 1
+    if cur==index then state.trackVersionsCurrentIndex[guid]=math.min(index,#versions)
+    elseif cur>index then state.trackVersionsCurrentIndex[guid]=cur-1 end
+  end
+  save_track_versions()
+  return true
+end
+local function rename_track_version(tr,index,newName)
+  if not tr then return false,'No track' end
+  local guid = track_guid(tr); if not guid then return false,'No GUID' end
+  local versions = state.trackVersions[guid]; if not versions or not versions[index] then return false,'Invalid version' end
+  if newName and newName~='' then versions[index].name=newName; save_track_versions(); return true end
+  return false,'Empty name'
+end
+local function draw_trackversion_panel()
+  if state.showPanelTrackVersion == false then return end
+  if state.trackVersionHeaderOpen then r.ImGui_SetNextItemOpen(ctx,true,r.ImGui_Cond_FirstUseEver()) end
+  local open = r.ImGui_CollapsingHeader(ctx,'Chain Snapshots:',0)
+  if open ~= nil and open ~= state.trackVersionHeaderOpen then state.trackVersionHeaderOpen = open; save_user_settings() end
+  if not open then return end
+  local tr = get_selected_track()
+  if not tr then
+    r.ImGui_TextDisabled(ctx,'Select a track to manage versions')
+    r.ImGui_Separator(ctx)
+    return
+  end
+  if not state._versionsLoaded then load_track_versions(); state._versionsLoaded = true end
+  local guid = track_guid(tr)
+  local versions = state.trackVersions[guid] or {}
+  local curIdx = state.trackVersionsCurrentIndex[guid]
+  local btnW = (r.ImGui_GetContentRegionAvail(ctx)-4)*0.5
+
+  local chgAA, valAA = r.ImGui_Checkbox(ctx, 'Auto apply on select', state.autoApplySnapshots or false)
+  if chgAA then state.autoApplySnapshots = valAA end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'When enabled: a single click on a snapshot applies it immediately') end
+  if r.ImGui_Button(ctx,'New Snapshot', btnW,0) then
+    local def = 'snap'..(#versions+1)
+    local ok,name = r.GetUserInputs('New Chain Snapshot',1,'Snapshot name:',def)
+    if ok then
+      local s,msg = create_track_version(tr,name)
+      if s then state.pendingMessage='Created snapshot '..msg else state.pendingError=msg end
+    end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Capture current FX chain (order, params, bypass/offline, names)') end
+  r.ImGui_SameLine(ctx)
+  local canApply = (#versions>0 and state._tvSelected and versions[state._tvSelected]) and true or false
+  if not canApply and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+  if r.ImGui_Button(ctx,'Apply Selected', btnW,0) then
+    if state._tvSelected and versions[state._tvSelected] then
+      local s,msg = apply_track_version(tr,state._tvSelected)
+      if s then state.pendingMessage='Applied snapshot '..msg else state.pendingError=msg end
+    end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Replace current track FX chain with selected snapshot') end
+  if not canApply and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+  r.ImGui_Dummy(ctx,0,4)
+  local listH = 140
+  if r.ImGui_BeginChild(ctx,'##tv_list', -1, listH) then
+    for i,ver in ipairs(versions) do
+      local label = ver.name
+      if curIdx == i then label = label .. '  [active]' end
+      local sel = (state._tvSelected == i)
+      if r.ImGui_Selectable(ctx,label, sel) then
+        state._tvSelected = i
+        if state.autoApplySnapshots then
+          local s,msg = apply_track_version(tr,i)
+          if s then state.pendingMessage='Applied snapshot '..msg else state.pendingError=msg end
+        end
+      end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Click: select snapshot\nDouble-click: apply\nRight-click: menu (apply / rename / delete)') end
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then
+        local s,msg = apply_track_version(tr,i)
+        if s then state.pendingMessage='Applied version '..msg else state.pendingError=msg end
+      end
+      if r.ImGui_IsItemClicked(ctx,1) then r.ImGui_OpenPopup(ctx,'tv_ctx'..i) end
+      if r.ImGui_BeginPopup(ctx,'tv_ctx'..i) then
+        if r.ImGui_MenuItem(ctx,'Apply') then
+          local s,msg=apply_track_version(tr,i)
+          if s then state.pendingMessage='Applied snapshot '..msg else state.pendingError=msg end
+        end
+        if r.ImGui_MenuItem(ctx,'Rename') then
+          local ok,newName = r.GetUserInputs('Rename Snapshot',1,'New name:', ver.name)
+          if ok and newName~='' then
+            local s,msg = rename_track_version(tr,i,newName)
+            if s then state.pendingMessage='Renamed snapshot' else state.pendingError=msg end
+          end
+        end
+        if r.ImGui_MenuItem(ctx,'Delete') then
+          local s,msg=delete_track_version(tr,i)
+          if s then state.pendingMessage='Deleted snapshot'; state._tvSelected=nil else state.pendingError=msg end
+        end
+        r.ImGui_EndPopup(ctx)
+      end
+    end
+    if #versions==0 then r.ImGui_TextDisabled(ctx,'(no versions yet)') end
+    if #versions>0 and state._tvSelected and versions[state._tvSelected] then
+      r.ImGui_TextDisabled(ctx, string.format('Selected: %s', versions[state._tvSelected].name))
+    end
+    r.ImGui_EndChild(ctx)
+  end
+  r.ImGui_Dummy(ctx,0,4)
+  r.ImGui_Separator(ctx)
 end
 
  
 local function draw()
+  do
+    local tr = get_selected_track()
+    if tr and r.ValidatePtr(tr,'MediaTrack*') then
+      local guid = r.GetTrackGUID(tr)
+      if state.lastTrackGUID ~= guid then
+        state.lastTrackGUID = guid
+        local idx = tonumber(state.selectedSourceFXIndex)
+        if idx and idx >=0 then
+          local name = get_fx_name(tr, idx)
+          if name ~= '' then
+            state.selectedSourceFXName = name
+          else
+            state.selectedSourceFXIndex, state.selectedSourceFXName = nil, nil
+          end
+        end
+      else
+        local idx = tonumber(state.selectedSourceFXIndex)
+        if idx then
+          local name = get_fx_name(tr, idx)
+           if name == '' then
+             state.selectedSourceFXIndex, state.selectedSourceFXName = nil, nil
+           else
+             state.selectedSourceFXName = name
+           end
+        end
+      end
+    else
+      state.selectedSourceFXIndex, state.selectedSourceFXName = nil, nil
+      state.lastTrackGUID = nil
+    end
+  end
   if not is_context_valid(ctx) then 
     r.ShowConsoleMsg("Context invalid, reinitializing...\n")
     if not init_context() then 
@@ -3637,47 +4173,76 @@ local function draw()
     if not tr then
       r.ImGui_Text(ctx, 'No track selected. Select a track in REAPER to view its FX.')
     else
-      local tnum = get_track_number(tr) or 0
-      local tname = get_track_name(tr)
-      local hdr = ("%d: %s"):format(tnum, tname)
-      
-      local rC,gC,bC = get_track_color_rgb(tr)
-      local pushedHdr = 0
-      if not state.hdrInitApplied then
-        
-        if state.trackHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_Always()) end
-        state.hdrInitApplied = true
-      end
-      local hdrFlags = 0
-      if r.ImGui_TreeNodeFlags_AllowItemOverlap then
-        hdrFlags = hdrFlags | r.ImGui_TreeNodeFlags_AllowItemOverlap()
-      end
-      
-      local buttonAreaWidth = state.showRMSButtons and 60 or 0
-      local availWidth = r.ImGui_GetContentRegionAvail(ctx)
-      local headerWidth = availWidth - buttonAreaWidth
-      
-      local openHdr = state.trackHeaderOpen
-      
-      if rC and gC and bC then
-        local base = col_u32(rC, gC, bC, 1.0)
-        local hovR,hovG,hovB = lighten(rC,gC,bC, 0.08)
-        local actR,actG,actB = lighten(rC,gC,bC, -0.06)
-        if r.ImGui_PushStyleColor then
-          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        base); pushedHdr = pushedHdr + 1
-          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hovR,hovG,hovB,1.0)); pushedHdr = pushedHdr + 1
-          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(actR,actG,actB,1.0)); pushedHdr = pushedHdr + 1
+  if state.showTopPanelToggleBar ~= false then
+        local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+        local btnCount = 5
+        local spacing = 4 
+        local totalSpacing = spacing * (btnCount - 1)
+        local rawW = (availW - totalSpacing)
+        if rawW < 50 * btnCount then rawW = 50 * btnCount end 
+        local btnW = math.floor(rawW / btnCount)
+        local labels = {
+          {'Track','showTrackList'},
+          {'Source','showPanelSource'},
+          {'Replace','showPanelReplacement'},
+          {'FXChain','showPanelFXChain'},
+          {'Snapshots','showPanelTrackVersion'},
+        }
+        for i, def in ipairs(labels) do
+          local label, flagField = def[1], def[2]
+          local on = state[flagField] ~= false
+          if on and r.ImGui_PushStyleColor then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(0.20,0.38,0.20,1.0))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.26,0.46,0.26,1.0))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(0.18,0.32,0.18,1.0))
+          end
+          if r.ImGui_Button(ctx, label, btnW, 0) then
+            state[flagField] = not on
+          end
+          if on and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,3) end
+          if i < btnCount then r.ImGui_SameLine(ctx, nil, spacing) end
         end
-      end
-      
-      local frameHeight = r.ImGui_GetFrameHeight(ctx)
-      if r.ImGui_Button(ctx, "##header_bg", headerWidth, frameHeight) then
-        openHdr = not openHdr
-        state.trackHeaderOpen = openHdr
-        r.SetExtState(EXT_NS, 'HDR_OPEN', state.trackHeaderOpen and '1' or '0', true)
-      end
-      
-      if state.showRMSButtons then
+        r.ImGui_Separator(ctx)
+      end 
+      if state.showTrackList ~= false then
+        local tnum = get_track_number(tr) or 0
+        local tname = get_track_name(tr)
+        local hdr = ("%d: %s"):format(tnum, tname)
+        local rC,gC,bC = get_track_color_rgb(tr)
+        local pushedHdr = 0
+        if not state.hdrInitApplied then
+          if state.trackHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_Always()) end
+          state.hdrInitApplied = true
+        end
+        local buttonAreaWidth = state.showRMSButtons and 60 or 0
+        local availWidth = r.ImGui_GetContentRegionAvail(ctx)
+        local headerWidth = availWidth - buttonAreaWidth
+        do
+          local arrowReserve = 26
+          local paddingReserve = 10
+          local extraGap = 8  
+          local maxNameWidth = headerWidth - arrowReserve - paddingReserve - extraGap
+          if maxNameWidth < 20 then maxNameWidth = 20 end
+          hdr = truncate_text_to_width(ctx, hdr, maxNameWidth)
+        end
+        local openHdr = state.trackHeaderOpen
+        if rC and gC and bC then
+          local base = col_u32(rC, gC, bC, 1.0)
+          local hovR,hovG,hovB = lighten(rC,gC,bC, 0.08)
+          local actR,actG,actB = lighten(rC,gC,bC, -0.06)
+          if r.ImGui_PushStyleColor then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        base); pushedHdr = pushedHdr + 1
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hovR,hovG,hovB,1.0)); pushedHdr = pushedHdr + 1
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(actR,actG,actB,1.0)); pushedHdr = pushedHdr + 1
+          end
+        end
+        local frameHeight = r.ImGui_GetFrameHeight(ctx)
+        if r.ImGui_Button(ctx, "##header_bg", headerWidth, frameHeight) then
+          openHdr = not openHdr
+          state.trackHeaderOpen = openHdr
+          r.SetExtState(EXT_NS, 'HDR_OPEN', state.trackHeaderOpen and '1' or '0', true)
+        end
+        if state.showRMSButtons then
         local trRec = tr and (r.GetMediaTrackInfo_Value(tr, 'I_RECARM') or 0) or 0
         local trMute = tr and (r.GetMediaTrackInfo_Value(tr, 'B_MUTE') or 0) or 0
         local trSolo = tr and (r.GetMediaTrackInfo_Value(tr, 'I_SOLO') or 0) or 0
@@ -3730,11 +4295,9 @@ local function draw()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.75, 0.55, 0.20, 1.0)); pushed = pushed + 1
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.85, 0.65, 0.25, 1.0)); pushed = pushed + 1
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.65, 0.45, 0.18, 1.0)); pushed = pushed + 1
-            -- Add adaptive text color for RMS buttons
             local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
           elseif rC and gC and bC then
-            -- For non-active button, still apply adaptive text color
             local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
           end
@@ -3781,11 +4344,9 @@ local function draw()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.25, 0.60, 0.25, 1.0)); pushed = pushed + 1
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.30, 0.70, 0.30, 1.0)); pushed = pushed + 1
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.20, 0.50, 0.20, 1.0)); pushed = pushed + 1
-            -- Add adaptive text color for RMS buttons
             local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
           elseif rC and gC and bC then
-            -- For non-active button, still apply adaptive text color
             local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
           end
@@ -3831,8 +4392,8 @@ local function draw()
         end
       end
       
-      r.ImGui_SameLine(ctx, 0, 0)
-      r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) - availWidth + 4)
+  r.ImGui_SameLine(ctx, 0, 0)
+  r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) - availWidth + 4)
       
       local textColorPushed = 0
       if rC and gC and bC then
@@ -3841,19 +4402,19 @@ local function draw()
         textColorPushed = 1
       end
       
-      r.ImGui_Text(ctx, openHdr and "▼" or "►")
-      r.ImGui_SameLine(ctx, 0, 6)
+  r.ImGui_Text(ctx, openHdr and "▼" or "►")
+  r.ImGui_SameLine(ctx, 0, 6)
       
       local currentY = r.ImGui_GetCursorPosY(ctx)
-      r.ImGui_SetCursorPosY(ctx, currentY - 3) -- Move up by 3 pixels
+      r.ImGui_SetCursorPosY(ctx, currentY - 3) 
 
       local fontPushed = false
       if r.ImGui_PushFont then
-        local pushSuccess = pcall(r.ImGui_PushFont, ctx, nil, r.ImGui_GetFontSize(ctx) * 1.25) -- 25% larger
+        local pushSuccess = pcall(r.ImGui_PushFont, ctx, nil, r.ImGui_GetFontSize(ctx) * 1.25) 
         fontPushed = pushSuccess
       end
       
-      r.ImGui_Text(ctx, hdr)
+  r.ImGui_Text(ctx, hdr)
       
       if fontPushed and r.ImGui_PopFont then
         pcall(r.ImGui_PopFont, ctx)
@@ -3865,37 +4426,33 @@ local function draw()
       
       if r.ImGui_SetItemAllowOverlap then r.ImGui_SetItemAllowOverlap(ctx) end
       
-      if pushedHdr > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushedHdr) end
-      if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-        r.ImGui_SetTooltip(ctx, 'Click to expand/collapse the selected track\'s FX list')
-      end
-
-      if openHdr then
+        if pushedHdr > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushedHdr) end
+        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+          r.ImGui_SetTooltip(ctx, 'Click to expand/collapse the selected track\'s FX list')
+        end
+        if openHdr then
         local fxCount = r.TrackFX_GetCount(tr)
         if fxCount <= 0 then
           r.ImGui_Text(ctx, '(No FX on this track)')
         else
-          local flags = r.ImGui_TableFlags_SizingFixedFit() | r.ImGui_TableFlags_RowBg()
+          state.fxSlotsVisibleRows = math.max(1, math.min(8, tonumber(state.fxSlotsVisibleRows) or 4))
+          local rowLineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
+          local targetRows = state.fxSlotsVisibleRows
+          local childH = math.floor((rowLineH + 4) * targetRows + 6)
+          if r.ImGui_BeginChild(ctx, 'fx_slots_scroll', -1, childH) then
+          local flags = r.ImGui_TableFlags_SizingFixedFit() | r.ImGui_TableFlags_RowBg() | (r.ImGui_TableFlags_ScrollY and r.ImGui_TableFlags_ScrollY() or 0)
           if r.ImGui_BeginTable(ctx, 'fx_table_single', 3, flags) then
             r.ImGui_TableSetupColumn(ctx, '#', r.ImGui_TableColumnFlags_WidthFixed(), 20)
             r.ImGui_TableSetupColumn(ctx, 'FX name', r.ImGui_TableColumnFlags_WidthStretch())
-            r.ImGui_TableSetupColumn(ctx, 'Source', r.ImGui_TableColumnFlags_WidthFixed(), 56)
+            r.ImGui_TableSetupColumn(ctx, 'Ctl', r.ImGui_TableColumnFlags_WidthFixed(), 46)
 
             for i = 0, fxCount - 1 do
               r.ImGui_TableNextRow(ctx)
               if r.ImGui_TableSetBgColor and r.ImGui_TableBgTarget_RowBg0 and r.ImGui_TableBgTarget_RowBg1 then
                 local isSelected = (tonumber(state.selectedSourceFXIndex) or -1) == i
-                if isSelected then
-                  local hr, hg, hb, ha = 0.18, 0.28, 0.42, 0.85 
-                  r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg0(), col_u32(hr, hg, hb, ha))
-                  r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg1(), col_u32(hr, hg, hb, ha))
-                else
-                  if (i % 2) == 0 then
-                    r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg0(), col_u32(0.17, 0.17, 0.17, 1.00))
-                  else
-                    r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg1(), col_u32(0.23, 0.23, 0.23, 1.00))
-                  end
-                end
+                local col = isSelected and col_u32(0.24,0.38,0.55,0.55) or col_u32(0.19,0.19,0.19,1.0)
+                r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg0(), col)
+                r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg1(), col)
               end
 
               
@@ -3935,9 +4492,11 @@ local function draw()
                     if src >= 0 and src ~= dest then
                       if src < dest then dest = dest + 1 end
                       r.Undo_BeginBlock('Move FX')
-                      r.TrackFX_CopyToTrack(tr, src, tr, dest, true)
+                      if not move_fx_drag_chunk(tr, src, dest) then
+                        r.TrackFX_CopyToTrack(tr, src, tr, dest, true)
+                      end
                       r.Undo_EndBlock('Move FX', -1)
-                      state.pendingMessage = string.format('Moved "%s" to position %d', disp, dest + 1)
+                      state.pendingMessage = string.format('Moved "%s" to position %d', disp, (dest<r.TrackFX_GetCount(tr) and dest or (r.TrackFX_GetCount(tr)-1)) + 1)
                     end
                   end
                   if r.ImGui_EndDragDropTarget then r.ImGui_EndDragDropTarget(ctx) end
@@ -3949,12 +4508,12 @@ local function draw()
               local rightClick = false
               if r.ImGui_IsItemClicked then
                 anyClick = r.ImGui_IsItemClicked(ctx, 0)
-                rightClick = r.ImGui_IsItemClicked(ctx, 1) -- Right mouse button
+                rightClick = r.ImGui_IsItemClicked(ctx, 1) 
                 if anyClick and is_alt_down() then altClick = true end
               else
                 anyClick = clicked
               end
-        if (clicked or anyClick or altClick) and not state._pendingDelArmed then
+  if (clicked or anyClick or altClick) and not state._pendingDelArmed then
                 local altDown = is_alt_down()
                 local shiftDown = is_shift_down()
                 local ctrlDown = is_ctrl_down()
@@ -3989,7 +4548,6 @@ local function draw()
                 end
               end
 
-              -- Right click opens FX floating window
               if rightClick and r.TrackFX_Show then
                 local hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
                 local uiOpen = r.TrackFX_GetOpen and r.TrackFX_GetOpen(tr, i) or false
@@ -4005,24 +4563,116 @@ local function draw()
               end
 
               
+              do
+                local setNormal = false
+                if clicked and r.ImGui_IsItemHovered(ctx) then
+                  local altDown = is_alt_down()
+                  local shiftDown = is_shift_down()
+                  local ctrlDown = is_ctrl_down()
+                  if not altDown and not shiftDown and not ctrlDown and not rightClick then
+                    setNormal = true
+                  end
+                end
+                if setNormal then
+                  state.selectedSourceFXName = nm
+                  state.selectedSourceFXIndex = i
+                end
+              end
+
               r.ImGui_TableSetColumnIndex(ctx, 2)
-              local pushedSrc = 0
-              if r.ImGui_PushStyleColor then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.18, 0.32, 0.50, 1.0)); pushedSrc = pushedSrc + 1
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.22, 0.40, 0.62, 1.0)); pushedSrc = pushedSrc + 1
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.14, 0.26, 0.42, 1.0)); pushedSrc = pushedSrc + 1
+              local frameH = r.ImGui_GetFrameHeight(ctx)
+              local btnW = 18
+              do
+                local en = get_fx_enabled(tr, i)
+                local bypassActive = (en ~= nil) and (not en)
+                local pushedB = 0
+                if bypassActive and r.ImGui_PushStyleColor then
+                  local br,bg,bb = 0.45,0.35,0.10
+                  local hr,hg,hb = lighten(br,bg,bb,0.10)
+                  local ar,ag,ab = lighten(br,bg,bb,-0.08)
+                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(br,bg,bb,1.0)); pushedB=pushedB+1
+                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushedB=pushedB+1
+                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(ar,ag,ab,1.0)); pushedB=pushedB+1
+                end
+                if r.ImGui_Button(ctx, 'B##rowB'..i, btnW, frameH) then
+                  local curEn = get_fx_enabled(tr, i)
+                  set_fx_enabled(tr, i, curEn == nil and false or (not curEn))
+                end
+                if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle bypass') end
+                if pushedB>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushedB) end
               end
-              r.ImGui_SetCursorPosX(ctx, (select(1, r.ImGui_GetCursorPos(ctx)) or 0) + 8)
-              if r.ImGui_SmallButton(ctx, 'Source##' .. i) then
-                state.selectedSourceFXName = nm
-                state.selectedSourceFXIndex = i
-              end
-              if pushedSrc > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushedSrc) end
-              if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-                r.ImGui_SetTooltip(ctx, 'Set this FX as the Source for other actions in this script or related tools')
+              r.ImGui_SameLine(ctx,nil,2)
+              do
+                local off = get_fx_offline(tr, i)
+                local offActive = (off ~= nil) and off
+                local pushedO = 0
+                if offActive and r.ImGui_PushStyleColor then
+                  local br,bg,bb = 0.38,0.20,0.20
+                  local hr,hg,hb = lighten(br,bg,bb,0.10)
+                  local ar,ag,ab = lighten(br,bg,bb,-0.08)
+                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(br,bg,bb,1.0)); pushedO=pushedO+1
+                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushedO=pushedO+1
+                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(ar,ag,ab,1.0)); pushedO=pushedO+1
+                end
+                if r.ImGui_Button(ctx, 'O##rowO'..i, btnW, frameH) then
+                  local curOff = get_fx_offline(tr, i)
+                  set_fx_offline(tr, i, curOff == nil and true or (not curOff))
+                end
+                if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle offline') end
+                if pushedO>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushedO) end
               end
             end
             r.ImGui_EndTable(ctx)
+          end 
+          local dlChild = r.ImGui_GetWindowDrawList(ctx)
+          local minx,miny = r.ImGui_GetItemRectMin(ctx)
+          local maxx,maxy = r.ImGui_GetItemRectMax(ctx)
+          if dlChild then
+            r.ImGui_DrawList_AddRectFilled(dlChild, minx, miny, maxx, miny + childH, col_u32(0.19,0.19,0.19,1.0))
+          end
+          r.ImGui_EndChild(ctx)
+          do
+            local splitterHeight = 6
+            local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or -1
+            if r.ImGui_InvisibleButton then
+              r.ImGui_InvisibleButton(ctx, '##fxSlotsResize', availW, splitterHeight)
+              local hovered = r.ImGui_IsItemHovered(ctx)
+              local active = r.ImGui_IsItemActive(ctx)
+              if hovered and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeNS then
+                pcall(function() r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS()) end)
+              end
+              if state.tooltips and hovered and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Drag to change FX slots height (1-8 rows)') end
+              if active and r.ImGui_IsMouseDragging and r.ImGui_IsMouseDragging(ctx,0) then
+                local dragDy = select(2, r.ImGui_GetMouseDragDelta(ctx,0)) or 0
+                local deltaRows = math.floor(dragDy / (rowLineH * 0.9))
+                if deltaRows ~= 0 then
+                  state.fxSlotsVisibleRows = math.max(1, math.min(8, state.fxSlotsVisibleRows + deltaRows))
+                  r.ImGui_ResetMouseDragDelta(ctx,0)
+                  save_user_settings()
+                end
+              end
+              if r.ImGui_GetItemRectMin and r.ImGui_GetItemRectMax and r.ImGui_DrawList_AddRectFilled then
+                local minx, miny = r.ImGui_GetItemRectMin(ctx)
+                local maxx, maxy = r.ImGui_GetItemRectMax(ctx)
+                local dl = r.ImGui_GetWindowDrawList(ctx)
+                if dl then
+                  local baseCol = col_u32(0.55,0.55,0.55,0.35)
+                  if hovered then baseCol = col_u32(0.80,0.80,0.80,0.55) end
+                  if active then baseCol = col_u32(0.32,0.60,0.95,0.85) end
+                  r.ImGui_DrawList_AddRectFilled(dl, minx, miny, maxx, maxy, baseCol, 2)
+                  local midY = (miny + maxy) * 0.5
+                  local centerX = (minx + maxx) * 0.5
+                  local dotCol = col_u32(0.15,0.15,0.15, active and 1.0 or (hovered and 0.9 or 0.6))
+                  if r.ImGui_DrawList_AddCircleFilled then
+                    local spacing = 6
+                    r.ImGui_DrawList_AddCircleFilled(dl, centerX - spacing, midY, 2, dotCol)
+                    r.ImGui_DrawList_AddCircleFilled(dl, centerX,          midY, 2, dotCol)
+                    r.ImGui_DrawList_AddCircleFilled(dl, centerX + spacing, midY, 2, dotCol)
+                  end
+                end
+              end
+            end
+          end
             if state._pendingDelGUID and state._pendingDelTrack then
               local delTr = state._pendingDelTrack
               local delGuid = state._pendingDelGUID
@@ -4051,25 +4701,38 @@ local function draw()
               end
               state._pendingDelGUID, state._pendingDelTrack, state._pendingDelDisp, state._pendingDelIndex = nil, nil, nil, nil
             end
-          end
-        end
+          end -- end fx slots child & table
+        end -- end openHdr
+      end -- end showTrackList
       end
     end
   
-  draw_replace_panel()
-    r.ImGui_EndChild(ctx)
+  local hdrColorCount = 0
+  if r.ImGui_PushStyleColor then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),        col_u32(0.12,0.12,0.12,1.00)); hdrColorCount = hdrColorCount + 1
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), col_u32(0.18,0.18,0.18,1.00)); hdrColorCount = hdrColorCount + 1
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),  col_u32(0.24,0.24,0.24,1.00)); hdrColorCount = hdrColorCount + 1
+  end
+
+  if state.showPanelSource ~= false then draw_source_panel() end
+  if state.showPanelReplacement ~= false then draw_replace_panel() end
+  if state.showPanelFXChain ~= false then draw_fxchain_panel() end
+  if state.showPanelTrackVersion ~= false then draw_trackversion_panel() end
+  if hdrColorCount > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, hdrColorCount) end
+  r.ImGui_EndChild(ctx)
 
     r.ImGui_Separator(ctx)
     
-    local current_track = get_selected_track()
+  local current_track = get_selected_track()
     local current_number = current_track and get_track_number(current_track) or 0
     local total_tracks = r.CountTracks(0)
-    local nav_width = 280
+  local nav_width = (state.lastSourceBlockWidth and state.lastSourceBlockWidth > 120) and math.min(state.lastSourceBlockWidth, 600) or 280
     local available_width = r.ImGui_GetContentRegionAvail(ctx)
     local start_pos = math.max(0, (available_width - nav_width) * 0.5)
     r.ImGui_SetCursorPosX(ctx, start_pos)
     
-    if r.ImGui_Button(ctx, '⟪', 25, 0) then
+  if (state.showTrackNavButtons ~= false) then
+  if r.ImGui_Button(ctx, '⟪', 25, 0) then
       local success, msg = navigate_to_first_track()
       if success then state.pendingMessage = msg else state.pendingError = msg end
     end
@@ -4078,7 +4741,7 @@ local function draw()
     end
     
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, '◀', 25, 0) then
+  if r.ImGui_Button(ctx, '◀', 25, 0) then
       local success, msg = navigate_to_previous_track()
       if success then state.pendingMessage = msg else state.pendingError = msg end
     end
@@ -4086,16 +4749,19 @@ local function draw()
       r.ImGui_SetTooltip(ctx, 'Go to previous track')
     end
     
-    r.ImGui_SameLine(ctx)
-    r.ImGui_SetNextItemWidth(ctx, 60)
-    local changed, new_input = r.ImGui_InputText(ctx, '##track_nav_input', state.trackNavInput)
+  r.ImGui_SameLine(ctx)
+  local usedButtonsW = (25+4) + (25+4) + (35+4) + (25+4) + 25
+  local trackPickerWidth = nav_width - usedButtonsW
+  if trackPickerWidth < 60 then trackPickerWidth = 60 end
+  r.ImGui_SetNextItemWidth(ctx, trackPickerWidth)
+  local changed, new_input = r.ImGui_InputText(ctx, '##track_nav_input', state.trackNavInput)
     if changed then state.trackNavInput = new_input end
     if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
       r.ImGui_SetTooltip(ctx, 'Enter track number (1-' .. total_tracks .. ')')
     end
     
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, 'Go!', 35, 0) then
+  if r.ImGui_Button(ctx, 'Go!', 35, 0) then
       local track_num = tonumber(state.trackNavInput)
       if track_num then
         local success, msg = go_to_track(track_num)
@@ -4114,7 +4780,7 @@ local function draw()
     end
     
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, '▶', 25, 0) then
+  if r.ImGui_Button(ctx, '▶', 25, 0) then
       local success, msg = navigate_to_next_track()
       if success then state.pendingMessage = msg else state.pendingError = msg end
     end
@@ -4123,18 +4789,18 @@ local function draw()
     end
     
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, '⟫', 25, 0) then
+  if r.ImGui_Button(ctx, '⟫', 25, 0) then
       local success, msg = navigate_to_last_track()
       if success then state.pendingMessage = msg else state.pendingError = msg end
-    end
+  end
     if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
       r.ImGui_SetTooltip(ctx, 'Go to last track')
     end
-    
-    r.ImGui_SameLine(ctx)
-    r.ImGui_TextDisabled(ctx, string.format(' (%d/%d)', current_number, total_tracks))
-    
-    r.ImGui_BeginChild(ctx, 'footer_child', -1, FOOTER_H)
+  end 
+  
+
+    local footer_open = r.ImGui_BeginChild(ctx, 'footer_child', -1, FOOTER_H)
+    if footer_open then
       local msg = state.pendingMessage or ''
       local err = state.pendingError or ''
       local hasMsg = (msg ~= '')
@@ -4146,7 +4812,16 @@ local function draw()
       else
         r.ImGui_TextDisabled(ctx, 'Ready')
       end
-    r.ImGui_EndChild(ctx)
+      r.ImGui_SameLine(ctx)
+      r.ImGui_TextDisabled(ctx, string.format(' (%d/%d)', current_number, total_tracks))
+      local preview = state.previewPending
+      if preview and preview ~= '' then
+        r.ImGui_NewLine(ctx)
+        r.ImGui_TextDisabled(ctx, preview)
+      end
+      state.previewPending = nil
+      r.ImGui_EndChild(ctx)
+    end
 
     local cw, ch = r.ImGui_GetWindowSize(ctx)
     state.winW, state.winH = cw, ch
@@ -4186,30 +4861,70 @@ local function draw()
     else
     local settings_begun = false
     local okS, openS
+    local settingsStylePush = push_app_style()
     local ok_call, err = pcall(function()
-  okS, openS = r.ImGui_Begin(ctx, 'Settings##TK_FX_Slots_SingleTrack', true, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar())
+      okS, openS = r.ImGui_Begin(ctx, 'Settings##TK_FX_Slots_SingleTrack', true,
+        r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar())
       settings_begun = true
     end)
     if ok_call and settings_begun then
       if okS then
+  r.ImGui_TextColored(ctx, col_u32(0.85,0.85,0.85,1.0), 'Settings')
+  r.ImGui_Dummy(ctx, 0, 2)
+        r.ImGui_Separator(ctx)
         local changed = false
         
         if r.ImGui_BeginTabBar and r.ImGui_BeginTabBar(ctx, 'SettingsTabs') then
           
           if r.ImGui_BeginTabItem and r.ImGui_BeginTabItem(ctx, 'General') then
             local c1, v1 = r.ImGui_Checkbox(ctx, 'Tooltips', state.tooltips)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Show on-hover help popups throughout the UI') end
             if c1 then state.tooltips = v1; changed = true end
             local c2, v2 = r.ImGui_Checkbox(ctx, 'Names without prefix', state.nameNoPrefix)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Strip common vendor / category prefixes from FX names') end
             if c2 then state.nameNoPrefix = v2; changed = true end
             local c3, v3 = r.ImGui_Checkbox(ctx, 'Hide developer name', state.nameHideDeveloper)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Hide the developer (author) segment from FX display names') end
             if c3 then state.nameHideDeveloper = v3; changed = true end
             local c4, v4 = r.ImGui_Checkbox(ctx, 'Plugin image', state.showScreenshot)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Show / hide captured plugin interface image') end
             if c4 then
               state.showScreenshot = v4; changed = true
-              if not v4 then release_screenshot() end
+              if v4 then
+                state.screenshotNeedsRefresh = true
+              else
+                release_screenshot()
+              end
             end
             local c5, v5 = r.ImGui_Checkbox(ctx, 'Show R/M/S buttons', state.showRMSButtons)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Show record (R), mute (M) and solo (S) buttons near tracks list') end
             if c5 then state.showRMSButtons = v5; changed = true end
+            local c6, v6 = r.ImGui_Checkbox(ctx, 'Show Track FX list', state.showTrackList ~= false)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle visibility of the left track FX list panel') end
+            if c6 then state.showTrackList = v6; changed = true end
+            local c7, v7 = r.ImGui_Checkbox(ctx, 'Show Track Nav buttons', state.showTrackNavButtons ~= false)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Show previous / next / range navigation buttons for tracks') end
+            if c7 then state.showTrackNavButtons = v7; changed = true end
+            local c7c, v7c = r.ImGui_Checkbox(ctx, 'Show Top Panel Toggle bar', state.showTopPanelToggleBar ~= false)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Show or hide the row of panel toggle buttons at the top') end
+            if c7c then state.showTopPanelToggleBar = v7c; changed = true end
+            local c7b, v7b = r.ImGui_Checkbox(ctx, 'Hide Wet control', state.hideWetControl == true)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Completely hide the global Wet (mix) knob control') end
+            if c7b then state.hideWetControl = v7b; changed = true end
+            r.ImGui_Separator(ctx)
+            r.ImGui_TextDisabled(ctx, 'Panels:')
+            local cp1, vp1 = r.ImGui_Checkbox(ctx, 'Replacement panel', state.showPanelReplacement ~= false)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle visibility of the Replacement (batch operations) panel') end
+            if cp1 then state.showPanelReplacement = vp1; changed = true end
+            local cp2, vp2 = r.ImGui_Checkbox(ctx, 'FX Instance Controls panel', state.showPanelSource ~= false)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle visibility of the per-instance Source FX control panel') end
+            if cp2 then state.showPanelSource = vp2; changed = true end
+            local cp3, vp3 = r.ImGui_Checkbox(ctx, 'FXChain Controls panel', state.showPanelFXChain ~= false)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle visibility of the FX Chain (preset/chain) panel') end
+            if cp3 then state.showPanelFXChain = vp3; changed = true end
+            local cp4, vp4 = r.ImGui_Checkbox(ctx, 'Chain Snapshots panel', state.showPanelTrackVersion ~= false)
+            if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle visibility of FX chain snapshot controls panel') end
+            if cp4 then state.showPanelTrackVersion = vp4; changed = true end
             
             if r.ImGui_EndTabItem then r.ImGui_EndTabItem(ctx) end
           end
@@ -4288,6 +5003,48 @@ local function draw()
               save_user_settings()
               changed = false
             end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, 'Reset Defaults') then
+              local ns = EXT_NS
+              local keys = {
+                'TOOLTIPS','NAME_NOPREFIX','NAME_HIDEDEV','HDR_OPEN','REPL_OPEN','ACT_OPEN','SRC_OPEN',
+                'IMG_SHOW','FXC_OPEN','TRV_OPEN','SHOW_RMS','SHOW_TRK_LIST','SHOW_TOP_PANEL_TOGGLES',
+                'SHOW_TRK_NAV','HIDE_WET','PANEL_REPLACEMENT','PANEL_SOURCE','PANEL_FXCHAIN','PANEL_TRKVER',
+                'STYLE_ROUNDING','STYLE_BTN_ROUNDING','STYLE_WIN_ROUNDING','STYLE_FRAME_ROUNDING',
+                'STYLE_GRAB_ROUNDING','STYLE_TAB_ROUNDING','STYLE_BTN_R','STYLE_BTN_G','STYLE_BTN_B',
+                'STYLE_BTN_HOV_R','STYLE_BTN_HOV_G','STYLE_BTN_HOV_B','STYLE_BTN_ACT_R','STYLE_BTN_ACT_G','STYLE_BTN_ACT_B',
+                'STYLE_WIN_BG_R','STYLE_WIN_BG_G','STYLE_WIN_BG_B','STYLE_WIN_BG_A',
+                'STYLE_FRAME_BG_R','STYLE_FRAME_BG_G','STYLE_FRAME_BG_B','STYLE_FRAME_BG_A',
+                'STYLE_FRAME_HOV_R','STYLE_FRAME_HOV_G','STYLE_FRAME_HOV_B','STYLE_FRAME_HOV_A',
+                'STYLE_FRAME_ACT_R','STYLE_FRAME_ACT_G','STYLE_FRAME_ACT_B','STYLE_FRAME_ACT_A'
+              }
+              for _,k in ipairs(keys) do r.SetExtState(ns, k, '', true) end
+              state.tooltips = true
+              state.nameNoPrefix = false
+              state.nameHideDeveloper = false
+              state.showScreenshot = true
+              state.showTrackList = true
+              state.showTopPanelToggleBar = true
+              state.showTrackNavButtons = true
+              state.showPanelReplacement = true
+              state.showPanelSource = true
+              state.showPanelFXChain = true
+              state.showPanelTrackVersion = true
+              state.styleRounding = state.styleRounding or 4
+              state.styleButtonRounding = state.styleButtonRounding or 4
+              state.styleWindowRounding = state.styleWindowRounding or 6
+              state.styleFrameRounding = state.styleFrameRounding or 4
+              state.styleGrabRounding = state.styleGrabRounding or 4
+              state.styleTabRounding = state.styleTabRounding or 4
+              state.styleButtonColorR, state.styleButtonColorG, state.styleButtonColorB = 0.30,0.30,0.30
+              state.styleButtonHoveredR, state.styleButtonHoveredG, state.styleButtonHoveredB = 0.38,0.38,0.38
+              state.styleButtonActiveR, state.styleButtonActiveG, state.styleButtonActiveB = 0.20,0.20,0.20
+              state.styleWindowBgR, state.styleWindowBgG, state.styleWindowBgB, state.styleWindowBgA = 0.14,0.14,0.14,1.0
+              state.styleFrameBgR, state.styleFrameBgG, state.styleFrameBgB, state.styleFrameBgA = 0.12,0.12,0.12,1.0
+              state.styleFrameBgHoveredR, state.styleFrameBgHoveredG, state.styleFrameBgHoveredB, state.styleFrameBgHoveredA = 0.18,0.18,0.18,1.0
+              state.styleFrameBgActiveR, state.styleFrameBgActiveG, state.styleFrameBgActiveB, state.styleFrameBgActiveA = 0.16,0.16,0.16,1.0
+              save_user_settings()
+            end
             
             if r.ImGui_EndTabItem then r.ImGui_EndTabItem(ctx) end
           end
@@ -4295,18 +5052,29 @@ local function draw()
           if r.ImGui_EndTabBar then r.ImGui_EndTabBar(ctx) end
         else
           local c1, v1 = r.ImGui_Checkbox(ctx, 'Tooltips', state.tooltips)
+          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Enable or disable all tooltips globally') end
           if c1 then state.tooltips = v1; changed = true end
           local c2, v2 = r.ImGui_Checkbox(ctx, 'Names without prefix', state.nameNoPrefix)
+          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Remove vendor / category prefixes in displayed FX names') end
           if c2 then state.nameNoPrefix = v2; changed = true end
           local c3, v3 = r.ImGui_Checkbox(ctx, 'Hide developer name', state.nameHideDeveloper)
+          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Omit the developer name portion from FX titles') end
           if c3 then state.nameHideDeveloper = v3; changed = true end
           local c4, v4 = r.ImGui_Checkbox(ctx, 'Plugin image', state.showScreenshot)
+          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Show or hide captured plugin GUI image') end
           if c4 then
             state.showScreenshot = v4; changed = true
             if not v4 then release_screenshot() end
           end
           local c5, v5 = r.ImGui_Checkbox(ctx, 'Show R/M/S buttons', state.showRMSButtons)
+          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Display Record / Mute / Solo buttons alongside track entries') end
           if c5 then state.showRMSButtons = v5; changed = true end
+          local c6, v6 = r.ImGui_Checkbox(ctx, 'Show Track FX list', state.showTrackList ~= false)
+          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle track FX list visibility') end
+          if c6 then state.showTrackList = v6; changed = true end
+          local c7, v7 = r.ImGui_Checkbox(ctx, 'Show Track Nav buttons', state.showTrackNavButtons ~= false)
+          if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle previous/next track navigation buttons') end
+          if c7 then state.showTrackNavButtons = v7; changed = true end
           
           if changed then save_user_settings() end
         end
@@ -4315,7 +5083,8 @@ local function draw()
         r.ImGui_Separator(ctx)
         if r.ImGui_Button(ctx, 'Close') then state.showSettings = false end
       end
-      pcall(r.ImGui_End, ctx)
+  pcall(r.ImGui_End, ctx)
+  pop_app_style(settingsStylePush)
       if openS == false then state.showSettings = false end
     else
       state.showSettings = false
@@ -4332,13 +5101,112 @@ local function draw()
     end)
     if ok_call and help_begun then
       if okH then
-        r.ImGui_Text(ctx, 'TK FX Slots Single Track - Help')
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, 'Source: Use the Source button next to an FX to set it as the target for Replace/Delete actions.')
-  r.ImGui_Text(ctx, 'Replace: Choose a replacement via My Favorites or Pick from list…, then Replace/Delete across the chosen scope.')
-        r.ImGui_Text(ctx, 'Slot ops: Replace/Add at a specific slot index across tracks; optionally insert a placeholder.')
-        r.ImGui_Text(ctx, 'Settings: Toggle tooltips and control name display formatting.')
-        r.ImGui_Dummy(ctx, 0, 6)
+  r.ImGui_Text(ctx, 'TK FX Slots Single Track - Help / Usage Guide')
+  r.ImGui_Separator(ctx)
+
+  r.ImGui_TextColored(ctx, col_u32(0.85,0.85,1,1), 'Overview')
+  r.ImGui_TextWrapped(ctx, 'Manage, replace and audition FX instances across one or many tracks. Provides A/B testing, batch slot operations, FX chain preset management, drag+drop slot reordering and panel customization.')
+  r.ImGui_Dummy(ctx,0,4)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Panels / Sections')
+  r.ImGui_BulletText(ctx, 'FX Instance Controls (Source): Shows controls for currently selected (source) FX: bypass/offline/delta toggles, wet mix knob, A/B prepare & toggle, commit (Replace Source).')
+  r.ImGui_BulletText(ctx, 'Replacement Panel: Choose replacement FX or placeholder; batch Replace/Delete/Move Up/Down All; targeted slot Replace/Add with conditional safety.')
+  r.ImGui_BulletText(ctx, 'FX Chain Panel: Save current chain, refresh list, apply or replace chains for current / selected / all tracks (confirmation for destructive actions).')
+  r.ImGui_BulletText(ctx, 'Snapshots / Navigation (optional): Previous / next / jump to track index; FX chain snapshot panel if enabled.')
+  r.ImGui_BulletText(ctx, 'Track FX List (optional left panel): Per‑track FX rows with status & direct mouse interactions (see Mouse Reference).')
+  r.ImGui_Dummy(ctx,0,4)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Selecting / Managing the Source FX')
+  r.ImGui_TextWrapped(ctx, 'There is no separate "Source" button anymore: simply Left‑Click (no modifiers) an FX row in the Track FX List to set it as the active Source. All replace / delete / move operations target this FX name & index (subject to scope).')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Replacement Selection')
+  r.ImGui_BulletText(ctx, 'Pick from list / browser: Internal filtered list or full REAPER browser (button).')
+  r.ImGui_BulletText(ctx, 'Placeholder mode: Inserts a dummy FX and optionally renames it (staging marker).')
+  r.ImGui_BulletText(ctx, 'Custom name field: Overrides display (useful with placeholders).')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Chain Snapshots (FX Chain Only)')
+  r.ImGui_TextWrapped(ctx,'Capture the current FX chain state (order, enabled/offline flags, parameter values, FX names). Apply snapshots to instantly revert or compare alternate processing chains.')
+  r.ImGui_BulletText(ctx,'New Snapshot: Stores current chain as a named snapshot (no items, sends, volumes, envelopes).')
+  r.ImGui_BulletText(ctx,'Apply Selected: Overwrites current chain with the chosen snapshot.')
+  r.ImGui_BulletText(ctx,'List interactions: Click select / Double-click apply / Right-click menu (Apply, Rename, Delete).')
+  r.ImGui_BulletText(ctx,'Scope: This is not a full track version system—only FX chain state is stored.')
+  r.ImGui_Dummy(ctx,0,2)
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'A/B Testing Workflow')
+  r.ImGui_BulletText(ctx, 'A/B Replace button: First press snapshots Source+Replacement (prepare). Next presses toggle which side is active (A=original, B=replacement).')
+  r.ImGui_BulletText(ctx, 'Replace Source: Commits the currently active side over the original slot and clears A/B state.')
+  r.ImGui_BulletText(ctx, 'Auto Reset: Changing the source FX or invalidating the prepared pair resets A/B.')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Batch & Slot Operations')
+  r.ImGui_BulletText(ctx, 'Replace all / Delete all / Move Up/Down All: Act on every instance of the Source FX (or only selected tracks when that scope is enabled).')
+  r.ImGui_BulletText(ctx, 'Slot Replace/Add: Force action at an explicit slot index across tracks.')
+  r.ImGui_BulletText(ctx, 'Only if slot is source: Skip slots whose current FX name does not match the Source (safety).')
+  r.ImGui_BulletText(ctx, 'Selected track(s) Only: Restrict operations to currently selected tracks instead of project‑wide.')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Wet / Mix Control')
+  r.ImGui_BulletText(ctx, 'Drag knob: Adjust wet mix (if FX supports global wet).')
+  r.ImGui_BulletText(ctx, 'Double‑Click: Set 100% wet. Right‑Click: Set 50%.')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Delta / Bypass / Offline')
+  r.ImGui_BulletText(ctx, 'Bypass (B): Toggle enable state (keeps FX loaded).')
+  r.ImGui_BulletText(ctx, 'Offline (O): Fully unloads processing (saves CPU/RAM).')
+  r.ImGui_BulletText(ctx, 'Delta: If supported by plugin, isolates difference signal for critical listening.')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'FX Chain Management')
+  r.ImGui_BulletText(ctx, 'Save: Write current track chain to .RfxChain.')
+  r.ImGui_BulletText(ctx, 'Refresh: Re-scan chain folder from disk.')
+  r.ImGui_BulletText(ctx, 'Apply: Append chain FX to target(s). Replace: Clear then load chain (confirmation).')
+  r.ImGui_BulletText(ctx, 'Targets: Current, selected, or all tracks (asks before large/global destructive actions).')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Navigation & Panels')
+  r.ImGui_BulletText(ctx, 'Track Nav (⟪ ◀ Go ▶ ⟫): Step previous / next or jump by index.')
+  r.ImGui_BulletText(ctx, 'Toggle Bar: One‑click show/hide for major panels (can be hidden in Settings).')
+  r.ImGui_BulletText(ctx, 'Settings: Panel visibility, tooltip enable, FX name formatting, wet knob, track buttons, image capture.')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Placeholders')
+  r.ImGui_TextWrapped(ctx, 'Enable "Use placeholder" to insert a dummy slot marker. Provide a custom display label to mark intent (e.g. "(SAT Comp Here)" ). Later you can batch replace placeholders with real FX.')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Mouse & Modifier Reference')
+  r.ImGui_BulletText(ctx, 'FX Row (left panel list):')
+  r.ImGui_TextWrapped(ctx, '  Left-Click: select as Source | Alt+Click: arm delete (confirmation phase) | Shift+Click: toggle bypass | Ctrl+Shift+Click: toggle offline | Right-Click: open/close plugin UI (float/embedded cycle) | Drag: reorder (drop on another row to move).')
+  r.ImGui_BulletText(ctx, 'FX Row Buttons:')
+  r.ImGui_TextWrapped(ctx, '  B = bypass toggle, O = offline toggle (these reflect per-row state; tooltips show when enabled).')
+  r.ImGui_BulletText(ctx, 'Track Header Bar:')
+  r.ImGui_TextWrapped(ctx, '  Click track name header to expand/collapse its FX list (multi-track mode if enabled).')
+  r.ImGui_BulletText(ctx, 'Record / Mute / Solo (R/M/S) Buttons:')
+  r.ImGui_TextWrapped(ctx, '  R: Click = arm toggle.  M: Click = mute; Ctrl+Click = unmute all; Alt+Click = mute all others; Ctrl+Alt+Click = exclusive mute.  S: Click = solo; Ctrl+Click = unsolo all; Ctrl+Shift+Click = solo defeat; Ctrl+Alt+Click = exclusive solo.')
+  r.ImGui_BulletText(ctx, 'A/B Replace Button:')
+  r.ImGui_TextWrapped(ctx, '  First press prepares pair (captures original + replacement); subsequent presses toggle active side. State auto-clears when source changes.')
+  r.ImGui_BulletText(ctx, 'Wet Knob:')
+  r.ImGui_TextWrapped(ctx, '  Drag = adjust | Double-Click = 100% | Right-Click = 50%.')
+  r.ImGui_BulletText(ctx, 'FX Chain List:')
+  r.ImGui_TextWrapped(ctx, '  Right-Click chain entry (where available) for context popup; filters and buttons as labeled.')
+  r.ImGui_BulletText(ctx, 'Drag & Drop:')
+  r.ImGui_TextWrapped(ctx, '  Begin drag on FX row text, drop onto another row to move (internal copy + delete). Undo supported.')
+  r.ImGui_BulletText(ctx, 'Slot Index Field:')
+  r.ImGui_TextWrapped(ctx, '  Enter 1-based slot number for Slot Replace/Add batch actions.')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Safety & Undo')
+  r.ImGui_BulletText(ctx, 'Destructive actions (global replace / chain replace / delete all) wrapped in Undo & may prompt.')
+  r.ImGui_BulletText(ctx, 'Drag reorders and A/B operations are undoable.')
+  r.ImGui_Dummy(ctx,0,2)
+
+  r.ImGui_TextColored(ctx, col_u32(0.9,0.8,0.6,1), 'Tips')
+  r.ImGui_BulletText(ctx, 'Enable tooltips (Settings) for contextual guidance while learning.')
+  r.ImGui_BulletText(ctx, 'Use Selected Track(s) scope before applying project‑wide changes.')
+  r.ImGui_BulletText(ctx, 'Prepare A/B early to compare subtle processing tweaks.')
+  r.ImGui_BulletText(ctx, 'Placeholders help plan future routing / processing stages.')
+  r.ImGui_Dummy(ctx,0,4)
+
         if r.ImGui_Button(ctx, 'Close') then state.showHelp = false end
       end
       pcall(r.ImGui_End, ctx)
@@ -4351,100 +5219,435 @@ local function draw()
   if state.showPicker and ctx then
     ensure_picker_items()
     local picker_begun = false
-    local okP, openP
-    local ok_call, err = pcall(function()
-      okP, openP = r.ImGui_Begin(ctx, 'Choose plugin (Sexan)##TK_FX_Slots_SingleTrack', true, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoTitleBar())
+  local okP, openP
+  local pickerStylePush = push_app_style()
+  local ok_call, err = pcall(function()
+  if is_context_valid(ctx) then
+  r.ImGui_SetNextWindowSize(ctx, 600, 440, r.ImGui_Cond_Appearing())
+  r.ImGui_SetNextWindowSizeConstraints(ctx, 480, 340, 1000, 800)
+  else
+    return
+  end
+  local picker_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoTitleBar()
+  okP, openP = r.ImGui_Begin(ctx, 'FX Picker##TK_FX_Slots_SingleTrack', true, picker_flags)
       picker_begun = true
     end)
     if ok_call and picker_begun then
       if okP then
-     
-  local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
-        if r.ImGui_Button(ctx, 'Refresh list (build)') then
+        
+  r.ImGui_Separator(ctx)
+  r.ImGui_Text(ctx, 'FX Picker')
+  if state.pickerSearchAll == nil then state.pickerSearchAll = false end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 200)
+  local chgF, ftxt = r.ImGui_InputTextWithHint(ctx, '##fxpick_filter', 'Search...', state.pickerFilter or '')
+  if chgF then state.pickerFilter = ftxt end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, 'x##clr_fxpick', 18, 0) then
+    state.pickerFilter = ''
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, 'Clear filter') end
+  r.ImGui_SameLine(ctx)
+  local chgAll, all = r.ImGui_Checkbox(ctx, 'All', state.pickerSearchAll)
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Search across all FX categories instead of the current filter') end
+  if chgAll then state.pickerSearchAll = all end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, 'Search all sections (ignore current selection)') end
+  local filter_l = (state.pickerFilter or ''):lower()
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, 'Refresh') then
           local items, perr = load_plugin_items()
           if items then
             state.pickerItems, state.pickerErr = items, nil
+            state._pickerStructBuilt = false
             state.pickerLoadedFromCache = false
-            write_cache_items(items)
+            local ok = pcall(write_cache_items, items)
+            state.pickerStatusMsg = ok and 'List rebuilt & cached' or 'List rebuilt (cache write failed)'
           else
             state.pickerErr = perr or 'Failed to build list'
+            state.pickerStatusMsg = nil
           end
         end
-  r.ImGui_SameLine(ctx)
-  r.ImGui_SetNextItemWidth(ctx, 160)
-        local currentType = state.pickerType or 'All types'
-        if r.ImGui_BeginCombo(ctx, '##picker_type', currentType) then
-          for _, opt in ipairs(PICKER_TYPE_OPTIONS) do
-            local sel = (opt == currentType)
-            if r.ImGui_Selectable(ctx, opt, sel) then state.pickerType = opt end
-          end
-          r.ImGui_EndCombo(ctx)
+  if state.pickerStatusMsg then
+          r.ImGui_SameLine(ctx)
+          r.ImGui_TextColored(ctx, 0x55FF55FF, state.pickerStatusMsg)
         end
-  if state.pickerLoadedFromCache then r.ImGui_SameLine(ctx) r.ImGui_Text(ctx, '[cache]') end
-
         if state.pickerErr then
-          r.ImGui_TextWrapped(ctx, state.pickerErr)
-        elseif not state.pickerItems then
-          r.ImGui_TextWrapped(ctx, 'No list loaded. Click "Refresh list (build)" to build and cache the list.')
-        else
-       
-          r.ImGui_SetNextItemWidth(ctx, 300)
-          local chgF, ftxt = r.ImGui_InputText(ctx, '##picker_filter', state.pickerFilter or '')
-          if chgF then state.pickerFilter = ftxt end
-       
-          r.ImGui_BeginChild(ctx, 'picker_list', 320, 360)
-          local fl = (state.pickerFilter or ''):lower()
-          for i, it in ipairs(state.pickerItems or {}) do
-            local disp = it.display or it.addname
-            local add  = it.addname or disp
-            local typ = parse_addname_type(add)
-            local type_ok = (state.pickerType == 'All types') or (typ == state.pickerType)
-            if type_ok and (fl == '' or (disp and disp:lower():find(fl, 1, true)) or (add and add:lower():find(fl, 1, true))) then
-            
-              if r.ImGui_SmallButton(ctx, ('+##fav%d'):format(i)) then
-                favs_add(add, disp)
+          r.ImGui_SameLine(ctx)
+          r.ImGui_TextColored(ctx, 0xFF6666FF, state.pickerErr)
+        end
+
+        local function parse_type(add)
+          return parse_addname_type and parse_addname_type(add) or 'OTHER'
+        end
+        local function extract_dev(add)
+          if not add then return 'Unknown' end
+          local last
+          for m in add:gmatch('%(([^)]+)%)') do
+            if not m:match('^%d+in') and not m:match('^%d+out') and not m:match('^%d+ch') then last = m end
+          end
+            return last or 'Unknown'
+        end
+        local function extract_cat(it)
+          local p = it.path or ''
+          local c = p:match('^([^/]+)/')
+          if not c or c == '' then
+            c = parse_type(it.addname or it.display)
+          end
+          return c or 'Other'
+        end
+
+        local function ensure_structure()
+          if state._pickerStructBuilt then return end
+          local list, cat_tbl, dev_list = FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE
+          if (not cat_tbl or #cat_tbl == 0) and type(ReadFXFile)=='function' then
+            local ok,a,b,c = pcall(ReadFXFile)
+            if ok then list, cat_tbl, dev_list = a,b,c end
+          end
+          if (not cat_tbl or #cat_tbl == 0) and type(GetFXTbl)=='function' then
+            local ok,a,b,c = pcall(GetFXTbl)
+            if ok then list, cat_tbl, dev_list = a,b,c end
+          end
+          if not cat_tbl or #cat_tbl == 0 then return end
+          local favorites = {}
+          local types = {}
+          local foldersRoot = { name='ROOT', children={}, items={} }
+          local categories = {} 
+          local devs = {}      
+
+          if type(dev_list)=='table' then
+            for _, d in ipairs(dev_list) do if d and d~='' then devs[d] = {} end end
+          end
+
+          local exclude_generic = {
+            ['FAVORITES']=true,['ALL PLUGINS']=true,['FOLDERS']=true,
+            ['FX CHAINS']=true,['TRACK TEMPLATES']=true,
+          }
+          for i = 1, #cat_tbl do
+            local cEntry = cat_tbl[i]
+            if cEntry.name == 'FAVORITES' then
+              for j=1,#cEntry.list do favorites[#favorites+1] = { addname = cEntry.list[j], display = cEntry.list[j] } end
+            elseif cEntry.name == 'ALL PLUGINS' then
+              for j=1,#cEntry.list do
+                local subtype = cEntry.list[j]
+                if subtype.name and subtype.fx then
+                  types[subtype.name] = {}
+                  for k=1,#subtype.fx do
+                    types[subtype.name][#types[subtype.name]+1] = { addname = subtype.fx[k], display = subtype.fx[k] }
+                  end
+                end
               end
-              if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-                r.ImGui_SetTooltip(ctx, 'Add to My Favorites')
+            elseif cEntry.name == 'DEVELOPER' then
+              for j=1,#cEntry.list do
+                local devEntry = cEntry.list[j]
+                if type(devEntry)=='table' and devEntry.name and devEntry.fx then
+                  local arr = devs[devEntry.name] or {}
+                  for _, fxn in ipairs(devEntry.fx) do
+                    arr[#arr+1] = { addname = fxn, display = fxn }
+                  end
+                  devs[devEntry.name] = arr
+                end
               end
-              r.ImGui_SameLine(ctx)
-              local selected = (state.pickerChosenAdd == add)
-              if r.ImGui_Selectable(ctx, (disp .. ('##pick%d'):format(i)), selected) then state.pickerChosenAdd = add end
-              if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+            elseif cEntry.name == 'CATEGORY' then
+              for j=1,#cEntry.list do
+                local catEntry = cEntry.list[j]
+                if type(catEntry)=='table' and catEntry.name and catEntry.fx then
+                  local arr = categories[catEntry.name] or {}
+                  for _, fxn in ipairs(catEntry.fx) do
+                    arr[#arr+1] = { addname = fxn, display = fxn }
+                  end
+                  categories[catEntry.name] = arr
+                end
+              end
+            elseif cEntry.name == 'FOLDERS' then
+              local function add_folder(node, folder_entry)
+                local child = node.children[folder_entry.name] or { name=folder_entry.name, children={}, items={} }
+                node.children[folder_entry.name] = child
+                if type(folder_entry.fx) == 'table' then
+                  for _, fxn in ipairs(folder_entry.fx) do
+                    child.items[#child.items+1] = { addname = fxn, display = fxn }
+                    if folder_entry.name and folder_entry.name:lower() == 'favorites' then
+                      if not fxn:lower():find('%.rfxchain$') then 
+                        favorites[#favorites+1] = { addname = fxn, display = fxn }
+                      end
+                    end
+                  end
+                end
+                if folder_entry.list then
+                  for _, v in ipairs(folder_entry.list) do
+                    if type(v) == 'table' and v.name and v.list then
+                      add_folder(child, v)
+                    elseif type(v) == 'string' then
+                      child.items[#child.items+1] = { addname = v, display = v }
+                    end
+                  end
+                end
+              end
+              for j=1,#cEntry.list do
+                local folder_entry = cEntry.list[j]
+                if type(folder_entry)=='table' and folder_entry.name then
+                  add_folder(foldersRoot, folder_entry)
+                end
+              end
+            else
+            end
+          end
+
+          if next(devs) == nil and list and dev_list then
+            local lowerDev = {}
+            for _, d in ipairs(dev_list) do lowerDev[d] = d:lower() devs[d]={} end
+            for _, pname in ipairs(list) do
+              local pl = pname:lower()
+              for _, d in ipairs(dev_list) do
+                if pl:find(lowerDev[d],1,true) then devs[d][#devs[d]+1]={ addname=pname, display=pname } break end
+              end
+            end
+          end
+          for d, arr in pairs(devs) do
+            if type(arr) == 'table' and #arr == 0 then
+              devs[d] = nil
+            end
+          end
+          if state.fxPickerSection and state.fxPickerSection:match('^dev:') then
+            local curDev = state.fxPickerSection:sub(5)
+            if not devs[curDev] then state.fxPickerSection = 'Favorites' end
+          end
+
+          if not state.cherryPicksLoaded then
+            local s = r.GetExtState(EXT_NS, 'CHERRYPICKS') or ''
+            state.cherryPicks = {}
+            for line in s:gmatch('[^\n]+') do
+              local name = line:match('^%s*(.-)%s*$')
+              if name ~= '' then
+                state.cherryPicks[#state.cherryPicks+1] = { addname = name, display = name }
+              end
+            end
+            state.cherryPicksLoaded = true
+          end
+          state.fxPickerStruct = {
+            favorites = favorites,
+            types = types,
+            developers = devs,
+            categories = categories,
+            folders = foldersRoot,
+            cherry = state.cherryPicks or {},
+          }
+          state.fxPickerSection = state.fxPickerSection or 'Favorites'
+          state._pickerStructBuilt = true
+        end
+
+        ensure_structure()
+
+  r.ImGui_Separator(ctx)
+
+  local availW, availH = r.ImGui_GetContentRegionAvail(ctx)
+  local leftW = 170
+  local footerH = 30 
+  local listH = math.max(150, availH - footerH)
+        if r.ImGui_BeginChild(ctx, 'fxpick_sections', leftW, listH) then
+          local function selectable_section(label, key)
+            local sel = (state.fxPickerSection == key)
+            if r.ImGui_Selectable(ctx, label .. (sel and ' *' or ''), sel) then
+              state.fxPickerSection = key
+              state.fxPickerFolderPath = nil
+            end
+          end
+          selectable_section('Cherry Picks', 'Cherry')
+          selectable_section('Favorites', 'Favorites')
+          if r.ImGui_TreeNode(ctx, 'All Plugins##fxpick_types') then
+            local type_keys = {}
+            for k in pairs(state.fxPickerStruct.types or {}) do type_keys[#type_keys+1] = k end
+            table.sort(type_keys)
+            for _, t in ipairs(type_keys) do
+              local key = 'type:' .. t
+              local sel = (state.fxPickerSection == key)
+              if r.ImGui_Selectable(ctx, t .. (sel and ' *' or ''), sel) then state.fxPickerSection = key end
+            end
+            r.ImGui_TreePop(ctx)
+          end
+          if r.ImGui_TreeNode(ctx, 'Developer##fxpick_devs') then
+            local dev_keys = {}
+            for k in pairs(state.fxPickerStruct.devs or state.fxPickerStruct.developers or {}) do dev_keys[#dev_keys+1] = k end
+            table.sort(dev_keys, function(a,b) return a:lower()<b:lower() end)
+            for _, d in ipairs(dev_keys) do
+              local key = 'dev:' .. d
+              local sel = (state.fxPickerSection == key)
+              if r.ImGui_Selectable(ctx, d .. (sel and ' *' or ''), sel) then state.fxPickerSection = key end
+            end
+            r.ImGui_TreePop(ctx)
+          end
+            if r.ImGui_TreeNode(ctx, 'Category##fxpick_cat') then
+              local cat_keys = {}
+              for k in pairs(state.fxPickerStruct.categories or {}) do cat_keys[#cat_keys+1] = k end
+              table.sort(cat_keys, function(a,b) return a:lower()<b:lower() end)
+              for _, c in ipairs(cat_keys) do
+                local key = 'cat:' .. c
+                local sel = (state.fxPickerSection == key)
+                if r.ImGui_Selectable(ctx, c .. (sel and ' *' or ''), sel) then state.fxPickerSection = key end
+              end
+              r.ImGui_TreePop(ctx)
+            end
+          if r.ImGui_TreeNode(ctx, 'Folders##fxpick_folders') then
+            local function draw_folder(node, pathPrefix)
+              local children_names = {}
+              for name in pairs(node.children or {}) do children_names[#children_names+1]=name end
+              table.sort(children_names, function(a,b) return a:lower()<b:lower() end)
+              for _, childName in ipairs(children_names) do
+                local child = node.children[childName]
+                local fullPath = pathPrefix and (pathPrefix .. '/' .. childName) or childName
+                local hasKids = (child.children and next(child.children)) ~= nil
+                local label = childName
+                if hasKids then
+                  local open = r.ImGui_TreeNode(ctx, childName .. '##fold_'..fullPath)
+                  if r.ImGui_IsItemClicked(ctx,0) then
+                    state.fxPickerSection = 'folder'
+                    state.fxPickerFolderPath = fullPath
+                  end
+                  if open then
+                    draw_folder(child, fullPath)
+                    r.ImGui_TreePop(ctx)
+                  end
+                else
+                  local sel = (state.fxPickerSection=='folder' and state.fxPickerFolderPath==fullPath)
+                  if r.ImGui_Selectable(ctx, label .. (sel and ' *' or ''), sel) then
+                    state.fxPickerSection = 'folder'
+                    state.fxPickerFolderPath = fullPath
+                  end
+                end
+              end
+            end
+            draw_folder(state.fxPickerStruct.folders or {children={}}, nil)
+            r.ImGui_TreePop(ctx)
+          end
+          r.ImGui_EndChild(ctx)
+        end
+
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_BeginChild(ctx, 'fxpick_items', availW-leftW-6, listH) then
+          local itemsToShow = {}
+          local section = state.fxPickerSection
+          local struct = state.fxPickerStruct or {}
+          if state.pickerSearchAll and filter_l ~= '' then
+            local uniq = {}
+            local function add_items(arr)
+              if not arr then return end
+              for _, it in ipairs(arr) do
+                local key = it.addname or it.display
+                if key and not uniq[key] then uniq[key] = true; itemsToShow[#itemsToShow+1] = it end
+              end
+            end
+         
+            add_items(struct.favorites)
+          
+            if struct.types then for _, arr in pairs(struct.types) do add_items(arr) end end
+        
+            if struct.developers then for _, arr in pairs(struct.developers) do add_items(arr) end end
+         
+            if struct.categories then for _, arr in pairs(struct.categories) do add_items(arr) end end
+         
+            local function walk_folder(node)
+              if not node then return end
+              add_items(node.items)
+              if node.children then for _, child in pairs(node.children) do walk_folder(child) end end
+            end
+            walk_folder(struct.folders)
+          else
+            if section == 'Favorites' then
+              itemsToShow = struct.favorites or {}
+            elseif section == 'Cherry' then
+              itemsToShow = struct.cherry or {}
+            elseif section and section:match('^type:') then
+              local t = section:sub(6)
+              itemsToShow = struct.types and struct.types[t] or {}
+            elseif section and section:match('^dev:') then
+              local d = section:sub(5)
+              itemsToShow = (struct.devs and struct.devs[d]) or (struct.developers and struct.developers[d]) or {}
+            elseif section and section:match('^cat:') then
+              local c = section:sub(5)
+              itemsToShow = struct.categories and struct.categories[c] or {}
+            elseif section == 'folder' and state.fxPickerFolderPath then
+              local node = struct.folders
+              if node then
+                for seg in state.fxPickerFolderPath:gmatch('[^/]+') do
+                  if node.children then node = node.children[seg] else node = nil break end
+                end
+                if node and node.items then itemsToShow = node.items end
+              end
+            end
+          end
+          if filter_l ~= '' then
+            local filtered = {}
+            for _, it in ipairs(itemsToShow) do
+              local disp = (it.display or it.addname or ''):lower()
+              local add  = (it.addname or ''):lower()
+              if disp:find(filter_l,1,true) or add:find(filter_l,1,true) then
+                filtered[#filtered+1] = it
+              end
+            end
+            itemsToShow = filtered
+          end
+          table.sort(itemsToShow, function(a,b) return (a.display or a.addname or ''):lower() < (b.display or b.addname or ''):lower() end)
+          if #itemsToShow == 0 then
+            r.ImGui_TextDisabled(ctx, '(no items)')
+          else
+            for i, it in ipairs(itemsToShow) do
+              local disp = it.display or it.addname
+              local add  = it.addname or disp
+              local maxLabelW = (availW - leftW - 80)
+              if maxLabelW and maxLabelW > 100 then
+                local tw = select(1, r.ImGui_CalcTextSize(ctx, disp))
+                if tw > maxLabelW then
+                  local trunc = disp
+                  local cut = #trunc
+                  while cut > 4 do
+                    cut = cut - 1
+                    trunc = trunc:sub(1, cut) .. '…'
+                    if select(1, r.ImGui_CalcTextSize(ctx, trunc)) <= maxLabelW then break end
+                  end
+                  disp = trunc
+                end
+              end
+              local selected = (state.replaceWith == add)
+              if r.ImGui_Selectable(ctx, (disp .. '##fxp_'..i), selected) then
                 state.pickerChosenAdd = add
-             
                 state.replaceWith = add
                 state.replaceDisplay = disp
-                state.pendingMessage = 'Chosen: ' .. tostring(disp)
-                openP = false
+                state.pendingMessage = 'Chosen: '..tostring(disp)
+              end
+              if r.ImGui_BeginPopupContextItem(ctx, '##fxp_ctx_'..i) then
+                local isCherry = false
+                if state.cherryPicks then
+                  for _, cp in ipairs(state.cherryPicks) do if (cp.addname or cp.display) == add then isCherry = true break end end
+                end
+                if not isCherry and r.ImGui_MenuItem(ctx, 'Add to Cherry Picks') then
+                  state.cherryPicks = state.cherryPicks or {}
+                  state.cherryPicks[#state.cherryPicks+1] = { addname = add, display = (it.display or add) }
+                  local lines = {}
+                  for _, cp in ipairs(state.cherryPicks) do lines[#lines+1] = cp.addname or cp.display end
+                  r.SetExtState(EXT_NS, 'CHERRYPICKS', table.concat(lines, '\n'), true)
+                  if state.fxPickerStruct then state.fxPickerStruct.cherry = state.cherryPicks end
+                elseif isCherry and r.ImGui_MenuItem(ctx, 'Remove from Cherry Picks') then
+                  for idx, cp in ipairs(state.cherryPicks) do
+                    local nm = cp.addname or cp.display
+                    if nm == add then table.remove(state.cherryPicks, idx) break end
+                  end
+                  local lines = {}
+                  for _, cp in ipairs(state.cherryPicks) do lines[#lines+1] = cp.addname or cp.display end
+                  r.SetExtState(EXT_NS, 'CHERRYPICKS', table.concat(lines, '\n'), true)
+                  if state.fxPickerStruct then state.fxPickerStruct.cherry = state.cherryPicks end
+                end
+                r.ImGui_EndPopup(ctx)
               end
             end
           end
           r.ImGui_EndChild(ctx)
-        
-          local disabled = not (state.pickerChosenAdd and state.pickerChosenAdd ~= '')
-          if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
-          if r.ImGui_Button(ctx, 'Use selection') then
-            local chosen = state.pickerChosenAdd
-            if chosen and chosen ~= '' then
-              state.replaceWith = chosen
-            
-              local disp = chosen
-              for _, it in ipairs(state.pickerItems or {}) do
-                if it.addname == chosen then disp = it.display or chosen; break end
-              end
-              state.replaceDisplay = disp
-              state.pendingMessage = 'Chosen: ' .. tostring(disp)
-              openP = false
-            end
-          end
-          if disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
-          r.ImGui_SameLine(ctx)
-          if r.ImGui_Button(ctx, 'Cancel') then openP = false end
         end
+
+  r.ImGui_Separator(ctx)
+  if r.ImGui_Button(ctx, 'Close', 70, 0) then openP = false end
       end
-      r.ImGui_End(ctx)
-      if openP == false then state.showPicker = false end
+  r.ImGui_End(ctx)
+  if pickerStylePush then pop_app_style(pickerStylePush) end
+  if openP == false then state.showPicker = false end
     else
       state.showPicker = false
     end
@@ -4498,6 +5701,7 @@ local function main()
   load_user_settings()
   favs_load()
   blanks_load()
+  load_track_versions()
   
   safe_draw()
 end
