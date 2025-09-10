@@ -1,10 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.6.3
+-- @version 1.6.4
 -- @changelog:
 --[[     
 ++ Pinned plugins now persist and appear on top after restart (including Developer), using type-agnostic matching (VST/VST3/CLAP) and applying startup sorting.
 ++ Added setting "Add instruments at top" to place VSTi/VST3i/CLAPi/AUi/LV2i at the top of the FX chain when adding.
+++ Fix: When default folder = Last opened folder, the folder now auto-refreshes & auto-expands on startup so pinned & favorites appear immediately without extra click.
 
 ---------------------TODO (sometime in the future ;o) )-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin
@@ -108,6 +109,61 @@ local function SetRunningState(running)
     r.SetExtState("TK_FX_BROWSER", "running", running and "true" or "false", true)
 end
 
+local did_initial_refresh = false
+local auto_expand_paths = nil 
+local force_open_developer_header = false
+local force_open_category_header  = false
+local force_open_all_plugins_header = false
+local force_open_folders_header = false
+local force_headers_open_applied = false -- track first frame application
+local initial_header_auto_expand_done = false -- one-shot open of the header containing last selected subgroup/folder
+local function BuildAutoExpandPaths(target)
+    auto_expand_paths = nil
+    if not target or target == '' then return end
+    if not target:find('/') then return end 
+    auto_expand_paths = {}
+    local accum = ''
+    for part in target:gmatch("[^/]+") do
+        accum = (accum == '' and part) or (accum .. '/' .. part)
+        auto_expand_paths[accum] = true
+    end
+end
+
+local function MarkForcedHeaderForSubgroup(subgroup)
+    if not subgroup or subgroup == '' or not CAT_TEST then return end
+    for i = 1, #CAT_TEST do
+        local cat = CAT_TEST[i]
+        if cat and type(cat.list) == 'table' then
+            if cat.name == 'DEVELOPER' or cat.name == 'CATEGORY' then
+                for j = 1, #cat.list do
+                    local entry = cat.list[j]
+                    if entry and entry.name == subgroup then
+                        if cat.name == 'DEVELOPER' then force_open_developer_header = true end
+                        if cat.name == 'CATEGORY'  then force_open_category_header  = true end
+                        return
+                    end
+                end
+            elseif cat.name == 'ALL PLUGINS' then
+                for j = 1, #cat.list do
+                    local entry = cat.list[j]
+                    if entry and entry.name == subgroup then
+                        force_open_all_plugins_header = true
+                        return
+                    end
+                end
+            elseif cat.name == 'FOLDERS' then
+                for j = 1, #cat.list do
+                    local entry = cat.list[j]
+                    if entry and entry.name == subgroup then
+                        force_open_folders_header = true
+                        return
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- Voorwaards mars ;o)
 local SearchActions
 local CreateSmartMarker
@@ -179,7 +235,7 @@ _last_screenshot_signature = nil
 _screenshots_dirty = false
 _pending_clear_cache = false
 _last_search_input_time = 0.0
-_search_debounce_ms = 120 -- minimal delay between rebuilds on typing
+_search_debounce_ms = 120 
 
 function MarkScreenshotsDirty()
     _screenshots_dirty = true
@@ -488,7 +544,7 @@ function SetDefaultConfig()
         folder_specific_sizes = {},
         include_x86_bridged = false,
         hide_default_titlebar_menu_items = false,
-        add_instruments_on_top = false, -- new: place instrument FX at the top of the chain when adding
+        add_instruments_on_top = false, 
         show_name_in_screenshot_window = true,
         show_name_in_main_window = true,
         clean_plugin_names = false, 
@@ -6301,6 +6357,9 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
             local label = ((IsCustomPinned(full_path) and "\xF0\x9F\x93\x8C ") or "") .. folder_name:upper()
+            if auto_expand_paths and auto_expand_paths[full_path] then
+                r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_Once())
+            end
             local open = r.ImGui_TreeNode(ctx, label)
             if open then
                 r.ImGui_Indent(ctx, 1)
@@ -6317,6 +6376,14 @@ footer_last_mouse_y  = footer_last_mouse_y or 0
 
 function ShowBrowserPanel()
     if not config.show_browser_panel then return end
+
+    -- Ensure force-open flags are determined BEFORE first header draw (ShowScreenshotWindow sets them too late for frame 1)
+    if not initial_header_auto_expand_done
+       and config.default_folder == LAST_OPENED_SENTINEL
+       and last_viewed_folder
+       and not (force_open_all_plugins_header or force_open_developer_header or force_open_category_header or force_open_folders_header) then
+        MarkForcedHeaderForSubgroup(last_viewed_folder)
+    end
 
     config.browser_footer_height = math.max(20, config.browser_footer_height or 150)
     local BROWSER_FOOTER_HEIGHT = config.browser_footer_height
@@ -6529,20 +6596,21 @@ function ShowBrowserPanel()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
                 local header_label = "ALL PLUGINS"
                
-                do
-                    local has_selected = false
-                    for j = 1, #CAT_TEST[i].list do
-                        if CAT_TEST[i].list[j].name == browser_panel_selected then has_selected = true break end
-                    end
-                    if has_selected then
-                        local dl = r.ImGui_GetWindowDrawList(ctx)
-                        local x,y = r.ImGui_GetCursorScreenPos(ctx)
-                        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-                        local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                        r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
-                    end
+                local all_has_selected = false
+                for j = 1, #CAT_TEST[i].list do
+                    if CAT_TEST[i].list[j].name == browser_panel_selected then all_has_selected = true break end
                 end
-                if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end
+                if all_has_selected then
+                    local dl = r.ImGui_GetWindowDrawList(ctx)
+                    local x,y = r.ImGui_GetCursorScreenPos(ctx)
+                    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                    local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                    r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
+                end
+                if (not initial_header_auto_expand_done) and all_has_selected then
+                    r.ImGui_SetNextItemOpen(ctx, true)
+                    initial_header_auto_expand_done = true
+                end
                 if r.ImGui_CollapsingHeader(ctx, header_label) then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
@@ -6554,20 +6622,21 @@ function ShowBrowserPanel()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
-                do
-                    local has_selected = false
-                    for j = 1, #CAT_TEST[i].list do
-                        if CAT_TEST[i].list[j].name == browser_panel_selected then has_selected = true break end
-                    end
-                    if has_selected then
-                        local dl = r.ImGui_GetWindowDrawList(ctx)
-                        local x,y = r.ImGui_GetCursorScreenPos(ctx)
-                        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-                        local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                        r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
-                    end
+                local developer_has_selected = false
+                for j = 1, #CAT_TEST[i].list do
+                    if CAT_TEST[i].list[j].name == browser_panel_selected then developer_has_selected = true break end
                 end
-                if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end
+                if developer_has_selected then
+                    local dl = r.ImGui_GetWindowDrawList(ctx)
+                    local x,y = r.ImGui_GetCursorScreenPos(ctx)
+                    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                    local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                    r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
+                end
+                if (not initial_header_auto_expand_done) and developer_has_selected then
+                    r.ImGui_SetNextItemOpen(ctx, true)
+                    initial_header_auto_expand_done = true
+                end
                 if r.ImGui_CollapsingHeader(ctx, "DEVELOPER") then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
@@ -6579,20 +6648,21 @@ function ShowBrowserPanel()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
-                do
-                    local has_selected = false
-                    for j = 1, #CAT_TEST[i].list do
-                        if CAT_TEST[i].list[j].name == browser_panel_selected then has_selected = true break end
-                    end
-                    if has_selected then
-                        local dl = r.ImGui_GetWindowDrawList(ctx)
-                        local x,y = r.ImGui_GetCursorScreenPos(ctx)
-                        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-                        local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                        r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
-                    end
+                local category_has_selected = false
+                for j = 1, #CAT_TEST[i].list do
+                    if CAT_TEST[i].list[j].name == browser_panel_selected then category_has_selected = true break end
                 end
-                if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end
+                if category_has_selected then
+                    local dl = r.ImGui_GetWindowDrawList(ctx)
+                    local x,y = r.ImGui_GetCursorScreenPos(ctx)
+                    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                    local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                    r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
+                end
+                if (not initial_header_auto_expand_done) and category_has_selected then
+                    r.ImGui_SetNextItemOpen(ctx, true)
+                    initial_header_auto_expand_done = true
+                end
                 if r.ImGui_CollapsingHeader(ctx, "CATEGORY") then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
@@ -6604,18 +6674,20 @@ function ShowBrowserPanel()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
-                do
-                    local has_selected = false
-                    for j = 1, #CAT_TEST[i].list do
-                        if CAT_TEST[i].list[j].name == selected_folder then has_selected = true break end
-                    end
-                    if has_selected then
-                        local dl = r.ImGui_GetWindowDrawList(ctx)
-                        local x,y = r.ImGui_GetCursorScreenPos(ctx)
-                        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-                        local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                        r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
-                    end
+                local folders_has_selected = false
+                for j = 1, #CAT_TEST[i].list do
+                    if CAT_TEST[i].list[j].name == selected_folder then folders_has_selected = true break end
+                end
+                if folders_has_selected then
+                    local dl = r.ImGui_GetWindowDrawList(ctx)
+                    local x,y = r.ImGui_GetCursorScreenPos(ctx)
+                    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                    local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                    r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
+                end
+                if (not initial_header_auto_expand_done) and folders_has_selected then
+                    r.ImGui_SetNextItemOpen(ctx, true)
+                    initial_header_auto_expand_done = true
                 end
                 if r.ImGui_CollapsingHeader(ctx, "FOLDERS") then
                     local function EnsurePinnedList()
@@ -6752,7 +6824,6 @@ function ShowBrowserPanel()
         end
         r.ImGui_Separator(ctx)
 
-        -- Extra opties (ongewijzigd)
         if config.show_container then
             if r.ImGui_Selectable(ctx, "CONTAINER") then
                 AddFXToTrack(TRACK, "Container")
@@ -6852,7 +6923,6 @@ function ShowBrowserPanel()
                 ClearScreenshotCache()
             end
         end
-                -- SCRIPTS launcher entry (met toggle)
                 if config.show_scripts then
                     local is_sel = (selected_folder == "Scripts" and show_scripts_browser)
                     if is_sel then
@@ -6893,7 +6963,7 @@ function ShowBrowserPanel()
     end
     r.ImGui_PopStyleVar(ctx) -- ScrollbarSize
 
-    -- Vaste footer optioneel
+   
     if config.show_screenshot_info_box then
         do
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -6928,7 +6998,7 @@ function ShowBrowserPanel()
                 if delta ~= 0 then
                     local new_height = BROWSER_FOOTER_HEIGHT - delta
                     local window_h = r.ImGui_GetWindowHeight(ctx)
-                    local max_h = math.floor(window_h * 0.7) -- 70% van vensterhoogte
+                    local max_h = math.floor(window_h * 0.7) 
                     new_height = math.max(20, math.min(new_height, max_h))
                     if new_height ~= BROWSER_FOOTER_HEIGHT then
                         config.browser_footer_height = new_height
@@ -7301,7 +7371,6 @@ function ShowBrowserPanel()
 
                 if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Left: toggle floating | Right: menu") end
 
-                                -- Context menu
                                 if r.ImGui_IsItemClicked(ctx, 1) then
                                     r.ImGui_OpenPopup(ctx, "footer_fx_ctx_" .. i)
                                 end
@@ -7483,7 +7552,7 @@ function CheckScrollAndLoadMore(all_plugins)
 end
 
 function ScaleScreenshotSize(width, height, max_display_size)
-    local max_height = max_display_size * 1.2 -- 120% van de ingestelde breedte
+    local max_height = max_display_size * 1.2 
     local display_width = max_display_size
     local display_height = display_width * (height / width)
     
@@ -7495,10 +7564,8 @@ function ScaleScreenshotSize(width, height, max_display_size)
     return display_width, display_height
 end
 
--- Draw a simple "pin" overlay at the top-right of a tile (screen coordinates)
 function DrawPinnedOverlayAt(tlx, tly, w, h)
     local dl = r.ImGui_GetWindowDrawList(ctx)
-    -- Fixed size icon independent of screenshot size - made smaller
     local size = (config and config.overlay_icon_size) or 14
     local pad = 5
     local x2 = tlx + w - pad
@@ -7507,10 +7574,8 @@ function DrawPinnedOverlayAt(tlx, tly, w, h)
     local y2 = y1 + size
     local head_col = 0xFFD700FF -- gold
     local shadow_col = 0x00000088
-    -- head with subtle shadow
     r.ImGui_DrawList_AddRectFilled(dl, x1+1, y1+1, x2+1, y2+1, shadow_col, 2)
     r.ImGui_DrawList_AddRectFilled(dl, x1,   y1,   x2,   y2,   head_col, 2)
-    -- stem
     local stem_w = math.max(2, math.floor(size * 0.2))
     local stem_h = math.floor(size * 0.7)
     local sx1 = x1 + math.floor(size * 0.5) - math.floor(stem_w * 0.5)
@@ -7525,14 +7590,13 @@ end
 function DrawFavoriteOverlayAt(tlx, tly, w, h)
     if not config.show_favorite_overlay then return end
     local dl = r.ImGui_GetWindowDrawList(ctx)
-    -- Fixed size icon independent of screenshot size - made smaller and same gold color as pinned
     local size = (config and config.overlay_icon_size) or 14
     local pad = 5
     local x1 = tlx + pad
     local y1 = tly + pad
     local x2 = x1 + size
     local y2 = y1 + size
-    local badge_col = 0xFFD700FF -- same gold as pinned overlay
+    local badge_col = 0xFFD700FF 
     local shadow_col = 0x00000088
     
     local rounding = math.floor(size * 0.5)
@@ -7540,7 +7604,6 @@ function DrawFavoriteOverlayAt(tlx, tly, w, h)
     r.ImGui_DrawList_AddRectFilled(dl, x1,   y1,   x2,   y2,   badge_col, rounding)
 end
 
--- Draw a thin horizontal bar across the window's content region at current cursor Y
 function DrawHorizontalSeparatorBar(thickness, color)
     local dl = r.ImGui_GetWindowDrawList(ctx)
     local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
@@ -7556,7 +7619,7 @@ end
 function DrawMasonryLayout(screenshots)
     local initial_spacing = 0
     if not top_screenshot_spacing_applied then
-        initial_spacing = 6 -- same visual gap as grid
+        initial_spacing = 6 
         top_screenshot_spacing_applied = true
     end
     local available_width = r.ImGui_GetContentRegionAvail(ctx)
@@ -7571,11 +7634,9 @@ function DrawMasonryLayout(screenshots)
 
     for i, fx in ipairs(screenshots) do
         if fx.is_separator then
-            -- Draw a thin, full-width horizontal bar across the masonry area
             local max_h = 0
             for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
             r.ImGui_SetCursorPos(ctx, padding, max_h)
-            -- draw full-width bar using cursor position and available width
             local dl = r.ImGui_GetWindowDrawList(ctx)
             local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
             local avail_w = r.ImGui_GetContentRegionAvail(ctx)
@@ -7584,7 +7645,6 @@ function DrawMasonryLayout(screenshots)
             local thickness = (config.compact_screenshots and 2) or 3
             local col = 0x606060FF
             r.ImGui_DrawList_AddRectFilled(dl, x1, sy, x2, sy + thickness, col, 2)
-            -- optional glyph
             if fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
                 local glyph = (fx.kind == 'pinned_end') and '📌' or '★'
                 r.ImGui_SetCursorPos(ctx, padding + 4, max_h - (config.compact_screenshots and 0 or 2))
@@ -7592,13 +7652,12 @@ function DrawMasonryLayout(screenshots)
                 r.ImGui_Text(ctx, glyph)
                 r.ImGui_PopStyleColor(ctx)
             end
-            -- Add a bit more bottom margin so items do not sit on the line
             local sep_height = thickness + (config.compact_screenshots and 8 or 14)
             for c = 1, num_columns do column_heights[c] = max_h + sep_height end
             goto continue
         end
         if fx.is_message then
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF) -- Gele tekst
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF)
             local display_name = GetDisplayPluginName(fx.name)
             r.ImGui_TextWrapped(ctx, display_name)
             r.ImGui_PopStyleColor(ctx)
@@ -7686,7 +7745,7 @@ function DrawMasonryLayout(screenshots)
                         local display_name = GetDisplayPluginName(fx.name)
                         r.ImGui_Text(ctx, display_name)
                         r.ImGui_PopTextWrapPos(ctx)
-                        r.ImGui_Text(ctx, GetStarsString(fx.name)) -- sterren blijven gebaseerd op originele naam
+                        r.ImGui_Text(ctx, GetStarsString(fx.name)) 
                         local y_after = r.ImGui_GetCursorPosY(ctx)
                         text_height = y_after - y_before
                     end
@@ -7765,7 +7824,7 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
 
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local current_y = r.ImGui_GetCursorPosY(ctx)
-    local footer_height = 0 -- (reserveer ruimte indien later nodig)
+    local footer_height = 0 
     local available_height = window_height - current_y - footer_height
     if r.ImGui_BeginChild(ctx, "ScriptsLauncherList", -1, available_height) then
         local avail_w = r.ImGui_GetContentRegionAvail(ctx)
@@ -7781,7 +7840,7 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
             if col_index >= cols then
                 col_index = 0
                 x = start_x
-                y = y + cell_h + spacing + 30 -- extra ruimte voor naam
+                y = y + cell_h + spacing + 30 
             end
             r.ImGui_SetCursorPos(ctx, x, y)
             local id = "script_cell_" .. i
@@ -7936,6 +7995,7 @@ function ShowScreenshotWindow()
                 if IsNonFoldersSubgroup(last_viewed_folder) then
                     browser_panel_selected = last_viewed_folder
                     selected_folder = nil
+                    MarkForcedHeaderForSubgroup(last_viewed_folder)
                     current_filtered_fx = GetFxListForSubgroup(last_viewed_folder) or {}
                     if config.apply_type_priority then
                         current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
@@ -7945,10 +8005,16 @@ function ShowScreenshotWindow()
                     for j = 1, math.min(cap, #current_filtered_fx) do
                         table.insert(screenshot_search_results, {name = current_filtered_fx[j]})
                     end
+                    if SortScreenshotResults then SortScreenshotResults() end
+                    did_initial_refresh = true
                 else
                     browser_panel_selected = nil
                     selected_folder = last_viewed_folder
+                    did_initial_refresh = true
+                    if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+                    if SortScreenshotResults then SortScreenshotResults() end
                 end
+                BuildAutoExpandPaths(last_viewed_folder)
             end
         elseif df == "Projects" then
             show_media_browser = true
@@ -7968,8 +8034,18 @@ function ShowScreenshotWindow()
             selected_folder = nil
         else
             selected_folder = df
+            did_initial_refresh = true
+            if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+            if SortScreenshotResults then SortScreenshotResults() end
+            BuildAutoExpandPaths(df)
         end
         initialized_default = true
+    end
+
+    if not did_initial_refresh and (selected_folder or browser_panel_selected) then
+        if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+        did_initial_refresh = true
+        if selected_folder then BuildAutoExpandPaths(selected_folder) end
     end
     
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
@@ -7977,8 +8053,8 @@ function ShowScreenshotWindow()
     local main_window_height = r.ImGui_GetWindowHeight(ctx)
 
     local browser_panel_width = config.show_browser_panel and config.browser_panel_width or 0
-    local screenshot_min_width = 145  -- Minimum width for screenshot section
-    local total_min_width = browser_panel_width + screenshot_min_width + 5  -- Add padding
+    local screenshot_min_width = 145  
+    local total_min_width = browser_panel_width + screenshot_min_width + 5 
 
     local min_width = config.show_browser_panel and total_min_width or screenshot_min_width
     local window_flags = r.ImGui_WindowFlags_NoTitleBar() |
@@ -8091,7 +8167,7 @@ function ShowScreenshotWindow()
                         LoadProjects()
                     end
                     
-                    if r.ImGui_IsItemClicked(ctx, 1) then  -- rechtermuisknop
+                    if r.ImGui_IsItemClicked(ctx, 1) then 
                         r.ImGui_OpenPopup(ctx, "location_menu_" .. i)
                     end
                     
@@ -8135,7 +8211,6 @@ function ShowScreenshotWindow()
             local current_y = r.ImGui_GetCursorPosY(ctx)
             local footer_height = show_project_info and 175 or 1
             local available_height = window_height - current_y - footer_height
-            -- Project List
             if r.ImGui_BeginChild(ctx, "ProjectsList", -1, available_height) then
                 for i, project in ipairs(filtered_projects) do
                     local has_preview = r.file_exists(project.path .. "-PROX")
@@ -8173,7 +8248,7 @@ function ShowScreenshotWindow()
                         current_project_info = {
                             path = project.path,
                             name = project.name,
-                            has_preview = has_preview,  -- Add this line
+                            has_preview = has_preview,
                             length = has_preview and r.GetMediaSourceLength(current_source) or 0,
                             size = GetFileSize(project.path),
                             folder_files = CountProjectFolderFiles(project.path)
@@ -8262,12 +8337,10 @@ function ShowScreenshotWindow()
                 r.ImGui_EndChild(ctx)
             end
             if show_project_info then
-                -- Info Panel
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x333333FF)
                 r.ImGui_Separator(ctx)
                 
                 if current_project_info then
-                    -- Project Info
                     r.ImGui_Text(ctx, "Project Info:")
                     r.ImGui_Separator(ctx)
                     r.ImGui_Text(ctx, "Name: " .. current_project_info.name)
@@ -8302,7 +8375,6 @@ function ShowScreenshotWindow()
                     r.ImGui_PopItemWidth(ctx)
                 end
             
-                -- Progress Bar
                 local rv, position = r.CF_Preview_GetValue(current_preview, "D_POSITION")
                 local rv2, length = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
                 if position and length then
@@ -8508,7 +8580,7 @@ function ShowScreenshotWindow()
                             SaveConfig()
                         end
                         
-                        r.ImGui_Dummy(ctx, 0, 10)  -- Spacing tussen secties
+                        r.ImGui_Dummy(ctx, 0, 10)  
                 
                         -- RECEIVES SECTIE
                         r.ImGui_Separator(ctx)
@@ -11455,6 +11527,7 @@ end
                     if CAT_TEST[i].name == "FX CHAINS" then
                         DrawFxChains(CAT_TEST[i].list)
                         if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                    if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end -- auto-expand FOLDERS header on startup when last opened was inside
                             r.ImGui_CloseCurrentPopup(ctx)
                         end
                     elseif CAT_TEST[i].name == "TRACK TEMPLATES" then
