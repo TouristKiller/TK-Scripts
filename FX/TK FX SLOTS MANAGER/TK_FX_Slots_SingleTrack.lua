@@ -1,4 +1,4 @@
--- @version 0.3.1
+-- @version 0.3.2
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -12,7 +12,7 @@ A Lot of changes... hahahaha!
 
 local r = reaper
 local SCRIPT_NAME = 'TK FX Slots Single Track'
-local SCRIPT_VERSION = '0.3.1'
+local SCRIPT_VERSION = '0.2.0'
 
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator = package.config:sub(1, 1)
@@ -4168,43 +4168,65 @@ local function draw()
     end
 
   local FOOTER_H = 60
-  r.ImGui_BeginChild(ctx, 'content_child', -1, -FOOTER_H)
-    local tr = get_selected_track()
-    if not tr then
-      r.ImGui_Text(ctx, 'No track selected. Select a track in REAPER to view its FX.')
-    else
+  local tr = get_selected_track()
+  local frameHeight_header = r.ImGui_GetFrameHeight(ctx)
+  local togglesH = 0
   if state.showTopPanelToggleBar ~= false then
-        local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
-        local btnCount = 5
-        local spacing = 4 
-        local totalSpacing = spacing * (btnCount - 1)
-        local rawW = (availW - totalSpacing)
-        if rawW < 50 * btnCount then rawW = 50 * btnCount end 
-        local btnW = math.floor(rawW / btnCount)
-        local labels = {
-          {'Track','showTrackList'},
-          {'Source','showPanelSource'},
-          {'Replace','showPanelReplacement'},
-          {'FXChain','showPanelFXChain'},
-          {'Snapshots','showPanelTrackVersion'},
-        }
-        for i, def in ipairs(labels) do
-          local label, flagField = def[1], def[2]
-          local on = state[flagField] ~= false
-          if on and r.ImGui_PushStyleColor then
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(0.20,0.38,0.20,1.0))
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.26,0.46,0.26,1.0))
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(0.18,0.32,0.18,1.0))
-          end
-          if r.ImGui_Button(ctx, label, btnW, 0) then
-            state[flagField] = not on
-          end
-          if on and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,3) end
-          if i < btnCount then r.ImGui_SameLine(ctx, nil, spacing) end
+    togglesH = frameHeight_header + 10
+  end
+  if state.showTopPanelToggleBar ~= false and togglesH > 0 then
+    if r.ImGui_BeginChild(ctx, 'top_buttons', -1, togglesH) then
+      local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+      local btnCount = 5
+      local spacing = 4
+      local totalSpacing = spacing * (btnCount - 1)
+      local rawW = (availW - totalSpacing)
+      if rawW < 50 * btnCount then rawW = 50 * btnCount end
+      local btnW = math.floor(rawW / btnCount)
+      local labels = {
+        {'Track','showTrackList'},
+        {'Source','showPanelSource'},
+        {'Replace','showPanelReplacement'},
+        {'FXChain','showPanelFXChain'},
+        {'Snapshots','showPanelTrackVersion'},
+      }
+      for i, def in ipairs(labels) do
+        local label, flagField = def[1], def[2]
+        local on = state[flagField] ~= false
+        if on and r.ImGui_PushStyleColor then
+          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(0.20,0.38,0.20,1.0))
+          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.26,0.46,0.26,1.0))
+          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(0.18,0.32,0.18,1.0))
         end
-        r.ImGui_Separator(ctx)
-      end 
-      if state.showTrackList ~= false then
+        if r.ImGui_Button(ctx, label, btnW, 0) then
+          state[flagField] = not on
+        end
+        if on and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,3) end
+        if i < btnCount then r.ImGui_SameLine(ctx, nil, spacing) end
+      end
+      r.ImGui_Separator(ctx)
+      r.ImGui_EndChild(ctx)
+    end
+  end
+
+  local trackSectionH = 0
+  if state.showTrackList ~= false then
+    local headerH = frameHeight_header
+    trackSectionH = headerH + 8
+    if tr and state.trackHeaderOpen then
+      local fxCount = r.TrackFX_GetCount(tr)
+      if fxCount > 0 then
+        local rowLineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
+        local rows = math.max(1, math.min(8, tonumber(state.fxSlotsVisibleRows) or 4))
+        local tableH = math.floor((rowLineH + 4) * rows + 6)
+        trackSectionH = headerH + tableH + 12
+      end
+    end
+  end
+
+  if state.showTrackList ~= false and trackSectionH > 0 then
+    if r.ImGui_BeginChild(ctx, 'top_tracklist', -1, trackSectionH) then
+      if tr then
         local tnum = get_track_number(tr) or 0
         local tname = get_track_name(tr)
         local hdr = ("%d: %s"):format(tnum, tname)
@@ -4220,7 +4242,7 @@ local function draw()
         do
           local arrowReserve = 26
           local paddingReserve = 10
-          local extraGap = 8  
+          local extraGap = 8
           local maxNameWidth = headerWidth - arrowReserve - paddingReserve - extraGap
           if maxNameWidth < 20 then maxNameWidth = 20 end
           hdr = truncate_text_to_width(ctx, hdr, maxNameWidth)
@@ -4243,436 +4265,350 @@ local function draw()
           r.SetExtState(EXT_NS, 'HDR_OPEN', state.trackHeaderOpen and '1' or '0', true)
         end
         if state.showRMSButtons then
-        local trRec = tr and (r.GetMediaTrackInfo_Value(tr, 'I_RECARM') or 0) or 0
-        local trMute = tr and (r.GetMediaTrackInfo_Value(tr, 'B_MUTE') or 0) or 0
-        local trSolo = tr and (r.GetMediaTrackInfo_Value(tr, 'I_SOLO') or 0) or 0
-
-        r.ImGui_SameLine(ctx, 0, 2)
-        
-        local spacingX = 2
-        local pushedSV = 0
-        if r.ImGui_PushStyleVar then
-          if r.ImGui_StyleVar_FramePadding then 
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 3, 3); 
-            pushedSV = pushedSV + 1
-            styleStackDepth.vars = styleStackDepth.vars + 1
-          end
-          if r.ImGui_StyleVar_ItemSpacing then 
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), spacingX, 0); 
-            pushedSV = pushedSV + 1
-            styleStackDepth.vars = styleStackDepth.vars + 1
-          end
-        end
-        
-        do
-          local isOn = (trRec or 0) > 0
-          local pushed = 0
-          if isOn and r.ImGui_PushStyleColor then
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.70, 0.20, 0.20, 1.0)); pushed = pushed + 1
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.85, 0.30, 0.30, 1.0)); pushed = pushed + 1
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.60, 0.15, 0.15, 1.0)); pushed = pushed + 1
-            local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
-          elseif rC and gC and bC then
-            local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
-          end
-          r.ImGui_Button(ctx, 'R', 18, frameHeight)
-          if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Click: Record arm on/off') end
-          if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 0) then
-            r.Undo_BeginBlock('Toggle record arm')
-            r.SetMediaTrackInfo_Value(tr, 'I_RECARM', isOn and 0 or 1)
-            r.Undo_EndBlock('Toggle record arm', -1)
-          end
-          if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
-        end
-
-        r.ImGui_SameLine(ctx)
-        do
-          local isOn = (trMute or 0) > 0
-          local pushed = 0
-          if isOn and r.ImGui_PushStyleColor then
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.75, 0.55, 0.20, 1.0)); pushed = pushed + 1
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.85, 0.65, 0.25, 1.0)); pushed = pushed + 1
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.65, 0.45, 0.18, 1.0)); pushed = pushed + 1
-            local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
-          elseif rC and gC and bC then
-            local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
-          end
-          r.ImGui_Button(ctx, 'M', 18, frameHeight)
-          if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Click: Mute on/off\nCtrl+Click: Unmute all\nCtrl+Alt+Click: Exclusive mute\nAlt+Click: Mute all others') end
-          if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 0) then
-            local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftCtrl()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightCtrl())
-            local alt = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftAlt()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightAlt())
-            
-            if ctrl and alt then
-              r.Undo_BeginBlock('Exclusive mute')
-              r.Main_OnCommand(40339, 0)
-              r.SetMediaTrackInfo_Value(tr, 'B_MUTE', 1)
-              r.Undo_EndBlock('Exclusive mute', -1)
-            elseif ctrl then
-              r.Undo_BeginBlock('Unmute all')
-              r.Main_OnCommand(40339, 0)
-              r.Undo_EndBlock('Unmute all', -1)
-            elseif alt then
-              r.Undo_BeginBlock('Mute all others')
-              r.SetMediaTrackInfo_Value(tr, 'B_MUTE', 0)
-              local trackCount = r.CountTracks(0)
-              for i = 0, trackCount - 1 do
-                local track = r.GetTrack(0, i)
-                if track ~= tr then
-                  r.SetMediaTrackInfo_Value(track, 'B_MUTE', 1)
-                end
-              end
-              r.Undo_EndBlock('Mute all others', -1)
-            else
-              r.Undo_BeginBlock('Toggle mute')
-              r.SetMediaTrackInfo_Value(tr, 'B_MUTE', isOn and 0 or 1)
-              r.Undo_EndBlock('Toggle mute', -1)
+          local trRec = tr and (r.GetMediaTrackInfo_Value(tr, 'I_RECARM') or 0) or 0
+          local trMute = tr and (r.GetMediaTrackInfo_Value(tr, 'B_MUTE') or 0) or 0
+          local trSolo = tr and (r.GetMediaTrackInfo_Value(tr, 'I_SOLO') or 0) or 0
+          r.ImGui_SameLine(ctx, 0, 2)
+          local spacingX = 2
+          local pushedSV = 0
+          if r.ImGui_PushStyleVar then
+            if r.ImGui_StyleVar_FramePadding then
+              r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 3, 3); pushedSV = pushedSV + 1; styleStackDepth.vars = styleStackDepth.vars + 1
+            end
+            if r.ImGui_StyleVar_ItemSpacing then
+              r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), spacingX, 0); pushedSV = pushedSV + 1; styleStackDepth.vars = styleStackDepth.vars + 1
             end
           end
-          if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
-        end
-
-        r.ImGui_SameLine(ctx)
-        do
-          local isOn = (trSolo or 0) > 0
-          local pushed = 0
-          if isOn and r.ImGui_PushStyleColor then
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.25, 0.60, 0.25, 1.0)); pushed = pushed + 1
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.30, 0.70, 0.30, 1.0)); pushed = pushed + 1
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.20, 0.50, 0.20, 1.0)); pushed = pushed + 1
-            local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
-          elseif rC and gC and bC then
-            local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
-          end
-          r.ImGui_Button(ctx, 'S', 18, frameHeight)
-          if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Click: Solo on/off\nCtrl+Click: Unsolo all\nCtrl+Shift+Click: Solo defeat\nCtrl+Alt+Click: Exclusive solo') end
-          if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 0) then
-            local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftCtrl()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightCtrl())
-            local alt = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftAlt()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightAlt())
-            local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
-            
-            if ctrl and shift then
-              r.Undo_BeginBlock('Solo defeat')
-              r.Main_OnCommand(41199, 0)
-              r.Undo_EndBlock('Solo defeat', -1)
-            elseif ctrl and alt then
-              r.Undo_BeginBlock('Exclusive solo')
-              local trackCount = r.CountTracks(0)
-              for i = 0, trackCount - 1 do
-                local track = r.GetTrack(0, i)
-                if track == tr then
-                  r.SetMediaTrackInfo_Value(track, 'I_SOLO', 1)
-                else
-                  r.SetMediaTrackInfo_Value(track, 'I_SOLO', 0)
-                end
-              end
-              r.Undo_EndBlock('Exclusive solo', -1)
-            elseif ctrl then
-              r.Undo_BeginBlock('Unsolo all')
-              r.Main_OnCommand(40340, 0)
-              r.Undo_EndBlock('Unsolo all', -1)
-            else
-              r.Undo_BeginBlock('Toggle solo')
-              r.SetMediaTrackInfo_Value(tr, 'I_SOLO', isOn and 0 or 1)
-              r.Undo_EndBlock('Toggle solo', -1)
+          do
+            local isOn = (trRec or 0) > 0
+            local pushed = 0
+            if isOn and r.ImGui_PushStyleColor then
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.70, 0.20, 0.20, 1.0)); pushed = pushed + 1
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.85, 0.30, 0.30, 1.0)); pushed = pushed + 1
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.60, 0.15, 0.15, 1.0)); pushed = pushed + 1
+              local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
+            elseif rC and gC and bC then
+              local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
             end
+            r.ImGui_Button(ctx, 'R', 18, frameHeight)
+            if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Click: Record arm on/off') end
+            if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 0) then
+              r.Undo_BeginBlock('Toggle record arm')
+              r.SetMediaTrackInfo_Value(tr, 'I_RECARM', isOn and 0 or 1)
+              r.Undo_EndBlock('Toggle record arm', -1)
+            end
+            if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
           end
-          if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
+          r.ImGui_SameLine(ctx)
+          do
+            local isOn = (trMute or 0) > 0
+            local pushed = 0
+            if isOn and r.ImGui_PushStyleColor then
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.75, 0.55, 0.20, 1.0)); pushed = pushed + 1
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.85, 0.65, 0.25, 1.0)); pushed = pushed + 1
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.65, 0.45, 0.18, 1.0)); pushed = pushed + 1
+              local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
+            elseif rC and gC and bC then
+              local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
+            end
+            r.ImGui_Button(ctx, 'M', 18, frameHeight)
+            if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Click: Mute on/off\nCtrl+Click: Unmute all\nCtrl+Alt+Click: Exclusive mute\nAlt+Click: Mute all others') end
+            if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 0) then
+              local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftCtrl()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightCtrl())
+              local alt = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftAlt()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightAlt())
+              if ctrl and alt then
+                r.Undo_BeginBlock('Exclusive mute')
+                r.Main_OnCommand(40339, 0)
+                r.SetMediaTrackInfo_Value(tr, 'B_MUTE', 1)
+                r.Undo_EndBlock('Exclusive mute', -1)
+              elseif ctrl then
+                r.Undo_BeginBlock('Unmute all')
+                r.Main_OnCommand(40339, 0)
+                r.Undo_EndBlock('Unmute all', -1)
+              elseif alt then
+                r.Undo_BeginBlock('Mute all others')
+                r.SetMediaTrackInfo_Value(tr, 'B_MUTE', 0)
+                local trackCount = r.CountTracks(0)
+                for i = 0, trackCount - 1 do
+                  local track = r.GetTrack(0, i)
+                  if track ~= tr then
+                    r.SetMediaTrackInfo_Value(track, 'B_MUTE', 1)
+                  end
+                end
+                r.Undo_EndBlock('Mute all others', -1)
+              else
+                r.Undo_BeginBlock('Toggle mute')
+                r.SetMediaTrackInfo_Value(tr, 'B_MUTE', isOn and 0 or 1)
+                r.Undo_EndBlock('Toggle mute', -1)
+              end
+            end
+            if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
+          end
+          r.ImGui_SameLine(ctx)
+          do
+            local isOn = (trSolo or 0) > 0
+            local pushed = 0
+            if isOn and r.ImGui_PushStyleColor then
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        col_u32(0.25, 0.60, 0.25, 1.0)); pushed = pushed + 1
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(0.30, 0.70, 0.30, 1.0)); pushed = pushed + 1
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  col_u32(0.20, 0.50, 0.20, 1.0)); pushed = pushed + 1
+              local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
+            elseif rC and gC and bC then
+              local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
+              r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0)); pushed = pushed + 1
+            end
+            r.ImGui_Button(ctx, 'S', 18, frameHeight)
+            if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, 'Click: Solo on/off\nCtrl+Click: Unsolo all\nCtrl+Shift+Click: Solo defeat\nCtrl+Alt+Click: Exclusive solo') end
+            if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 0) then
+              local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftCtrl()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightCtrl())
+              local alt = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftAlt()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightAlt())
+              local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
+              if ctrl and shift then
+                r.Undo_BeginBlock('Solo defeat')
+                r.Main_OnCommand(41199, 0)
+                r.Undo_EndBlock('Solo defeat', -1)
+              elseif ctrl and alt then
+                r.Undo_BeginBlock('Exclusive solo')
+                local trackCount = r.CountTracks(0)
+                for i = 0, trackCount - 1 do
+                  local track = r.GetTrack(0, i)
+                  if track == tr then
+                    r.SetMediaTrackInfo_Value(track, 'I_SOLO', 1)
+                  else
+                    r.SetMediaTrackInfo_Value(track, 'I_SOLO', 0)
+                  end
+                end
+                r.Undo_EndBlock('Exclusive solo', -1)
+              elseif ctrl then
+                r.Undo_BeginBlock('Unsolo all')
+                r.Main_OnCommand(40340, 0)
+                r.Undo_EndBlock('Unsolo all', -1)
+              else
+                r.Undo_BeginBlock('Toggle solo')
+                r.SetMediaTrackInfo_Value(tr, 'I_SOLO', isOn and 0 or 1)
+                r.Undo_EndBlock('Toggle solo', -1)
+              end
+            end
+            if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
+          end
+          if pushedSV > 0 and r.ImGui_PopStyleVar then
+            r.ImGui_PopStyleVar(ctx, pushedSV)
+            styleStackDepth.vars = math.max(0, styleStackDepth.vars - pushedSV)
+          end
         end
-        
-        if pushedSV > 0 and r.ImGui_PopStyleVar then 
-          r.ImGui_PopStyleVar(ctx, pushedSV) 
-          styleStackDepth.vars = math.max(0, styleStackDepth.vars - pushedSV)
+        r.ImGui_SameLine(ctx, 0, 0)
+        r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) - availWidth + 4)
+        local textColorPushed = 0
+        if rC and gC and bC then
+          local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
+          r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0))
+          textColorPushed = 1
         end
-      end
-      
-  r.ImGui_SameLine(ctx, 0, 0)
-  r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) - availWidth + 4)
-      
-      local textColorPushed = 0
-      if rC and gC and bC then
-        local textR, textG, textB = get_text_color_for_background(rC, gC, bC)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(textR, textG, textB, 1.0))
-        textColorPushed = 1
-      end
-      
-  r.ImGui_Text(ctx, openHdr and "▼" or "►")
-  r.ImGui_SameLine(ctx, 0, 6)
-      
-      local currentY = r.ImGui_GetCursorPosY(ctx)
-      r.ImGui_SetCursorPosY(ctx, currentY - 3) 
-
-      local fontPushed = false
-      if r.ImGui_PushFont then
-        local pushSuccess = pcall(r.ImGui_PushFont, ctx, nil, r.ImGui_GetFontSize(ctx) * 1.25) 
-        fontPushed = pushSuccess
-      end
-      
-  r.ImGui_Text(ctx, hdr)
-      
-      if fontPushed and r.ImGui_PopFont then
-        pcall(r.ImGui_PopFont, ctx)
-      end
-      
-      if textColorPushed > 0 then
-        r.ImGui_PopStyleColor(ctx, textColorPushed)
-      end
-      
-      if r.ImGui_SetItemAllowOverlap then r.ImGui_SetItemAllowOverlap(ctx) end
-      
+        r.ImGui_Text(ctx, openHdr and "▼" or "►")
+        r.ImGui_SameLine(ctx, 0, 6)
+        local currentY = r.ImGui_GetCursorPosY(ctx)
+        r.ImGui_SetCursorPosY(ctx, currentY - 3)
+        local fontPushed = false
+        if r.ImGui_PushFont then
+          local pushSuccess = pcall(r.ImGui_PushFont, ctx, nil, r.ImGui_GetFontSize(ctx) * 1.25)
+          fontPushed = pushSuccess
+        end
+        r.ImGui_Text(ctx, hdr)
+        if fontPushed and r.ImGui_PopFont then
+          pcall(r.ImGui_PopFont, ctx)
+        end
+        if textColorPushed > 0 then
+          r.ImGui_PopStyleColor(ctx, textColorPushed)
+        end
+        if r.ImGui_SetItemAllowOverlap then r.ImGui_SetItemAllowOverlap(ctx) end
         if pushedHdr > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushedHdr) end
         if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
           r.ImGui_SetTooltip(ctx, 'Click to expand/collapse the selected track\'s FX list')
         end
         if openHdr then
-        local fxCount = r.TrackFX_GetCount(tr)
-        if fxCount <= 0 then
-          r.ImGui_Text(ctx, '(No FX on this track)')
-        else
-          state.fxSlotsVisibleRows = math.max(1, math.min(8, tonumber(state.fxSlotsVisibleRows) or 4))
-          local rowLineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
-          local targetRows = state.fxSlotsVisibleRows
-          local childH = math.floor((rowLineH + 4) * targetRows + 6)
-          if r.ImGui_BeginChild(ctx, 'fx_slots_scroll', -1, childH) then
-          local flags = r.ImGui_TableFlags_SizingFixedFit() | r.ImGui_TableFlags_RowBg() | (r.ImGui_TableFlags_ScrollY and r.ImGui_TableFlags_ScrollY() or 0)
-          if r.ImGui_BeginTable(ctx, 'fx_table_single', 3, flags) then
-            r.ImGui_TableSetupColumn(ctx, '#', r.ImGui_TableColumnFlags_WidthFixed(), 20)
-            r.ImGui_TableSetupColumn(ctx, 'FX name', r.ImGui_TableColumnFlags_WidthStretch())
-            r.ImGui_TableSetupColumn(ctx, 'Ctl', r.ImGui_TableColumnFlags_WidthFixed(), 46)
-
-            for i = 0, fxCount - 1 do
-              r.ImGui_TableNextRow(ctx)
-              if r.ImGui_TableSetBgColor and r.ImGui_TableBgTarget_RowBg0 and r.ImGui_TableBgTarget_RowBg1 then
-                local isSelected = (tonumber(state.selectedSourceFXIndex) or -1) == i
-                local col = isSelected and col_u32(0.24,0.38,0.55,0.55) or col_u32(0.19,0.19,0.19,1.0)
-                r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg0(), col)
-                r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg1(), col)
-              end
-
-              
-              r.ImGui_TableSetColumnIndex(ctx, 0)
-              r.ImGui_Text(ctx, tostring(i + 1))
-
-              
-              r.ImGui_TableSetColumnIndex(ctx, 1)
-              local nm = get_fx_name(tr, i)
-              local disp = format_fx_display_name(nm)
-              local pushedTxt = 0
-              do
-                local off = get_fx_offline(tr, i)
-                local en = get_fx_enabled(tr, i)
-                if off then
-                  if r.ImGui_PushStyleColor then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(0.90, 0.35, 0.35, 1.0)); pushedTxt = pushedTxt + 1 end
-                elseif en ~= nil and not en then
-                  if r.ImGui_PushStyleColor then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(0.90, 0.75, 0.30, 1.0)); pushedTxt = pushedTxt + 1 end
+          local fxCount = r.TrackFX_GetCount(tr)
+          if fxCount <= 0 then
+            r.ImGui_Text(ctx, '(No FX on this track)')
+          else
+            state.fxSlotsVisibleRows = math.max(1, math.min(8, tonumber(state.fxSlotsVisibleRows) or 4))
+            local rowLineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
+            local flags = r.ImGui_TableFlags_SizingFixedFit() | r.ImGui_TableFlags_RowBg()
+            if r.ImGui_BeginTable(ctx, 'fx_table_single', 3, flags) then
+              r.ImGui_TableSetupColumn(ctx, '#', r.ImGui_TableColumnFlags_WidthFixed(), 20)
+              r.ImGui_TableSetupColumn(ctx, 'FX name', r.ImGui_TableColumnFlags_WidthStretch())
+              r.ImGui_TableSetupColumn(ctx, 'Ctl', r.ImGui_TableColumnFlags_WidthFixed(), 46)
+              for i = 0, fxCount - 1 do
+                r.ImGui_TableNextRow(ctx)
+                if r.ImGui_TableSetBgColor and r.ImGui_TableBgTarget_RowBg0 and r.ImGui_TableBgTarget_RowBg1 then
+                  local isSelected = (tonumber(state.selectedSourceFXIndex) or -1) == i
+                  local col = isSelected and col_u32(0.24,0.38,0.55,0.55) or col_u32(0.19,0.19,0.19,1.0)
+                  r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg0(), col)
+                  r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg1(), col)
                 end
-              end
-              local clicked = r.ImGui_Selectable(ctx, (disp .. '##fxrow' .. i), false)
-              if pushedTxt > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushedTxt) end
-              if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-                r.ImGui_SetTooltip(ctx, 'Right-Click: open | Alt+Click: delete | Shift+Click: bypass | Ctrl+Shift+Click: offline | Drag: reorder')
-              end
-              if r.ImGui_BeginDragDropSource and r.ImGui_BeginDragDropTarget and r.ImGui_AcceptDragDropPayload and r.ImGui_SetDragDropPayload then
-                if r.ImGui_BeginDragDropSource(ctx, 0) then
-                  r.ImGui_SetDragDropPayload(ctx, DND_FX_PAYLOAD, tostring(i))
-                  r.ImGui_Text(ctx, 'Move: ' .. disp)
-                  if r.ImGui_EndDragDropSource then r.ImGui_EndDragDropSource(ctx) end
-                end
-                if r.ImGui_BeginDragDropTarget(ctx) then
-                  local ok, payload = r.ImGui_AcceptDragDropPayload(ctx, DND_FX_PAYLOAD)
-                  if ok and payload then
-                    local src = tonumber(payload) or -1
-                    local dest = i
-                    if src >= 0 and src ~= dest then
-                      if src < dest then dest = dest + 1 end
-                      r.Undo_BeginBlock('Move FX')
-                      if not move_fx_drag_chunk(tr, src, dest) then
-                        r.TrackFX_CopyToTrack(tr, src, tr, dest, true)
-                      end
-                      r.Undo_EndBlock('Move FX', -1)
-                      state.pendingMessage = string.format('Moved "%s" to position %d', disp, (dest<r.TrackFX_GetCount(tr) and dest or (r.TrackFX_GetCount(tr)-1)) + 1)
-                    end
-                  end
-                  if r.ImGui_EndDragDropTarget then r.ImGui_EndDragDropTarget(ctx) end
-                end
-              end
-
-              local altClick = false
-              local anyClick = false
-              local rightClick = false
-              if r.ImGui_IsItemClicked then
-                anyClick = r.ImGui_IsItemClicked(ctx, 0)
-                rightClick = r.ImGui_IsItemClicked(ctx, 1) 
-                if anyClick and is_alt_down() then altClick = true end
-              else
-                anyClick = clicked
-              end
-  if (clicked or anyClick or altClick) and not state._pendingDelArmed then
-                local altDown = is_alt_down()
-                local shiftDown = is_shift_down()
-                local ctrlDown = is_ctrl_down()
-                if altDown then
-                
-                  local guid = r.TrackFX_GetFXGUID and r.TrackFX_GetFXGUID(tr, i) or nil
-                  state._pendingDelGUID = guid
-                  state._pendingDelTrack = tr
-                  state._pendingDelDisp = disp
-                  state._pendingDelIndex = i
-          state._pendingDelArmed = true
-                  break
-                elseif shiftDown and ctrlDown then
-                  
-                  r.Undo_BeginBlock('Toggle FX Offline')
+                r.ImGui_TableSetColumnIndex(ctx, 0)
+                r.ImGui_Text(ctx, tostring(i + 1))
+                r.ImGui_TableSetColumnIndex(ctx, 1)
+                local nm = get_fx_name(tr, i)
+                local disp = format_fx_display_name(nm)
+                local pushedTxt = 0
+                do
                   local off = get_fx_offline(tr, i)
-                  set_fx_offline(tr, i, off == nil and true or (not off))
-                  r.Undo_EndBlock('Toggle FX Offline', -1)
-                  state.pendingMessage = string.format('Offline: %s (%s)', (get_fx_offline(tr, i) and 'On' or 'Off'), disp)
-                  state._pendingDelArmed = true
-                  break
-                elseif shiftDown then
-            
-                  r.Undo_BeginBlock('Toggle FX Bypass')
                   local en = get_fx_enabled(tr, i)
-                  set_fx_enabled(tr, i, en == nil and false or (not en))
-                  r.Undo_EndBlock('Toggle FX Bypass', -1)
-                  local newEn = get_fx_enabled(tr, i)
-                  state.pendingMessage = string.format('Bypass: %s (%s)', (newEn == false) and 'On' or 'Off', disp)
-                  state._pendingDelArmed = true
-                  break
+                  if off then
+                    if r.ImGui_PushStyleColor then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(0.90, 0.35, 0.35, 1.0)); pushedTxt = pushedTxt + 1 end
+                  elseif en ~= nil and not en then
+                    if r.ImGui_PushStyleColor then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col_u32(0.90, 0.75, 0.30, 1.0)); pushedTxt = pushedTxt + 1 end
+                  end
                 end
-              end
-
-              if rightClick and r.TrackFX_Show then
-                local hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
-                local uiOpen = r.TrackFX_GetOpen and r.TrackFX_GetOpen(tr, i) or false
-                if hwnd and hwnd ~= 0 then
-                  r.TrackFX_Show(tr, i, 2)
-                elseif uiOpen then
-                  r.TrackFX_Show(tr, i, 0)
+                local clicked = r.ImGui_Selectable(ctx, (disp .. '##fxrow' .. i), false)
+                if pushedTxt > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushedTxt) end
+                if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+                  r.ImGui_SetTooltip(ctx, 'Right-Click: open | Alt+Click: delete | Shift+Click: bypass | Ctrl+Shift+Click: offline | Drag: reorder')
+                end
+                if r.ImGui_BeginDragDropSource and r.ImGui_BeginDragDropTarget and r.ImGui_AcceptDragDropPayload and r.ImGui_SetDragDropPayload then
+                  if r.ImGui_BeginDragDropSource(ctx, 0) then
+                    r.ImGui_SetDragDropPayload(ctx, DND_FX_PAYLOAD, tostring(i))
+                    r.ImGui_Text(ctx, 'Move: ' .. disp)
+                    if r.ImGui_EndDragDropSource then r.ImGui_EndDragDropSource(ctx) end
+                  end
+                  if r.ImGui_BeginDragDropTarget(ctx) then
+                    local ok, payload = r.ImGui_AcceptDragDropPayload(ctx, DND_FX_PAYLOAD)
+                    if ok and payload then
+                      local src = tonumber(payload) or -1
+                      local dest = i
+                      if src >= 0 and src ~= dest then
+                        if src < dest then dest = dest + 1 end
+                        r.Undo_BeginBlock('Move FX')
+                        if not move_fx_drag_chunk(tr, src, dest) then
+                          r.TrackFX_CopyToTrack(tr, src, tr, dest, true)
+                        end
+                        r.Undo_EndBlock('Move FX', -1)
+                        state.pendingMessage = string.format('Moved "%s" to position %d', disp, (dest<r.TrackFX_GetCount(tr) and dest or (r.TrackFX_GetCount(tr)-1)) + 1)
+                      end
+                    end
+                    if r.ImGui_EndDragDropTarget then r.ImGui_EndDragDropTarget(ctx) end
+                  end
+                end
+                local altClick = false
+                local anyClick = false
+                local rightClick = false
+                if r.ImGui_IsItemClicked then
+                  anyClick = r.ImGui_IsItemClicked(ctx, 0)
+                  rightClick = r.ImGui_IsItemClicked(ctx, 1)
+                  if anyClick and is_alt_down() then altClick = true end
                 else
-                  r.TrackFX_Show(tr, i, 3)
-                  hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
-                  if not (hwnd and hwnd ~= 0) then r.TrackFX_Show(tr, i, 1) end
+                  anyClick = clicked
                 end
-              end
-
-              
-              do
-                local setNormal = false
-                if clicked and r.ImGui_IsItemHovered(ctx) then
+                if (clicked or anyClick or altClick) and not state._pendingDelArmed then
                   local altDown = is_alt_down()
                   local shiftDown = is_shift_down()
                   local ctrlDown = is_ctrl_down()
-                  if not altDown and not shiftDown and not ctrlDown and not rightClick then
-                    setNormal = true
+                  if altDown then
+                    local guid = r.TrackFX_GetFXGUID and r.TrackFX_GetFXGUID(tr, i) or nil
+                    state._pendingDelGUID = guid
+                    state._pendingDelTrack = tr
+                    state._pendingDelDisp = disp
+                    state._pendingDelIndex = i
+                    state._pendingDelArmed = true
+                    break
+                  elseif shiftDown and ctrlDown then
+                    r.Undo_BeginBlock('Toggle FX Offline')
+                    local off = get_fx_offline(tr, i)
+                    set_fx_offline(tr, i, off == nil and true or (not off))
+                    r.Undo_EndBlock('Toggle FX Offline', -1)
+                    state.pendingMessage = string.format('Offline: %s (%s)', (get_fx_offline(tr, i) and 'On' or 'Off'), disp)
+                    state._pendingDelArmed = true
+                    break
+                  elseif shiftDown then
+                    r.Undo_BeginBlock('Toggle FX Bypass')
+                    local en = get_fx_enabled(tr, i)
+                    set_fx_enabled(tr, i, en == nil and false or (not en))
+                    r.Undo_EndBlock('Toggle FX Bypass', -1)
+                    local newEn = get_fx_enabled(tr, i)
+                    state.pendingMessage = string.format('Bypass: %s (%s)', (newEn == false) and 'On' or 'Off', disp)
+                    state._pendingDelArmed = true
+                    break
                   end
                 end
-                if setNormal then
-                  state.selectedSourceFXName = nm
-                  state.selectedSourceFXIndex = i
-                end
-              end
-
-              r.ImGui_TableSetColumnIndex(ctx, 2)
-              local frameH = r.ImGui_GetFrameHeight(ctx)
-              local btnW = 18
-              do
-                local en = get_fx_enabled(tr, i)
-                local bypassActive = (en ~= nil) and (not en)
-                local pushedB = 0
-                if bypassActive and r.ImGui_PushStyleColor then
-                  local br,bg,bb = 0.45,0.35,0.10
-                  local hr,hg,hb = lighten(br,bg,bb,0.10)
-                  local ar,ag,ab = lighten(br,bg,bb,-0.08)
-                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(br,bg,bb,1.0)); pushedB=pushedB+1
-                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushedB=pushedB+1
-                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(ar,ag,ab,1.0)); pushedB=pushedB+1
-                end
-                if r.ImGui_Button(ctx, 'B##rowB'..i, btnW, frameH) then
-                  local curEn = get_fx_enabled(tr, i)
-                  set_fx_enabled(tr, i, curEn == nil and false or (not curEn))
-                end
-                if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle bypass') end
-                if pushedB>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushedB) end
-              end
-              r.ImGui_SameLine(ctx,nil,2)
-              do
-                local off = get_fx_offline(tr, i)
-                local offActive = (off ~= nil) and off
-                local pushedO = 0
-                if offActive and r.ImGui_PushStyleColor then
-                  local br,bg,bb = 0.38,0.20,0.20
-                  local hr,hg,hb = lighten(br,bg,bb,0.10)
-                  local ar,ag,ab = lighten(br,bg,bb,-0.08)
-                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(br,bg,bb,1.0)); pushedO=pushedO+1
-                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushedO=pushedO+1
-                  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(ar,ag,ab,1.0)); pushedO=pushedO+1
-                end
-                if r.ImGui_Button(ctx, 'O##rowO'..i, btnW, frameH) then
-                  local curOff = get_fx_offline(tr, i)
-                  set_fx_offline(tr, i, curOff == nil and true or (not curOff))
-                end
-                if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle offline') end
-                if pushedO>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushedO) end
-              end
-            end
-            r.ImGui_EndTable(ctx)
-          end 
-          local dlChild = r.ImGui_GetWindowDrawList(ctx)
-          local minx,miny = r.ImGui_GetItemRectMin(ctx)
-          local maxx,maxy = r.ImGui_GetItemRectMax(ctx)
-          if dlChild then
-            r.ImGui_DrawList_AddRectFilled(dlChild, minx, miny, maxx, miny + childH, col_u32(0.19,0.19,0.19,1.0))
-          end
-          r.ImGui_EndChild(ctx)
-          do
-            local splitterHeight = 6
-            local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or -1
-            if r.ImGui_InvisibleButton then
-              r.ImGui_InvisibleButton(ctx, '##fxSlotsResize', availW, splitterHeight)
-              local hovered = r.ImGui_IsItemHovered(ctx)
-              local active = r.ImGui_IsItemActive(ctx)
-              if hovered and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeNS then
-                pcall(function() r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS()) end)
-              end
-              if state.tooltips and hovered and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Drag to change FX slots height (1-8 rows)') end
-              if active and r.ImGui_IsMouseDragging and r.ImGui_IsMouseDragging(ctx,0) then
-                local dragDy = select(2, r.ImGui_GetMouseDragDelta(ctx,0)) or 0
-                local deltaRows = math.floor(dragDy / (rowLineH * 0.9))
-                if deltaRows ~= 0 then
-                  state.fxSlotsVisibleRows = math.max(1, math.min(8, state.fxSlotsVisibleRows + deltaRows))
-                  r.ImGui_ResetMouseDragDelta(ctx,0)
-                  save_user_settings()
-                end
-              end
-              if r.ImGui_GetItemRectMin and r.ImGui_GetItemRectMax and r.ImGui_DrawList_AddRectFilled then
-                local minx, miny = r.ImGui_GetItemRectMin(ctx)
-                local maxx, maxy = r.ImGui_GetItemRectMax(ctx)
-                local dl = r.ImGui_GetWindowDrawList(ctx)
-                if dl then
-                  local baseCol = col_u32(0.55,0.55,0.55,0.35)
-                  if hovered then baseCol = col_u32(0.80,0.80,0.80,0.55) end
-                  if active then baseCol = col_u32(0.32,0.60,0.95,0.85) end
-                  r.ImGui_DrawList_AddRectFilled(dl, minx, miny, maxx, maxy, baseCol, 2)
-                  local midY = (miny + maxy) * 0.5
-                  local centerX = (minx + maxx) * 0.5
-                  local dotCol = col_u32(0.15,0.15,0.15, active and 1.0 or (hovered and 0.9 or 0.6))
-                  if r.ImGui_DrawList_AddCircleFilled then
-                    local spacing = 6
-                    r.ImGui_DrawList_AddCircleFilled(dl, centerX - spacing, midY, 2, dotCol)
-                    r.ImGui_DrawList_AddCircleFilled(dl, centerX,          midY, 2, dotCol)
-                    r.ImGui_DrawList_AddCircleFilled(dl, centerX + spacing, midY, 2, dotCol)
+                if rightClick and r.TrackFX_Show then
+                  local hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
+                  local uiOpen = r.TrackFX_GetOpen and r.TrackFX_GetOpen(tr, i) or false
+                  if hwnd and hwnd ~= 0 then
+                    r.TrackFX_Show(tr, i, 2)
+                  elseif uiOpen then
+                    r.TrackFX_Show(tr, i, 0)
+                  else
+                    r.TrackFX_Show(tr, i, 3)
+                    hwnd = r.TrackFX_GetFloatingWindow and r.TrackFX_GetFloatingWindow(tr, i) or nil
+                    if not (hwnd and hwnd ~= 0) then r.TrackFX_Show(tr, i, 1) end
                   end
                 end
+                do
+                  local setNormal = false
+                  if clicked and r.ImGui_IsItemHovered(ctx) then
+                    local altDown = is_alt_down()
+                    local shiftDown = is_shift_down()
+                    local ctrlDown = is_ctrl_down()
+                    if not altDown and not shiftDown and not ctrlDown and not rightClick then
+                      setNormal = true
+                    end
+                  end
+                  if setNormal then
+                    state.selectedSourceFXName = nm
+                    state.selectedSourceFXIndex = i
+                  end
+                end
+                r.ImGui_TableSetColumnIndex(ctx, 2)
+                local frameH = r.ImGui_GetFrameHeight(ctx)
+                local btnW = 18
+                do
+                  local en = get_fx_enabled(tr, i)
+                  local bypassActive = (en ~= nil) and (not en)
+                  local pushedB = 0
+                  if bypassActive and r.ImGui_PushStyleColor then
+                    local br,bg,bb = 0.45,0.35,0.10
+                    local hr,hg,hb = lighten(br,bg,bb,0.10)
+                    local ar,ag,ab = lighten(br,bg,bb,-0.08)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(br,bg,bb,1.0)); pushedB=pushedB+1
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushedB=pushedB+1
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(ar,ag,ab,1.0)); pushedB=pushedB+1
+                  end
+                  if r.ImGui_Button(ctx, 'B##rowB'..i, btnW, frameH) then
+                    local curEn = get_fx_enabled(tr, i)
+                    set_fx_enabled(tr, i, curEn == nil and false or (not curEn))
+                  end
+                  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle bypass') end
+                  if pushedB>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushedB) end
+                end
+                r.ImGui_SameLine(ctx,nil,2)
+                do
+                  local off = get_fx_offline(tr, i)
+                  local offActive = (off ~= nil) and off
+                  local pushedO = 0
+                  if offActive and r.ImGui_PushStyleColor then
+                    local br,bg,bb = 0.38,0.20,0.20
+                    local hr,hg,hb = lighten(br,bg,bb,0.10)
+                    local ar,ag,ab = lighten(br,bg,bb,-0.08)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), col_u32(br,bg,bb,1.0)); pushedO=pushedO+1
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), col_u32(hr,hg,hb,1.0)); pushedO=pushedO+1
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), col_u32(ar,ag,ab,1.0)); pushedO=pushedO+1
+                  end
+                  if r.ImGui_Button(ctx, 'O##rowO'..i, btnW, frameH) then
+                    local curOff = get_fx_offline(tr, i)
+                    set_fx_offline(tr, i, curOff == nil and true or (not curOff))
+                  end
+                  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle offline') end
+                  if pushedO>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushedO) end
+                end
               end
+              r.ImGui_EndTable(ctx)
             end
-          end
+            
             if state._pendingDelGUID and state._pendingDelTrack then
               local delTr = state._pendingDelTrack
               local delGuid = state._pendingDelGUID
@@ -4701,25 +4637,79 @@ local function draw()
               end
               state._pendingDelGUID, state._pendingDelTrack, state._pendingDelDisp, state._pendingDelIndex = nil, nil, nil, nil
             end
-          end -- end fx slots child & table
-        end -- end openHdr
-      end -- end showTrackList
+          end
+        end
+      else
+        r.ImGui_Text(ctx, 'No track selected. Select a track in REAPER to view its FX.')
       end
+      r.ImGui_EndChild(ctx)
     end
-  
-  local hdrColorCount = 0
-  if r.ImGui_PushStyleColor then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),        col_u32(0.12,0.12,0.12,1.00)); hdrColorCount = hdrColorCount + 1
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), col_u32(0.18,0.18,0.18,1.00)); hdrColorCount = hdrColorCount + 1
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),  col_u32(0.24,0.24,0.24,1.00)); hdrColorCount = hdrColorCount + 1
   end
 
-  if state.showPanelSource ~= false then draw_source_panel() end
-  if state.showPanelReplacement ~= false then draw_replace_panel() end
-  if state.showPanelFXChain ~= false then draw_fxchain_panel() end
-  if state.showPanelTrackVersion ~= false then draw_trackversion_panel() end
-  if hdrColorCount > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, hdrColorCount) end
-  r.ImGui_EndChild(ctx)
+  if state.showTrackList ~= false then
+    local splitterHeight = 6
+    local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or -1
+    if r.ImGui_InvisibleButton then
+      r.ImGui_InvisibleButton(ctx, '##fxSlotsResize_fixed', availW, splitterHeight)
+      local hovered = r.ImGui_IsItemHovered(ctx)
+      local active = r.ImGui_IsItemActive(ctx)
+      if hovered and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeNS then
+        pcall(function() r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS()) end)
+      end
+      if state.tooltips and hovered and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Drag to change FX slots height (1-8 rows)') end
+      if active and r.ImGui_IsMouseDragging and r.ImGui_IsMouseDragging(ctx,0) then
+        local rowLineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
+        local dragDy = select(2, r.ImGui_GetMouseDragDelta(ctx,0)) or 0
+        local deltaRows = math.floor(dragDy / (rowLineH * 0.9))
+        if deltaRows ~= 0 then
+          state.fxSlotsVisibleRows = math.max(1, math.min(8, state.fxSlotsVisibleRows + deltaRows))
+          r.ImGui_ResetMouseDragDelta(ctx,0)
+          save_user_settings()
+        end
+      end
+      if r.ImGui_GetItemRectMin and r.ImGui_GetItemRectMax and r.ImGui_DrawList_AddRectFilled then
+        local minx, miny = r.ImGui_GetItemRectMin(ctx)
+        local maxx, maxy = r.ImGui_GetItemRectMax(ctx)
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        if dl then
+          local hovered = r.ImGui_IsItemHovered(ctx)
+          local active = r.ImGui_IsItemActive(ctx)
+          local baseCol = col_u32(0.55,0.55,0.55,0.35)
+          if hovered then baseCol = col_u32(0.80,0.80,0.80,0.55) end
+          if active then baseCol = col_u32(0.32,0.60,0.95,0.85) end
+          r.ImGui_DrawList_AddRectFilled(dl, minx, miny, maxx, maxy, baseCol, 2)
+          local midY = (miny + maxy) * 0.5
+          local centerX = (minx + maxx) * 0.5
+          local dotCol = col_u32(0.15,0.15,0.15, active and 1.0 or (hovered and 0.9 or 0.6))
+          if r.ImGui_DrawList_AddCircleFilled then
+            local spacing = 6
+            r.ImGui_DrawList_AddCircleFilled(dl, centerX - spacing, midY, 2, dotCol)
+            r.ImGui_DrawList_AddCircleFilled(dl, centerX,          midY, 2, dotCol)
+            r.ImGui_DrawList_AddCircleFilled(dl, centerX + spacing, midY, 2, dotCol)
+          end
+        end
+      end
+    end
+  end
+
+  if r.ImGui_BeginChild(ctx, 'content_child', -1, -FOOTER_H) then
+    if not tr then
+      r.ImGui_Text(ctx, 'No track selected. Select a track in REAPER to view its FX.')
+    else
+    end
+    local hdrColorCount = 0
+    if r.ImGui_PushStyleColor then
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),        col_u32(0.12,0.12,0.12,1.00)); hdrColorCount = hdrColorCount + 1
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), col_u32(0.18,0.18,0.18,1.00)); hdrColorCount = hdrColorCount + 1
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),  col_u32(0.24,0.24,0.24,1.00)); hdrColorCount = hdrColorCount + 1
+    end
+    if state.showPanelSource ~= false then draw_source_panel() end
+    if state.showPanelReplacement ~= false then draw_replace_panel() end
+    if state.showPanelFXChain ~= false then draw_fxchain_panel() end
+    if state.showPanelTrackVersion ~= false then draw_trackversion_panel() end
+    if hdrColorCount > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, hdrColorCount) end
+    r.ImGui_EndChild(ctx)
+  end
 
     r.ImGui_Separator(ctx)
     
