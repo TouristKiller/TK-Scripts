@@ -1,12 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.6.4
+-- @version 1.6.5
 -- @changelog:
 --[[     
-++ Pinned plugins now persist and appear on top after restart (including Developer), using type-agnostic matching (VST/VST3/CLAP) and applying startup sorting.
-++ Added setting "Add instruments at top" to place VSTi/VST3i/CLAPi/AUi/LV2i at the top of the FX chain when adding.
-++ Fix: When default folder = Last opened folder, the folder now auto-refreshes & auto-expands on startup so pinned & favorites appear immediately without extra click.
-
+++ Fixed bug
 ---------------------TODO (sometime in the future ;o) )-----------------------------------------
             - Auto tracks and send /recieve for multi output plugin
             - Meter functionality (Pre/post Peak) -- vooralsnog niet haalbaar
@@ -9940,9 +9937,12 @@ function ShowScreenshotWindow()
             r.ImGui_EndChild(ctx)
         end
         r.ImGui_PopStyleVar(ctx, 2)
+        if screenshot_child_open then
+            r.ImGui_EndChild(ctx)
+        end
     end
     config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
-    
+    r.ImGui_End(ctx)
     return visible 
     end
 end
@@ -11810,10 +11810,7 @@ end
 
 -----------------------------------------------------------------------------------------
 function Main()
-    -- Set running state to indicate FX Browser is active
     SetRunningState(true)
-    
-    -- Periodic cache cleanup to prevent memory bloat
     MaybeClearCaches()
     
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
@@ -11950,13 +11947,7 @@ if visible then
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
     if config.show_screenshot_window then
-        r.ImGui_PushID(ctx, "ScreenshotWindow")
-        local screenshot_visible = ShowScreenshotWindow()
-        if screenshot_visible then
-            r.ImGui_EndChild(ctx)  -- Sluit ScreenshotSection
-            r.ImGui_End(ctx)
-        end
-        r.ImGui_PopID(ctx)
+        ShowScreenshotWindow()
     end
     if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
         local progress_text = string.format("Loading %d/%d (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
