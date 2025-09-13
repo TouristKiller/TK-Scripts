@@ -1,4 +1,4 @@
--- @version 0.3.2
+-- @version 0.3.3
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -73,6 +73,10 @@ local function cleanup_resources()
     pcall(r.ImGui_PopStyleVar, ctx, styleStackDepth.vars)
     styleStackDepth.vars = 0
   end
+  if state and state.slotLogoTex and r.ImGui_DestroyImage then
+    pcall(function() r.ImGui_DestroyImage(state.slotLogoTex) end)
+    state.slotLogoTex = nil
+  end
 end
 
 local function init_context()
@@ -123,6 +127,9 @@ local state = {
   showPanelFXChain = true,
   showPanelTrackVersion = true,
   hdrInitApplied = false,
+  
+  -- Branding
+  slotLogoTex = nil,
   
   -- Operation settings
   scopeSelectedOnly = false,
@@ -219,6 +226,7 @@ local state = {
   fxChainLoadToCurrent = true,
   fxChainLoadToSelected = false,
   fxChainLoadToAll = false,
+  fxChainListHeight = 140,
   
   trackNavInput = '',
   
@@ -335,6 +343,7 @@ local function load_user_settings()
   state.showPanelSource = get_bool_setting('PANEL_SOURCE', state.showPanelSource == nil and true or state.showPanelSource)
   state.showPanelFXChain = get_bool_setting('PANEL_FXCHAIN', state.showPanelFXChain == nil and true or state.showPanelFXChain)
   state.showPanelTrackVersion = get_bool_setting('PANEL_TRKVER', state.showPanelTrackVersion == nil and true or state.showPanelTrackVersion)
+  state.fxChainListHeight    = get_float_setting('FXC_LIST_H', state.fxChainListHeight)
   -- Style numeric settings
   state.styleRounding         = get_float_setting('STYLE_ROUNDING', state.styleRounding)
   state.styleButtonRounding   = get_float_setting('STYLE_BTN_ROUNDING', state.styleButtonRounding)
@@ -400,6 +409,7 @@ local function save_user_settings()
   set_bool_setting('PANEL_SOURCE', state.showPanelSource ~= false)
   set_bool_setting('PANEL_FXCHAIN', state.showPanelFXChain ~= false)
   set_bool_setting('PANEL_TRKVER', state.showPanelTrackVersion ~= false)
+  set_float_setting('FXC_LIST_H', state.fxChainListHeight)
   
   set_float_setting('STYLE_ROUNDING', state.styleRounding)
   set_float_setting('STYLE_BTN_ROUNDING', state.styleButtonRounding)
@@ -1357,6 +1367,10 @@ local function cleanup_resources()
   state.screenshotTex = nil
   state.screenshotKey = nil
   state.screenshotFound = false
+  if state.slotLogoTex and r.ImGui_DestroyImage then
+    pcall(function() r.ImGui_DestroyImage(state.slotLogoTex) end)
+  end
+  state.slotLogoTex = nil
   
   if ctx then
     if iconFont and iconFont ~= false and r.ImGui_ValidatePtr and r.ImGui_Detach then
@@ -2697,6 +2711,19 @@ local function ensure_source_screenshot(add)
   state.deferScreenshotDraw = 0
 end
 
+-- Branding image loader
+local function ensure_slot_logo()
+  if state.slotLogoTex or not r.ImGui_CreateImage then return end
+  local sep = package.config:sub(1,1)
+  local png = (script_path or '') .. 'SLOTS.png'
+  local ok, tex = pcall(function() return r.ImGui_CreateImage(png) end)
+  if ok and tex and type(tex) == 'userdata' then
+    state.slotLogoTex = tex
+  else
+    state.slotLogoTex = false
+  end
+end
+
 
 local function delete_all_instances(sourceName, placeholderAdd, placeholderAlias)
   if not sourceName or sourceName == '' then return 0, 'No source FX selected' end
@@ -2862,7 +2889,12 @@ end
 local function draw_replace_panel()
   if state.showPanelReplacement == false then return end
   if state.replHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
-  local open = r.ImGui_CollapsingHeader(ctx, 'Replacement:', 0)
+  -- Build dynamic header label to show current Source selection while keeping a stable ID
+  local srcName = state.selectedSourceFXName
+  local srcLabel = (srcName and srcName ~= '') and format_fx_display_name(srcName) or nil
+  local hdrVisible = 'Replacement:' .. (srcLabel and (' (for source ' .. tostring(srcLabel) .. ')') or '')
+  local headerId = hdrVisible .. '##replacement_header'
+  local open = r.ImGui_CollapsingHeader(ctx, headerId, 0)
   if open ~= nil and open ~= state.replHeaderOpen then state.replHeaderOpen = open; save_user_settings() end
   if open then
   local halfWidth = (r.ImGui_GetContentRegionAvail(ctx) - 4) * 0.5
@@ -3266,7 +3298,8 @@ local function draw_source_panel()
         r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
         r.ImGui_TextDisabled(ctx, placeholder)
       end
-      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX, startY + frameH + 6) end
+  if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX, startY + frameH + 6) end
+  if r.ImGui_Dummy then r.ImGui_Dummy(ctx, 0, 0) end
     else
       if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX, startY) end
       if r.ImGui_GetWindowDrawList then
@@ -3343,7 +3376,8 @@ local function draw_source_panel()
     end
     do
       local afterY = (startY or 0) + frameH + 2
-      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX or 0, afterY) end
+  if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX or 0, afterY) end
+  if r.ImGui_Dummy then r.ImGui_Dummy(ctx, 0, 0) end
     end
   else
     if not state.hideWetControl then
@@ -3404,6 +3438,7 @@ local function draw_source_panel()
         r.ImGui_Text(ctx, pctLabel)
       end
   if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX, startY + ctrlBoxH + 2) end
+      if r.ImGui_Dummy then r.ImGui_Dummy(ctx, 0, 0) end
     end
   end
   r.ImGui_Dummy(ctx,0,4)
@@ -3459,6 +3494,327 @@ local function draw_source_panel()
   r.ImGui_Separator(ctx)
 end
 
+-- Inline version of Source controls to embed under Track header
+local function draw_source_controls_inline()
+  if state.showPanelSource == false then return end
+  local tr = get_selected_track()
+  local srcIdx = tonumber(state.selectedSourceFXIndex)
+  if not (tr and srcIdx) then r.ImGui_Text(ctx, 'Pick a Source'); return end
+  if state.abSlotIndex and state.abSlotIndex ~= srcIdx then
+    if state.abActiveIsRepl then ab_cancel() else state.abSlotIndex, state.abSnap, state.abActiveIsRepl = nil, nil, false end
+  end
+  local srcCtrlIdx = srcIdx
+  local sname = state.selectedSourceFXName
+  if not sname or sname == '' then local _, nm = r.TrackFX_GetFXName(tr, srcIdx, ''); sname = nm end
+  local disp = format_fx_display_name(sname)
+  do
+    local label = tostring(disp or '')
+    local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local textW = 0
+    if r.ImGui_CalcTextSize then textW = select(1,r.ImGui_CalcTextSize(ctx,label)) or 0 end
+    local padX = math.max(0,(availW - textW)*0.5)
+    local curX = select(1,r.ImGui_GetCursorPos(ctx)) or 0
+    if r.ImGui_GetWindowDrawList then
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      if dl and r.ImGui_GetCursorScreenPos then
+        local startX, startY = r.ImGui_GetCursorScreenPos(ctx)
+        local bgX1 = startX
+        local bgY1 = startY
+        local bgX2 = startX + availW
+        local lineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
+        local bgY2 = bgY1 + lineH
+        local selCol = col_u32(0.24,0.38,0.55,0.90)
+        if r.ImGui_DrawList_AddRectFilled then
+          r.ImGui_DrawList_AddRectFilled(dl, bgX1, bgY1, bgX2, bgY2, selCol, 4)
+        end
+      end
+    end
+    r.ImGui_SetCursorPosX(ctx, curX + padX)
+    r.ImGui_Text(ctx, label)
+  end
+  r.ImGui_Dummy(ctx,0,2)
+
+  local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+  if state.showScreenshot then
+    local _, addname = r.TrackFX_GetFXName(tr, srcCtrlIdx, '')
+    validate_screenshot_ptr()
+    if state.screenshotNeedsRefresh or state.screenshotKey ~= addname or not state.screenshotTex then
+      state.screenshotNeedsRefresh = true
+      ensure_source_screenshot(addname)
+    end
+    local maxW = math.max(120, math.min(280, availW - 8))
+    local imgW, imgH = maxW, math.floor(maxW * 0.56)
+    local pad, spacing = 8, 8
+    local knobSize = math.floor(math.min(imgW, imgH) * 0.30); if knobSize < 34 then knobSize = 34 end
+    local deltaBtnH, labelH = 18, 16
+    local mixValPreview = get_fx_overall_wet(tr, srcCtrlIdx) or 1.0
+    local previewTxt = ('Wet %d%%'):format(math.floor(mixValPreview*100+0.5))
+    local labelW = 0; if r.ImGui_CalcTextSize then labelW = select(1, r.ImGui_CalcTextSize(ctx, previewTxt)) or 0 end
+    local neededInnerW = math.max(knobSize, 64, labelW)
+    local ctrlBoxW = neededInnerW + pad * 2 + 6
+    local ctrlBoxH = pad + deltaBtnH + 2 + knobSize + 2 + labelH + pad
+    local imgBoxW = imgW + pad * 2
+    local imgBoxH = imgH + pad * 2
+    local frameH = math.max(imgBoxH, ctrlBoxH)
+    local totalW = imgBoxW + spacing + ctrlBoxW
+    if not state.hideWetControl and imgBoxH > ctrlBoxH * 1.35 then
+      local desiredImgH = math.max(ctrlBoxH - pad * 2, 40)
+      local scale = desiredImgH / imgH
+      if scale < 1.0 then
+        imgW = math.max(80, math.floor(imgW * scale))
+        imgH = math.floor(imgH * scale)
+        imgBoxW = imgW + pad * 2
+        imgBoxH = imgH + pad * 2
+        frameH = math.max(imgBoxH, ctrlBoxH)
+      end
+    end
+    if totalW > availW - 4 then
+      local maxImgAllowed = math.max(80, (availW - ctrlBoxW - spacing - pad * 2))
+      if maxImgAllowed < imgW then
+        imgW = maxImgAllowed; imgH = math.floor(imgW * 0.56)
+        imgBoxW = imgW + pad * 2; imgBoxH = imgH + pad * 2
+        frameH = math.max(imgBoxH, ctrlBoxH)
+        totalW = imgBoxW + spacing + ctrlBoxW
+      end
+    end
+    local startX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+    local startY = select(2, r.ImGui_GetCursorPos(ctx)) or 0
+    totalW = imgBoxW + spacing + ctrlBoxW
+    state.lastSourceBlockWidth = totalW 
+    if totalW < 0 then totalW = 0 end
+    local offset
+    if totalW >= availW then offset = 0 else offset = math.floor((availW - totalW) * 0.5 + 0.5) end
+    local imgX = startX + offset
+    local ctrlX = imgX + imgBoxW + spacing
+    if state.hideWetControl then
+      local frameH2 = imgBoxH
+      imgX = startX + math.max(0,(availW - imgBoxW) * 0.5)
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX, startY) end
+      if r.ImGui_GetWindowDrawList then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local x1,y1 = r.ImGui_GetCursorScreenPos(ctx)
+        local x2,y2 = x1 + imgBoxW, y1 + frameH2
+        if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl, x1,y1,x2,y2, col_u32(0.05,0.05,0.05,0.45), 6) end
+        if r.ImGui_DrawList_AddRect then r.ImGui_DrawList_AddRect(dl, x1,y1,x2,y2, col_u32(0.8,0.8,0.8,0.25), 6,0,1.1) end
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX + pad, startY + pad) end
+      if state.deferScreenshotDraw and state.deferScreenshotDraw > 0 then
+        state.deferScreenshotDraw = state.deferScreenshotDraw - 1
+        local placeholder = 'Loading...'
+        local tw,th = 0,0
+        if r.ImGui_CalcTextSize then tw,th = r.ImGui_CalcTextSize(ctx, placeholder) end
+        local offX = (imgW - tw) * 0.5
+        local offY = (imgH - th) * 0.5
+        r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
+        r.ImGui_TextDisabled(ctx, placeholder)
+      elseif state.screenshotTex and type(state.screenshotTex)=='userdata' then
+        local ok = pcall(function() if r.ImGui_Image then r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end end)
+        if not ok then release_screenshot() end
+      else
+        local placeholder = 'No Image'
+        local tw,th = 0,0
+        if r.ImGui_CalcTextSize then tw,th = r.ImGui_CalcTextSize(ctx, placeholder) end
+        local offX = (imgW - tw) * 0.5
+        local offY = (imgH - th) * 0.5
+        r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
+        r.ImGui_TextDisabled(ctx, placeholder)
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX, startY + frameH2 + 6) end
+      if r.ImGui_Dummy then r.ImGui_Dummy(ctx, 0, 0) end
+    else
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX, startY) end
+      if r.ImGui_GetWindowDrawList then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local x1,y1 = r.ImGui_GetCursorScreenPos(ctx)
+        local x2,y2 = x1 + imgBoxW, y1 + frameH
+        if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl, x1,y1,x2,y2, col_u32(0.05,0.05,0.05,0.45), 6) end
+        if r.ImGui_DrawList_AddRect then r.ImGui_DrawList_AddRect(dl, x1,y1,x2,y2, col_u32(0.8,0.8,0.8,0.25), 6,0,1.1) end
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, imgX + pad, startY + pad) end
+      if state.deferScreenshotDraw and state.deferScreenshotDraw > 0 then
+        state.deferScreenshotDraw = state.deferScreenshotDraw - 1
+        local placeholder = 'Loading...'
+        local tw,th = 0,0
+        if r.ImGui_CalcTextSize then tw,th = r.ImGui_CalcTextSize(ctx, placeholder) end
+        local offX = (imgW - tw) * 0.5
+        local offY = (imgH - th) * 0.5
+        r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
+        r.ImGui_TextDisabled(ctx, placeholder)
+      elseif state.screenshotTex and type(state.screenshotTex)=='userdata' then
+        local ok = pcall(function() if r.ImGui_Image then r.ImGui_Image(ctx, state.screenshotTex, imgW, imgH) end end)
+        if not ok then release_screenshot() end
+      else
+        local placeholder = 'No Image'
+        local tw,th = 0,0
+        if r.ImGui_CalcTextSize then tw,th = r.ImGui_CalcTextSize(ctx, placeholder) end
+        local offX = (imgW - tw) * 0.5
+        local offY = (imgH - th) * 0.5
+        r.ImGui_SetCursorPos(ctx, imgX + pad + offX, startY + pad + offY)
+        r.ImGui_TextDisabled(ctx, placeholder)
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, ctrlX, startY) end
+      if r.ImGui_GetWindowDrawList then
+        local dl2 = r.ImGui_GetWindowDrawList(ctx)
+        local cx1,cy1 = r.ImGui_GetCursorScreenPos(ctx)
+        local cx2,cy2 = cx1 + ctrlBoxW, cy1 + frameH
+        if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl2, cx1,cy1,cx2,cy2, col_u32(0.05,0.05,0.05,0.55), 6) end
+        if r.ImGui_DrawList_AddRect then r.ImGui_DrawList_AddRect(dl2, cx1,cy1,cx2,cy2, col_u32(0.9,0.9,0.9,0.30), 6,0,1.2) end
+      end
+      local innerX, innerY = ctrlX + pad, startY + pad
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, innerX + (ctrlBoxW - pad*2 - 64)*0.5, innerY) end
+      local dstate = get_fx_delta_active(tr, srcCtrlIdx)
+      do
+        local pushed=0
+        if dstate and r.ImGui_PushStyleColor then
+          local br,bg,bb=0.20,0.38,0.20; local hr,hg,hb=lighten(br,bg,bb,0.10); local ar,ag,ab=lighten(br,bg,bb,-0.08)
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_Button(),col_u32(br,bg,bb,1.0)); pushed=pushed+1
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_ButtonHovered(),col_u32(hr,hg,hb,1.0)); pushed=pushed+1
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_ButtonActive(),col_u32(ar,ag,ab,1.0)); pushed=pushed+1
+        end
+        local disabled = (dstate == nil)
+        if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+        if r.ImGui_Button(ctx,'Delta',64,deltaBtnH) then toggle_fx_delta(tr, srcCtrlIdx) end
+        if disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        if pushed>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushed) end
+        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle Delta solo (if plugin supports it)') end
+      end
+      local knobPosX = innerX + (ctrlBoxW - pad*2 - knobSize)*0.5
+      local knobPosY = innerY + deltaBtnH + 2
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, knobPosX, knobPosY) end
+      local mixVal = get_fx_overall_wet(tr, srcCtrlIdx) or 1.0
+      local changedOV, newVal = knob_widget('##mix_knob_overlay_inline', mixVal, knobSize)
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, ('Overall Wet: %d%% (Double-click=100, Right-click=50)'):format(math.floor(((newVal or mixVal) or 0)*100+0.5))) end
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx,0) then newVal,changedOV=1.0,true end
+      if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx,1) then newVal,changedOV=0.5,true end
+      if changedOV then set_fx_overall_wet(tr, srcCtrlIdx, newVal) end
+      if r.ImGui_CalcTextSize then
+        local pctLabel = ('Wet %d%%'):format(math.floor(((newVal or mixVal))*100+0.5))
+        local tw = select(1, r.ImGui_CalcTextSize(ctx, pctLabel)) or 0
+        local labelX = innerX + (ctrlBoxW - pad*2 - tw)*0.5
+        if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, labelX, knobPosY + knobSize + 2) end
+        r.ImGui_Text(ctx, pctLabel)
+      end
+    end
+    do
+      local afterY = (startY or 0) + frameH + 2
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX or 0, afterY) end
+      if r.ImGui_Dummy then r.ImGui_Dummy(ctx, 0, 0) end
+    end
+  else
+    if not state.hideWetControl then
+      local pad = 8
+      local deltaBtnH, labelH = 18, 16
+      local baseImgW = math.max(120, math.min(280, availW - 8))
+      local baseImgH = math.floor(baseImgW * 0.56)
+      local knobSize = math.floor(math.min(baseImgW, baseImgH) * 0.30); if knobSize < 34 then knobSize = 34 end
+      local mixValPreview = get_fx_overall_wet(tr, srcCtrlIdx) or 1.0
+      local previewTxt = ('Wet %d%%'):format(math.floor(mixValPreview*100+0.5))
+      local labelW = 0; if r.ImGui_CalcTextSize then labelW = select(1, r.ImGui_CalcTextSize(ctx, previewTxt)) or 0 end
+      local neededInnerW = math.max(knobSize, 64, labelW)
+      local ctrlBoxW = neededInnerW + pad * 2 + 6
+      local ctrlBoxH = pad + deltaBtnH + 2 + knobSize + 2 + labelH + pad
+      local startX = select(1, r.ImGui_GetCursorPos(ctx)) or 0
+      local startY = select(2, r.ImGui_GetCursorPos(ctx)) or 0
+      local ctrlX = startX + math.max(0,(availW - ctrlBoxW) * 0.5)
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, ctrlX, startY) end
+      if r.ImGui_GetWindowDrawList then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local x1,y1 = r.ImGui_GetCursorScreenPos(ctx)
+        local x2,y2 = x1 + ctrlBoxW, y1 + ctrlBoxH
+        if r.ImGui_DrawList_AddRectFilled then r.ImGui_DrawList_AddRectFilled(dl, x1,y1,x2,y2, col_u32(0.05,0.05,0.05,0.55), 6) end
+        if r.ImGui_DrawList_AddRect then r.ImGui_DrawList_AddRect(dl, x1,y1,x2,y2, col_u32(0.9,0.9,0.9,0.30), 6,0,1.2) end
+      end
+      local innerX, innerY = ctrlX + pad, startY + pad
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, innerX + (ctrlBoxW - pad*2 - 64)*0.5, innerY) end
+      local dstate = get_fx_delta_active(tr, srcCtrlIdx)
+      do
+        local pushed=0
+        if dstate and r.ImGui_PushStyleColor then
+          local br,bg,bb=0.20,0.38,0.20; local hr,hg,hb=lighten(br,bg,bb,0.10); local ar,ag,ab=lighten(br,bg,bb,-0.08)
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_Button(),col_u32(br,bg,bb,1.0)); pushed=pushed+1
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_ButtonHovered(),col_u32(hr,hg,hb,1.0)); pushed=pushed+1
+          r.ImGui_PushStyleColor(ctx,r.ImGui_Col_ButtonActive(),col_u32(ar,ag,ab,1.0)); pushed=pushed+1
+        end
+        local disabled = (dstate == nil)
+        if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+        if r.ImGui_Button(ctx,'Delta',64,deltaBtnH) then toggle_fx_delta(tr, srcCtrlIdx) end
+        if disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        if pushed>0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,pushed) end
+        if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Toggle Delta solo (if plugin supports it)') end
+      end
+      local knobPosX = innerX + (ctrlBoxW - pad*2 - knobSize)*0.5
+      local knobPosY = innerY + deltaBtnH + 2
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, knobPosX, knobPosY) end
+      local mixVal = mixValPreview
+      local changedOV, newVal = knob_widget('##mix_knob_centered_inline', mixVal, knobSize)
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip and state.tooltips then r.ImGui_SetTooltip(ctx, ('Overall Wet: %d%% (Double-click=100, Right-click=50)'):format(math.floor(((newVal or mixVal))*100+0.5))) end
+      if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx,0) then newVal,changedOV=1.0,true end
+      if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx,1) then newVal,changedOV=0.5,true end
+      if changedOV then set_fx_overall_wet(tr, srcCtrlIdx, newVal) end
+      if r.ImGui_CalcTextSize then
+        local pctLabel = ('Wet %d%%'):format(math.floor(((newVal or mixVal))*100+0.5))
+        local tw = select(1, r.ImGui_CalcTextSize(ctx, pctLabel)) or 0
+        local labelX = innerX + (ctrlBoxW - pad*2 - tw)*0.5
+        if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, labelX, knobPosY + knobSize + 4) end
+        r.ImGui_Text(ctx, pctLabel)
+      end
+      if r.ImGui_SetCursorPos then r.ImGui_SetCursorPos(ctx, startX, startY + ctrlBoxH + 2) end
+      if r.ImGui_Dummy then r.ImGui_Dummy(ctx, 0, 0) end
+    end
+  end
+  r.ImGui_Dummy(ctx,0,4)
+  local hasSelName = state.selectedSourceFXName and state.selectedSourceFXName ~= ''
+  if r.ImGui_Checkbox then
+    local changed, val = r.ImGui_Checkbox(ctx, 'Only selected track(s)', state.scopeSelectedOnly or false)
+    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'When enabled: operations target only the single selected track context') end
+    if changed then state.scopeSelectedOnly = val; save_user_settings() end
+  end
+  r.ImGui_Dummy(ctx,0,2)
+  local fullW = r.ImGui_GetContentRegionAvail(ctx)
+  local gap = 6
+  local btnW = (fullW - gap*2) / 3
+  local dis = (not hasSelName) and r.ImGui_BeginDisabled and r.ImGui_BeginDisabled(ctx)
+  local source = state.selectedSourceFXName
+  local scopeSel = state.scopeSelectedOnly == true
+  if r.ImGui_Button(ctx,'Move up', btnW, 0) then
+    if scopeSel then
+      local trk = get_selected_track(); local idx = tonumber(state.selectedSourceFXIndex)
+      if trk and idx and idx>0 then
+        if not swap_fx_via_chunk(trk, idx, idx-1) then
+          r.TrackFX_CopyToTrack(trk, idx, trk, idx-1, true)
+        end
+        state.selectedSourceFXIndex = idx-1; state.pendingMessage='Moved up (selected track).'
+      end
+    else
+      local cnt,msg = move_all_instances_up(source); if cnt>0 then state.pendingMessage=msg else state.pendingError=msg or 'No instances moved up' end
+    end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, scopeSel and 'Move this FX one position up on the selected track' or 'Move every matching FX instance up by one slot on all tracks') end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx,'Move down', btnW, 0) then
+    if scopeSel then
+      local trk = get_selected_track(); local idx = tonumber(state.selectedSourceFXIndex)
+      if trk and idx then local fxCount = r.TrackFX_GetCount(trk); if idx < fxCount-1 then if not swap_fx_via_chunk(trk, idx, idx+1) then r.TrackFX_CopyToTrack(trk, idx, trk, idx+1, true) end; state.selectedSourceFXIndex=idx+1; state.pendingMessage='Moved down (selected track).' end end
+    else
+      local cnt,msg = move_all_instances_down(source); if cnt>0 then state.pendingMessage=msg else state.pendingError=msg or 'No instances moved down' end
+    end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, scopeSel and 'Move this FX one position down on the selected track' or 'Move every matching FX instance down by one slot on all tracks') end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx,'Delete', btnW, 0) then
+    if scopeSel then
+      local trk = get_selected_track(); local idx = tonumber(state.selectedSourceFXIndex)
+      if trk and idx then r.TrackFX_Delete(trk, idx); state.pendingMessage='Deleted (selected track)'; state.selectedSourceFXIndex, state.selectedSourceFXName=nil,nil end
+    else
+      local cnt = select(1, delete_all_instances(source, nil, nil)); state.pendingMessage=string.format('%d instances deleted (all tracks).', cnt); state.selectedSourceFXIndex, state.selectedSourceFXName=nil,nil
+    end
+  end
+  if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, scopeSel and 'Delete this FX from the selected track' or 'Delete every matching FX instance from all tracks') end
+  if dis and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+  r.ImGui_Dummy(ctx,0,4)
+  r.ImGui_Separator(ctx)
+end
+
 local function draw_fxchain_panel()
   if state.showPanelFXChain == false then return end
   local tr = get_selected_track()
@@ -3500,7 +3856,7 @@ local function draw_fxchain_panel()
   if changedFilter then state.fxChainFilter = new_filter end
   if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx,'Filter FX chains by name') end
   r.ImGui_Dummy(ctx,0,2)
-  if r.ImGui_BeginChild(ctx,'##fxchains_list', -1, 70) then
+  if r.ImGui_BeginChild(ctx,'##fxchains_list', -1, state.fxChainListHeight or 140) then
     if state.fxChains and #state.fxChains > 0 then
       local filter = state.fxChainFilter:lower()
       for i, chain in ipairs(state.fxChains) do
@@ -3533,6 +3889,51 @@ local function draw_fxchain_panel()
       r.ImGui_TextDisabled(ctx,'Save some FX chains to see them here')
     end
     r.ImGui_EndChild(ctx)
+  end
+  do
+    local splitterHeight = 6
+    local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or -1
+    if r.ImGui_InvisibleButton then
+      r.ImGui_InvisibleButton(ctx, '##fxChainListResize', availW, splitterHeight)
+      local hovered = r.ImGui_IsItemHovered(ctx)
+      local active = r.ImGui_IsItemActive(ctx)
+      if hovered and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeNS then
+        pcall(function() r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS()) end)
+      end
+      if state.tooltips and hovered and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Sleep om de FX chain lijst hoogte aan te passen') end
+      if active and r.ImGui_IsMouseDragging and r.ImGui_IsMouseDragging(ctx,0) then
+        local dragDy = select(2, r.ImGui_GetMouseDragDelta(ctx,0)) or 0
+        local newH = (state.fxChainListHeight or 140) + dragDy
+        newH = math.max(60, math.min(500, newH))
+        if newH ~= state.fxChainListHeight then
+          state.fxChainListHeight = newH
+          r.ImGui_ResetMouseDragDelta(ctx,0)
+          save_user_settings()
+        end
+      end
+      if r.ImGui_GetItemRectMin and r.ImGui_GetItemRectMax and r.ImGui_DrawList_AddRectFilled then
+        local minx, miny = r.ImGui_GetItemRectMin(ctx)
+        local maxx, maxy = r.ImGui_GetItemRectMax(ctx)
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        if dl then
+          local hovered = r.ImGui_IsItemHovered(ctx)
+          local active = r.ImGui_IsItemActive(ctx)
+          local baseCol = col_u32(0.55,0.55,0.55,0.35)
+          if hovered then baseCol = col_u32(0.80,0.80,0.80,0.55) end
+          if active then baseCol = col_u32(0.32,0.60,0.95,0.85) end
+          r.ImGui_DrawList_AddRectFilled(dl, minx, miny, maxx, maxy, baseCol, 2)
+          local midY = (miny + maxy) * 0.5
+          local centerX = (minx + maxx) * 0.5
+          local dotCol = col_u32(0.15,0.15,0.15, active and 1.0 or (hovered and 0.9 or 0.6))
+          if r.ImGui_DrawList_AddCircleFilled then
+            local spacing = 6
+            r.ImGui_DrawList_AddCircleFilled(dl, centerX - spacing, midY, 2, dotCol)
+            r.ImGui_DrawList_AddCircleFilled(dl, centerX,          midY, 2, dotCol)
+            r.ImGui_DrawList_AddCircleFilled(dl, centerX + spacing, midY, 2, dotCol)
+          end
+        end
+      end
+    end
   end
   r.ImGui_Dummy(ctx,0,4)
   if state.selectedFxChain then
@@ -4149,6 +4550,19 @@ local function draw()
   end
   r.ImGui_PopStyleColor(ctx, 3)
 
+  r.ImGui_SameLine(ctx)
+  r.ImGui_Text(ctx, ' - SLOT')
+  r.ImGui_SameLine(ctx)
+  ensure_slot_logo()
+  if state.slotLogoTex and state.slotLogoTex ~= false and r.ImGui_Image then
+    r.ImGui_Image(ctx, state.slotLogoTex, 32, 20)
+    if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
+      r.ImGui_SetTooltip(ctx, 'Slot Machine')
+    end
+  end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_Text(ctx, 'MACHINE - ')
+
   local closeW = (select(1, r.ImGui_CalcTextSize(ctx, 'Close')) or 40)
   local availW2 = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
   r.ImGui_SameLine(ctx, math.max(0, availW2 - closeW))
@@ -4177,19 +4591,18 @@ local function draw()
   if state.showTopPanelToggleBar ~= false and togglesH > 0 then
     if r.ImGui_BeginChild(ctx, 'top_buttons', -1, togglesH) then
       local availW = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
-      local btnCount = 5
       local spacing = 4
-      local totalSpacing = spacing * (btnCount - 1)
-      local rawW = (availW - totalSpacing)
-      if rawW < 50 * btnCount then rawW = 50 * btnCount end
-      local btnW = math.floor(rawW / btnCount)
       local labels = {
-        {'Track','showTrackList'},
-        {'Source','showPanelSource'},
+        {'Source','showTrackList'},
         {'Replace','showPanelReplacement'},
         {'FXChain','showPanelFXChain'},
         {'Snapshots','showPanelTrackVersion'},
       }
+      local btnCount = #labels
+      local totalSpacing = spacing * (btnCount - 1)
+      local rawW = (availW - totalSpacing)
+      if rawW < 50 * btnCount then rawW = 50 * btnCount end
+      local btnW = math.floor(rawW / btnCount)
       for i, def in ipairs(labels) do
         local label, flagField = def[1], def[2]
         local on = state[flagField] ~= false
@@ -4200,6 +4613,9 @@ local function draw()
         end
         if r.ImGui_Button(ctx, label, btnW, 0) then
           state[flagField] = not on
+          if flagField == 'showTrackList' then
+            state.showPanelSource = (state[flagField] ~= false)
+          end
         end
         if on and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx,3) end
         if i < btnCount then r.ImGui_SameLine(ctx, nil, spacing) end
@@ -4642,7 +5058,7 @@ local function draw()
       else
         r.ImGui_Text(ctx, 'No track selected. Select a track in REAPER to view its FX.')
       end
-      r.ImGui_EndChild(ctx)
+  r.ImGui_EndChild(ctx)
     end
   end
 
@@ -4691,6 +5107,12 @@ local function draw()
       end
     end
   end
+  
+  -- Draw Source controls inline below the track list splitter when Track/Source is visible
+  if state.showTrackList ~= false and state.showPanelSource ~= false then
+    r.ImGui_Dummy(ctx,0,4)
+    draw_source_controls_inline()
+  end
 
   if r.ImGui_BeginChild(ctx, 'content_child', -1, -FOOTER_H) then
     if not tr then
@@ -4703,7 +5125,7 @@ local function draw()
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), col_u32(0.18,0.18,0.18,1.00)); hdrColorCount = hdrColorCount + 1
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),  col_u32(0.24,0.24,0.24,1.00)); hdrColorCount = hdrColorCount + 1
     end
-    if state.showPanelSource ~= false then draw_source_panel() end
+  -- Source controls are now shown inline under the Track section
     if state.showPanelReplacement ~= false then draw_replace_panel() end
     if state.showPanelFXChain ~= false then draw_fxchain_panel() end
     if state.showPanelTrackVersion ~= false then draw_trackversion_panel() end
