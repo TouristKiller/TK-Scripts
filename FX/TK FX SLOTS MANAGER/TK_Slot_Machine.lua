@@ -1,4 +1,4 @@
--- @version 0.3.4
+-- @version 0.3.5
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -2956,7 +2956,7 @@ local function draw_replace_panel()
   if state.replHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
   local srcName = state.selectedSourceFXName
   local srcLabel = (srcName and srcName ~= '') and format_fx_display_name(srcName) or nil
-  local hdrVisible = 'Repica' .. (srcLabel and (' (for source ' .. tostring(srcLabel) .. ')') or '')
+  local hdrVisible = 'Replacement:' .. (srcLabel and (' (for source ' .. tostring(srcLabel) .. ')') or '')
   local headerId = hdrVisible .. '##replacement_header'
   local open = r.ImGui_CollapsingHeader(ctx, headerId, 0)
   if open ~= nil and open ~= state.replHeaderOpen then state.replHeaderOpen = open; save_user_settings() end
