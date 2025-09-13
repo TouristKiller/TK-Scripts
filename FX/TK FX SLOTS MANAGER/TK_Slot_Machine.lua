@@ -1,4 +1,4 @@
--- @version 0.3.3
+-- @version 0.3.4
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -11,8 +11,8 @@ A Lot of changes... hahahaha!
 
 
 local r = reaper
-local SCRIPT_NAME = 'TK FX Slots Single Track'
-local SCRIPT_VERSION = '0.2.0'
+local SCRIPT_NAME = 'TK Slot Machine'
+local SCRIPT_VERSION = '0.3.4'
 
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator = package.config:sub(1, 1)
@@ -42,8 +42,8 @@ init_fx_parser()
 local ctx = nil
 local DND_FX_PAYLOAD = 'TK_FX_ROW_SINGLE'
 
-local ctx = nil
-local styleStackDepth = {colors = 0, vars = 0} 
+local styleStackDepth = {colors = 0, vars = 0}
+local windowStack = {depth = 0} -- Track ImGui window Begin/End balance
 
 local function debug_stack_state(location)
   if styleStackDepth.colors > 0 or styleStackDepth.vars > 0 then
@@ -63,6 +63,25 @@ local function is_context_valid(c)
   return ok
 end
 
+local function emergency_reset_stacks()
+  -- Emergency reset van alle tracking variabelen
+  styleStackDepth.colors = 0
+  styleStackDepth.vars = 0
+  windowStack.depth = 0
+  r.ShowConsoleMsg("Emergency reset: all ImGui stacks cleared\n")
+end
+
+local function safe_imgui_call(func, ...)
+  if not ctx or not is_context_valid(ctx) then
+    return false
+  end
+  local success, result = pcall(func, ctx, ...)
+  if not success then
+    return false
+  end
+  return true, result
+end
+
 local function cleanup_resources()
   if not ctx then return end
   if styleStackDepth.colors > 0 and r.ImGui_PopStyleColor then
@@ -80,18 +99,16 @@ local function cleanup_resources()
 end
 
 local function init_context()
-  if ctx and is_context_valid(ctx) then return true end
-  styleStackDepth.colors = 0
-  styleStackDepth.vars = 0
-  if r.ImGui_CreateContext then
-    ctx = r.ImGui_CreateContext(SCRIPT_NAME)
-  else
-    ctx = r.ImGui_CreateContext(SCRIPT_NAME)
-  end
-  if not ctx or not is_context_valid(ctx) then
+  ctx = r.ImGui_CreateContext(SCRIPT_NAME)
+  if not ctx then
     r.ShowMessageBox('Failed to create ImGui context. Check ReaImGui installation.', 'Error', 0)
     return false
   end
+  
+  styleStackDepth.colors = 0
+  styleStackDepth.vars = 0
+  windowStack.depth = 0
+  
   return true
 end
 
@@ -1381,9 +1398,6 @@ local function cleanup_resources()
   end
   iconFont = nil
   
-  if ctx and r.ImGui_DestroyContext then
-    pcall(r.ImGui_DestroyContext, ctx)
-  end
   ctx = nil
 end
 
@@ -2711,17 +2725,68 @@ local function ensure_source_screenshot(add)
   state.deferScreenshotDraw = 0
 end
 
--- Branding image loader
 local function ensure_slot_logo()
   if state.slotLogoTex or not r.ImGui_CreateImage then return end
-  local sep = package.config:sub(1,1)
-  local png = (script_path or '') .. 'SLOTS.png'
-  local ok, tex = pcall(function() return r.ImGui_CreateImage(png) end)
-  if ok and tex and type(tex) == 'userdata' then
-    state.slotLogoTex = tex
-  else
-    state.slotLogoTex = false
+  
+  local function try_load_image(path)
+    local file_test = io.open(path, 'r')
+    if file_test then
+      file_test:close()
+      local ok, tex = pcall(function() return r.ImGui_CreateImage(path) end)
+      if ok and tex and type(tex) == 'userdata' then
+        return tex
+      end
+    end
+    return nil
   end
+  
+  if script_path and script_path ~= '' then
+    local tex = try_load_image(script_path .. 'SLOTS.png')
+    if tex then 
+      state.slotLogoTex = tex 
+      return 
+    end
+  end
+  
+  local info = debug.getinfo(1, "S")
+  if info and info.source then
+    local source_path = info.source:match("^@(.+)")
+    if source_path then
+      local dir = source_path:match("^(.+[/\\])")
+      if dir then
+        local tex = try_load_image(dir .. 'SLOTS.png')
+        if tex then 
+          state.slotLogoTex = tex 
+          return 
+        end
+      end
+    end
+  end
+  
+  local tex = try_load_image('SLOTS.png')
+  if tex then 
+    state.slotLogoTex = tex 
+    return 
+  end
+  
+  local resource_path = r.GetResourcePath()
+  if resource_path then
+    local sep = package.config:sub(1,1)
+    local paths = {
+      resource_path .. sep .. 'Scripts' .. sep .. 'TK Scripts' .. sep .. 'TK FX SLOTS MANAGER' .. sep .. 'SLOTS.png',
+      resource_path .. sep .. 'Scripts' .. sep .. 'TK Scripts' .. sep .. 'SLOTS.png'
+    }
+    
+    for _, path in ipairs(paths) do
+      local tex = try_load_image(path)
+      if tex then 
+        state.slotLogoTex = tex 
+        return 
+      end
+    end
+  end
+  
+  state.slotLogoTex = false
 end
 
 
@@ -2889,10 +2954,9 @@ end
 local function draw_replace_panel()
   if state.showPanelReplacement == false then return end
   if state.replHeaderOpen then r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_FirstUseEver()) end
-  -- Build dynamic header label to show current Source selection while keeping a stable ID
   local srcName = state.selectedSourceFXName
   local srcLabel = (srcName and srcName ~= '') and format_fx_display_name(srcName) or nil
-  local hdrVisible = 'Replacement:' .. (srcLabel and (' (for source ' .. tostring(srcLabel) .. ')') or '')
+  local hdrVisible = 'Repica' .. (srcLabel and (' (for source ' .. tostring(srcLabel) .. ')') or '')
   local headerId = hdrVisible .. '##replacement_header'
   local open = r.ImGui_CollapsingHeader(ctx, headerId, 0)
   if open ~= nil and open ~= state.replHeaderOpen then state.replHeaderOpen = open; save_user_settings() end
@@ -3494,7 +3558,6 @@ local function draw_source_panel()
   r.ImGui_Separator(ctx)
 end
 
--- Inline version of Source controls to embed under Track header
 local function draw_source_controls_inline()
   if state.showPanelSource == false then return end
   local tr = get_selected_track()
@@ -4468,8 +4531,8 @@ local function draw()
   end
   
   if not ctx then
-    r.ShowConsoleMsg("No context available\n")
-    return
+    ctx = r.ImGui_CreateContext(SCRIPT_NAME)
+    if not ctx then return end
   end
   
   if r.ImGui_SetNextWindowSize then 
@@ -4481,19 +4544,9 @@ local function draw()
   end
   if r.ImGui_SetNextWindowSizeConstraints then r.ImGui_SetNextWindowSizeConstraints(ctx, 300, 220, 2000, 1400) end
   
-  if not is_context_valid(ctx) then 
-    r.ShowConsoleMsg("Context became invalid before Begin\n")
-    return 
-  end
-  
   local stylePush = push_app_style()
-  local success, visible, open = pcall(r.ImGui_Begin, ctx, SCRIPT_NAME, true, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoTitleBar())
+  local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoTitleBar())
   
-  if not success then
-    r.ShowConsoleMsg("ImGui_Begin failed, context invalid\n")
-    pop_app_style(stylePush)
-    return
-  end
   if visible then
       do
       r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 8, 6)
@@ -5108,7 +5161,6 @@ local function draw()
     end
   end
   
-  -- Draw Source controls inline below the track list splitter when Track/Source is visible
   if state.showTrackList ~= false and state.showPanelSource ~= false then
     r.ImGui_Dummy(ctx,0,4)
     draw_source_controls_inline()
@@ -5125,7 +5177,6 @@ local function draw()
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), col_u32(0.18,0.18,0.18,1.00)); hdrColorCount = hdrColorCount + 1
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),  col_u32(0.24,0.24,0.24,1.00)); hdrColorCount = hdrColorCount + 1
     end
-  -- Source controls are now shown inline under the Track section
     if state.showPanelReplacement ~= false then draw_replace_panel() end
     if state.showPanelFXChain ~= false then draw_fxchain_panel() end
     if state.showPanelTrackVersion ~= false then draw_trackversion_panel() end
@@ -5237,34 +5288,15 @@ local function draw()
 
     local cw, ch = r.ImGui_GetWindowSize(ctx)
     state.winW, state.winH = cw, ch
+    
+    r.ImGui_End(ctx)
   end
-  r.ImGui_End(ctx)
+  
   pop_app_style(stylePush)
   
-    debug_stack_state("Before cleanup")
-  if styleStackDepth.colors > 0 and r.ImGui_PopStyleColor then
-    pcall(r.ImGui_PopStyleColor, ctx, styleStackDepth.colors)
-    styleStackDepth.colors = 0
+  if r.ImGui_IsMouseReleased and r.ImGui_IsMouseReleased(ctx, 0) then
+    state._pendingDelArmed = false
   end
-  if styleStackDepth.vars > 0 and r.ImGui_PopStyleVar then
-    pcall(r.ImGui_PopStyleVar, ctx, styleStackDepth.vars)  
-    styleStackDepth.vars = 0
-  end
-  debug_stack_state("After cleanup")
-
-  if r.ImGui_IsMouseDown and r.ImGui_IsMouseReleased then
-    if r.ImGui_IsMouseReleased(ctx, 0) then
-      state._pendingDelArmed = false
-    end
-  else
-    if r.ImGui_GetIO then
-      local io = r.ImGui_GetIO(ctx)
-      if io and not (io.MouseDown and io.MouseDown[1]) then
-        state._pendingDelArmed = false
-      end
-    end
-  end
-
   
   if state.showSettings and ctx then
     if state.showSettingsPending then
@@ -6057,7 +6089,7 @@ local function draw()
   r.ImGui_Separator(ctx)
   if r.ImGui_Button(ctx, 'Close', 70, 0) then openP = false end
       end
-  r.ImGui_End(ctx)
+  pcall(r.ImGui_End, ctx)
   if pickerStylePush then pop_app_style(pickerStylePush) end
   if openP == false then state.showPicker = false end
     else
@@ -6077,33 +6109,18 @@ local function draw()
 end
 
 local function safe_draw()
-  if not is_context_valid(ctx) then
-    r.ShowConsoleMsg("Context invalid in safe_draw, reinitializing...\n")
-    if not init_context() then
-      r.ShowConsoleMsg("Failed to reinitialize context in safe_draw\n")
-      return 
-    end
-  end
-  
   local success, error_msg = pcall(draw)
   if not success then
     local error_text = tostring(error_msg or 'Unknown error')
     r.ShowConsoleMsg("Draw error: " .. error_text .. "\n")
     
-    if error_text:find('ImGui_Context', 1, true) or 
-       error_text:find('ValidatePtr', 1, true) or
-       error_text:find('invalid', 1, true) then
-      r.ShowConsoleMsg("Detected ImGui context error, cleaning up and reinitializing...\n")
-      cleanup_resources()
-      if init_context() then
-        r.defer(safe_draw) 
-      else
-        r.ShowMessageBox('Failed to recover from ImGui context error. Please restart the script.', 'Error', 0)
-      end
-    else
-      state.pendingError = 'Script error: ' .. error_text
-      r.defer(safe_draw) 
-    end
+    r.ShowConsoleMsg("Recreating context due to error...\n")
+    ctx = r.ImGui_CreateContext(SCRIPT_NAME)
+    styleStackDepth.colors = 0
+    styleStackDepth.vars = 0
+    windowStack.depth = 0
+    
+    r.defer(safe_draw)
   end
 end
 
