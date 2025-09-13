@@ -216,7 +216,7 @@
     </reapack>
 
         <reapack name="TK_GTR2MIDI(EXPERIMENTAL).lua" type="script" desc="TK GTR2MIDI (EXPERIMENTAL)">
-            <version name="0.0.2" author="TouristKiller" time="2025-09-13T16:25:00Z">
+            <version name="0.0.3" author="TouristKiller" time="2025-09-13T16:35:00Z">
                 <changelog><![CDATA[
 + Experimental: cross-string sequences (s:f), per-string MIDI channel option, UI theming & settings polish
                 ]]></changelog>
