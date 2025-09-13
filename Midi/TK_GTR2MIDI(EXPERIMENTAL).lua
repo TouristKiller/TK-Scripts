@@ -1,6 +1,6 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.0.1
+-- @version 0.0.2
 -- @changelog
 --[[ 
 
@@ -2060,9 +2060,22 @@ function MainLoop()
             ImGui.Spacing(ctx)
             ImGui.Text(ctx, "Chord:")
             ImGui.SameLine(ctx)
-            ImGui.PushItemWidth(ctx, 87)  
+            do
+                local char_w = select(1, ImGui.CalcTextSize(ctx, "0"))
+                local est_chars = (num_strings or 6) * 2 + 6
+                local dyn_w = math.floor(char_w * est_chars)
+                local cap = is_xl_mode and 220 or 180
+                if (num_strings or 6) >= 9 then
+                    dyn_w = cap
+                else
+                    if dyn_w > cap then dyn_w = cap end
+                    if dyn_w < 100 then dyn_w = 100 end
+                end
+                ImGui.PushItemWidth(ctx, dyn_w)
+            end
             local _, new_input = ImGui.InputTextWithHint(ctx, "##chord", "X 3 2 0 1 0", input_chord)
             input_chord = FilterChordInput(new_input)
+            ImGui.PopItemWidth(ctx)
             ImGui.SameLine(ctx)
             if ImGui.Button(ctx, "X##clearchord") then
                 input_chord = ""
