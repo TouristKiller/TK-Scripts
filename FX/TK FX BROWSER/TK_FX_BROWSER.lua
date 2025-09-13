@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.6.5
+-- @version 1.6.6
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -100,6 +100,17 @@ local function CheckVisibilityState()
     
     last_visibility_state = visibility_state
     return is_visible
+end
+
+-- NEW: Separate function to check if main window should be shown
+local function ShouldShowMainWindow()
+    local general_visibility = CheckVisibilityState()
+    if not general_visibility then
+        return false -- If whole script is hidden, main window is hidden too
+    end
+    
+    -- Check if "Hide Main Window" option is enabled
+    return not config.hide_main_window
 end
 
 local function SetRunningState(running)
@@ -11784,13 +11795,14 @@ function InitializeImGuiContext()
 end
 
 function EnsureWindowVisible()
+    -- This function now only handles screenshot window forcing when main window is hidden
     if config.hide_main_window then
         config.dock_screenshot_window = false
         config.show_screenshot_window = true
-        r.ImGui_SetNextWindowPos(ctx, 10000, 10000)
         was_hidden = true
     else
         if was_hidden then
+            -- Restore window when showing main window again
             local viewport = r.ImGui_GetMainViewport(ctx)
             local vp_x, vp_y = r.ImGui_Viewport_GetPos(viewport)
             local vp_w, vp_h = r.ImGui_Viewport_GetWorkSize(viewport)
@@ -11805,6 +11817,42 @@ function EnsureWindowVisible()
             
             was_hidden = false
         end
+    end
+end
+
+-- Centralized drag & drop handling function
+function HandleDragAndDrop()
+    if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
+        local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
+        if shift then
+            local item = r.GetSelectedMediaItem(0,0)
+            if item then
+                local take = r.GetActiveTake(item)
+                if take then
+                    r.TakeFX_AddByName(take, dragging_fx_name, 1)
+                    LAST_USED_FX = dragging_fx_name
+                end
+            end
+        else
+            local sx, sy = r.GetMousePosition()
+            local track = select(1, r.GetTrackFromPoint(sx, sy))
+            if not track then
+                local ix, iy = r.ImGui_GetMousePos(ctx)
+                track = select(1, r.GetTrackFromPoint(ix, iy))
+            end
+            if not track then
+                track = r.GetSelectedTrack(0,0) or r.GetTrack(0,0) or r.GetMasterTrack(0)
+            end
+            if track then
+                local fx_index = AddFXToTrack(track, dragging_fx_name)
+                LAST_USED_FX = dragging_fx_name
+                if config.open_floating_after_adding and fx_index and fx_index >= 0 then
+                    r.TrackFX_Show(track, fx_index, 3)
+                end
+            end
+        end
+        dragging_fx_name = nil
+        potential_drag_fx_name = nil
     end
 end
 
@@ -11905,9 +11953,12 @@ r.ImGui_SetNextWindowSizeConstraints(ctx, 140, min_window_height, 16384, 16384)
 handleDocking()
 EnsureWindowVisible()
 
--- Check visibility state and hide window if needed
-local should_show_window = CheckVisibilityState()
-if not should_show_window then
+-- Check visibility states
+local general_visibility = CheckVisibilityState()
+local should_show_main_window = ShouldShowMainWindow()
+
+-- If whole script is hidden (TOGGLE_VISIBILITY), show hidden window
+if not general_visibility then
     -- Window is hidden but script keeps running
     -- Clean up any pushed styles before creating hidden window
     if pushed_main_styles then
@@ -11933,10 +11984,37 @@ if not should_show_window then
     end
     r.ImGui_End(ctx)
     
-    -- Continue the defer loop to keep script running
     if hidden_open then
         r.defer(Main)
     end
+    return
+end
+
+if not should_show_main_window then
+    config.show_screenshot_window = true
+    
+    if config.show_screenshot_window then
+        ShowScreenshotWindow()
+    end
+    
+    if show_settings then
+        show_settings = ShowConfigWindow()
+    end
+    
+    if config.enable_drag_add_fx then
+        DrawDragOverlay()
+    end
+    
+    -- Handle drag & drop completion when main window is hidden
+    HandleDragAndDrop()
+    
+    if pushed_main_styles then
+        r.ImGui_PopFont(ctx)
+        r.ImGui_PopStyleColor(ctx, 13) -- 13 StyleColors
+        r.ImGui_PopStyleVar(ctx, 6)    -- 6 StyleVars
+    end
+    
+    r.defer(Main)
     return
 end
 
@@ -13222,38 +13300,10 @@ if visible then
         SetRunningState(false)
         return
     end
-    if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
-        local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
-        if shift then
-            local item = r.GetSelectedMediaItem(0,0)
-            if item then
-                local take = r.GetActiveTake(item)
-                if take then
-                    r.TakeFX_AddByName(take, dragging_fx_name, 1)
-                    LAST_USED_FX = dragging_fx_name
-                end
-            end
-        else
-            local sx, sy = r.GetMousePosition()
-            local track = select(1, r.GetTrackFromPoint(sx, sy))
-            if not track then
-                local ix, iy = r.ImGui_GetMousePos(ctx)
-                track = select(1, r.GetTrackFromPoint(ix, iy))
-            end
-            if not track then
-                track = r.GetSelectedTrack(0,0) or r.GetTrack(0,0) or r.GetMasterTrack(0)
-            end
-            if track then
-                local fx_index = AddFXToTrack(track, dragging_fx_name)
-                LAST_USED_FX = dragging_fx_name
-                if config.open_floating_after_adding and fx_index and fx_index >= 0 then
-                    r.TrackFX_Show(track, fx_index, 3)
-                end
-            end
-        end
-        dragging_fx_name = nil
-        potential_drag_fx_name = nil
-    end
+    
+    -- Use centralized drag & drop handling
+    HandleDragAndDrop()
+    
     if open then        
         r.defer(Main)
     end
