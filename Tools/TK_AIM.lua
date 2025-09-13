@@ -1,5 +1,5 @@
 -- @description TK Automation Item Manager (AIM)
--- @version 0.0.6
+-- @version 0.0.7
 -- @author TouristKiller
 -- @about
 --   Automation Item Manager with visual previews
@@ -37,6 +37,15 @@ end
 local ctx = r.ImGui_CreateContext(script_name)
 local automation_items = {}
 local startup_warnings = {}
+
+function ValidateContext()
+    -- Voor ReaImGui is het beter om geen context te destroyen
+    -- We checken alleen of de pointer nog geldig is
+    if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+        ctx = r.ImGui_CreateContext(script_name)
+    end
+    return ctx
+end
 
 function VF_CheckReaperVrs(rvrs, showmsg) 
     local vrs_num = r.GetAppVersion()
@@ -1045,6 +1054,9 @@ end
 ---------------------------------------------------
 function HandleDragAndDrop()
     if not is_dragging or not drag_item then return end
+    
+    ValidateContext() -- Ensure context is valid before using ImGui functions
+    
     if has_sws then
         r.BR_GetMouseCursorContext()
         local env = r.BR_GetMouseCursorContext_Envelope()
@@ -1167,9 +1179,12 @@ end
 ---------------------------------------------------
 
 function DrawMainWindow()
+    ValidateContext() -- Ensure context is valid before using it
+    
     local window_flags = r.ImGui_WindowFlags_NoScrollbar() + r.ImGui_WindowFlags_NoScrollWithMouse()
     r.ImGui_SetNextWindowSize(ctx, 800, 600, r.ImGui_Cond_FirstUseEver())
     
+    -- Push styles voor het window
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBg(), 0x000000FF)          
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBgActive(), 0x000000FF)   
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBgCollapsed(), 0x000000FF) 
@@ -1272,9 +1287,10 @@ function DrawMainWindow()
         DrawStatusBar()
         
         r.ImGui_End(ctx)
-        
-        r.ImGui_PopStyleColor(ctx, 3)  
     end
+    
+    -- Pop de window styles - dit moet altijd gebeuren, ongeacht visible state
+    r.ImGui_PopStyleColor(ctx, 3)  
     
     return open
 end
@@ -1659,5 +1675,13 @@ if not LoadCache() then
         SetFooterMessage("AutomationItems folder not found at: " .. automation_folder .. " — save an automation item first or create this folder")
     end
 end
+
+-- Cleanup function for when script exits
+function cleanup()
+    -- ReaImGui ruimt automatisch contexts op, geen handmatige cleanup nodig
+    ctx = nil
+end
+
+r.atexit(cleanup)
 
 Main()
