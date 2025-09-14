@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.6.6
+-- @version 1.6.7
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -345,6 +345,10 @@ if not BuildScreenshotIndex then function BuildScreenshotIndex() end end
 dragging_fx_name = dragging_fx_name or nil
 potential_drag_fx_name = potential_drag_fx_name or nil
 drag_start_x, drag_start_y = drag_start_x or 0, drag_start_y or 0
+
+-- Window state variables
+was_hidden = was_hidden or false
+was_docked_before_hide = was_docked_before_hide or false
 
 screenshot_search_results = screenshot_search_results or {}
 browser_panel_selected = browser_panel_selected or nil
@@ -11795,27 +11799,33 @@ function InitializeImGuiContext()
 end
 
 function EnsureWindowVisible()
-    -- This function now only handles screenshot window forcing when main window is hidden
     if config.hide_main_window then
+        if not was_hidden then
+            was_docked_before_hide = (dock and dock ~= 0)
+        end
         config.dock_screenshot_window = false
         config.show_screenshot_window = true
         was_hidden = true
     else
         if was_hidden then
-            -- Restore window when showing main window again
-            local viewport = r.ImGui_GetMainViewport(ctx)
-            local vp_x, vp_y = r.ImGui_Viewport_GetPos(viewport)
-            local vp_w, vp_h = r.ImGui_Viewport_GetWorkSize(viewport)
-            
-            local window_w = 200
-            local window_h = 600
-            local center_x = vp_x + (vp_w - window_w) * 0.5
-            local center_y = vp_y + (vp_h - window_h) * 0.5
-            
-            r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Always())
-            r.ImGui_SetNextWindowSize(ctx, window_w, window_h, r.ImGui_Cond_Always())
+            -- Only restore position/size if window was NOT docked before hiding
+            if not was_docked_before_hide then
+                local viewport = r.ImGui_GetMainViewport(ctx)
+                local vp_x, vp_y = r.ImGui_Viewport_GetPos(viewport)
+                local vp_w, vp_h = r.ImGui_Viewport_GetWorkSize(viewport)
+                
+                local window_w = 200
+                local window_h = 600
+                local center_x = vp_x + (vp_w - window_w) * 0.5
+                local center_y = vp_y + (vp_h - window_h) * 0.5
+                
+                r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Always())
+                r.ImGui_SetNextWindowSize(ctx, window_w, window_h, r.ImGui_Cond_Always())
+            end
+            -- If it was docked, let ImGui restore the docking automatically
             
             was_hidden = false
+            was_docked_before_hide = false
         end
     end
 end
