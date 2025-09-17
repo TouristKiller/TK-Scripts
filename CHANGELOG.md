@@ -12,6 +12,7 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 - Optionele auto-glue voor Reverse Selection via nieuwe setting `reverse_sel_glue_after` (Behavior menu: "Reverse selection: glue back to single item").
 - Behavior menu optie voor reverse glue; opgeslagen in ExtState.
 - Negatieve icon/tekst spacing ondersteuning (voor zeer compacte horizontal buttons).
+- Tool indicator overlay in horizontale modus die actieve pencil/envelope mode toont (zoals in verticale modus).
 
 ### Gewijzigd
 - Horizontal toolbar verplaatst naar boven de ruler; volledige breedte inclusief linker gutter; inhoud links uitgelijnd.
@@ -29,6 +30,8 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 - Collapse toggle werkte niet om uit te klappen → fallback hittest toegevoegd.
 - Goto/label constructie verwijderd (Lua error) vervangen door conditionele flow.
 - Split deselecteerde alle items → nu blijft linker deel geselecteerd.
+- Debug venster dat verscheen bij horizontale toolbar met envelope mode → vervangen door correcte tool indicator overlay.
+- Envelope punten "springen" weg van randen bij bepaalde zoom niveaus → zoom factor wordt niet meer toegepast op extreme waarden.
 
 ### Interne / Code Structuur
 - Definitiestructuur voor horizontale knoppen (lijst met id/icon/callback) geïntroduceerd.
