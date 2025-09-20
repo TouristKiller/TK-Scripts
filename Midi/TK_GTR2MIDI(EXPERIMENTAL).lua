@@ -1,6 +1,6 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.0.3
+-- @version 0.0.4
 -- @changelog
 --[[ 
 
@@ -425,7 +425,6 @@ function ShowCustomTuningWindow()
 
     local flags = ImGui.WindowFlags_AlwaysAutoResize | ImGui.WindowFlags_NoScrollbar
     if not custom_tuning_initialized then
-        -- Prefill from current selection; resize to current string count
         local src = tunings[selected_tuning] or base_notes or {}
         custom_notes = {}
         for i=1, math.min(#src, num_strings) do custom_notes[i] = src[i] end
@@ -447,7 +446,6 @@ function ShowCustomTuningWindow()
         ImGui.Separator(ctx)
         ImGui.Text(ctx, "Strings (low ➜ high):")
 
-        -- Per-string editors
         local col_min_x, _ = ImGui.GetWindowContentRegionMin(ctx)
         local col_max_x, _ = ImGui.GetWindowContentRegionMax(ctx)
         local cell_w = (col_max_x - col_min_x - 6) / 2
@@ -516,8 +514,9 @@ function ShowCustomTuningWindow()
         end
     end
     ImGui.End(ctx)
-    ImGui.PopStyleVar(ctx, 2)
-    ImGui.PopStyleColor(ctx, 7)
+    -- Match pushes above: 3 style vars (Alpha, WindowRounding, FrameRounding) and 9 colors
+    ImGui.PopStyleVar(ctx, 3)
+    ImGui.PopStyleColor(ctx, 9)
     ImGui.PopFont(ctx)
 end
 
@@ -529,12 +528,10 @@ function CreateMIDIItem(insert_type)
     local cursor_pos = r.GetCursorPosition()
     local ppq = 960
     local dur_val = tonumber(selected_duration) or 4
-    -- Length of a single note in quarter-notes (QN). E.g. 4 -> 1.0 QN, 8 -> 0.5 QN
     local qn_per_note = 4 / dur_val
-    local note_length = ppq * qn_per_note  -- PPQ length per note
+    local note_length = ppq * qn_per_note  
     
     if existing_item and insert_in_existing then
-        -- Move cursor by the musical length using tempo map
         local cursor_qn = r.TimeMap2_timeToQN(0, cursor_pos)
         local qn_total = qn_per_note
         if insert_type == "sequence" then
@@ -561,7 +558,14 @@ function CreateMIDIItem(insert_type)
     end
     local item_end = r.TimeMap2_QNToTime(0, cursor_qn + qn_total)
 
+    if not qn_total or qn_total <= 0 then
+        return nil, nil, nil
+    end
+
     local item = r.CreateNewMIDIItemInProj(track, cursor_pos, item_end, false)
+    if not item then
+        return nil, nil, nil
+    end
     local take = r.GetActiveTake(item)
     r.SetEditCurPos(item_end, true, true)
 
@@ -617,7 +621,7 @@ end
 function DrawFingerLegend(ctx, startX, startY)
     local draw_list = ImGui.GetWindowDrawList(ctx)
     local spacing = is_xl_mode and 34 or 25
-    local circle_size = is_xl_mode and 10 or 8 -- circles already sized ok
+    local circle_size = is_xl_mode and 10 or 8 
     local labels = {
         "- Index finger",
         "- Middle finger", 
@@ -1011,8 +1015,8 @@ function DrawFretboard(ctx,startX,startY,width,height)
     do
         local pad_x = is_xl_mode and 8 or 6
         local pad_y = is_xl_mode and 10 or 8
-        local bg_col = 0x4A2F1EFF   -- warm brown
-        local brd_col = 0x2E1E14FF  -- darker border
+        local bg_col = 0x4A2F1EFF   
+        local brd_col = 0x2E1E14FF  
         ImGui.DrawList_AddRectFilled(
             draw_list,
             startX - pad_x,
@@ -1205,7 +1209,7 @@ function DrawChordboard(ctx,startX,startY,width,height)
         do
             local pad_x = is_xl_mode and 8 or 6
             local pad_y = is_xl_mode and 10 or 8
-            local bg_col = 0x4A2F1EFF   -- warm brown
+            local bg_col = 0x4A2F1EFF  
             local brd_col = 0x2E1E14FF  -- darker border
             ImGui.DrawList_AddRectFilled(
                 draw_list,
@@ -1233,8 +1237,8 @@ function DrawChordboard(ctx,startX,startY,width,height)
         do
             local pad_x = is_xl_mode and 8 or 6
             local pad_y = is_xl_mode and 10 or 8
-            local bg_col = 0x4A2F1EFF   -- warm brown
-            local brd_col = 0x2E1E14FF  -- darker border
+            local bg_col = 0x4A2F1EFF  
+            local brd_col = 0x2E1E14FF  
             ImGui.DrawList_AddRectFilled(
                 draw_list,
                 startX - pad_x,
@@ -1537,7 +1541,7 @@ function DrawChordboard(ctx,startX,startY,width,height)
                     if chord_board_horizontal then
                         x = startX + (fret_num * fret_spacing) - (fret_spacing/2)
                         if is_mirror_mode then
-                            x = startX + width - (x - startX)  -- Spiegelt de x-positie rond het midden
+                            x = startX + width - (x - startX)  
                         end
                     else
                         y = startY + (fret_num * fret_spacing) - (fret_spacing/2)
@@ -1848,7 +1852,6 @@ function MainLoop()
         local base_tuning_width = 190
         local base_transpose_button = 18
 
-        -- Scale values based on XL mode
         local button_width = is_xl_mode and (base_button_width * Scaling_XL) or base_button_width
         local combo_width = is_xl_mode and (base_combo_width * Scaling_XL) or base_combo_width
         local tuning_width = is_xl_mode and (base_tuning_width * Scaling_XL) or base_tuning_width
@@ -1865,7 +1868,6 @@ function MainLoop()
             local col3_x = content_min_x + (2 * (col_w + gap))
             local row_y = ImGui.GetCursorPosY(ctx)
 
-            -- Column 1: Duration
             local label1 = "Duration:"
             ImGui.SetCursorPos(ctx, col1_x, row_y)
             ImGui.Text(ctx, label1)
@@ -1897,7 +1899,6 @@ function MainLoop()
             end
             ImGui.PopItemWidth(ctx)
 
-            -- Column 2: Transpose (combo + +/- buttons)
             local label2 = "Trans:"
             ImGui.SetCursorPos(ctx, col2_x, row_y)
             ImGui.Text(ctx, label2)
@@ -1933,7 +1934,6 @@ function MainLoop()
                 input_chord = TransposeChord(steps, 1)
             end
 
-            -- Column 3: Strings
             local label3 = "Strings:"
             ImGui.SetCursorPos(ctx, col3_x, row_y)
             ImGui.Text(ctx, label3)
