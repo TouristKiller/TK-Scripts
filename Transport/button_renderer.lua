@@ -122,6 +122,19 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                             end
                         end
                     end
+                    -- Tooltip on hover (icons)
+                    if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
+                        local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
+                        if tip and tip ~= "" then
+                            r.ImGui_BeginTooltip(ctx)
+                            r.ImGui_Text(ctx, tostring(tip))
+                            if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
+                                r.ImGui_Separator(ctx)
+                                r.ImGui_Text(ctx, "Right-click for menu")
+                            end
+                            r.ImGui_EndTooltip(ctx)
+                        end
+                    end
                     
                     if r.ImGui_IsItemClicked(ctx, 1) and not edit_mode then
                         r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
@@ -147,6 +160,19 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                             end
                         end
                     end
+                    -- Tooltip on hover (fallback text button)
+                    if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
+                        local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
+                        if tip and tip ~= "" then
+                            r.ImGui_BeginTooltip(ctx)
+                            r.ImGui_Text(ctx, tostring(tip))
+                            if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
+                                r.ImGui_Separator(ctx)
+                                r.ImGui_Text(ctx, "Right-click for menu")
+                            end
+                            r.ImGui_EndTooltip(ctx)
+                        end
+                    end
                     
                     if r.ImGui_IsItemClicked(ctx, 1) and not edit_mode then
                         r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
@@ -168,6 +194,19 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                                 r.Main_OnCommand(command_id, 0)
                             end
                         end
+                    end
+                end
+                -- Tooltip on hover (text buttons)
+                if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
+                    local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
+                    if tip and tip ~= "" then
+                        r.ImGui_BeginTooltip(ctx)
+                        r.ImGui_Text(ctx, tostring(tip))
+                        if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
+                            r.ImGui_Separator(ctx)
+                            r.ImGui_Text(ctx, "Right-click for menu")
+                        end
+                        r.ImGui_EndTooltip(ctx)
                     end
                 end
                 

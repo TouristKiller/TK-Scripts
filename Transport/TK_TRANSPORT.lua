@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.5.0
+-- @version 0.5.1
 -- @changelog 
 --[[
 
@@ -152,6 +152,8 @@ local default_settings  = {
     edit_grid_size_px = 16,
     edit_grid_color = 0xFFFFFF22,
     edit_snap_to_grid = true,
+    -- Custom buttons UX
+    show_custom_button_tooltip = true,
 
     -- Color settings
     background          = 0x000000FF,
@@ -1041,6 +1043,11 @@ function ShowSettings(main_window_width , main_window_height)
                 r.ImGui_PopStyleColor(ctx)
                 r.ImGui_PopFont(ctx)
 
+                -- UX: hover tooltip toggle for custom buttons
+                r.ImGui_Separator(ctx)
+                local _rv
+                _rv, settings.show_custom_button_tooltip = r.ImGui_Checkbox(ctx, "Show action tooltip on hover", settings.show_custom_button_tooltip)
+
                 ButtonEditor.ShowEditorInline(ctx, CustomButtons, settings)
                 r.ImGui_EndTabItem(ctx)
             end
@@ -1829,6 +1836,20 @@ function ShowTempo(main_window_width, main_window_height)
         reaper.ImGui_PopStyleColor(ctx, 3)
     end
 
+    -- Scroll wheel on the tempo button to adjust BPM (when not in edit mode)
+    if (not settings.edit_mode) and reaper.ImGui_IsItemHovered(ctx) then
+        local wheel = reaper.ImGui_GetMouseWheel(ctx) or 0
+        if wheel ~= 0 then
+            local delta = (wheel > 0) and math.ceil(wheel) or math.floor(wheel)
+            local new_tempo = math.max(1, math.min(590, math.floor(tempo + delta + 0.5)))
+            if reaper.CSurf_OnTempoChange then
+                reaper.CSurf_OnTempoChange(new_tempo)
+            else
+                reaper.GetSetProjectInfo(0, 'TEMPO', new_tempo, true)
+            end
+        end
+    end
+
 
     if (not settings.edit_mode) and tempo_button_left_click then
         tempo_dragging = true
@@ -2380,7 +2401,13 @@ function Main()
         end
         ShowSettings(main_window_width, main_window_height)
 
-        if r.ImGui_BeginPopupContextWindow(ctx, "TransportContextMenu", r.ImGui_PopupFlags_MouseButtonRight()) then
+        -- Only open the transport context menu when right-clicking empty space (not over items)
+        if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem())
+            and r.ImGui_IsMouseClicked(ctx, 1)
+            and not r.ImGui_IsAnyItemHovered(ctx) then
+            r.ImGui_OpenPopup(ctx, "TransportContextMenu")
+        end
+        if r.ImGui_BeginPopup(ctx, "TransportContextMenu") then
             if r.ImGui_MenuItem(ctx, settings.edit_mode and "Disable Edit Mode" or "Enable Edit Mode") then
                 settings.edit_mode = not settings.edit_mode
                 SaveSettings()
