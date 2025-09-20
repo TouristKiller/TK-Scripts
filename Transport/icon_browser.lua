@@ -42,7 +42,7 @@ function IconBrowser.FilterIcons()
     end
 end
 
-function IconBrowser.Show(ctx)
+function IconBrowser.Show(ctx, settings)
     if not IconBrowser.show_window then return end
     
     if #IconBrowser.icons == 0 then
@@ -51,11 +51,28 @@ function IconBrowser.Show(ctx)
     end
     
     local window_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoTitleBar()
+    -- Removed NoResize to allow user resizing
     
-    r.ImGui_SetNextWindowSize(ctx, 600, 400)
+    -- Use settings for window size with minimum constraints
+    local width = settings and math.max(400, settings.icon_browser_width) or 600
+    local height = settings and math.max(300, settings.icon_browser_height) or 400
+    
+    r.ImGui_SetNextWindowSize(ctx, width, height)
     local visible, open = r.ImGui_Begin(ctx, "Icon Browser##TK", true, window_flags)
     
     if visible then
+        -- Update settings when user resizes window
+        if settings then
+            local current_width = r.ImGui_GetWindowWidth(ctx)
+            local current_height = r.ImGui_GetWindowHeight(ctx)
+            if current_width ~= settings.icon_browser_width then
+                settings.icon_browser_width = math.max(400, current_width)
+            end
+            if current_height ~= settings.icon_browser_height then
+                settings.icon_browser_height = math.max(300, current_height)
+            end
+        end
+        
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
         r.ImGui_Text(ctx, "TK")
         r.ImGui_PopStyleColor(ctx)

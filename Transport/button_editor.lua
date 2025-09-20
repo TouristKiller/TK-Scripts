@@ -6,6 +6,32 @@ local IconBrowser = require('icon_browser')
 local ButtonEditor = {}
 local new_preset_name = ""
 
+-- Local open/close states for inline editor sections
+local cb_section_states = {
+    basic_open = true,
+    group_open = false,
+    colors_open = false,
+    left_open = false,
+    right_open = false,
+}
+
+-- Draw a section header with + / - toggle like Layout & Position tab
+local function ShowCBSectionHeader(ctx, title, state_key)
+    r.ImGui_Text(ctx, title)
+    r.ImGui_SameLine(ctx)
+    -- Transparent button background (match style)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+    if r.ImGui_Button(ctx, (cb_section_states[state_key] and "-##" or "+##") .. title) then
+        cb_section_states[state_key] = not cb_section_states[state_key]
+    end
+    r.ImGui_PopStyleVar(ctx)
+    r.ImGui_PopStyleColor(ctx, 3)
+    return cb_section_states[state_key]
+end
+
 function GetIconFiles()
     local icons = {}
     local resource_path = r.GetResourcePath() .. "/Data/toolbar_icons"
@@ -30,44 +56,8 @@ end
 
 
 
-function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_width, main_window_height)
-    if not custom_buttons.show_editor then return end
-
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), settings.window_rounding)
-    local window_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_TopMost()
-    
-    r.ImGui_SetNextWindowSize(ctx, 500, -1)
-    local visible, open = r.ImGui_Begin(ctx, "Custom Button Editor##TK", true, window_flags)
-    
-    if visible then
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
-        r.ImGui_Text(ctx, "TK")
-        r.ImGui_PopStyleColor(ctx)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_Text(ctx, "BUTTON EDITOR")
-        
-        if custom_buttons.current_preset then
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, window_width - 150)  -- Adjust position if needed
-            r.ImGui_Text(ctx, "Preset: " .. custom_buttons.current_preset)
-        end
-        
-        local window_width = r.ImGui_GetWindowWidth(ctx)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, window_width - 25)
-        r.ImGui_SetCursorPosY(ctx, 6)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF6666FF)
-        
-        if r.ImGui_Button(ctx, "##close", 14, 14) then
-            open = false
-            custom_buttons.SaveCurrentButtons()
-        end
-        r.ImGui_PopStyleColor(ctx, 3)
-        r.ImGui_Separator(ctx)
-
+-- Inline version that renders the editor inside an existing window/tab
+function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings)
     -- Button Presets (altijd zichtbaar)
     r.ImGui_Text(ctx, "Button Presets:")
     local presets = custom_buttons.GetButtonPresets()
@@ -193,8 +183,6 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
 
     if custom_buttons.current_edit then
             local button = custom_buttons.buttons[custom_buttons.current_edit]
-            
-            r.ImGui_BeginChild(ctx, "ButtonEditor", 0, 200)
             r.ImGui_Separator(ctx)
 
             if r.ImGui_Checkbox(ctx, "Use Icon", button.use_icon) then
@@ -208,7 +196,7 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
                     IconBrowser.show_window = true
                 end
                 
-                local selected_icon = IconBrowser.Show(ctx)
+                local selected_icon = IconBrowser.Show(ctx, settings)
                 if selected_icon then
                     button.icon_name = selected_icon
                     button.icon = nil
@@ -216,7 +204,7 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
                 end
             end
             r.ImGui_Separator(ctx)
-            if r.ImGui_CollapsingHeader(ctx, "Basic Settings", r.ImGui_TreeNodeFlags_DefaultOpen()) then
+            if ShowCBSectionHeader(ctx, "Basic Settings", "basic_open") then
                 local changed = false
                 
                 rv, button.name = r.ImGui_InputText(ctx, "Name", button.name)
@@ -272,7 +260,7 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
                 
                 if changed then custom_buttons.SaveCurrentButtons() end
             end
-            if r.ImGui_CollapsingHeader(ctx, "Group Edit") then
+            if ShowCBSectionHeader(ctx, "Group Edit", "group_open") then
                 r.ImGui_Text(ctx, "Edit all buttons sharing this group name (relative spacing preserved when shifting)")
                 local gcount = 0
                 for _,b in ipairs(custom_buttons.buttons) do if b.group and b.group ~= "" and button.group == b.group then gcount = gcount + 1 end end
@@ -374,7 +362,7 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
                 end
             end
             
-            if r.ImGui_CollapsingHeader(ctx, "Colors") then
+            if ShowCBSectionHeader(ctx, "Colors", "colors_open") then
                 local changed = false
                 local flags = r.ImGui_ColorEditFlags_NoInputs()
                 
@@ -394,7 +382,7 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
             end
 
             r.ImGui_Separator(ctx)
-            if r.ImGui_CollapsingHeader(ctx, "Left Click Action") then
+            if ShowCBSectionHeader(ctx, "Left Click Action", "left_open") then
                 local changed = false
                 
                 local rv_name, new_name = r.ImGui_InputText(ctx, "Action Name", button.left_click.name)
@@ -418,7 +406,7 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
                 if changed then custom_buttons.SaveCurrentButtons() end
             end
 
-            if r.ImGui_CollapsingHeader(ctx, "Right Click Menu") then
+            if ShowCBSectionHeader(ctx, "Right Click Menu", "right_open") then
                 button.right_menu = button.right_menu or {}
                 button.right_menu.items = button.right_menu.items or {}
 
@@ -535,14 +523,10 @@ function ButtonEditor.ShowEditor(ctx, custom_buttons, settings, main_window_widt
                 end
             end
 
-            r.ImGui_EndChild(ctx)
             r.ImGui_Text(ctx, "Set Left click for single click action, right click for menu")
             r.ImGui_Text(ctx, "Always save button in preset after editing, or it will be lost")
         end
-        r.ImGui_End(ctx)
-    end
-    r.ImGui_PopStyleVar(ctx)
-    custom_buttons.show_editor = open
+    -- No separate window close handling in inline mode
 end
 
 return ButtonEditor

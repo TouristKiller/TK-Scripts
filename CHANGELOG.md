@@ -5,6 +5,13 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 ## Ongeversioneerd (werk in uitvoering)
 
 ### Toegevoegd
+- **Pitch & Rate controls**: Volledige pitch en playback rate aanpassing van audio items met real-time preview
+  - Pitch slider (-24 tot +24 semitonen) met fine-tuning
+  - Rate slider (0.25x tot 4.0x speed) voor tempo aanpassingen  
+  - "Preserve pitch" optie om pitch constant te houden bij rate changes
+  - "Preserve formants" optie voor natuurlijkere vocal pitch shifting
+  - Unified slider styling en responsieve UI controls
+- **Sidebar tabs**: Edit en FX tabs in de verticale sidebar voor georganiseerde tool toegang
 - Horizontale toolbar (boven de waveform) als alternatief voor de verticale sidebar; toggle via View menu, Settings popup en pijltje (collapse).
 - Persistente instelling `sidebar_layout` (vertical/horizontal).
 - Fallback hit-test voor horizontale collapse toggle (zorgt dat opnieuw uitklappen altijd werkt).
