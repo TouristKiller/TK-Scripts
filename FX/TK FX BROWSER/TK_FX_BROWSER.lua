@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.6.9
+-- @version 1.7.0
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -3527,6 +3527,215 @@ function LoadTexture(file)
         tex_log("Failed to load texture: " .. file)
     end
     return texture
+end
+
+-- Lightweight cache for gallery thumbnails used in the FX Chains gallery
+local fxchain_thumb_cache = {}
+
+-- Resolve a screenshot file path for a given plugin name by trying known variants
+local function GetScreenshotFilePath(plugin_name)
+    if not plugin_name or plugin_name == '' then return nil end
+    -- Try direct sanitized name first (same as LoadPluginScreenshot uses)
+    local function file_exists_with_ext(base)
+        if not base or base == '' then return nil end
+        local png = screenshot_path .. base .. '.png'
+        if r.file_exists(png) then return png end
+        local jpg = screenshot_path .. base .. '.jpg'
+        if r.file_exists(jpg) then return jpg end
+        local jpeg = screenshot_path .. base .. '.jpeg'
+        if r.file_exists(jpeg) then return jpeg end
+        return nil
+    end
+
+    local safe = (plugin_name or ''):gsub('[^%w%s-]','_')
+    local direct = file_exists_with_ext(safe)
+    if direct then return direct end
+
+    -- Fall back to the same variants as HasScreenshot tries
+    local stripped_x86 = StripX86Markers and StripX86Markers(plugin_name) or plugin_name
+    local variants = {
+        plugin_name,
+        (type(CleanPluginName) == 'function') and CleanPluginName(plugin_name) or plugin_name,
+        safe,
+        (type(CleanPluginName) == 'function') and (CleanPluginName(plugin_name):gsub('[^%w%s-]','_')) or safe,
+        stripped_x86,
+        (type(CleanPluginName) == 'function') and CleanPluginName(stripped_x86) or stripped_x86,
+        (type(CleanPluginName) == 'function' and type(StripX86Markers) == 'function') and StripX86Markers(CleanPluginName(plugin_name)) or plugin_name,
+    }
+    for _, base in ipairs(variants) do
+        local found = file_exists_with_ext(base)
+        if found then return found end
+    end
+    return nil
+end
+
+-- Get or create a thumbnail texture for a plugin's screenshot (used in FX Chain gallery)
+local function GetPluginImageForGallery(plugin_name)
+    if not plugin_name or plugin_name == '' then return nil end
+    local key = plugin_name
+    local cached = fxchain_thumb_cache[key]
+    if cached and r.ImGui_ValidatePtr(cached, 'ImGui_Image*') then
+        return cached
+    end
+    local file = GetScreenshotFilePath(plugin_name)
+    if not file then return nil end
+    local tex = LoadTexture(file)
+    if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+        fxchain_thumb_cache[key] = tex
+        return tex
+    end
+    return nil
+end
+
+-- Parse a .RfxChain file and return an ordered list of plugin display names
+local function ParseFXChainFile(full_path)
+    local list = {}
+    local f = io.open(full_path, 'r')
+    if not f then return list end
+    for line in f:lines() do
+        -- Common formats inside quotes after the tag
+        local vst = line:match('^%s*VST%s+"([^"]+)"')
+        if vst then table.insert(list, vst) goto continue end
+        local clap = line:match('^%s*CLAP%s+"([^"]+)"')
+        if clap then table.insert(list, clap) goto continue end
+        local au = line:match('^%s*AU%s+"([^"]+)"')
+        if au then table.insert(list, au) goto continue end
+        -- JS occasionally appears like: JS: plugin path/name
+        local js = line:match('^%s*JS:%s*(.+)$')
+        if js then
+            js = js:gsub('%s+$','')
+            if js ~= '' then table.insert(list, 'JS: ' .. js) end
+            goto continue
+        end
+        ::continue::
+    end
+    f:close()
+    return list
+end
+
+-- Draw FX Chains as visual blocks of plugin screenshots with an Apply button
+function DrawFxChainsGallery(tbl, path)
+    local extension = ".RfxChain"
+    path = path or ""
+    local resource_path = r.GetResourcePath()
+    local fx_chains_base = resource_path .. "/FXChains"
+
+    local i = 1
+    while i <= #tbl do
+        local item = tbl[i]
+        if type(item) == 'table' and item.dir then
+            -- Subfolder: recurse
+            r.ImGui_Text(ctx, item.dir .. "/")
+            r.ImGui_Indent(ctx)
+            DrawFxChainsGallery(item, (path ~= '' and (path .. os_separator) or '') .. item.dir)
+            r.ImGui_Unindent(ctx)
+            r.ImGui_Separator(ctx)
+        elseif type(item) == 'string' then
+            local rel = (path ~= '' and (path .. os_separator) or os_separator) .. item .. extension
+            local full_path = fx_chains_base .. rel
+            -- Title
+            r.ImGui_Text(ctx, item)
+            -- Load plugin list and render thumbnails in a row
+            local plugins = ParseFXChainFile(full_path)
+            if #plugins > 0 then
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 6, 6)
+                -- Determine thumbnail width based on user setting
+                local thumb_w = math.max(80, math.min(180, math.floor((config.screenshot_display_size or 200) * 0.6)))
+                for idx = 1, #plugins do
+                    local pname = plugins[idx]
+                    local tex = GetPluginImageForGallery(pname)
+                    if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+                        local w, h = r.ImGui_Image_GetSize(tex)
+                        if w and h and w > 0 and h > 0 then
+                            local scale = thumb_w / w
+                            local disp_w = thumb_w
+                            local disp_h = math.floor(h * scale)
+                            r.ImGui_Image(ctx, tex, disp_w, disp_h)
+                        else
+                            r.ImGui_Button(ctx, pname, thumb_w, 26)
+                        end
+                    else
+                        r.ImGui_Button(ctx, pname, thumb_w, 26)
+                    end
+                    if idx < #plugins then r.ImGui_SameLine(ctx) end
+                end
+                r.ImGui_PopStyleVar(ctx)
+            else
+                r.ImGui_Text(ctx, "(No plugins detected in chain)")
+            end
+            -- Apply button
+            if r.ImGui_Button(ctx, "Apply FX chain to selected track##apply_" .. tostring(i)) then
+                if ADD_FX_TO_ITEM then
+                    local selected_item = r.GetSelectedMediaItem(0, 0)
+                    if selected_item then
+                        local take = r.GetActiveTake(selected_item)
+                        if take then
+                            r.TakeFX_AddByName(take, rel, 1)
+                        end
+                    end
+                else
+                    if TRACK and r.ValidatePtr(TRACK, 'MediaTrack*') then
+                        AddFXToTrack(TRACK, rel)
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+            end
+            r.ImGui_Separator(ctx)
+        elseif type(item) == 'table' and not item.dir then
+            -- Nested array of chain names
+            for j = 1, #item do
+                if type(item[j]) == 'string' then
+                    local rel = (path ~= '' and (path .. os_separator) or os_separator) .. item[j] .. extension
+                    local full_path = fx_chains_base .. rel
+                    r.ImGui_Text(ctx, item[j])
+                    local plugins = ParseFXChainFile(full_path)
+                    if #plugins > 0 then
+                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 6, 6)
+                        local thumb_w = math.max(80, math.min(180, math.floor((config.screenshot_display_size or 200) * 0.6)))
+                        for idx = 1, #plugins do
+                            local pname = plugins[idx]
+                            local tex = GetPluginImageForGallery(pname)
+                            if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+                                local w, h = r.ImGui_Image_GetSize(tex)
+                                if w and h and w > 0 and h > 0 then
+                                    local scale = thumb_w / w
+                                    local disp_w = thumb_w
+                                    local disp_h = math.floor(h * scale)
+                                    r.ImGui_Image(ctx, tex, disp_w, disp_h)
+                                else
+                                    r.ImGui_Button(ctx, pname, thumb_w, 26)
+                                end
+                            else
+                                r.ImGui_Button(ctx, pname, thumb_w, 26)
+                            end
+                            if idx < #plugins then r.ImGui_SameLine(ctx) end
+                        end
+                        r.ImGui_PopStyleVar(ctx)
+                    else
+                        r.ImGui_Text(ctx, "(No plugins detected in chain)")
+                    end
+                    if r.ImGui_Button(ctx, "Apply FX chain to selected track##apply_" .. tostring(i) .. "_" .. tostring(j)) then
+                        if ADD_FX_TO_ITEM then
+                            local selected_item = r.GetSelectedMediaItem(0, 0)
+                            if selected_item then
+                                local take = r.GetActiveTake(selected_item)
+                                if take then
+                                    r.TakeFX_AddByName(take, rel, 1)
+                                end
+                            end
+                        else
+                            if TRACK and r.ValidatePtr(TRACK, 'MediaTrack*') then
+                                AddFXToTrack(TRACK, rel)
+                                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                            end
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                end
+            end
+        end
+        i = i + 1
+    end
 end
     
 function LoadSearchTexture(file, plugin_name)
@@ -7089,6 +7298,7 @@ function ShowBrowserPanel()
                 end
             end
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+            local footer_text_color_active = true
             r.ImGui_Text(ctx, "Project: " .. proj_name)
             r.ImGui_Text(ctx, string.format("Sample Rate: %s", sr > 0 and (tostring(math.floor(sr)) .. " Hz") or "Device"))
             r.ImGui_Text(ctx, string.format("BPM: %.2f", bpm))
@@ -7365,68 +7575,70 @@ function ShowBrowserPanel()
                 r.ImGui_Dummy(ctx, 0, 6) 
                 r.ImGui_Separator(ctx)
                 if fx_count > 0 then
-                    r.ImGui_Text(ctx, string.format("Track FX (%d):", fx_count))
-                    local list_height = math.min(120, fx_count * 18 + 4)
-                    r.ImGui_BeginChild(ctx, "FooterTrackFX", -1, list_height)
-                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 2)
-                        for i = 0, fx_count - 1 do
-                            local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
-                            if ok and fx_name ~= "" then
-                                if config.clean_plugin_names or config.remove_manufacturer_names then
-                                    fx_name = GetDisplayPluginName(fx_name)
-                                end
-                local clicked = r.ImGui_Selectable(ctx, fx_name .. "##footerfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
-                if clicked then
-                                    if r.TrackFX_GetFloatingWindow(TRACK, i) then
-                                        r.TrackFX_Show(TRACK, i, 2)
-                                    else
-                                        r.TrackFX_Show(TRACK, i, 3)
-                                    end
-                                end
-
-                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Left: toggle floating | Right: menu") end
-
-                                if r.ImGui_IsItemClicked(ctx, 1) then
-                                    r.ImGui_OpenPopup(ctx, "footer_fx_ctx_" .. i)
-                                end
-                                if r.ImGui_BeginPopup(ctx, "footer_fx_ctx_" .. i) then
-                                    fx_clipboard = fx_clipboard or {}
-                                    local enabled = r.TrackFX_GetEnabled and r.TrackFX_GetEnabled(TRACK, i)
-                                    local offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(TRACK, i)
-                                    if r.ImGui_MenuItem(ctx, (enabled and "Bypass" or "Enable")) then
-                                        if r.TrackFX_SetEnabled then r.TrackFX_SetEnabled(TRACK, i, not enabled) end
-                                    end
-                                    if r.ImGui_MenuItem(ctx, (offline and "Set Online" or "Set Offline")) then
-                                        if r.TrackFX_SetOffline then r.TrackFX_SetOffline(TRACK, i, not offline) end
-                                    end
-                                    if r.ImGui_MenuItem(ctx, "Float / Unfloat") then
-                                        if r.TrackFX_GetFloatingWindow(TRACK, i) then r.TrackFX_Show(TRACK, i, 2) else r.TrackFX_Show(TRACK, i, 3) end
-                                    end
-                                    r.ImGui_Separator(ctx)
-                                    if r.ImGui_MenuItem(ctx, "Copy") then fx_clipboard.track = TRACK; fx_clipboard.index = i end
-                                    local can_paste = fx_clipboard.track and r.ValidatePtr(fx_clipboard.track, "MediaTrack*") and fx_clipboard.index ~= nil
-                                    if not can_paste then r.ImGui_BeginDisabled(ctx) end
-                                    if r.ImGui_MenuItem(ctx, "Paste (after)") and can_paste then
-                                        local dest_index = i + 1
-                                        r.TrackFX_CopyToTrack(fx_clipboard.track, fx_clipboard.index, TRACK, dest_index, false)
-                                    end
-                                    if not can_paste then r.ImGui_EndDisabled(ctx) end
-                                    r.ImGui_Separator(ctx)
-                                    if i == 0 then r.ImGui_BeginDisabled(ctx) end
-                                    if r.ImGui_MenuItem(ctx, "Move Up") and i > 0 then r.TrackFX_CopyToTrack(TRACK, i, TRACK, i-1, true) end
-                                    if i == 0 then r.ImGui_EndDisabled(ctx) end
-                                    if i == fx_count - 1 then r.ImGui_BeginDisabled(ctx) end
-                                    if r.ImGui_MenuItem(ctx, "Move Down") and i < fx_count - 1 then r.TrackFX_CopyToTrack(TRACK, i, TRACK, i+2, true) end
-                                    if i == fx_count - 1 then r.ImGui_EndDisabled(ctx) end
-                                    r.ImGui_Separator(ctx)
-                                    if r.ImGui_MenuItem(ctx, "Rename Track to this FX") then r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", fx_name, true) end
-                                    if r.ImGui_MenuItem(ctx, "Delete FX") then r.TrackFX_Delete(TRACK, i) end
-                                    r.ImGui_EndPopup(ctx)
-                                end
+                r.ImGui_Text(ctx, string.format("Track FX (%d):", fx_count))
+                local list_height = math.min(120, fx_count * 18 + 4)
+                    if footer_text_color_active then r.ImGui_PopStyleColor(ctx); footer_text_color_active = false end
+                    local ft_child_open = r.ImGui_BeginChild(ctx, "FooterTrackFX", -1, list_height)
+                if ft_child_open then
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 2)
+                    for i = 0, fx_count - 1 do
+                        local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
+                        if ok and fx_name ~= "" then
+                            if config.clean_plugin_names or config.remove_manufacturer_names then
+                                fx_name = GetDisplayPluginName(fx_name)
+                            end
+                        local clicked = r.ImGui_Selectable(ctx, fx_name .. "##footerfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                        if clicked then
+                            if r.TrackFX_GetFloatingWindow(TRACK, i) then
+                                r.TrackFX_Show(TRACK, i, 2)
+                            else
+                                r.TrackFX_Show(TRACK, i, 3)
                             end
                         end
+                        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Left: toggle floating | Right: menu") end
+                        if r.ImGui_IsItemClicked(ctx, 1) then
+                            r.ImGui_OpenPopup(ctx, "footer_fx_ctx_" .. i)
+                        end
+                        if r.ImGui_BeginPopup(ctx, "footer_fx_ctx_" .. i) then
+                            fx_clipboard = fx_clipboard or {}
+                            local enabled = r.TrackFX_GetEnabled and r.TrackFX_GetEnabled(TRACK, i)
+                            local offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(TRACK, i)
+                            if r.ImGui_MenuItem(ctx, (enabled and "Bypass" or "Enable")) then
+                                if r.TrackFX_SetEnabled then r.TrackFX_SetEnabled(TRACK, i, not enabled) end
+                            end
+                            if r.ImGui_MenuItem(ctx, (offline and "Set Online" or "Set Offline")) then
+                                if r.TrackFX_SetOffline then r.TrackFX_SetOffline(TRACK, i, not offline) end
+                            end
+                            if r.ImGui_MenuItem(ctx, "Float / Unfloat") then
+                                if r.TrackFX_GetFloatingWindow(TRACK, i) then r.TrackFX_Show(TRACK, i, 2) else r.TrackFX_Show(TRACK, i, 3) end
+                            end
+                            r.ImGui_Separator(ctx)
+                            if r.ImGui_MenuItem(ctx, "Copy") then fx_clipboard.track = TRACK; fx_clipboard.index = i end
+                            local can_paste = fx_clipboard.track and r.ValidatePtr(fx_clipboard.track, "MediaTrack*") and fx_clipboard.index ~= nil
+                            if not can_paste then r.ImGui_BeginDisabled(ctx) end
+                            if r.ImGui_MenuItem(ctx, "Paste (after)") and can_paste then
+                                local dest_index = i + 1
+                                r.TrackFX_CopyToTrack(fx_clipboard.track, fx_clipboard.index, TRACK, dest_index, false)
+                            end
+                            if not can_paste then r.ImGui_EndDisabled(ctx) end
+                            r.ImGui_Separator(ctx)
+                            if i == 0 then r.ImGui_BeginDisabled(ctx) end
+                            if r.ImGui_MenuItem(ctx, "Move Up") and i > 0 then r.TrackFX_CopyToTrack(TRACK, i, TRACK, i-1, true) end
+                            if i == 0 then r.ImGui_EndDisabled(ctx) end
+                            if i == fx_count - 1 then r.ImGui_BeginDisabled(ctx) end
+                            if r.ImGui_MenuItem(ctx, "Move Down") and i < fx_count - 1 then r.TrackFX_CopyToTrack(TRACK, i, TRACK, i+2, true) end
+                            if i == fx_count - 1 then r.ImGui_EndDisabled(ctx) end
+                            r.ImGui_Separator(ctx)
+                            if r.ImGui_MenuItem(ctx, "Rename Track to this FX") then r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", fx_name, true) end
+                            if r.ImGui_MenuItem(ctx, "Delete FX") then r.TrackFX_Delete(TRACK, i) end
+                            r.ImGui_EndPopup(ctx)
+                        end
+                        end
+                    end
                         r.ImGui_PopStyleVar(ctx)
                         r.ImGui_EndChild(ctx)
+                end
+                    if not footer_text_color_active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF); footer_text_color_active = true end
                 else
                     r.ImGui_Text(ctx, "Track FX: (none)")
                 end
@@ -10934,11 +11146,16 @@ function ShowTrackFX()
     if track_fxlist_open then
         r.ImGui_Dummy(ctx, 0, 5)
         r.ImGui_Text(ctx, "FX on Track:")
-        local fx_count = r.TrackFX_GetCount(TRACK)
-        if fx_count > 0 then
+    local fx_count = r.TrackFX_GetCount(TRACK)
+    if fx_count > 0 then
             local track_bypassed = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
             for i = 0, fx_count - 1 do
-                local retval, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
+        -- Get FX name for display and apply optional cleaning
+        local _, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
+        if fx_name == nil then fx_name = "(unknown FX)" end
+        if config.clean_plugin_names or config.remove_manufacturer_names then
+            fx_name = GetDisplayPluginName(fx_name)
+        end
                 local is_open = r.TrackFX_GetFloatingWindow(TRACK, i)
                 local is_enabled = r.TrackFX_GetEnabled(TRACK, i)                
                 local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"                
@@ -11467,9 +11684,10 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                 r.ImGui_EndMenu(ctx)
             end
             
-            r.ImGui_PopStyleVar(ctx, 4)
-            r.ImGui_PopStyleColor(ctx, 2)
+                            r.ImGui_PopStyleVar(ctx)
+                            r.ImGui_EndChild(ctx)
             
+                        if not footer_text_color_active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF); footer_text_color_active = true end
         elseif IsSubfolderStructure(folder_content) then
             r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
@@ -11477,7 +11695,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 7)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
+            if footer_text_color_active then r.ImGui_PopStyleColor(ctx); footer_text_color_active = false end
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
             
             if r.ImGui_BeginMenu(ctx, folder_name) then
@@ -11566,7 +11784,8 @@ end
          
                 if r.ImGui_BeginMenu(ctx, CAT_TEST[i].name) then
                     if CAT_TEST[i].name == "FX CHAINS" then
-                        DrawFxChains(CAT_TEST[i].list)
+                        -- Show a visual gallery of FX chains with plugin screenshots and per-chain Apply button
+                        DrawFxChainsGallery(CAT_TEST[i].list)
                         if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end -- auto-expand FOLDERS header on startup when last opened was inside
                             r.ImGui_CloseCurrentPopup(ctx)
