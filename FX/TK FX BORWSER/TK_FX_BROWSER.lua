@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.6.8
+-- @version 1.6.9
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -180,7 +180,7 @@ function RenderActionsSection()
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
     local button_h = r.ImGui_GetFrameHeight(ctx)
     local button_w = button_h
-        r.ImGui_PushItemWidth(ctx, avail_w - (button_w * 2) - 10)
+            r.ImGui_PushItemWidth(ctx, avail_w - (button_w * 2) - 10)
     local changed, new_term = r.ImGui_InputTextWithHint(ctx, "##ActionSearch", "SEARCH ACTIONS", action_search_term or "")
     if changed then action_search_term = new_term end
     r.ImGui_PopItemWidth(ctx)
@@ -12397,7 +12397,7 @@ if visible then
                 end
                 r.ImGui_PopStyleColor(ctx)
             end
-            r.ImGui_EndChild(ctx)
+            if trackinfo_open then r.ImGui_EndChild(ctx) end
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx)
             
@@ -13063,7 +13063,7 @@ if visible then
                         r.ImGui_EndPopup(ctx)
                     end
                     
-                    r.ImGui_EndChild(ctx)
+                                        if tagsection_open then r.ImGui_EndChild(ctx) end
                   
                     -- Mute knop
                     local mute_color_active = mute_mode
