@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.8.2
+-- @version 1.8.3
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -5234,6 +5234,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
     end
 end
 
+
 function RemoveFXFromAllTracksByName(fx_name, include_master)
     if not fx_name or fx_name == '' then return end
     r.Undo_BeginBlock()
@@ -5248,6 +5249,7 @@ function RemoveFXFromAllTracksByName(fx_name, include_master)
             end
         end
     end
+    -- Remove from all normal tracks
     local track_count = r.CountTracks(0)
     for i = 0, track_count - 1 do
         local tr = r.GetTrack(0, i)
