@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.8.1
+-- @version 1.8.2
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -5234,6 +5234,34 @@ function ShowPluginContextMenu(plugin_name, menu_id)
     end
 end
 
+function RemoveFXFromAllTracksByName(fx_name, include_master)
+    if not fx_name or fx_name == '' then return end
+    r.Undo_BeginBlock()
+    -- Optionally remove from master
+    if include_master then
+        local master = r.GetMasterTrack(0)
+        if master and r.ValidatePtr(master, "MediaTrack*") then
+            while true do
+                local idx = r.TrackFX_GetByName(master, fx_name, false)
+                if not idx or idx < 0 then break end
+                r.TrackFX_Delete(master, idx)
+            end
+        end
+    end
+    local track_count = r.CountTracks(0)
+    for i = 0, track_count - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            while true do
+                local idx = r.TrackFX_GetByName(tr, fx_name, false)
+                if not idx or idx < 0 then break end
+                r.TrackFX_Delete(tr, idx)
+            end
+        end
+    end
+    r.Undo_EndBlock("Remove '" .. fx_name .. "' from all tracks", -1)
+end
+
 function ShowFXContextMenu(plugin, menu_id)
     if r.ImGui_IsItemClicked(ctx, 1) then
         r.ImGui_OpenPopup(ctx, "FXContextMenu_" .. menu_id)
@@ -5282,6 +5310,12 @@ function ShowFXContextMenu(plugin, menu_id)
 
         if r.ImGui_MenuItem(ctx, "Delete") then
             r.TrackFX_Delete(track, fx_index)
+        end
+
+        -- Remove this plugin from all tracks (and master if the clicked instance is on master)
+        if r.ImGui_MenuItem(ctx, "Remove from all tracks") then
+            local include_master = (selected_folder == "Current Project FX" and plugin.is_master) or false
+            RemoveFXFromAllTracksByName(plugin.fx_name, include_master)
         end
 
         if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
