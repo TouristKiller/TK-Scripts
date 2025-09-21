@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.8.3
+-- @version 1.8.4
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -17,6 +17,20 @@ local script_path           = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator          = package.config:sub(1, 1)
 package.path                = script_path .. "?.lua;"
 local json                  = require("json")
+if not r.APIExists or not r.APIExists("JS_Dialog_BrowseForFolder") then
+    local msg = table.concat({
+        "Missing dependency: 'js_ReaScriptAPI' (by Julian Sader).",
+        "",
+        "This script calls JS_Dialog_BrowseForFolder(), which is provided by that extension.",
+        "",
+        "Install via ReaPack:",
+        "1) In REAPER: Extensions > ReaPack > Browse Packages",
+        "2) Search for 'js_ReaScriptAPI' and install it",
+        "3) Restart REAPER and run the script again."
+    }, "\n")
+    r.ShowMessageBox(msg, "TK FX BROWSER – Missing dependency", 0)
+    return
+end
 local screenshot_path       = script_path .. "Screenshots" .. os_separator
 StartBulkScreenshot         = function() end
 local DrawMeterModule       = dofile(script_path .. "DrawMeter.lua")
