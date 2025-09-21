@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.8.0
+-- @version 1.8.1
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -2490,17 +2490,18 @@ function ShowConfigWindow()
            NewSection("LOCATIONS:")
             -- FX Chains location
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            local changed_fx_use, use_fx_custom = r.ImGui_Checkbox(ctx, "Use custom FX Chains folder", config.use_custom_fxchain_dir)
+            local changed_fx_use, use_fx_custom = r.ImGui_Checkbox(ctx, "custom FXChain folder", config.use_custom_fxchain_dir)
             if changed_fx_use then
                 config.use_custom_fxchain_dir = use_fx_custom; SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_PushItemWidth(ctx, 260)
+            -- r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_PushItemWidth(ctx, 180)
             local fx_dir = config.custom_fxchain_dir or ""
             local changed_fx_dir, new_fx_dir = r.ImGui_InputText(ctx, "##fxchain_dir", fx_dir)
             if changed_fx_dir then config.custom_fxchain_dir = new_fx_dir end
             r.ImGui_PopItemWidth(ctx)
+            -- Keep buttons on the same line as input
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Browse…##fxchain") then
                 local rv, path = r.JS_Dialog_BrowseForFolder("Select FX Chains folder", ResolveFxChainsRoot())
@@ -2531,17 +2532,18 @@ function ShowConfigWindow()
 
             -- Track Templates location
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            local changed_tt_use, use_tt_custom = r.ImGui_Checkbox(ctx, "Use custom Track Templates folder", config.use_custom_template_dir)
+            local changed_tt_use, use_tt_custom = r.ImGui_Checkbox(ctx, "custom TT Folder", config.use_custom_template_dir)
             if changed_tt_use then
                 config.use_custom_template_dir = use_tt_custom; SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_PushItemWidth(ctx, 260)
+            -- r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_PushItemWidth(ctx, 180)
             local tt_dir = config.custom_template_dir or ""
             local changed_tt_dir, new_tt_dir = r.ImGui_InputText(ctx, "##templ_dir", tt_dir)
             if changed_tt_dir then config.custom_template_dir = new_tt_dir end
             r.ImGui_PopItemWidth(ctx)
+            -- Keep buttons on the same line as input
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Browse…##templ") then
                 local rv, path = r.JS_Dialog_BrowseForFolder("Select Track Templates folder", ResolveTrackTemplatesRoot())
