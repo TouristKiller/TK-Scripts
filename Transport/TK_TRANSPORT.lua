@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.5.1
+-- @version 0.5.2
 -- @changelog 
 --[[
 
@@ -163,6 +163,8 @@ local default_settings  = {
     pause_active        = 0xFFFF00FF,  
     loop_active         = 0x0088FFFF,    
     text_normal         = 0xFFFFFFFF,
+    -- Settings window specific text color (decoupled from text_normal)
+    settings_text_color = 0xFFFFFFFF,
     frame_bg            = 0x333333FF,
     frame_bg_hovered    = 0x444444FF,
     frame_bg_active     = 0x555555FF,
@@ -212,6 +214,8 @@ local default_settings  = {
     use_custom_forward_image    = false,
     custom_forward_image_path   = "",
     custom_image_size           = 1.0,
+    -- Global spacing factor for graphic buttons (multiplied by button size)
+    graphic_spacing_factor      = 0.2,
     locked_button_folder_path = "",
     use_locked_button_folder = false,
 
@@ -602,6 +606,8 @@ function ShowSettings(main_window_width , main_window_height)
     if settings_visible then
         r.ImGui_PushFont(ctx, settings_ui_font, SETTINGS_UI_FONT_SIZE)
         SetStyle()
+        -- Override text color for the Settings window only (decoupled from global text_normal)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.settings_text_color or 0xFFFFFFFF)
         
         local window_width = r.ImGui_GetWindowWidth(ctx)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
@@ -700,6 +706,9 @@ function ShowSettings(main_window_width , main_window_height)
             rv, settings.text_normal = r.ImGui_ColorEdit4(ctx, "Text Normal", settings.text_normal, flags)
             r.ImGui_SameLine(ctx, column_width)
             rv, settings.frame_bg_hovered = r.ImGui_ColorEdit4(ctx, "Frame Bg Hovered", settings.frame_bg_hovered, flags)
+            
+            -- Settings window text color (independent)
+            rv, settings.settings_text_color = r.ImGui_ColorEdit4(ctx, "Settings Text", settings.settings_text_color or 0xFFFFFFFF, flags)
         
             rv, settings.border = r.ImGui_ColorEdit4(ctx, "Border Color", settings.border, flags)
             r.ImGui_SameLine(ctx, column_width)
@@ -816,8 +825,26 @@ function ShowSettings(main_window_width , main_window_height)
                             local buttonSize = tfsize * 1.1
                             local spacing = math.floor(buttonSize * 0.2)
                             local count = 7 
-                            local perButtonWidth = settings.use_graphic_buttons and buttonSize or (buttonSize * 1.7)
-                            local buttons_width = perButtonWidth * count + spacing * (count - 1)
+                            local buttons_width
+                            if settings.use_graphic_buttons then
+                                local gis = settings.custom_image_size or 1.0
+                                local function sz(per, used)
+                                    local base = buttonSize * gis
+                                    if used then return base * (per or 1.0) else return base end
+                                end
+                                buttons_width = (
+                                    sz(settings.custom_rewind_image_size,  settings.use_custom_rewind_image) +
+                                    sz(settings.custom_play_image_size,    settings.use_custom_play_image)   +
+                                    sz(settings.custom_stop_image_size,    settings.use_custom_stop_image)   +
+                                    sz(settings.custom_pause_image_size,   settings.use_custom_pause_image)  +
+                                    sz(settings.custom_record_image_size,  settings.use_custom_record_image) +
+                                    sz(settings.custom_loop_image_size,    settings.use_custom_loop_image)   +
+                                    sz(settings.custom_forward_image_size, settings.use_custom_forward_image)
+                                ) + spacing * (count - 1)
+                            else
+                                local perButtonWidth_text = buttonSize * 1.7
+                                buttons_width = perButtonWidth_text * count + spacing * (count - 1)
+                            end
                             settings.transport_x = ((main_window_width - buttons_width) / 2) / main_window_width
                         else
                             DrawXYControls('transport_x','transport_y', main_window_width, main_window_height, { step = 'percent', percentStep = 0.001, directInputX = true, directInputY = true })
@@ -997,6 +1024,187 @@ function ShowSettings(main_window_width , main_window_height)
                 r.ImGui_EndTabItem(ctx)
             end
             
+            -- Transport Buttons tab (moved before Custom Buttons)
+            if r.ImGui_BeginTabItem(ctx, "Transport Buttons") then
+                local changed = false
+                rv, settings.use_graphic_buttons = r.ImGui_Checkbox(ctx, "Use Graphic Buttons", settings.use_graphic_buttons)
+                rv, settings.custom_image_size = r.ImGui_SliderDouble(ctx, "Global Image Scale", settings.custom_image_size or 1.0, 0.5, 2.0, "%.2fx")
+                rv, settings.graphic_spacing_factor = r.ImGui_SliderDouble(ctx, "Global Spacing", settings.graphic_spacing_factor or 0.2, 0.0, 1.0, "%.2fx")
+                rv, settings.use_locked_button_folder = r.ImGui_Checkbox(ctx, "Use last image folder for all buttons", settings.use_locked_button_folder)
+                if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                    r.ImGui_Text(ctx, "Current folder: " .. settings.locked_button_folder_path)
+                end
+                
+                r.ImGui_Separator(ctx)
+                
+                rv, settings.use_custom_play_image = r.ImGui_Checkbox(ctx, "Use Custom Play Button", settings.use_custom_play_image)
+                changed = changed or rv
+                if settings.use_custom_play_image then
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Browse##Play") then
+                        local start_dir = ""
+                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                            start_dir = settings.locked_button_folder_path
+                        end
+                        
+                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Play Button Image", ".png")
+                        if retval then
+                            settings.custom_play_image_path = file
+                            changed = true
+                            
+                            if settings.use_locked_button_folder then
+                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                            end
+                        end
+                    end
+                    
+                end
+                rv, settings.custom_play_image_size = r.ImGui_SliderDouble(ctx, "Play Image Scale", settings.custom_play_image_size, 0.5, 2.0, "%.2fx")
+                
+                rv, settings.use_custom_stop_image = r.ImGui_Checkbox(ctx, "Use Custom Stop Button", settings.use_custom_stop_image)
+                changed = changed or rv
+                if settings.use_custom_stop_image then
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Browse##Stop") then
+                        local start_dir = ""
+                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                            start_dir = settings.locked_button_folder_path
+                        end
+                        
+                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Stop Button Image", ".png")
+                        if retval then
+                            settings.custom_stop_image_path = file
+                            changed = true
+                            
+                            if settings.use_locked_button_folder then
+                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                            end
+                        end
+                    end
+                end
+                rv, settings.custom_stop_image_size = r.ImGui_SliderDouble(ctx, "Stop Image Scale", settings.custom_stop_image_size, 0.5, 2.0, "%.2fx")
+                
+                rv, settings.use_custom_pause_image = r.ImGui_Checkbox(ctx, "Use Custom Pause Button", settings.use_custom_pause_image)
+                changed = changed or rv
+                if settings.use_custom_pause_image then
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Browse##Pause") then
+                        local start_dir = ""
+                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                            start_dir = settings.locked_button_folder_path
+                        end
+                        
+                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Pause Button Image", ".png")
+                        if retval then
+                            settings.custom_pause_image_path = file
+                            changed = true
+                            
+                            if settings.use_locked_button_folder then
+                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                            end
+                        end
+                    end
+                end
+                rv, settings.custom_pause_image_size = r.ImGui_SliderDouble(ctx, "Pause Image Scale", settings.custom_pause_image_size, 0.5, 2.0, "%.2fx")
+                
+                rv, settings.use_custom_record_image = r.ImGui_Checkbox(ctx, "Use Custom Record Button", settings.use_custom_record_image)
+                changed = changed or rv
+                if settings.use_custom_record_image then
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Browse##Record") then
+                        local start_dir = ""
+                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                            start_dir = settings.locked_button_folder_path
+                        end
+                        
+                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Record Button Image", ".png")
+                        if retval then
+                            settings.custom_record_image_path = file
+                            changed = true
+                            if settings.use_locked_button_folder then
+                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                            end
+                        end
+                    end
+                end
+                rv, settings.custom_record_image_size = r.ImGui_SliderDouble(ctx, "Record Image Scale", settings.custom_record_image_size, 0.5, 2.0, "%.2fx")
+                
+                rv, settings.use_custom_loop_image = r.ImGui_Checkbox(ctx, "Use Custom Loop Button", settings.use_custom_loop_image)
+                changed = changed or rv
+                if settings.use_custom_loop_image then
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Browse##Loop") then
+                        local start_dir = ""
+                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                            start_dir = settings.locked_button_folder_path
+                        end
+                        
+                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Loop Button Image", ".png")
+                        if retval then
+                            settings.custom_loop_image_path = file
+                            changed = true
+                            
+                            if settings.use_locked_button_folder then
+                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                            end
+                        end
+                    end
+                end
+                rv, settings.custom_loop_image_size = r.ImGui_SliderDouble(ctx, "Loop Image Scale", settings.custom_loop_image_size, 0.5, 2.0, "%.2fx")
+                
+                rv, settings.use_custom_rewind_image = r.ImGui_Checkbox(ctx, "Use Custom Rewind Button", settings.use_custom_rewind_image)
+                changed = changed or rv
+                if settings.use_custom_rewind_image then
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Browse##Rewind") then
+                        local start_dir = ""
+                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                            start_dir = settings.locked_button_folder_path
+                        end
+                        
+                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Rewind Button Image", ".png")
+                        if retval then
+                            settings.custom_rewind_image_path = file
+                            changed = true
+                            
+                            if settings.use_locked_button_folder then
+                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                            end
+                        end
+                    end
+                end
+                rv, settings.custom_rewind_image_size = r.ImGui_SliderDouble(ctx, "Rewind Image Scale", settings.custom_rewind_image_size, 0.5, 2.0, "%.2fx")
+                
+                rv, settings.use_custom_forward_image = r.ImGui_Checkbox(ctx, "Use Custom Forward Button", settings.use_custom_forward_image)
+                changed = changed or rv
+                if settings.use_custom_forward_image then
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Browse##Forward") then
+                        local start_dir = ""
+                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
+                            start_dir = settings.locked_button_folder_path
+                        end
+                        
+                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Forward Button Image", ".png")
+                        if retval then
+                            settings.custom_forward_image_path = file
+                            changed = true
+                            
+                            if settings.use_locked_button_folder then
+                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
+                            end
+                        end
+                    end
+                end
+                rv, settings.custom_forward_image_size = r.ImGui_SliderDouble(ctx, "Forward Image Scale", settings.custom_forward_image_size, 0.5, 2.0, "%.2fx")
+                
+                if changed then
+                    UpdateCustomImages()
+                end
+                r.ImGui_EndTabItem(ctx)
+            end
+            
+            -- Custom Buttons tab (moved after Transport Buttons)
             if r.ImGui_BeginTabItem(ctx, "Custom Buttons") then
                 local rv
                 
@@ -1051,185 +1259,7 @@ function ShowSettings(main_window_width , main_window_height)
                 ButtonEditor.ShowEditorInline(ctx, CustomButtons, settings)
                 r.ImGui_EndTabItem(ctx)
             end
-            
-            if r.ImGui_BeginTabItem(ctx, "Images & Graphics") then
-                local changed = false
-                rv, settings.use_graphic_buttons = r.ImGui_Checkbox(ctx, "Use Graphic Buttons", settings.use_graphic_buttons)
-                rv, settings.custom_image_size = r.ImGui_SliderDouble(ctx, "Global Image Scale", settings.custom_image_size or 1.0, 0.5, 2.0, "%.2fx")
-                rv, settings.use_locked_button_folder = r.ImGui_Checkbox(ctx, "Use last image folder for all buttons", settings.use_locked_button_folder)
-                if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
-                    r.ImGui_Text(ctx, "Current folder: " .. settings.locked_button_folder_path)
-                end
-                
-                r.ImGui_Separator(ctx)
-                
-                rv, settings.use_custom_play_image = r.ImGui_Checkbox(ctx, "Use Custom Play Button", settings.use_custom_play_image)
-                changed = changed or rv
-                if settings.use_custom_play_image then
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Browse##Play") then
-                        local start_dir = ""
-                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
-                            start_dir = settings.locked_button_folder_path
-                        end
-                        
-                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Play Button Image", ".png")
-                        if retval then
-                            settings.custom_play_image_path = file
-                            changed = true
 
-                            if settings.use_locked_button_folder then
-                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
-                            end
-                        end
-                    end
-                    
-                end
-                rv, settings.custom_play_image_size = r.ImGui_SliderDouble(ctx, "Play Image Scale", settings.custom_play_image_size, 0.5, 2.0, "%.2fx")
-
-                rv, settings.use_custom_stop_image = r.ImGui_Checkbox(ctx, "Use Custom Stop Button", settings.use_custom_stop_image)
-                changed = changed or rv
-                if settings.use_custom_stop_image then
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Browse##Stop") then
-                        local start_dir = ""
-                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
-                            start_dir = settings.locked_button_folder_path
-                        end
-                        
-                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Stop Button Image", ".png")
-                        if retval then
-                            settings.custom_stop_image_path = file
-                            changed = true
-                            
-                            if settings.use_locked_button_folder then
-                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
-                            end
-                        end
-                    end
-                end
-                rv, settings.custom_stop_image_size = r.ImGui_SliderDouble(ctx, "Stop Image Scale", settings.custom_stop_image_size, 0.5, 2.0, "%.2fx")
-
-                rv, settings.use_custom_pause_image = r.ImGui_Checkbox(ctx, "Use Custom Pause Button", settings.use_custom_pause_image)
-                changed = changed or rv
-                if settings.use_custom_pause_image then
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Browse##Pause") then
-                        local start_dir = ""
-                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
-                            start_dir = settings.locked_button_folder_path
-                        end
-                        
-                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Pause Button Image", ".png")
-                        if retval then
-                            settings.custom_pause_image_path = file
-                            changed = true
-                            
-                            if settings.use_locked_button_folder then
-                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
-                            end
-                        end
-                    end
-                end
-                rv, settings.custom_pause_image_size = r.ImGui_SliderDouble(ctx, "Pause Image Scale", settings.custom_pause_image_size, 0.5, 2.0, "%.2fx")
-
-                rv, settings.use_custom_record_image = r.ImGui_Checkbox(ctx, "Use Custom Record Button", settings.use_custom_record_image)
-                changed = changed or rv
-                if settings.use_custom_record_image then
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Browse##Record") then
-                        local start_dir = ""
-                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
-                            start_dir = settings.locked_button_folder_path
-                        end
-                        
-                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Record Button Image", ".png")
-                        if retval then
-                            settings.custom_record_image_path = file
-                            changed = true
-                            if settings.use_locked_button_folder then
-                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
-                            end
-                        end
-                    end
-                end
-                rv, settings.custom_record_image_size = r.ImGui_SliderDouble(ctx, "Record Image Scale", settings.custom_record_image_size, 0.5, 2.0, "%.2fx")
-                
-                rv, settings.use_custom_loop_image = r.ImGui_Checkbox(ctx, "Use Custom Loop Button", settings.use_custom_loop_image)
-                changed = changed or rv
-                if settings.use_custom_loop_image then
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Browse##Loop") then
-                        local start_dir = ""
-                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
-                            start_dir = settings.locked_button_folder_path
-                        end
-                        
-                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Loop Button Image", ".png")
-                        if retval then
-                            settings.custom_loop_image_path = file
-                            changed = true
-                            
-                            if settings.use_locked_button_folder then
-                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
-                            end
-                        end
-                    end
-                end
-                rv, settings.custom_loop_image_size = r.ImGui_SliderDouble(ctx, "Loop Image Scale", settings.custom_loop_image_size, 0.5, 2.0, "%.2fx")
-
-                rv, settings.use_custom_rewind_image = r.ImGui_Checkbox(ctx, "Use Custom Rewind Button", settings.use_custom_rewind_image)
-                changed = changed or rv
-                if settings.use_custom_rewind_image then
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Browse##Rewind") then
-                        local start_dir = ""
-                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
-                            start_dir = settings.locked_button_folder_path
-                        end
-                        
-                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Rewind Button Image", ".png")
-                        if retval then
-                            settings.custom_rewind_image_path = file
-                            changed = true
-                            
-                            if settings.use_locked_button_folder then
-                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
-                            end
-                        end
-                    end
-                end
-                rv, settings.custom_rewind_image_size = r.ImGui_SliderDouble(ctx, "Rewind Image Scale", settings.custom_rewind_image_size, 0.5, 2.0, "%.2fx")
-                
-                rv, settings.use_custom_forward_image = r.ImGui_Checkbox(ctx, "Use Custom Forward Button", settings.use_custom_forward_image)
-                changed = changed or rv
-                if settings.use_custom_forward_image then
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Browse##Forward") then
-                        local start_dir = ""
-                        if settings.use_locked_button_folder and settings.locked_button_folder_path ~= "" then
-                            start_dir = settings.locked_button_folder_path
-                        end
-                        
-                        local retval, file = r.GetUserFileNameForRead(start_dir, "Select Forward Button Image", ".png")
-                        if retval then
-                            settings.custom_forward_image_path = file
-                            changed = true
-                            
-                            if settings.use_locked_button_folder then
-                                settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
-                            end
-                        end
-                    end
-                end
-                rv, settings.custom_forward_image_size = r.ImGui_SliderDouble(ctx, "Forward Image Scale", settings.custom_forward_image_size, 0.5, 2.0, "%.2fx")
-                
-                if changed then
-                    UpdateCustomImages()
-                end
-                r.ImGui_EndTabItem(ctx)
-            end
-            
             if r.ImGui_BeginTabItem(ctx, "Widget Manager") then
                 WidgetManager.RenderWidgetManagerUI(ctx, script_path)
                 r.ImGui_EndTabItem(ctx)
@@ -1245,7 +1275,8 @@ function ShowSettings(main_window_width , main_window_height)
 
 
         r.ImGui_PopStyleVar(ctx, 7)  
-        r.ImGui_PopStyleColor(ctx, 13)
+        -- Pop SetStyle() colors + the one extra Settings text override
+        r.ImGui_PopStyleColor(ctx, 14)
         r.ImGui_PopFont(ctx)
         r.ImGui_End(ctx)
     end
@@ -1334,16 +1365,62 @@ function Transport_Buttons(main_window_width, main_window_height)
 
     local tfsize = settings.transport_font_size or settings.font_size
     local buttonSize = tfsize * 1.1
-    local spacing = math.floor(buttonSize * 0.2)
+    -- Spacing: use configurable factor in graphic mode; keep text mode spacing as before
+    local spacing_graphic = math.floor(buttonSize * (settings.graphic_spacing_factor or 0.2))
+    local spacing_text = math.floor(buttonSize * 0.2)
+    local spacing = settings.use_graphic_buttons and spacing_graphic or spacing_text
     local count = 7
-    local perButtonWidth_graphic = buttonSize
     local perButtonWidth_text = buttonSize * 1.7 -- keep in sync with Settings centering logic
-    local total_width = (settings.use_graphic_buttons and perButtonWidth_graphic or perButtonWidth_text) * count + spacing * (count - 1)
-    local base_x_px = settings.center_transport and math.max(0, math.floor((main_window_width - total_width) / 2)) or math.floor(settings.transport_x * main_window_width)
-    local base_y_px = math.floor(settings.transport_y * main_window_height)
 
+    -- Push font before any text-size dependent calculations
     local drawList = r.ImGui_GetWindowDrawList(ctx)
     if font_transport then r.ImGui_PushFont(ctx, font_transport, settings.transport_font_size or settings.font_size) end
+
+    -- Compute dynamic per-button sizes for graphics mode so scaling affects layout and hitboxes
+    local sizes = nil
+    local widths_text = nil
+    local total_width
+    if settings.use_graphic_buttons then
+        local gis = settings.custom_image_size or 1.0
+        local function sz(use_flag, img_handle, per)
+            -- Always start from globally scaled base
+            local base = buttonSize * gis
+            if use_flag and img_handle then
+                -- If ValidatePtr is available, prefer it; otherwise rely on non-nil handle
+                local ok = true
+                if r.ImGui_ValidatePtr then ok = r.ImGui_ValidatePtr(img_handle, 'ImGui_Image*') end
+                if ok then return base * (per or 1.0) end
+            end
+            return base
+        end
+        sizes = {
+            rewind  = sz(settings.use_custom_rewind_image,  transport_custom_images.rewind,  settings.custom_rewind_image_size),
+            play    = sz(settings.use_custom_play_image,    transport_custom_images.play,    settings.custom_play_image_size),
+            stop    = sz(settings.use_custom_stop_image,    transport_custom_images.stop,    settings.custom_stop_image_size),
+            pause   = sz(settings.use_custom_pause_image,   transport_custom_images.pause,   settings.custom_pause_image_size),
+            rec     = sz(settings.use_custom_record_image,  transport_custom_images.record,  settings.custom_record_image_size),
+            loop    = sz(settings.use_custom_loop_image,    transport_custom_images.loop,    settings.custom_loop_image_size),
+            forward = sz(settings.use_custom_forward_image, transport_custom_images.forward, settings.custom_forward_image_size),
+        }
+        total_width = (sizes.rewind + sizes.play + sizes.stop + sizes.pause + sizes.rec + sizes.loop + sizes.forward)
+            + spacing * (count - 1)
+    else
+        -- Use variable button widths based on text size to avoid overlap
+        widths_text = {}
+        local labels = {"<<","PLAY","STOP","PAUSE","REC","LOOP",">>"}
+        local pad = math.floor(buttonSize * 0.6) -- horizontal padding budget
+        for i=1,#labels do
+            local tw, _ = r.ImGui_CalcTextSize(ctx, labels[i])
+            widths_text[i] = math.max(tw + pad, perButtonWidth_text)
+        end
+        -- Sum total width for centering
+        total_width = 0
+        for i=1,#widths_text do total_width = total_width + widths_text[i] end
+        total_width = total_width + spacing * (count - 1)
+    end
+
+    local base_x_px = settings.center_transport and math.max(0, math.floor((main_window_width - total_width) / 2)) or math.floor(settings.transport_x * main_window_width)
+    local base_y_px = math.floor(settings.transport_y * main_window_height)
 
     group_min_x, group_min_y, group_max_x, group_max_y = nil, nil, nil, nil
 
@@ -1361,198 +1438,218 @@ function Transport_Buttons(main_window_width, main_window_height)
     end
 
     if settings.use_graphic_buttons then
+        local x = base_x_px
         local pos_x, pos_y
+
         -- 1) <<
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 0 * (perButtonWidth_graphic + spacing))
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         do
-            local clicked = r.ImGui_InvisibleButton(ctx, "<<", buttonSize, buttonSize)
+            local clicked = r.ImGui_InvisibleButton(ctx, "<<", sizes.rewind, sizes.rewind)
             if allow_input and clicked then r.Main_OnCommand(GOTO_START, 0) end
         end
         update_group_bounds()
-        if settings.use_custom_rewind_image and transport_custom_images.rewind and r.ImGui_ValidatePtr(transport_custom_images.rewind, 'ImGui_Image*') then
+        if settings.use_custom_rewind_image and transport_custom_images.rewind and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.rewind, 'ImGui_Image*')) then
             local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
-            local scaled_size = buttonSize * settings.custom_rewind_image_size * settings.custom_image_size
-            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.rewind, pos_x, pos_y, pos_x + scaled_size, pos_y + scaled_size, uv_x, 0, uv_x + 0.33, 1)
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.rewind, pos_x, pos_y, pos_x + sizes.rewind, pos_y + sizes.rewind, uv_x, 0, uv_x + 0.33, 1)
         else
-            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, settings.transport_normal)
-            graphics.DrawArrows(pos_x-10, pos_y, buttonSize, false)
+            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.rewind, settings.transport_normal)
+            graphics.DrawArrows(pos_x, pos_y, sizes.rewind, false)
         end
+        -- Shift play a bit to the right only when the play button is using vector graphics (not a custom image)
+        local play_uses_vector = not (settings.use_custom_play_image and transport_custom_images.play and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.play, 'ImGui_Image*')))
+        local play_bias = play_uses_vector and math.floor(spacing * 0.5) or 0
+        x = x + sizes.rewind + spacing + play_bias
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 1 * (perButtonWidth_graphic + spacing))
+        -- 2) PLAY
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         local play_state = r.GetPlayState() & 1 == 1
         local play_color = play_state and settings.play_active or settings.transport_normal
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         do
-            local clicked = r.ImGui_InvisibleButton(ctx, "PLAY", buttonSize, buttonSize)
+            local clicked = r.ImGui_InvisibleButton(ctx, "PLAY", sizes.play, sizes.play)
             if allow_input and clicked then r.Main_OnCommand(PLAY_COMMAND, 0) end
         end
         update_group_bounds()
         ShowPlaySyncMenu()
-        if settings.use_custom_play_image and transport_custom_images.play and r.ImGui_ValidatePtr(transport_custom_images.play, 'ImGui_Image*') then
+        if settings.use_custom_play_image and transport_custom_images.play and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.play, 'ImGui_Image*')) then
             local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
             if play_state then uv_x = 0.66 end
-            local scaled_size = buttonSize * settings.custom_play_image_size * settings.custom_image_size
-            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.play, pos_x, pos_y, pos_x + scaled_size, pos_y + scaled_size, uv_x, 0, uv_x + 0.33, 1)
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.play, pos_x, pos_y, pos_x + sizes.play, pos_y + sizes.play, uv_x, 0, uv_x + 0.33, 1)
         else
-            local play_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, play_color)
-            play_graphics.DrawPlay(pos_x, pos_y, buttonSize)
+            local play_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.play, play_color)
+            play_graphics.DrawPlay(pos_x, pos_y, sizes.play)
         end
+    -- Compensate spacing after PLAY so the total width remains unchanged
+    local post_play_spacing = spacing - play_bias
+    if post_play_spacing < 0 then post_play_spacing = 0 end
+    x = x + sizes.play + post_play_spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 2 * (perButtonWidth_graphic + spacing))
+        -- 3) STOP
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         do
-            local clicked = r.ImGui_InvisibleButton(ctx, "STOP", buttonSize, buttonSize)
+            local clicked = r.ImGui_InvisibleButton(ctx, "STOP", sizes.stop, sizes.stop)
             if allow_input and clicked then r.Main_OnCommand(STOP_COMMAND, 0) end
         end
         update_group_bounds()
-        if settings.use_custom_stop_image and transport_custom_images.stop and r.ImGui_ValidatePtr(transport_custom_images.stop, 'ImGui_Image*') then
+        if settings.use_custom_stop_image and transport_custom_images.stop and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.stop, 'ImGui_Image*')) then
             local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
-            local scaled_size = buttonSize * settings.custom_stop_image_size * settings.custom_image_size
-            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.stop, pos_x, pos_y, pos_x + scaled_size, pos_y + scaled_size, uv_x, 0, uv_x + 0.33, 1)
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.stop, pos_x, pos_y, pos_x + sizes.stop, pos_y + sizes.stop, uv_x, 0, uv_x + 0.33, 1)
         else
-            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, settings.transport_normal)
-            graphics.DrawStop(pos_x, pos_y, buttonSize)
+            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.stop, settings.transport_normal)
+            graphics.DrawStop(pos_x, pos_y, sizes.stop)
         end
+        x = x + sizes.stop + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 3 * (perButtonWidth_graphic + spacing))
+        -- 4) PAUSE
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         local pause_state = r.GetPlayState() & 2 == 2
         local pause_color = pause_state and settings.pause_active or settings.transport_normal
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         do
-            local clicked = r.ImGui_InvisibleButton(ctx, "PAUSE", buttonSize, buttonSize)
+            local clicked = r.ImGui_InvisibleButton(ctx, "PAUSE", sizes.pause, sizes.pause)
             if allow_input and clicked then r.Main_OnCommand(PAUSE_COMMAND, 0) end
         end
         update_group_bounds()
-        if settings.use_custom_pause_image and transport_custom_images.pause and r.ImGui_ValidatePtr(transport_custom_images.pause, 'ImGui_Image*') then
+        if settings.use_custom_pause_image and transport_custom_images.pause and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.pause, 'ImGui_Image*')) then
             local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
             if pause_state then uv_x = 0.66 end
-            local scaled_size = buttonSize * settings.custom_pause_image_size * settings.custom_image_size
-            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.pause, pos_x, pos_y, pos_x + scaled_size, pos_y + scaled_size, uv_x, 0, uv_x + 0.33, 1)
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.pause, pos_x, pos_y, pos_x + sizes.pause, pos_y + sizes.pause, uv_x, 0, uv_x + 0.33, 1)
         else
-            local pause_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, pause_color)
-            pause_graphics.DrawPause(pos_x, pos_y, buttonSize)
+            local pause_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.pause, pause_color)
+            pause_graphics.DrawPause(pos_x, pos_y, sizes.pause)
         end
+        x = x + sizes.pause + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 4 * (perButtonWidth_graphic + spacing))
+        -- 5) REC
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         local rec_state = r.GetToggleCommandState(RECORD_COMMAND)
         local rec_color = (rec_state == 1) and settings.record_active or settings.transport_normal
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         do
-            local clicked = r.ImGui_InvisibleButton(ctx, "REC", buttonSize, buttonSize)
+            local clicked = r.ImGui_InvisibleButton(ctx, "REC", sizes.rec, sizes.rec)
             if allow_input and clicked then r.Main_OnCommand(RECORD_COMMAND, 0) end
         end
         update_group_bounds()
         ShowRecordMenu()
-        if settings.use_custom_record_image and transport_custom_images.record and r.ImGui_ValidatePtr(transport_custom_images.record, 'ImGui_Image*') then
+        if settings.use_custom_record_image and transport_custom_images.record and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.record, 'ImGui_Image*')) then
             local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
             if rec_state == 1 then uv_x = 0.66 end
-            local scaled_size = buttonSize * settings.custom_record_image_size * settings.custom_image_size
-            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.record, pos_x, pos_y, pos_x + scaled_size, pos_y + scaled_size, uv_x, 0, uv_x + 0.33, 1)
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.record, pos_x, pos_y, pos_x + sizes.rec, pos_y + sizes.rec, uv_x, 0, uv_x + 0.33, 1)
         else
-            local rec_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, rec_color)
-            rec_graphics.DrawRecord(pos_x, pos_y, buttonSize)
+            local rec_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.rec, rec_color)
+            rec_graphics.DrawRecord(pos_x, pos_y, sizes.rec)
         end
+        x = x + sizes.rec + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 5 * (perButtonWidth_graphic + spacing))
+        -- 6) LOOP
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         local repeat_state = r.GetToggleCommandState(REPEAT_COMMAND)
         local loop_color = (repeat_state == 1) and settings.loop_active or settings.transport_normal
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         do
-            local clicked = r.ImGui_InvisibleButton(ctx, "LOOP", buttonSize, buttonSize)
+            local clicked = r.ImGui_InvisibleButton(ctx, "LOOP", sizes.loop, sizes.loop)
             if allow_input and clicked then r.Main_OnCommand(REPEAT_COMMAND, 0) end
         end
         update_group_bounds()
-        if settings.use_custom_loop_image and transport_custom_images.loop and r.ImGui_ValidatePtr(transport_custom_images.loop, 'ImGui_Image*') then
+        if settings.use_custom_loop_image and transport_custom_images.loop and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.loop, 'ImGui_Image*')) then
             local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
             if repeat_state == 1 then uv_x = 0.66 end
-            local scaled_size = buttonSize * settings.custom_loop_image_size * settings.custom_image_size
-            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.loop, pos_x, pos_y, pos_x + scaled_size, pos_y + scaled_size, uv_x, 0, uv_x + 0.33, 1)
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.loop, pos_x, pos_y, pos_x + sizes.loop, pos_y + sizes.loop, uv_x, 0, uv_x + 0.33, 1)
         else
-            local loop_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, loop_color)
-            loop_graphics.DrawLoop(pos_x, pos_y, buttonSize)
+            local loop_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.loop, loop_color)
+            loop_graphics.DrawLoop(pos_x, pos_y, sizes.loop)
         end
+        x = x + sizes.loop + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 6 * (perButtonWidth_graphic + spacing))
+        -- 7) >>
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         do
-            local clicked = r.ImGui_InvisibleButton(ctx, ">>", buttonSize, buttonSize)
+            local clicked = r.ImGui_InvisibleButton(ctx, ">>", sizes.forward, sizes.forward)
             if allow_input and clicked then r.Main_OnCommand(GOTO_END, 0) end
         end
         update_group_bounds()
-        if settings.use_custom_forward_image and transport_custom_images.forward and r.ImGui_ValidatePtr(transport_custom_images.forward, 'ImGui_Image*') then
+        if settings.use_custom_forward_image and transport_custom_images.forward and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.forward, 'ImGui_Image*')) then
             local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
-            local scaled_size = buttonSize * settings.custom_forward_image_size * settings.custom_image_size
-            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.forward, pos_x, pos_y, pos_x + scaled_size, pos_y + scaled_size, uv_x, 0, uv_x + 0.33, 1)
+            r.ImGui_DrawList_AddImage(drawList, transport_custom_images.forward, pos_x, pos_y, pos_x + sizes.forward, pos_y + sizes.forward, uv_x, 0, uv_x + 0.33, 1)
         else
-            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, buttonSize, settings.transport_normal)
-            graphics.DrawArrows(pos_x+5, pos_y, buttonSize, true)
+            local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.forward, settings.transport_normal)
+            graphics.DrawArrows(pos_x, pos_y, sizes.forward, true)
         end
 
     else
         local clicked
-        local button_w = perButtonWidth_text
+        local x = base_x_px
+        local w = widths_text or {}
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 0 * (button_w + spacing))
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
-        clicked = r.ImGui_Button(ctx, "<<", button_w, buttonSize)
+        clicked = r.ImGui_Button(ctx, "<<", w[1] or perButtonWidth_text, buttonSize)
         if allow_input and clicked then r.Main_OnCommand(GOTO_START, 0) end
         update_group_bounds()
+        x = x + (w[1] or perButtonWidth_text) + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 1 * (button_w + spacing))
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         local play_state = r.GetPlayState() & 1 == 1
         if play_state then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.play_active) end
-        clicked = r.ImGui_Button(ctx, "PLAY", button_w, buttonSize)
+        clicked = r.ImGui_Button(ctx, "PLAY", w[2] or perButtonWidth_text, buttonSize)
         if allow_input and clicked then r.Main_OnCommand(PLAY_COMMAND, 0) end
         if play_state then r.ImGui_PopStyleColor(ctx) end
         update_group_bounds()
         ShowPlaySyncMenu()
+        x = x + (w[2] or perButtonWidth_text) + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 2 * (button_w + spacing))
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
-        clicked = r.ImGui_Button(ctx, "STOP", button_w, buttonSize)
+        clicked = r.ImGui_Button(ctx, "STOP", w[3] or perButtonWidth_text, buttonSize)
         if allow_input and clicked then r.Main_OnCommand(STOP_COMMAND, 0) end
         update_group_bounds()
+        x = x + (w[3] or perButtonWidth_text) + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 3 * (button_w + spacing))
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         local pause_state = r.GetPlayState() & 2 == 2
         if pause_state then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.pause_active) end
-        clicked = r.ImGui_Button(ctx, "PAUSE", button_w, buttonSize)
+        clicked = r.ImGui_Button(ctx, "PAUSE", w[4] or perButtonWidth_text, buttonSize)
         if allow_input and clicked then r.Main_OnCommand(PAUSE_COMMAND, 0) end
         if pause_state then r.ImGui_PopStyleColor(ctx) end
         update_group_bounds()
+        x = x + (w[4] or perButtonWidth_text) + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 4 * (button_w + spacing))
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         local rec_state = r.GetToggleCommandState(RECORD_COMMAND)
         if rec_state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.record_active) end
-        clicked = r.ImGui_Button(ctx, "REC", button_w, buttonSize)
+        clicked = r.ImGui_Button(ctx, "REC", w[5] or perButtonWidth_text, buttonSize)
         if allow_input and clicked then r.Main_OnCommand(RECORD_COMMAND, 0) end
         if rec_state == 1 then r.ImGui_PopStyleColor(ctx) end
         update_group_bounds()
         ShowRecordMenu()
+        x = x + (w[5] or perButtonWidth_text) + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 5 * (button_w + spacing))
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
         local repeat_state = r.GetToggleCommandState(REPEAT_COMMAND)
         if repeat_state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.loop_active) end
-        clicked = r.ImGui_Button(ctx, "LOOP", button_w, buttonSize)
+        clicked = r.ImGui_Button(ctx, "LOOP", w[6] or perButtonWidth_text, buttonSize)
         if allow_input and clicked then r.Main_OnCommand(REPEAT_COMMAND, 0) end
         if repeat_state == 1 then r.ImGui_PopStyleColor(ctx) end
         update_group_bounds()
+        x = x + (w[6] or perButtonWidth_text) + spacing
 
-        r.ImGui_SetCursorPosX(ctx, base_x_px + 6 * (button_w + spacing))
+        r.ImGui_SetCursorPosX(ctx, x)
         r.ImGui_SetCursorPosY(ctx, base_y_px)
-        clicked = r.ImGui_Button(ctx, ">>", button_w, buttonSize)
+        clicked = r.ImGui_Button(ctx, ">>", w[7] or perButtonWidth_text, buttonSize)
         if allow_input and clicked then r.Main_OnCommand(GOTO_END, 0) end
         update_group_bounds()
     end
