@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.8.5
+-- @version 1.8.6
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -3881,9 +3881,12 @@ function GetTrackColorAndTextColor(track)
     if color == 0 then
         return r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, 1), 0x000000FF
     else
-        local red = (color & 0xFF) / 255
-        local green = ((color >> 8) & 0xFF) / 255
-        local blue = ((color >> 16) & 0xFF) / 255
+        -- Convert from REAPER's native color encoding (platform-dependent) to RGB
+        local rr, gg, bb = r.ColorFromNative(color)
+        rr, gg, bb = rr or 128, gg or 128, bb or 128
+        local red = rr / 255
+        local green = gg / 255
+        local blue = bb / 255
         local brightness = (red * 0.299 + green * 0.587 + blue * 0.114)
         local text_color = brightness > 0.5 and 0x000000FF or 0xFFFFFFFF
         return r.ImGui_ColorConvertDouble4ToU32(red, green, blue, 1), text_color
