@@ -1,10 +1,22 @@
 -- TK RAW Audio Editor - Reaper Audio Workstation
--- Version: 0.0.6 ALPHA
+-- Version: 0.0.7 ALPHA
 -- Author: TouristKiller
 --[[
  Changelog:
- 
-
+ v0.0.7 ALPHA:
+ - Added Pitch & Rate controls with real-time preview
+   * Pitch slider (-24 to +24 semitones) with fine-tuning
+   * Rate slider (0.25x to 4.0x speed) for tempo adjustments
+   * "Preserve pitch" option to maintain pitch during rate changes
+   * "Preserve formants" option for natural vocal pitch shifting
+   * Unified slider styling and responsive UI controls
+ - Added sidebar tabs (Edit/FX) for organized tool access
+ - Improved sidebar UI with fixed header and scrollable content
+ - Enhanced navigation controls and consistent styling
+ - Added Mute and Pitch envelopes support
+ - Added FX browser for adding fx to items
+ - Show FX on item in right sidebar
+ - Fixed Bug when making transport invisible
 
  ]]--
 ----------------------------------------------------------------------------------
@@ -79,6 +91,7 @@ CONST = {
         -- Overlay colors (RGBA 0xRRGGBBAA)
         COLOR_ENV_VOL_OVERLAY  = 0x00FF00FF, 
         COLOR_ENV_PAN_OVERLAY  = 0xFF00FFFF, 
+    COLOR_ENV_PITCH_OVERLAY = 0xAA66FFFF,
         COLOR_DC_OVERLAY       = 0xFF6699FF,
         COLOR_FADE_REGION      = 0xFFFFFFFF,
         COLOR_FADE_LINE        = 0x000000FF,
@@ -103,9 +116,9 @@ CONST = {
 SETTINGS = {
         show_grid = true,
         grid_alpha = 1.0,
-        grid_type = "1/4",  -- Grid type: 1/1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64, 1/128, adaptive
-        grid_modifier = "straight",  -- Grid modifier: straight, dotted, triplet
-        sync_project_grid = true,  -- When true, changes to grid_type also update the project grid
+        grid_type = "1/4",  
+        grid_modifier = "straight",  
+        sync_project_grid = true,  
         show_ruler = true,
         ruler_beats = false,
         show_edit_cursor = true,
@@ -123,7 +136,7 @@ SETTINGS = {
         waveform_outline_paths = false,
         waveform_centerline_thickness = 1.5,
         waveform_fill_alpha = 0.18,
-        waveform_color = 0x66FF66FF,  -- Custom waveform color (default green)
+        waveform_color = 0x66FF66FF,  
         view_detail_mode = "fixed",
         view_oversample = 4,
         spectral_peaks = false,
@@ -135,6 +148,7 @@ SETTINGS = {
         spectral_samples_budget = 350000,
         sidebar_collapsed = false,
         sidebar_layout = "vertical", 
+        sidebar_tab = "edit", 
         ripple_item = false,
         glue_include_touching = false,
         glue_after_normalize_sel = false,
@@ -144,19 +158,19 @@ SETTINGS = {
         show_fades = true,
         show_dc_overlay = false,
         show_pan_overlay = false,
-        show_pan_waveform = true,  -- Pan envelope affects waveform display
-        show_volume_waveform = true,  -- Volume envelope affects waveform display
-        show_debug_info = false,  -- Debug meldingen verwijderd
-        show_env_points = true,  -- Algemene toggle voor alle envelope punten
-        show_vol_points = false,  -- Deprecated: gebruik show_env_points
+        show_pan_waveform = true,  
+        show_volume_waveform = true,  
+        show_debug_info = false, 
+        show_env_points = true,  
+        show_vol_points = false, 
         show_sample_points = true,
-        show_sample_stems = true,  -- Show lines from zero to sample points
-        live_sample_edit = true,    -- Replace original samples with live stroke during sample editing
+        show_sample_stems = true,  
+        live_sample_edit = true,    
         show_transport_overlay = true,
         transport_item_only = false,
         pencil_target = "sample_edit", 
         dc_link_lr = true, 
-        sample_edit_sync_lr = true,  -- Sync left and right channels during sample editing
+        sample_edit_sync_lr = true,  
         draw_min_px_step = 1.0,
 }
 
@@ -226,7 +240,7 @@ STATE = {
         vol_pt_last_click_time = 0,
         vol_pt_last_click_x = 0,
         vol_pt_last_click_y = 0,
-        vol_pt_double_click_threshold = 0.35, -- seconden (iets ruimer voor betere detectie)
+        vol_pt_double_click_threshold = 0.35, 
         
         -- Pan envelope dubbel-klik detectie
         pan_pt_last_click_time = 0,
@@ -255,6 +269,18 @@ STATE = {
         game_stars = {},
         game_starfield_w = 0,
         game_starfield_h = 0,
+
+        -- Pitch control state
+        pitch_value = 0.0,       
+        pitch_cents = 0.0,       
+        preserve_formants = false, 
+        preserve_pitch = false,    
+        pitch_algorithm = 0,      
+        rate_value = 1.0,        
+        pitch_window_open = false, 
+        pitch_window_x = 0, 
+        pitch_window_y = 0, 
+        last_pitch_item = nil, 
 
     ts_user_override = false,
 }
@@ -340,7 +366,6 @@ function RunCommandOnItemWithTemporarySelection(item, cmd)
     local proj = 0
     local n = r.CountMediaItems(proj)
     local prev = {}
-    local current_item = item
     for i = 0, n - 1 do
         local it = r.GetMediaItem(proj, i)
         prev[#prev+1] = { it = it, sel = r.IsMediaItemSelected(it) }
@@ -388,6 +413,72 @@ function EnsureTakeVolEnv(take, item)
     local newChunk = table.concat(lines, "\n")
     r.SetItemStateChunk(item, newChunk, true)
     return r.GetTakeEnvelopeByName(take, "Volume")
+end
+
+function EnsureTakeMuteEnv(take, item)
+    if not take or not item then return nil end
+    local env = r.GetTakeEnvelopeByName(take, "Mute")
+    if env then return env end
+    local _, takeGUID = r.GetSetMediaItemTakeInfo_String(take, "GUID", "", false)
+    if not takeGUID or takeGUID == "" then return nil end
+    local ok, chunk = r.GetItemStateChunk(item, '', false)
+    if not ok or not chunk or chunk == '' then return nil end
+    local lines = {}
+    for s in (chunk .. "\n"):gmatch("(.-)\n") do lines[#lines+1] = s end
+    local insertIdx, foundTake, search_take_end = nil, false, true
+    local takeGUID_pat = takeGUID:gsub("-", "%%-")
+    for i = 1, #lines do
+        local line = lines[i]
+        if not foundTake and line:find(takeGUID_pat) then foundTake = true end
+        if foundTake and not insertIdx then
+            if line:find("^<.-ENV$") then
+                insertIdx = i
+            elseif line == ">" and search_take_end then
+                search_take_end = false
+                insertIdx = i + 1
+            end
+        end
+    end
+    if not insertIdx then insertIdx = #lines + 1 end
+    local mute_env = "\n<MUTEENV\nEGUID " .. (r.genGuid and r.genGuid("") or ("{"..tostring(math.random()).."}")) ..
+                     "\nACT 1 -1\nVIS 1 1 1\nLANEHEIGHT 0 0\nARM 1\nDEFSHAPE 0 -1 -1\nPT 0 0 0\n>\n"
+    table.insert(lines, insertIdx, mute_env)
+    local newChunk = table.concat(lines, "\n")
+    r.SetItemStateChunk(item, newChunk, true)
+    return r.GetTakeEnvelopeByName(take, "Mute")
+end
+
+local function EnsureTakePitchEnv(take, item)
+    if not take or not item then return nil end
+    local env = r.GetTakeEnvelopeByName and r.GetTakeEnvelopeByName(take, "Pitch")
+    if env then return env end
+    local _, takeGUID = r.GetSetMediaItemTakeInfo_String(take, "GUID", "", false)
+    if not takeGUID or takeGUID == "" then return nil end
+    local ok, chunk = r.GetItemStateChunk(item, '', false)
+    if not ok or not chunk or chunk == '' then return nil end
+    local lines = {}
+    for s in (chunk .. "\n"):gmatch("(.-)\n") do lines[#lines+1] = s end
+    local insertIdx, foundTake, search_take_end = nil, false, true
+    local takeGUID_pat = takeGUID:gsub("-", "%%-")
+    for i = 1, #lines do
+        local line = lines[i]
+        if not foundTake and line:find(takeGUID_pat) then foundTake = true end
+        if foundTake and not insertIdx then
+            if line:find("^<.-ENV$") then
+                insertIdx = i
+            elseif line == ">" and search_take_end then
+                search_take_end = false
+                insertIdx = i + 1
+            end
+        end
+    end
+    if not insertIdx then insertIdx = #lines + 1 end
+    local pitch_env = "\n<PITCHENV\nEGUID " .. (r.genGuid and r.genGuid("") or ("{"..tostring(math.random()).."}")) ..
+                     "\nACT 1 -1\nVIS 1 1 1\nLANEHEIGHT 0 0\nARM 1\nDEFSHAPE 0 -1 -1\nPT 0 0 0\n>\n"
+    table.insert(lines, insertIdx, pitch_env)
+    local newChunk = table.concat(lines, "\n")
+    r.SetItemStateChunk(item, newChunk, true)
+    return r.GetTakeEnvelopeByName and r.GetTakeEnvelopeByName(take, "Pitch") or nil
 end
 
 function VToEnvelopeValue(env, v, zoom_factor)
@@ -549,6 +640,116 @@ local function PToEnvelopeValue(v)
     return vv
 end
 
+local PITCH_ST_MIN, PITCH_ST_MAX = -12.0, 12.0
+local function PitchNormToSemitones(v)
+    local vv = math.max(-1.0, math.min(1.0, v or 0))
+    return vv * PITCH_ST_MAX 
+end
+
+local function PitchSemitonesToNorm(st)
+    local s = math.max(PITCH_ST_MIN, math.min(PITCH_ST_MAX, st or 0))
+    return s / PITCH_ST_MAX
+end
+
+local function PitchToEnvelopeValue(env, v)
+    local semis = PitchNormToSemitones(v)
+    return semis
+end
+
+function CommitStrokeToTakePitchEnv(take, item, points, item_pos, view_len_px, view_w_px)
+    if not take or not item or not points or #points < 1 then return false end
+    local env = EnsureTakePitchEnv(take, item)
+    if not env then return false end
+    local it_start = item_pos or 0
+    local it_end = it_start + (current_item_len or 0)
+    local t0, t1 = math.huge, -math.huge
+    for i = 1, #points do
+        local t = points[i].t or 0
+        if t < t0 then t0 = t end
+        if t > t1 then t1 = t end
+    end
+    if t0 == math.huge or t1 == -math.huge or t1 <= t0 then return false end
+    if t0 < it_start then t0 = it_start end
+    if t1 > it_end then t1 = it_end end
+
+    local t0_in = t0 - it_start
+    local t1_in = t1 - it_start
+
+    local function eval_env_raw(envh, t_in)
+        local cnt = r.CountEnvelopePoints(envh) or 0
+        if cnt == 0 then return 0.0 end
+        local prev_val, next_val = nil, nil
+        local prev_time, next_time = -math.huge, math.huge
+        for i = 0, cnt - 1 do
+            local rv, time, val = r.GetEnvelopePoint(envh, i)
+            if rv then
+                if time <= t_in and time > prev_time then prev_time, prev_val = time, val end
+                if time >= t_in and time < next_time then next_time, next_val = time, val end
+            end
+        end
+        if prev_val ~= nil and next_val ~= nil then
+            local tspan = (next_time - prev_time)
+            if tspan > 0 then
+                local a = (t_in - prev_time) / tspan
+                return prev_val + (next_val - prev_val) * a
+            else
+                return prev_val
+            end
+        end
+        return prev_val or next_val or 0.0
+    end
+
+    local min_px = math.max(0.1, draw_min_px_step or DRAW_MIN_PX_STEP)
+    local px_to_time = (view_len or 0) / math.max(1, view_w_px or 1)
+    local eps_anchor = math.max(0.0005, (min_px * px_to_time) * 0.5)
+    local eps_delete = math.max(1e-6, (min_px * px_to_time) * 0.25)
+
+    local pre_time = math.max(0, t0_in - eps_anchor)
+    local post_time = math.min((current_item_len or 0), t1_in + eps_anchor)
+
+    local v_start = eval_env_raw(env, t0_in)
+    local v_end   = eval_env_raw(env, t1_in)
+    local v_pre   = eval_env_raw(env, pre_time)
+    local v_post  = eval_env_raw(env, post_time)
+
+    if r.DeleteEnvelopePointRange and (t1_in - t0_in) > (2 * eps_delete) then
+        r.DeleteEnvelopePointRange(env, t0_in + eps_delete, t1_in - eps_delete)
+    end
+
+    if v_pre  ~= nil then r.InsertEnvelopePoint(env, pre_time,  v_pre,  0, 0, 0, true) end
+    if v_start~= nil then r.InsertEnvelopePoint(env, t0_in,     v_start,0, 0, 0, true) end
+    if v_end  ~= nil then r.InsertEnvelopePoint(env, t1_in,     v_end,  0, 0, 0, true) end
+    if v_post ~= nil then r.InsertEnvelopePoint(env, post_time, v_post, 0, 0, 0, true) end
+
+    local min_dt = min_px * px_to_time
+    local last_t_in = nil
+    local unsorted = true
+    local points_added = 0
+
+    local sorted_points = {}
+    for i = 1, #points do
+        table.insert(sorted_points, points[i])
+    end
+    table.sort(sorted_points, function(a, b) return (a.t or 0) < (b.t or 0) end)
+
+    for i = 1, #sorted_points do
+        local p = sorted_points[i]
+        local t_in = (p.t or 0) - it_start
+        if t_in >= t0_in and t_in <= t1_in then
+            local time_ok = (not last_t_in) or (t_in - last_t_in >= (min_dt or 0))
+            local val = PitchToEnvelopeValue(env, p.v)
+            if time_ok and val ~= nil then
+                r.InsertEnvelopePoint(env, t_in, val, 0, 0, 0, unsorted)
+                last_t_in = t_in
+                points_added = points_added + 1
+            end
+        end
+    end
+
+    r.Envelope_SortPoints(env)
+    return points_added > 0
+end
+
 function CommitStrokeToTakePanEnv(take, item, points, item_pos, view_len_px, view_w_px)
     if not take or not item or not points or #points < 1 then return false end
     
@@ -652,11 +853,110 @@ function CommitStrokeToTakePanEnv(take, item, points, item_pos, view_len_px, vie
     return points_added > 0
 end
 
+function CommitStrokeToTakeMuteEnv(take, item, points, item_pos, view_len_px, view_w_px)
+    if not take or not item or not points or #points < 1 then return false end
+    local env = EnsureTakeMuteEnv(take, item)
+    if not env then return false end
+    local it_start = item_pos or 0
+    local it_end = it_start + (current_item_len or 0)
+    local t0, t1 = math.huge, -math.huge
+    for i = 1, #points do
+        local t = points[i].t or 0
+        if t < t0 then t0 = t end
+        if t > t1 then t1 = t end
+    end
+    if t0 == math.huge or t1 == -math.huge or t1 <= t0 then return false end
+    if t0 < it_start then t0 = it_start end
+    if t1 > it_end then t1 = it_end end
+
+    local t0_in = t0 - it_start
+    local t1_in = t1 - it_start
+
+    local function eval_env(envh, t_in)
+        if r.Envelope_Evaluate then
+            local _, val = r.Envelope_Evaluate(envh, t_in, 0, 0)
+            if val ~= nil then return val end
+        end
+        local cnt = r.CountEnvelopePoints(envh) or 0
+        local prev_val, next_val = nil, nil
+        local prev_time, next_time = -math.huge, math.huge
+        for i = 0, cnt - 1 do
+            local rv, time, val = r.GetEnvelopePoint(envh, i)
+            if rv then
+                if time <= t_in and time > prev_time then prev_time, prev_val = time, val end
+                if time >= t_in and time < next_time then next_time, next_val = time, val end
+            end
+        end
+        if prev_val ~= nil and next_val ~= nil then
+            local tspan = (next_time - prev_time)
+            if tspan > 0 then
+                local a = (t_in - prev_time) / tspan
+                return prev_val + (next_val - prev_val) * a
+            else
+                return prev_val
+            end
+        end
+        return prev_val or next_val or 0.0
+    end
+
+    local min_px = math.max(0.1, draw_min_px_step or DRAW_MIN_PX_STEP)
+    local px_to_time = (view_len or 0) / math.max(1, view_w_px or 1)
+    local eps_anchor = math.max(0.0005, (min_px * px_to_time) * 0.5)
+    local eps_delete = math.max(1e-6, (min_px * px_to_time) * 0.25)
+
+    local pre_time = math.max(0, t0_in - eps_anchor)
+    local post_time = math.min((current_item_len or 0), t1_in + eps_anchor)
+
+    local v_start = eval_env(env, t0_in)
+    local v_end = eval_env(env, t1_in)
+    local v_pre = eval_env(env, pre_time)
+    local v_post = eval_env(env, post_time)
+
+    if r.DeleteEnvelopePointRange and (t1_in - t0_in) > (2 * eps_delete) then
+        r.DeleteEnvelopePointRange(env, t0_in + eps_delete, t1_in - eps_delete)
+    end
+
+    if v_pre ~= nil then r.InsertEnvelopePoint(env, pre_time, (v_pre >= 0.5) and 1.0 or 0.0, 0, 0, 0, true) end
+    if v_start ~= nil then r.InsertEnvelopePoint(env, t0_in, (v_start >= 0.5) and 1.0 or 0.0, 0, 0, 0, true) end
+    if v_end ~= nil then r.InsertEnvelopePoint(env, t1_in, (v_end >= 0.5) and 1.0 or 0.0, 0, 0, 0, true) end
+    if v_post ~= nil then r.InsertEnvelopePoint(env, post_time, (v_post >= 0.5) and 1.0 or 0.0, 0, 0, 0, true) end
+
+    local min_dt = min_px * px_to_time
+    local last_t_in = nil
+    local unsorted = true
+    local points_added = 0
+
+    local sorted_points = {}
+    for i = 1, #points do sorted_points[i] = points[i] end
+    table.sort(sorted_points, function(a,b) return (a.t or 0) < (b.t or 0) end)
+
+    for i = 1, #sorted_points do
+        local p = sorted_points[i]
+        local t_in = (p.t or 0) - it_start
+        if t_in >= t0_in and t_in <= t1_in then
+            local time_ok = (not last_t_in) or (t_in - last_t_in >= (min_dt or 0))
+            local bin = ((p.v or 0) >= 0.5) and 1.0 or 0.0
+            if time_ok then
+                r.InsertEnvelopePoint(env, t_in, bin, 0, 0, 0, unsorted)
+                last_t_in = t_in
+                points_added = points_added + 1
+            end
+        end
+    end
+
+    r.Envelope_SortPoints(env)
+    return points_added > 0
+end
+
 local function EnsureActiveTakeEnvelopeVisible(target, take, item)
     if not take or not item then return end
     local env = nil
     if target == "item_pan" then
         env = EnsureTakePanEnv(take, item)
+    elseif target == "item_pitch" then
+        env = EnsureTakePitchEnv and EnsureTakePitchEnv(take, item) or (r.GetTakeEnvelopeByName and r.GetTakeEnvelopeByName(take, "Pitch"))
+    elseif target == "item_mute" then
+        env = EnsureTakeMuteEnv and EnsureTakeMuteEnv(take, item) or (r.GetTakeEnvelopeByName and r.GetTakeEnvelopeByName(take, "Mute"))
     else
         env = EnsureTakeVolEnv(take, item)
     end
@@ -822,16 +1122,55 @@ function HandleEnvelopePointInteraction(env, env_type, hovered, mx, my, content_
             
             return math.max(-1, math.min(1, pan_value))
         end
+    elseif env_type == "mute" then
+        hover_idx_key = "mute_pt_hover_idx"
+        drag_idx_key = "mute_pt_drag_idx"
+        undo_open_key = "mute_pt_undo_open"
+        last_click_time_key = "mute_pt_last_click_time"
+        last_click_x_key = "mute_pt_last_click_x"
+        last_click_y_key = "mute_pt_last_click_y"
+        threshold_key = "mute_pt_double_click_threshold"
+        undo_text_prefix = "RAW: Add Mute envelope point"
+
+        value_converter = function(y)
+            local ty = top_y or 0
+            local by = bot_y or 1
+            if by < ty then ty, by = by, ty end
+            local yy = math.max(ty, math.min(by, y or ty))
+            local cy = (ty + by) * 0.5
+            return (yy <= cy) and 1.0 or 0.0
+        end
+    elseif env_type == "pitch" then
+        hover_idx_key = "pitch_pt_hover_idx"
+        drag_idx_key = "pitch_pt_drag_idx"
+        undo_open_key = "pitch_pt_undo_open"
+        last_click_time_key = "pitch_pt_last_click_time"
+        last_click_x_key = "pitch_pt_last_click_x"
+        last_click_y_key = "pitch_pt_last_click_y"
+        threshold_key = "pitch_pt_double_click_threshold"
+        undo_text_prefix = "RAW: Add Pitch envelope point"
+
+        value_converter = function(y)
+            local norm_y = (y - top_y) / math.max(1, bot_y - top_y)
+            norm_y = math.max(0, math.min(1, norm_y))
+            local norm = (1 - norm_y) * 2 - 1 -- -1..+1
+            local semis = PitchNormToSemitones(norm)
+            return semis
+        end
     else
         return 
         end
     
     if STATE[hover_idx_key] == nil and r.ImGui_IsMouseClicked(ctx, 0) then
         local current_time = r.time_precise()
-        local time_diff = current_time - STATE[last_click_time_key]
-        local pos_diff = math.abs(mx - STATE[last_click_x_key]) + math.abs(my - STATE[last_click_y_key])
+        local last_time = STATE[last_click_time_key] or 0
+        local last_x = STATE[last_click_x_key] or mx
+        local last_y = STATE[last_click_y_key] or my
+        local time_diff = current_time - last_time
+        local pos_diff = math.abs(mx - last_x) + math.abs(my - last_y)
+        local dbl_thresh = STATE[threshold_key] or 0.25
         
-        if time_diff < STATE[threshold_key] and pos_diff < 15 then
+        if time_diff < dbl_thresh and pos_diff < 15 then
             if not STATE[undo_open_key] then r.Undo_BeginBlock(); STATE[undo_open_key] = true end
             
             local mx_norm = (mx - content_x) / math.max(1, wave_w)
@@ -859,7 +1198,7 @@ function HandleEnvelopePointInteraction(env, env_type, hovered, mx, my, content_
     
     if STATE[hover_idx_key] ~= nil and hasAlt and not hasCtrl and r.ImGui_IsMouseClicked(ctx, 0) then
         r.Undo_BeginBlock()
-        r.DeleteEnvelopePointEx(env, -1, STATE[hover_idx_key])
+    r.DeleteEnvelopePointEx(env, -1, STATE[hover_idx_key])
         r.Envelope_SortPoints(env)
         r.UpdateArrange()
         r.Undo_EndBlock(string.gsub(undo_text_prefix, "Add", "Delete"), -1)
@@ -907,8 +1246,16 @@ function HandleEnvelopePointSelectionDelete(env, env_type, hasCtrl, hasAlt, sel_
     if not env or not hasCtrl or not hasAlt or not sel_a or not sel_b then return end
     if sel_b <= sel_a then return end
     
-    local undo_text = env_type == "volume" and "RAW: Delete Volume envelope points in selection" 
-                                           or "RAW: Delete Pan envelope points in selection"
+    local undo_text
+    if env_type == "volume" then
+        undo_text = "RAW: Delete Volume envelope points in selection"
+    elseif env_type == "pan" then
+        undo_text = "RAW: Delete Pan envelope points in selection"
+    elseif env_type == "mute" then
+        undo_text = "RAW: Delete Mute envelope points in selection"
+    else
+        undo_text = "RAW: Delete Pitch envelope points in selection"
+    end
     
     local t0_in = math.max(0, math.min(current_item_len or 0, sel_a - it_start))
     local t1_in = math.max(0, math.min(current_item_len or 0, sel_b - it_start))
@@ -2315,6 +2662,7 @@ local function SettingsToBlob()
     add("transport_item_only", transport_item_only and 1 or 0)
     add("sidebar_collapsed", sidebar_collapsed and 1 or 0)
     add("sidebar_layout", sidebar_layout or "vertical")
+    add("sidebar_tab", sidebar_tab or "edit")
     add("ripple_item", ripple_item and 1 or 0)
     add("glue_include_touching", glue_include_touching and 1 or 0)
     add("spectral_peaks", spectral_peaks and 1 or 0)
@@ -2339,7 +2687,7 @@ local function SettingsToBlob()
     add("prefer_sws_normalize", prefer_sws_normalize and 1 or 0)
     add("reverse_sel_glue_after", reverse_sel_glue_after and 1 or 0)
     add("sws_norm_named_cmd", sws_norm_named_cmd or "")
-    add("pencil_target", pencil_target or "dc_offset")
+    add("pencil_target", pencil_target or "sample_edit")
     add("draw_min_px_step", draw_min_px_step or 1.0)
     add("dc_link_lr", dc_link_lr and 1 or 0)
     add("game_starfield", game_starfield and 1 or 0)
@@ -2413,6 +2761,7 @@ local function LoadSettings()
     local wc = get("waveform_color"); if wc then local v = tonumber(wc); if v then waveform_color = v end end
     local sc = get("sidebar_collapsed"); if sc then sidebar_collapsed = (sc == "1" or sc == "true") end
     local sly = get("sidebar_layout"); if sly and (sly == "horizontal" or sly == "vertical") then sidebar_layout = sly end
+    local stb = get("sidebar_tab"); if stb and (stb == "edit" or stb == "fx") then sidebar_tab = stb end
     local ri = get("ripple_item"); if ri then ripple_item = (ri == "1" or ri == "true") end
     local git = get("glue_include_touching"); if git then glue_include_touching = (git == "1" or git == "true") end
     local sp = get("spectral_peaks"); if sp then spectral_peaks = (sp == "1" or sp == "true") end
@@ -2445,7 +2794,8 @@ local function LoadSettings()
     local ptg = get("pencil_target")
     if ptg ~= nil and ptg ~= "" then
         if ptg == "gum" then ptg = "eraser" end
-        if ptg == "dc_offset" or ptg == "eraser" or ptg == "item_vol" or ptg == "item_pan" or ptg == "silence" or ptg == "sample_edit" then pencil_target = ptg end
+        if ptg == "dc_offset" then ptg = "sample_edit" end -- Convert old dc_offset to sample_edit
+        if ptg == "eraser" or ptg == "item_vol" or ptg == "item_pan" or ptg == "silence" or ptg == "sample_edit" then pencil_target = ptg end
     end
     local dll = get("dc_link_lr"); if dll then dc_link_lr = (dll == "1" or dll == "true") end
     local tio = get("transport_item_only"); if tio then transport_item_only = (tio == "1" or tio == "true") end
@@ -2454,6 +2804,164 @@ local function LoadSettings()
     local vm = get("views_map"); if vm then VIEWS = DecodeViews(vm) end
 
     if not cfg then SaveSettings() end
+end
+
+-- Launch TK RAW Take FX Browser from the same folder as this script
+local function OpenTakeFXBrowser()
+    -- Resolve this script's directory and run the neighboring Take FX Browser directly
+    local src = debug.getinfo(1, 'S').source or ''
+    if src:sub(1,1) == '@' then src = src:sub(2) end
+    local base_dir = src:match("^(.*[\\/])") or ""
+    -- Clear any pending close/toggle command so the browser doesn't auto-close on start
+    r.SetExtState('TK_RAW_FX_BROWSER','command','', false)
+    dofile(base_dir .. "TK_RAW_fx browser.lua")
+end
+
+-- Toggle bypass state for all Take FX on selected items (fallback to current item)
+local function ToggleBypassAllTakeFX()
+    local proj = 0
+    local items = {}
+    local sel_count = r.CountSelectedMediaItems(proj) or 0
+    if sel_count > 0 then
+        for i = 0, sel_count - 1 do
+            local it = r.GetSelectedMediaItem(proj, i)
+            if it and ValidItem(it) then items[#items+1] = it end
+        end
+    elseif current_item and ValidItem(current_item) then
+        items[#items+1] = current_item
+    end
+    if #items == 0 then
+        r.ShowMessageBox("No items selected.", "Bypass Take FX", 0)
+        return
+    end
+
+    local any_enabled = false
+    for _, it in ipairs(items) do
+        local take_count = r.CountTakes(it) or 0
+        for ti = 0, take_count - 1 do
+            local take = r.GetTake(it, ti)
+            if take then
+                local fx_count = r.TakeFX_GetCount(take) or 0
+                for fx = 0, fx_count - 1 do
+                    if r.TakeFX_GetEnabled(take, fx) then any_enabled = true; break end
+                end
+            end
+            if any_enabled then break end
+        end
+        if any_enabled then break end
+    end
+
+    local enable = not any_enabled -- if any is enabled, we will bypass all; else enable all
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for _, it in ipairs(items) do
+        local take_count = r.CountTakes(it) or 0
+        for ti = 0, take_count - 1 do
+            local take = r.GetTake(it, ti)
+            if take then
+                local fx_count = r.TakeFX_GetCount(take) or 0
+                for fx = 0, fx_count - 1 do
+                    r.TakeFX_SetEnabled(take, fx, enable)
+                end
+            end
+        end
+    end
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+    r.Undo_EndBlock(enable and "RAW: Enable all take FX" or "RAW: Bypass all take FX", -1)
+end
+
+-- Helpers to access active take and its FX
+local function GetActiveItemTake()
+    if current_take and ValidTake(current_take) and current_item and ValidItem(current_item) then
+        return current_item, current_take
+    end
+    local proj = 0
+    local sel_count = r.CountSelectedMediaItems(proj) or 0
+    if sel_count > 0 then
+        local it = r.GetSelectedMediaItem(proj, 0)
+        if it and ValidItem(it) then
+            local take = r.GetActiveTake(it)
+            if take and ValidTake(take) then return it, take end
+        end
+    end
+    return nil, nil
+end
+
+-- Clean display name: remove type prefix (e.g., "VST3:") and trailing vendor in parentheses
+local function CleanFxDisplayName(s)
+    s = tostring(s or '')
+    -- Remove leading token + colon (e.g., "VST3:", "VST:", "CLAP:", "JS:")
+    s = s:gsub('^%s*[%w_]+%s*:%s*', '')
+    -- Remove trailing parenthetical group (e.g., "(Vendor)")
+    s = s:gsub('%s*%([^)]-%)%s*$', '')
+    -- Trim whitespace
+    s = s:gsub('^%s+', ''):gsub('%s+$', '')
+    return s
+end
+
+local function EnumerateTakeFX(take)
+    local list = {}
+    if not take or not ValidTake(take) then return list end
+    local cnt = r.TakeFX_GetCount(take) or 0
+    for i = 0, cnt - 1 do
+        local _, name = r.TakeFX_GetFXName(take, i, '')
+        name = CleanFxDisplayName(name)
+        local enabled = r.TakeFX_GetEnabled(take, i)
+        list[#list+1] = { index = i, name = name or ("FX "..i), enabled = enabled and true or false }
+    end
+    return list
+end
+
+local function DrawTakeFXSection(side_margin, btn_w, side_spacing)
+    local it, take = GetActiveItemTake()
+    r.ImGui_SetCursorPosX(ctx, side_margin)
+    r.ImGui_Text(ctx, "Take FX")
+    r.ImGui_Dummy(ctx, 1, 4)
+    r.ImGui_SetCursorPosX(ctx, side_margin)
+    local ch_flags = (r.ImGui_ChildFlags_Border and r.ImGui_ChildFlags_Border()) or 0
+    local list_h = 220
+    if r.ImGui_BeginChild(ctx, 'take_fx_list', btn_w, list_h, ch_flags) then
+        if not take then
+            r.ImGui_Text(ctx, "No active take")
+        else
+            local fx_list = EnumerateTakeFX(take)
+            if #fx_list == 0 then
+                r.ImGui_Text(ctx, "No take FX")
+            else
+                for _, fx in ipairs(fx_list) do
+                    local label = (fx.enabled and "● " or "○ ") .. fx.name
+                    if r.ImGui_Selectable(ctx, label, false) then
+                        local hwnd = r.TakeFX_GetFloatingWindow and r.TakeFX_GetFloatingWindow(take, fx.index) or nil
+                        r.TakeFX_Show(take, fx.index, hwnd and 2 or 3)
+                    end
+                    if r.ImGui_BeginPopupContextItem(ctx, 'takefx_ctx##' .. fx.index) then
+                        local is_open = r.TakeFX_GetFloatingWindow and (r.TakeFX_GetFloatingWindow(take, fx.index) ~= nil)
+                        if r.ImGui_MenuItem(ctx, is_open and 'Close UI' or 'Open UI') then
+                            r.TakeFX_Show(take, fx.index, is_open and 2 or 3)
+                        end
+                        local toggle_label = fx.enabled and 'Disable' or 'Enable'
+                        if r.ImGui_MenuItem(ctx, toggle_label) then
+                            r.Undo_BeginBlock()
+                            r.TakeFX_SetEnabled(take, fx.index, not fx.enabled)
+                            r.Undo_EndBlock('RAW: Toggle take FX enable', -1)
+                        end
+                        if r.ImGui_MenuItem(ctx, 'Remove') then
+                            r.Undo_BeginBlock()
+                            r.TakeFX_Delete(take, fx.index)
+                            r.Undo_EndBlock('RAW: Remove take FX', -1)
+                            if r.ImGui_CloseCurrentPopup then r.ImGui_CloseCurrentPopup(ctx) end
+                            r.ImGui_EndPopup(ctx)
+                            break 
+                        end
+                        r.ImGui_EndPopup(ctx)
+                    end
+                end
+            end
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_Dummy(ctx, 1, side_spacing)
 end
 
 local function CurrentOversample()
@@ -3912,6 +4420,172 @@ local function ConvertToStereo()
     LoadPeaks(temp_item, false)
 end
 
+-- PITCH CONTROL FUNCTIONS --
+local function GetCurrentTakePitch()
+    if not current_take then return 0.0, 0.0 end
+    local pitch_semitones = r.GetMediaItemTakeInfo_Value(current_take, "D_PITCH") or 0.0
+    local whole_semitones = math.floor(pitch_semitones + 0.5)
+    local cents = (pitch_semitones - whole_semitones) * 100.0
+    return whole_semitones, cents
+end
+
+local function SetTakePitch(take, semitones, cents)
+    if not take then return end
+    local total_pitch = semitones + (cents or 0.0) / 100.0
+    r.SetMediaItemTakeInfo_Value(take, "D_PITCH", total_pitch)
+    
+    if STATE.preserve_formants then
+        r.SetMediaItemTakeInfo_Value(take, "B_PPITCH", 1)
+    end
+end
+
+local function ApplyPitchToCurrentItem()
+    if not current_item then return end
+    local take = r.GetActiveTake(current_item)
+    if not take then return end
+    
+    r.Undo_BeginBlock()
+    SetTakePitch(take, pitch_value, pitch_cents)
+    r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", STATE.rate_value)
+    r.SetMediaItemTakeInfo_Value(take, "B_RSMODEPITCH", STATE.preserve_pitch and 1 or 0)
+    r.UpdateArrange()
+    r.Undo_EndBlock("RAW: Set pitch & rate", -1)
+end
+
+local function NudgePitch(semitone_delta, cents_delta)
+    if not current_item then return end
+    local take = r.GetActiveTake(current_item)
+    if not take then return end
+    
+    local current_pitch = r.GetMediaItemTakeInfo_Value(take, "D_PITCH") or 0.0
+    local new_pitch = current_pitch + (semitone_delta or 0.0) + ((cents_delta or 0.0) / 100.0)
+    new_pitch = math.max(-24.0, math.min(24.0, new_pitch))  -- Clamp to reasonable range
+    
+    r.Undo_BeginBlock()
+    r.SetMediaItemTakeInfo_Value(take, "D_PITCH", new_pitch)
+    if STATE.preserve_formants then
+        r.SetMediaItemTakeInfo_Value(take, "B_PPITCH", 1)
+    end
+    r.UpdateArrange()
+    r.Undo_EndBlock("RAW: Nudge pitch", -1)
+    
+    pitch_value = math.floor(new_pitch + 0.5)
+    pitch_cents = (new_pitch - pitch_value) * 100.0
+end
+
+local function ResetPitch()
+    if not current_item then return end
+    local take = r.GetActiveTake(current_item)
+    if not take then return end
+    
+    r.Undo_BeginBlock()
+    r.SetMediaItemTakeInfo_Value(take, "D_PITCH", 0.0)
+    r.UpdateArrange()
+    r.Undo_EndBlock("RAW: Reset pitch", -1)
+    
+    pitch_value = 0.0
+    pitch_cents = 0.0
+end
+
+local function NudgeRate(delta)
+    if not current_item then return end
+    local take = r.GetActiveTake(current_item)
+    if not take then return end
+    
+    local new_rate = STATE.rate_value + delta
+    new_rate = math.max(0.1, math.min(4.0, new_rate))  -- Clamp to reasonable range
+    
+    r.Undo_BeginBlock()
+    r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", new_rate)
+    r.SetMediaItemTakeInfo_Value(take, "B_RSMODEPITCH", STATE.preserve_pitch and 1 or 0)
+    r.UpdateArrange()
+    r.Undo_EndBlock("RAW: Nudge rate", -1)
+    
+    STATE.rate_value = new_rate
+end
+
+local function ResetRate()
+    if not current_item then return end
+    local take = r.GetActiveTake(current_item)
+    if not take then return end
+    
+    r.Undo_BeginBlock()
+    r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", 1.0)
+    r.SetMediaItemTakeInfo_Value(take, "B_RSMODEPITCH", STATE.preserve_pitch and 1 or 0)
+    r.UpdateArrange()
+    r.Undo_EndBlock("RAW: Reset rate", -1)
+    
+    STATE.rate_value = 1.0
+end
+
+local function DrawCustomSlider(ctx, id, label, value, min_val, max_val, format, width, height, dlp, label_width)
+    local label_w = label_width or 70.0
+    width = width or 200.0
+    height = height or 16.0
+    
+    r.ImGui_Text(ctx, label)
+    r.ImGui_SameLine(ctx, label_w)
+    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+    
+    r.ImGui_InvisibleButton(ctx, id, width, height)
+    local hovered = r.ImGui_IsItemHovered(ctx)
+    local active = r.ImGui_IsItemActive(ctx)
+    
+    local x0, y0 = cursor_x, cursor_y
+    local cx = x0 + 8.0
+    local cy = y0 + height * 0.5
+    local track_w = width - 16.0
+    local norm = (value - min_val) / (max_val - min_val)
+    if norm < 0.0 then norm = 0.0 elseif norm > 1.0 then norm = 1.0 end
+    
+    local new_value = value
+    if active then
+        local mx, _ = r.ImGui_GetMousePos(ctx)
+        local new_norm = (mx - cx) / math.max(1.0, track_w)
+        if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+        new_value = min_val + (new_norm * (max_val - min_val))
+        norm = new_norm
+    elseif hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+        local mx, _ = r.ImGui_GetMousePos(ctx)
+        local new_norm = (mx - cx) / math.max(1.0, track_w)
+        if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+        new_value = min_val + (new_norm * (max_val - min_val))
+        norm = new_norm
+    end
+    
+    local track_col = 0x666666FF
+    local knob_x = cx + norm * track_w
+    r.ImGui_DrawList_AddLine(dlp, cx, cy, cx + track_w, cy, track_col, 2.0)
+    r.ImGui_DrawList_AddCircleFilled(dlp, knob_x, cy, 6.0, 0xFFFFFFFF)
+    r.ImGui_DrawList_AddCircle(dlp, knob_x, cy, 6.0, 0x333333FF, 0, 1.0)
+    
+    r.ImGui_SameLine(ctx)
+    r.ImGui_Text(ctx, string.format(format, new_value))
+    
+    return new_value ~= value, new_value
+end
+
+local function UpdatePitchFromCurrentItem()
+    if STATE.last_pitch_item == current_item then
+        return
+    end
+    
+    STATE.last_pitch_item = current_item
+    
+    if current_take then
+        pitch_value, pitch_cents = GetCurrentTakePitch()
+        STATE.rate_value = r.GetMediaItemTakeInfo_Value(current_take, "D_PLAYRATE")
+        STATE.preserve_formants = r.GetMediaItemTakeInfo_Value(current_take, "B_PPITCH") == 1
+        STATE.preserve_pitch = r.GetMediaItemTakeInfo_Value(current_take, "B_RSMODEPITCH") == 1
+    else
+        pitch_value = 0.0
+        pitch_cents = 0.0
+        STATE.rate_value = 1.0
+        STATE.preserve_formants = false
+        STATE.preserve_pitch = false
+    end
+end
+
 local function IsCurrentItemMono()
     if not current_take then return false end
     if not r.ValidatePtr2(0, current_take, "MediaItem_Take*") then 
@@ -3937,6 +4611,12 @@ local function SelectAndLoadItem(item)
     if current_accessor then r.DestroyAudioAccessor(current_accessor); current_accessor = nil end
     peak_pyr = nil; peak_pyr_ch = nil; is_loaded = false
     LoadPeaks(item)
+    if current_take then
+        pitch_value, pitch_cents = GetCurrentTakePitch()
+    else
+        pitch_value = 0.0
+        pitch_cents = 0.0
+    end
 end
 
 local function GotoPrevItemOnTrack()
@@ -5552,6 +6232,12 @@ local function Loop()
                 last_sel_guid = guid
                 pending_sel_reload = (pending_sel_reload or 1) - 1
                 did_reload_from_selection = true
+                if current_take then
+                    pitch_value, pitch_cents = GetCurrentTakePitch()
+                else
+                    pitch_value = 0.0
+                    pitch_cents = 0.0
+                end
             end
         end
         if not did_reload_from_selection then LoadPeaks() end
@@ -5642,6 +6328,27 @@ local function Loop()
                         peak_pyr = nil
                         is_loaded = false; LoadPeaks(target)
                     end
+                end
+                
+                if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_LeftBracket(), false) then
+                    is_interacting = true; last_interaction_time = r.time_precise()
+                    NudgePitch(-1.0, 0.0)  -- [ = pitch down 1 semitone
+                end
+                if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_RightBracket(), false) then
+                    is_interacting = true; last_interaction_time = r.time_precise()
+                    NudgePitch(1.0, 0.0)   -- ] = pitch up 1 semitone
+                end
+                if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Semicolon(), false) then
+                    is_interacting = true; last_interaction_time = r.time_precise()
+                    NudgePitch(0.0, -10.0) -- ; = pitch down 10 cents
+                end
+                if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Apostrophe(), false) then
+                    is_interacting = true; last_interaction_time = r.time_precise()
+                    NudgePitch(0.0, 10.0)  -- ' = pitch up 10 cents
+                end
+                if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_P(), false) then
+                    is_interacting = true; last_interaction_time = r.time_precise()
+                    ResetPitch()           -- P = reset pitch
                 end
             end
         end
@@ -5790,10 +6497,9 @@ local function Loop()
                     SaveSettings()
                 end
                 r.ImGui_Text(ctx, string.format("Max ZCR (Hz): %.0f", spectral_max_zcr_hz))
-                r.ImGui_PushItemWidth(ctx, 180)
-                local changed, newv = r.ImGui_SliderDouble(ctx, "##maxzcr", spectral_max_zcr_hz or 8000, 1000, 16000, "%.0f")
-                r.ImGui_PopItemWidth(ctx)
-                if changed then spectral_max_zcr_hz = newv; view_cache_valid = false; spectral_max_zcr_dirty = true end
+                local dlp = r.ImGui_GetWindowDrawList(ctx)
+                local zcr_changed, zcr_new = DrawCustomSlider(ctx, "##maxzcr_custom", "", spectral_max_zcr_hz or 8000, 1000, 16000, "%.0f Hz", 180, 16, dlp)
+                if zcr_changed then spectral_max_zcr_hz = zcr_new; view_cache_valid = false; spectral_max_zcr_dirty = true end
                 if spectral_max_zcr_dirty and (not r.ImGui_IsMouseDown(ctx, 0)) then spectral_max_zcr_dirty = false; SaveSettings() end
             end
             r.ImGui_EndPopup(ctx)
@@ -5965,7 +6671,7 @@ local function Loop()
             display_text = display_text .. " " .. (grid_modifier or "straight")
         end
         
-        if r.ImGui_BeginCombo(ctx, "##grid_type", display_text) then
+        if r.ImGui_BeginCombo(ctx, "##grid_type", display_text, r.ImGui_ComboFlags_HeightLarge()) then
             for i, gtype in ipairs(grid_types) do
                 local is_selected = (i == current_type_idx)
                 if r.ImGui_Selectable(ctx, gtype, is_selected) then
@@ -6205,11 +6911,12 @@ local function Loop()
                 end
                 SaveSettings() 
             end
-            local th_changed, th_val = r.ImGui_SliderDouble(ctx, "Centerline thickness", waveform_centerline_thickness, 0.6, 4.0, "%.2f")
-            if th_val ~= nil then waveform_centerline_thickness = th_val; th_slider_dirty = true elseif th_changed ~= nil then waveform_centerline_thickness = th_changed; th_slider_dirty = true end
+            local dlp = r.ImGui_GetWindowDrawList(ctx)
+            local th_changed, th_val = DrawCustomSlider(ctx, "##centerline_custom", "Centerline thickness:", waveform_centerline_thickness, 0.6, 4.0, "%.2f", 180, 16, dlp, 130)
+            if th_changed then waveform_centerline_thickness = th_val; th_slider_dirty = true end
             if th_slider_dirty and (not r.ImGui_IsMouseDown(ctx, 0)) then th_slider_dirty = false; SaveSettings() end
-            local fa_changed, fa_val = r.ImGui_SliderDouble(ctx, "Fill alpha", waveform_fill_alpha, 0.05, 0.40, "%.2f")
-            if fa_val ~= nil then waveform_fill_alpha = fa_val; fa_slider_dirty = true elseif fa_changed ~= nil then waveform_fill_alpha = fa_changed; fa_slider_dirty = true end
+            local fa_changed, fa_val = DrawCustomSlider(ctx, "##fillalpha_custom", "Fill alpha:", waveform_fill_alpha, 0.05, 0.40, "%.2f", 180, 16, dlp, 130)
+            if fa_changed then waveform_fill_alpha = fa_val; fa_slider_dirty = true end
             if fa_slider_dirty and (not r.ImGui_IsMouseDown(ctx, 0)) then fa_slider_dirty = false; SaveSettings() end
             
             r.ImGui_Text(ctx, "Waveform Color")
@@ -6278,26 +6985,26 @@ local function Loop()
         end
         if r.ImGui_BeginPopup(ctx, "Help") then
             if r.ImGui_BeginTabBar(ctx, "HelpTabs") then
-                if r.ImGui_BeginTabItem(ctx, "Basics") then
-                    r.ImGui_Text(ctx, "Navigation & Zoom")
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_Text(ctx, "- Mouse wheel: horizontal zoom around cursor")
-                    r.ImGui_Text(ctx, "- Shift + wheel: pan horizontally")
-                    r.ImGui_Text(ctx, "- Ctrl + wheel: vertical (amplitude) zoom")
-                    r.ImGui_Text(ctx, "- Middle-drag: pan")
-                    r.ImGui_Text(ctx, "- Click Zoom readout to reset (Zoom: ...x)")
-                    r.ImGui_NewLine(ctx)
-                    r.ImGui_Text(ctx, "Click & Cursors")
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_Text(ctx, "- Click: set edit cursor (and seek if 'Click seeks' is enabled)")
-                    r.ImGui_Text(ctx, "- Ctrl + click: set only edit cursor")
-                    r.ImGui_Text(ctx, "- Shift + click: move nearest time selection edge")
-                    r.ImGui_Text(ctx, "- Alt during click/drag: no snap (also for envelope points)")
-                    r.ImGui_Text(ctx, "- Edit cursor handle: small square above edit cursor for precise dragging")
-                    r.ImGui_Text(ctx, "  • Drag the handle to move edit cursor without snap to grid")
+                if r.ImGui_BeginTabItem(ctx, "FX") then
+                    r.ImGui_SetCursorPosX(ctx, side_margin)
+                    if r.ImGui_Button(ctx, 'FX Browser', btn_w, btn_h) then
+                        local run = r.GetExtState('TK_RAW_FX_BROWSER','running')
+                        if run and run ~= '' then
+                            r.SetExtState('TK_RAW_FX_BROWSER','command','close', false)
+                        else
+                            OpenTakeFXBrowser()
+                        end
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, 'Bypass All FX', btn_w, btn_h) then
+                        ToggleBypassAllTakeFX()
+                    end
+
+                    DrawTakeFXSection(side_margin, btn_w * 2 + 8, 8)
+
+                    r.ImGui_Dummy(ctx, 1, 8)
                     r.ImGui_EndTabItem(ctx)
                 end
-
                 if r.ImGui_BeginTabItem(ctx, "Selection") then
                     r.ImGui_Text(ctx, "Create & Adjust Selection")
                     r.ImGui_Separator(ctx)
@@ -6515,20 +7222,19 @@ local function Loop()
         local sb_y = canvas_y
         r.ImGui_DrawList_AddRectFilled(draw_list, sb_x, sb_y, sb_x + sidebar_w, sb_y + avail_h, 0x202020FF)
         r.ImGui_DrawList_AddRect(draw_list, sb_x, sb_y, sb_x + sidebar_w, sb_y + avail_h, 0x333333FF, 4.0, 0, 1.0)
-        
-   
-        local handle_pad = 2.0
-        local handle_h = 20.0
-        local handle_w = math.min(16.0, sidebar_w - handle_pad * 2)
-        local hx = sb_x + handle_pad
-        local hy = sb_y + handle_pad
-        local glyph = sidebar_collapsed and "<" or ">"
-        r.ImGui_DrawList_AddText(draw_list, hx + 3, hy + 2, 0xFFFFFFFF, glyph)
-        r.ImGui_SetCursorScreenPos(ctx, hx, hy)
-        r.ImGui_InvisibleButton(ctx, "##sidebar_toggle", handle_w, handle_h)
-        if r.ImGui_IsItemClicked(ctx, 0) then
-            sidebar_collapsed = not sidebar_collapsed
-            SaveSettings()
+        if sidebar_collapsed then
+            local handle_pad = 2.0
+            local handle_w = math.min(16.0, sidebar_w - handle_pad * 2)
+            local handle_h = 20.0
+            local hx = sb_x + handle_pad
+            local hy = sb_y + handle_pad
+            r.ImGui_SetCursorScreenPos(ctx, hx, hy)
+            r.ImGui_InvisibleButton(ctx, "##v_sidebar_expand", handle_w, handle_h)
+            r.ImGui_DrawList_AddText(draw_list, hx + 4, hy + 2, 0xFFFFFFFF, "<")
+            if r.ImGui_IsItemClicked(ctx, 0) then
+                sidebar_collapsed = false
+                SaveSettings()
+            end
         end
     end
 
@@ -6930,6 +7636,8 @@ local function Loop()
         end
     tx = tx + rw + gap
 
+    end 
+
     local canvas_click_y = (horizontal_sidebar_active and (canvas_y + horiz_bar_h)) or canvas_y
     local canvas_click_h = (horizontal_sidebar_active and (avail_h - horiz_bar_h)) or avail_h
     r.ImGui_SetCursorScreenPos(ctx, content_x, canvas_click_y)
@@ -6944,7 +7652,7 @@ local function Loop()
     local rmb_clicked = r.ImGui_IsMouseClicked(ctx, 1)
     local rmb_down = r.ImGui_IsMouseDown(ctx, 1)
     local rmb_released = r.ImGui_IsMouseReleased(ctx, 1)
-    local draw_mode_allowed = pencil_mode or (show_env_overlay and (pencil_target == "item_vol" or pencil_target == "item_pan"))
+    local draw_mode_allowed = pencil_mode or (show_env_overlay and (pencil_target == "item_vol" or pencil_target == "item_pan" or pencil_target == "item_mute" or pencil_target == "item_pitch"))
         local wheel = r.ImGui_GetMouseWheel(ctx) or 0
     local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
     local hasAlt   = r.ImGui_Mod_Alt   and ((mods & r.ImGui_Mod_Alt())   ~= 0) or false
@@ -7262,7 +7970,7 @@ local function Loop()
                 lane_h_used = wave_h
             end
             local v
-            if show_env_overlay and (pencil_target == "item_pan" or pencil_target == "item_vol") then
+            if show_env_overlay and (pencil_target == "item_pan" or pencil_target == "item_vol" or pencil_target == "item_mute" or pencil_target == "item_pitch") then
                 if pencil_target == "item_vol" then
                     local ty = wave_y
                     local by = wave_y + wave_h
@@ -7283,6 +7991,14 @@ local function Loop()
                     local norm_y = (my - wave_y) / math.max(1, wave_h)
                     norm_y = math.max(0, math.min(1, norm_y))
                     v = (1 - norm_y) * 2 - 1 
+                elseif pencil_target == "item_mute" then
+                    local norm_y = (my - wave_y) / math.max(1, wave_h)
+                    norm_y = math.max(0, math.min(1, norm_y))
+                    v = (1 - norm_y) * 2 - 1
+                elseif pencil_target == "item_pitch" then
+                    local norm_y = (my - wave_y) / math.max(1, wave_h)
+                    norm_y = math.max(0, math.min(1, norm_y))
+                    v = (1 - norm_y) * 2 - 1
                 end
                 v_screen_y = my
             else
@@ -7299,7 +8015,7 @@ local function Loop()
                     if math.abs(t - last.t) < min_time_step then
                         append = false
                     end
-                elseif show_env_overlay and (pencil_target == "item_pan" or pencil_target == "item_vol") then
+                elseif show_env_overlay and (pencil_target == "item_pan" or pencil_target == "item_vol" or pencil_target == "item_mute" or pencil_target == "item_pitch") then
                     local last_px = content_x + ((last.t - view_start) / math.max(1e-12, view_len)) * wave_w
                     local min_px_dist = math.max(1.0, (draw_min_px_step or DRAW_MIN_PX_STEP) * 0.8) 
                     local px_dist = math.abs(mx - last_px)
@@ -7316,7 +8032,7 @@ local function Loop()
             end
             if append then
                 local point_data = { t = t, v = v }
-                if show_env_overlay and (pencil_target == "item_pan" or pencil_target == "item_vol") then
+                if show_env_overlay and (pencil_target == "item_pan" or pencil_target == "item_vol" or pencil_target == "item_mute" or pencil_target == "item_pitch") then
                     point_data.screen_y = my
                 end
                 if pencil_mode and (pencil_target == "dc_offset" or pencil_target == "sample_edit") then
@@ -7357,6 +8073,12 @@ local function Loop()
                 elseif pencil_target == "item_pan" then
                     ok = CommitStrokeToTakePanEnv(current_take, current_item, draw_points, current_item_start, wave_w, wave_w)
                     if ok and current_take and current_item then EnsureActiveTakeEnvelopeVisible('item_pan', current_take, current_item) end
+                elseif pencil_target == "item_mute" then
+                    ok = CommitStrokeToTakeMuteEnv(current_take, current_item, draw_points, current_item_start, wave_w, wave_w)
+                    if ok and current_take and current_item then EnsureActiveTakeEnvelopeVisible('item_mute', current_take, current_item) end
+                elseif pencil_target == "item_pitch" then
+                    ok = CommitStrokeToTakePitchEnv(current_take, current_item, draw_points, current_item_start, wave_w, wave_w)
+                    if ok and current_take and current_item then EnsureActiveTakeEnvelopeVisible('item_pitch', current_take, current_item) end
                 else
                     ok = CommitStrokeToTakeVolEnv(current_take, current_item, draw_points, current_item_start, wave_w, wave_w)
                     if ok and current_take and current_item then EnsureActiveTakeEnvelopeVisible('item_vol', current_take, current_item) end
@@ -7377,6 +8099,12 @@ local function Loop()
                         desc = 'RAW: Envelopes: take Pan'
                     else
                         desc = 'RAW: Pencil to take Pan'
+                    end
+                elseif pencil_target == "item_mute" then
+                    if not pencil_mode and show_env_overlay then
+                        desc = 'RAW: Envelopes: take Mute'
+                    else
+                        desc = 'RAW: Pencil to take Mute'
                     end
                 else
                     if not pencil_mode and show_env_overlay then
@@ -7581,7 +8309,10 @@ local function Loop()
             EnsureActiveTakeEnvelopeVisible(pencil_target, current_take, current_item)
             if not ValidItem(current_item) or not ValidTake(current_take) then goto after_env_overlay end
             local draw_pan = (pencil_target == "item_pan")
-            local env = r.GetTakeEnvelopeByName(current_take, draw_pan and "Pan" or "Volume")
+            local draw_mute = (pencil_target == "item_mute")
+            local draw_pitch = (pencil_target == "item_pitch")
+            local env = r.GetTakeEnvelopeByName(current_take,
+                draw_pan and "Pan" or (draw_mute and "Mute" or (draw_pitch and "Pitch" or "Volume")))
             local top_y = wave_y
             local bot_y = wave_y + wave_h
             local has_env = (env ~= nil)
@@ -7672,6 +8403,170 @@ local function Loop()
                     end
 
                     HandleEnvelopePointInteraction(env, "pan", hovered, mx, my, content_x, wave_w, top_y, bot_y, vt0, vt1, it_start, current_item_len, snap_click_to_grid, hasAlt, SnapTimeToProjectGrid, hasCtrl)
+                end
+            elseif draw_mute then
+                if not has_env or cnt < 2 then
+                    local cy = top_y + (bot_y - top_y) * 0.5
+                    r.ImGui_DrawList_AddLine(draw_list, content_x, cy, content_x + wave_w, cy, 0xFFAA00FF, 1.6)
+                else
+                    local samples = math.max(32, math.min(512, math.floor(wave_w / 4)))
+                    local last_px, last_py = nil, nil
+                    for i = 0, samples do
+                        local tt = (samples == 0) and 0 or (i / samples)
+                        local t_abs = view_start + tt * view_len
+                        local t_in = t_abs - (current_item_start or 0)
+                        if t_in < 0 then t_in = 0 end
+                        if t_in > (current_item_len or 0) then t_in = current_item_len or 0 end
+                        local _, v = r.Envelope_Evaluate(env, t_in, 0, 0)
+                        if v == nil then v = 0.0 end
+                        local norm = (v >= 0.5) and 1.0 or 0.0
+                        local py = top_y + (bot_y - top_y) * (1.0 - norm)
+                        local px = content_x + tt * wave_w
+                        if last_px then
+                            r.ImGui_DrawList_AddLine(draw_list, last_px, last_py, px, py, 0xFFAA00FF, 1.6)
+                        end
+                        last_px, last_py = px, py
+                    end
+                end
+
+                if show_env_points and has_env and cnt > 0 then
+                    local sel_t0, sel_t1 = nil, nil
+                    if dragging_select and drag_start_t and drag_cur_t then
+                        sel_t0 = math.max(current_item_start or 0, math.min(drag_start_t, drag_cur_t))
+                        sel_t1 = math.min((current_item_start or 0) + (current_item_len or 0), math.max(drag_start_t, drag_cur_t))
+                    elseif sel_a and sel_b then
+                        sel_t0, sel_t1 = sel_a, sel_b
+                    end
+                    local it_start = current_item_start or 0
+                    local vt0 = view_start
+                    local vt1 = view_start + view_len
+                    local hovered = (mx >= content_x and mx <= content_x + wave_w and my >= top_y and my <= bot_y)
+
+                    local hovered_idx = nil
+                    for i = 0, cnt - 1 do
+                        local ok, t_in, val = r.GetEnvelopePoint(env, i)
+                        if ok then
+                            local t_abs = it_start + t_in
+                            if t_abs >= vt0 and t_abs <= vt1 then
+                                local tt = (t_abs - vt0) / math.max(1e-12, (vt1 - vt0))
+                                local px = content_x + tt * wave_w
+                                local norm_val = (val or 0) >= 0.5 and 1.0 or 0.0
+                                local py = top_y + (bot_y - top_y) * (1.0 - norm_val)
+                                local dist = math.sqrt((mx - px)^2 + (my - py)^2)
+                                local in_sel = (sel_t0 and sel_t1) and (t_abs >= sel_t0 and t_abs <= sel_t1) or false
+                                local base_alpha = (STATE.mute_pt_drag_idx == i or STATE.mute_pt_hover_idx == i or in_sel) and 1.0 or 0.9
+                                local clr = in_sel and 0xFFFFFFFF or ColorWithAlpha(0xFFAA00FF, base_alpha)
+                                r.ImGui_DrawList_AddCircleFilled(draw_list, px, py, 3.5, clr)
+                                r.ImGui_DrawList_AddCircle(draw_list, px, py, 3.5, 0xFFFFFFFF, 12, in_sel and 2.0 or 1.2)
+                                if hovered and dist <= hit_radius_px then
+                                    hovered_idx = i
+                                end
+                            end
+                        end
+                    end
+                    STATE.mute_pt_hover_idx = hovered_idx
+
+                    if hovered and STATE.mute_pt_hover_idx ~= nil and not r.ImGui_IsMouseDown(ctx, 0) then
+                        local idx = STATE.mute_pt_hover_idx
+                        local ok, t_in, val = r.GetEnvelopePoint(env, idx)
+                        if ok then
+                            local t_abs = it_start + t_in
+                            local mstr = (val or 0) >= 0.5 and "Muted" or "Unmuted"
+                            r.ImGui_BeginTooltip(ctx)
+                            r.ImGui_Text(ctx, string.format("Point: %.3fs, %s", t_abs, mstr))
+                            r.ImGui_Separator(ctx)
+                            r.ImGui_Text(ctx, "Left-drag: move (snaps to grid)")
+                            r.ImGui_Text(ctx, "Hold Alt: disable snap while moving")
+                            r.ImGui_Text(ctx, "Alt+Click: delete point")
+                            r.ImGui_Text(ctx, "Double-click empty area: add point")
+                            r.ImGui_Text(ctx, "Ctrl+Alt (release): delete points in selection")
+                            r.ImGui_EndTooltip(ctx)
+                        end
+                    end
+
+                    HandleEnvelopePointInteraction(env, "mute", hovered, mx, my, content_x, wave_w, top_y, bot_y, vt0, vt1, it_start, current_item_len, snap_click_to_grid, hasAlt, SnapTimeToProjectGrid, hasCtrl)
+                end
+            elseif draw_pitch then
+                if not has_env or cnt < 2 then
+                    local cy = top_y + (bot_y - top_y) * 0.5
+                    r.ImGui_DrawList_AddLine(draw_list, content_x, cy, content_x + wave_w, cy, COLOR_ENV_PITCH_OVERLAY, 1.6)
+                else
+                    local samples = math.max(32, math.min(512, math.floor(wave_w / 4)))
+                    local last_px, last_py = nil, nil
+                    for i = 0, samples do
+                        local tt = (samples == 0) and 0 or (i / samples)
+                        local t_abs = view_start + tt * view_len
+                        local t_in = t_abs - (current_item_start or 0)
+                        if t_in < 0 then t_in = 0 end
+                        if t_in > (current_item_len or 0) then t_in = current_item_len or 0 end
+                        local _, v = r.Envelope_Evaluate(env, t_in, 0, 0)
+                        if v == nil then v = 0.0 end
+                        local norm = PitchSemitonesToNorm(v)
+                        local py = top_y + (bot_y - top_y) * (1.0 - (norm * 0.5 + 0.5))
+                        local px = content_x + tt * wave_w
+                        if last_px then
+                            r.ImGui_DrawList_AddLine(draw_list, last_px, last_py, px, py, COLOR_ENV_PITCH_OVERLAY, 1.6)
+                        end
+                        last_px, last_py = px, py
+                    end
+                end
+
+                if show_env_points and has_env and cnt > 0 then
+                    local sel_t0, sel_t1 = nil, nil
+                    if dragging_select and drag_start_t and drag_cur_t then
+                        sel_t0 = math.max(current_item_start or 0, math.min(drag_start_t, drag_cur_t))
+                        sel_t1 = math.min((current_item_start or 0) + (current_item_len or 0), math.max(drag_start_t, drag_cur_t))
+                    elseif sel_a and sel_b then
+                        sel_t0, sel_t1 = sel_a, sel_b
+                    end
+                    local it_start = current_item_start or 0
+                    local vt0 = view_start
+                    local vt1 = view_start + view_len
+                    local hovered = (mx >= content_x and mx <= content_x + wave_w and my >= top_y and my <= bot_y)
+
+                    local hovered_idx = nil
+                    for i = 0, cnt - 1 do
+                        local ok, t_in, val = r.GetEnvelopePoint(env, i)
+                        if ok then
+                            local t_abs = it_start + t_in
+                            if t_abs >= vt0 and t_abs <= vt1 then
+                                local tt = (t_abs - vt0) / math.max(1e-12, (vt1 - vt0))
+                                local px = content_x + tt * wave_w
+                                local norm_val = PitchSemitonesToNorm(val or 0)
+                                local py = top_y + (bot_y - top_y) * (1.0 - (norm_val * 0.5 + 0.5))
+                                local dist = math.sqrt((mx - px)^2 + (my - py)^2)
+                                local in_sel = (sel_t0 and sel_t1) and (t_abs >= sel_t0 and t_abs <= sel_t1) or false
+                                local base_alpha = (STATE.pitch_pt_drag_idx == i or STATE.pitch_pt_hover_idx == i or in_sel) and 1.0 or 0.9
+                                local clr = in_sel and 0xFFFFFFFF or ColorWithAlpha(COLOR_ENV_PITCH_OVERLAY, base_alpha)
+                                r.ImGui_DrawList_AddCircleFilled(draw_list, px, py, 3.5, clr)
+                                r.ImGui_DrawList_AddCircle(draw_list, px, py, 3.5, 0xFFFFFFFF, 12, in_sel and 2.0 or 1.2)
+                                if hovered and dist <= hit_radius_px then
+                                    hovered_idx = i
+                                end
+                            end
+                        end
+                    end
+                    STATE.pitch_pt_hover_idx = hovered_idx
+
+                    if hovered and STATE.pitch_pt_hover_idx ~= nil and not r.ImGui_IsMouseDown(ctx, 0) then
+                        local idx = STATE.pitch_pt_hover_idx
+                        local ok, t_in, val = r.GetEnvelopePoint(env, idx)
+                        if ok then
+                            local t_abs = it_start + t_in
+                            local semis = val or 0
+                            r.ImGui_BeginTooltip(ctx)
+                            r.ImGui_Text(ctx, string.format("Point: %.3fs, %.2f st", t_abs, semis))
+                            r.ImGui_Separator(ctx)
+                            r.ImGui_Text(ctx, "Left-drag: move (snaps to grid)")
+                            r.ImGui_Text(ctx, "Hold Alt: disable snap while moving")
+                            r.ImGui_Text(ctx, "Alt+Click: delete point")
+                            r.ImGui_Text(ctx, "Double-click empty area: add point")
+                            r.ImGui_Text(ctx, "Ctrl+Alt (release): delete points in selection")
+                            r.ImGui_EndTooltip(ctx)
+                        end
+                    end
+
+                    HandleEnvelopePointInteraction(env, "pitch", hovered, mx, my, content_x, wave_w, top_y, bot_y, vt0, vt1, it_start, current_item_len, snap_click_to_grid, hasAlt, SnapTimeToProjectGrid, hasCtrl)
                 end
             else
                 local mode = SafeEnvelopeMode(env)
@@ -8135,7 +9030,7 @@ local function Loop()
         end
         do
             local now = r.time_precise()
-            local can_preview = pencil_mode or (show_env_overlay and (pencil_target == "item_vol" or pencil_target == "item_pan"))
+            local can_preview = pencil_mode or (show_env_overlay and (pencil_target == "item_vol" or pencil_target == "item_pan" or pencil_target == "item_mute" or pencil_target == "item_pitch"))
             local active = can_preview and (rmb_drawing or (draw_points and #draw_points >= 2 and now <= (draw_visible_until or 0)))
             if active and draw_points and #draw_points >= 2 then
                 local alpha = rmb_drawing and 0.95 or math.max(0.0, math.min(1.0, (draw_visible_until - now) / DRAW_FADE_SEC))
@@ -8149,15 +9044,19 @@ local function Loop()
                         local px = content_x + rel * wave_w
                         local py
                         
-                        if pencil_target == "item_vol" or pencil_target == "item_pan" then
+                        if pencil_target == "item_vol" or pencil_target == "item_pan" or pencil_target == "item_mute" or pencil_target == "item_pitch" then
                             if pt.screen_y then
-                                py = pt.screen_y 
+                                py = pt.screen_y
                             else
                                 if pencil_target == "item_vol" then
                                     local db = pt.v * VOL_DB_MAX
                                     py = vol_db_to_y(db, wave_y, wave_y + wave_h)
-                                else 
+                                elseif pencil_target == "item_pan" then
                                     py = pan_to_y(pt.v, wave_y, wave_y + wave_h)
+                                else
+                                    local lane_center_y = wave_y + wave_h * 0.5
+                                    local lane_h_used = wave_h
+                                    py = lane_center_y - (pt.v * (lane_h_used * 0.45 * (amp_zoom or 1.0)))
                                 end
                             end
                         else
@@ -8254,7 +9153,7 @@ local function Loop()
                 else
                     r.ImGui_Text(ctx, "Shift: live TS | Alt: no snap")
                 end
-                if show_env_points and (pencil_target == "item_vol" or pencil_target == "item_pan") then
+                if show_env_points and (pencil_target == "item_vol" or pencil_target == "item_pan" or pencil_target == "item_mute" or pencil_target == "item_pitch") then
                     r.ImGui_Text(ctx, "Ctrl+Alt (release): delete points in selection")
                     r.ImGui_Text(ctx, "Del: delete points in selection")
                 end
@@ -8271,7 +9170,7 @@ local function Loop()
                 else
                     r.ImGui_Text(ctx, "Shift: selection | Ctrl: only cursor | Alt: no snap")
                 end
-                if pencil_mode or (show_env_overlay and (pencil_target == "item_vol" or pencil_target == "item_pan")) then r.ImGui_Text(ctx, "RMB: draw preview (UI only)") end
+                if pencil_mode or (show_env_overlay and (pencil_target == "item_vol" or pencil_target == "item_pan" or pencil_target == "item_mute" or pencil_target == "item_pitch")) then r.ImGui_Text(ctx, "RMB: draw preview (UI only)") end
             end
             r.ImGui_EndTooltip(ctx)
         end
@@ -8280,7 +9179,7 @@ local function Loop()
             local key_bsp = r.ImGui_Key_Backspace and r.ImGui_Key_Backspace() or 0
             local del_pressed = (r.ImGui_IsKeyPressed and (r.ImGui_IsKeyPressed(ctx, key_del, false) or r.ImGui_IsKeyPressed(ctx, key_bsp, false))) or false
             if del_pressed and current_take and r.ImGui_IsWindowFocused and r.ImGui_IsWindowFocused(ctx) then
-                if show_env_points and ((pencil_target == "item_vol") or (pencil_target == "item_pan")) then
+                if show_env_points and ((pencil_target == "item_vol") or (pencil_target == "item_pan") or (pencil_target == "item_mute") or (pencil_target == "item_pitch")) then
                     local a, b = nil, nil
                     if drag_start_t and drag_cur_t then
                         a = math.max(current_item_start or 0, math.min(drag_start_t, drag_cur_t))
@@ -8299,9 +9198,52 @@ local function Loop()
                             if env then
                                 HandleEnvelopePointSelectionDelete(env, "pan", true, true, a, b, current_item_start or 0, current_item_len or 0)
                             end
+                        elseif pencil_target == "item_mute" then
+                            local env = r.GetTakeEnvelopeByName(current_take, 'Mute')
+                            if env then
+                                HandleEnvelopePointSelectionDelete(env, "mute", true, true, a, b, current_item_start or 0, current_item_len or 0)
+                            end
+                        elseif pencil_target == "item_pitch" then
+                            local env = r.GetTakeEnvelopeByName(current_take, 'Pitch')
+                            if env then
+                                HandleEnvelopePointSelectionDelete(env, "pitch", true, true, a, b, current_item_start or 0, current_item_len or 0)
+                            end
                         end
                     end
                 end
+            end
+
+            if show_env_points and current_take and (pencil_target == "item_vol" or pencil_target == "item_pan" or pencil_target == "item_mute" or pencil_target == "item_pitch") then
+                if STATE.ctrl_alt_down_prev == nil then STATE.ctrl_alt_down_prev = false end
+                local both_down = hasCtrl and hasAlt
+
+                local a, b = nil, nil
+                if drag_start_t and drag_cur_t then
+                    a = math.max(current_item_start or 0, math.min(drag_start_t, drag_cur_t))
+                    b = math.min((current_item_start or 0) + (current_item_len or 0), math.max(drag_start_t, drag_cur_t))
+                elseif sel_a and sel_b then
+                    a, b = sel_a, sel_b
+                end
+
+                if STATE.ctrl_alt_down_prev and (not both_down) then
+                    if a and b and b > a then
+                        if pencil_target == "item_vol" then
+                            local env = r.GetTakeEnvelopeByName(current_take, 'Volume')
+                            if env then HandleEnvelopePointSelectionDelete(env, "volume", true, true, a, b, current_item_start or 0, current_item_len or 0) end
+                        elseif pencil_target == "item_pan" then
+                            local env = r.GetTakeEnvelopeByName(current_take, 'Pan')
+                            if env then HandleEnvelopePointSelectionDelete(env, "pan", true, true, a, b, current_item_start or 0, current_item_len or 0) end
+                        elseif pencil_target == "item_mute" then
+                            local env = r.GetTakeEnvelopeByName(current_take, 'Mute')
+                            if env then HandleEnvelopePointSelectionDelete(env, "mute", true, true, a, b, current_item_start or 0, current_item_len or 0) end
+                        elseif pencil_target == "item_pitch" then
+                            local env = r.GetTakeEnvelopeByName(current_take, 'Pitch')
+                            if env then HandleEnvelopePointSelectionDelete(env, "pitch", true, true, a, b, current_item_start or 0, current_item_len or 0) end
+                        end
+                    end
+                end
+
+                STATE.ctrl_alt_down_prev = both_down
             end
         end
         
@@ -8587,12 +9529,12 @@ local function Loop()
         local th_y = miny + (maxy - miny - th) * 0.5
 
         local pad_x = 6
+        local icon_width = 24  -- Fixed width for icon area for alignment
         local ix = minx + pad_x
 
         r.ImGui_DrawList_AddText(dl, ix, ih_y, 0xFFFFFFFF, icon_str)
 
-        local tighten_px = 3
-        local tx = ix + iw - tighten_px
+        local tx = minx + pad_x + icon_width  -- Use fixed position for text alignment
         r.ImGui_DrawList_AddText(dl, tx, th_y, 0xFFFFFFFF, tostring(text or ""))
 
         r.ImGui_PopID(ctx)
@@ -8680,7 +9622,7 @@ local function Loop()
                 {id='info', icon='ⓘ', full=function() return info_open and 'Info (on)' or 'Info' end, cb=function() is_interacting=true; last_interaction_time=r.time_precise(); info_open=not info_open; info_item_guid=nil; info_range_key=nil; info_last_calc=0.0 end},
                 {id='fit_item', icon='⤢', full=function() return 'Fit item' end, cb=function() if current_item and current_item_len and current_item_len>0 then view_start=current_item_start; view_len=math.max(1e-6, current_item_len); view_cache_valid=false end end},
                 {id='fit_sel', icon='⤢⟦⟧', full=function() return 'Fit sel' end, cb=function() if sel_a and sel_b and current_item then local a=math.max(current_item_start, math.min(sel_a, sel_b)); local b=math.min(current_item_start+current_item_len, math.max(sel_a, sel_b)); if b>a then view_start=a; view_len=math.max(1e-6,b-a); view_cache_valid=false end end end},
-                {id='pencil', icon='✎', full=function() return pencil_mode and 'Pencil (on)' or 'Pencil (off)' end, cb=function() pencil_mode=not pencil_mode; if pencil_mode then if show_env_overlay then show_env_overlay=false end; show_dc_overlay=(pencil_target=='dc_offset') else show_dc_overlay=false end; SaveSettings() end, rclick='PencilTargetMenu'},
+                {id='pencil', icon='✎', full=function() return pencil_mode and 'Pencil (on)' or 'Pencil (off)' end, cb=function() pencil_mode=not pencil_mode; if pencil_mode then if show_env_overlay then show_env_overlay=false end; show_dc_overlay=false else show_dc_overlay=false end; SaveSettings() end, rclick='PencilTargetMenu'},
                 {id='envelopes', icon='∿', full=function() return show_env_overlay and 'Env (on)' or 'Env (off)' end, cb=function() local newv=not show_env_overlay; show_env_overlay=newv; if newv then if pencil_mode then pencil_mode=false end; if show_dc_overlay then show_dc_overlay=false end; if current_take and current_item then EnsureActiveTakeEnvelopeVisible(pencil_target,current_take,current_item) end end; SaveSettings() end, rclick='EnvelopesMenu'},
                 {id='silence', icon='🔇', full=function() return 'Silence' end, cb=function() SilenceSelectionWithinItem() end},
                 {id='mono', icon='M', full=function() return 'Mono' end, cb=function() ConvertToMono() end},
@@ -8722,6 +9664,18 @@ local function Loop()
                 {id='revsel', icon='↔', full=function() return 'RevSel' end, cb=function() ReverseSelectionWithinItem() end},
                 {id='phase', icon='Ø', full=function() return phase_on and 'Phase(on)' or 'Phase' end, cb=function() ToggleItemPolarity() end},
                 {id='phasesel', icon='Ø', full=function() return 'PhaseSel' end, cb=function() ToggleSelectionPolarity() end},
+                {id='pitch', icon='♪', full=function() 
+                    if pitch_value == 0.0 and pitch_cents == 0.0 and STATE.rate_value == 1.0 then 
+                        return 'Pitch&Rate' 
+                    else 
+                        return string.format('P&R %+.1f/%.2fx', pitch_value + pitch_cents/100.0, STATE.rate_value) 
+                    end 
+                end, cb=function() 
+                    local mx, my = r.ImGui_GetMousePos(ctx)
+                    pitch_window_x = mx
+                    pitch_window_y = my
+                    pitch_window_open = not pitch_window_open
+                end, rclick='PitchMenu'},
                 {id='game_play', icon='🎮', full=function() return game_active and 'Game(on)' or 'Game' end, cb=function() game_active=not game_active; game_over=false; if game_active then game_score=0; game_obstacles={}; game_spawn_cooldown=0.0; game_last_time=nil; game_elapsed=0.0 end end, rclick='GameMenu'},
               
                 {id='nav_prev', icon=MonoIcon('←'), full=function() return '' end, cb=function() GotoPrevItemOnTrack() end, size=btn_h},
@@ -8739,31 +9693,23 @@ local function Loop()
                 end
                 
                 if show_button then
+                    local pushed_colors = false
+                    if (d.id == 'pencil' and pencil_mode) or (d.id == 'envelopes' and show_env_overlay) then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        0x2E7D32FF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x388E3CFF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  0x1B5E20FF)
+                        pushed_colors = true
+                    end
+
                     if DrawFullButton(d.id, d.icon, d.full(), d.size) then
                         is_interacting=true; last_interaction_time=r.time_precise(); d.cb()
                     end
+                    if pushed_colors then r.ImGui_PopStyleColor(ctx, 3) end
                     if d.rclick and r.ImGui_IsItemClicked(ctx,1) then r.ImGui_OpenPopup(ctx, d.rclick) end
                 end
             end
 
             r.ImGui_PopStyleColor(ctx,4)
-        end
-    local toggle_w = 18.0
-    local tx = bar_x1 + bar_w - toggle_w - 4.0
-        local ty = bar_y1 + 4.0
-        r.ImGui_SetCursorScreenPos(ctx, tx, ty)
-        r.ImGui_InvisibleButton(ctx, "##h_sidebar_toggle", toggle_w, 20.0)
-        local glyph = sidebar_collapsed and ">" or "v"
-        r.ImGui_DrawList_AddText(dl, tx + 4, ty + 2, 0xFFFFFFFF, glyph)
-        local toggled = false
-        if r.ImGui_IsItemClicked(ctx,0) then
-            sidebar_collapsed = not sidebar_collapsed; SaveSettings(); toggled = true
-        end
-        if not toggled and r.ImGui_IsMouseClicked(ctx,0) then
-            local mx, my = r.ImGui_GetMousePos(ctx)
-            if mx >= tx and mx <= tx + toggle_w and my >= ty and my <= ty + 20.0 then
-                sidebar_collapsed = not sidebar_collapsed; SaveSettings()
-            end
         end
 
         if r.ImGui_BeginPopup(ctx, "GameMenu") then
@@ -8784,20 +9730,26 @@ local function Loop()
         if r.ImGui_BeginPopup(ctx, "EnvelopesMenu") then
             local is_draw_vol = (pencil_target == "item_vol")
             local is_draw_pan = (pencil_target == "item_pan")
+            local is_draw_mute = (pencil_target == "item_mute")
+            local is_draw_pitch = (pencil_target == "item_pitch")
             if r.ImGui_MenuItem(ctx, "Draw: Item Volume (take envelope)", nil, is_draw_vol, true) then pencil_target = "item_vol"; pencil_mode=false; if not show_env_overlay then show_env_overlay = true end; if current_take and current_item then EnsureActiveTakeEnvelopeVisible(pencil_target, current_take, current_item) end; SaveSettings() end
             if r.ImGui_MenuItem(ctx, "Draw: Pan (take envelope)", nil, is_draw_pan, true) then pencil_target = "item_pan"; pencil_mode=false; if not show_env_overlay then show_env_overlay = true end; if current_take and current_item then EnsureActiveTakeEnvelopeVisible(pencil_target, current_take, current_item) end; SaveSettings() end
+            if r.ImGui_MenuItem(ctx, "Draw: Mute (take envelope)", nil, is_draw_mute, true) then pencil_target = "item_mute"; pencil_mode=false; if not show_env_overlay then show_env_overlay = true end; if current_take and current_item then EnsureActiveTakeEnvelopeVisible(pencil_target, current_take, current_item) end; SaveSettings() end
             r.ImGui_Separator(ctx)
-            if r.ImGui_MenuItem(ctx, "Show envelope points (experimental)", nil, show_env_points, is_draw_vol or is_draw_pan) then show_env_points = not show_env_points; SaveSettings() end
+            if r.ImGui_MenuItem(ctx, "Draw: Pitch (take envelope)", nil, is_draw_pitch, true) then pencil_target = "item_pitch"; pencil_mode=false; if not show_env_overlay then show_env_overlay = true end; if current_take and current_item then EnsureActiveTakeEnvelopeVisible(pencil_target, current_take, current_item) end; SaveSettings() end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Show envelope points (experimental)", nil, show_env_points, is_draw_vol or is_draw_pan or is_draw_mute or is_draw_pitch) then show_env_points = not show_env_points; SaveSettings() end
             r.ImGui_EndPopup(ctx)
         end
-
+        
+        
         if show_tooltips then
             local hovered = r.ImGui_IsItemHovered(ctx) 
         end
         
         local label = nil
         if show_env_overlay then
-            local env_label = (pencil_target == "item_pan") and "Take Pan" or "Take Volume"
+            local env_label = (pencil_target == "item_pan") and "Take Pan" or ((pencil_target == "item_mute") and "Take Mute" or ((pencil_target == "item_pitch") and "Take Pitch" or "Take Volume"))
             label = (MonoIcon and MonoIcon("∿") or "∿") .. " Envelope: " .. env_label
         elseif pencil_mode then
             local tgt = (pencil_target == "dc_offset") and "DC Offset" 
@@ -8850,11 +9802,11 @@ local function Loop()
             local sb_x = content_x + wave_w + side_gap
             local sb_y = canvas_y
             
-            local handle_pad = 2.0
-            local handle_h = 20.0
+            local handle_pad = 4.0
+            local tab_pad = 4.0
 
             if not sidebar_collapsed then
-                local child_y = sb_y + handle_h + (handle_pad * 2)
+                local child_y = sb_y + 8
                 local child_h = math.max(1.0, avail_h - (child_y - sb_y))
 
                 local side_margin = 8.0                
@@ -8864,9 +9816,50 @@ local function Loop()
                 local bottom_margin = 8.0
                 local nav_gap = 4.0
                 local footer_h = btn_h + bottom_margin
+                
+                local header_h = 28.0
+                r.ImGui_SetCursorScreenPos(ctx, sb_x, sb_y)
+                local header_started = r.ImGui_BeginChild(ctx, "SidebarHeader", sidebar_w, header_h)
 
-                local scroll_h = math.max(1.0, child_h - footer_h)
-                r.ImGui_SetCursorScreenPos(ctx, sb_x, child_y)
+                if header_started then
+                    local tab_h = 20.0
+                    local arrow_space = 20.0
+                    local tab_w = (btn_w - arrow_space - 8) / 2
+
+                    local arrow_y = math.max(0, (header_h - tab_h) * 0.5)
+                    r.ImGui_SetCursorPos(ctx, side_margin, arrow_y)
+                    local hx, hy = r.ImGui_GetCursorScreenPos(ctx)
+                    r.ImGui_InvisibleButton(ctx, "##v_sidebar_collapse", arrow_space, tab_h)
+                    local dl_hdr = r.ImGui_GetWindowDrawList(ctx)
+                    r.ImGui_DrawList_AddText(dl_hdr, hx + 6, hy + 2, 0xFFFFFFFF, ">")
+                    if r.ImGui_IsItemClicked(ctx, 0) then
+                        sidebar_collapsed = true
+                        SaveSettings()
+                    end
+
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        0x2A2A2AFF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x343434FF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  0x1E1E1EFF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(),          0xFFFFFFFF)
+                    
+                    r.ImGui_SetCursorPos(ctx, side_margin + arrow_space + 3, arrow_y)
+                    if r.ImGui_Button(ctx, "Edit", tab_w, tab_h) then
+                        sidebar_tab = "edit"
+                        SaveSettings()
+                    end
+                    r.ImGui_SameLine(ctx, 0, 3)
+                    if r.ImGui_Button(ctx, "FX", tab_w, tab_h) then
+                        sidebar_tab = "fx"
+                        SaveSettings()
+                    end
+                    
+                    r.ImGui_PopStyleColor(ctx, 4)
+                end
+                if header_started then r.ImGui_EndChild(ctx) end
+
+                local scroll_y = sb_y + header_h
+                local scroll_h = math.max(1.0, child_h - header_h - footer_h)
+                r.ImGui_SetCursorScreenPos(ctx, sb_x, scroll_y)
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 8.0)
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0.0, 1.0)
                 local sb_disabled_active = false
@@ -8878,17 +9871,19 @@ local function Loop()
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  0x1E1E1EFF)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(),          0xFFFFFFFF)
 
-                    r.ImGui_SetCursorPosX(ctx, side_margin)
-                    if SidebarButton("info", "ⓘ", info_open and "Info (on)" or "Info", btn_w) then
-                        is_interacting = true; last_interaction_time = r.time_precise()
-                        info_open = not info_open
-                        info_item_guid, info_range_key, info_last_calc = nil, nil, 0.0
-                    end
-                    r.ImGui_Dummy(ctx, 1, side_spacing)
+                    if sidebar_tab == "edit" then
+                        -- EDIT TAB CONTENT
+                        r.ImGui_SetCursorPosX(ctx, side_margin)
+                        if SidebarButton("info", "ⓘ", info_open and "Info (on)" or "Info", btn_w) then
+                            is_interacting = true; last_interaction_time = r.time_precise()
+                            info_open = not info_open
+                            info_item_guid, info_range_key, info_last_calc = nil, nil, 0.0
+                        end
+                        r.ImGui_Dummy(ctx, 1, side_spacing)
 
-                    r.ImGui_SetCursorPosX(ctx, side_margin)
-                    if SidebarButton("fit_item", "⤢", "Fit item", btn_w) then
-                        is_interacting = true; last_interaction_time = r.time_precise()
+                        r.ImGui_SetCursorPosX(ctx, side_margin)
+                        if SidebarButton("fit_item", "⤢", "Fit item", btn_w) then
+                            is_interacting = true; last_interaction_time = r.time_precise()
                         if current_item and current_item_len and current_item_len > 0 then
                             view_start = current_item_start
                             view_len = math.max(1e-6, current_item_len)
@@ -8915,6 +9910,13 @@ local function Loop()
                     r.ImGui_Dummy(ctx, 1, side_spacing)
 
                     r.ImGui_SetCursorPosX(ctx, side_margin)
+                    local v_pushed_pencil = false
+                    if pencil_mode then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        0x2E7D32FF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x388E3CFF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  0x1B5E20FF)
+                        v_pushed_pencil = true
+                    end
                     if SidebarButton("pencil", "✎", pencil_mode and "Pencil (on)" or "Pencil (off)", btn_w) then
                         is_interacting = true; last_interaction_time = r.time_precise()
                         pencil_mode = not pencil_mode
@@ -8926,6 +9928,7 @@ local function Loop()
                         end
                         SaveSettings()
                     end
+                    if v_pushed_pencil then r.ImGui_PopStyleColor(ctx, 3) end
                     if r.ImGui_IsItemClicked(ctx, 1) then
                         r.ImGui_OpenPopup(ctx, "PencilTargetMenu")
                     end
@@ -8957,6 +9960,13 @@ local function Loop()
                     r.ImGui_Dummy(ctx, 1, side_spacing)
 
                     r.ImGui_SetCursorPosX(ctx, side_margin)
+                    local v_pushed_env = false
+                    if show_env_overlay then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        0x2E7D32FF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x388E3CFF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  0x1B5E20FF)
+                        v_pushed_env = true
+                    end
             if SidebarButton("envelopes", "∿", show_env_overlay and "Envelope (on)" or "Envelope (off)", btn_w) then
                         is_interacting = true; last_interaction_time = r.time_precise()
                         local newv = not show_env_overlay
@@ -8968,6 +9978,7 @@ local function Loop()
                         end
                         SaveSettings()
                     end
+                    if v_pushed_env then r.ImGui_PopStyleColor(ctx, 3) end
                     if r.ImGui_IsItemClicked(ctx, 1) then
                         r.ImGui_OpenPopup(ctx, "EnvelopesMenu")
                     end
@@ -8997,6 +10008,8 @@ local function Loop()
                     if r.ImGui_BeginPopup(ctx, "EnvelopesMenu") then
                         local is_draw_vol = (pencil_target == "item_vol")
                         local is_draw_pan = (pencil_target == "item_pan")
+                        local is_draw_mute = (pencil_target == "item_mute")
+                        local is_draw_pitch = (pencil_target == "item_pitch")
                         if r.ImGui_MenuItem(ctx, "Draw: Item Volume (take envelope)", nil, is_draw_vol, true) then
                             pencil_target = "item_vol"
                             pencil_mode = false
@@ -9011,6 +10024,20 @@ local function Loop()
                             if current_take and current_item then EnsureActiveTakeEnvelopeVisible(pencil_target, current_take, current_item) end
                             SaveSettings()
                         end
+                        if r.ImGui_MenuItem(ctx, "Draw: Pitch (take envelope)", nil, is_draw_pitch, true) then
+                            pencil_target = "item_pitch"
+                            pencil_mode = false
+                            if not show_env_overlay then show_env_overlay = true end
+                            if current_take and current_item then EnsureActiveTakeEnvelopeVisible(pencil_target, current_take, current_item) end
+                            SaveSettings()
+                        end
+                        if r.ImGui_MenuItem(ctx, "Draw: Mute (take envelope)", nil, is_draw_mute, true) then
+                            pencil_target = "item_mute"
+                            pencil_mode = false
+                            if not show_env_overlay then show_env_overlay = true end
+                            if current_take and current_item then EnsureActiveTakeEnvelopeVisible(pencil_target, current_take, current_item) end
+                            SaveSettings()
+                        end
                         r.ImGui_Separator(ctx)
                         if r.ImGui_MenuItem(ctx, "Show envelope points (experimental)", nil, show_env_points, is_draw_vol or is_draw_pan) then
                             show_env_points = not show_env_points
@@ -9018,9 +10045,11 @@ local function Loop()
                         end
                         r.ImGui_EndPopup(ctx)
                     end
+                    
+                    
                     if show_tooltips and r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_BeginTooltip(ctx)
-                        local t = (pencil_target == "item_pan") and "Pan" or "Volume"
+                        local t = (pencil_target == "item_pan") and "Pan" or ((pencil_target == "item_mute") and "Mute" or "Volume")
                         r.ImGui_Text(ctx, "Toggle take " .. t .. " envelope overlay")
                         r.ImGui_EndTooltip(ctx)
                     end
@@ -9161,6 +10190,28 @@ local function Loop()
                     end
 
                     r.ImGui_Dummy(ctx, 1, side_spacing)
+                    r.ImGui_SetCursorPosX(ctx, side_margin)
+                    local pitch_text
+                    if pitch_value == 0.0 and pitch_cents == 0.0 and STATE.rate_value == 1.0 then 
+                        pitch_text = "Pitch&Rate"
+                    else 
+                        pitch_text = string.format("P&R %+.1f/%.2fx", pitch_value + pitch_cents/100.0, STATE.rate_value) 
+                    end
+                    if SidebarButton("pitch", "♪", pitch_text, btn_w) then
+                        is_interacting = true; last_interaction_time = r.time_precise()
+                        local mx, my = r.ImGui_GetMousePos(ctx)
+                        pitch_window_x = mx
+                        pitch_window_y = my
+                        pitch_window_open = not pitch_window_open
+                    end
+                    if r.ImGui_IsItemClicked(ctx, 1) then
+                        local mx, my = r.ImGui_GetMousePos(ctx)
+                        pitch_window_x = mx
+                        pitch_window_y = my
+                        pitch_window_open = not pitch_window_open
+                    end
+
+                    r.ImGui_Dummy(ctx, 1, side_spacing)
                     if sb_disabled_active and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx); sb_disabled_active = false end
                     r.ImGui_SetCursorPosX(ctx, side_margin)
                     if SidebarButton("game_play", "🎮", "Play", btn_w) then
@@ -9185,6 +10236,46 @@ local function Loop()
                         end
                         r.ImGui_EndPopup(ctx)
                     end
+                    
+                    elseif sidebar_tab == "fx" then
+                        fx_browser_toggle_attempts = fx_browser_toggle_attempts or 0
+                        fx_browser_last_toggle_ts = fx_browser_last_toggle_ts or 0
+                        -- FX TAB CONTENT
+                        r.ImGui_SetCursorPosX(ctx, side_margin)
+                        if SidebarButton("fx_browser", "🎛", "FX Browser", btn_w) then
+                            is_interacting = true; last_interaction_time = r.time_precise()
+                            local running = r.GetExtState('TK_RAW_FX_BROWSER', 'running')
+                            local now = (r.time_precise and r.time_precise()) or os.clock()
+                            if running and running ~= '' then
+                                r.SetExtState('TK_RAW_FX_BROWSER', 'command', 'close', false)
+                                if (now - (fx_browser_last_toggle_ts or 0)) < 0.8 then
+                                    fx_browser_toggle_attempts = (fx_browser_toggle_attempts or 0) + 1
+                                else
+                                    fx_browser_toggle_attempts = 1
+                                end
+                                fx_browser_last_toggle_ts = now
+                                if fx_browser_toggle_attempts >= 2 then
+                                    r.SetExtState('TK_RAW_FX_BROWSER','command','', false)
+                                    r.SetExtState('TK_RAW_FX_BROWSER','running','', false)
+                                    OpenTakeFXBrowser()
+                                    fx_browser_toggle_attempts = 0
+                                end
+                            else
+                                fx_browser_toggle_attempts = 0
+                                OpenTakeFXBrowser()
+                            end
+                        end
+                        r.ImGui_Dummy(ctx, 1, side_spacing)
+                        r.ImGui_SetCursorPosX(ctx, side_margin)
+                        if SidebarButton("fx_bypass", "⊗", "Bypass All FX", btn_w) then
+                            is_interacting = true; last_interaction_time = r.time_precise()
+                            ToggleBypassAllTakeFX()
+                        end
+                        r.ImGui_Dummy(ctx, 1, side_spacing)
+                        DrawTakeFXSection(side_margin, btn_w, side_spacing)
+                    end
+                    -- END OF TAB CONTENT
+                    
                     if game_active and r.ImGui_BeginDisabled and not sb_disabled_active then r.ImGui_BeginDisabled(ctx, true); sb_disabled_active = true end
 
                     r.ImGui_PopStyleColor(ctx, 4)
@@ -9198,7 +10289,7 @@ local function Loop()
                 do
                     local label = nil
                     if show_env_overlay then
-                        local env_label = (pencil_target == "item_pan") and "Take Pan" or "Take Volume"
+                        local env_label = (pencil_target == "item_pan") and "Take Pan" or ((pencil_target == "item_mute") and "Take Mute" or "Take Volume")
                         label = (MonoIcon and MonoIcon("∿") or "∿") .. " Envelope: " .. env_label
                     elseif pencil_mode then
                         local tgt = (pencil_target == "dc_offset") and "DC Offset" 
@@ -9247,7 +10338,7 @@ local function Loop()
                     end
                 end
 
-                local footer_y = child_y + scroll_h
+                local footer_y = scroll_y + scroll_h
                 local dl_sb = r.ImGui_GetWindowDrawList(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl_sb, sb_x, footer_y, sb_x + sidebar_w, sb_y + avail_h, 0x202020FF)
                 r.ImGui_DrawList_AddLine(dl_sb, sb_x, footer_y, sb_x + sidebar_w, footer_y, 0x333333FF, 1.0)
@@ -9264,6 +10355,9 @@ local function Loop()
 
                     local nav_w = (btn_w - 3 * nav_gap)
                     local each = nav_w / 4.0
+                    
+                    -- Add some top margin to position buttons lower
+                    r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + 6.0)
                     r.ImGui_SetCursorPosX(ctx, side_margin)
                     if r.ImGui_Button(ctx, MonoIcon("←"), each, 0) then
                         is_interacting = true; last_interaction_time = r.time_precise()
@@ -9289,17 +10383,20 @@ local function Loop()
                     r.ImGui_PopStyleColor(ctx, 4)
                 end
                 if footer_started then r.ImGui_EndChild(ctx) end
+            else
             end
         end
 
-    if show_footer then r.ImGui_SetCursorScreenPos(ctx, canvas_x, canvas_y + avail_h + 4) end
     local base = string.format("Canvas: %.0fx%.0f | Loaded: %s |", wave_w, avail_h, is_loaded and "Yes" or "No")
     local zf = 1.0
     if current_item and current_item_len > 0 and view_len > 0 then zf = current_item_len / view_len end
     local dl_foot = r.ImGui_GetWindowDrawList(ctx)
+    local spacing = 8.0
+    local footer_top_y = canvas_y + avail_h + 4.0
+    if show_footer then r.ImGui_SetCursorScreenPos(ctx, canvas_x, footer_top_y) end
     local fx, fy = r.ImGui_GetCursorScreenPos(ctx)
     local avail_w_foot = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
-    local spacing = 8.0
+    if (avail_w_foot or 0) <= 0 then avail_w_foot = avail_w end
     if show_footer and current_item then
         local tech_left = base
         local cov_txt = ""
@@ -9321,13 +10418,20 @@ local function Loop()
         local rw, rh = r.ImGui_CalcTextSize(ctx, right_text)
         local lh = math.max(zh, rh)
         local spacing_zoom = 8.0
+        r.ImGui_SetCursorScreenPos(ctx, canvas_x, footer_top_y)
+        local fx, fy = r.ImGui_GetCursorScreenPos(ctx)
+        local avail_w_foot = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+        if (avail_w_foot or 0) <= 0 then avail_w_foot = avail_w end
         local left_space = math.max(0.0, (avail_w_foot or 0) - rw - spacing)
         local left_text_space = math.max(0.0, left_space - zw - spacing_zoom)
-        r.ImGui_DrawList_PushClipRect(dl_foot, fx, fy, fx + left_text_space, fy + lh, true)
+        if show_footer then
+            r.ImGui_SetCursorScreenPos(ctx, fx, fy)
+            r.ImGui_Dummy(ctx, avail_w_foot or 0, lh)
+        end
+        r.ImGui_DrawList_PushClipRect(dl_foot, fx, fy, fx + (avail_w_foot or 0), fy + lh, false)
         r.ImGui_DrawList_AddText(dl_foot, fx, fy, 0xFFFFFFFF, tech_left)
-        r.ImGui_DrawList_PopClipRect(dl_foot)
-        r.ImGui_SetCursorScreenPos(ctx, fx + left_text_space + spacing_zoom, fy)
-        local zx, zy = r.ImGui_GetCursorScreenPos(ctx)
+        local zx, zy = fx + left_text_space + spacing_zoom, fy
+        r.ImGui_SetCursorScreenPos(ctx, zx, zy)
         r.ImGui_Text(ctx, zoom_label)
         local tw, th = r.ImGui_CalcTextSize(ctx, zoom_label)
         r.ImGui_SetCursorScreenPos(ctx, zx, zy)
@@ -9345,22 +10449,249 @@ local function Loop()
         end
         local rx = fx + (avail_w_foot or 0) - rw
         if rx < fx + left_space + spacing then rx = fx + left_space + spacing end
-        r.ImGui_DrawList_AddText(dl_foot, rx, fy, 0xFFFFFFFF, right_text)
-        if show_footer then
-            r.ImGui_SetCursorScreenPos(ctx, fx, fy)
-            r.ImGui_Dummy(ctx, avail_w_foot or 0, lh)
-        end
+    r.ImGui_DrawList_AddText(dl_foot, rx, fy, 0xFFFFFFFF, right_text)
+    r.ImGui_DrawList_PopClipRect(dl_foot)
     elseif show_footer then
         local left_text = base .. " | No item selected"
         local lw, lh = r.ImGui_CalcTextSize(ctx, left_text)
-        r.ImGui_DrawList_PushClipRect(dl_foot, fx, fy, fx + (avail_w_foot or 0), fy + lh, true)
-        r.ImGui_DrawList_AddText(dl_foot, fx, fy, 0xFFFFFFFF, left_text)
-        r.ImGui_DrawList_PopClipRect(dl_foot)
-    r.ImGui_Dummy(ctx, avail_w_foot, lh)
+    r.ImGui_SetCursorScreenPos(ctx, canvas_x, footer_top_y)
+    local fx, fy = r.ImGui_GetCursorScreenPos(ctx)
+    local avail_w_foot = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    if (avail_w_foot or 0) <= 0 then avail_w_foot = avail_w end
+    r.ImGui_SetCursorScreenPos(ctx, fx, fy)
+    r.ImGui_Dummy(ctx, avail_w_foot or 0, lh)
+    r.ImGui_DrawList_PushClipRect(dl_foot, fx, fy, fx + (avail_w_foot or 0), fy + lh, false)
+    r.ImGui_DrawList_AddText(dl_foot, fx, fy, 0xFFFFFFFF, left_text)
+    r.ImGui_DrawList_PopClipRect(dl_foot)
     end
     end
     
     if visible then r.ImGui_End(ctx) end
+    
+    if pitch_window_open then
+        r.ImGui_SetNextWindowSize(ctx, 350, 160, r.ImGui_Cond_Always())
+        r.ImGui_SetNextWindowPos(ctx, pitch_window_x - 440, pitch_window_y - 140, r.ImGui_Cond_Appearing())
+        
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x000000BB)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0xFFFFFF88)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 6.0)
+        
+        local pitch_visible, pitch_open = r.ImGui_Begin(ctx, "♪ Pitch & Rate Control", true, 
+            r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize())
+        pitch_window_open = pitch_open
+        
+        if pitch_visible then
+            UpdatePitchFromCurrentItem()
+            
+            local slider_w, slider_h = 200.0, 16.0
+            local label_w = 70.0
+            
+            r.ImGui_Text(ctx, "Semitones:")
+            r.ImGui_SameLine(ctx, label_w)
+            local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+            
+            r.ImGui_InvisibleButton(ctx, "##pitch_semitones_slider_win", slider_w, slider_h)
+            local hovered_semi = r.ImGui_IsItemHovered(ctx)
+            local active_semi = r.ImGui_IsItemActive(ctx)
+            local dlp = r.ImGui_GetWindowDrawList(ctx)
+            
+            local x0, y0 = cursor_x, cursor_y
+            local cx = x0 + 8.0
+            local cy = y0 + slider_h * 0.5
+            local track_w = slider_w - 16.0
+            local tnorm = (pitch_value + 24.0) / 48.0
+            if tnorm < 0.0 then tnorm = 0.0 elseif tnorm > 1.0 then tnorm = 1.0 end
+            
+            if active_semi then
+                local mx, _ = r.ImGui_GetMousePos(ctx)
+                local new_norm = (mx - cx) / math.max(1.0, track_w)
+                if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+                local new_val = math.floor((new_norm * 48.0) - 24.0 + 0.5)
+                if new_val ~= pitch_value then
+                    pitch_value = new_val
+                    ApplyPitchToCurrentItem()
+                end
+                tnorm = new_norm
+            elseif hovered_semi and r.ImGui_IsMouseClicked(ctx, 0) then
+                local mx, _ = r.ImGui_GetMousePos(ctx)
+                local new_norm = (mx - cx) / math.max(1.0, track_w)
+                if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+                local new_val = math.floor((new_norm * 48.0) - 24.0 + 0.5)
+                if new_val ~= pitch_value then
+                    pitch_value = new_val
+                    ApplyPitchToCurrentItem()
+                end
+                tnorm = new_norm
+            end
+            
+            local track_col = 0x666666FF
+            local knob_x = cx + tnorm * track_w
+            r.ImGui_DrawList_AddLine(dlp, cx, cy, cx + track_w, cy, track_col, 2.0)
+            r.ImGui_DrawList_AddCircleFilled(dlp, knob_x, cy, 6.0, 0xFFFFFFFF)
+            r.ImGui_DrawList_AddCircle(dlp, knob_x, cy, 6.0, 0x333333FF, 0, 1.0)
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, string.format("%+d", pitch_value))
+            
+            r.ImGui_Text(ctx, "Cents:")
+            r.ImGui_SameLine(ctx, label_w)
+            cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+            
+            r.ImGui_InvisibleButton(ctx, "##pitch_cents_slider_win", slider_w, slider_h)
+            local hovered_cents = r.ImGui_IsItemHovered(ctx)
+            local active_cents = r.ImGui_IsItemActive(ctx)
+            
+            x0, y0 = cursor_x, cursor_y
+            cx = x0 + 8.0
+            cy = y0 + slider_h * 0.5
+            tnorm = (pitch_cents + 100.0) / 200.0
+            if tnorm < 0.0 then tnorm = 0.0 elseif tnorm > 1.0 then tnorm = 1.0 end
+            
+            if active_cents then
+                local mx, _ = r.ImGui_GetMousePos(ctx)
+                local new_norm = (mx - cx) / math.max(1.0, track_w)
+                if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+                local new_val = (new_norm * 200.0) - 100.0
+                if math.abs(new_val - pitch_cents) > 0.1 then
+                    pitch_cents = new_val
+                    ApplyPitchToCurrentItem()
+                end
+                tnorm = new_norm
+            elseif hovered_cents and r.ImGui_IsMouseClicked(ctx, 0) then
+                local mx, _ = r.ImGui_GetMousePos(ctx)
+                local new_norm = (mx - cx) / math.max(1.0, track_w)
+                if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+                local new_val = (new_norm * 200.0) - 100.0
+                if math.abs(new_val - pitch_cents) > 0.1 then
+                    pitch_cents = new_val
+                    ApplyPitchToCurrentItem()
+                end
+                tnorm = new_norm
+            end
+            
+            knob_x = cx + tnorm * track_w
+            r.ImGui_DrawList_AddLine(dlp, cx, cy, cx + track_w, cy, track_col, 2.0)
+            r.ImGui_DrawList_AddCircleFilled(dlp, knob_x, cy, 6.0, 0xFFFFFFFF)
+            r.ImGui_DrawList_AddCircle(dlp, knob_x, cy, 6.0, 0x333333FF, 0, 1.0)
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, string.format("%+.1f", pitch_cents))
+            
+            r.ImGui_Text(ctx, "Rate:")
+            r.ImGui_SameLine(ctx, label_w)
+            cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+            
+            r.ImGui_InvisibleButton(ctx, "##rate_slider_win", slider_w, slider_h)
+            local hovered_rate = r.ImGui_IsItemHovered(ctx)
+            local active_rate = r.ImGui_IsItemActive(ctx)
+            
+            x0, y0 = cursor_x, cursor_y
+            cx = x0 + 8.0
+            cy = y0 + slider_h * 0.5
+            local rate_norm = (STATE.rate_value - 0.5) / 1.5  -- Map 0.5-2.0 to 0.0-1.0
+            if rate_norm < 0.0 then rate_norm = 0.0 elseif rate_norm > 1.0 then rate_norm = 1.0 end
+            
+            if active_rate then
+                local mx, _ = r.ImGui_GetMousePos(ctx)
+                local new_norm = (mx - cx) / math.max(1.0, track_w)
+                if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+                local new_val = 0.5 + (new_norm * 1.5)  -- Map 0.0-1.0 to 0.5-2.0
+                if math.abs(new_val - STATE.rate_value) > 0.01 then
+                    STATE.rate_value = new_val
+                    ApplyPitchToCurrentItem()
+                end
+                rate_norm = new_norm
+            elseif hovered_rate and r.ImGui_IsMouseClicked(ctx, 0) then
+                local mx, _ = r.ImGui_GetMousePos(ctx)
+                local new_norm = (mx - cx) / math.max(1.0, track_w)
+                if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+                local new_val = 0.5 + (new_norm * 1.5)  -- Map 0.0-1.0 to 0.5-2.0
+                if math.abs(new_val - STATE.rate_value) > 0.01 then
+                    STATE.rate_value = new_val
+                    ApplyPitchToCurrentItem()
+                end
+                rate_norm = new_norm
+            end
+            
+            knob_x = cx + rate_norm * track_w
+            r.ImGui_DrawList_AddLine(dlp, cx, cy, cx + track_w, cy, track_col, 2.0)
+            r.ImGui_DrawList_AddCircleFilled(dlp, knob_x, cy, 6.0, 0xFFFFFFFF)
+            r.ImGui_DrawList_AddCircle(dlp, knob_x, cy, 6.0, 0x333333FF, 0, 1.0)
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, string.format("%.2fx", STATE.rate_value))
+            
+            r.ImGui_Separator(ctx)
+            
+            local btn_w, btn_h = 24.0, 18.0
+            local gap = 6.0
+            
+            local function DrawPitchButton(id, label, tooltip)
+                local tw, th = r.ImGui_CalcTextSize(ctx, label)
+                r.ImGui_InvisibleButton(ctx, id, btn_w, btn_h)
+                local hov = r.ImGui_IsItemHovered(ctx)
+                local minx, miny = r.ImGui_GetItemRectMin(ctx)
+                local maxx, maxy = r.ImGui_GetItemRectMax(ctx)
+                local bg = hov and 0x343434FF or 0x2A2A2AFF
+                r.ImGui_DrawList_AddRectFilled(dlp, minx, miny, maxx, maxy, bg, 3.0)
+                r.ImGui_DrawList_AddRect(dlp, minx, miny, maxx, maxy, 0x555555FF, 3.0, 0, 1.0)
+                local lx = minx + (btn_w - tw) * 0.5
+                local ly = miny + (btn_h - th) * 0.5
+                r.ImGui_DrawList_AddText(dlp, lx, ly, 0xFFFFFFFF, label)
+                if tooltip and hov then r.ImGui_BeginTooltip(ctx); r.ImGui_Text(ctx, tooltip); r.ImGui_EndTooltip(ctx) end
+                return r.ImGui_IsItemClicked(ctx, 0)
+            end
+            
+            if DrawPitchButton("##pitch_down_win", "-1", "Lower by 1 semitone") then NudgePitch(-1.0, 0.0) end
+            r.ImGui_SameLine(ctx, 0, gap)
+            if DrawPitchButton("##pitch_up_win", "+1", "Raise by 1 semitone") then NudgePitch(1.0, 0.0) end
+            r.ImGui_SameLine(ctx, 0, gap)
+            if DrawPitchButton("##pitch_reset_win", "0", "Reset pitch") then ResetPitch() end
+            
+            r.ImGui_SameLine(ctx, 0, gap * 2)
+            r.ImGui_Text(ctx, "|")
+            r.ImGui_SameLine(ctx, 0, gap)
+            
+            if DrawPitchButton("##rate_down_win", "0.5", "Half speed") then NudgeRate(-0.5) end
+            r.ImGui_SameLine(ctx, 0, gap)
+            if DrawPitchButton("##rate_reset_win", "1x", "Normal speed") then ResetRate() end
+            r.ImGui_SameLine(ctx, 0, gap)
+            if DrawPitchButton("##rate_up_win", "2x", "Double speed") then NudgeRate(1.0) end
+            
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x2A2A2AFF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x343434FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x1B5E20FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), 0x66FF66FF)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3.0)
+            
+            if r.ImGui_RadioButton(ctx, "Formants", STATE.preserve_formants) then
+                STATE.preserve_formants = not STATE.preserve_formants
+                if current_take then
+                    r.SetMediaItemTakeInfo_Value(current_take, "B_PPITCH", STATE.preserve_formants and 1 or 0)
+                    r.UpdateArrange()
+                end
+            end
+            
+            r.ImGui_SameLine(ctx, 0, gap)
+            local preserve_pitch_changed, preserve_pitch_new = r.ImGui_Checkbox(ctx, "Preserve Pitch", STATE.preserve_pitch)
+            if preserve_pitch_changed then
+                STATE.preserve_pitch = preserve_pitch_new
+                if current_take then
+                    r.SetMediaItemTakeInfo_Value(current_take, "B_RSMODEPITCH", STATE.preserve_pitch and 1 or 0)
+                    r.UpdateArrange()
+                end
+            end
+            
+            r.ImGui_PopStyleVar(ctx, 1)
+            r.ImGui_PopStyleColor(ctx, 4)
+            
+            r.ImGui_End(ctx)
+        end
+        
+        r.ImGui_PopStyleVar(ctx, 1)
+        r.ImGui_PopStyleColor(ctx, 2)
+    end
 
     r.ImGui_PopStyleColor(ctx, 3)
 
@@ -9403,8 +10734,6 @@ local function Loop()
             end
         end
     end
-
-    end 
 
     if settings_pending_save then
         local now2 = r.time_precise()
