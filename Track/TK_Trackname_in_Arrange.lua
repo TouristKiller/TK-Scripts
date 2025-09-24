@@ -1,12 +1,15 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.5
+-- @version 0.9.6
 -- @changelog 
 --[[
 + Set track name length and FX name length to be independent
 ]]--
 
 local r                  = reaper
+-- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
+local OS                 = r.GetOS()
+local IS_LINUX           = OS:lower():find("linux") ~= nil
 local script_path        = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
 local preset_path        = script_path .. "TK_Trackname_Presets/"
 local json               = dofile(script_path .. "json.lua")
@@ -227,6 +230,7 @@ local default_settings              = {
     auto_center                     = false,
     fx_name_length                  = 1,
     fx_fixed_label_length           = 10,
+    pass_through_overlay            = IS_LINUX,
 }
 
 local settings = {}
@@ -732,10 +736,10 @@ function ShowSettingsWindow()
     -- Use Sexan's positioning
     local _, DPI_RPR = r.get_config_var_string("uiscale")
     local window_x = LEFT + (RIGHT - LEFT - 520) / 2  
-    local window_y = TOP + (BOT - TOP - 620) / 2      
+    local window_y = TOP + (BOT - TOP - 650) / 2      
     
     r.ImGui_SetNextWindowPos(ctx, window_x, window_y, r.ImGui_Cond_FirstUseEver())
-    r.ImGui_SetNextWindowSize(ctx, 520, 620)
+    r.ImGui_SetNextWindowSize(ctx, 520, 650)
     
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -861,6 +865,9 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, column_width * 4)
         if r.ImGui_RadioButton(ctx, "Autosave", settings.autosave_enabled) then
             settings.autosave_enabled = not settings.autosave_enabled
+        end
+        if r.ImGui_RadioButton(ctx, "Pass Through (for linux users only)", settings.pass_through_overlay) then
+            settings.pass_through_overlay = not settings.pass_through_overlay
         end
 
         if r.ImGui_RadioButton(ctx, "Track Label", settings.show_label) then
@@ -1875,10 +1882,34 @@ function loop()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x00000000)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0.0)
 
-    local visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, window_flags)
+    -- Pass-through overlay implementatie (Linux: off-screen micro host + ForegroundDrawList)
+    local use_pass_through = settings.pass_through_overlay
+    local draw_list, WX, WY
+    local visible, open
+
+    if use_pass_through then
+        -- Off-screen mini venster: voorkomt dat overlay een klik target is
+        r.ImGui_SetNextWindowPos(ctx, -10000, -10000, r.ImGui_Cond_Always())
+        r.ImGui_SetNextWindowSize(ctx, 4, 4, r.ImGui_Cond_Always())
+        visible, open = r.ImGui_Begin(ctx, '##TK_TrackNames_LinuxHost', true,
+            r.ImGui_WindowFlags_NoDecoration() |
+            r.ImGui_WindowFlags_NoInputs() |
+            r.ImGui_WindowFlags_NoNav() |
+            r.ImGui_WindowFlags_NoMove() |
+            r.ImGui_WindowFlags_NoSavedSettings() |
+            r.ImGui_WindowFlags_NoBackground()
+        )
+        draw_list = r.ImGui_GetForegroundDrawList(ctx)
+        WX, WY = 0, 0
+        visible = true -- we willen blijven tekenen
+    else
+        visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, window_flags)
+        if visible then
+            draw_list = r.ImGui_GetWindowDrawList(ctx)
+            WX, WY = r.ImGui_GetWindowPos(ctx)
+        end
+    end
     if visible then
-        local draw_list = r.ImGui_GetWindowDrawList(ctx)
-        local WX, WY = r.ImGui_GetWindowPos(ctx)
         local max_width = 0
 
         if not cached_bg_color then
@@ -2332,7 +2363,8 @@ function loop()
                             local env = r.GetTrackEnvelope(track, i)
                             local env_height = r.GetEnvelopeInfo_Value(env, "I_TCPH") / screen_scale
                             local env_y = r.GetEnvelopeInfo_Value(env, "I_TCPY") / screen_scale
-                            local in_lane = r.GetEnvelopeInfo_Value(env, "I_TCPH_USED") > 0
+                            local env_used_height = r.GetEnvelopeInfo_Value(env, "I_TCPH_USED")
+                            local in_lane = env_used_height > 0 and env_height > 0 and env_y > 0
                             
                             if in_lane then
                                 local retval, env_name = r.GetEnvelopeName(env)
