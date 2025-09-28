@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.6.1
+-- @version 0.6.2
 -- @changelog 
 --[[
 
@@ -51,6 +51,26 @@ local tempo_button_center_x = nil
 local tempo_button_center_y = nil
 local tempo_last_mouse_y = nil
 local tempo_mouse_anchor_x, tempo_mouse_anchor_y = nil, nil
+
+local visual_metronome = {
+    enabled = false,
+    jsfx_track = nil,
+    jsfx_index = -1,
+    beat_flash = 0,
+    beat_position = 0,
+    downbeat_flash = 0,
+    size = 40,
+    color_offbeat = 0xFF0000FF,
+    color_beat = 0x00FF00FF,
+    color_ring = 0x0080FFFF,
+    color_off = 0x333333FF,
+    fade_speed = 8.0,
+    show_beat_flash = true,
+    show_position_ring = true,
+    ring_thickness = 3,
+    show_beat_numbers = true,
+    current_beat_in_measure = 0
+}
 
 local section_states = {
     transport_open = false,
@@ -252,7 +272,22 @@ local default_settings  = {
     tempo_presets = {60,80,100,120,140,160,180},
     tempo_button_color = 0x333333FF,
     tempo_button_color_hover = 0x444444FF,
-    measure_display_width = 160  
+    measure_display_width = 160,
+    
+    -- Visual Metronome settings
+    show_visual_metronome = false,
+    visual_metronome_x = 0.85,
+    visual_metronome_y = 0.15,
+    visual_metronome_size = 40,
+    visual_metronome_fade_speed = 8.0,
+    visual_metronome_color_offbeat = 0xFF0000FF,
+    visual_metronome_color_beat = 0x00FF00FF,
+    visual_metronome_color_ring = 0x0080FFFF,
+    visual_metronome_color_off = 0x333333FF,
+    visual_metronome_show_beat_flash = true,
+    visual_metronome_show_position_ring = true,
+    visual_metronome_ring_thickness = 3,
+    visual_metronome_show_beat_numbers = true
 
 }
 
@@ -274,6 +309,7 @@ local Layout = {
         { name = "env",          showFlag = "show_env_button",     keyx = "env_x",        keyy = "env_y" },
         { name = "timesel",      showFlag = "show_timesel",        keyx = "timesel_x",    keyy = "timesel_y" },
         { name = "taptempo",     showFlag = "show_taptempo",       keyx = "taptempo_x",   keyy = "taptempo_y" },
+        { name = "visual_metronome", showFlag = "visual_metronome_enabled", keyx = "visual_metronome_x", keyy = "visual_metronome_y" },
     }
 }
 function Layout.move_frac(dx, dy, keyx, keyy)
@@ -731,6 +767,12 @@ function SavePreset(name)
         preset_data[k] = v
     end
     
+    -- Save visual metronome settings
+    preset_data.visual_metronome = {}
+    for k, v in pairs(visual_metronome) do
+        preset_data.visual_metronome[k] = v
+    end
+    
     r.RecursiveCreateDirectory(preset_path, 0)
     local file = io.open(preset_path .. name .. '.json', 'w')
     if file then
@@ -750,7 +792,14 @@ function LoadPreset(name)
         local preset_data = json.decode(content)
         
         for key, value in pairs(preset_data) do
-            settings[key] = value
+            if key == "visual_metronome" and type(value) == "table" then
+                -- Load visual metronome settings
+                for vm_key, vm_value in pairs(value) do
+                    visual_metronome[vm_key] = vm_value
+                end
+            else
+                settings[key] = value
+            end
         end
         
         if old_font_size ~= settings.font_size or old_font_name ~= settings.current_font then
@@ -786,6 +835,200 @@ function LoadLastUsedPreset()
     if last_preset ~= "" then
         preset_name = last_preset
         LoadPreset(last_preset)
+    end
+end
+
+function Color_ToRGBA(color)
+    local a = (color >> 24) & 0xFF
+    local r = (color >> 16) & 0xFF
+    local g = (color >> 8) & 0xFF
+    local b = color & 0xFF
+    return r/255, g/255, b/255, a/255
+end
+
+function Color_FromRGBA(r, g, b, a)
+    return (math.floor(a*255) << 24) | (math.floor(r*255) << 16) | (math.floor(g*255) << 8) | math.floor(b*255)
+end
+
+function InitializeVisualMetronome()
+    if not visual_metronome.enabled then return end
+    visual_metronome.last_beat_number = -1
+    visual_metronome.beat_flash = 0
+    visual_metronome.downbeat_flash = 0
+    visual_metronome.beat_position = 0
+end
+
+function CleanupVisualMetronome()
+    local master_track = r.GetMasterTrack(0)
+    if master_track then
+        local fx_count = r.TrackFX_GetCount(master_track)
+        for i = fx_count - 1, 0, -1 do
+            local retval, fx_name = r.TrackFX_GetFXName(master_track, i, "")
+            if retval and fx_name and (fx_name == "TK_Visual_Metronome" or fx_name:find("JS: TK_Visual_Metronome")) then
+                r.TrackFX_Delete(master_track, i)
+            end
+        end
+    end
+    visual_metronome.last_beat_number = -1
+    visual_metronome.beat_flash = 0
+    visual_metronome.downbeat_flash = 0
+end
+
+function UpdateVisualMetronome()
+    if not visual_metronome.enabled then return end
+    
+    local play_state = r.GetPlayState()
+    local is_playing = (play_state & 1) == 1
+    
+    if not is_playing then
+        visual_metronome.beat_flash = math.max(0, visual_metronome.beat_flash - (visual_metronome.fade_speed * (1/60)))
+        visual_metronome.downbeat_flash = math.max(0, visual_metronome.downbeat_flash - (visual_metronome.fade_speed * (1/60)))
+        visual_metronome.beat_position = 0
+        visual_metronome.last_beat_number = -1
+        return
+    end
+    
+    local play_pos = r.GetPlayPosition()
+    local retval, measures, cml, fullbeats, cdenom = r.TimeMap2_timeToBeats(0, play_pos)
+    
+    if retval then
+        -- Get time signature using the same method as ShowTimeSignature function
+        local ts_retval, ts_pos, ts_measurepos, ts_beatpos, ts_bpm, timesig_num, timesig_denom = r.GetTempoTimeSigMarker(0, 0)
+        if not ts_retval then 
+            timesig_num, timesig_denom = 4, 4 
+        end
+        local beats_per_measure = math.floor(timesig_num)
+        
+        local current_beat = math.floor(fullbeats)
+        local beat_fraction = fullbeats - current_beat
+        
+        -- Calculate beat within measure: use modulo but handle 0-based vs 1-based correctly
+        local beat_in_measure_zero_based = current_beat % beats_per_measure
+        local beat_in_measure = beat_in_measure_zero_based + 1
+        
+        visual_metronome.beat_position = beat_fraction
+        visual_metronome.current_beat_in_measure = beat_in_measure
+        
+        if not visual_metronome.last_beat_number then
+            visual_metronome.last_beat_number = -1
+        end
+        
+        if current_beat ~= visual_metronome.last_beat_number then
+            visual_metronome.beat_flash = 1.0
+            
+            -- Downbeat occurs when we're on beat 1 of the measure
+            if beat_in_measure == 1 then
+                visual_metronome.downbeat_flash = 1.0
+            end
+            
+            visual_metronome.last_beat_number = current_beat
+        end
+    end
+    
+    visual_metronome.beat_flash = math.max(0, visual_metronome.beat_flash - (visual_metronome.fade_speed * (1/60)))
+    visual_metronome.downbeat_flash = math.max(0, visual_metronome.downbeat_flash - (visual_metronome.fade_speed * (1/60)))
+end
+
+function RenderVisualMetronome(main_window_width, main_window_height)
+    if not visual_metronome.enabled then return end
+    
+    UpdateVisualMetronome()
+    
+    -- Positioneer de metronoom
+    local x = settings.visual_metronome_x_px and ScalePosX(settings.visual_metronome_x_px, main_window_width, settings) or ((settings.visual_metronome_x or 0.85) * main_window_width)
+    local y = settings.visual_metronome_y_px and ScalePosY(settings.visual_metronome_y_px, main_window_height, settings) or ((settings.visual_metronome_y or 0.15) * main_window_height)
+    
+    r.ImGui_SetCursorPosX(ctx, x)
+    r.ImGui_SetCursorPosY(ctx, y)
+    
+    local size = visual_metronome.size
+    r.ImGui_InvisibleButton(ctx, "##VisualMetronome", size, size)
+    StoreElementRect("visual_metronome")
+    
+    -- Teken de metronoom
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local center_x, center_y = r.ImGui_GetItemRectMin(ctx)
+    center_x = center_x + size * 0.5
+    center_y = center_y + size * 0.5
+    local radius = size * 0.4
+    
+    local bg_color = visual_metronome.color_off
+    r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, bg_color)
+    
+    if visual_metronome.show_beat_flash then
+        local flash_intensity = math.max(visual_metronome.beat_flash, visual_metronome.downbeat_flash)
+        if flash_intensity > 0.1 then
+            local is_offbeat = visual_metronome.current_beat_in_measure == 1
+            local flash_color = is_offbeat and visual_metronome.color_offbeat or visual_metronome.color_beat
+            
+            r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, flash_color)
+        end
+    end
+    
+    if visual_metronome.show_beat_numbers and visual_metronome.current_beat_in_measure > 0 then
+        local beat_text = tostring(visual_metronome.current_beat_in_measure)
+        local text_size = r.ImGui_CalcTextSize(ctx, beat_text)
+        local text_x = center_x - text_size * 0.5
+        local text_y = center_y - r.ImGui_GetFontSize(ctx) * 0.5
+        
+        local text_color = 0xFFFFFFFF
+        if visual_metronome.downbeat_flash > 0.1 then
+            text_color = 0x000000FF
+        elseif visual_metronome.beat_flash > 0.1 then
+            text_color = 0x000000FF
+        end
+        
+        r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, beat_text)
+    end
+    
+    if visual_metronome.show_position_ring and visual_metronome.beat_position > 0 then
+        local ring_radius = radius + 6
+        local arc_start = -math.pi * 0.5
+        local arc_end = arc_start + (visual_metronome.beat_position * 2 * math.pi)
+        
+        r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, ring_radius, arc_start, arc_end, 32)
+        r.ImGui_DrawList_PathStroke(draw_list, visual_metronome.color_ring, 0, visual_metronome.ring_thickness)
+    end
+    if (not settings.edit_mode) and r.ImGui_IsItemClicked(ctx, 1) then
+        r.ImGui_OpenPopup(ctx, "VisualMetronomeMenu")
+    end
+    
+    if r.ImGui_BeginPopup(ctx, "VisualMetronomeMenu") then
+        local rv
+        rv, visual_metronome.enabled = r.ImGui_MenuItem(ctx, "Enable Visual Metronome", nil, visual_metronome.enabled)
+        if rv and visual_metronome.enabled then
+            InitializeVisualMetronome()
+        end
+        
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_Text(ctx, "Size:")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 100)
+        rv, visual_metronome.size = r.ImGui_SliderInt(ctx, "##MetronomeSize", visual_metronome.size, 20, 100)
+        
+        r.ImGui_Text(ctx, "Fade Speed:")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 100)
+        rv, visual_metronome.fade_speed = r.ImGui_SliderDouble(ctx, "##FadeSpeed", visual_metronome.fade_speed, 1.0, 20.0, "%.1f")
+        
+        r.ImGui_Separator(ctx)
+        
+        local flags = r.ImGui_ColorEditFlags_NoInputs()
+        rv, visual_metronome.color_beat = r.ImGui_ColorEdit4(ctx, "Beat Color", visual_metronome.color_beat, flags)
+        rv, visual_metronome.color_downbeat = r.ImGui_ColorEdit4(ctx, "Downbeat Color", visual_metronome.color_downbeat, flags)
+        rv, visual_metronome.color_off = r.ImGui_ColorEdit4(ctx, "Off Color", visual_metronome.color_off, flags)
+        
+        r.ImGui_Separator(ctx)
+        
+        rv, visual_metronome.show_position_ring = r.ImGui_Checkbox(ctx, "Show Position Ring", visual_metronome.show_position_ring)
+        if visual_metronome.show_position_ring then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 80)
+            rv, visual_metronome.ring_thickness = r.ImGui_SliderInt(ctx, "##RingThickness", visual_metronome.ring_thickness, 1, 8)
+        end
+        
+        r.ImGui_EndPopup(ctx)
     end
 end
 
@@ -1329,6 +1572,68 @@ function ShowSettings(main_window_width , main_window_height)
                         rv, settings.medium_accuracy_color = r.ImGui_ColorEdit4(ctx, "Medium Accuracy", settings.medium_accuracy_color, cflags)
                         r.ImGui_SameLine(ctx)
                         rv, settings.low_accuracy_color = r.ImGui_ColorEdit4(ctx, "Low Accuracy", settings.low_accuracy_color, cflags)
+                    end
+                end
+                r.ImGui_Separator(ctx)
+                r.ImGui_TextColored(ctx, 0x3399FFFF, "Visual Metronome")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, show_col_x)
+                local rv_met
+                rv_met, visual_metronome.enabled = r.ImGui_Checkbox(ctx, "Show##visualmetronome", visual_metronome.enabled)
+                if rv_met then
+                    if visual_metronome.enabled then
+                        InitializeVisualMetronome()
+                    else
+                        CleanupVisualMetronome()
+                    end
+                end
+                
+                if visual_metronome.enabled then
+                    DrawPixelXYControlsInline('visual_metronome_x','visual_metronome_y', main_window_width, main_window_height)
+
+                    local metro_line1_y = r.ImGui_GetCursorPosY(ctx)
+                    r.ImGui_SetCursorPosX(ctx, show_col_x)
+                    r.ImGui_SetNextItemWidth(ctx, 80)
+                    local rv_size
+                    rv_size, visual_metronome.size = r.ImGui_SliderInt(ctx, "Size##MetronomeSize", visual_metronome.size, 20, 100, "%d px")
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetNextItemWidth(ctx, 80)
+                    local rv_fade
+                    rv_fade, visual_metronome.fade_speed = r.ImGui_SliderDouble(ctx, "Fade##FadeSpeed", visual_metronome.fade_speed, 1.0, 20.0, "%.1f")
+                    
+                    local metro_line2_y = r.ImGui_GetCursorPosY(ctx) + r.ImGui_GetTextLineHeightWithSpacing(ctx)*0.2
+                    r.ImGui_SetCursorPosX(ctx, show_col_x)
+                    r.ImGui_SetCursorPosY(ctx, metro_line2_y)
+                    local rv_beat_nums, rv_beat_flash, rv_show_ring
+                    rv_beat_nums, visual_metronome.show_beat_numbers = r.ImGui_Checkbox(ctx, "Show Beat Numbers", visual_metronome.show_beat_numbers)
+                    r.ImGui_SameLine(ctx)
+                    rv_beat_flash, visual_metronome.show_beat_flash = r.ImGui_Checkbox(ctx, "Show Beat Flash", visual_metronome.show_beat_flash)
+                    r.ImGui_SameLine(ctx)
+                    rv_show_ring, visual_metronome.show_position_ring = r.ImGui_Checkbox(ctx, "Show Ring", visual_metronome.show_position_ring)
+                    
+                    local rv_ring_thick
+                    if visual_metronome.show_position_ring then
+                        local metro_line3_y = r.ImGui_GetCursorPosY(ctx) + r.ImGui_GetTextLineHeightWithSpacing(ctx)*0.2
+                        r.ImGui_SetCursorPosX(ctx, show_col_x)
+                        r.ImGui_SetCursorPosY(ctx, metro_line3_y)
+                        r.ImGui_SetNextItemWidth(ctx, 60)
+                        rv_ring_thick, visual_metronome.ring_thickness = r.ImGui_SliderInt(ctx, "Ring Thickness", visual_metronome.ring_thickness, 1, 8, "%d px")
+                    end
+                    
+                    local flags = r.ImGui_ColorEditFlags_NoInputs()
+                    local metro_line4_y = r.ImGui_GetCursorPosY(ctx) + r.ImGui_GetTextLineHeightWithSpacing(ctx)*0.2
+                    r.ImGui_SetCursorPosX(ctx, show_col_x)
+                    r.ImGui_SetCursorPosY(ctx, metro_line4_y)
+                    local rv_col_off, rv_col_beat, rv_col_ring
+                    rv_col_off, visual_metronome.color_offbeat = r.ImGui_ColorEdit4(ctx, "Downbeat (1)", visual_metronome.color_offbeat, flags)
+                    r.ImGui_SameLine(ctx)
+                    rv_col_beat, visual_metronome.color_beat = r.ImGui_ColorEdit4(ctx, "Beat (2,3,4...)", visual_metronome.color_beat, flags)
+                    r.ImGui_SameLine(ctx)
+                    rv_col_ring, visual_metronome.color_ring = r.ImGui_ColorEdit4(ctx, "Ring", visual_metronome.color_ring, flags)
+                    
+                    -- Save settings when any visual metronome setting changes
+                    if rv_size or rv_fade or rv_beat_nums or rv_beat_flash or rv_show_ring or rv_ring_thick or rv_col_off or rv_col_beat or rv_col_ring then
+                        SaveSettings()
                     end
                 end
                 r.ImGui_Separator(ctx)
@@ -2712,7 +3017,6 @@ function Main()
     EnvelopeOverride(main_window_width, main_window_height)
     Transport_Buttons(main_window_width, main_window_height)
     ShowCursorPosition(main_window_width, main_window_height)
-    ShowLocalTime(main_window_width, main_window_height)
         CustomButtons.x_offset_px = settings.custom_buttons_x_offset_px or (settings.custom_buttons_x_offset * main_window_width)
     CustomButtons.y_offset_px = settings.custom_buttons_y_offset_px or (settings.custom_buttons_y_offset * main_window_height)
     CustomButtons.x_offset = CustomButtons.x_offset_px / main_window_width
@@ -2723,7 +3027,9 @@ function Main()
         ShowTempo(main_window_width, main_window_height)
         ShowTimeSignature(main_window_width, main_window_height)
         PlayRate_Slider(main_window_width, main_window_height) 
-        TapTempo(main_window_width, main_window_height) 
+        TapTempo(main_window_width, main_window_height)
+        RenderVisualMetronome(main_window_width, main_window_height)
+        ShowLocalTime(main_window_width, main_window_height) 
 
         if settings.edit_mode then
             local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -2769,7 +3075,16 @@ function Main()
                 end
             end
             for _, e in ipairs(Layout.elems) do
-                if not e.showFlag or settings[e.showFlag] then
+                local show_element = true
+                if e.showFlag then
+                    if e.name == "visual_metronome" then
+                        show_element = visual_metronome.enabled
+                    else
+                        show_element = settings[e.showFlag]
+                    end
+                end
+                
+                if show_element then
                     local rct = element_rects[e.name]
                     if rct then
                         overlay_rect(e.name, rct.min_x, rct.min_y, rct.max_x, rct.max_y, function(dx_px, dy_px, dx_frac, dy_frac)
