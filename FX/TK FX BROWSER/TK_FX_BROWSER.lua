@@ -1,10 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.8.6
+-- @version 1.8.7
 -- @changelog:
 --[[     
 ++ Fixed bug
----------------------TODO (sometime in the future ;o) )-----------------------------------------
+            TODO (sometime in the future ;o) ):
             - Auto tracks and send /recieve for multi output plugin
             - Meter functionality (Pre/post Peak) -- vooralsnog niet haalbaar
             - Expand project files
@@ -53,7 +53,32 @@ local normalized_name_cache = {}
 local plugin_type_cache     = {}
 local type_priority_cache   = nil
 
--- Version helper: read @version from script header once and cache
+
+local function LaunchTKNotes()
+    local notes_path = script_path .. "TK_NOTES.lua"
+    if not r.file_exists(notes_path) then
+        r.ShowMessageBox("TK_NOTES.lua not found.\nExpected path:\n" .. notes_path, "TK Notes Error", 0)
+        return
+    end
+
+    local command_id = r.AddRemoveReaScript(true, 0, notes_path, false)
+    if not command_id or command_id == 0 or command_id == "" then
+        command_id = r.AddRemoveReaScript(true, 0, notes_path, true)
+    end
+
+    if type(command_id) == "string" then
+        command_id = r.NamedCommandLookup(command_id)
+    end
+
+    if not command_id or command_id == 0 then
+        r.ShowMessageBox("Unable to register TK_NOTES.lua as an action.", "TK Notes Error", 0)
+        return
+    end
+
+    r.Main_OnCommand(command_id, 0)
+end
+
+
 local SCRIPT_VERSION
 local function GetScriptVersion()
     if SCRIPT_VERSION then return SCRIPT_VERSION end
@@ -133,14 +158,12 @@ local function CheckVisibilityState()
     return is_visible
 end
 
--- NEW: Separate function to check if main window should be shown
 local function ShouldShowMainWindow()
     local general_visibility = CheckVisibilityState()
     if not general_visibility then
-        return false -- If whole script is hidden, main window is hidden too
+        return false 
     end
     
-    -- Check if "Hide Main Window" option is enabled
     return not config.hide_main_window
 end
 
@@ -154,8 +177,8 @@ local force_open_developer_header = false
 local force_open_category_header  = false
 local force_open_all_plugins_header = false
 local force_open_folders_header = false
-local force_headers_open_applied = false -- track first frame application
-local initial_header_auto_expand_done = false -- one-shot open of the header containing last selected subgroup/folder
+local force_headers_open_applied = false 
+local initial_header_auto_expand_done = false 
 local function BuildAutoExpandPaths(target)
     auto_expand_paths = nil
     if not target or target == '' then return end
@@ -615,11 +638,7 @@ function SetDefaultConfig()
         show_only_dropdown = false,
         create_sends_folder = false,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
-        show_notes = true,
-        show_notes_widget =  false,
-        show_screenshot_info_box = true, -- nieuwe toggle voor info box / footer
-        track_notes_color = track_notes_color or 0xFFFFB366,  -- Default orange
-        item_notes_color = item_notes_color or 0x6699FFFF,    -- Default blue
+        
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
         show_project_info = show_project_info or true,
         hide_main_window = false,
@@ -1627,9 +1646,6 @@ function EnsureFileExists(filepath)
     end
 end
 
-EnsureFileExists(script_path .. "tknotes.txt")
-
-
 
 function load_projects_info()
     local file = io.open(PROJECTS_INFO_FILE, "r")
@@ -1761,31 +1777,6 @@ function LoadFavorites()
 end
 LoadFavorites()
 
-function LoadNotes()
-    local notes = {}
-    local file = io.open(script_path .. "tknotes.txt", "r")
-    if file then
-        local content = file:read("*all")
-        for guid, note in content:gmatch("START_NOTE:([^|]+)|(.-)END_NOTE") do
-            notes[guid] = note
-        end
-        file:close()
-    end
-    return notes
-end
-notes = LoadNotes()
-
-function SaveNotes()
-    local file = io.open(script_path .. "tknotes.txt", "w")
-    if file then
-        for guid, note in pairs(notes) do
-            if guid and note then
-                file:write("START_NOTE:" .. guid .. "|" .. note .. "END_NOTE\n")
-            end
-        end
-        file:close()
-    end
-end
 
 function SaveTags()
     local tags_data = {
@@ -2495,7 +2486,10 @@ function ShowConfigWindow()
             _, config.show_custom_folders = r.ImGui_Checkbox(ctx, "Custom Folders", config.show_custom_folders)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
-             _, config.show_tooltips = r.ImGui_Checkbox(ctx, "Show Tooltips", config.show_tooltips)
+            _, config.show_tooltips = r.ImGui_Checkbox(ctx, "Show Tooltips", config.show_tooltips)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.show_notes_widget = r.ImGui_Checkbox(ctx, "Show Notes", config.show_notes_widget)
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.add_instruments_on_top = r.ImGui_Checkbox(ctx, "Add instruments at top", config.add_instruments_on_top)
@@ -2603,11 +2597,6 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.show_tags = r.ImGui_Checkbox(ctx, "Show Tags", config.show_tags)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            _, config.show_notes_widget = r.ImGui_Checkbox(ctx, "Show Notes", config.show_notes_widget)
-          
-
              r.ImGui_SetCursorPosX(ctx, column1_width)
              _, config.hideMeter = r.ImGui_Checkbox(ctx, "Hide Meter", config.hideMeter)
             
@@ -6600,41 +6589,67 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 r.ImGui_EndPopup(ctx)
             end
             
-        if custom_folders_open[full_path] then
-            r.ImGui_Indent(ctx, 1)
-            for i, plugin in ipairs(folder_content) do
-                local display_plugin = GetDisplayPluginName(plugin)
-                if r.ImGui_Selectable(ctx, display_plugin .. "  " .. GetStarsString(plugin)) then
-                    selected_folder = nil
-                    selected_individual_item = plugin
-                    screenshot_search_results = {{name = plugin}}
-                    ClearScreenshotCache()
+        else
+            if custom_folders_open[full_path] then
+                r.ImGui_Indent(ctx, 1)
+                for i, plugin in ipairs(folder_content) do
+                    local display_plugin = GetDisplayPluginName(plugin)
+                    if r.ImGui_Selectable(ctx, display_plugin .. "  " .. GetStarsString(plugin)) then
+                        selected_folder = nil
+                        selected_individual_item = plugin
+                        screenshot_search_results = {{name = plugin}}
+                        ClearScreenshotCache()
+                    end
+                    ShowPluginContextMenu(plugin, "custom_" .. full_path .. "_" .. i)
                 end
-                ShowPluginContextMenu(plugin, "custom_" .. full_path .. "_" .. i)
+                r.ImGui_Unindent(ctx, 1)
             end
-            r.ImGui_Unindent(ctx, 1)
         end
-            
-        elseif IsSubfolderStructure(folder_content) then
+
+        if IsSubfolderStructure(folder_content) then
+            local original_cursor_x = r.ImGui_GetCursorPosX(ctx)
+            r.ImGui_SetCursorPosX(ctx, math.max(original_cursor_x - 8, -2))
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemInnerSpacing(), 0, 0)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 3, 3)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
             local tree_is_selected = (selected_folder == full_path) or (selected_folder and selected_folder:sub(1, #full_path) == full_path and selected_folder:find("/", #full_path+1))
+            local tree_flags = r.ImGui_TreeNodeFlags_Framed() | r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_FramePadding()
             if tree_is_selected then
+                tree_flags = tree_flags | r.ImGui_TreeNodeFlags_Selected()
                 local dl = r.ImGui_GetWindowDrawList(ctx)
                 local x,y = r.ImGui_GetCursorScreenPos(ctx)
                 local avail_w = r.ImGui_GetContentRegionAvail(ctx)
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
+                r.ImGui_DrawList_AddRectFilled(dl, x, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-            local label = ((IsCustomPinned(full_path) and "\xF0\x9F\x93\x8C ") or "") .. folder_name:upper()
+            local display_label = ((IsCustomPinned(full_path) and "\xF0\x9F\x93\x8C ") or "") .. folder_name:upper()
             if auto_expand_paths and auto_expand_paths[full_path] then
                 r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_Once())
             end
-            local open = r.ImGui_TreeNode(ctx, label)
+            local tree_id = full_path .. "##customTree"
+            local open = r.ImGui_TreeNodeEx(ctx, tree_id, "", tree_flags)
+            local item_min_x, item_min_y = r.ImGui_GetItemRectMin(ctx)
+            local line_h = r.ImGui_GetTextLineHeight(ctx)
+            local text_w, text_h = r.ImGui_CalcTextSize(ctx, display_label)
+            local spacing = r.ImGui_GetTreeNodeToLabelSpacing(ctx)
+            local text_x = item_min_x + math.max(spacing - 3, 0)
+            local text_y = item_min_y + (line_h - text_h) * 0.5 + 3
+            local text_col = r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
+            local draw_list = r.ImGui_GetWindowDrawList(ctx)
+            r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_col, display_label)
             if open then
                 r.ImGui_Indent(ctx, 1)
                 DisplayCustomFoldersInBrowser(folder_content, full_path)
                 r.ImGui_Unindent(ctx, 1)
                 r.ImGui_TreePop(ctx)
             end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx)
+            r.ImGui_PopStyleVar(ctx)
+            r.ImGui_SetCursorPosX(ctx, original_cursor_x)
+            r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 2)
         end
     end
 end
@@ -6645,7 +6660,6 @@ footer_last_mouse_y  = footer_last_mouse_y or 0
 function ShowBrowserPanel()
     if not config.show_browser_panel then return end
 
-    -- Ensure force-open flags are determined BEFORE first header draw (ShowScreenshotWindow sets them too late for frame 1)
     if not initial_header_auto_expand_done
        and config.default_folder == LAST_OPENED_SENTINEL
        and last_viewed_folder
@@ -6660,7 +6674,7 @@ function ShowBrowserPanel()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     r.ImGui_BeginChild(ctx, "BrowserSection", config.browser_panel_width, -1)
     local section_pos_y = r.ImGui_GetCursorScreenPos(ctx)
-    local section_start_y = section_pos_y -- screen pos not directly used; we will later compute height via window height minus pos diff
+    local section_start_y = section_pos_y 
 
     -- Header
     local header_open = r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 25 or 4)
@@ -6794,10 +6808,6 @@ function ShowBrowserPanel()
             end
         end
    
-        if config.show_custom_folders then
-            DisplayCustomFoldersInBrowser(config.custom_folders)
-        end
-
         -- CURRENT TRACK FX
         local ctrack_selected = (selected_folder == "Current Track FX")
     if ctrack_selected then
@@ -6852,10 +6862,15 @@ function ShowBrowserPanel()
          r.ImGui_PopStyleVar(ctx)
         r.ImGui_Separator(ctx)
 
+        if config.show_custom_folders then
+            DisplayCustomFoldersInBrowser(config.custom_folders)
+        end
+
         -- Categories / Folders / Chains / Templates
         for i = 1, #CAT_TEST do
             local category_name = CAT_TEST[i].name
-            if (category_name == "ALL PLUGINS" and config.show_all_plugins) then
+            if category_name ~= "CUSTOM" then
+                if (category_name == "ALL PLUGINS" and config.show_all_plugins) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
@@ -6882,8 +6897,8 @@ function ShowBrowserPanel()
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleVar(ctx)
-            end
-            if (category_name == "DEVELOPER" and config.show_developer) then
+                end
+                if (category_name == "DEVELOPER" and config.show_developer) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
@@ -6908,8 +6923,8 @@ function ShowBrowserPanel()
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleVar(ctx)
-            end
-            if (category_name == "CATEGORY" and config.show_category) then
+                end
+                if (category_name == "CATEGORY" and config.show_category) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
@@ -6934,8 +6949,8 @@ function ShowBrowserPanel()
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleVar(ctx)
-            end
-            if (category_name == "FOLDERS" and config.show_folders) then
+                end
+                if (category_name == "FOLDERS" and config.show_folders) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
@@ -7060,8 +7075,8 @@ function ShowBrowserPanel()
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleVar(ctx)
-            end
-            if (category_name == "FX CHAINS" and config.show_fx_chains) then
+                end
+                if (category_name == "FX CHAINS" and config.show_fx_chains) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
@@ -7074,8 +7089,8 @@ function ShowBrowserPanel()
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleVar(ctx)
-            end
-            if (category_name == "TRACK TEMPLATES" and config.show_track_templates) then
+                end
+                if (category_name == "TRACK TEMPLATES" and config.show_track_templates) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
@@ -7088,9 +7103,12 @@ function ShowBrowserPanel()
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleVar(ctx)
+                end
             end
         end
+        r.ImGui_Dummy(ctx, 0, 4)
         r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 4)
 
         if config.show_container then
             if r.ImGui_Selectable(ctx, "CONTAINER") then
@@ -7189,6 +7207,11 @@ function ShowBrowserPanel()
                     GetPluginsForFolder(last_viewed_folder)
                 end
                 ClearScreenshotCache()
+            end
+        end
+        if config.show_notes_widget then
+            if r.ImGui_Selectable(ctx, "NOTES", false) then
+                LaunchTKNotes()
             end
         end
                 if config.show_scripts then
@@ -11192,12 +11215,7 @@ function ShowTrackFX()
         r.ImGui_Text(ctx, "No track selected")
         return
     end
-    local min_height = r.ImGui_GetCursorPosY(ctx)
-    local window_height = r.ImGui_GetWindowHeight(ctx)
-    local available_height = window_height - r.ImGui_GetCursorPosY(ctx)
-    local notes_section_height = config.show_notes and notes_height or 0
-    local fx_list_height = available_height - notes_section_height - 25
-    
+    local fx_list_height = (config.fx_track_list_height and config.fx_track_list_height > 40) and config.fx_track_list_height or 260
     local track_fxlist_open = r.ImGui_BeginChild(ctx, "TrackFXList", -1, fx_list_height)
     if track_fxlist_open then
         r.ImGui_Dummy(ctx, 0, 5)
@@ -11313,66 +11331,6 @@ function ShowTrackFX()
         end       
     end
     r.ImGui_EndChild(ctx)
-
-        -- Notation:
-        if config.show_notes_widget then
-            r.ImGui_Separator(ctx)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
-
-            if r.ImGui_ColorButton(ctx, "##notes_color", config.track_notes_color, 0, 13, 13) then
-                r.ImGui_OpenPopup(ctx, "NotesColorPopup")
-            end
-
-            r.ImGui_SameLine(ctx)
-
-            if r.ImGui_Selectable(ctx, config.show_notes and " - " or " + ") then
-                config.show_notes = not config.show_notes
-                SaveConfig()
-            end
-
-            r.ImGui_SameLine(ctx)
-            r.ImGui_Text(ctx, "Notes:")
-
-            local window_width = r.ImGui_GetWindowWidth(ctx)
-            local text_width = r.ImGui_CalcTextSize(ctx, "Save")
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, window_width - text_width - 5)
-            if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
-                SaveNotes()
-            end
-
-            if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
-                local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.track_notes_color)
-                if changed then
-                    config.track_notes_color = new_color
-                    SaveConfig()
-                end
-                r.ImGui_EndPopup(ctx)
-            end
-
-            r.ImGui_PopStyleColor(ctx, 2)
-
-            -- Notes section
-            if config.show_notes then
-                local track_guid = r.GetTrackGUID(TRACK)
-                if not notes[track_guid] then
-                    notes[track_guid] = LoadNotes()[track_guid] or ""
-                end
-
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.track_notes_color)
-                local notes_track_open = r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height)
-                if notes_track_open then
-                    local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##tracknotes", notes[track_guid], -1, notes_height - 10)
-                    if changed then
-                        notes[track_guid] = new_note
-                        SaveNotes()
-                    end
-                end
-                r.ImGui_EndChild(ctx)
-            r.ImGui_PopStyleColor(ctx)       
-        end
-    end
 end
 
 function ShowItemFX()
@@ -11384,8 +11342,7 @@ function ShowItemFX()
     local min_height = r.ImGui_GetCursorPosY(ctx)
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx)
-    local notes_section_height = config.show_notes and notes_height or 0
-    local fx_list_height = available_height - notes_section_height - 25
+    local fx_list_height = available_height - 25
 
     local item_fxlist_open = r.ImGui_BeginChild(ctx, "ItemFXList", -1, fx_list_height)
     if item_fxlist_open then
@@ -11479,82 +11436,8 @@ function ShowItemFX()
         end
     end
     r.ImGui_EndChild(ctx)
-
-    r.ImGui_Separator(ctx)
-    -- Notation:
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x00000000)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x00000000)
-
-    -- Eerst de kleurknop
-    if r.ImGui_ColorButton(ctx, "##notes_color", config.item_notes_color, 0, 13, 13) then
-        r.ImGui_OpenPopup(ctx, "NotesColorPopup")
-    end
-    r.ImGui_SameLine(ctx)
-
-    if r.ImGui_Selectable(ctx, config.show_notes and " - " or " + ") then
-        config.show_notes = not config.show_notes
-        SaveConfig()
-    end
-    
-    r.ImGui_SameLine(ctx)
-    r.ImGui_Text(ctx, "Notes:")
-
-    -- Save knop rechts uitlijnen
-    local window_width = r.ImGui_GetWindowWidth(ctx)
-    local text_width = r.ImGui_CalcTextSize(ctx, "Save")
-    r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosX(ctx, window_width - text_width - 5)
-    if r.ImGui_Selectable(ctx, "Save", false, r.ImGui_SelectableFlags_None()) then
-        SaveNotes()
-    end
-
-    if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
-        local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", config.item_notes_color)
-        if changed then
-            config.item_notes_color = new_color
-            SaveConfig()
-        end
-        r.ImGui_EndPopup(ctx)
-    end
-    r.ImGui_PopStyleColor(ctx, 2)
-
-    if config.show_notes then
-        local item_guid = r.BR_GetMediaItemGUID(item)
-        if not notes[item_guid] then
-            notes[item_guid] = LoadNotes()[item_guid] or ""
-        end
-
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), config.item_notes_color) 
-    local notes_item_open = r.ImGui_BeginChild(ctx, "NotesSection", -1, notes_height)
-    if notes_item_open then
-            if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
-                r.ImGui_OpenPopup(ctx, "NotesColorPopup")
-            end
-            
-            if r.ImGui_BeginPopup(ctx, "NotesColorPopup") then
-                local changed, new_color = r.ImGui_ColorEdit4(ctx, "Notes Color", is_item and config.item_notes_color or config.track_notes_color)
-                if changed then
-                    if is_item then
-                        config.item_notes_color = new_color
-                    else
-                        config.track_notes_color = new_color
-                    end
-                    SaveConfig()
-                end
-                r.ImGui_EndPopup(ctx)
-            end
-        
-            local changed, new_note = r.ImGui_InputTextMultiline(ctx, "##itemnotes", notes[item_guid], -1, notes_height - 10)
-            if changed then
-                notes[item_guid] = new_note
-                SaveNotes()
-            end
-        
-        end
-        r.ImGui_EndChild(ctx)
-        r.ImGui_PopStyleColor(ctx)
-    end
 end
+
 
 function GetTrackType(track)
     if not track or not reaper.ValidatePtr(track, "MediaTrack*") then
@@ -11770,7 +11653,8 @@ function Frame()
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local menu_items_height = CalculateMenuHeight(config)
     local bottom_section_height = CalculateBottomSectionHeight(config)
-    local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_section_height - menu_items_height + 10
+    -- Initial rough estimate (not used directly for final child size; we recompute later to avoid negative heights)
+    local initial_available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_section_height - menu_items_height + 10
     if config.show_favorites and #favorite_plugins > 0 then
         r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
@@ -11932,6 +11816,11 @@ end
                 ClearScreenshotCache()
             end
         end
+        if config.show_notes_widget then
+            if r.ImGui_Selectable(ctx, "NOTES", false) then
+                LaunchTKNotes()
+            end
+        end
 
         if LAST_USED_FX and r.ValidatePtr(TRACK, "MediaTrack*") then
             if r.ImGui_Selectable(ctx, "RECENT: " .. LAST_USED_FX) then
@@ -11944,14 +11833,20 @@ end
         end
     r.ImGui_Separator(ctx)
     
+    -- Recompute available height AFTER drawing dynamic menu sections to avoid negative or tiny values
+    local current_y = r.ImGui_GetCursorPosY(ctx)
+    local window_h_now = r.ImGui_GetWindowHeight(ctx)
+    local available_height = window_h_now - current_y - bottom_section_height - 5
+    if available_height < 50 then available_height = 50 end
+
     if ADD_FX_TO_ITEM then
-        local popup2_open = r.ImGui_BeginChild(ctx, "##popup2", -1, available_height)
+        local popup2_open = r.ImGui_BeginChild(ctx, "MainItemFXPanel", -1, available_height)
         if popup2_open then
             ShowItemFX()
         end
         r.ImGui_EndChild(ctx)
     else
-        local popupp3_open = r.ImGui_BeginChild(ctx, "##popupp3", -1, available_height)
+        local popupp3_open = r.ImGui_BeginChild(ctx, "MainTrackFXPanel", -1, available_height)
         if popupp3_open then
             ShowTrackFX()
         end
@@ -13603,12 +13498,10 @@ if visible then
     end
     
     if SHOULD_CLOSE_SCRIPT then
-        -- Clear running state when script closes
         SetRunningState(false)
         return
     end
     
-    -- Use centralized drag & drop handling
     HandleDragAndDrop()
     
     if open then        
@@ -13616,7 +13509,6 @@ if visible then
     end
     
 end
--- Initialize visibility state if not set
 local initial_visibility = r.GetExtState("TK_FX_BROWSER", "visibility")
 if initial_visibility == "" then
     r.SetExtState("TK_FX_BROWSER", "visibility", "visible", true)
