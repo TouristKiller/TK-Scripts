@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.6.2
+-- @version 0.6.3
 -- @changelog 
 --[[
 
@@ -105,7 +105,9 @@ local AUTOMATION_MODES  = {
     {name               = "Write", command = 40882}
 }
 
-local show_settings     = false 
+local show_settings     = false
+local show_instance_manager = false
+local instance_name_input = "" 
 local window_flags      = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
 local settings_flags    = window_flags | r.ImGui_WindowFlags_NoResize() 
 
@@ -208,7 +210,6 @@ local default_settings  = {
     env_button_color            = 0x333333FF,
     env_button_color_hover      = 0x444444FF,
     env_button_color_active     = 0x555555FF,
-    -- Optional: when an override mode is active, use loop_active to indicate state by default
     env_override_active_color   = 0x66CC66FF,
 
     -- Settings tab colors (base color per tab; hover/active are derived)
@@ -767,7 +768,6 @@ function SavePreset(name)
         preset_data[k] = v
     end
     
-    -- Save visual metronome settings
     preset_data.visual_metronome = {}
     for k, v in pairs(visual_metronome) do
         preset_data.visual_metronome[k] = v
@@ -793,7 +793,6 @@ function LoadPreset(name)
         
         for key, value in pairs(preset_data) do
             if key == "visual_metronome" and type(value) == "table" then
-                -- Load visual metronome settings
                 for vm_key, vm_value in pairs(value) do
                     visual_metronome[vm_key] = vm_value
                 end
@@ -892,7 +891,6 @@ function UpdateVisualMetronome()
     local retval, measures, cml, fullbeats, cdenom = r.TimeMap2_timeToBeats(0, play_pos)
     
     if retval then
-        -- Get time signature using the same method as ShowTimeSignature function
         local ts_retval, ts_pos, ts_measurepos, ts_beatpos, ts_bpm, timesig_num, timesig_denom = r.GetTempoTimeSigMarker(0, 0)
         if not ts_retval then 
             timesig_num, timesig_denom = 4, 4 
@@ -902,7 +900,6 @@ function UpdateVisualMetronome()
         local current_beat = math.floor(fullbeats)
         local beat_fraction = fullbeats - current_beat
         
-        -- Calculate beat within measure: use modulo but handle 0-based vs 1-based correctly
         local beat_in_measure_zero_based = current_beat % beats_per_measure
         local beat_in_measure = beat_in_measure_zero_based + 1
         
@@ -916,7 +913,6 @@ function UpdateVisualMetronome()
         if current_beat ~= visual_metronome.last_beat_number then
             visual_metronome.beat_flash = 1.0
             
-            -- Downbeat occurs when we're on beat 1 of the measure
             if beat_in_measure == 1 then
                 visual_metronome.downbeat_flash = 1.0
             end
@@ -934,7 +930,6 @@ function RenderVisualMetronome(main_window_width, main_window_height)
     
     UpdateVisualMetronome()
     
-    -- Positioneer de metronoom
     local x = settings.visual_metronome_x_px and ScalePosX(settings.visual_metronome_x_px, main_window_width, settings) or ((settings.visual_metronome_x or 0.85) * main_window_width)
     local y = settings.visual_metronome_y_px and ScalePosY(settings.visual_metronome_y_px, main_window_height, settings) or ((settings.visual_metronome_y or 0.15) * main_window_height)
     
@@ -945,7 +940,6 @@ function RenderVisualMetronome(main_window_width, main_window_height)
     r.ImGui_InvisibleButton(ctx, "##VisualMetronome", size, size)
     StoreElementRect("visual_metronome")
     
-    -- Teken de metronoom
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local center_x, center_y = r.ImGui_GetItemRectMin(ctx)
     center_x = center_x + size * 0.5
@@ -989,47 +983,8 @@ function RenderVisualMetronome(main_window_width, main_window_height)
         r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, ring_radius, arc_start, arc_end, 32)
         r.ImGui_DrawList_PathStroke(draw_list, visual_metronome.color_ring, 0, visual_metronome.ring_thickness)
     end
-    if (not settings.edit_mode) and r.ImGui_IsItemClicked(ctx, 1) then
-        r.ImGui_OpenPopup(ctx, "VisualMetronomeMenu")
-    end
-    
-    if r.ImGui_BeginPopup(ctx, "VisualMetronomeMenu") then
-        local rv
-        rv, visual_metronome.enabled = r.ImGui_MenuItem(ctx, "Enable Visual Metronome", nil, visual_metronome.enabled)
-        if rv and visual_metronome.enabled then
-            InitializeVisualMetronome()
-        end
-        
-        r.ImGui_Separator(ctx)
-        
-        r.ImGui_Text(ctx, "Size:")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetNextItemWidth(ctx, 100)
-        rv, visual_metronome.size = r.ImGui_SliderInt(ctx, "##MetronomeSize", visual_metronome.size, 20, 100)
-        
-        r.ImGui_Text(ctx, "Fade Speed:")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetNextItemWidth(ctx, 100)
-        rv, visual_metronome.fade_speed = r.ImGui_SliderDouble(ctx, "##FadeSpeed", visual_metronome.fade_speed, 1.0, 20.0, "%.1f")
-        
-        r.ImGui_Separator(ctx)
-        
-        local flags = r.ImGui_ColorEditFlags_NoInputs()
-        rv, visual_metronome.color_beat = r.ImGui_ColorEdit4(ctx, "Beat Color", visual_metronome.color_beat, flags)
-        rv, visual_metronome.color_downbeat = r.ImGui_ColorEdit4(ctx, "Downbeat Color", visual_metronome.color_downbeat, flags)
-        rv, visual_metronome.color_off = r.ImGui_ColorEdit4(ctx, "Off Color", visual_metronome.color_off, flags)
-        
-        r.ImGui_Separator(ctx)
-        
-        rv, visual_metronome.show_position_ring = r.ImGui_Checkbox(ctx, "Show Position Ring", visual_metronome.show_position_ring)
-        if visual_metronome.show_position_ring then
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 80)
-            rv, visual_metronome.ring_thickness = r.ImGui_SliderInt(ctx, "##RingThickness", visual_metronome.ring_thickness, 1, 8)
-        end
-        
-        r.ImGui_EndPopup(ctx)
-    end
+
+
 end
 
 LoadLastUsedPreset()
@@ -1037,6 +992,7 @@ LoadLastUsedPreset()
 
 function SetStyle()
     -- Style setup
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), settings.window_rounding)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.frame_rounding)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 2)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), settings.popup_rounding)
@@ -1631,7 +1587,6 @@ function ShowSettings(main_window_width , main_window_height)
                     r.ImGui_SameLine(ctx)
                     rv_col_ring, visual_metronome.color_ring = r.ImGui_ColorEdit4(ctx, "Ring", visual_metronome.color_ring, flags)
                     
-                    -- Save settings when any visual metronome setting changes
                     if rv_size or rv_fade or rv_beat_nums or rv_beat_flash or rv_show_ring or rv_ring_thick or rv_col_off or rv_col_beat or rv_col_ring then
                         SaveSettings()
                     end
@@ -1860,13 +1815,167 @@ function ShowSettings(main_window_width , main_window_height)
         end
 
 
-        r.ImGui_PopStyleVar(ctx, 7)  
+        r.ImGui_PopStyleVar(ctx, 8)  
         r.ImGui_PopStyleColor(ctx, 14)
         r.ImGui_PopFont(ctx)
         r.ImGui_End(ctx)
     end
     r.ImGui_PopStyleVar(ctx) 
     show_settings = settings_open
+end
+
+function ShowInstanceManager()
+    if not show_instance_manager then return end
+    
+    r.ImGui_SetNextWindowSize(ctx, 500, 300, r.ImGui_Cond_FirstUseEver())
+    local visible, open = r.ImGui_Begin(ctx, 'Instance Manager', true)
+    
+    if visible then
+        r.ImGui_Text(ctx, "Create Named Transport Instances")
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_Text(ctx, "Instance Name:")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 150)
+        local rv
+        rv, instance_name_input = r.ImGui_InputText(ctx, "##instancename", instance_name_input)
+        
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Create") and instance_name_input ~= "" then
+            CreateNamedInstance(instance_name_input)
+            instance_name_input = ""
+        end
+        
+        r.ImGui_Spacing(ctx)
+        r.ImGui_Text(ctx, "How it works:")
+        r.ImGui_BulletText(ctx, "Creates: TK_TRANSPORT_" .. (instance_name_input ~= "" and instance_name_input or "name") .. ".lua")
+        r.ImGui_BulletText(ctx, "Window title: TK_TRANSPORT_" .. (instance_name_input ~= "" and instance_name_input or "name"))
+        r.ImGui_BulletText(ctx, "Separate Action List entry")
+        r.ImGui_BulletText(ctx, "Shares same presets folder")
+        r.ImGui_BulletText(ctx, "Independent last-used preset per instance")
+        
+        r.ImGui_Spacing(ctx)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Existing Instances:")
+        
+        local files = ListInstanceFiles()
+        for _, file in ipairs(files) do
+            r.ImGui_AlignTextToFramePadding(ctx)
+            r.ImGui_BulletText(ctx, file)
+            r.ImGui_SameLine(ctx)
+            
+            if r.ImGui_Button(ctx, "Launch##" .. file) then
+                LaunchInstance(file)
+            end
+            r.ImGui_SameLine(ctx)
+            
+            if r.ImGui_Button(ctx, "Delete##" .. file) then
+                DeleteInstance(file)
+            end
+        end
+        
+        if #files == 0 then
+            r.ImGui_Text(ctx, "(No additional instances created yet)")
+        end
+        
+        r.ImGui_End(ctx)
+    end
+    
+    show_instance_manager = open
+end
+
+function CreateNamedInstance(name)
+    local clean_name = name:gsub("[^%w_%-]", "_")
+    local new_filename = "TK_TRANSPORT_" .. clean_name .. ".lua"
+    local new_filepath = script_path .. new_filename
+    local current_script_path = debug.getinfo(1, "S").source:match("@?(.*)")
+    
+    local escaped_path = current_script_path:gsub("\\", "\\\\"):gsub('"', '\\"')
+    
+    local wrapper_content = 'local r = reaper\n'
+    wrapper_content = wrapper_content .. 'local instance_name = "' .. clean_name .. '"\n\n'
+    wrapper_content = wrapper_content .. 'local original_CreateContext = r.ImGui_CreateContext\n'
+    wrapper_content = wrapper_content .. 'r.ImGui_CreateContext = function(title)\n'
+    wrapper_content = wrapper_content .. '    return original_CreateContext("Transport Control " .. instance_name)\n'
+    wrapper_content = wrapper_content .. 'end\n\n'
+    wrapper_content = wrapper_content .. 'local original_GetExtState = r.GetExtState\n'
+    wrapper_content = wrapper_content .. 'local original_SetExtState = r.SetExtState\n'
+    wrapper_content = wrapper_content .. 'local original_DeleteExtState = r.DeleteExtState\n\n'
+    wrapper_content = wrapper_content .. 'r.GetExtState = function(section, key, ...)\n'
+    wrapper_content = wrapper_content .. '    if section == "TK_TRANSPORT" then\n'
+    wrapper_content = wrapper_content .. '        return original_GetExtState("TK_TRANSPORT_" .. instance_name, key, ...)\n'
+    wrapper_content = wrapper_content .. '    end\n'
+    wrapper_content = wrapper_content .. '    return original_GetExtState(section, key, ...)\n'
+    wrapper_content = wrapper_content .. 'end\n\n'
+    wrapper_content = wrapper_content .. 'r.SetExtState = function(section, key, value, ...)\n'
+    wrapper_content = wrapper_content .. '    if section == "TK_TRANSPORT" then\n'
+    wrapper_content = wrapper_content .. '        return original_SetExtState("TK_TRANSPORT_" .. instance_name, key, value, ...)\n'
+    wrapper_content = wrapper_content .. '    end\n'
+    wrapper_content = wrapper_content .. '    return original_SetExtState(section, key, value, ...)\n'
+    wrapper_content = wrapper_content .. 'end\n\n'
+    wrapper_content = wrapper_content .. 'r.DeleteExtState = function(section, key, ...)\n'
+    wrapper_content = wrapper_content .. '    if section == "TK_TRANSPORT" then\n'
+    wrapper_content = wrapper_content .. '        return original_DeleteExtState("TK_TRANSPORT_" .. instance_name, key, ...)\n'
+    wrapper_content = wrapper_content .. '    end\n'
+    wrapper_content = wrapper_content .. '    return original_DeleteExtState(section, key, ...)\n'
+    wrapper_content = wrapper_content .. 'end\n\n'
+    wrapper_content = wrapper_content .. 'dofile("' .. escaped_path .. '")\n'
+    
+    local file = io.open(new_filepath, "w")
+    if file then
+        file:write(wrapper_content)
+        file:close()
+        r.AddRemoveReaScript(true, 0, new_filepath, true)
+        r.ShowMessageBox("Instance created successfully!\n\nFile: " .. new_filename .. "\n\nThis wrapper will always use the latest version of the main script.", "Instance Manager", 0)
+    else
+        r.ShowMessageBox("Error: Could not create instance file", "Instance Manager", 0)
+    end
+end
+
+function ListInstanceFiles()
+    local files = {}
+    local i = 0
+    
+    repeat
+        local file = r.EnumerateFiles(script_path, i)
+        if file and file:match("^TK_TRANSPORT_.*%.lua$") and file ~= "TK_TRANSPORT.lua" then
+            files[#files + 1] = file:gsub("%.lua$", "")
+        end
+        i = i + 1
+    until not file
+    
+    return files
+end
+
+function LaunchInstance(instance_name)
+    local script_file = script_path .. instance_name .. ".lua"
+    
+    if not r.file_exists(script_file) then
+        r.ShowMessageBox("Error: Script file not found:\n" .. script_file, "Instance Manager", 0)
+        return
+    end
+    
+    local command_id = r.AddRemoveReaScript(true, 0, script_file, false)
+    if command_id and command_id ~= 0 then
+        r.Main_OnCommand(command_id, 0)
+    else
+        r.Main_OnCommand(40015, 0) 
+        r.ShowMessageBox("Script registered! Please search for '" .. instance_name .. "' in the Actions window and run it.", "Instance Manager", 0)
+    end
+end
+
+function DeleteInstance(instance_name)
+    local script_file = script_path .. instance_name .. ".lua"
+    
+    local result = r.ShowMessageBox("Are you sure you want to delete this instance?\n\n" .. instance_name .. "\n\nThis action cannot be undone.", "Delete Instance", 4)
+    
+    if result == 6 then 
+        r.AddRemoveReaScript(false, 0, script_file, true)
+        
+        os.remove(script_file)
+        
+        r.ShowMessageBox("Instance deleted successfully!", "Instance Manager", 0)
+    end
 end
 
 function EnvelopeOverride(main_window_width, main_window_height)
@@ -3096,6 +3205,7 @@ function Main()
             end
         end
         ShowSettings(main_window_width, main_window_height)
+        ShowInstanceManager()
 
         if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem())
             and r.ImGui_IsMouseClicked(ctx, 1)
@@ -3116,6 +3226,10 @@ function Main()
             if r.ImGui_MenuItem(ctx, "Show Settings") then
                 show_settings = true
             end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Instance Manager") then
+                show_instance_manager = true
+            end
             if r.ImGui_MenuItem(ctx, "Close Script") then
                 open = false
             end
@@ -3124,7 +3238,7 @@ function Main()
         r.ImGui_End(ctx)
     end
     r.ImGui_PopFont(ctx)
-    r.ImGui_PopStyleVar(ctx, 7)
+    r.ImGui_PopStyleVar(ctx, 8)
     r.ImGui_PopStyleColor(ctx, 13)
     
     if open then
