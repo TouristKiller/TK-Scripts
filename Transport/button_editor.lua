@@ -15,6 +15,60 @@ local cb_section_states = {
     right_open = false,
 }
 
+local function to_int(value, default)
+    value = tonumber(value)
+    if not value then return default end
+    return math.floor(value + 0.5)
+end
+
+local function clamp(value, min_val, max_val)
+    if min_val and value < min_val then value = min_val end
+    if max_val and value > max_val then value = max_val end
+    return value
+end
+
+local function sanitize_button_xy(button, canvas_width, canvas_height)
+    canvas_width = clamp(to_int(canvas_width, 1), 1)
+    canvas_height = clamp(to_int(canvas_height, 1), 1)
+
+    local changed = false
+
+    local orig_px = button.position_px
+    local orig_frac_x = button.position
+    local px = tonumber(orig_px)
+    if px == nil then
+        px = (tonumber(button.position) or 0) * canvas_width
+    end
+    local new_px = clamp(to_int(px, 0), 0, canvas_width)
+    if new_px ~= orig_px then changed = true end
+    button.position_px = new_px
+
+    local new_frac_x = (tonumber(new_px) or 0) / math.max(1, canvas_width)
+    if orig_frac_x == nil or math.abs(new_frac_x - orig_frac_x) > 1e-9 then
+        changed = true
+        button.position = new_frac_x
+    end
+
+    local fallback_y = (tonumber(button.position_y) or 0.15) * canvas_height
+    local orig_py = button.position_y_px
+    local orig_frac_y = button.position_y
+    local py = tonumber(orig_py)
+    if py == nil then
+        py = fallback_y
+    end
+    local new_py = clamp(to_int(py, fallback_y), 0, canvas_height)
+    if new_py ~= orig_py then changed = true end
+    button.position_y_px = new_py
+
+    local new_frac_y = (tonumber(new_py) or 0) / math.max(1, canvas_height)
+    if orig_frac_y == nil or math.abs(new_frac_y - orig_frac_y) > 1e-9 then
+        changed = true
+        button.position_y = new_frac_y
+    end
+
+    return canvas_width, canvas_height, changed
+end
+
 local function ShowCBSectionHeader(ctx, title, state_key)
     r.ImGui_Text(ctx, title)
     r.ImGui_SameLine(ctx)
@@ -205,7 +259,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_SameLine(ctx)
             local can_delete = has_sel
             if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_delete) end
-            if r.ImGui_Button(ctx, "Delete") and can_delete then
+            if r.ImGui_Button(ctx, "Delete!") and can_delete then
                 table.remove(custom_buttons.buttons, custom_buttons.current_edit)
                 custom_buttons.current_edit = nil
                 custom_buttons.SaveCurrentButtons()
@@ -215,31 +269,51 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
     if custom_buttons.current_edit then
         local button = custom_buttons.buttons[custom_buttons.current_edit]
         local changed = false
+        local canvas_width, canvas_height
+
         do
-            local window_width  = r.ImGui_GetWindowWidth(ctx)
-            local window_height = r.ImGui_GetWindowHeight(ctx)
-            button.width         = button.width or 60
-            button.position_px   = button.position_px or 0
-            button.position_y_px = button.position_y_px or math.floor(0.15 * window_height)
+            local editor_width  = math.floor((r.ImGui_GetWindowWidth(ctx) or 0) + 0.5)
+            local editor_height = math.floor((r.ImGui_GetWindowHeight(ctx) or 0) + 0.5)
+            canvas_width  = math.max(editor_width, math.floor(((opts and opts.canvas_width) or 0) + 0.5))
+            canvas_height = math.max(editor_height, math.floor(((opts and opts.canvas_height) or 0) + 0.5))
+            if canvas_width <= 0 then canvas_width = math.max(1, editor_width) end
+            if canvas_height <= 0 then canvas_height = math.max(1, editor_height) end
+            if canvas_width <= 0 then canvas_width = 1 end
+            if canvas_height <= 0 then canvas_height = 1 end
+
+            local sanitized_width = clamp(to_int(button.width, 60), 12, 400)
+            if sanitized_width ~= button.width then
+                button.width = sanitized_width
+                changed = true
+            end
+
+            local _, _, xy_changed = sanitize_button_xy(button, canvas_width, canvas_height)
+            if xy_changed then changed = true end
 
             r.ImGui_Text(ctx, "Width   ")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 170)
             local rvw; rvw, button.width = r.ImGui_SliderInt(ctx, "##btnWidth", button.width, 12, 400)
-            if rvw then changed = true end
+            if rvw then
+                button.width = clamp(to_int(button.width, 60), 12, 400)
+                changed = true
+            end
 
             r.ImGui_SameLine(ctx); r.ImGui_Dummy(ctx, 18, 0); r.ImGui_SameLine(ctx)
 
             r.ImGui_Text(ctx, "X")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 85)
-            local rvx; rvx, button.position_px = r.ImGui_SliderInt(ctx, "##btnPosX_slider", button.position_px, 0, window_width, "%d px")
-            if rvx then changed = true end
+            local rvx; rvx, button.position_px = r.ImGui_SliderInt(ctx, "##btnPosX_slider", button.position_px, 0, canvas_width, "%d px")
+            if rvx then
+                button.position_px = clamp(to_int(button.position_px, 0), 0, canvas_width)
+                changed = true
+            end
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 90) -- widened to fit 4 digits comfortably
+            r.ImGui_SetNextItemWidth(ctx, 90)
             local rvxi; rvxi, button.position_px = r.ImGui_InputInt(ctx, "##btnPosXInputInline", button.position_px)
             if rvxi then
-                button.position_px = math.max(0, math.min(window_width, button.position_px))
+                button.position_px = clamp(to_int(button.position_px, 0), 0, canvas_width)
                 changed = true
             end
 
@@ -248,317 +322,315 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_Text(ctx, "Y")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 85)
-            local rvy; rvy, button.position_y_px = r.ImGui_SliderInt(ctx, "##btnPosY_slider", button.position_y_px, 0, window_height, "%d px")
-            if rvy then changed = true end
+            local rvy; rvy, button.position_y_px = r.ImGui_SliderInt(ctx, "##btnPosY_slider", button.position_y_px, 0, canvas_height, "%d px")
+            if rvy then
+                button.position_y_px = clamp(to_int(button.position_y_px, 0), 0, canvas_height)
+                changed = true
+            end
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 90) 
+            r.ImGui_SetNextItemWidth(ctx, 90)
             local rvyi; rvyi, button.position_y_px = r.ImGui_InputInt(ctx, "##btnPosYInputInline", button.position_y_px)
             if rvyi then
-                button.position_y_px = math.max(0, math.min(window_height, button.position_y_px))
+                button.position_y_px = clamp(to_int(button.position_y_px, 0), 0, canvas_height)
                 changed = true
             end
 
             if changed then
-                button.position   = button.position_px   / math.max(1, window_width)
-                button.position_y = button.position_y_px / math.max(1, window_height)
+                button.position   = button.position_px   / math.max(1, canvas_width)
+                button.position_y = button.position_y_px / math.max(1, canvas_height)
                 custom_buttons.SaveCurrentButtons()
             end
             r.ImGui_Separator(ctx)
         end
+
+        do
+            local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
+            local label_gap = 6
+            local group_gap = 16
+            local name_label = "Name   "
+            local name_label_w = select(1, r.ImGui_CalcTextSize(ctx, name_label))
+            local name_input_w = 220
+            local used_w = name_label_w + label_gap + name_input_w + group_gap
+            local width_label = "Width"
+            local width_label_w = select(1, r.ImGui_CalcTextSize(ctx, width_label))
+            local remaining = math.max(60, avail_w - used_w - width_label_w - label_gap)
+            local width_slider_w = math.min(remaining, 260)
+            local props_w = math.min(avail_w, used_w + width_label_w + label_gap + width_slider_w)
+
+            button.border_color = button.border_color or 0xFFFFFFFF
+            local colorFlags = r.ImGui_ColorEditFlags_NoInputs()
+            if r.ImGui_BeginTable(ctx, "CB_PropsWrapper", 2, r.ImGui_TableFlags_SizingStretchProp()) then
+                r.ImGui_TableSetupColumn(ctx, "Left", r.ImGui_TableColumnFlags_WidthFixed(), props_w)
+                r.ImGui_TableSetupColumn(ctx, "Right", r.ImGui_TableColumnFlags_WidthStretch())
+                r.ImGui_TableNextRow(ctx)
+                r.ImGui_TableSetColumnIndex(ctx, 0)
                 
-                do
-                    local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
-                    local label_gap = 6
-                    local group_gap = 16
-                    local name_label = "Name   "
-                    local name_label_w = select(1, r.ImGui_CalcTextSize(ctx, name_label))
-                    local name_input_w = 220
-                    local used_w = name_label_w + label_gap + name_input_w + group_gap
-                    local width_label = "Width"
-                    local width_label_w = select(1, r.ImGui_CalcTextSize(ctx, width_label))
-                    local remaining = math.max(60, avail_w - used_w - width_label_w - label_gap)
-                    local width_slider_w = math.min(remaining, 260)
-                    local props_w = math.min(avail_w, used_w + width_label_w + label_gap + width_slider_w)
+                if r.ImGui_BeginTable(ctx, "CB_Props", 5, r.ImGui_TableFlags_SizingStretchProp()) then
+                    r.ImGui_TableNextRow(ctx)
+                    r.ImGui_TableSetColumnIndex(ctx, 0)
+                    local rv
+                    rv, button.visible = r.ImGui_Checkbox(ctx, "Visible", button.visible)
+                    changed = changed or rv
 
-                    button.border_color = button.border_color or 0xFFFFFFFF
-                    local colorFlags = r.ImGui_ColorEditFlags_NoInputs()
-                    if r.ImGui_BeginTable(ctx, "CB_PropsWrapper", 2, r.ImGui_TableFlags_SizingStretchProp()) then
-                        r.ImGui_TableSetupColumn(ctx, "Left", r.ImGui_TableColumnFlags_WidthFixed(), props_w)
-                        r.ImGui_TableSetupColumn(ctx, "Right", r.ImGui_TableColumnFlags_WidthStretch())
-                        r.ImGui_TableNextRow(ctx)
-                        r.ImGui_TableSetColumnIndex(ctx, 0)
-                        
-                        if r.ImGui_BeginTable(ctx, "CB_Props", 5, r.ImGui_TableFlags_SizingStretchProp()) then
-                        r.ImGui_TableNextRow(ctx)
-                        r.ImGui_TableSetColumnIndex(ctx, 0)
-                        rv, button.visible = r.ImGui_Checkbox(ctx, "Visible", button.visible)
-                        changed = changed or rv
-
-                        r.ImGui_TableSetColumnIndex(ctx, 1)
-                        rv, button.show_border = r.ImGui_Checkbox(ctx, "Border", button.show_border ~= false)
-                        if rv then
-                            button.show_border = (button.show_border ~= false)
-                            changed = true
-                        end
-
-                        r.ImGui_TableSetColumnIndex(ctx, 2)
-                        rv, button.use_icon = r.ImGui_Checkbox(ctx, "Use Icon", button.use_icon)
-                        changed = changed or rv
-
-                        r.ImGui_TableSetColumnIndex(ctx, 3)
-                        if button.use_icon then
-                            if r.ImGui_Button(ctx, "Browse Icons") then
-                                IconBrowser.show_window = true
-                            end
-                            local selected_icon = IconBrowser.Show(ctx, settings)
-                            if selected_icon then
-                                button.icon_name = selected_icon
-                                button.icon = nil
-                                custom_buttons.SaveCurrentButtons()
-                            end
-                        else
-                        end
-
-                        r.ImGui_TableSetColumnIndex(ctx, 4)
-                        if button.use_icon then
-                            local rv_tt
-                            rv_tt, settings.show_custom_button_tooltip = r.ImGui_Checkbox(ctx, "Show tooltip", settings.show_custom_button_tooltip)
-                            changed = changed or rv_tt
-                        else
-                        end
-
-                        r.ImGui_TableNextRow(ctx)
-                        -- Base
-                        r.ImGui_TableSetColumnIndex(ctx, 0)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
-                        local rv_col
-                        rv_col, button.color = r.ImGui_ColorEdit4(ctx, "Base Color", button.color, colorFlags)
-                        changed = changed or rv_col
-                        -- Hover
-                        r.ImGui_TableSetColumnIndex(ctx, 1)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
-                        rv_col, button.hover_color = r.ImGui_ColorEdit4(ctx, "Hover Color", button.hover_color, colorFlags)
-                        changed = changed or rv_col
-                        -- Active
-                        r.ImGui_TableSetColumnIndex(ctx, 2)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
-                        rv_col, button.active_color = r.ImGui_ColorEdit4(ctx, "Active Color", button.active_color, colorFlags)
-                        changed = changed or rv_col
-                        -- Text Color
-                        r.ImGui_TableSetColumnIndex(ctx, 3)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
-                        rv_col, button.text_color = r.ImGui_ColorEdit4(ctx, "Text Color", button.text_color, colorFlags)
-                        changed = changed or rv_col
-                        -- Border Color
-                        r.ImGui_TableSetColumnIndex(ctx, 4)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
-                        rv_col, button.border_color = r.ImGui_ColorEdit4(ctx, "Border Color", button.border_color, colorFlags)
-                        changed = changed or rv_col
-
-                            r.ImGui_EndTable(ctx)
-                        end
-                        r.ImGui_EndTable(ctx)
-                    end
-                end
-                local group_set, existing_groups = {}, {}
-                for _, b in ipairs(custom_buttons.buttons) do
-                    local g = b.group
-                    if g and g ~= "" and not group_set[g] then
-                        group_set[g] = true
-                        table.insert(existing_groups, g)
-                    end
-                end
-                table.sort(existing_groups, function(a,b) return a:lower() < b:lower() end)
-
-                r. ImGui_Separator(ctx)
-                r.ImGui_Text(ctx, "Existing Group")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetNextItemWidth(ctx, 220)
-                local current_group_label = (button.group and button.group ~= "") and button.group or "(none)"
-                if r.ImGui_BeginCombo(ctx, "##ExistingGroup", current_group_label) then
-                    if r.ImGui_Selectable(ctx, "(none)", current_group_label == "(none)") then
-                        button.group = ""
+                    r.ImGui_TableSetColumnIndex(ctx, 1)
+                    rv, button.show_border = r.ImGui_Checkbox(ctx, "Border", button.show_border ~= false)
+                    if rv then
+                        button.show_border = (button.show_border ~= false)
                         changed = true
                     end
-                    for _, g in ipairs(existing_groups) do
-                        if r.ImGui_Selectable(ctx, g, button.group == g) then
-                            button.group = g
-                            new_group_name = g 
-                            changed = true
-                        end
-                        if button.group == g then r.ImGui_SetItemDefaultFocus(ctx) end
-                    end
-                    r.ImGui_EndCombo(ctx)
-                end
 
-                r.ImGui_SameLine(ctx)
-                r.ImGui_Text(ctx, "New Group")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetNextItemWidth(ctx, 220)
-                local rv_ng
-                rv_ng, new_group_name = r.ImGui_InputText(ctx, "##NewGroupName", new_group_name or (button.group or ""))
-                if rv_ng then
-                    button.group = new_group_name or ""
+                    r.ImGui_TableSetColumnIndex(ctx, 2)
+                    rv, button.use_icon = r.ImGui_Checkbox(ctx, "Use Icon", button.use_icon)
+                    changed = changed or rv
+
+                    r.ImGui_TableSetColumnIndex(ctx, 3)
+                    if button.use_icon then
+                        if r.ImGui_Button(ctx, "Browse Icons") then
+                            IconBrowser.show_window = true
+                        end
+                        local selected_icon = IconBrowser.Show(ctx, settings)
+                        if selected_icon then
+                            button.icon_name = selected_icon
+                            button.icon = nil
+                            custom_buttons.SaveCurrentButtons()
+                        end
+                    end
+
+                    r.ImGui_TableSetColumnIndex(ctx, 4)
+                    if button.use_icon then
+                        local rv_tt
+                        rv_tt, settings.show_custom_button_tooltip = r.ImGui_Checkbox(ctx, "Show tooltip", settings.show_custom_button_tooltip)
+                        changed = changed or rv_tt
+                    end
+
+                    r.ImGui_TableNextRow(ctx)
+                    r.ImGui_TableSetColumnIndex(ctx, 0)
+                    r.ImGui_SetNextItemWidth(ctx, -1)
+                    local rv_col
+                    rv_col, button.color = r.ImGui_ColorEdit4(ctx, "Base Color", button.color, colorFlags)
+                    changed = changed or rv_col
+
+                    r.ImGui_TableSetColumnIndex(ctx, 1)
+                    r.ImGui_SetNextItemWidth(ctx, -1)
+                    rv_col, button.hover_color = r.ImGui_ColorEdit4(ctx, "Hover Color", button.hover_color, colorFlags)
+                    changed = changed or rv_col
+
+                    r.ImGui_TableSetColumnIndex(ctx, 2)
+                    r.ImGui_SetNextItemWidth(ctx, -1)
+                    rv_col, button.active_color = r.ImGui_ColorEdit4(ctx, "Active Color", button.active_color, colorFlags)
+                    changed = changed or rv_col
+
+                    r.ImGui_TableSetColumnIndex(ctx, 3)
+                    r.ImGui_SetNextItemWidth(ctx, -1)
+                    rv_col, button.text_color = r.ImGui_ColorEdit4(ctx, "Text Color", button.text_color, colorFlags)
+                    changed = changed or rv_col
+
+                    r.ImGui_TableSetColumnIndex(ctx, 4)
+                    r.ImGui_SetNextItemWidth(ctx, -1)
+                    rv_col, button.border_color = r.ImGui_ColorEdit4(ctx, "Border Color", button.border_color, colorFlags)
+                    changed = changed or rv_col
+
+                    r.ImGui_EndTable(ctx)
+                end
+                r.ImGui_EndTable(ctx)
+            end
+        end
+
+        local group_set, existing_groups = {}, {}
+        for _, b in ipairs(custom_buttons.buttons) do
+            local g = b.group
+            if g and g ~= "" and not group_set[g] then
+                group_set[g] = true
+                table.insert(existing_groups, g)
+            end
+        end
+        table.sort(existing_groups, function(a,b) return a:lower() < b:lower() end)
+
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Existing Group")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 220)
+        local current_group_label = (button.group and button.group ~= "") and button.group or "(none)"
+        if r.ImGui_BeginCombo(ctx, "##ExistingGroup", current_group_label) then
+            if r.ImGui_Selectable(ctx, "(none)", current_group_label == "(none)") then
+                button.group = ""
+                changed = true
+            end
+            for _, g in ipairs(existing_groups) do
+                if r.ImGui_Selectable(ctx, g, button.group == g) then
+                    button.group = g
+                    new_group_name = g 
                     changed = true
                 end
-                
-                if changed then custom_buttons.SaveCurrentButtons() end
-                r.ImGui_Text(ctx, "Edit all buttons sharing this group name ")
-                local gcount = 0
-                for _,b in ipairs(custom_buttons.buttons) do if b.group and b.group ~= "" and button.group == b.group then gcount = gcount + 1 end end
-                if button.group and button.group ~= "" then
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_TextColored(ctx, 0x00FF88FF, "Current Group: " .. button.group .. " (" .. gcount .. ")")
-                end
-                local gname = button.group or ""
-                if gname == "" then
-                    r.ImGui_TextDisabled(ctx, "(This button has no group name)")
-                else
-                    local window_width = (opts and opts.canvas_width) or r.ImGui_GetWindowWidth(ctx)
-                    local window_height = (opts and opts.canvas_height) or r.ImGui_GetWindowHeight(ctx)
-                    
-                    if r.ImGui_Button(ctx, "<-X##grpMoveLeft") then
-                        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel left") end
-                        for _,b in ipairs(custom_buttons.buttons) do
-                            if b.group==gname then 
-                                if b.position_px == nil then
-                                    if b.position ~= nil then
-                                        b.position_px = math.floor(b.position * window_width)
-                                    else
-                                        b.position_px = 0
-                                    end
-                                end
-                                b.position_px = math.max(0, b.position_px - 1)
-                                b.position = b.position_px / math.max(1, window_width)
-                            end
-                        end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "X->##grpMoveRight") then
-                        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel right (clamped)") end
-                        for _,b in ipairs(custom_buttons.buttons) do
-                            if b.group==gname then 
-                                if b.position_px == nil then
-                                    if b.position ~= nil then
-                                        b.position_px = math.floor(b.position * window_width)
-                                    else
-                                        b.position_px = 0
-                                    end
-                                end
-                                local max_x = math.max(0, window_width - 1)
-                                b.position_px = math.min(max_x, b.position_px + 1)
-                                b.position = b.position_px / math.max(1, window_width)
-                            end
-                        end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "<-Y##grpMoveUp") then
-                        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel up") end
-                        for _,b in ipairs(custom_buttons.buttons) do
-                            if b.group==gname then 
-                                if b.position_y_px == nil then
-                                    if b.position_y ~= nil then
-                                        b.position_y_px = math.floor((b.position_y or 0.15) * window_height)
-                                    else
-                                        b.position_y_px = math.floor(0.15 * window_height)
-                                    end
-                                end
-                                b.position_y_px = math.max(0, b.position_y_px - 1)
-                                b.position_y = b.position_y_px / math.max(1, window_height)
-                            end
-                        end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Y->##grpMoveDown") then
-                        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel down") end
-                        for _,b in ipairs(custom_buttons.buttons) do
-                            if b.group==gname then 
-                                if b.position_y_px == nil then
-                                    if b.position_y ~= nil then
-                                        b.position_y_px = math.floor((b.position_y or 0.15) * window_height)
-                                    else
-                                        b.position_y_px = math.floor(0.15 * window_height)
-                                    end
-                                end
-                                local max_y = math.max(0, window_height - 1)
-                                b.position_y_px = math.min(max_y, b.position_y_px + 1)
-                                b.position_y = b.position_y_px / math.max(1, window_height)
-                            end
-                        end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Align Y") then
-                        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Align all group members vertically to this button") end
-                        for _,b in ipairs(custom_buttons.buttons) do 
-                            if b.group==gname then 
-                                b.position_y = button.position_y
-                                b.position_y_px = button.position_y_px
-                            end 
-                        end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Group Width") then
-                        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Apply this button's width to entire group") end
-                        for _,b in ipairs(custom_buttons.buttons) do if b.group==gname then b.width = button.width end end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Color") then
-                        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Apply all four colors from this button to group") end
-                        for _,b in ipairs(custom_buttons.buttons) do if b.group==gname then
-                            b.color=button.color; b.hover_color=button.hover_color; b.active_color=button.active_color; b.text_color=button.text_color
-                        end end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    local all_visible = true
-                    for _,b in ipairs(custom_buttons.buttons) do
-                        if b.group==gname and not b.visible then all_visible = false break end
-                    end
-                    local label = all_visible and "Hide Group" or "Show Group"
-                    if r.ImGui_Button(ctx, label .. "##grpToggleVis") then
-                        local new_state = not all_visible
-                        for _,b in ipairs(custom_buttons.buttons) do if b.group==gname then b.visible = new_state end end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    if r.ImGui_IsItemHovered(ctx) then
-                        if all_visible then
-                            r.ImGui_SetTooltip(ctx, "Hide all buttons in this group")
-                        else
-                            r.ImGui_SetTooltip(ctx, "Show all buttons in this group")
-                        end
-                    end
-                    local all_borders = true
-                    for _,b in ipairs(custom_buttons.buttons) do if b.group==gname and b.show_border == false then all_borders = false break end end
-                    r.ImGui_SameLine(ctx)
-                    local border_label = all_borders and "No Borders" or "Borders"
-                    if r.ImGui_Button(ctx, border_label .. "##grpToggleBorder") then
-                        local newb = not all_borders
-                        for _,b in ipairs(custom_buttons.buttons) do if b.group==gname then b.show_border = newb end end
-                        custom_buttons.SaveCurrentButtons()
-                    end
-                    if r.ImGui_IsItemHovered(ctx) then
-                        if all_borders then
-                            r.ImGui_SetTooltip(ctx, "Disable borders for entire group")
-                        else
-                            r.ImGui_SetTooltip(ctx, "Enable borders for entire group")
-                        end
-                    end
-                end
-            
-
-            if opts and opts.render_global_offset then
-                r.ImGui_Separator(ctx)
-                opts.render_global_offset(ctx)
-                r.ImGui_Separator(ctx)
-            else
-                r.ImGui_Separator(ctx)
+                if button.group == g then r.ImGui_SetItemDefaultFocus(ctx) end
             end
+            r.ImGui_EndCombo(ctx)
+        end
+
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, "New Group")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 220)
+        local rv_ng
+        rv_ng, new_group_name = r.ImGui_InputText(ctx, "##NewGroupName", new_group_name or (button.group or ""))
+        if rv_ng then
+            button.group = new_group_name or ""
+            changed = true
+        end
+
+        if changed then custom_buttons.SaveCurrentButtons() end
+
+        r.ImGui_Text(ctx, "Edit all buttons sharing this group name ")
+        local gcount = 0
+        for _, b in ipairs(custom_buttons.buttons) do
+            if b.group and b.group ~= "" and button.group == b.group then
+                gcount = gcount + 1
+            end
+        end
+        if button.group and button.group ~= "" then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_TextColored(ctx, 0x00FF88FF, "Current Group: " .. button.group .. " (" .. gcount .. ")")
+        end
+        local gname = button.group or ""
+        if gname == "" then
+            r.ImGui_TextDisabled(ctx, "(Deze knop heeft geen groepsnaam)")
+        else
+            local raw_w = (opts and opts.canvas_width) or r.ImGui_GetWindowWidth(ctx)
+            local raw_h = (opts and opts.canvas_height) or r.ImGui_GetWindowHeight(ctx)
+            local canvas_w = clamp(to_int(raw_w, 1), 1)
+            local canvas_h = clamp(to_int(raw_h, 1), 1)
+
+            local function adjust_group(dx, dy)
+                local any_changed = false
+                for _, b in ipairs(custom_buttons.buttons) do
+                    if b.group == gname then
+                        local _, _, sanitized = sanitize_button_xy(b, canvas_w, canvas_h)
+                        if sanitized then any_changed = true end
+
+                        if dx ~= 0 then
+                            local new_px = clamp(to_int((tonumber(b.position_px) or 0) + dx, 0), 0, canvas_w)
+                            if new_px ~= b.position_px then
+                                b.position_px = new_px
+                                b.position = new_px / math.max(1, canvas_w)
+                                any_changed = true
+                            end
+                        end
+                        if dy ~= 0 then
+                            local new_py = clamp(to_int((tonumber(b.position_y_px) or 0) + dy, 0), 0, canvas_h)
+                            if new_py ~= b.position_y_px then
+                                b.position_y_px = new_py
+                                b.position_y = new_py / math.max(1, canvas_h)
+                                any_changed = true
+                            end
+                        end
+                    end
+                end
+                if any_changed then
+                    custom_buttons.SaveCurrentButtons()
+                end
+            end
+
+            if r.ImGui_Button(ctx, "<-X##grpMoveLeft") then
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Verplaats de hele groep 1 pixel naar links") end
+                adjust_group(-1, 0)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "X->##grpMoveRight") then
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Verplaats de hele groep 1 pixel naar rechts (begrensd)") end
+                adjust_group(1, 0)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "<-Y##grpMoveUp") then
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Verplaats de hele groep 1 pixel omhoog") end
+                adjust_group(0, -1)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Y->##grpMoveDown") then
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Verplaats de hele groep 1 pixel omlaag") end
+                adjust_group(0, 1)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Align Y") then
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Zet alle knoppen in deze groep op dezelfde Y-positie") end
+                for _, b in ipairs(custom_buttons.buttons) do
+                    if b.group == gname then
+                        b.position_y = button.position_y
+                        b.position_y_px = button.position_y_px
+                        sanitize_button_xy(b, canvas_w, canvas_h)
+                    end
+                end
+                custom_buttons.SaveCurrentButtons()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Group Width") then
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Gebruik deze breedte voor de hele groep") end
+                local new_width = clamp(to_int(button.width, 60), 12, 400)
+                for _, b in ipairs(custom_buttons.buttons) do
+                    if b.group == gname then
+                        b.width = new_width
+                    end
+                end
+                custom_buttons.SaveCurrentButtons()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Color") then
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Kopieer alle kleuren naar de groep") end
+                for _, b in ipairs(custom_buttons.buttons) do
+                    if b.group == gname then
+                        b.color = button.color
+                        b.hover_color = button.hover_color
+                        b.active_color = button.active_color
+                        b.text_color = button.text_color
+                        b.border_color = button.border_color
+                    end
+                end
+                custom_buttons.SaveCurrentButtons()
+            end
+            r.ImGui_SameLine(ctx)
+            local all_visible = true
+            for _, b in ipairs(custom_buttons.buttons) do
+                if b.group == gname and not b.visible then all_visible = false break end
+            end
+            local vis_label = all_visible and "Hide Group" or "Show Group"
+            if r.ImGui_Button(ctx, vis_label .. "##grpToggleVis") then
+                local new_state = not all_visible
+                for _, b in ipairs(custom_buttons.buttons) do if b.group == gname then b.visible = new_state end end
+                custom_buttons.SaveCurrentButtons()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                if all_visible then
+                    r.ImGui_SetTooltip(ctx, "Verberg alle knoppen in deze groep")
+                else
+                    r.ImGui_SetTooltip(ctx, "Toon alle knoppen in deze groep")
+                end
+            end
+            local all_borders = true
+            for _, b in ipairs(custom_buttons.buttons) do
+                if b.group == gname and b.show_border == false then all_borders = false break end
+            end
+            r.ImGui_SameLine(ctx)
+            local border_label = all_borders and "No Borders" or "Borders"
+            if r.ImGui_Button(ctx, border_label .. "##grpToggleBorder") then
+                local new_border = not all_borders
+                for _, b in ipairs(custom_buttons.buttons) do if b.group == gname then b.show_border = new_border end end
+                custom_buttons.SaveCurrentButtons()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                if all_borders then
+                    r.ImGui_SetTooltip(ctx, "Zet de rand uit voor de hele groep")
+                else
+                    r.ImGui_SetTooltip(ctx, "Zet de rand aan voor de hele groep")
+                end
+            end
+        end
+
+        if opts and opts.render_global_offset then
+            r.ImGui_Separator(ctx)
+            opts.render_global_offset(ctx)
+            r.ImGui_Separator(ctx)
+        else
+            r.ImGui_Separator(ctx)
+        end
             r.ImGui_Text(ctx, "Left Click Action:")
             local changed = false
 

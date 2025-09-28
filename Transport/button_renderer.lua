@@ -388,51 +388,54 @@ function ExecuteMenuItem(item)
     end
 end
 
+local function new_menu_node()
+    return { children = {}, entries = {} }
+end
+
+local function ensure_submenu(current, segment)
+    local child = current.children[segment]
+    if not child then
+        child = new_menu_node()
+        current.children[segment] = child
+        table.insert(current.entries, { type = 'submenu', name = segment, node = child })
+    end
+    return child
+end
+
 function BuildMenuTree(items)
-    local root = { children = {}, items = {} }
-    for _, it in ipairs(items) do
-        local name = it.name or ''
-        if name:find('/') then
+    local root = new_menu_node()
+    for _, it in ipairs(items or {}) do
+        local raw_name = it.name or ''
+        local segments = {}
+        for segment in raw_name:gmatch('[^/]+') do
+            segments[#segments + 1] = segment
+        end
+
+        if #segments == 0 then
+            table.insert(root.entries, { type = 'item', label = raw_name, item = it })
+        else
             local current = root
-            local segment_index = 0
-            for segment in name:gmatch('[^/]+') do
-                segment_index = segment_index + 1
-                if segment_index == 0 then break end
-                if segment_index == select(2, name:gsub('/', '')) + 1 then
-                    current.items = current.items or {}
-                    table.insert(current.items, { label = segment, item = it })
+            for idx, segment in ipairs(segments) do
+                if idx == #segments then
+                    table.insert(current.entries, { type = 'item', label = segment, item = it })
                 else
-                    current.children[segment] = current.children[segment] or { children = {}, items = {} }
-                    current = current.children[segment]
+                    current = ensure_submenu(current, segment)
                 end
             end
-        else
-            table.insert(root.items, { label = name, item = it })
         end
     end
     return root
 end
 
-function SortedKeys(t)
-    local keys = {}
-    for k,_ in pairs(t) do table.insert(keys, k) end
-    table.sort(keys, function(a,b) return a:lower()<b:lower() end)
-    return keys
-end
-
 function RenderMenuTree(ctx, node)
-    if node.items then
-        for _, leaf in ipairs(node.items) do
-            if r.ImGui_MenuItem(ctx, leaf.label) then
-                ExecuteMenuItem(leaf.item)
+    for _, entry in ipairs(node.entries or {}) do
+        if entry.type == 'item' then
+            if r.ImGui_MenuItem(ctx, entry.label or '') then
+                ExecuteMenuItem(entry.item)
             end
-        end
-    end
-    if node.children then
-        for _, k in ipairs(SortedKeys(node.children)) do
-            local child = node.children[k]
-            if r.ImGui_BeginMenu(ctx, k) then
-                RenderMenuTree(ctx, child)
+        elseif entry.type == 'submenu' then
+            if r.ImGui_BeginMenu(ctx, entry.name or '') then
+                RenderMenuTree(ctx, entry.node)
                 r.ImGui_EndMenu(ctx)
             end
         end
