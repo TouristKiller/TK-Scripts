@@ -23,8 +23,8 @@ function CustomButtons.CreateNewButton()
         position_y = 0.15,
         width = 60,
         visible = true,
-    group = "", -- optional group name for batch editing
-    show_border = true, -- new: individual border toggle
+    group = "", 
+    show_border = true, 
         color = 0x333333FF,
         hover_color = 0x444444FF,
         active_color = 0x555555FF,
@@ -44,7 +44,7 @@ function CustomButtons.PrepareForSave()
     for i, button in ipairs(CustomButtons.buttons) do
         local button_copy = {}
         for k, v in pairs(button) do
-            if k ~= "icon" then  
+            if k ~= "icon" and k ~= "font" then  
                 button_copy[k] = v
             end
         end
@@ -68,7 +68,13 @@ function CustomButtons.LoadCurrentButtons()
     if file then
         local content = file:read('*all')
         file:close()
-        CustomButtons.buttons = json.decode(content)
+        local success, result = pcall(json.decode, content)
+        if success then
+            CustomButtons.buttons = result
+        else
+            reaper.ShowMessageBox("Error loading custom buttons: " .. tostring(result) .. "\n\nResetting to default buttons.", "Custom Buttons Error", 0)
+            CustomButtons.buttons = {}
+        end
     end
 end
 
@@ -90,22 +96,32 @@ function CustomButtons.LoadButtonPreset(name)
     if file then
         local content = file:read('*all')
         file:close()
-        CustomButtons.buttons = json.decode(content)
-        CustomButtons.current_preset = name
-        CustomButtons.SaveCurrentButtons()
-        r.SetExtState("TK_TRANSPORT", "last_button_preset", name, true)
+        local success, result = pcall(json.decode, content)
+        if success then
+            CustomButtons.buttons = result
+            CustomButtons.current_preset = name
+            CustomButtons.SaveCurrentButtons()
+            r.SetExtState("TK_TRANSPORT", "last_button_preset", name, true)
+        else
+            reaper.ShowMessageBox("Error loading button preset '" .. name .. "': " .. tostring(result) .. "\n\nPreset may be corrupted.", "Preset Load Error", 0)
+        end
     end
 end
 
 function CustomButtons.GetButtonPresets()
     local presets = {}
+    local seen = {} 
     local idx = 0
     r.RecursiveCreateDirectory(button_presets_path, 0)
     local filename = r.EnumerateFiles(button_presets_path, idx)
     
     while filename do
         if filename:match('%.json$') then
-            presets[#presets + 1] = filename:gsub('%.json$', '')
+            local preset_name = filename:gsub('%.json$', '')
+            if not seen[preset_name] then
+                presets[#presets + 1] = preset_name
+                seen[preset_name] = true
+            end
         end
         idx = idx + 1
         filename = r.EnumerateFiles(button_presets_path, idx)
@@ -134,21 +150,17 @@ function CustomButtons.DeleteButtonPreset(name)
 end
 
 function CustomButtons.RegisterCommandToLoadPreset(preset_name)
-    -- Create cross-platform safe filename
     local safe_name = preset_name:gsub("[^%w]", "_")
     local command_id = "TK_TRANSPORT_" .. safe_name
     local section_name = "Custom: Scripts"
     local command_name = "TK_TRANSPORT_" .. preset_name
     
-    -- Get the OS path separator
     local sep = package.config:sub(1,1) -- Returns "/" on Unix/Mac, "\" on Windows
     
-    -- Create directory and path safely
     local preset_loader_dir = script_path .. "preset_loaders"
     local preset_script_path = preset_loader_dir .. sep .. "TK_TRANSPORT_" .. safe_name .. ".lua"
     r.RecursiveCreateDirectory(preset_loader_dir, 0)
     
-    -- Create script content with platform-independent path handling
     local script_content = [[
 local r = reaper
 local script_path = debug.getinfo(1, 'S').source:match([=[^@?(.*[\/])[^\/]-$]=])
@@ -163,13 +175,11 @@ r.UpdateArrange()
 r.SetExtState("TK_TRANSPORT", "refresh_buttons", "1", false)
 ]]
     
-    -- Write the script file
     local file = io.open(preset_script_path, "w")
     if file then
         file:write(script_content)
         file:close()
         
-        -- Register as REAPER action
         local result = r.AddRemoveReaScript(true, 0, preset_script_path, true)
         r.RefreshToolbar2(0, 0)
         return result and 1 or 0
@@ -177,11 +187,6 @@ r.SetExtState("TK_TRANSPORT", "refresh_buttons", "1", false)
     
     return 0
 end
-
-
-
-
-
 
 
 function CustomButtons.CheckForCommandPick()

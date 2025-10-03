@@ -2,6 +2,44 @@ local r = reaper
 local SECTIONS = 0
 local resource_path = r.GetResourcePath()
 
+local function round_to_grid(px, grid)
+    if grid and grid > 1 then
+        return math.floor((px + grid/2) / grid) * grid
+    end
+    return px
+end
+
+local function ExecuteButtonAction(ctx, button)
+    local alt_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
+    
+    if alt_pressed and button.alt_left_click and button.alt_left_click.command then
+        local command_id = tonumber(button.alt_left_click.command) or r.NamedCommandLookup(button.alt_left_click.command)
+        if command_id then
+            if button.alt_left_click.type == 1 then
+                local editor = r.MIDIEditor_GetActive()
+                if editor then
+                    r.MIDIEditor_OnCommand(editor, command_id)
+                end
+            else
+                r.Main_OnCommand(command_id, 0)
+            end
+        end
+    elseif button.left_click and button.left_click.command then
+        local command_id = tonumber(button.left_click.command) or r.NamedCommandLookup(button.left_click.command)
+        if command_id then
+            if button.left_click.type == 1 then
+                local editor = r.MIDIEditor_GetActive()
+                if editor then
+                    r.MIDIEditor_OnCommand(editor, command_id)
+                end
+            else
+                r.Main_OnCommand(command_id, 0)
+            end
+        end
+    end
+end
+r.GetResourcePath()
+
 
 local ButtonRenderer = {}
 ButtonRenderer.image_cache = {}
@@ -9,6 +47,40 @@ ButtonRenderer.drag_active_index = nil
 ButtonRenderer.last_mx = nil
 ButtonRenderer.last_my = nil
 ButtonRenderer.drag_moved = false
+ButtonRenderer.popup_font_cache = {}  
+
+local function PushTransportPopupStyling(ctx, settings)
+ if not settings then return 0, false end
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.transport_popup_bg or settings.background)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.transport_popup_text or settings.text_normal)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.transport_border or settings.border)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), settings.transport_popup_bg or settings.background)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), settings.transport_border or settings.border)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), settings.transport_border or settings.border)
+ local popup_font = nil
+ if settings.transport_popup_font_name and settings.transport_popup_font_size then
+ local cache_key = settings.transport_popup_font_name .. "_" .. settings.transport_popup_font_size
+ popup_font = ButtonRenderer.popup_font_cache[cache_key]
+ if not popup_font then
+ popup_font = r.ImGui_CreateFont(settings.transport_popup_font_name, settings.transport_popup_font_size)
+ if popup_font then
+ r.ImGui_Attach(ctx, popup_font)
+ ButtonRenderer.popup_font_cache[cache_key] = popup_font
+ end
+ end
+ if popup_font then
+ r.ImGui_PushFont(ctx, popup_font, settings.transport_popup_font_size)
+ return 6, true, popup_font 
+ end
+ end
+ r.ImGui_PushFont(ctx, nil, settings.font_size or 14)
+ return 6, true, nil
+end
+
+local function PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
+ if font_pushed then r.ImGui_PopFont(ctx) end
+ r.ImGui_PopStyleColor(ctx, color_count or 6)
+end
 
 local function round_to_grid(px, grid)
     if grid and grid > 1 then
@@ -66,6 +138,21 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
     for i, button in ipairs(custom_buttons.buttons) do
         if button.visible then
             r.ImGui_SameLine(ctx)
+            
+            local font_pushed = false
+            if button.font_name and button.font_size then
+                if not button.font or not r.ImGui_ValidatePtr(button.font, 'ImGui_Font*') then
+                    button.font = r.ImGui_CreateFont(button.font_name, button.font_size)
+                    if button.font then
+                        r.ImGui_Attach(ctx, button.font)
+                    end
+                end
+                
+                if button.font and r.ImGui_ValidatePtr(button.font, 'ImGui_Font*') then
+                    r.ImGui_PushFont(ctx, button.font, button.font_size)
+                    font_pushed = true
+                end
+            end
 
 
             local x_pos, y_pos
@@ -89,9 +176,23 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button.active_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), button.text_color)
             
+            local style_var_count = 0
+            if button.rounding then
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), button.rounding)
+                style_var_count = style_var_count + 1
+            end
+            if button.border_thickness then
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), button.border_thickness)
+                style_var_count = style_var_count + 1
+            end
+            
             local border_for_button = (button.show_border ~= false) and 1 or 0
-            if border_for_button == 0 then
+            if border_for_button == 0 and style_var_count == 0 then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+                style_var_count = 1
+            elseif border_for_button == 0 and not button.border_thickness then
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+                style_var_count = style_var_count + 1
             end
             local draw_w = button.width
             if scale_sizes and draw_w and draw_w > 0 then
@@ -111,96 +212,174 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                 button.icon = ButtonRenderer.image_cache[button.icon_name]
             
                 if r.ImGui_ValidatePtr(button.icon, 'ImGui_Image*') then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
-                    
-                    local cursorX, cursorY = r.ImGui_GetCursorPos(ctx)
-                    local clicked = r.ImGui_Button(ctx, "##btn" .. i, draw_w, draw_w)
-                    
-                    r.ImGui_SetCursorPos(ctx, cursorX, cursorY)
-                    
-                    local uv_x = 0
-                    if r.ImGui_IsItemHovered(ctx) then
-                        uv_x = 0.33
-                    end
-                    if r.ImGui_IsItemActive(ctx) then
-                        uv_x = 0.66
-                    end
-                    
-                    r.ImGui_Image(ctx, button.icon, draw_w, draw_w, uv_x, 0, uv_x + 0.33, 1)
-                    
-                    r.ImGui_PopStyleVar(ctx)
-                    r.ImGui_PopStyleColor(ctx, 3)
-                    
-                    if clicked and not edit_mode then
-                        if button.left_click.command then
-                            local command_id = tonumber(button.left_click.command) or r.NamedCommandLookup(button.left_click.command)
-                            if command_id then
-                                if button.left_click.type == 1 then
-                                    local editor = r.MIDIEditor_GetActive()
-                                    if editor then
-                                        r.MIDIEditor_OnCommand(editor, command_id)
-                                    end
-                                else
-                                    r.Main_OnCommand(command_id, 0)
+                    if button.show_text_with_icon and button.name and button.name ~= "" then
+                        local icon_size = draw_w 
+                        local text_label = button.name .. "##btn" .. i
+                        
+                        local cursorX, cursorY = r.ImGui_GetCursorPos(ctx)
+                        
+                        local icon_padding = (button.show_border ~= false) and 4 or 0  
+                        local text_size = r.ImGui_CalcTextSize(ctx, button.name)
+                        local separator_width = (button.show_border ~= false) and 12 or 4  
+                        local padding = 8  
+                        local total_width = icon_padding + icon_size + separator_width + text_size + padding
+                        
+                        
+                        local clicked = r.ImGui_Button(ctx, "##btn" .. i, total_width, icon_size)
+                        
+                        local is_hovered = r.ImGui_IsItemHovered(ctx)
+                        local is_active = r.ImGui_IsItemActive(ctx)
+                        local button_min_x, button_min_y = r.ImGui_GetItemRectMin(ctx)
+                        local button_max_x, button_max_y = r.ImGui_GetItemRectMax(ctx)
+                        
+                        local icon_padding = (button.show_border ~= false) and 4 or 0
+                        r.ImGui_SetCursorPos(ctx, cursorX + icon_padding, cursorY)
+                        
+                        local uv_x = 0
+                        if is_hovered then
+                            uv_x = 0.33
+                        end
+                        if is_active then
+                            uv_x = 0.66
+                        end
+                        
+                        r.ImGui_Image(ctx, button.icon, icon_size, icon_size, uv_x, 0, uv_x + 0.33, 1)
+                        
+                        local text_offset = (button.show_border ~= false) and 12 or 4 
+                        r.ImGui_SameLine(ctx, cursorX + icon_padding + icon_size + text_offset, 0)
+                        r.ImGui_SetCursorPosY(ctx, cursorY + (icon_size - r.ImGui_GetTextLineHeight(ctx)) * 0.5)
+                        r.ImGui_Text(ctx, button.name)
+                        
+                        if button.show_border ~= false then
+                            local win_x, win_y = r.ImGui_GetWindowPos(ctx)
+                            local separator_x = win_x + cursorX + icon_padding + icon_size + 6 
+                            local separator_y1 = win_y + cursorY + 2  
+                            local separator_y2 = win_y + cursorY + icon_size - 2  
+                            local dl = r.ImGui_GetWindowDrawList(ctx)
+                            local sep_color = button.border_color or 0xFFFFFFFF
+                            local thickness = button.border_thickness or 1.0
+                            r.ImGui_DrawList_AddLine(dl, separator_x, separator_y1, separator_x, separator_y2, sep_color, thickness)
+                        end
+                        
+                        if clicked and not edit_mode then
+                            ExecuteButtonAction(ctx, button)
+                        end
+
+                        
+                        if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
+                            local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
+                            local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
+                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") then
+                                local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
+                                r.ImGui_BeginTooltip(ctx)
+                                if tip and tip ~= "" then
+                                    r.ImGui_Text(ctx, tostring(tip))
                                 end
+                                if alt_tip and alt_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                                end
+                                if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
+                                    r.ImGui_Separator(ctx)
+                                    r.ImGui_Text(ctx, "Right-click for menu")
+                                end
+                                r.ImGui_EndTooltip(ctx)
+                                PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
                             end
                         end
-                    end
-                    if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
-                        local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
-                        if tip and tip ~= "" then
-                            r.ImGui_BeginTooltip(ctx)
-                            r.ImGui_Text(ctx, tostring(tip))
-                            if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
-                                r.ImGui_Separator(ctx)
-                                r.ImGui_Text(ctx, "Right-click for menu")
-                            end
-                            r.ImGui_EndTooltip(ctx)
+                        
+                        if r.ImGui_IsItemClicked(ctx, 1) and not edit_mode then
+                            r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
                         end
-                    end
-                    
-                    if r.ImGui_IsItemClicked(ctx, 1) and not edit_mode then
-                        r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
-                    end
-                    if button.show_border ~= false then
-                        local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
-                        local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
-                        local dl = r.ImGui_GetWindowDrawList(ctx)
-                        local col = button.border_color or 0xFFFFFFFF
-                        r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, col)
+                        
+                        if button.show_border ~= false then
+                            local dl = r.ImGui_GetWindowDrawList(ctx)
+                            local col = button.border_color or 0xFFFFFFFF
+                            local thickness = button.border_thickness or 1.0
+                            r.ImGui_DrawList_AddRect(dl, button_min_x, button_min_y, button_max_x, button_max_y, col, button.rounding or 0, nil, thickness)
+                        end
+                    else
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button.color)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), button.hover_color)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button.active_color)
+                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+                        
+                        local cursorX, cursorY = r.ImGui_GetCursorPos(ctx)
+                        local clicked = r.ImGui_Button(ctx, "##btn" .. i, draw_w, draw_w)
+                        
+                        r.ImGui_SetCursorPos(ctx, cursorX, cursorY)
+                        
+                        local uv_x = 0
+                        if r.ImGui_IsItemHovered(ctx) then
+                            uv_x = 0.33
+                        end
+                        if r.ImGui_IsItemActive(ctx) then
+                            uv_x = 0.66
+                        end
+                        
+                        r.ImGui_Image(ctx, button.icon, draw_w, draw_w, uv_x, 0, uv_x + 0.33, 1)
+                        
+                        r.ImGui_PopStyleVar(ctx)
+                        r.ImGui_PopStyleColor(ctx, 3)
+                        
+                        if clicked and not edit_mode then
+                            ExecuteButtonAction(ctx, button)
+                        end
+                        if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
+                            local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
+                            local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
+                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") then
+                                local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
+                                r.ImGui_BeginTooltip(ctx)
+                                if tip and tip ~= "" then
+                                    r.ImGui_Text(ctx, tostring(tip))
+                                end
+                                if alt_tip and alt_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                                end
+                                if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
+                                    r.ImGui_Separator(ctx)
+                                    r.ImGui_Text(ctx, "Right-click for menu")
+                                end
+                                r.ImGui_EndTooltip(ctx)
+                                PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
+                            end
+                        end
+                        
+                        if r.ImGui_IsItemClicked(ctx, 1) and not edit_mode then
+                            r.ImGui_OpenPopup(ctx, "CustomButtonMenu" .. i)
+                        end
+                        if button.show_border ~= false then
+                            local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+                            local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+                            local dl = r.ImGui_GetWindowDrawList(ctx)
+                            local col = button.border_color or 0xFFFFFFFF
+                            local thickness = button.border_thickness or 1.0
+                            r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, col, button.rounding or 0, nil, thickness)
+                        end
                     end
                 else
                     button.use_icon = false
                     
                     local label = (button.name ~= "" and button.name or "EmptyButton") .. "##btn"..i
                     if r.ImGui_Button(ctx, label, draw_w) and not edit_mode then
-                        if button.left_click.command then
-                            local command_id = tonumber(button.left_click.command) or r.NamedCommandLookup(button.left_click.command)
-                            if command_id then
-                                if button.left_click.type == 1 then
-                                    local editor = r.MIDIEditor_GetActive()
-                                    if editor then
-                                        r.MIDIEditor_OnCommand(editor, command_id)
-                                    end
-                                else
-                                    r.Main_OnCommand(command_id, 0)
-                                end
-                            end
-                        end
+                        ExecuteButtonAction(ctx, button)
                     end
                     if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
                         local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
+                        local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
                         if tip and tip ~= "" then
+                            local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
                             r.ImGui_BeginTooltip(ctx)
                             r.ImGui_Text(ctx, tostring(tip))
+                            if alt_tip and alt_tip ~= "" then
+                                r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                            end
                             if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
                                 r.ImGui_Separator(ctx)
                                 r.ImGui_Text(ctx, "Right-click for menu")
                             end
                             r.ImGui_EndTooltip(ctx)
+                            PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
                         end
                     end
                     
@@ -212,36 +391,31 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
                         local dl = r.ImGui_GetWindowDrawList(ctx)
                         local col = button.border_color or 0xFFFFFFFF
-                        r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, col)
+                        local thickness = button.border_thickness or 1.0
+                        r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, col, button.rounding or 0, nil, thickness)
                     end
                 end
             else
                 local label = (button.name ~= "" and button.name or "EmptyButton") .. "##btn"..i
                 if r.ImGui_Button(ctx, label, draw_w) and not edit_mode then
-                    if button.left_click.command then
-                        local command_id = tonumber(button.left_click.command) or r.NamedCommandLookup(button.left_click.command)
-                        if command_id then
-                            if button.left_click.type == 1 then
-                                local editor = r.MIDIEditor_GetActive()
-                                if editor then
-                                    r.MIDIEditor_OnCommand(editor, command_id)
-                                end
-                            else
-                                r.Main_OnCommand(command_id, 0)
-                            end
-                        end
-                    end
+                    ExecuteButtonAction(ctx, button)
                 end
                 if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
                     local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
+                    local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
                     if tip and tip ~= "" then
+                        local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
                         r.ImGui_BeginTooltip(ctx)
                         r.ImGui_Text(ctx, tostring(tip))
+                        if alt_tip and alt_tip ~= "" then
+                            r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                        end
                         if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
                             r.ImGui_Separator(ctx)
                             r.ImGui_Text(ctx, "Right-click for menu")
                         end
                         r.ImGui_EndTooltip(ctx)
+                        PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
                     end
                 end
                 
@@ -253,7 +427,8 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                     local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
                     local dl = r.ImGui_GetWindowDrawList(ctx)
                     local col = button.border_color or 0xFFFFFFFF
-                    r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, col)
+                    local thickness = button.border_thickness or 1.0
+                    r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, col, button.rounding or 0, nil, thickness)
                 end
             end
             if edit_mode then
@@ -349,27 +524,33 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                 end
             end
             
-            if r.ImGui_BeginPopup(ctx, "CustomButtonMenu" .. i) then
-                local has_sub = false
-                for _, it in ipairs(button.right_menu.items) do
-                    if it.name and it.name:find('/') then has_sub = true break end
-                end
-                if has_sub then
-                    local tree = BuildMenuTree(button.right_menu.items)
-                    RenderMenuTree(ctx, tree)
-                else
-                    for _, it in ipairs(button.right_menu.items) do
-                        if r.ImGui_MenuItem(ctx, it.name) then
-                            ExecuteMenuItem(it)
-                        end
-                    end
-                end
-                r.ImGui_EndPopup(ctx)
+if r.ImGui_BeginPopup(ctx, "CustomButtonMenu" .. i) then
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
+ 
+ local has_folders = false
+ for _, it in ipairs(button.right_menu.items) do
+ if it.is_submenu then has_folders = true break end
+ end
+ 
+ if has_folders then
+ RenderMenuWithFolders(ctx, button.right_menu.items)
+ else
+ for _, it in ipairs(button.right_menu.items) do
+ if r.ImGui_MenuItem(ctx, it.name) then
+ ExecuteMenuItem(it)
+ end
+ end
+ end
+ 
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
+ r.ImGui_EndPopup(ctx)
+ end            r.ImGui_PopStyleColor(ctx, 4)
+            if style_var_count > 0 then
+                r.ImGui_PopStyleVar(ctx, style_var_count)
             end
             
-            r.ImGui_PopStyleColor(ctx, 4)
-            if border_for_button == 0 then
-                r.ImGui_PopStyleVar(ctx)
+            if font_pushed then
+                r.ImGui_PopFont(ctx)
             end
         end
     end
@@ -385,6 +566,50 @@ function ExecuteMenuItem(item)
         if editor then r.MIDIEditor_OnCommand(editor, command_id) end
     else
         r.Main_OnCommand(command_id, 0)
+    end
+end
+
+function RenderMenuWithFolders(ctx, items)
+    for idx, it in ipairs(items) do
+        if not it.parent_id then
+            if it.is_submenu then
+                if r.ImGui_BeginMenu(ctx, it.name) then
+                    for child_idx, child_it in ipairs(items) do
+                        if child_it.parent_id == it.unique_id then
+                            if child_it.is_submenu then
+                                RenderMenuFolder(ctx, items, child_it)
+                            else
+                                if r.ImGui_MenuItem(ctx, child_it.name) then
+                                    ExecuteMenuItem(child_it)
+                                end
+                            end
+                        end
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
+            else
+                if r.ImGui_MenuItem(ctx, it.name) then
+                    ExecuteMenuItem(it)
+                end
+            end
+        end
+    end
+end
+
+function RenderMenuFolder(ctx, items, folder)
+    if r.ImGui_BeginMenu(ctx, folder.name) then
+        for child_idx, child_it in ipairs(items) do
+            if child_it.parent_id == folder.unique_id then
+                if child_it.is_submenu then
+                    RenderMenuFolder(ctx, items, child_it)
+                else
+                    if r.ImGui_MenuItem(ctx, child_it.name) then
+                        ExecuteMenuItem(child_it)
+                    end
+                end
+            end
+        end
+        r.ImGui_EndMenu(ctx)
     end
 end
 
