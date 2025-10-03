@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.9.0
+-- @version 0.9.1
 -- @changelog 
 --[[
 
@@ -6154,6 +6154,12 @@ function Main()
  if changed then SaveSettings() end
  changed, settings.edit_grid_show = r.ImGui_MenuItem(ctx, "Show Grid", nil, settings.edit_grid_show or false)
  if changed then SaveSettings() end
+ 
+ -- Grid Size slider
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ changed, settings.edit_grid_size_px = r.ImGui_SliderInt(ctx, "Grid Size", settings.edit_grid_size_px or 16, 1, 15, "%d px")
+ if changed then SaveSettings() end
+ 
  r.ImGui_Separator(ctx)
  if r.ImGui_MenuItem(ctx, "Show Settings") then
  show_settings = true
