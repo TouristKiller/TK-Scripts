@@ -1,9 +1,10 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.6
+-- @version 0.9.7
 -- @changelog 
 --[[
-+ Set track name length and FX name length to be independent
++ Fixed compatibility with REAPER 7.46+ pinned tracks feature
++ Track overlays now correctly respect pinned track layers to prevent color bleeding
 ]]--
 
 local r                  = reaper
@@ -1475,16 +1476,36 @@ function ResetRenderContext()
     end
 end
 
-function RenderSolidOverlay(draw_list, track, track_y, track_height, color, window_y)
-    local background_draw_list = r.ImGui_GetBackgroundDrawList(ctx)
-    r.ImGui_DrawList_AddRectFilled(
-        background_draw_list,
-        LEFT,
-        window_y + track_y,
-        RIGHT - scroll_size,
-        window_y + track_y + track_height,
-        color
-    )
+function RenderSolidOverlay(draw_list, track, track_y, track_height, color, window_y, pinned_height)
+    local window_draw_list = r.ImGui_GetWindowDrawList(ctx)
+    
+    pinned_height = pinned_height or 0
+    
+    if pinned_height > 0 and track_y < pinned_height then
+        if track_y + track_height <= pinned_height then
+            return
+        end
+        local actual_y = window_y + pinned_height
+        local actual_height = track_height - (pinned_height - track_y)
+        
+        r.ImGui_DrawList_AddRectFilled(
+            window_draw_list,
+            LEFT,
+            actual_y,
+            RIGHT - scroll_size,
+            actual_y + actual_height,
+            color
+        )
+    else
+        r.ImGui_DrawList_AddRectFilled(
+            window_draw_list,
+            LEFT,
+            window_y + track_y,
+            RIGHT - scroll_size,
+            window_y + track_y + track_height,
+            color
+        )
+    end
     
     local track_env_cnt = r.CountTrackEnvelopes(track)
     if track_env_cnt > 0 and settings.show_envelope_colors then
@@ -1492,14 +1513,30 @@ function RenderSolidOverlay(draw_list, track, track_y, track_height, color, wind
         local env_height = (r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale) - track_height
         local env_color = (color & 0xFFFFFF00) | ((settings.envelope_color_intensity * settings.overlay_alpha * 255)//1)
         
-        r.ImGui_DrawList_AddRectFilled(
-            draw_list,
-            LEFT,
-            window_y + env_y,
-            RIGHT - scroll_size,
-            window_y + env_y + env_height,
-            env_color
-        )
+        if pinned_height > 0 and env_y < pinned_height then
+            if env_y + env_height <= pinned_height then
+                return
+            end
+            local actual_env_y = window_y + pinned_height
+            local actual_env_height = env_height - (pinned_height - env_y)
+            r.ImGui_DrawList_AddRectFilled(
+                window_draw_list,
+                LEFT,
+                actual_env_y,
+                RIGHT - scroll_size,
+                actual_env_y + actual_env_height,
+                env_color
+            )
+        else
+            r.ImGui_DrawList_AddRectFilled(
+                window_draw_list,
+                LEFT,
+                window_y + env_y,
+                RIGHT - scroll_size,
+                window_y + env_y + env_height,
+                env_color
+            )
+        end
     end
 end
 
@@ -1526,28 +1563,59 @@ function RenderGradientRect(draw_list, x1, y1, x2, y2, color, intensity)
     end
 end
   
-function RenderGradientOverlay(draw_list, track, track_y, track_height, color, window_y, is_parent)    
-    local background_draw_list = r.ImGui_GetBackgroundDrawList(ctx)
+function RenderGradientOverlay(draw_list, track, track_y, track_height, color, window_y, is_parent, pinned_height)    
+    local window_draw_list = r.ImGui_GetWindowDrawList(ctx)
     
-    if is_parent and settings.darker_parent_tracks and 
-       (not r.GetParentTrack(track) or settings.nested_parents_darker) then
-        r.ImGui_DrawList_AddRectFilled(
-            background_draw_list,
-            LEFT,
-            window_y + track_y,
-            RIGHT - scroll_size,
-            window_y + track_y + track_height,
-            color
-        )
+    pinned_height = pinned_height or 0
+    
+    if pinned_height > 0 and track_y < pinned_height then
+        if track_y + track_height <= pinned_height then
+            return
+        end
+        local actual_y = window_y + pinned_height
+        local actual_height = track_height - (pinned_height - track_y)
+        
+        if is_parent and settings.darker_parent_tracks and 
+           (not r.GetParentTrack(track) or settings.nested_parents_darker) then
+            r.ImGui_DrawList_AddRectFilled(
+                window_draw_list,
+                LEFT,
+                actual_y,
+                RIGHT - scroll_size,
+                actual_y + actual_height,
+                color
+            )
+        else
+            RenderGradientRect(
+                window_draw_list,
+                LEFT,
+                actual_y,
+                RIGHT - scroll_size,
+                actual_y + actual_height,
+                color
+            )
+        end
     else
-        RenderGradientRect(
-            background_draw_list,
-            LEFT,
-            window_y + track_y,
-            RIGHT - scroll_size,
-            window_y + track_y + track_height,
-            color
-        )
+        if is_parent and settings.darker_parent_tracks and 
+           (not r.GetParentTrack(track) or settings.nested_parents_darker) then
+            r.ImGui_DrawList_AddRectFilled(
+                window_draw_list,
+                LEFT,
+                window_y + track_y,
+                RIGHT - scroll_size,
+                window_y + track_y + track_height,
+                color
+            )
+        else
+            RenderGradientRect(
+                window_draw_list,
+                LEFT,
+                window_y + track_y,
+                RIGHT - scroll_size,
+                window_y + track_y + track_height,
+                color
+            )
+        end
     end
     
     local track_env_cnt = r.CountTrackEnvelopes(track)
@@ -1555,15 +1623,32 @@ function RenderGradientOverlay(draw_list, track, track_y, track_height, color, w
         local env_y = track_y + track_height
         local env_height = (r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale) - track_height
         
-        RenderGradientRect(
-            draw_list,
-            LEFT,
-            window_y + env_y,
-            RIGHT - scroll_size,
-            window_y + env_y + env_height,
-            color,
-            settings.envelope_color_intensity
-        )
+        if pinned_height > 0 and env_y < pinned_height then
+            if env_y + env_height <= pinned_height then
+                return
+            end
+            local actual_env_y = window_y + pinned_height
+            local actual_env_height = env_height - (pinned_height - env_y)
+            RenderGradientRect(
+                window_draw_list,
+                LEFT,
+                actual_env_y,
+                RIGHT - scroll_size,
+                actual_env_y + actual_env_height,
+                color,
+                settings.envelope_color_intensity
+            )
+        else
+            RenderGradientRect(
+                window_draw_list,
+                LEFT,
+                window_y + env_y,
+                RIGHT - scroll_size,
+                window_y + env_y + env_height,
+                color,
+                settings.envelope_color_intensity
+            )
+        end
     end
 end
 
@@ -1916,15 +2001,55 @@ function loop()
             UpdateBgColorCache()
         end
 
-        for i = -1, track_count - 1 do 
-            local track
-            if i == -1 then
-                track = r.GetMasterTrack(0)
-            else
-                track = r.GetTrack(0, i)
+        -- First pass: Calculate pinned track area height
+        local pinned_tracks_height = 0
+        local pinned_override = r.GetToggleCommandState(42595) == 1
+        
+        if not pinned_override then
+            local accumulated_height = 0
+            for i = 0, track_count - 1 do
+                local track = r.GetTrack(0, i)
+                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
+                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+                local expected_y = accumulated_height
+                
+                if math.abs(track_y - expected_y) < 1 then
+                    accumulated_height = accumulated_height + track_height
+                else
+                    pinned_tracks_height = accumulated_height
+                    if pinned_tracks_height > 0 then
+                        pinned_tracks_height = pinned_tracks_height + 2
+                    end
+                    break
+                end
             end
-            
-            local is_master = (i == -1)
+        end
+
+        for pass = 1, 2 do
+            local accumulated_height = 0
+            for i = -1, track_count - 1 do 
+                local track
+                if i == -1 then
+                    track = r.GetMasterTrack(0)
+                else
+                    track = r.GetTrack(0, i)
+                end
+                
+                local is_master = (i == -1)
+                local is_pinned = false
+                
+                if not is_master and not pinned_override then
+                    local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
+                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+                    local expected_y = accumulated_height
+                    
+                    if math.abs(track_y - expected_y) < 1 then
+                        is_pinned = true
+                        accumulated_height = accumulated_height + track_height
+                    end
+                end
+                
+                if (pass == 1 and not is_pinned) or (pass == 2 and is_pinned) then
 
             if is_master then
                 local master_visible = r.GetMasterTrackVisibility()
@@ -1954,7 +2079,7 @@ function loop()
                         else
                             local red, green, blue, _ = r.ImGui_ColorConvertU32ToDouble4(settings.master_track_color)
                             local color_with_alpha = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, settings.master_overlay_alpha)
-                            RenderSolidOverlay(draw_list, track, track_y, track_height, color_with_alpha, WY)
+                            RenderSolidOverlay(draw_list, track, track_y, track_height, color_with_alpha, WY, 0)
                         end
                     end
                     local text = "MASTER"
@@ -1976,9 +2101,11 @@ function loop()
                         text_x = WX + settings.horizontal_offset
                     end
                     
-                    local text_color = GetTextColor(track)
-                    text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
-                    r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
+                    if is_pinned or text_y >= WY + pinned_tracks_height then
+                        local text_color = GetTextColor(track)
+                        text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
+                        r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
+                    end
                     
                 end
             else
@@ -2099,10 +2226,12 @@ function loop()
                                     color = GetCachedColor(blended_color, settings.overlay_alpha)
                                     end
                                     
+                                    local clip_height = is_pinned and 0 or pinned_tracks_height
+                                    
                                     if settings.gradient_enabled then
-                                        RenderGradientOverlay(draw_list, track, track_y, track_height, color, WY, is_parent)
+                                        RenderGradientOverlay(draw_list, track, track_y, track_height, color, WY, is_parent, clip_height)
                                     else
-                                        RenderSolidOverlay(draw_list, track, track_y, track_height, color, WY)
+                                        RenderSolidOverlay(draw_list, track, track_y, track_height, color, WY, clip_height)
                                     end
                                 end
                             end
@@ -2238,25 +2367,29 @@ function loop()
                                         settings.label_alpha
                                     )
                                     
-                                    r.ImGui_DrawList_AddRectFilled(
-                                        draw_list,
-                                        label_x - 10,
-                                        text_y - 1,
-                                        label_x + parent_text_width + 10,
-                                        text_y + settings.text_size + 1,
-                                        parent_label_color,
-                                        4.0
-                                    )
+                                    if is_pinned or text_y >= WY + pinned_tracks_height then
+                                        r.ImGui_DrawList_AddRectFilled(
+                                            draw_list,
+                                            label_x - 10,
+                                            text_y - 1,
+                                            label_x + parent_text_width + 10,
+                                            text_y + settings.text_size + 1,
+                                            parent_label_color,
+                                            4.0
+                                        )
+                                    end
                                 end
 
-                                local parent_text_color = GetTextColor(parents[#parents], false, true)
-                                r.ImGui_DrawList_AddText(
-                                    draw_list,
-                                    parent_text_pos,
-                                    text_y,
-                                    parent_text_color,
-                                    combined_name
-                                )
+                                if is_pinned or text_y >= WY + pinned_tracks_height then
+                                    local parent_text_color = GetTextColor(parents[#parents], false, true)
+                                    r.ImGui_DrawList_AddText(
+                                        draw_list,
+                                        parent_text_pos,
+                                        text_y,
+                                        parent_text_color,
+                                        combined_name
+                                    )
+                                end
                             end
                         end
 
@@ -2290,20 +2423,25 @@ function loop()
 
                             if settings.show_label then
                                 local label_color = GetLabelColor(track)
-                                r.ImGui_DrawList_AddRectFilled(
-                                    draw_list,
-                                    text_x - 10,
-                                    text_y - 1,
-                                    text_x + text_width + 10,
-                                    text_y + settings.text_size + 1,
-                                    label_color,
-                                    4.0
-                                )
+                                if is_pinned or text_y >= WY + pinned_tracks_height then
+                                    r.ImGui_DrawList_AddRectFilled(
+                                        draw_list,
+                                        text_x - 10,
+                                        text_y - 1,
+                                        text_x + text_width + 10,
+                                        text_y + settings.text_size + 1,
+                                        label_color,
+                                        4.0
+                                    )
+                                end
                             end
                         
                             local text_color = GetTextColor(track, is_child)
                             text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
-                            r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, modified_display_name)
+                            
+                            if is_pinned or text_y >= WY + pinned_tracks_height then
+                                r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, modified_display_name)
+                            end
                           
                             if settings.show_info_line and not r.GetParentTrack(track) then
                                 local info_text = GetFolderInfo(track)
@@ -2316,7 +2454,9 @@ function loop()
                                     info_text_x = text_x + track_text_width + 20
                                 end
                                 
-                                r.ImGui_DrawList_AddText(draw_list, info_text_x, text_y, text_color, info_text)
+                                if is_pinned or text_y >= WY + pinned_tracks_height then
+                                    r.ImGui_DrawList_AddText(draw_list, info_text_x, text_y, text_color, info_text)
+                                end
                             end
 
                             local dot_size = 4
@@ -2326,7 +2466,7 @@ function loop()
                             local dots_start_y = track_center - (total_dots_height / 2)
                             local dot_x = text_x + text_width + 5
                         
-                            if is_armed then
+                            if (is_pinned or text_y >= WY + pinned_tracks_height) and is_armed then
                                 r.ImGui_DrawList_AddCircleFilled(
                                     draw_list,
                                     dot_x,
@@ -2336,7 +2476,7 @@ function loop()
                                 )
                             end
                             
-                            if is_soloed then
+                            if (is_pinned or text_y >= WY + pinned_tracks_height) and is_soloed then
                                 r.ImGui_DrawList_AddCircleFilled(
                                     draw_list,
                                     dot_x,
@@ -2346,7 +2486,7 @@ function loop()
                                 )
                             end
                             
-                            if is_muted then
+                            if (is_pinned or text_y >= WY + pinned_tracks_height) and is_muted then
                                 r.ImGui_DrawList_AddCircleFilled(
                                     draw_list,
                                     dot_x,
@@ -2388,15 +2528,20 @@ function loop()
                                 local absolute_env_y = track_y + env_y
                                 local text_y = WY + absolute_env_y + (env_height/2) - (settings.text_size/2)
                                 
-                                local env_color = GetTextColor(track, is_child)
-                                env_color = (env_color & 0xFFFFFF00) | ((settings.envelope_text_opacity * 255)//1)
-                                r.ImGui_DrawList_AddText(draw_list, env_text_x, text_y, env_color, env_name)
+                                if is_pinned or text_y >= WY + pinned_tracks_height then
+                                    local env_color = GetTextColor(track, is_child)
+                                    env_color = (env_color & 0xFFFFFF00) | ((settings.envelope_text_opacity * 255)//1)
+                                    r.ImGui_DrawList_AddText(draw_list, env_text_x, text_y, env_color, env_name)
+                                end
                             end
                         end
                     end
                 end 
             end
+                end
+            end
         end
+        
         r.ImGui_End(ctx)
     end
     r.ImGui_PopStyleVar(ctx)
