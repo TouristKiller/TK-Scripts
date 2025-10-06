@@ -60,6 +60,10 @@ function IconBrowser.Show(ctx, settings)
     
     if visible then
         if settings then
+            -- Initialize values if they don't exist
+            settings.icon_browser_width = settings.icon_browser_width or 600
+            settings.icon_browser_height = settings.icon_browser_height or 400
+            
             local current_width = r.ImGui_GetWindowWidth(ctx)
             local current_height = r.ImGui_GetWindowHeight(ctx)
             if current_width ~= settings.icon_browser_width then
