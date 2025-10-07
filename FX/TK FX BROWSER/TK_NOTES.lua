@@ -1,6 +1,6 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.0.0
+-- @version 2.0.1
 
 --------------------------------------------------------------------------------
 local r = reaper
@@ -343,6 +343,7 @@ local function ResetNotebook()
     editor.mouse_selecting = false
     state.bold_input_active = false
     ClearAllImages()
+    state.strokes = {}  -- Clear all drawings
     state.show_status = true
     state.window_width = 600
     state.window_height = 400
@@ -758,6 +759,7 @@ local function LoadTrackState(proj, track, track_guid)
     state.tabs_enabled = stored_tabs_enabled == "true"
     state.tabs = {}
     state.active_tab_index = 1
+    state.strokes = {}  -- Reset strokes
     
     if state.tabs_enabled and stored_tabs_data and stored_tabs_data ~= "" then
         -- Format: tab_count|active_index|tab1_name:tab1_text|tab2_name:tab2_text|...
@@ -990,6 +992,7 @@ local function LoadItemState(proj, item, item_guid)
     state.tabs_enabled = stored_tabs_enabled == "true"
     state.tabs = {}
     state.active_tab_index = 1
+    state.strokes = {}  -- Reset strokes
     
     if state.tabs_enabled and stored_tabs_data and stored_tabs_data ~= "" then
         local parts = {}
@@ -2881,11 +2884,7 @@ local function DrawStatusBar(status_height)
         end
         table.insert(parts, string.format("%d words", word_count))
         table.insert(parts, string.format("%d characters", char_count))
-        if state.can_edit then
-            table.insert(parts, state.dirty and "Unsaved" or "Saved")
-        else
-            table.insert(parts, "Read only")
-        end
+        -- Auto-save is always active, no need for save status indicator
         local status = table.concat(parts, "  |  ")
         local text_height = r.ImGui_GetTextLineHeight(ctx)
         r.ImGui_SetCursorPosY(ctx, math.max(0, (status_height - text_height) * 0.5))
