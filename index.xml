@@ -231,10 +231,9 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="0.9.7" author="TouristKiller" time="2025-09-24T12:55:00Z">
+        <version name="0.9.8" author="TouristKiller" time="2025-10-07T12:55:00Z">
             <changelog><![CDATA[           
-+ Fixed compatibility with REAPER 7.46+ pinned tracks feature
-+ Track overlays now correctly respect pinned track layers to prevent color bleeding
+
 ]]>
             </changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>

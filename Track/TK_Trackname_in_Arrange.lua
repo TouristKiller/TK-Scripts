@@ -1,10 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.7
+-- @version 0.9.8
 -- @changelog 
 --[[
-+ Fixed compatibility with REAPER 7.46+ pinned tracks feature
-+ Track overlays now correctly respect pinned track layers to prevent color bleeding
++ FIXED: Pinned tracks height calculation now includes envelope lanes (I_WNDH instead of I_TCPH)
++ This was the root cause - pinned_tracks_height was too small when envelopes were present
++ Borders and overlays now correctly stop at envelope lanes in pinned section
 ]]--
 
 local r                  = reaper
@@ -1660,57 +1661,114 @@ function DrawTrackBorderLine(draw_list,x1,y1,x2,y2,color,thickness)
     r.ImGui_DrawList_AddLine(draw_list,x1, y1, x2, y2,color,thickness)
 end
 
-function DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
-    if settings.track_border_left then
-        DrawTrackBorderLine(
-            draw_list,
-            LEFT + settings.border_thickness/2,
-            WY + track_y,
-            LEFT + settings.border_thickness/2,
-            WY + track_y + track_height,
-            border_color,
-            settings.border_thickness
-        )
+function DrawTrackBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, pinned_tracks_height)
+    is_pinned = is_pinned or false
+    pinned_tracks_height = pinned_tracks_height or 0
+    
+    -- Teken track borders (exact zoals RenderSolidOverlay)
+    if pinned_tracks_height > 0 and not is_pinned and track_y < pinned_tracks_height then
+        if track_y + track_height <= pinned_tracks_height then
+            -- Hele track zit in pinned zone, skip
+            goto draw_envelope_borders
+        end
+        -- Track loopt door pinned zone heen
+        local actual_y = pinned_tracks_height
+        local actual_height = track_height - (pinned_tracks_height - track_y)
+        
+        if settings.track_border_left then
+            DrawTrackBorderLine(draw_list, LEFT + settings.border_thickness/2, WY + actual_y,
+                LEFT + settings.border_thickness/2, WY + actual_y + actual_height,
+                border_color, settings.border_thickness)
+        end
+        if settings.track_border_right then
+            DrawTrackBorderLine(draw_list, RIGHT - scroll_size - settings.border_thickness/2, WY + actual_y,
+                RIGHT - scroll_size - settings.border_thickness/2, WY + actual_y + actual_height,
+                border_color, settings.border_thickness)
+        end
+        if settings.track_border_bottom then
+            DrawTrackBorderLine(draw_list, LEFT, WY + track_y + track_height - settings.border_thickness/2,
+                RIGHT - scroll_size, WY + track_y + track_height - settings.border_thickness/2,
+                border_color, settings.border_thickness)
+        end
+    else
+        -- Track is buiten pinned zone
+        if settings.track_border_left then
+            DrawTrackBorderLine(draw_list, LEFT + settings.border_thickness/2, WY + track_y,
+                LEFT + settings.border_thickness/2, WY + track_y + track_height,
+                border_color, settings.border_thickness)
+        end
+        if settings.track_border_right then
+            DrawTrackBorderLine(draw_list, RIGHT - scroll_size - settings.border_thickness/2, WY + track_y,
+                RIGHT - scroll_size - settings.border_thickness/2, WY + track_y + track_height,
+                border_color, settings.border_thickness)
+        end
+        if settings.track_border_top then
+            DrawTrackBorderLine(draw_list, LEFT, WY + track_y + settings.border_thickness/2,
+                RIGHT - scroll_size, WY + track_y + settings.border_thickness/2,
+                border_color, settings.border_thickness)
+        end
+        if settings.track_border_bottom then
+            DrawTrackBorderLine(draw_list, LEFT, WY + track_y + track_height - settings.border_thickness/2,
+                RIGHT - scroll_size, WY + track_y + track_height - settings.border_thickness/2,
+                border_color, settings.border_thickness)
+        end
     end
     
-    if settings.track_border_right then
-        DrawTrackBorderLine(
-            draw_list,
-            RIGHT - scroll_size - settings.border_thickness/2,
-            WY + track_y,
-            RIGHT - scroll_size - settings.border_thickness/2,
-            WY + track_y + track_height,
-            border_color,
-            settings.border_thickness
-        )
-    end
-    
-    if settings.track_border_top then
-        DrawTrackBorderLine(
-            draw_list,
-            LEFT,
-            WY + track_y + settings.border_thickness/2,
-            RIGHT - scroll_size,
-            WY + track_y + settings.border_thickness/2,
-            border_color,
-            settings.border_thickness
-        )
-    end
-    
-    if settings.track_border_bottom then
-        DrawTrackBorderLine(
-            draw_list,
-            LEFT,
-            WY + track_y + track_height - settings.border_thickness/2,
-            RIGHT - scroll_size,
-            WY + track_y + track_height - settings.border_thickness/2,
-            border_color,
-            settings.border_thickness
-        )
+    ::draw_envelope_borders::
+    -- Teken envelope borders (exact zoals RenderSolidOverlay envelope code)
+    local track_env_cnt = r.CountTrackEnvelopes(track)
+    if track_env_cnt > 0 then
+        local env_y = track_y + track_height
+        local env_height = (r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale) - track_height
+        
+        if pinned_tracks_height > 0 and not is_pinned and env_y < pinned_tracks_height then
+            if env_y + env_height <= pinned_tracks_height then
+                return -- Envelopes zitten volledig in pinned zone
+            end
+            -- Envelopes lopen door pinned zone heen
+            local actual_env_y = pinned_tracks_height
+            local actual_env_height = env_height - (pinned_tracks_height - env_y)
+            
+            if settings.track_border_left then
+                DrawTrackBorderLine(draw_list, LEFT + settings.border_thickness/2, WY + actual_env_y,
+                    LEFT + settings.border_thickness/2, WY + actual_env_y + actual_env_height,
+                    border_color, settings.border_thickness)
+            end
+            if settings.track_border_right then
+                DrawTrackBorderLine(draw_list, RIGHT - scroll_size - settings.border_thickness/2, WY + actual_env_y,
+                    RIGHT - scroll_size - settings.border_thickness/2, WY + actual_env_y + actual_env_height,
+                    border_color, settings.border_thickness)
+            end
+            if settings.track_border_bottom then
+                DrawTrackBorderLine(draw_list, LEFT, WY + env_y + env_height - settings.border_thickness/2,
+                    RIGHT - scroll_size, WY + env_y + env_height - settings.border_thickness/2,
+                    border_color, settings.border_thickness)
+            end
+        else
+            -- Envelopes zijn buiten pinned zone
+            if settings.track_border_left then
+                DrawTrackBorderLine(draw_list, LEFT + settings.border_thickness/2, WY + env_y,
+                    LEFT + settings.border_thickness/2, WY + env_y + env_height,
+                    border_color, settings.border_thickness)
+            end
+            if settings.track_border_right then
+                DrawTrackBorderLine(draw_list, RIGHT - scroll_size - settings.border_thickness/2, WY + env_y,
+                    RIGHT - scroll_size - settings.border_thickness/2, WY + env_y + env_height,
+                    border_color, settings.border_thickness)
+            end
+            if settings.track_border_bottom then
+                DrawTrackBorderLine(draw_list, LEFT, WY + env_y + env_height - settings.border_thickness/2,
+                    RIGHT - scroll_size, WY + env_y + env_height - settings.border_thickness/2,
+                    border_color, settings.border_thickness)
+            end
+        end
     end
 end
 
-function DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
+function DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, pinned_tracks_height)
+    is_pinned = is_pinned or false
+    pinned_tracks_height = pinned_tracks_height or 0
+    
     local depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
     if depth == 1 then
         local start_idx, end_idx = GetFolderBoundaries(track)
@@ -1728,28 +1786,57 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
             if has_visible_children then
                 local end_track = r.GetTrack(0, end_idx)
                 local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
-                local end_height = r.GetMediaTrackInfo_Value(end_track, "I_TCPH") /screen_scale
-                local total_height = (end_y + end_height) - track_y
+                
+                -- Gebruik I_WNDH voor de laatste track om envelopes mee te nemen
+                local end_total_height = r.GetMediaTrackInfo_Value(end_track, "I_WNDH") / screen_scale
+                local total_height = (end_y + end_total_height) - track_y
+                
+                -- Skip borders als de folder (inclusief envelopes) volledig in de pinned zone valt
+                if not is_pinned and track_y + total_height <= pinned_tracks_height then
+                    return
+                end
+                
+                -- Clip de borders zodat ze niet over pinned tracks gaan
+                local actual_track_y = track_y
+                local actual_total_height = total_height
+                
+                if not is_pinned and track_y < pinned_tracks_height then
+                    -- Folder begint in pinned zone
+                    if track_y + total_height <= pinned_tracks_height then
+                        -- Hele folder zit in pinned zone
+                        return
+                    end
+                    local overlap = pinned_tracks_height - track_y
+                    actual_track_y = pinned_tracks_height
+                    actual_total_height = total_height - overlap
+                    
+                    if actual_total_height <= 0 then
+                        return
+                    end
+                end
                 
                 if settings.folder_border_top then
-                    DrawFolderBorderLine(
-                        draw_list,
-                        LEFT,
-                        WY + track_y + settings.border_thickness/2,
-                        RIGHT - scroll_size,
-                        WY + track_y + settings.border_thickness/2,
-                        border_color,
-                        settings.border_thickness
-                    )
+                    -- Teken alleen de top border als we niet zijn geclipped
+                    if actual_track_y == track_y or is_pinned then
+                        DrawFolderBorderLine(
+                            draw_list,
+                            LEFT,
+                            WY + actual_track_y + settings.border_thickness/2,
+                            RIGHT - scroll_size,
+                            WY + actual_track_y + settings.border_thickness/2,
+                            border_color,
+                            settings.border_thickness
+                        )
+                    end
                 end
 
                 if settings.folder_border_left then
                     DrawFolderBorderLine(
                         draw_list,
                         LEFT + settings.border_thickness/2,
-                        WY + track_y,
+                        WY + actual_track_y,
                         LEFT + settings.border_thickness/2,
-                        WY + track_y + total_height,
+                        WY + actual_track_y + actual_total_height,
                         border_color,
                         settings.border_thickness
                     )
@@ -1759,9 +1846,9 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                     DrawFolderBorderLine(
                         draw_list,
                         RIGHT - scroll_size - settings.border_thickness/2,
-                        WY + track_y,
+                        WY + actual_track_y,
                         RIGHT - scroll_size - settings.border_thickness/2,
-                        WY + track_y + total_height,
+                        WY + actual_track_y + actual_total_height,
                         border_color,
                         settings.border_thickness
                     )
@@ -1779,25 +1866,53 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                     )
                 end
             else
+                -- Folder zonder zichtbare kinderen
+                local total_visual_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
+                
+                -- Skip borders als de track volledig in de pinned zone valt
+                if not is_pinned and track_y + total_visual_height <= pinned_tracks_height then
+                    return
+                end
+                
+                -- Clip de borders
+                local actual_track_y = track_y
+                local actual_track_height = track_height
+                
+                if not is_pinned and track_y < pinned_tracks_height then
+                    if track_y + total_visual_height <= pinned_tracks_height then
+                        return
+                    end
+                    local overlap = pinned_tracks_height - track_y
+                    actual_track_y = pinned_tracks_height
+                    actual_track_height = track_height - overlap
+                    
+                    if actual_track_height <= 0 then
+                        return
+                    end
+                end
+                
                 if settings.folder_border_top then
-                    DrawFolderBorderLine(
-                        draw_list,
-                        LEFT,
-                        WY + track_y + settings.border_thickness/2,
-                        RIGHT - scroll_size,
-                        WY + track_y + settings.border_thickness/2,
-                        border_color,
-                        settings.border_thickness
-                    )
+                    -- Teken alleen de top border als we niet zijn geclipped
+                    if actual_track_y == track_y or is_pinned then
+                        DrawFolderBorderLine(
+                            draw_list,
+                            LEFT,
+                            WY + actual_track_y + settings.border_thickness/2,
+                            RIGHT - scroll_size,
+                            WY + actual_track_y + settings.border_thickness/2,
+                            border_color,
+                            settings.border_thickness
+                        )
+                    end
                 end
 
                 if settings.folder_border_left then
                     DrawFolderBorderLine(
                         draw_list,
                         LEFT + settings.border_thickness/2,
-                        WY + track_y,
+                        WY + actual_track_y,
                         LEFT + settings.border_thickness/2,
-                        WY + track_y + track_height,
+                        WY + actual_track_y + actual_track_height,
                         border_color,
                         settings.border_thickness
                     )
@@ -1807,9 +1922,9 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                     DrawFolderBorderLine(
                         draw_list,
                         RIGHT - scroll_size - settings.border_thickness/2,
-                        WY + track_y,
+                        WY + actual_track_y,
                         RIGHT - scroll_size - settings.border_thickness/2,
-                        WY + track_y + track_height,
+                        WY + actual_track_y + actual_track_height,
                         border_color,
                         settings.border_thickness
                     )
@@ -2010,11 +2125,12 @@ function loop()
             for i = 0, track_count - 1 do
                 local track = r.GetTrack(0, i)
                 local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
-                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+                -- Gebruik I_WNDH om envelope lanes mee te tellen
+                local track_total_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
                 local expected_y = accumulated_height
                 
                 if math.abs(track_y - expected_y) < 1 then
-                    accumulated_height = accumulated_height + track_height
+                    accumulated_height = accumulated_height + track_total_height
                 else
                     pinned_tracks_height = accumulated_height
                     if pinned_tracks_height > 0 then
@@ -2127,7 +2243,7 @@ function loop()
                     end
                     local darker_color = GetDarkerColor(border_base_color)
                     local border_color = GetCachedColor(darker_color, settings.border_opacity)
-                    DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY)
+                    DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, pinned_tracks_height)
                 end
                 
                 local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
@@ -2241,7 +2357,7 @@ function loop()
                             local blended_color = BlendColor(track, track_color, settings.blend_mode)
 
                             local border_color = GetCachedColor(blended_color, settings.border_opacity)
-                            DrawTrackBorders(draw_list, track_y, track_height, border_color, WY)
+                            DrawTrackBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, pinned_tracks_height)
                         end
                     end
 
