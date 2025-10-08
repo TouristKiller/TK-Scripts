@@ -1,6 +1,6 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.0.1
+-- @version 2.0.2
 
 --------------------------------------------------------------------------------
 local r = reaper
@@ -82,7 +82,7 @@ local state = {
     window_width = 600,
     window_height = 400,
     window_size_needs_update = false,
-    mode = "track", 
+    mode = "project", -- "project", "track", "item"
     current_item = nil,
     current_item_guid = nil,
     tabs_enabled = false,
@@ -152,6 +152,18 @@ local function ReadProjExtState(proj, extname, key)
     return ""
 end
 
+local function WriteExtState(extname, key, value)
+    r.SetExtState(extname, key, value or "", true)
+    return true
+end
+
+local function ReadExtState(extname, key)
+    if r.HasExtState(extname, key) then
+        return r.GetExtState(extname, key)
+    end
+    return ""
+end
+
 local function MakeTrackAlignKey(track_guid)
     if not track_guid or track_guid == "" then
         return "__align"
@@ -179,21 +191,22 @@ local function LoadNotebook()
 end
 
 local function SaveNotebook()
-    if not state.current_proj then return end
-    
     local is_item_mode = state.mode == "item" and state.current_item_guid
-    local is_track_mode = state.current_track_guid and not is_item_mode
+    local is_track_mode = state.mode == "track" and state.current_track_guid
+    local is_project_mode = state.mode == "project" and state.current_proj
+    local is_global_mode = state.mode == "global"
     
-    if not is_item_mode and not is_track_mode then return end
+    if not is_item_mode and not is_track_mode and not is_project_mode and not is_global_mode then return end
     
     local text = state.text or ""
-    local text_key, align_key, color_key, images_key, font_size_key, font_family_key, auto_save_key, window_width_key, window_height_key, show_status_key, tabs_enabled_key, tabs_data_key
+    local text_key, align_key, color_key, images_key, strokes_key, font_size_key, font_family_key, auto_save_key, window_width_key, window_height_key, show_status_key, tabs_enabled_key, tabs_data_key
     
     if is_item_mode then
         text_key = MakeItemKey(state.current_item_guid, "text")
         align_key = MakeItemKey(state.current_item_guid, "align")
         color_key = MakeItemKey(state.current_item_guid, "text_color")
         images_key = MakeItemKey(state.current_item_guid, "images")
+        strokes_key = MakeItemKey(state.current_item_guid, "strokes")
         font_size_key = MakeItemKey(state.current_item_guid, "font_size")
         font_family_key = MakeItemKey(state.current_item_guid, "font_family")
         auto_save_key = MakeItemKey(state.current_item_guid, "auto_save_enabled")
@@ -202,11 +215,40 @@ local function SaveNotebook()
         show_status_key = MakeItemKey(state.current_item_guid, "show_status")
         tabs_enabled_key = MakeItemKey(state.current_item_guid, "tabs_enabled")
         tabs_data_key = MakeItemKey(state.current_item_guid, "tabs_data")
+    elseif is_project_mode then
+        text_key = "PROJECT::text"
+        align_key = "PROJECT::align"
+        color_key = "PROJECT::text_color"
+        images_key = "PROJECT::images"
+        strokes_key = "PROJECT::strokes"
+        font_size_key = "PROJECT::font_size"
+        font_family_key = "PROJECT::font_family"
+        auto_save_key = "PROJECT::auto_save_enabled"
+        window_width_key = "PROJECT::window_width"
+        window_height_key = "PROJECT::window_height"
+        show_status_key = "PROJECT::show_status"
+        tabs_enabled_key = "PROJECT::tabs_enabled"
+        tabs_data_key = "PROJECT::tabs_data"
+    elseif is_global_mode then
+        text_key = "GLOBAL::text"
+        align_key = "GLOBAL::align"
+        color_key = "GLOBAL::text_color"
+        images_key = "GLOBAL::images"
+        strokes_key = "GLOBAL::strokes"
+        font_size_key = "GLOBAL::font_size"
+        font_family_key = "GLOBAL::font_family"
+        auto_save_key = "GLOBAL::auto_save_enabled"
+        window_width_key = "GLOBAL::window_width"
+        window_height_key = "GLOBAL::window_height"
+        show_status_key = "GLOBAL::show_status"
+        tabs_enabled_key = "GLOBAL::tabs_enabled"
+        tabs_data_key = "GLOBAL::tabs_data"
     else
         text_key = state.current_track_guid
         align_key = MakeTrackAlignKey(state.current_track_guid)
         color_key = tostring(state.current_track_guid) .. "::text_color"
         images_key = tostring(state.current_track_guid) .. "::images"
+        strokes_key = tostring(state.current_track_guid) .. "::strokes"
         font_size_key = tostring(state.current_track_guid) .. "::font_size"
         font_family_key = tostring(state.current_track_guid) .. "::font_family"
         auto_save_key = tostring(state.current_track_guid) .. "::auto_save_enabled"
@@ -228,6 +270,24 @@ local function SaveNotebook()
         local escaped_path = img.path:gsub(":", "::")
         images_str = images_str .. string.format("%d;%s;%.1f;%.1f;%d", img.id, escaped_path, img.pos_x, img.pos_y, img.scale)
     end
+    
+    -- Serialize strokes (drawings) when tabs are disabled
+    local strokes_str = ""
+    if not state.tabs_enabled and state.strokes then
+        for stroke_idx, stroke in ipairs(state.strokes) do
+            if stroke_idx > 1 then strokes_str = strokes_str .. "|" end
+            local stroke_str = string.format("%.2f,%.2f,%.2f,%.2f;%.1f", 
+                stroke.color.r or 1, stroke.color.g or 0, stroke.color.b or 0, stroke.color.a or 1,
+                stroke.thickness or 2)
+            if stroke.points then
+                for _, pt in ipairs(stroke.points) do
+                    stroke_str = stroke_str .. ";" .. string.format("%.1f,%.1f", pt.x, pt.y)
+                end
+            end
+            strokes_str = strokes_str .. stroke_str
+        end
+    end
+    -- Always save strokes_str (even if empty) to clear old data when tabs are enabled
     
     local font_size_value = tostring(state.font_size or 14)
     local font_family_value = state.font_family or "sans-serif"
@@ -256,26 +316,53 @@ local function SaveNotebook()
         end
     end
     
-    local saved_text = WriteProjExtState(state.current_proj, EXT_NAMESPACE, text_key, text)
-    local saved_align = WriteProjExtState(state.current_proj, EXT_NAMESPACE, align_key, align_value)
-    local saved_color = WriteProjExtState(state.current_proj, EXT_NAMESPACE, color_key, color_value)
-    local saved_images = WriteProjExtState(state.current_proj, EXT_NAMESPACE, images_key, images_str)
-    local saved_font_size = WriteProjExtState(state.current_proj, EXT_NAMESPACE, font_size_key, font_size_value)
-    local saved_font_family = WriteProjExtState(state.current_proj, EXT_NAMESPACE, font_family_key, font_family_value)
-    local saved_auto_save = WriteProjExtState(state.current_proj, EXT_NAMESPACE, auto_save_key, auto_save_value)
-    local saved_window_width = WriteProjExtState(state.current_proj, EXT_NAMESPACE, window_width_key, window_width_value)
-    local saved_window_height = WriteProjExtState(state.current_proj, EXT_NAMESPACE, window_height_key, window_height_value)
-    local saved_show_status = WriteProjExtState(state.current_proj, EXT_NAMESPACE, show_status_key, show_status_value)
-    local saved_tabs_enabled = WriteProjExtState(state.current_proj, EXT_NAMESPACE, tabs_enabled_key, tabs_enabled_value)
-    local saved_tabs_data = WriteProjExtState(state.current_proj, EXT_NAMESPACE, tabs_data_key, tabs_data_value)
+    -- Use ExtState for global mode, ProjExtState for others
+    local saved_text, saved_align, saved_color, saved_images, saved_strokes, saved_font_size, saved_font_family
+    local saved_auto_save, saved_window_width, saved_window_height, saved_show_status, saved_tabs_enabled, saved_tabs_data
     
-    -- Save images per tab
+    if is_global_mode then
+        saved_text = WriteExtState(EXT_NAMESPACE, text_key, text)
+        saved_align = WriteExtState(EXT_NAMESPACE, align_key, align_value)
+        saved_color = WriteExtState(EXT_NAMESPACE, color_key, color_value)
+        saved_images = WriteExtState(EXT_NAMESPACE, images_key, images_str)
+        saved_strokes = WriteExtState(EXT_NAMESPACE, strokes_key, strokes_str)
+        saved_font_size = WriteExtState(EXT_NAMESPACE, font_size_key, font_size_value)
+        saved_font_family = WriteExtState(EXT_NAMESPACE, font_family_key, font_family_value)
+        saved_auto_save = WriteExtState(EXT_NAMESPACE, auto_save_key, auto_save_value)
+        saved_window_width = WriteExtState(EXT_NAMESPACE, window_width_key, window_width_value)
+        saved_window_height = WriteExtState(EXT_NAMESPACE, window_height_key, window_height_value)
+        saved_show_status = WriteExtState(EXT_NAMESPACE, show_status_key, show_status_value)
+        saved_tabs_enabled = WriteExtState(EXT_NAMESPACE, tabs_enabled_key, tabs_enabled_value)
+        saved_tabs_data = WriteExtState(EXT_NAMESPACE, tabs_data_key, tabs_data_value)
+    else
+        saved_text = WriteProjExtState(state.current_proj, EXT_NAMESPACE, text_key, text)
+        saved_align = WriteProjExtState(state.current_proj, EXT_NAMESPACE, align_key, align_value)
+        saved_color = WriteProjExtState(state.current_proj, EXT_NAMESPACE, color_key, color_value)
+        saved_images = WriteProjExtState(state.current_proj, EXT_NAMESPACE, images_key, images_str)
+        saved_strokes = WriteProjExtState(state.current_proj, EXT_NAMESPACE, strokes_key, strokes_str)
+        saved_font_size = WriteProjExtState(state.current_proj, EXT_NAMESPACE, font_size_key, font_size_value)
+        saved_font_family = WriteProjExtState(state.current_proj, EXT_NAMESPACE, font_family_key, font_family_value)
+        saved_auto_save = WriteProjExtState(state.current_proj, EXT_NAMESPACE, auto_save_key, auto_save_value)
+        saved_window_width = WriteProjExtState(state.current_proj, EXT_NAMESPACE, window_width_key, window_width_value)
+        saved_window_height = WriteProjExtState(state.current_proj, EXT_NAMESPACE, window_height_key, window_height_value)
+        saved_show_status = WriteProjExtState(state.current_proj, EXT_NAMESPACE, show_status_key, show_status_value)
+        saved_tabs_enabled = WriteProjExtState(state.current_proj, EXT_NAMESPACE, tabs_enabled_key, tabs_enabled_value)
+        saved_tabs_data = WriteProjExtState(state.current_proj, EXT_NAMESPACE, tabs_data_key, tabs_data_value)
+    end
+    
+    -- Save images and strokes per tab
     if state.tabs_enabled and #state.tabs > 0 then
         for idx, tab in ipairs(state.tabs) do
             local tab_images_key, tab_strokes_key
             if is_item_mode then
                 tab_images_key = MakeItemKey(state.current_item_guid, "tab" .. idx .. "_images")
                 tab_strokes_key = MakeItemKey(state.current_item_guid, "tab" .. idx .. "_strokes")
+            elseif is_project_mode then
+                tab_images_key = "PROJECT::tab" .. idx .. "_images"
+                tab_strokes_key = "PROJECT::tab" .. idx .. "_strokes"
+            elseif is_global_mode then
+                tab_images_key = "GLOBAL::tab" .. idx .. "_images"
+                tab_strokes_key = "GLOBAL::tab" .. idx .. "_strokes"
             else
                 tab_images_key = tostring(state.current_track_guid) .. "::tab" .. idx .. "_images"
                 tab_strokes_key = tostring(state.current_track_guid) .. "::tab" .. idx .. "_strokes"
@@ -289,7 +376,6 @@ local function SaveNotebook()
                     tab_images_str = tab_images_str .. string.format("%d;%s;%.1f;%.1f;%d", img.id, escaped_path, img.pos_x, img.pos_y, img.scale)
                 end
             end
-            WriteProjExtState(state.current_proj, EXT_NAMESPACE, tab_images_key, tab_images_str)
             
             local tab_strokes_str = ""
             if tab.strokes then
@@ -306,13 +392,20 @@ local function SaveNotebook()
                     tab_strokes_str = tab_strokes_str .. stroke_str
                 end
             end
-            WriteProjExtState(state.current_proj, EXT_NAMESPACE, tab_strokes_key, tab_strokes_str)
+            
+            if is_global_mode then
+                WriteExtState(EXT_NAMESPACE, tab_images_key, tab_images_str)
+                WriteExtState(EXT_NAMESPACE, tab_strokes_key, tab_strokes_str)
+            else
+                WriteProjExtState(state.current_proj, EXT_NAMESPACE, tab_images_key, tab_images_str)
+                WriteProjExtState(state.current_proj, EXT_NAMESPACE, tab_strokes_key, tab_strokes_str)
+            end
         end
     end
     
     r.SetExtState(EXT_NAMESPACE, "auto_save_interval", tostring(state.auto_save_interval or 10), true)
     
-    if saved_text and saved_align and saved_color and saved_images and saved_font_size and saved_font_family and saved_auto_save and saved_window_width and saved_window_height and saved_show_status and saved_tabs_enabled and saved_tabs_data then
+    if saved_text and saved_align and saved_color and saved_images and saved_strokes and saved_font_size and saved_font_family and saved_auto_save and saved_window_width and saved_window_height and saved_show_status and saved_tabs_enabled and saved_tabs_data then
         state.dirty = false
         state.last_save_time = r.time_precise()
     end
@@ -683,6 +776,510 @@ local function SetNoTrackState(proj)
     editor.request_focus = false
 end
 
+local function LoadProjectState(proj)
+    state.current_proj = proj
+    state.current_track = nil
+    state.current_track_guid = nil
+    state.current_item = nil
+    state.current_item_guid = nil
+    state.track_name = "Project Notes"
+    state.track_number = nil
+    state.can_edit = true
+    state.dirty = false
+    state.last_edit_time = 0
+    state.bold_input_active = false
+    
+    local stored = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::text")
+    state.text = NormalizeLineEndings(stored or "")
+    
+    local stored_align = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::align")
+    if stored_align ~= "left" and stored_align ~= "center" and stored_align ~= "right" then
+        stored_align = "left"
+    end
+    state.text_align = stored_align
+    
+    local stored_color = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::text_color")
+    if stored_color ~= "white" and stored_color ~= "black" then
+        stored_color = "white"
+    end
+    state.text_color_mode = stored_color
+    
+    local stored_font_size = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::font_size"))
+    local stored_font_family = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::font_family")
+    local min_font, max_font = 11, 26
+    local default_font = 14
+    local target_font = default_font
+    if stored_font_size and stored_font_size >= min_font and stored_font_size <= max_font then
+        target_font = math.floor(stored_font_size + 0.5)
+    end
+    local font_changed = false
+    if target_font ~= state.font_size then
+        state.font_size = target_font
+        font_changed = true
+    end
+    if stored_font_family and stored_font_family ~= "" and stored_font_family ~= state.font_family then
+        state.font_family = stored_font_family
+        font_changed = true
+    end
+    if font_changed then
+        BuildFont()
+    end
+    
+    local stored_images = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::images")
+    local stored_auto_save = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::auto_save_enabled")
+    local stored_width = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::window_width"))
+    local stored_height = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::window_height"))
+    local stored_show_status = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::show_status")
+    local stored_tabs_enabled = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::tabs_enabled")
+    local stored_tabs_data = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::tabs_data")
+    
+    if stored_auto_save then
+        state.auto_save_enabled = (stored_auto_save == "true")
+    else
+        state.auto_save_enabled = true
+    end
+    
+    -- Load tabs data
+    state.tabs_enabled = stored_tabs_enabled == "true"
+    state.tabs = {}
+    state.active_tab_index = 1
+    state.strokes = {}
+    
+    if state.tabs_enabled and stored_tabs_data and stored_tabs_data ~= "" then
+        local parts = {}
+        for part in stored_tabs_data:gmatch("[^|]+") do
+            table.insert(parts, part)
+        end
+        
+        if #parts >= 2 then
+            local tab_count = tonumber(parts[1]) or 0
+            state.active_tab_index = tonumber(parts[2]) or 1
+            
+            for i = 3, #parts do
+                local colon_pos = parts[i]:find(":")
+                if colon_pos then
+                    local name = parts[i]:sub(1, colon_pos - 1):gsub("::", ":"):gsub("||", "|")
+                    local text = parts[i]:sub(colon_pos + 1):gsub("::", ":"):gsub("||", "|")
+                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}})
+                end
+            end
+            
+            -- Load images and strokes for each tab
+            for idx = 1, #state.tabs do
+                local tab_images_key = "PROJECT::tab" .. idx .. "_images"
+                local stored_tab_images = ReadProjExtState(proj, EXT_NAMESPACE, tab_images_key)
+                if stored_tab_images and stored_tab_images ~= "" then
+                    state.tabs[idx].images = {}
+                    for img_data in stored_tab_images:gmatch("[^|]+") do
+                        local img_parts = {}
+                        for part in img_data:gmatch("[^;]+") do
+                            table.insert(img_parts, part)
+                        end
+                        if #img_parts >= 5 then
+                            local img_id = tonumber(img_parts[1])
+                            local img_path = img_parts[2]:gsub("::", ":")
+                            local img_x = tonumber(img_parts[3]) or 0
+                            local img_y = tonumber(img_parts[4]) or 0
+                            local img_scale = tonumber(img_parts[5]) or 100
+                            
+                            local img_texture = nil
+                            if r.ImGui_CreateImage then
+                                img_texture = r.ImGui_CreateImage(img_path)
+                            end
+                            
+                            if img_texture then
+                                local img_w, img_h = r.ImGui_Image_GetSize(img_texture)
+                                table.insert(state.tabs[idx].images, {
+                                    id = img_id,
+                                    path = img_path,
+                                    texture = img_texture,
+                                    width = img_w,
+                                    height = img_h,
+                                    pos_x = img_x,
+                                    pos_y = img_y,
+                                    scale = img_scale
+                                })
+                            end
+                        end
+                    end
+                end
+                
+                local tab_strokes_key = "PROJECT::tab" .. idx .. "_strokes"
+                local stored_tab_strokes = ReadProjExtState(proj, EXT_NAMESPACE, tab_strokes_key)
+                if stored_tab_strokes and stored_tab_strokes ~= "" then
+                    state.tabs[idx].strokes = {}
+                    for stroke_data in stored_tab_strokes:gmatch("[^|]+") do
+                        local stroke_parts = {}
+                        for part in stroke_data:gmatch("[^;]+") do
+                            table.insert(stroke_parts, part)
+                        end
+                        if #stroke_parts >= 2 then
+                            local color_parts = {}
+                            for num in stroke_parts[1]:gmatch("[^,]+") do
+                                table.insert(color_parts, tonumber(num) or 1)
+                            end
+                            local thickness = tonumber(stroke_parts[2]) or 2
+                            
+                            local points = {}
+                            for i = 3, #stroke_parts do
+                                local coords = {}
+                                for num in stroke_parts[i]:gmatch("[^,]+") do
+                                    table.insert(coords, tonumber(num) or 0)
+                                end
+                                if #coords >= 2 then
+                                    table.insert(points, {x = coords[1], y = coords[2]})
+                                end
+                            end
+                            
+                            if #points > 1 then
+                                table.insert(state.tabs[idx].strokes, {
+                                    color = {r = color_parts[1] or 1, g = color_parts[2] or 0, b = color_parts[3] or 0, a = color_parts[4] or 1},
+                                    thickness = thickness,
+                                    points = points
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+            
+            if state.tabs[state.active_tab_index] then
+                state.text = state.tabs[state.active_tab_index].text or ""
+                state.images = state.tabs[state.active_tab_index].images or {}
+                state.strokes = state.tabs[state.active_tab_index].strokes or {}
+            end
+        end
+    end
+    
+    local prev_width = state.window_width
+    local prev_height = state.window_height
+    if stored_width and stored_width >= 300 and stored_width <= 3000 then
+        state.window_width = stored_width
+    else
+        state.window_width = 600
+    end
+    if stored_height and stored_height >= 250 and stored_height <= 3000 then
+        state.window_height = stored_height
+    else
+        state.window_height = 400
+    end
+    if stored_show_status then
+        state.show_status = (stored_show_status == "true")
+    else
+        state.show_status = true
+    end
+    
+    if prev_width ~= state.window_width or prev_height ~= state.window_height then
+        state.window_size_needs_update = true
+    end
+    
+    -- Load images and strokes when tabs are disabled
+    if not state.tabs_enabled then
+        LoadImagesFromString(stored_images)
+        
+        local stored_strokes = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::strokes")
+        if stored_strokes and stored_strokes ~= "" then
+            state.strokes = {}
+            for stroke_data in stored_strokes:gmatch("[^|]+") do
+                local stroke_parts = {}
+                for part in stroke_data:gmatch("[^;]+") do
+                    table.insert(stroke_parts, part)
+                end
+                if #stroke_parts >= 2 then
+                    local color_parts = {}
+                    for num in stroke_parts[1]:gmatch("[^,]+") do
+                        table.insert(color_parts, tonumber(num) or 1)
+                    end
+                    local thickness = tonumber(stroke_parts[2]) or 2
+                    
+                    local points = {}
+                    for i = 3, #stroke_parts do
+                        local coords = {}
+                        for num in stroke_parts[i]:gmatch("[^,]+") do
+                            table.insert(coords, tonumber(num) or 0)
+                        end
+                        if #coords >= 2 then
+                            table.insert(points, {x = coords[1], y = coords[2]})
+                        end
+                    end
+                    
+                    if #points > 1 then
+                        table.insert(state.strokes, {
+                            color = {r = color_parts[1] or 1, g = color_parts[2] or 0, b = color_parts[3] or 0, a = color_parts[4] or 1},
+                            thickness = thickness,
+                            points = points
+                        })
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Apply default appearance for project mode
+    ApplyTrackAppearance(nil)
+    
+    local editor = EnsureEditorState()
+    editor.caret = #state.text
+    editor.selection_start = #state.text
+    editor.selection_end = #state.text
+    editor.selection_anchor = #state.text
+    editor.mouse_selecting = false
+    editor.active = false
+    editor.request_focus = true
+end
+
+local function LoadGlobalState()
+    state.current_proj = nil
+    state.current_track = nil
+    state.current_track_guid = nil
+    state.current_item = nil
+    state.current_item_guid = nil
+    state.track_name = "Global Notes"
+    state.track_number = nil
+    state.can_edit = true
+    state.dirty = false
+    state.last_edit_time = 0
+    state.bold_input_active = false
+    
+    local stored = ReadExtState(EXT_NAMESPACE, "GLOBAL::text")
+    state.text = NormalizeLineEndings(stored or "")
+    
+    local stored_align = ReadExtState(EXT_NAMESPACE, "GLOBAL::align")
+    if stored_align ~= "left" and stored_align ~= "center" and stored_align ~= "right" then
+        stored_align = "left"
+    end
+    state.text_align = stored_align
+    
+    local stored_color = ReadExtState(EXT_NAMESPACE, "GLOBAL::text_color")
+    if stored_color ~= "white" and stored_color ~= "black" then
+        stored_color = "white"
+    end
+    state.text_color_mode = stored_color
+    
+    local stored_font_size = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::font_size"))
+    local stored_font_family = ReadExtState(EXT_NAMESPACE, "GLOBAL::font_family")
+    local min_font, max_font = 11, 26
+    local default_font = 14
+    local target_font = default_font
+    if stored_font_size and stored_font_size >= min_font and stored_font_size <= max_font then
+        target_font = math.floor(stored_font_size + 0.5)
+    end
+    local font_changed = false
+    if target_font ~= state.font_size then
+        state.font_size = target_font
+        font_changed = true
+    end
+    if stored_font_family and stored_font_family ~= "" and stored_font_family ~= state.font_family then
+        state.font_family = stored_font_family
+        font_changed = true
+    end
+    if font_changed then
+        BuildFont()
+    end
+    
+    local stored_images = ReadExtState(EXT_NAMESPACE, "GLOBAL::images")
+    local stored_auto_save = ReadExtState(EXT_NAMESPACE, "GLOBAL::auto_save_enabled")
+    local stored_width = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::window_width"))
+    local stored_height = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::window_height"))
+    local stored_show_status = ReadExtState(EXT_NAMESPACE, "GLOBAL::show_status")
+    local stored_tabs_enabled = ReadExtState(EXT_NAMESPACE, "GLOBAL::tabs_enabled")
+    local stored_tabs_data = ReadExtState(EXT_NAMESPACE, "GLOBAL::tabs_data")
+    
+    if stored_auto_save then
+        state.auto_save_enabled = (stored_auto_save == "true")
+    else
+        state.auto_save_enabled = true
+    end
+    
+    -- Load tabs data
+    state.tabs_enabled = stored_tabs_enabled == "true"
+    state.tabs = {}
+    state.active_tab_index = 1
+    state.strokes = {}
+    
+    if state.tabs_enabled and stored_tabs_data and stored_tabs_data ~= "" then
+        local parts = {}
+        for part in stored_tabs_data:gmatch("[^|]+") do
+            table.insert(parts, part)
+        end
+        
+        if #parts >= 2 then
+            local tab_count = tonumber(parts[1]) or 0
+            state.active_tab_index = tonumber(parts[2]) or 1
+            
+            for i = 3, #parts do
+                local colon_pos = parts[i]:find(":")
+                if colon_pos then
+                    local name = parts[i]:sub(1, colon_pos - 1):gsub("::", ":"):gsub("||", "|")
+                    local text = parts[i]:sub(colon_pos + 1):gsub("::", ":"):gsub("||", "|")
+                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}})
+                end
+            end
+            
+            -- Load images and strokes for each tab
+            for idx = 1, #state.tabs do
+                local tab_images_key = "GLOBAL::tab" .. idx .. "_images"
+                local stored_tab_images = ReadExtState(EXT_NAMESPACE, tab_images_key)
+                if stored_tab_images and stored_tab_images ~= "" then
+                    state.tabs[idx].images = {}
+                    for img_data in stored_tab_images:gmatch("[^|]+") do
+                        local img_parts = {}
+                        for part in img_data:gmatch("[^;]+") do
+                            table.insert(img_parts, part)
+                        end
+                        if #img_parts >= 5 then
+                            local img_id = tonumber(img_parts[1])
+                            local img_path = img_parts[2]:gsub("::", ":")
+                            local img_x = tonumber(img_parts[3]) or 0
+                            local img_y = tonumber(img_parts[4]) or 0
+                            local img_scale = tonumber(img_parts[5]) or 100
+                            
+                            local img_texture = nil
+                            if r.ImGui_CreateImage then
+                                img_texture = r.ImGui_CreateImage(img_path)
+                            end
+                            
+                            if img_texture then
+                                local img_w, img_h = r.ImGui_Image_GetSize(img_texture)
+                                table.insert(state.tabs[idx].images, {
+                                    id = img_id,
+                                    path = img_path,
+                                    texture = img_texture,
+                                    width = img_w,
+                                    height = img_h,
+                                    pos_x = img_x,
+                                    pos_y = img_y,
+                                    scale = img_scale
+                                })
+                            end
+                        end
+                    end
+                end
+                
+                local tab_strokes_key = "GLOBAL::tab" .. idx .. "_strokes"
+                local stored_tab_strokes = ReadExtState(EXT_NAMESPACE, tab_strokes_key)
+                if stored_tab_strokes and stored_tab_strokes ~= "" then
+                    state.tabs[idx].strokes = {}
+                    for stroke_data in stored_tab_strokes:gmatch("[^|]+") do
+                        local stroke_parts = {}
+                        for part in stroke_data:gmatch("[^;]+") do
+                            table.insert(stroke_parts, part)
+                        end
+                        if #stroke_parts >= 2 then
+                            local color_parts = {}
+                            for num in stroke_parts[1]:gmatch("[^,]+") do
+                                table.insert(color_parts, tonumber(num) or 1)
+                            end
+                            local thickness = tonumber(stroke_parts[2]) or 2
+                            
+                            local points = {}
+                            for i = 3, #stroke_parts do
+                                local coords = {}
+                                for num in stroke_parts[i]:gmatch("[^,]+") do
+                                    table.insert(coords, tonumber(num) or 0)
+                                end
+                                if #coords >= 2 then
+                                    table.insert(points, {x = coords[1], y = coords[2]})
+                                end
+                            end
+                            
+                            if #points > 1 then
+                                table.insert(state.tabs[idx].strokes, {
+                                    color = {r = color_parts[1] or 1, g = color_parts[2] or 0, b = color_parts[3] or 0, a = color_parts[4] or 1},
+                                    thickness = thickness,
+                                    points = points
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+            
+            if state.tabs[state.active_tab_index] then
+                state.text = state.tabs[state.active_tab_index].text or ""
+                state.images = state.tabs[state.active_tab_index].images or {}
+                state.strokes = state.tabs[state.active_tab_index].strokes or {}
+            end
+        end
+    end
+    
+    local prev_width = state.window_width
+    local prev_height = state.window_height
+    if stored_width and stored_width >= 300 and stored_width <= 3000 then
+        state.window_width = stored_width
+    else
+        state.window_width = 600
+    end
+    if stored_height and stored_height >= 250 and stored_height <= 3000 then
+        state.window_height = stored_height
+    else
+        state.window_height = 400
+    end
+    if stored_show_status then
+        state.show_status = (stored_show_status == "true")
+    else
+        state.show_status = true
+    end
+    
+    if prev_width ~= state.window_width or prev_height ~= state.window_height then
+        state.window_size_needs_update = true
+    end
+    
+    -- Load images and strokes when tabs are disabled
+    if not state.tabs_enabled then
+        LoadImagesFromString(stored_images)
+        
+        local stored_strokes = ReadExtState(EXT_NAMESPACE, "GLOBAL::strokes")
+        if stored_strokes and stored_strokes ~= "" then
+            state.strokes = {}
+            for stroke_data in stored_strokes:gmatch("[^|]+") do
+                local stroke_parts = {}
+                for part in stroke_data:gmatch("[^;]+") do
+                    table.insert(stroke_parts, part)
+                end
+                if #stroke_parts >= 2 then
+                    local color_parts = {}
+                    for num in stroke_parts[1]:gmatch("[^,]+") do
+                        table.insert(color_parts, tonumber(num) or 1)
+                    end
+                    local thickness = tonumber(stroke_parts[2]) or 2
+                    
+                    local points = {}
+                    for i = 3, #stroke_parts do
+                        local coords = {}
+                        for num in stroke_parts[i]:gmatch("[^,]+") do
+                            table.insert(coords, tonumber(num) or 0)
+                        end
+                        if #coords >= 2 then
+                            table.insert(points, {x = coords[1], y = coords[2]})
+                        end
+                    end
+                    
+                    if #points > 1 then
+                        table.insert(state.strokes, {
+                            color = {r = color_parts[1] or 1, g = color_parts[2] or 0, b = color_parts[3] or 0, a = color_parts[4] or 1},
+                            thickness = thickness,
+                            points = points
+                        })
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Apply default appearance for global mode
+    ApplyTrackAppearance(nil)
+    
+    local editor = EnsureEditorState()
+    editor.caret = #state.text
+    editor.selection_start = #state.text
+    editor.selection_end = #state.text
+    editor.selection_anchor = #state.text
+    editor.mouse_selecting = false
+    editor.active = false
+    editor.request_focus = true
+end
+
 local function LoadTrackState(proj, track, track_guid)
     state.current_proj = proj
     state.current_track = track
@@ -893,7 +1490,48 @@ local function LoadTrackState(proj, track, track_guid)
         state.show_status = true
     end
     
-    LoadImagesFromString(stored_images)
+    -- Load images and strokes when tabs are disabled
+    if not state.tabs_enabled then
+        LoadImagesFromString(stored_images)
+        
+        local strokes_key = tostring(track_guid) .. "::strokes"
+        local stored_strokes = ReadProjExtState(proj, EXT_NAMESPACE, strokes_key)
+        if stored_strokes and stored_strokes ~= "" then
+            state.strokes = {}
+            for stroke_data in stored_strokes:gmatch("[^|]+") do
+                local stroke_parts = {}
+                for part in stroke_data:gmatch("[^;]+") do
+                    table.insert(stroke_parts, part)
+                end
+                if #stroke_parts >= 2 then
+                    local color_parts = {}
+                    for num in stroke_parts[1]:gmatch("[^,]+") do
+                        table.insert(color_parts, tonumber(num) or 1)
+                    end
+                    local thickness = tonumber(stroke_parts[2]) or 2
+                    
+                    local points = {}
+                    for i = 3, #stroke_parts do
+                        local coords = {}
+                        for num in stroke_parts[i]:gmatch("[^,]+") do
+                            table.insert(coords, tonumber(num) or 0)
+                        end
+                        if #coords >= 2 then
+                            table.insert(points, {x = coords[1], y = coords[2]})
+                        end
+                    end
+                    
+                    if #points > 1 then
+                        table.insert(state.strokes, {
+                            color = {r = color_parts[1] or 1, g = color_parts[2] or 0, b = color_parts[3] or 0, a = color_parts[4] or 1},
+                            thickness = thickness,
+                            points = points
+                        })
+                    end
+                end
+            end
+        end
+    end
 
     local _, name = r.GetTrackName(track, "")
     local number = tonumber(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")) or 0
@@ -1107,7 +1745,48 @@ local function LoadItemState(proj, item, item_guid)
         state.window_size_needs_update = true
     end
     
-    LoadImagesFromString(stored_images)
+    -- Load images and strokes when tabs are disabled
+    if not state.tabs_enabled then
+        LoadImagesFromString(stored_images)
+        
+        local strokes_key = MakeItemKey(item_guid, "strokes")
+        local stored_strokes = ReadProjExtState(proj, EXT_NAMESPACE, strokes_key)
+        if stored_strokes and stored_strokes ~= "" then
+            state.strokes = {}
+            for stroke_data in stored_strokes:gmatch("[^|]+") do
+                local stroke_parts = {}
+                for part in stroke_data:gmatch("[^;]+") do
+                    table.insert(stroke_parts, part)
+                end
+                if #stroke_parts >= 2 then
+                    local color_parts = {}
+                    for num in stroke_parts[1]:gmatch("[^,]+") do
+                        table.insert(color_parts, tonumber(num) or 1)
+                    end
+                    local thickness = tonumber(stroke_parts[2]) or 2
+                    
+                    local points = {}
+                    for i = 3, #stroke_parts do
+                        local coords = {}
+                        for num in stroke_parts[i]:gmatch("[^,]+") do
+                            table.insert(coords, tonumber(num) or 0)
+                        end
+                        if #coords >= 2 then
+                            table.insert(points, {x = coords[1], y = coords[2]})
+                        end
+                    end
+                    
+                    if #points > 1 then
+                        table.insert(state.strokes, {
+                            color = {r = color_parts[1] or 1, g = color_parts[2] or 0, b = color_parts[3] or 0, a = color_parts[4] or 1},
+                            thickness = thickness,
+                            points = points
+                        })
+                    end
+                end
+            end
+        end
+    end
 
     if item then
         local track = r.GetMediaItem_Track(item)
@@ -1170,6 +1849,34 @@ local function UpdateActiveItemContext(force)
     end
 end
 
+local function UpdateActiveProjectContext(force)
+    local proj = GetActiveProject()
+    local proj_changed = proj ~= state.current_proj
+
+    if force or proj_changed then
+        if not force and state.can_edit and state.current_proj then
+            SaveNotebook()
+        end
+        LoadProjectState(proj)
+    end
+end
+
+local function UpdateActiveGlobalContext(force)
+    -- Global state never changes (always the same across all projects)
+    -- We need to check if we're actually already showing global content
+    -- by verifying that the GUIDs were cleared by LoadGlobalState
+    local was_global_loaded = (state.current_track_guid == nil and 
+                                state.current_item_guid == nil and 
+                                state.track_name == "Global Notes")
+    
+    if force or not was_global_loaded then
+        if not force and state.can_edit and state.current_proj then
+            SaveNotebook()
+        end
+        LoadGlobalState()
+    end
+end
+
 UpdateActiveTrackContext = function(force)
     local proj = GetActiveProject()
     local track = GetFirstSelectedTrack(proj)
@@ -1193,6 +1900,10 @@ end
 UpdateActiveContext = function(force)
     if state.mode == "item" then
         UpdateActiveItemContext(force)
+    elseif state.mode == "project" then
+        UpdateActiveProjectContext(force)
+    elseif state.mode == "global" then
+        UpdateActiveGlobalContext(force)
     else
         UpdateActiveTrackContext(force)
     end
@@ -2357,9 +3068,16 @@ local function DrawMenuBar()
     r.ImGui_SameLine(ctx, 0, 10)
     r.ImGui_SetCursorPosY(ctx, toolbar_base_y)
     
-    -- Mode toggle button (Track/Item)
-    local mode_text = state.mode == "track" and "Track" or "Item"
-    local mode_tinted = state.mode == "item"
+    -- Mode toggle button (Track/Item/Project/Global)
+    local mode_text = "Track"
+    if state.mode == "item" then
+        mode_text = "Item"
+    elseif state.mode == "project" then
+        mode_text = "Project"
+    elseif state.mode == "global" then
+        mode_text = "Global"
+    end
+    local mode_tinted = state.mode ~= "track"
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent)
@@ -2368,7 +3086,16 @@ local function DrawMenuBar()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), accent_color)
     end
     if r.ImGui_Button(ctx, mode_text .. "##mode_toggle") then
-        state.mode = state.mode == "track" and "item" or "track"
+        -- Cycle: Track -> Item -> Project -> Global -> Track
+        if state.mode == "track" then
+            state.mode = "item"
+        elseif state.mode == "item" then
+            state.mode = "project"
+        elseif state.mode == "project" then
+            state.mode = "global"
+        else
+            state.mode = "track"
+        end
         UpdateActiveContext(true)
     end
     if mode_tinted then
@@ -2376,7 +3103,17 @@ local function DrawMenuBar()
     end
     r.ImGui_PopStyleColor(ctx, 3)
     if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, state.mode == "track" and "Switch to Item mode" or "Switch to Track mode")
+        local tooltip = "Switch to "
+        if state.mode == "track" then
+            tooltip = tooltip .. "Item mode"
+        elseif state.mode == "item" then
+            tooltip = tooltip .. "Project mode"
+        elseif state.mode == "project" then
+            tooltip = tooltip .. "Global mode"
+        else
+            tooltip = tooltip .. "Track mode"
+        end
+        r.ImGui_SetTooltip(ctx, tooltip)
     end
     
     -- Separator
@@ -2411,14 +3148,15 @@ local function DrawMenuBar()
     if r.ImGui_Button(ctx, tabs_label, button_width, button_height) then
         state.tabs_enabled = not state.tabs_enabled
         if state.tabs_enabled and #state.tabs == 0 then
-            -- Initialize with one default tab, including current images
-            state.tabs = {{name = "Notes", text = state.text, images = state.images}}
+            -- Initialize with one default tab, including current images and strokes
+            state.tabs = {{name = "Notes", text = state.text, images = state.images, strokes = state.strokes}}
             state.active_tab_index = 1
         elseif not state.tabs_enabled and #state.tabs > 0 then
-            -- When disabling, save current tab text and images back to main state
+            -- When disabling, save current tab text, images and strokes back to main state
             if state.tabs[state.active_tab_index] then
                 state.text = state.tabs[state.active_tab_index].text
                 state.images = state.tabs[state.active_tab_index].images or {}
+                state.strokes = state.tabs[state.active_tab_index].strokes or {}
             end
         end
         state.dirty = true
@@ -2849,7 +3587,11 @@ local function DrawStatusBar(status_height)
         local word_count = WordCount(state.text)
         local char_count = CharacterCount(state.text)
         local parts = {}
-        if state.mode == "item" and state.current_item then
+        if state.mode == "global" then
+            table.insert(parts, "Global Notes")
+        elseif state.mode == "project" then
+            table.insert(parts, "Project Notes")
+        elseif state.mode == "item" and state.current_item then
             local item_label = "Item"
             if state.track_name then
                 item_label = state.track_name 
@@ -2876,8 +3618,12 @@ local function DrawStatusBar(status_height)
             end
             table.insert(parts, track_label)
         else
-            if state.mode == "item" then
+            if state.mode == "global" then
+                table.insert(parts, "Global Notes")
+            elseif state.mode == "item" then
                 table.insert(parts, "No item selected")
+            elseif state.mode == "project" then
+                table.insert(parts, "Project Notes")
             else
                 table.insert(parts, "No track selected")
             end
@@ -2989,6 +3735,7 @@ local function DrawTabBar()
                     if state.tabs[state.active_tab_index] and state.active_tab_index ~= i then
                         state.tabs[state.active_tab_index].text = state.text
                         state.tabs[state.active_tab_index].images = state.images
+                        state.tabs[state.active_tab_index].strokes = state.strokes
                     end
                     
                     -- Remove the tab
@@ -3000,6 +3747,19 @@ local function DrawTabBar()
                         state.active_tab_index = math.max(1, i - 1)
                         state.text = state.tabs[state.active_tab_index].text or ""
                         state.images = state.tabs[state.active_tab_index].images or {}
+                        state.strokes = state.tabs[state.active_tab_index].strokes or {}
+                        
+                        -- Recreate ALL image textures for loaded images (old textures are invalid)
+                        for _, img in ipairs(state.images) do
+                            if img.path then
+                                img.texture = r.ImGui_CreateImage(img.path)
+                                if img.texture then
+                                    local w, h = r.ImGui_Image_GetSize(img.texture)
+                                    img.width = w
+                                    img.height = h
+                                end
+                            end
+                        end
                     elseif state.active_tab_index > i then
                         -- Active tab is after deleted tab, shift index down
                         state.active_tab_index = state.active_tab_index - 1
@@ -3065,12 +3825,14 @@ local function DrawTabBar()
         if state.tabs[state.active_tab_index] then
             state.tabs[state.active_tab_index].text = state.text
             state.tabs[state.active_tab_index].images = state.images
+            state.tabs[state.active_tab_index].strokes = state.strokes
         end
-        -- Create new tab with empty images array
+        -- Create new tab with empty content
         table.insert(state.tabs, {name = "Tab " .. (#state.tabs + 1), text = "", images = {}, strokes = {}})
         state.active_tab_index = #state.tabs
         state.text = ""
-        state.images = {}
+        state.images = state.tabs[state.active_tab_index].images  -- Reference the tab's images
+        state.strokes = state.tabs[state.active_tab_index].strokes  -- Reference the tab's strokes
         state.dirty = true
         state.last_edit_time = r.time_precise()
         SaveNotebook()
