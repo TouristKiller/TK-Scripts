@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.5
+-- @version 1.0.6
 -- @changelog 
 --[[
 + FIXED: Overlay now properly repositions when returning to REAPER from other applications
