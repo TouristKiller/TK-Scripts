@@ -1,6 +1,6 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.0.3
+-- @version 2.0.4
 
 --------------------------------------------------------------------------------
 local r = reaper
@@ -100,9 +100,28 @@ local state = {
     eraser_mode = false,
     -- List mode state
     list_mode = "none", -- "none", "bullet", "numbered"
+    -- Background colors per mode
+    project_bg_color = nil,
+    global_bg_color = nil,
+    project_bg_brightness = 1.0,
+    global_bg_brightness = 1.0,
 }
 
 local VARIATION_TEXT = "\239\184\142" 
+
+local BG_COLOR_PRESETS = {
+    {name = "None", r = 0, g = 0, b = 0, a = 0, preview_r = 0.13, preview_g = 0.13, preview_b = 0.13},
+    {name = "White", r = 1.0, g = 1.0, b = 1.0, a = 0.15, preview_r = 0.28, preview_g = 0.28, preview_b = 0.28},
+    {name = "White (bright)", r = 1.0, g = 1.0, b = 1.0, a = 0.6, preview_r = 0.73, preview_g = 0.73, preview_b = 0.73},
+    {name = "Red", r = 0.8, g = 0.2, b = 0.2, a = 0.2, preview_r = 0.27, preview_g = 0.13, preview_b = 0.13},
+    {name = "Orange", r = 0.9, g = 0.5, b = 0.2, a = 0.2, preview_r = 0.31, preview_g = 0.23, preview_b = 0.13},
+    {name = "Yellow", r = 0.9, g = 0.8, b = 0.2, a = 0.2, preview_r = 0.31, preview_g = 0.29, preview_b = 0.13},
+    {name = "Green", r = 0.2, g = 0.7, b = 0.3, a = 0.2, preview_r = 0.13, preview_g = 0.27, preview_b = 0.16},
+    {name = "Cyan", r = 0.2, g = 0.7, b = 0.8, a = 0.2, preview_r = 0.13, preview_g = 0.27, preview_b = 0.29},
+    {name = "Blue", r = 0.3, g = 0.4, b = 0.9, a = 0.2, preview_r = 0.16, preview_g = 0.21, preview_b = 0.31},
+    {name = "Purple", r = 0.6, g = 0.3, b = 0.8, a = 0.2, preview_r = 0.24, preview_g = 0.16, preview_b = 0.29},
+    {name = "Pink", r = 0.9, g = 0.4, b = 0.7, a = 0.2, preview_r = 0.31, preview_g = 0.21, preview_b = 0.27},
+}
 
 local function MonoIcon(str)
     if not str then return VARIATION_TEXT end
@@ -199,7 +218,7 @@ local function SaveNotebook()
     if not is_item_mode and not is_track_mode and not is_project_mode and not is_global_mode then return end
     
     local text = state.text or ""
-    local text_key, align_key, color_key, images_key, strokes_key, font_size_key, font_family_key, auto_save_key, window_width_key, window_height_key, show_status_key, tabs_enabled_key, tabs_data_key
+    local text_key, align_key, color_key, images_key, strokes_key, font_size_key, font_family_key, auto_save_key, window_width_key, window_height_key, show_status_key, tabs_enabled_key, tabs_data_key, bg_color_key, bg_brightness_key
     
     if is_item_mode then
         text_key = MakeItemKey(state.current_item_guid, "text")
@@ -229,6 +248,8 @@ local function SaveNotebook()
         show_status_key = "PROJECT::show_status"
         tabs_enabled_key = "PROJECT::tabs_enabled"
         tabs_data_key = "PROJECT::tabs_data"
+        bg_color_key = "PROJECT::bg_color"
+        bg_brightness_key = "PROJECT::bg_brightness"
     elseif is_global_mode then
         text_key = "GLOBAL::text"
         align_key = "GLOBAL::align"
@@ -243,6 +264,8 @@ local function SaveNotebook()
         show_status_key = "GLOBAL::show_status"
         tabs_enabled_key = "GLOBAL::tabs_enabled"
         tabs_data_key = "GLOBAL::tabs_data"
+        bg_color_key = "GLOBAL::bg_color"
+        bg_brightness_key = "GLOBAL::bg_brightness"
     else
         text_key = state.current_track_guid
         align_key = MakeTrackAlignKey(state.current_track_guid)
@@ -318,7 +341,22 @@ local function SaveNotebook()
     
     -- Use ExtState for global mode, ProjExtState for others
     local saved_text, saved_align, saved_color, saved_images, saved_strokes, saved_font_size, saved_font_family
-    local saved_auto_save, saved_window_width, saved_window_height, saved_show_status, saved_tabs_enabled, saved_tabs_data
+    local saved_auto_save, saved_window_width, saved_window_height, saved_show_status, saved_tabs_enabled, saved_tabs_data, saved_bg_color, saved_bg_brightness
+    
+    -- Serialize background color and brightness (only for project/global mode)
+    local bg_color_value = ""
+    local bg_brightness_value = ""
+    if is_project_mode and state.project_bg_color then
+        bg_color_value = string.format("%.3f,%.3f,%.3f,%.3f", 
+            state.project_bg_color.r, state.project_bg_color.g, 
+            state.project_bg_color.b, state.project_bg_color.a)
+        bg_brightness_value = tostring(state.project_bg_brightness or 1.0)
+    elseif is_global_mode and state.global_bg_color then
+        bg_color_value = string.format("%.3f,%.3f,%.3f,%.3f", 
+            state.global_bg_color.r, state.global_bg_color.g, 
+            state.global_bg_color.b, state.global_bg_color.a)
+        bg_brightness_value = tostring(state.global_bg_brightness or 1.0)
+    end
     
     if is_global_mode then
         saved_text = WriteExtState(EXT_NAMESPACE, text_key, text)
@@ -334,6 +372,8 @@ local function SaveNotebook()
         saved_show_status = WriteExtState(EXT_NAMESPACE, show_status_key, show_status_value)
         saved_tabs_enabled = WriteExtState(EXT_NAMESPACE, tabs_enabled_key, tabs_enabled_value)
         saved_tabs_data = WriteExtState(EXT_NAMESPACE, tabs_data_key, tabs_data_value)
+        saved_bg_color = WriteExtState(EXT_NAMESPACE, bg_color_key, bg_color_value)
+        saved_bg_brightness = WriteExtState(EXT_NAMESPACE, bg_brightness_key, bg_brightness_value)
     else
         saved_text = WriteProjExtState(state.current_proj, EXT_NAMESPACE, text_key, text)
         saved_align = WriteProjExtState(state.current_proj, EXT_NAMESPACE, align_key, align_value)
@@ -348,6 +388,10 @@ local function SaveNotebook()
         saved_show_status = WriteProjExtState(state.current_proj, EXT_NAMESPACE, show_status_key, show_status_value)
         saved_tabs_enabled = WriteProjExtState(state.current_proj, EXT_NAMESPACE, tabs_enabled_key, tabs_enabled_value)
         saved_tabs_data = WriteProjExtState(state.current_proj, EXT_NAMESPACE, tabs_data_key, tabs_data_value)
+        if is_project_mode and bg_color_key then
+            saved_bg_color = WriteProjExtState(state.current_proj, EXT_NAMESPACE, bg_color_key, bg_color_value)
+            saved_bg_brightness = WriteProjExtState(state.current_proj, EXT_NAMESPACE, bg_brightness_key, bg_brightness_value)
+        end
     end
     
     -- Save images and strokes per tab (always save, even if tabs are disabled, to preserve them)
@@ -832,6 +876,22 @@ local function LoadProjectState(proj)
     local stored_show_status = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::show_status")
     local stored_tabs_enabled = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::tabs_enabled")
     local stored_tabs_data = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::tabs_data")
+    local stored_bg_color = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::bg_color")
+    local stored_bg_brightness = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::bg_brightness")
+    
+    -- Load background color and brightness
+    if stored_bg_color and stored_bg_color ~= "" then
+        local parts = {}
+        for num in stored_bg_color:gmatch("[^,]+") do
+            table.insert(parts, tonumber(num) or 0)
+        end
+        if #parts >= 4 then
+            state.project_bg_color = {r = parts[1], g = parts[2], b = parts[3], a = parts[4]}
+        end
+    else
+        state.project_bg_color = nil
+    end
+    state.project_bg_brightness = tonumber(stored_bg_brightness) or 1.0
     
     if stored_auto_save then
         state.auto_save_enabled = (stored_auto_save == "true")
@@ -1084,6 +1144,22 @@ local function LoadGlobalState()
     local stored_show_status = ReadExtState(EXT_NAMESPACE, "GLOBAL::show_status")
     local stored_tabs_enabled = ReadExtState(EXT_NAMESPACE, "GLOBAL::tabs_enabled")
     local stored_tabs_data = ReadExtState(EXT_NAMESPACE, "GLOBAL::tabs_data")
+    local stored_bg_color = ReadExtState(EXT_NAMESPACE, "GLOBAL::bg_color")
+    local stored_bg_brightness = ReadExtState(EXT_NAMESPACE, "GLOBAL::bg_brightness")
+    
+    -- Load background color and brightness
+    if stored_bg_color and stored_bg_color ~= "" then
+        local parts = {}
+        for num in stored_bg_color:gmatch("[^,]+") do
+            table.insert(parts, tonumber(num) or 0)
+        end
+        if #parts >= 4 then
+            state.global_bg_color = {r = parts[1], g = parts[2], b = parts[3], a = parts[4]}
+        end
+    else
+        state.global_bg_color = nil
+    end
+    state.global_bg_brightness = tonumber(stored_bg_brightness) or 1.0
     
     if stored_auto_save then
         state.auto_save_enabled = (stored_auto_save == "true")
@@ -2756,7 +2832,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
                     marker = "• "
                 else
                     local before_text = state.text:sub(1, editor.caret)
-                    local last_line = before_text:match("[^\n]*$")  -- Get current line before cursor
+                    local last_line = before_text:match("[^\n]*$") 
                     local prev_num = last_line:match("^(%d+)%. ")
                     
                     if prev_num then
@@ -2767,7 +2843,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
                 end
             end
             
-            process_codepoint(10)  -- Add newline
+            process_codepoint(10)  
             
             if state.list_mode ~= "none" then
                 local before = state.text:sub(1, editor.caret)
@@ -2786,7 +2862,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
                     marker = "• "
                 else
                     local before_text = state.text:sub(1, editor.caret)
-                    local last_line = before_text:match("[^\n]*$")  -- Get current line before cursor
+                    local last_line = before_text:match("[^\n]*$")  
                     local prev_num = last_line:match("^(%d+)%. ")
                     
                     if prev_num then
@@ -2797,9 +2873,8 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
                 end
             end
             
-            process_codepoint(10)  -- Add newline
+            process_codepoint(10)  
             
-            -- Add the list marker if list mode is active
             if state.list_mode ~= "none" then
                 local before = state.text:sub(1, editor.caret)
                 local after = state.text:sub(editor.caret + 1)
@@ -3068,7 +3143,6 @@ local function DrawMenuBar()
     r.ImGui_SameLine(ctx, 0, 10)
     r.ImGui_SetCursorPosY(ctx, toolbar_base_y)
     
-    -- Mode toggle button (Track/Item/Project/Global)
     local mode_text = "Track"
     if state.mode == "item" then
         mode_text = "Item"
@@ -3086,7 +3160,6 @@ local function DrawMenuBar()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), accent_color)
     end
     if r.ImGui_Button(ctx, mode_text .. "##mode_toggle") then
-        -- Cycle: Track -> Item -> Project -> Global -> Track
         if state.mode == "track" then
             state.mode = "item"
         elseif state.mode == "item" then
@@ -3098,6 +3171,75 @@ local function DrawMenuBar()
         end
         UpdateActiveContext(true)
     end
+    
+    if (state.mode == "project" or state.mode == "global") and r.ImGui_IsItemClicked(ctx, 1) then
+        r.ImGui_OpenPopup(ctx, "mode_bg_color_popup")
+    end
+    
+    if r.ImGui_BeginPopup(ctx, "mode_bg_color_popup") then
+        r.ImGui_Text(ctx, "Background Color:")
+        r.ImGui_Separator(ctx)
+        
+        for i, preset in ipairs(BG_COLOR_PRESETS) do
+            -- Use preview color to show actual blended result
+            local preview_r = preset.preview_r or preset.r
+            local preview_g = preset.preview_g or preset.g
+            local preview_b = preset.preview_b or preset.b
+            local color_u32 = PackColorToU32(preview_r, preview_g, preview_b, 1.0)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), color_u32)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), color_u32)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), color_u32)
+            
+            if r.ImGui_Button(ctx, "    ##bgcol" .. i, 40, 20) then
+                if state.mode == "project" then
+                    if preset.a == 0 then
+                        state.project_bg_color = nil
+                    else
+                        state.project_bg_color = {r = preset.r, g = preset.g, b = preset.b, a = preset.a}
+                    end
+                elseif state.mode == "global" then
+                    if preset.a == 0 then
+                        state.global_bg_color = nil
+                    else
+                        state.global_bg_color = {r = preset.r, g = preset.g, b = preset.b, a = preset.a}
+                    end
+                end
+                state.dirty = true
+                state.last_edit_time = r.time_precise()
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            
+            r.ImGui_PopStyleColor(ctx, 3)
+            
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, preset.name)
+            end
+            
+            if i % 5 ~= 0 and i < #BG_COLOR_PRESETS then
+                r.ImGui_SameLine(ctx)
+            end
+        end
+        
+        -- Brightness slider
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Brightness:")
+        r.ImGui_SetNextItemWidth(ctx, 200)
+        
+        local current_brightness = (state.mode == "project" and state.project_bg_brightness) or state.global_bg_brightness or 1.0
+        local changed, new_brightness = r.ImGui_SliderDouble(ctx, "##brightness", current_brightness, 0.5, 4.0, "%.2f")
+        if changed then
+            if state.mode == "project" then
+                state.project_bg_brightness = new_brightness
+            else
+                state.global_bg_brightness = new_brightness
+            end
+            state.dirty = true
+            state.last_edit_time = r.time_precise()
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+    
     if mode_tinted then
         r.ImGui_PopStyleColor(ctx, 1)
     end
@@ -3109,19 +3251,17 @@ local function DrawMenuBar()
         elseif state.mode == "item" then
             tooltip = tooltip .. "Project mode"
         elseif state.mode == "project" then
-            tooltip = tooltip .. "Global mode"
+            tooltip = tooltip .. "Global mode (Right-click for background color)"
         else
-            tooltip = tooltip .. "Track mode"
+            tooltip = tooltip .. "Track mode (Right-click for background color)"
         end
         r.ImGui_SetTooltip(ctx, tooltip)
     end
     
-    -- Separator
     r.ImGui_SameLine(ctx, 0, 8)
     r.ImGui_SetCursorPosY(ctx, toolbar_base_y)
     r.ImGui_Text(ctx, "|")
     
-    -- Now add all toolbar buttons in menubar
     local button_height = r.ImGui_GetTextLineHeight(ctx) + 6
     local button_width = button_height
     local transparent_button = PackColorToU32(0, 0, 0, 0)
@@ -3135,7 +3275,6 @@ local function DrawMenuBar()
     
     SameLineToolbar()
     
-    -- Tabs toggle button
     local tabs_icon = "☰"
     local tabs_tinted = state.tabs_enabled
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
@@ -3148,11 +3287,9 @@ local function DrawMenuBar()
     if r.ImGui_Button(ctx, tabs_label, button_width, button_height) then
         state.tabs_enabled = not state.tabs_enabled
         if state.tabs_enabled and #state.tabs == 0 then
-            -- Initialize with one default tab, including current images and strokes
             state.tabs = {{name = "Notes", text = state.text, images = state.images, strokes = state.strokes}}
             state.active_tab_index = 1
         elseif not state.tabs_enabled and #state.tabs > 0 then
-            -- When disabling, save current tab text, images and strokes back to main state
             if state.tabs[state.active_tab_index] then
                 state.text = state.tabs[state.active_tab_index].text
                 state.images = state.tabs[state.active_tab_index].images or {}
@@ -3279,13 +3416,11 @@ local function DrawMenuBar()
     
     SameLineToolbar()
     
-    -- Drawing tool button
     local drawing_active = state.drawing_enabled or state.eraser_mode
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
     if state.eraser_mode then
-        -- Red tint for eraser
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), PackColorToU32(1.0, 0.3, 0.3, 1.0))
     elseif drawing_active then
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), bold_accent)
@@ -3322,7 +3457,6 @@ local function DrawMenuBar()
             state.drawing_color.r, state.drawing_color.g, state.drawing_color.b, state.drawing_color.a)
         r.ImGui_ColorButton(ctx, "##current_color", col_int, 0, 40, 40)
         
-        -- Quick color presets
         r.ImGui_Separator(ctx)
         r.ImGui_Text(ctx, "Color Presets:")
         local presets = {
@@ -3357,7 +3491,6 @@ local function DrawMenuBar()
         
         r.ImGui_Separator(ctx)
         
-        -- Thickness slider
         r.ImGui_Text(ctx, "Pen Thickness:")
         local thickness_changed, new_thickness = r.ImGui_SliderDouble(ctx, "##thickness", state.drawing_thickness, 1.0, 10.0, "%.1f")
         if thickness_changed then
@@ -3366,11 +3499,10 @@ local function DrawMenuBar()
         
         r.ImGui_Separator(ctx)
         
-        -- Eraser mode toggle
         if r.ImGui_MenuItem(ctx, state.eraser_mode and "✓ Eraser Mode" or "Eraser Mode") then
             state.eraser_mode = not state.eraser_mode
             if state.eraser_mode then
-                state.drawing_enabled = false  -- Disable drawing when eraser is active
+                state.drawing_enabled = false 
             end
         end
         if r.ImGui_IsItemHovered(ctx) then
@@ -3379,7 +3511,6 @@ local function DrawMenuBar()
         
         r.ImGui_Separator(ctx)
         
-        -- Clear all drawings
         if r.ImGui_MenuItem(ctx, "Clear All Drawings") then
             state.strokes = {}
             state.dirty = true
@@ -3392,7 +3523,6 @@ local function DrawMenuBar()
     
     SameLineToolbar()
     
-    -- List mode button
     local list_active = state.list_mode ~= "none"
     local list_icon = state.list_mode == "bullet" and "•" or (state.list_mode == "numbered" and "#" or "≡")
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
@@ -3403,13 +3533,11 @@ local function DrawMenuBar()
     end
     local list_label = list_icon .. "##list_mode"
     if r.ImGui_Button(ctx, list_label, button_width, button_height) then
-        -- Toggle list mode on/off (default to bullet when enabling)
         if state.list_mode == "none" then
             state.list_mode = "bullet"
         else
             state.list_mode = "none"
         end
-        -- Keep editor focus
         local editor = EnsureEditorState()
         editor.request_focus = true
     end
@@ -3423,7 +3551,6 @@ local function DrawMenuBar()
         r.ImGui_SetTooltip(ctx, tooltip)
     end
     
-    -- Right-click menu for list options
     if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
         r.ImGui_OpenPopup(ctx, "list_options")
     end
@@ -3554,7 +3681,6 @@ local function HandleShortcuts()
 end
 
 local function AutoSaveText()
-    -- Auto-save text changes after 0.5 seconds of inactivity
     if not state.can_edit or not state.dirty then return end
     local debounce_time = 0.5
     if r.time_precise() - state.last_edit_time >= debounce_time then
@@ -3630,7 +3756,6 @@ local function DrawStatusBar(status_height)
         end
         table.insert(parts, string.format("%d words", word_count))
         table.insert(parts, string.format("%d characters", char_count))
-        -- Auto-save is always active, no need for save status indicator
         local status = table.concat(parts, "  |  ")
         local text_height = r.ImGui_GetTextLineHeight(ctx)
         r.ImGui_SetCursorPosY(ctx, math.max(0, (status_height - text_height) * 0.5))
@@ -3677,19 +3802,16 @@ local function DrawTabBar()
         local tab_label = tab_name .. "##tab_" .. i
         if r.ImGui_Button(ctx, tab_label, tab_min_width, tab_height - 4) then
             if state.active_tab_index ~= i then
-                -- Save current tab text and images before switching
                 if state.tabs[state.active_tab_index] then
                     state.tabs[state.active_tab_index].text = state.text
                     state.tabs[state.active_tab_index].images = state.images
                     state.tabs[state.active_tab_index].strokes = state.strokes
                 end
-                -- Switch to new tab
                 state.active_tab_index = i
                 state.text = state.tabs[i].text or ""
                 state.images = state.tabs[i].images or {}
                 state.strokes = state.tabs[i].strokes or {}
                 
-                -- Recreate ALL image textures for loaded images (old textures are invalid)
                 for _, img in ipairs(state.images) do
                     if img.path then
                         img.texture = r.ImGui_CreateImage(img.path)
@@ -3704,7 +3826,6 @@ local function DrawTabBar()
                 state.dirty = true
                 state.last_edit_time = r.time_precise()
                 SaveNotebook()
-                -- Reset editor for new tab
                 state.editor = nil
                 local new_editor = EnsureEditorState()
                 new_editor.request_focus = true
@@ -3713,7 +3834,6 @@ local function DrawTabBar()
         
         r.ImGui_PopStyleColor(ctx, 4)
         
-        -- Right-click menu for rename and delete
         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
             r.ImGui_OpenPopup(ctx, "tab_menu_" .. i)
         end
@@ -3722,34 +3842,27 @@ local function DrawTabBar()
             r.ImGui_Text(ctx, "Tab: " .. tab_name)
             r.ImGui_Separator(ctx)
             
-            -- Rename option
             if r.ImGui_MenuItem(ctx, "Rename") then
                 state.renaming_tab_index = i
                 state.renaming_tab_name = tab_name
             end
             
-            -- Delete option (only if more than 1 tab)
             if #state.tabs > 1 then
                 if r.ImGui_MenuItem(ctx, "Delete") then
-                    -- Save current tab before deleting
                     if state.tabs[state.active_tab_index] and state.active_tab_index ~= i then
                         state.tabs[state.active_tab_index].text = state.text
                         state.tabs[state.active_tab_index].images = state.images
                         state.tabs[state.active_tab_index].strokes = state.strokes
                     end
                     
-                    -- Remove the tab
                     table.remove(state.tabs, i)
                     
-                    -- Adjust active index if needed
                     if state.active_tab_index == i then
-                        -- Deleted active tab, switch to previous or first
                         state.active_tab_index = math.max(1, i - 1)
                         state.text = state.tabs[state.active_tab_index].text or ""
                         state.images = state.tabs[state.active_tab_index].images or {}
                         state.strokes = state.tabs[state.active_tab_index].strokes or {}
                         
-                        -- Recreate ALL image textures for loaded images (old textures are invalid)
                         for _, img in ipairs(state.images) do
                             if img.path then
                                 img.texture = r.ImGui_CreateImage(img.path)
@@ -3761,7 +3874,6 @@ local function DrawTabBar()
                             end
                         end
                     elseif state.active_tab_index > i then
-                        -- Active tab is after deleted tab, shift index down
                         state.active_tab_index = state.active_tab_index - 1
                     end
                     
@@ -3769,7 +3881,6 @@ local function DrawTabBar()
                     state.last_edit_time = r.time_precise()
                     SaveNotebook()
                     
-                    -- Reset editor
                     state.editor = nil
                     local new_editor = EnsureEditorState()
                     new_editor.request_focus = true
@@ -3780,7 +3891,6 @@ local function DrawTabBar()
         end
     end
     
-    -- Rename modal (outside the loop to avoid nesting issues)
     if state.renaming_tab_index and state.tabs[state.renaming_tab_index] then
         r.ImGui_OpenPopup(ctx, "Rename Tab")
         if r.ImGui_BeginPopupModal(ctx, "Rename Tab", true, r.ImGui_WindowFlags_AlwaysAutoResize()) then
@@ -3815,28 +3925,24 @@ local function DrawTabBar()
         end
     end
     
-    -- Add new tab button
     r.ImGui_SameLine(ctx, 0, 2)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), tab_bg)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), tab_hover_bg)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), tab_active_bg)
     if r.ImGui_Button(ctx, "+##add_tab", add_button_width, tab_height - 4) then
-        -- Save current tab before creating new one
         if state.tabs[state.active_tab_index] then
             state.tabs[state.active_tab_index].text = state.text
             state.tabs[state.active_tab_index].images = state.images
             state.tabs[state.active_tab_index].strokes = state.strokes
         end
-        -- Create new tab with empty content
         table.insert(state.tabs, {name = "Tab " .. (#state.tabs + 1), text = "", images = {}, strokes = {}})
         state.active_tab_index = #state.tabs
         state.text = ""
-        state.images = state.tabs[state.active_tab_index].images  -- Reference the tab's images
-        state.strokes = state.tabs[state.active_tab_index].strokes  -- Reference the tab's strokes
+        state.images = state.tabs[state.active_tab_index].images  
+        state.strokes = state.tabs[state.active_tab_index].strokes  
         state.dirty = true
         state.last_edit_time = r.time_precise()
         SaveNotebook()
-        -- Reset editor for new tab
         state.editor = nil
         local new_editor = EnsureEditorState()
         new_editor.request_focus = true
@@ -3852,14 +3958,12 @@ local function DrawTabBar()
 end
 
 local function DrawEditor()
-    -- Draw tab bar if enabled
     local tab_bar_height = DrawTabBar()
     
     local editor = EnsureEditorState()
     local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
     local editor_w = math.max(220, avail_w)
     local status_height = state.show_status and StatusBarConstants.height or 0
-    -- Only use margins when tabs are disabled
     local margin = (tab_bar_height > 0) and 0 or (EditorConstants.scroll_margin or 0)
     local extra_margin = (tab_bar_height > 0) and 0 or 8
     local editor_h = math.max(200, avail_h - status_height - margin - extra_margin - tab_bar_height)
@@ -3888,6 +3992,7 @@ local function DrawEditor()
         child_flags = child_flags | r.ImGui_WindowFlags_NoScrollWithMouse()
     end
     local border = 0
+    
     if r.ImGui_BeginChild(ctx, "##notebook_editor", editor_w, editor_h, border, child_flags) then
         local area_x, area_y = r.ImGui_GetCursorScreenPos(ctx)
     local can_edit = state.can_edit and true or false
@@ -4011,10 +4116,8 @@ local function DrawEditor()
             r.ImGui_SetCursorPos(ctx, img.pos_x, img.pos_y)
             r.ImGui_InvisibleButton(ctx, "##image_" .. img.id, img_w, img_h)
             
-            -- Recreate texture if invalid or missing
             local texture_valid = false
             if img.texture then
-                -- Check if texture pointer is still valid
                 texture_valid = r.ValidatePtr(img.texture, "ImGui_Image*")
             end
             
@@ -4142,9 +4245,26 @@ local function DrawEditor()
 
         local draw_list = r.ImGui_GetWindowDrawList(ctx)
         local scroll_y = r.ImGui_GetScrollY(ctx)
+        
         local base_bg = state.track_bg_color or 0x202020FF
         local hover_bg = state.track_bg_color_hover or 0x303030FF
         local border_color = state.track_bg_color_border or 0x3A3A3AFF
+        
+        -- Use custom color for Project/Global mode with brightness adjustment
+        if state.mode == "project" and state.project_bg_color then
+            local brightness = state.project_bg_brightness or 1.0
+            local r = math.min(1.0, state.project_bg_color.r * brightness)
+            local g = math.min(1.0, state.project_bg_color.g * brightness)
+            local b = math.min(1.0, state.project_bg_color.b * brightness)
+            base_bg = PackColorToU32(r, g, b, state.project_bg_color.a)
+        elseif state.mode == "global" and state.global_bg_color then
+            local brightness = state.global_bg_brightness or 1.0
+            local r = math.min(1.0, state.global_bg_color.r * brightness)
+            local g = math.min(1.0, state.global_bg_color.g * brightness)
+            local b = math.min(1.0, state.global_bg_color.b * brightness)
+            base_bg = PackColorToU32(r, g, b, state.global_bg_color.a)
+        end
+        
         local bg_color = base_bg
         if not can_edit then
             bg_color = ApplyAlpha(bg_color, 0.6) or bg_color
