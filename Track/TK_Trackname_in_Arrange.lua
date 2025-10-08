@@ -8,7 +8,7 @@
 + FIXED: Script no longer switches focus between multiple REAPER instances when running simultaneously
 ]]--
 
-local SCRIPT_VERSION = "1.0.5"
+local SCRIPT_VERSION = "1.0.6"
 
 local r                  = reaper
 -- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
@@ -2067,13 +2067,14 @@ function loop()
     -- Check if main window regained focus and force position update if needed
     local force_position_update = false
     if current_time - last_position_check_time >= POSITION_CHECK_INTERVAL then
-        local is_main_focused = r.JS_Window_GetFocus() == main
-        if is_main_focused and not was_main_window_focused then
-            -- Main window just regained focus, force position update and re-handle focus for FX windows
+        local foreground = r.JS_Window_GetForeground()
+        local is_reaper_focused = (foreground == main) or (r.JS_Window_GetParent(foreground) == main)
+        if is_reaper_focused and not was_main_window_focused then
+            -- REAPER just regained focus, force position update and re-handle focus for FX windows
             force_position_update = true
             hasDrawingFocusBeenHandled = false
         end
-        was_main_window_focused = is_main_focused
+        was_main_window_focused = is_reaper_focused
         last_position_check_time = current_time
     end
     
