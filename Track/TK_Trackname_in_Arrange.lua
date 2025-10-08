@@ -1,10 +1,14 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.4
+-- @version 1.0.5
 -- @changelog 
 --[[
++ FIXED: Overlay now properly repositions when returning to REAPER from other applications
++ FIXED: FX windows and dialogs automatically move above overlay when REAPER regains focus
 + FIXED: Script no longer switches focus between multiple REAPER instances when running simultaneously
 ]]--
+
+local SCRIPT_VERSION = "1.0.5"
 
 local r                  = reaper
 -- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
@@ -31,6 +35,9 @@ local grid_divide_state  = 0
 local hasDrawingFocusBeenHandled = false
 local last_focus_check_time = 0
 local FOCUS_CHECK_INTERVAL = 0.5  -- Check every 0.5 seconds instead of every frame
+local was_main_window_focused = false
+local last_position_check_time = 0
+local POSITION_CHECK_INTERVAL = 0.1  -- Check window focus every 0.1 seconds
 
 local color_cache        = {}
 local cached_bg_color    = nil
@@ -67,14 +74,14 @@ local OLD_VAL = 0
 local main = r.GetMainHwnd()
 local arrange = r.JS_Window_FindChildByID(main, 0x3E8)
 
-local function DrawOverArrange()
+local function DrawOverArrange(force_update)
     local _, DPI_RPR = r.get_config_var_string("uiscale")
     scroll_size = 15 * DPI_RPR
     
     local _, orig_LEFT, orig_TOP, orig_RIGHT, orig_BOT = r.JS_Window_GetRect(arrange)
     local current_val = orig_TOP + orig_BOT + orig_LEFT + orig_RIGHT
     
-    if current_val ~= OLD_VAL then
+    if current_val ~= OLD_VAL or force_update then
         OLD_VAL = current_val
         LEFT, TOP = im.PointConvertNative(ctx, orig_LEFT, orig_TOP)
         RIGHT, BOT = im.PointConvertNative(ctx, orig_RIGHT, orig_BOT)
@@ -86,9 +93,6 @@ end
 local function handleDrawingFocus()
     if hasDrawingFocusBeenHandled then return end
     local windowsToFocus = {}
-    
-    -- Get the title of the current REAPER instance's main window
-    local main_title = r.JS_Window_GetTitle(main)
     
     local arr = r.new_array({}, 1024)
     local ret = r.JS_Window_ArrayAllTop(arr)
@@ -103,24 +107,20 @@ local function handleDrawingFocus()
                 className:match("Lua_LICE") or 
                 className:match("^WDL")       
                 then
-                    -- Check if this window belongs to our REAPER instance
-                    -- by checking if it's a child of our main window, or has the same title prefix
                     local isOurWindow = false
                     
-                    -- First check: is it a child of our main window?
-                    if r.JS_Window_IsChild(main, hwnd) or hwnd == main then
+                    if hwnd == main then
                         isOurWindow = true
                     else
-                        -- Second check: for top-level windows, compare titles
-                        local window_title = r.JS_Window_GetTitle(hwnd)
-                        -- REAPER windows from the same instance share the same project name in title
-                        if window_title and main_title and window_title ~= "" and main_title ~= "" then
-                            -- Extract project name from main title (format: "project.rpp - REAPER")
-                            local main_project = main_title:match("^(.-)%s*%-") or main_title
-                            -- Check if window title contains the same project name or is the main window itself
-                            if window_title == main_title or window_title:find(main_project, 1, true) then
+                        local parent = r.JS_Window_GetParent(hwnd)
+                        local depth = 0
+                        while parent and parent ~= 0 and depth < 10 do
+                            if parent == main then
                                 isOurWindow = true
+                                break
                             end
+                            parent = r.JS_Window_GetParent(parent)
+                            depth = depth + 1
                         end
                     end
                     
@@ -796,6 +796,10 @@ function ShowSettingsWindow()
         r.ImGui_PopStyleColor(ctx)
         r.ImGui_SameLine(ctx)
         r.ImGui_Text(ctx, "ARRANGE READECORATOR")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+        r.ImGui_Text(ctx, "v" .. SCRIPT_VERSION)
+        r.ImGui_PopStyleColor(ctx)
         
         local window_width = r.ImGui_GetWindowWidth(ctx)
         local column_width = window_width / 5
@@ -2060,6 +2064,19 @@ function loop()
         last_focus_check_time = current_time
     end
     
+    -- Check if main window regained focus and force position update if needed
+    local force_position_update = false
+    if current_time - last_position_check_time >= POSITION_CHECK_INTERVAL then
+        local is_main_focused = r.JS_Window_GetFocus() == main
+        if is_main_focused and not was_main_window_focused then
+            -- Main window just regained focus, force position update and re-handle focus for FX windows
+            force_position_update = true
+            hasDrawingFocusBeenHandled = false
+        end
+        was_main_window_focused = is_main_focused
+        last_position_check_time = current_time
+    end
+    
     if r.GetExtState("TK_TRACKNAMES", "reload_settings") == "1" then
         LoadSettings()
         r.SetExtState("TK_TRACKNAMES", "reload_settings", "0", false)
@@ -2086,7 +2103,7 @@ function loop()
         end
     end
 
-    DrawOverArrange()
+    DrawOverArrange(force_position_update)
     r.ImGui_PushFont(ctx, font_objects[settings.selected_font])
     local ImGuiScale = reaper.ImGui_GetWindowDpiScale(ctx)
     if ImGuiScale ~= ImGuiScale_saved then
