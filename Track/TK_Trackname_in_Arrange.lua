@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.0.1
 -- @changelog 
 --[[
 + FIXED: Pinned tracks height calculation including master
@@ -2099,7 +2099,7 @@ function loop()
 
         for pass = 1, 2 do
             local pinned_tracks_height = 0  
-            local pinned_status = {}  -
+            local pinned_status = {}  
             
             pinned_status[-1] = false  
             if not pinned_override then
