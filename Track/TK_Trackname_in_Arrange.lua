@@ -1,11 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 0.9.8
+-- @version 1.0.0
 -- @changelog 
 --[[
-+ FIXED: Pinned tracks height calculation now includes envelope lanes (I_WNDH instead of I_TCPH)
-+ This was the root cause - pinned_tracks_height was too small when envelopes were present
-+ Borders and overlays now correctly stop at envelope lanes in pinned section
++ FIXED: Pinned tracks height calculation including master
 ]]--
 
 local r                  = reaper
@@ -1003,7 +1001,6 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Show button", settings.show_settings_button) then
             settings.show_settings_button = not settings.show_settings_button
         end
-    -- Autosave moved next to Info Line
 
         r.ImGui_Dummy(ctx, 0, 2)
         r.ImGui_Separator(ctx)
@@ -1665,13 +1662,10 @@ function DrawTrackBorders(draw_list, track, track_y, track_height, border_color,
     is_pinned = is_pinned or false
     pinned_tracks_height = pinned_tracks_height or 0
     
-    -- Teken track borders (exact zoals RenderSolidOverlay)
     if pinned_tracks_height > 0 and not is_pinned and track_y < pinned_tracks_height then
         if track_y + track_height <= pinned_tracks_height then
-            -- Hele track zit in pinned zone, skip
             goto draw_envelope_borders
         end
-        -- Track loopt door pinned zone heen
         local actual_y = pinned_tracks_height
         local actual_height = track_height - (pinned_tracks_height - track_y)
         
@@ -1691,7 +1685,6 @@ function DrawTrackBorders(draw_list, track, track_y, track_height, border_color,
                 border_color, settings.border_thickness)
         end
     else
-        -- Track is buiten pinned zone
         if settings.track_border_left then
             DrawTrackBorderLine(draw_list, LEFT + settings.border_thickness/2, WY + track_y,
                 LEFT + settings.border_thickness/2, WY + track_y + track_height,
@@ -1715,7 +1708,6 @@ function DrawTrackBorders(draw_list, track, track_y, track_height, border_color,
     end
     
     ::draw_envelope_borders::
-    -- Teken envelope borders (exact zoals RenderSolidOverlay envelope code)
     local track_env_cnt = r.CountTrackEnvelopes(track)
     if track_env_cnt > 0 then
         local env_y = track_y + track_height
@@ -1723,9 +1715,8 @@ function DrawTrackBorders(draw_list, track, track_y, track_height, border_color,
         
         if pinned_tracks_height > 0 and not is_pinned and env_y < pinned_tracks_height then
             if env_y + env_height <= pinned_tracks_height then
-                return -- Envelopes zitten volledig in pinned zone
+                return 
             end
-            -- Envelopes lopen door pinned zone heen
             local actual_env_y = pinned_tracks_height
             local actual_env_height = env_height - (pinned_tracks_height - env_y)
             
@@ -1745,7 +1736,6 @@ function DrawTrackBorders(draw_list, track, track_y, track_height, border_color,
                     border_color, settings.border_thickness)
             end
         else
-            -- Envelopes zijn buiten pinned zone
             if settings.track_border_left then
                 DrawTrackBorderLine(draw_list, LEFT + settings.border_thickness/2, WY + env_y,
                     LEFT + settings.border_thickness/2, WY + env_y + env_height,
@@ -1787,23 +1777,18 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                 local end_track = r.GetTrack(0, end_idx)
                 local end_y = r.GetMediaTrackInfo_Value(end_track, "I_TCPY") /screen_scale
                 
-                -- Gebruik I_WNDH voor de laatste track om envelopes mee te nemen
                 local end_total_height = r.GetMediaTrackInfo_Value(end_track, "I_WNDH") / screen_scale
                 local total_height = (end_y + end_total_height) - track_y
                 
-                -- Skip borders als de folder (inclusief envelopes) volledig in de pinned zone valt
                 if not is_pinned and track_y + total_height <= pinned_tracks_height then
                     return
                 end
                 
-                -- Clip de borders zodat ze niet over pinned tracks gaan
                 local actual_track_y = track_y
                 local actual_total_height = total_height
                 
                 if not is_pinned and track_y < pinned_tracks_height then
-                    -- Folder begint in pinned zone
                     if track_y + total_height <= pinned_tracks_height then
-                        -- Hele folder zit in pinned zone
                         return
                     end
                     local overlap = pinned_tracks_height - track_y
@@ -1816,7 +1801,6 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                 end
                 
                 if settings.folder_border_top then
-                    -- Teken alleen de top border als we niet zijn geclipped
                     if actual_track_y == track_y or is_pinned then
                         DrawFolderBorderLine(
                             draw_list,
@@ -1866,15 +1850,12 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                     )
                 end
             else
-                -- Folder zonder zichtbare kinderen
                 local total_visual_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
                 
-                -- Skip borders als de track volledig in de pinned zone valt
                 if not is_pinned and track_y + total_visual_height <= pinned_tracks_height then
                     return
                 end
                 
-                -- Clip de borders
                 local actual_track_y = track_y
                 local actual_track_height = track_height
                 
@@ -1892,7 +1873,6 @@ function DrawFolderBorders(draw_list, track, track_y, track_height, border_color
                 end
                 
                 if settings.folder_border_top then
-                    -- Teken alleen de top border als we niet zijn geclipped
                     if actual_track_y == track_y or is_pinned then
                         DrawFolderBorderLine(
                             draw_list,
@@ -2088,7 +2068,6 @@ function loop()
     local visible, open
 
     if use_pass_through then
-        -- Off-screen mini venster: voorkomt dat overlay een klik target is
         r.ImGui_SetNextWindowPos(ctx, -10000, -10000, r.ImGui_Cond_Always())
         r.ImGui_SetNextWindowSize(ctx, 4, 4, r.ImGui_Cond_Always())
         visible, open = r.ImGui_Begin(ctx, '##TK_TrackNames_LinuxHost', true,
@@ -2101,7 +2080,7 @@ function loop()
         )
         draw_list = r.ImGui_GetForegroundDrawList(ctx)
         WX, WY = 0, 0
-        visible = true -- we willen blijven tekenen
+        visible = true 
     else
         visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, window_flags)
         if visible then
@@ -2116,115 +2095,153 @@ function loop()
             UpdateBgColorCache()
         end
 
-        -- First pass: Calculate pinned track area height
-        local pinned_tracks_height = 0
         local pinned_override = r.GetToggleCommandState(42595) == 1
-        
-        if not pinned_override then
-            local accumulated_height = 0
-            for i = 0, track_count - 1 do
-                local track = r.GetTrack(0, i)
-                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
-                -- Gebruik I_WNDH om envelope lanes mee te tellen
-                local track_total_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
-                local expected_y = accumulated_height
-                
-                if math.abs(track_y - expected_y) < 1 then
-                    accumulated_height = accumulated_height + track_total_height
-                else
-                    pinned_tracks_height = accumulated_height
-                    if pinned_tracks_height > 0 then
-                        pinned_tracks_height = pinned_tracks_height + 2
-                    end
-                    break
-                end
-            end
-        end
 
         for pass = 1, 2 do
-            local accumulated_height = 0
-            for i = -1, track_count - 1 do 
-                local track
-                if i == -1 then
-                    track = r.GetMasterTrack(0)
-                else
-                    track = r.GetTrack(0, i)
+            local pinned_tracks_height = 0  
+            local pinned_status = {}  -
+            
+            pinned_status[-1] = false  
+            if not pinned_override then
+                local master_track = r.GetMasterTrack(0)
+                -- Thanks to Olshalom for the correct visibility check using bit mask
+                local master_visible = r.GetMasterTrackVisibility() & (1<<0) ~= 0
+                
+                if master_visible then
+                    local master_y = r.GetMediaTrackInfo_Value(master_track, "I_TCPY") / screen_scale
+                    local master_height = r.GetMediaTrackInfo_Value(master_track, "I_WNDH") / screen_scale
+                    
+                    if math.abs(master_y - 0) < 1 then
+                        pinned_status[-1] = true
+                        pinned_tracks_height = pinned_tracks_height + master_height
+                    end
                 end
                 
-                local is_master = (i == -1)
-                local is_pinned = false
-                
-                if not is_master and not pinned_override then
+                for i = 0, track_count - 1 do
+                    local track = r.GetTrack(0, i)
                     local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
-                    local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
-                    local expected_y = accumulated_height
+                    local track_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
+                    local expected_y = pinned_tracks_height
                     
-                    if math.abs(track_y - expected_y) < 1 then
-                        is_pinned = true
-                        accumulated_height = accumulated_height + track_height
+                    local gap = track_y - expected_y
+                    if gap >= 0 and gap < 5 then
+                        pinned_status[i] = true
+                        pinned_tracks_height = track_y + track_height
+                    else
+                        pinned_status[i] = false
+                        break 
                     end
+                end
+                
+                if pinned_tracks_height > 0 then
+                    pinned_tracks_height = pinned_tracks_height + 2
+                end
+            end
+            
+            local current_height = 0  
+            
+            do
+                local i = -1
+                local track = r.GetMasterTrack(0)
+                local is_master = true
+                local is_pinned = pinned_status[-1] or false
+                
+                local clip_height_for_this_track = current_height
+                
+                if is_pinned then
+                    local track_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
+                    current_height = current_height + track_height
                 end
                 
                 if (pass == 1 and not is_pinned) or (pass == 2 and is_pinned) then
-
-            if is_master then
-                local master_visible = r.GetMasterTrackVisibility()
-                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
-                local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
-                if master_visible == 1 then
-                    if settings.show_track_colors and settings.use_custom_master_color then
-                        if settings.master_gradient_enabled then
-    
-                            local start_alpha = (settings.master_gradient_start_alpha * 255)//1
-                            local end_alpha = (settings.master_gradient_end_alpha * 255)//1
-                            
-                            local start_color = (settings.master_track_color & 0xFFFFFF00) | start_alpha
-                            local end_color = (settings.master_track_color & 0xFFFFFF00) | end_alpha
-                            
-                            r.ImGui_DrawList_AddRectFilledMultiColor(
-                                draw_list, 
-                                LEFT, 
-                                WY + track_y,
-                                RIGHT - scroll_size,
-                                WY + track_y + track_height,
-                                start_color,
-                                settings.gradient_direction == 1 and end_color or start_color,
-                                settings.gradient_direction == 1 and end_color or start_color,
-                                start_color
-                            )
+                    -- Thanks to Olshalom .... again...hahaha!
+                    local master_visible = r.GetMasterTrackVisibility() & (1<<0) ~= 0
+                    if master_visible then
+                        local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
+                        local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") /screen_scale
+                        
+                        local clip_height = is_pinned and 0 or pinned_tracks_height
+                        
+                        if settings.show_track_colors and settings.use_custom_master_color then
+                            if settings.master_gradient_enabled then
+                                local start_alpha = (settings.master_gradient_start_alpha * 255)//1
+                                local end_alpha = (settings.master_gradient_end_alpha * 255)//1
+                                
+                                local start_color = (settings.master_track_color & 0xFFFFFF00) | start_alpha
+                                local end_color = (settings.master_track_color & 0xFFFFFF00) | end_alpha
+                                
+                                local actual_y = track_y
+                                local actual_height = track_height
+                                
+                                if clip_height > 0 and track_y < clip_height then
+                                    if track_y + track_height <= clip_height then
+                                        goto skip_master_gradient
+                                    end
+                                    local overlap = clip_height - track_y
+                                    actual_y = clip_height
+                                    actual_height = track_height - overlap
+                                end
+                                
+                                r.ImGui_DrawList_AddRectFilledMultiColor(
+                                    draw_list, 
+                                    LEFT, 
+                                    WY + actual_y,
+                                    RIGHT - scroll_size,
+                                    WY + actual_y + actual_height,
+                                    start_color,
+                                    settings.gradient_direction == 1 and end_color or start_color,
+                                    settings.gradient_direction == 1 and end_color or start_color,
+                                    start_color
+                                )
+                                ::skip_master_gradient::
+                            else
+                                local red, green, blue, _ = r.ImGui_ColorConvertU32ToDouble4(settings.master_track_color)
+                                local color_with_alpha = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, settings.master_overlay_alpha)
+                                RenderSolidOverlay(draw_list, track, track_y, track_height, color_with_alpha, WY, clip_height)
+                            end
+                        end
+                        
+                        local text = "MASTER"
+                        local text_width = r.ImGui_CalcTextSize(ctx, text)
+                        local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5)
+                        local text_x
+                        
+                        if settings.text_centered then
+                            if settings.auto_center then
+                                local window_width = RIGHT - LEFT - scroll_size
+                                text_x = LEFT + (window_width / 2) - (text_width / 2)
+                            else                      
+                                local offset = (max_width - text_width) / 2
+                                text_x = WX + settings.horizontal_offset + offset
+                            end
+                        elseif settings.right_align then
+                            text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
                         else
-                            local red, green, blue, _ = r.ImGui_ColorConvertU32ToDouble4(settings.master_track_color)
-                            local color_with_alpha = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, settings.master_overlay_alpha)
-                            RenderSolidOverlay(draw_list, track, track_y, track_height, color_with_alpha, WY, 0)
+                            text_x = WX + settings.horizontal_offset
+                        end
+                        
+                        if is_pinned or text_y >= WY + pinned_tracks_height then
+                            local text_color = GetTextColor(track)
+                            text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
+                            r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
                         end
                     end
-                    local text = "MASTER"
-                    local text_width = r.ImGui_CalcTextSize(ctx, text)
-                    local text_y = WY + track_y + (track_height * 0.5) - (settings.text_size * 0.5)
-                    local text_x
-                    
-                    if settings.text_centered then
-                        if settings.auto_center then
-                            local window_width = RIGHT - LEFT - scroll_size
-                            text_x = LEFT + (window_width / 2) - (text_width / 2)
-                        else                      
-                            local offset = (max_width - text_width) / 2
-                            text_x = WX + settings.horizontal_offset + offset
-                        end
-                    elseif settings.right_align then
-                        text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
-                    else
-                        text_x = WX + settings.horizontal_offset
-                    end
-                    
-                    if is_pinned or text_y >= WY + pinned_tracks_height then
-                        local text_color = GetTextColor(track)
-                        text_color = (text_color & 0xFFFFFF00) | ((settings.text_opacity * 255)//1)
-                        r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
-                    end
-                    
                 end
-            else
+            end
+            
+            for i = 0, track_count - 1 do 
+                
+                local track = r.GetTrack(0, i)
+                local is_pinned = pinned_status[i] or false
+                
+                local clip_height_for_this_track = current_height
+                
+                if is_pinned then
+                    local track_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
+                    current_height = current_height + track_height
+                end
+                
+                if (pass == 1 and not is_pinned) or (pass == 2 and is_pinned) then
             
              
                 local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
@@ -2243,7 +2260,8 @@ function loop()
                     end
                     local darker_color = GetDarkerColor(border_base_color)
                     local border_color = GetCachedColor(darker_color, settings.border_opacity)
-                    DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, pinned_tracks_height)
+                    local border_clip_height = is_pinned and 0 or pinned_tracks_height
+                    DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, border_clip_height)
                 end
                 
                 local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
@@ -2357,7 +2375,8 @@ function loop()
                             local blended_color = BlendColor(track, track_color, settings.blend_mode)
 
                             local border_color = GetCachedColor(blended_color, settings.border_opacity)
-                            DrawTrackBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, pinned_tracks_height)
+                            local border_clip_height = is_pinned and 0 or pinned_tracks_height
+                            DrawTrackBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, border_clip_height)
                         end
                     end
 
@@ -2386,7 +2405,6 @@ function loop()
                         local _, track_name = r.GetTrackName(track)
                         local display_name
 
-                        -- Build track and FX parts with independent lengths
                         local track_display = TruncateTrackName(track_name, settings.track_name_length, settings.fixed_label_length)
                         local fx_display = nil
                         if settings.show_first_fx then
@@ -2653,10 +2671,9 @@ function loop()
                         end
                     end
                 end 
-            end
-                end
-            end
-        end
+            end 
+            end 
+        end 
         
         r.ImGui_End(ctx)
     end
