@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.9.3
+-- @version 0.9.4
 -- @changelog 
 --[[
 
@@ -2581,10 +2581,35 @@ function UpdateVisualMetronome()
  local retval, measures, cml, fullbeats, cdenom = r.TimeMap2_timeToBeats(0, play_pos)
  
  if retval then
- local ts_retval, ts_pos, ts_measurepos, ts_beatpos, ts_bpm, timesig_num, timesig_denom = r.GetTempoTimeSigMarker(0, 0)
- if not ts_retval then 
- timesig_num, timesig_denom = 4, 4 
+ -- Get the active time signature at the current playback position
+ local timesig_num, timesig_denom = 4, 4  -- Default fallback
+ local marker_count = r.CountTempoTimeSigMarkers(0)
+ 
+ if marker_count > 0 then
+ -- Loop backwards through markers to find the active one at play_pos
+ for i = marker_count - 1, 0, -1 do
+ local ts_retval, timepos, measurepos, beatpos, bpm, ts_num, ts_denom, lineartempo = r.GetTempoTimeSigMarker(0, i)
+ if ts_retval and timepos <= play_pos then
+ -- This is the active marker at current position
+ timesig_num = ts_num
+ timesig_denom = ts_denom
+ break
  end
+ end
+ else
+ -- No markers: use project-level time signature
+ local ts_retval, ts_bpm, ts_bpi = r.GetProjectTimeSignature2(0)
+ if ts_retval and ts_bpi then
+ timesig_num = ts_bpi
+ timesig_denom = 4  -- REAPER project time sig doesn't expose denominator, assume quarter notes
+ end
+ end
+ 
+ -- Safety check: ensure timesig_num is valid
+ if not timesig_num or timesig_num <= 0 then
+ timesig_num = 4  -- Fallback to 4/4
+ end
+ 
  local beats_per_measure = math.floor(timesig_num)
  
  local current_beat = math.floor(fullbeats)
