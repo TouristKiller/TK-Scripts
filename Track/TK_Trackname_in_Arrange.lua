@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.3
+-- @version 1.0.4
 -- @changelog 
 --[[
 + FIXED: Script no longer switches focus between multiple REAPER instances when running simultaneously
@@ -87,8 +87,8 @@ local function handleDrawingFocus()
     if hasDrawingFocusBeenHandled then return end
     local windowsToFocus = {}
     
-    -- Get the process ID of the current REAPER instance
-    local main_pid = r.JS_Window_GetPID and r.JS_Window_GetPID(main) or nil
+    -- Get the title of the current REAPER instance's main window
+    local main_title = r.JS_Window_GetTitle(main)
     
     local arr = r.new_array({}, 1024)
     local ret = r.JS_Window_ArrayAllTop(arr)
@@ -97,16 +97,34 @@ local function handleDrawingFocus()
         for j = 1, #childs do
             local hwnd = r.JS_Window_HandleFromAddress(childs[j])
             if r.JS_Window_IsVisible(hwnd) then
-                -- Only process windows from the same process (same REAPER instance)
-                local window_pid = r.JS_Window_GetPID and r.JS_Window_GetPID(hwnd) or nil
-                
-                if not main_pid or not window_pid or window_pid == main_pid then
-                    local className = r.JS_Window_GetClassName(hwnd)
-                    if className:match("^REAPER") or  
-                    className == "#32770" or       
-                    className:match("Lua_LICE") or 
-                    className:match("^WDL")       
-                    then
+                local className = r.JS_Window_GetClassName(hwnd)
+                if className:match("^REAPER") or  
+                className == "#32770" or       
+                className:match("Lua_LICE") or 
+                className:match("^WDL")       
+                then
+                    -- Check if this window belongs to our REAPER instance
+                    -- by checking if it's a child of our main window, or has the same title prefix
+                    local isOurWindow = false
+                    
+                    -- First check: is it a child of our main window?
+                    if r.JS_Window_IsChild(main, hwnd) or hwnd == main then
+                        isOurWindow = true
+                    else
+                        -- Second check: for top-level windows, compare titles
+                        local window_title = r.JS_Window_GetTitle(hwnd)
+                        -- REAPER windows from the same instance share the same project name in title
+                        if window_title and main_title and window_title ~= "" and main_title ~= "" then
+                            -- Extract project name from main title (format: "project.rpp - REAPER")
+                            local main_project = main_title:match("^(.-)%s*%-") or main_title
+                            -- Check if window title contains the same project name or is the main window itself
+                            if window_title == main_title or window_title:find(main_project, 1, true) then
+                                isOurWindow = true
+                            end
+                        end
+                    end
+                    
+                    if isOurWindow then
                         table.insert(windowsToFocus, hwnd)
                     end
                 end
