@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.9.4
+-- @version 0.9.5
 -- @changelog 
 --[[
 
@@ -2581,41 +2581,41 @@ function UpdateVisualMetronome()
  local retval, measures, cml, fullbeats, cdenom = r.TimeMap2_timeToBeats(0, play_pos)
  
  if retval then
- -- Get the active time signature at the current playback position
- local timesig_num, timesig_denom = 4, 4  -- Default fallback
+ local timesig_num, timesig_denom = 4, 4
  local marker_count = r.CountTempoTimeSigMarkers(0)
+ local marker_timepos = 0
  
  if marker_count > 0 then
- -- Loop backwards through markers to find the active one at play_pos
  for i = marker_count - 1, 0, -1 do
  local ts_retval, timepos, measurepos, beatpos, bpm, ts_num, ts_denom, lineartempo = r.GetTempoTimeSigMarker(0, i)
  if ts_retval and timepos <= play_pos then
- -- This is the active marker at current position
  timesig_num = ts_num
  timesig_denom = ts_denom
+ marker_timepos = timepos
  break
  end
  end
  else
- -- No markers: use project-level time signature
  local ts_retval, ts_bpm, ts_bpi = r.GetProjectTimeSignature2(0)
  if ts_retval and ts_bpi then
  timesig_num = ts_bpi
- timesig_denom = 4  -- REAPER project time sig doesn't expose denominator, assume quarter notes
+ timesig_denom = 4
  end
  end
  
- -- Safety check: ensure timesig_num is valid
  if not timesig_num or timesig_num <= 0 then
- timesig_num = 4  -- Fallback to 4/4
+ timesig_num = 4
  end
  
  local beats_per_measure = math.floor(timesig_num)
  
+ local marker_retval, marker_measures, marker_cml, marker_fullbeats, marker_cdenom = r.TimeMap2_timeToBeats(0, marker_timepos)
+ 
  local current_beat = math.floor(fullbeats)
  local beat_fraction = fullbeats - current_beat
  
- local beat_in_measure_zero_based = current_beat % beats_per_measure
+ local beats_since_marker = fullbeats - marker_fullbeats
+ local beat_in_measure_zero_based = math.floor(beats_since_marker) % beats_per_measure
  local beat_in_measure = beat_in_measure_zero_based + 1
  
  visual_metronome.beat_position = beat_fraction
@@ -5580,8 +5580,36 @@ function ShowTimeSignature(main_window_width, main_window_height)
  reaper.ImGui_SameLine(ctx)
  reaper.ImGui_SetCursorPosX(ctx, settings.timesig_x_px and ScalePosX(settings.timesig_x_px, main_window_width, settings) or ((settings.timesig_x or (settings.tempo_x + 0.05)) * main_window_width))
  reaper.ImGui_SetCursorPosY(ctx, settings.timesig_y_px and ScalePosY(settings.timesig_y_px, main_window_height, settings) or ((settings.timesig_y or settings.tempo_y) * main_window_height))
- local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = reaper.GetTempoTimeSigMarker(0, 0)
- if not retval then timesig_num, timesig_denom = 4, 4 end
+ 
+ local timesig_num, timesig_denom = 4, 4
+ local play_state = r.GetPlayState()
+ local check_pos
+ if play_state & 1 == 1 then
+  check_pos = r.GetPlayPosition()
+ else
+  check_pos = r.GetCursorPosition()
+ end
+ 
+ local num_markers = r.CountTempoTimeSigMarkers(0)
+ local active_marker_idx = -1
+ 
+ for i = num_markers - 1, 0, -1 do
+  local retval, timepos, measurepos, beatpos, bpm, sig_num, sig_denom = r.GetTempoTimeSigMarker(0, i)
+  if retval and timepos <= check_pos then
+   timesig_num = sig_num
+   timesig_denom = sig_denom
+   active_marker_idx = i
+   break
+  end
+ end
+ 
+ if active_marker_idx == -1 then
+  local _, _, sig_num, sig_denom = r.GetProjectTimeSignature2(0)
+  if sig_num and sig_denom then
+   timesig_num = sig_num
+   timesig_denom = sig_denom
+  end
+ end
 
  if font_timesig then reaper.ImGui_PushFont(ctx, font_timesig, settings.timesig_font_size or settings.font_size) end
  local ts_text = string.format("%d/%d", timesig_num, timesig_denom)
@@ -5617,23 +5645,60 @@ function ShowTimeSignature(main_window_width, main_window_height)
  reaper.ImGui_Text(ctx, "Set Time Signature")
  reaper.ImGui_Separator(ctx)
  reaper.ImGui_PushItemWidth(ctx, 60)
- local rv_num, new_num = reaper.ImGui_InputInt(ctx, "Numerator", timesig_num, 0, 0)
- local rv_denom, new_denom = reaper.ImGui_InputInt(ctx, "Denominator", timesig_denom, 0, 0)
+ 
+ if not timesig_popup_num then timesig_popup_num = timesig_num end
+ if not timesig_popup_denom then timesig_popup_denom = timesig_denom end
+ 
+ local rv_num, new_num = reaper.ImGui_InputInt(ctx, "Numerator", timesig_popup_num, 0, 0)
+ local rv_denom, new_denom = reaper.ImGui_InputInt(ctx, "Denominator", timesig_popup_denom, 0, 0)
+ 
+ if rv_num and new_num > 0 then timesig_popup_num = new_num end
+ if rv_denom and new_denom > 0 then timesig_popup_denom = new_denom end
+ 
  reaper.ImGui_PopItemWidth(ctx)
- if rv_num or rv_denom then
- reaper.Undo_BeginBlock()
- local num_to_set = rv_num and new_num>0 and new_num or timesig_num
- local denom_to_set = rv_denom and new_denom>0 and new_denom or timesig_denom
- local _, measures = reaper.TimeMap2_timeToBeats(0, 0)
- local ptx_in_effect = reaper.FindTempoTimeSigMarker(0, 0)
- reaper.SetTempoTimeSigMarker(0, -1, -1, measures, 0, -1, num_to_set, denom_to_set, true)
- reaper.GetSetTempoTimeSigMarkerFlag(0, ptx_in_effect + 1, 1|2|16, true)
- reaper.Undo_EndBlock("Change time signature", 1|4|8)
+ 
+ reaper.ImGui_Separator(ctx)
+ settings.timesig_create_marker_at_cursor = settings.timesig_create_marker_at_cursor or false
+ local rv_marker, new_marker = reaper.ImGui_Checkbox(ctx, "Create marker at cursor/play position", settings.timesig_create_marker_at_cursor)
+ if rv_marker then
+ settings.timesig_create_marker_at_cursor = new_marker
+ SaveSettings()
  end
- if reaper.ImGui_Button(ctx, "Close") then reaper.ImGui_CloseCurrentPopup(ctx) end
+ 
+ reaper.ImGui_Separator(ctx)
+ if reaper.ImGui_Button(ctx, "Apply") then
+ reaper.Undo_BeginBlock()
+ 
+ local target_pos = 0
+ if settings.timesig_create_marker_at_cursor then
+ local play_state = reaper.GetPlayState()
+ if play_state & 1 == 1 then
+ target_pos = reaper.GetPlayPosition()
+ else
+ target_pos = reaper.GetCursorPosition()
+ end
+ end
+ 
+ reaper.SetTempoTimeSigMarker(0, -1, target_pos, -1, -1, -1, timesig_popup_num, timesig_popup_denom, false)
+ reaper.Undo_EndBlock("Change time signature", 1|4|8)
+ 
+ timesig_popup_num = nil
+ timesig_popup_denom = nil
+ reaper.ImGui_CloseCurrentPopup(ctx)
+ end
+ 
+ reaper.ImGui_SameLine(ctx)
+ if reaper.ImGui_Button(ctx, "Close") then 
+ timesig_popup_num = nil
+ timesig_popup_denom = nil
+ reaper.ImGui_CloseCurrentPopup(ctx) 
+ end
  
  PopTransportPopupStyling(color_count)
  reaper.ImGui_EndPopup(ctx)
+ else
+ timesig_popup_num = nil
+ timesig_popup_denom = nil
  end
 end
 
