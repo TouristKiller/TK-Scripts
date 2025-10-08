@@ -231,7 +231,7 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.0.7" author="TouristKiller" time="2025-10-09T00:100Z">
+        <version name="1.0.8" author="TouristKiller" time="2025-10-09T00:20:00Z">
             <changelog><![CDATA[           
 + FIXED: Overlay now properly repositions when returning to REAPER from other applications
 + FIXED: FX windows and dialogs automatically move above overlay when REAPER regains focus
