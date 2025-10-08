@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.1
+-- @version 1.0.2
 -- @changelog 
 --[[
-+ FIXED: Pinned tracks height calculation including master
++ FIXED: Script no longer switches focus between multiple REAPER instances when running simultaneously
 ]]--
 
 local r                  = reaper
@@ -91,13 +91,23 @@ local function handleDrawingFocus()
         for j = 1, #childs do
             local hwnd = r.JS_Window_HandleFromAddress(childs[j])
             if r.JS_Window_IsVisible(hwnd) then
-                local className = r.JS_Window_GetClassName(hwnd)
-                if className:match("^REAPER") or  
-                className == "#32770" or       
-                className:match("Lua_LICE") or 
-                className:match("^WDL")       
-                then
-                    table.insert(windowsToFocus, hwnd)
+                local parent = r.JS_Window_GetParent(hwnd)
+                local isOurWindow = (hwnd == main) or (parent == main)
+                
+                if not isOurWindow and parent == nil then
+                    local owner = r.JS_Window_GetOwner(hwnd)
+                    isOurWindow = (owner == main)
+                end
+                
+                if isOurWindow then
+                    local className = r.JS_Window_GetClassName(hwnd)
+                    if className:match("^REAPER") or  
+                    className == "#32770" or       
+                    className:match("Lua_LICE") or 
+                    className:match("^WDL")       
+                    then
+                        table.insert(windowsToFocus, hwnd)
+                    end
                 end
             end
         end
