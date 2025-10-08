@@ -567,11 +567,24 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
 
                     r.ImGui_TableSetColumnIndex(ctx, 4)
                     if button.use_icon then
-                        if r.ImGui_Button(ctx, "Browse Icons") then
-                            IconBrowser.show_window = true
-                            active_icon_button = button  -- Remember which button is selecting an icon
+                        local is_browser_active = IconBrowser.show_window and active_icon_button == button
+                        if is_browser_active then
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
                         end
-                        -- Note: IconBrowser.Show is called outside this function to prevent GUI conflicts
+                        
+                        if r.ImGui_Button(ctx, is_browser_active and "Close Browser" or "Browse Icons") then
+                            if is_browser_active then
+                                IconBrowser.show_window = false
+                                active_icon_button = nil
+                            else
+                                IconBrowser.show_window = true
+                                active_icon_button = button
+                            end
+                        end
+                        
+                        if is_browser_active then
+                            r.ImGui_PopStyleColor(ctx)
+                        end
                     end
 
                     r.ImGui_TableNextRow(ctx)
@@ -2012,11 +2025,17 @@ end
 function ButtonEditor.HandleIconBrowser(ctx, custom_buttons, settings)
     local selected_icon = IconBrowser.Show(ctx, settings)
     if selected_icon and active_icon_button then
+        local ButtonRenderer = require('button_renderer')
+        if active_icon_button.icon_name and ButtonRenderer.image_cache[active_icon_button.icon_name] then
+            ButtonRenderer.image_cache[active_icon_button.icon_name] = nil
+        end
+        
         active_icon_button.icon_name = selected_icon
         active_icon_button.icon = nil
         custom_buttons.SaveCurrentButtons()
         has_unsaved_changes = true
-        active_icon_button = nil  -- Clear the reference
+        
+        IconBrowser.selected_icon = nil
     end
 end
 

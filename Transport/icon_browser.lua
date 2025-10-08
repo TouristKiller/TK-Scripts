@@ -52,10 +52,15 @@ function IconBrowser.Show(ctx, settings)
     
     local window_flags = r.ImGui_WindowFlags_None()
     
-    local width = settings and math.max(400, settings.icon_browser_width) or 600
-    local height = settings and math.max(300, settings.icon_browser_height) or 400
+    local width = 600
+    local height = 400
+    if settings then
+        width = settings.icon_browser_width and math.max(400, settings.icon_browser_width) or 600
+        height = settings.icon_browser_height and math.max(300, settings.icon_browser_height) or 400
+    end
     
     r.ImGui_SetNextWindowSize(ctx, width, height, r.ImGui_Cond_FirstUseEver())
+    r.ImGui_SetNextWindowSizeConstraints(ctx, 400, 300, 800, 600)
     local visible, open = r.ImGui_Begin(ctx, "TK Icon Browser", true, window_flags)
     
     if visible then
@@ -67,11 +72,15 @@ function IconBrowser.Show(ctx, settings)
             -- Only update if window was resized (with tolerance to prevent constant updates)
             local current_width = r.ImGui_GetWindowWidth(ctx)
             local current_height = r.ImGui_GetWindowHeight(ctx)
-            if current_width and math.abs(current_width - settings.icon_browser_width) > 5 then
-                settings.icon_browser_width = math.max(400, current_width)
+            if current_width and settings.icon_browser_width and type(settings.icon_browser_width) == "number" then
+                if math.abs(current_width - settings.icon_browser_width) > 5 then
+                    settings.icon_browser_width = math.max(400, current_width)
+                end
             end
-            if current_height and math.abs(current_height - settings.icon_browser_height) > 5 then
-                settings.icon_browser_height = math.max(300, current_height)
+            if current_height and settings.icon_browser_height and type(settings.icon_browser_height) == "number" then
+                if math.abs(current_height - settings.icon_browser_height) > 5 then
+                    settings.icon_browser_height = math.max(300, current_height)
+                end
             end
         end
         
@@ -91,13 +100,9 @@ function IconBrowser.Show(ctx, settings)
         local child_width = r.ImGui_GetWindowWidth(ctx)
         local style_spacing_x = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
         
-        -- Safety check: if we can't get valid values, show error and exit early
         if not child_width or not style_spacing_x then
-            r.ImGui_Text(ctx, "Error: Unable to initialize icon browser")
-            r.ImGui_EndChild(ctx)
-            r.ImGui_End(ctx)
-            IconBrowser.show_window = open
-            return IconBrowser.selected_icon
+            child_width = child_width or 600
+            style_spacing_x = style_spacing_x or 8
         end
         
         local icon_with_spacing = IconBrowser.grid_size + style_spacing_x
@@ -113,13 +118,9 @@ function IconBrowser.Show(ctx, settings)
         local scroll_y = r.ImGui_GetScrollY(ctx)
         local window_height = r.ImGui_GetWindowHeight(ctx)
         
-        -- Safety check for scroll values
         if not scroll_y or not window_height then
-            r.ImGui_Text(ctx, "Error: Unable to get scroll information")
-            r.ImGui_EndChild(ctx)
-            r.ImGui_End(ctx)
-            IconBrowser.show_window = open
-            return IconBrowser.selected_icon
+            scroll_y = scroll_y or 0
+            window_height = window_height or 400
         end
         
         local row_height = IconBrowser.grid_size
@@ -157,7 +158,6 @@ function IconBrowser.Show(ctx, settings)
             if r.ImGui_ImageButton(ctx, "##" .. icon.name, IconBrowser.image_cache[icon.name],
                 IconBrowser.grid_size-10, IconBrowser.grid_size-10, 0, 0, 0.33, 1) then
                 IconBrowser.selected_icon = icon.name
-                IconBrowser.show_window = false
             end
             
             if r.ImGui_IsItemHovered(ctx) then
@@ -173,9 +173,9 @@ function IconBrowser.Show(ctx, settings)
         end
         
         r.ImGui_EndChild(ctx)
-        r.ImGui_End(ctx)
     end
     
+    r.ImGui_End(ctx)
     IconBrowser.show_window = open
     return IconBrowser.selected_icon
 end
