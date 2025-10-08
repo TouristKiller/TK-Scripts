@@ -1,6 +1,6 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.0.2
+-- @version 2.0.3
 
 --------------------------------------------------------------------------------
 local r = reaper
@@ -297,11 +297,11 @@ local function SaveNotebook()
     local show_status_value = tostring(state.show_status and "true" or "false")
     local tabs_enabled_value = tostring(state.tabs_enabled and "true" or "false")
     
-    -- Serialize tabs data
+    -- Serialize tabs data (always save, even if tabs are disabled, to preserve them)
     local tabs_data_value = ""
-    if state.tabs_enabled and #state.tabs > 0 then
-        -- Save current tab text and images before serializing
-        if state.tabs[state.active_tab_index] then
+    if #state.tabs > 0 then
+        -- Save current tab text and images before serializing (only if tabs are enabled)
+        if state.tabs_enabled and state.tabs[state.active_tab_index] then
             state.tabs[state.active_tab_index].text = state.text
             state.tabs[state.active_tab_index].images = state.images
             state.tabs[state.active_tab_index].strokes = state.strokes
@@ -350,8 +350,8 @@ local function SaveNotebook()
         saved_tabs_data = WriteProjExtState(state.current_proj, EXT_NAMESPACE, tabs_data_key, tabs_data_value)
     end
     
-    -- Save images and strokes per tab
-    if state.tabs_enabled and #state.tabs > 0 then
+    -- Save images and strokes per tab (always save, even if tabs are disabled, to preserve them)
+    if #state.tabs > 0 then
         for idx, tab in ipairs(state.tabs) do
             local tab_images_key, tab_strokes_key
             if is_item_mode then
@@ -839,13 +839,13 @@ local function LoadProjectState(proj)
         state.auto_save_enabled = true
     end
     
-    -- Load tabs data
+    -- Load tabs data (always load, even if tabs are disabled, to preserve them)
     state.tabs_enabled = stored_tabs_enabled == "true"
     state.tabs = {}
     state.active_tab_index = 1
     state.strokes = {}
     
-    if state.tabs_enabled and stored_tabs_data and stored_tabs_data ~= "" then
+    if stored_tabs_data and stored_tabs_data ~= "" then
         local parts = {}
         for part in stored_tabs_data:gmatch("[^|]+") do
             table.insert(parts, part)
@@ -1097,7 +1097,7 @@ local function LoadGlobalState()
     state.active_tab_index = 1
     state.strokes = {}
     
-    if state.tabs_enabled and stored_tabs_data and stored_tabs_data ~= "" then
+    if stored_tabs_data and stored_tabs_data ~= "" then
         local parts = {}
         for part in stored_tabs_data:gmatch("[^|]+") do
             table.insert(parts, part)
@@ -1352,13 +1352,13 @@ local function LoadTrackState(proj, track, track_guid)
         state.auto_save_enabled = true
     end
     
-    -- Load tabs data
+    -- Load tabs data (always load, even if tabs are disabled, to preserve them)
     state.tabs_enabled = stored_tabs_enabled == "true"
     state.tabs = {}
     state.active_tab_index = 1
     state.strokes = {}  -- Reset strokes
     
-    if state.tabs_enabled and stored_tabs_data and stored_tabs_data ~= "" then
+    if stored_tabs_data and stored_tabs_data ~= "" then
         -- Format: tab_count|active_index|tab1_name:tab1_text|tab2_name:tab2_text|...
         local parts = {}
         for part in stored_tabs_data:gmatch("[^|]+") do
@@ -1632,7 +1632,7 @@ local function LoadItemState(proj, item, item_guid)
     state.active_tab_index = 1
     state.strokes = {}  -- Reset strokes
     
-    if state.tabs_enabled and stored_tabs_data and stored_tabs_data ~= "" then
+    if stored_tabs_data and stored_tabs_data ~= "" then
         local parts = {}
         for part in stored_tabs_data:gmatch("[^|]+") do
             table.insert(parts, part)

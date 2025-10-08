@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.9.0
+-- @version 1.9.1
 -- @changelog:
 --[[     
 ++ Fixed bug
