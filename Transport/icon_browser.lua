@@ -60,16 +60,17 @@ function IconBrowser.Show(ctx, settings)
     
     if visible then
         if settings then
-            -- Initialize values if they don't exist
+            -- Initialize defaults only if not set
             settings.icon_browser_width = settings.icon_browser_width or 600
             settings.icon_browser_height = settings.icon_browser_height or 400
             
+            -- Only update if window was resized (with tolerance to prevent constant updates)
             local current_width = r.ImGui_GetWindowWidth(ctx)
             local current_height = r.ImGui_GetWindowHeight(ctx)
-            if current_width ~= settings.icon_browser_width then
+            if current_width and math.abs(current_width - settings.icon_browser_width) > 5 then
                 settings.icon_browser_width = math.max(400, current_width)
             end
-            if current_height ~= settings.icon_browser_height then
+            if current_height and math.abs(current_height - settings.icon_browser_height) > 5 then
                 settings.icon_browser_height = math.max(300, current_height)
             end
         end
@@ -88,8 +89,16 @@ function IconBrowser.Show(ctx, settings)
         r.ImGui_BeginChild(ctx, "IconScrollArea", 0, -20)
         
         local child_width = r.ImGui_GetWindowWidth(ctx)
-        
         local style_spacing_x = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+        
+        -- Safety check: if we can't get valid values, show error and exit early
+        if not child_width or not style_spacing_x then
+            r.ImGui_Text(ctx, "Error: Unable to initialize icon browser")
+            r.ImGui_EndChild(ctx)
+            r.ImGui_End(ctx)
+            IconBrowser.show_window = open
+            return IconBrowser.selected_icon
+        end
         
         local icon_with_spacing = IconBrowser.grid_size + style_spacing_x
         
@@ -103,7 +112,23 @@ function IconBrowser.Show(ctx, settings)
         
         local scroll_y = r.ImGui_GetScrollY(ctx)
         local window_height = r.ImGui_GetWindowHeight(ctx)
+        
+        -- Safety check for scroll values
+        if not scroll_y or not window_height then
+            r.ImGui_Text(ctx, "Error: Unable to get scroll information")
+            r.ImGui_EndChild(ctx)
+            r.ImGui_End(ctx)
+            IconBrowser.show_window = open
+            return IconBrowser.selected_icon
+        end
+        
         local row_height = IconBrowser.grid_size
+        
+        -- Ensure columns is valid
+        if not columns or columns <= 0 then
+            columns = 1
+        end
+        
         local start_row = math.max(0, math.floor(scroll_y / row_height) - 1)
         local end_row = math.ceil((scroll_y + window_height) / row_height) + 1
         local total_rows = math.ceil(#IconBrowser.filtered_icons / columns)

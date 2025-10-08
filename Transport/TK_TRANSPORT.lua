@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.9.2
+-- @version 0.9.3
 -- @changelog 
 --[[
 
@@ -6136,6 +6136,11 @@ function Main()
  end
  ShowSettings(main_window_width, main_window_height)
  ShowInstanceManager()
+ 
+ -- Handle IconBrowser outside of all other windows to prevent GUI conflicts
+ if CustomButtons then
+     ButtonEditor.HandleIconBrowser(ctx, CustomButtons, settings)
+ end
 
  if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem())
  and r.ImGui_IsMouseClicked(ctx, 1)

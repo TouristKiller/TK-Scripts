@@ -7,6 +7,7 @@ local ButtonEditor = {}
 local new_preset_name = ""
 local new_group_name = ""
 local has_unsaved_changes = false
+local active_icon_button = nil  -- Track which button is selecting an icon
 
 local cb_section_states = {
     basic_open = true,
@@ -568,13 +569,9 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                     if button.use_icon then
                         if r.ImGui_Button(ctx, "Browse Icons") then
                             IconBrowser.show_window = true
+                            active_icon_button = button  -- Remember which button is selecting an icon
                         end
-                        local selected_icon = IconBrowser.Show(ctx, settings)
-                        if selected_icon then
-                            button.icon_name = selected_icon
-                            button.icon = nil
-                            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-                        end
+                        -- Note: IconBrowser.Show is called outside this function to prevent GUI conflicts
                     end
 
                     r.ImGui_TableNextRow(ctx)
@@ -2008,6 +2005,18 @@ function ButtonEditor.ShowImportInline(ctx, custom_buttons)
             end
             r.ImGui_PopID(ctx)
         end
+    end
+end
+
+-- Handle IconBrowser separately to avoid GUI conflicts with settings window
+function ButtonEditor.HandleIconBrowser(ctx, custom_buttons, settings)
+    local selected_icon = IconBrowser.Show(ctx, settings)
+    if selected_icon and active_icon_button then
+        active_icon_button.icon_name = selected_icon
+        active_icon_button.icon = nil
+        custom_buttons.SaveCurrentButtons()
+        has_unsaved_changes = true
+        active_icon_button = nil  -- Clear the reference
     end
 end
 
