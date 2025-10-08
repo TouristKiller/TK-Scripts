@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.2
+-- @version 1.0.3
 -- @changelog 
 --[[
 + FIXED: Script no longer switches focus between multiple REAPER instances when running simultaneously
@@ -29,6 +29,8 @@ local ImGuiScale_saved   = nil
 local screen_scale       = nil
 local grid_divide_state  = 0
 local hasDrawingFocusBeenHandled = false
+local last_focus_check_time = 0
+local FOCUS_CHECK_INTERVAL = 0.5  -- Check every 0.5 seconds instead of every frame
 
 local color_cache        = {}
 local cached_bg_color    = nil
@@ -84,6 +86,10 @@ end
 local function handleDrawingFocus()
     if hasDrawingFocusBeenHandled then return end
     local windowsToFocus = {}
+    
+    -- Get the process ID of the current REAPER instance
+    local main_pid = r.JS_Window_GetPID and r.JS_Window_GetPID(main) or nil
+    
     local arr = r.new_array({}, 1024)
     local ret = r.JS_Window_ArrayAllTop(arr)
     if ret >= 1 then
@@ -91,15 +97,10 @@ local function handleDrawingFocus()
         for j = 1, #childs do
             local hwnd = r.JS_Window_HandleFromAddress(childs[j])
             if r.JS_Window_IsVisible(hwnd) then
-                local parent = r.JS_Window_GetParent(hwnd)
-                local isOurWindow = (hwnd == main) or (parent == main)
+                -- Only process windows from the same process (same REAPER instance)
+                local window_pid = r.JS_Window_GetPID and r.JS_Window_GetPID(hwnd) or nil
                 
-                if not isOurWindow and parent == nil then
-                    local owner = r.JS_Window_GetOwner(hwnd)
-                    isOurWindow = (owner == main)
-                end
-                
-                if isOurWindow then
+                if not main_pid or not window_pid or window_pid == main_pid then
                     local className = r.JS_Window_GetClassName(hwnd)
                     if className:match("^REAPER") or  
                     className == "#32770" or       
@@ -112,6 +113,7 @@ local function handleDrawingFocus()
             end
         end
     end
+    
     local trackCount = r.CountTracks(0)
     for i = 0, trackCount - 1 do
         local track = r.GetTrack(0, i)
@@ -2033,7 +2035,13 @@ end
 profiler.run()
 profiler.start()]]--
 function loop()
-    handleDrawingFocus()
+    -- Only check focus every 0.5 seconds to reduce CPU usage
+    local current_time = r.time_precise()
+    if current_time - last_focus_check_time >= FOCUS_CHECK_INTERVAL then
+        handleDrawingFocus()
+        last_focus_check_time = current_time
+    end
+    
     if r.GetExtState("TK_TRACKNAMES", "reload_settings") == "1" then
         LoadSettings()
         r.SetExtState("TK_TRACKNAMES", "reload_settings", "0", false)
