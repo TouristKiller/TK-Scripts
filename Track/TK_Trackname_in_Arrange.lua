@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.6
+-- @version 1.0.7
 -- @changelog 
 --[[
 + FIXED: Overlay now properly repositions when returning to REAPER from other applications
@@ -8,7 +8,7 @@
 + FIXED: Script no longer switches focus between multiple REAPER instances when running simultaneously
 ]]--
 
-local SCRIPT_VERSION = "1.0.6"
+local SCRIPT_VERSION = "1.0.7
 
 local r                  = reaper
 -- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
