@@ -30,6 +30,58 @@ local icon_check_window = {
     title = "Icon Health Check"
 }
 
+-- Style clipboard for copy/paste functionality
+local style_clipboard = {
+    has_data = false,
+    data = {},
+    -- Which properties to copy (saved preferences)
+    copy_settings = {
+        width = true,
+        border = true,
+        tooltip = true,
+        use_icon = true,
+        show_text = true,
+        color_base = true,
+        color_hover = true,
+        color_active = true,
+        color_text = true,
+        color_border = true,
+        font = true,
+        font_size = true,
+        rounding = true,
+        border_thickness = true,
+    }
+}
+
+local style_settings_window = {
+    open = false,
+    ctx = nil,
+    title = "Copy Style Settings"
+}
+
+-- Load style copy settings from ExtState
+local function LoadStyleCopySettings()
+    for key, _ in pairs(style_clipboard.copy_settings) do
+        local value = r.GetExtState("TK_TRANSPORT_BUTTON_STYLE", key)
+        if value == "true" then
+            style_clipboard.copy_settings[key] = true
+        elseif value == "false" then
+            style_clipboard.copy_settings[key] = false
+        end
+        -- If value is empty, keep the default
+    end
+end
+
+-- Save style copy settings to ExtState
+local function SaveStyleCopySettings()
+    for key, value in pairs(style_clipboard.copy_settings) do
+        r.SetExtState("TK_TRANSPORT_BUTTON_STYLE", key, tostring(value), true)
+    end
+end
+
+-- Load settings on module initialization
+LoadStyleCopySettings()
+
 local function to_int(value, default)
     value = tonumber(value)
     if not value then return default end
@@ -215,6 +267,202 @@ local function GetDisplayOrder(items)
     end
     
     return display_order
+end
+
+-- Function to show style copy settings window
+local function ShowStyleSettingsWindow(ctx)
+    if not style_settings_window.open then return end
+    
+    local flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_AlwaysAutoResize()
+    local visible, open = r.ImGui_Begin(ctx, style_settings_window.title, true, flags)
+    
+    if visible then
+        r.ImGui_Text(ctx, "Select which properties to copy:")
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_Text(ctx, "Size & Layout:")
+        local rv
+        rv, style_clipboard.copy_settings.width = r.ImGui_Checkbox(ctx, "Icon Size / Width", style_clipboard.copy_settings.width)
+        if rv then SaveStyleCopySettings() end
+        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Display Options:")
+        rv, style_clipboard.copy_settings.border = r.ImGui_Checkbox(ctx, "Show Border", style_clipboard.copy_settings.border)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.use_icon = r.ImGui_Checkbox(ctx, "Use Icon", style_clipboard.copy_settings.use_icon)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.show_text = r.ImGui_Checkbox(ctx, "Show Text with Icon", style_clipboard.copy_settings.show_text)
+        if rv then SaveStyleCopySettings() end
+        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Colors:")
+        rv, style_clipboard.copy_settings.color_base = r.ImGui_Checkbox(ctx, "Base Color", style_clipboard.copy_settings.color_base)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.color_hover = r.ImGui_Checkbox(ctx, "Hover Color", style_clipboard.copy_settings.color_hover)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.color_active = r.ImGui_Checkbox(ctx, "Active Color", style_clipboard.copy_settings.color_active)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.color_text = r.ImGui_Checkbox(ctx, "Text Color", style_clipboard.copy_settings.color_text)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.color_border = r.ImGui_Checkbox(ctx, "Border Color", style_clipboard.copy_settings.color_border)
+        if rv then SaveStyleCopySettings() end
+        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Text & Font:")
+        rv, style_clipboard.copy_settings.font = r.ImGui_Checkbox(ctx, "Font", style_clipboard.copy_settings.font)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.font_size = r.ImGui_Checkbox(ctx, "Font Size", style_clipboard.copy_settings.font_size)
+        if rv then SaveStyleCopySettings() end
+        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Border Style:")
+        rv, style_clipboard.copy_settings.rounding = r.ImGui_Checkbox(ctx, "Button Rounding", style_clipboard.copy_settings.rounding)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.border_thickness = r.ImGui_Checkbox(ctx, "Border Thickness", style_clipboard.copy_settings.border_thickness)
+        if rv then SaveStyleCopySettings() end
+        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+        
+        local button_width = 80
+        local avail = r.ImGui_GetContentRegionAvail(ctx)
+        local center_x = (avail - (button_width * 3 + 20)) * 0.5
+        if center_x > 0 then
+            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + center_x)
+        end
+        
+        if r.ImGui_Button(ctx, "Select All", button_width) then
+            for k, _ in pairs(style_clipboard.copy_settings) do
+                style_clipboard.copy_settings[k] = true
+            end
+            SaveStyleCopySettings()
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Deselect All", button_width) then
+            for k, _ in pairs(style_clipboard.copy_settings) do
+                style_clipboard.copy_settings[k] = false
+            end
+            SaveStyleCopySettings()
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "OK", button_width) then
+            style_settings_window.open = false
+        end
+        
+        r.ImGui_End(ctx)
+    end
+    
+    if not open then
+        style_settings_window.open = false
+    end
+end
+
+-- Function to copy style from button
+local function CopyButtonStyle(button)
+    if not button then return end
+    
+    style_clipboard.data = {}
+    local settings = style_clipboard.copy_settings
+    
+    if settings.width then
+        style_clipboard.data.width = button.width
+    end
+    if settings.border then
+        style_clipboard.data.show_border = button.show_border
+    end
+    if settings.use_icon then
+        style_clipboard.data.use_icon = button.use_icon
+        style_clipboard.data.icon_name = button.icon_name
+    end
+    if settings.show_text then
+        style_clipboard.data.show_text_with_icon = button.show_text_with_icon
+    end
+    if settings.color_base then
+        style_clipboard.data.color = button.color
+    end
+    if settings.color_hover then
+        style_clipboard.data.hover_color = button.hover_color
+    end
+    if settings.color_active then
+        style_clipboard.data.active_color = button.active_color
+    end
+    if settings.color_text then
+        style_clipboard.data.text_color = button.text_color
+    end
+    if settings.color_border then
+        style_clipboard.data.border_color = button.border_color
+    end
+    if settings.font then
+        style_clipboard.data.font_name = button.font_name
+    end
+    if settings.font_size then
+        style_clipboard.data.font_size = button.font_size
+    end
+    if settings.rounding then
+        style_clipboard.data.rounding = button.rounding
+    end
+    if settings.border_thickness then
+        style_clipboard.data.border_thickness = button.border_thickness
+    end
+    
+    style_clipboard.has_data = true
+end
+
+-- Function to paste style to button
+local function PasteButtonStyle(button)
+    if not button or not style_clipboard.has_data then return false end
+    
+    local changed = false
+    
+    for key, value in pairs(style_clipboard.data) do
+        if key == "icon_name" then
+            -- Special handling for icons - also clear the cached icon
+            if button.icon_name ~= value then
+                local ButtonRenderer = require('button_renderer')
+                if button.icon_name and ButtonRenderer.image_cache[button.icon_name] then
+                    ButtonRenderer.image_cache[button.icon_name] = nil
+                end
+                button.icon_name = value
+                button.icon = nil
+                changed = true
+            end
+        elseif key == "font_name" or key == "font_size" then
+            -- Clear font cache when font properties change
+            if button[key] ~= value then
+                button[key] = value
+                button.font = nil
+                changed = true
+            end
+        else
+            -- Regular property copy
+            if button[key] ~= value then
+                button[key] = value
+                changed = true
+            end
+        end
+    end
+    
+    return changed
+end
+
+-- Function to paste style to all buttons in a group
+local function PasteStyleToGroup(button, custom_buttons)
+    if not button or not button.group or button.group == "" then return false end
+    if not style_clipboard.has_data then return false end
+    
+    local changed = false
+    local gname = button.group
+    
+    for _, b in ipairs(custom_buttons.buttons) do
+        if b.group == gname then
+            -- Use PasteButtonStyle for each button in the group
+            if PasteButtonStyle(b) then
+                changed = true
+            end
+        end
+    end
+    
+    return changed
 end
 
 
@@ -707,7 +955,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_TextDisabled(ctx, "(This Button is not in a group)")
         else
             r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Edit all buttons in Current Group:")
+            r.ImGui_Text(ctx, "Group Settings:")
             local gcount = 0
             for _, b in ipairs(custom_buttons.buttons) do
                 if b.group and b.group ~= "" and button.group == b.group then
@@ -802,131 +1050,6 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Set all buttons in this group to the same Y position") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Size") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.width = button.width
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy size/width to the group") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Color") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.color = button.color
-                        b.hover_color = button.hover_color
-                        b.active_color = button.active_color
-                        b.text_color = button.text_color
-                        b.border_color = button.border_color
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy all colors to the group") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Use Icon") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.use_icon = button.use_icon
-                        b.icon_name = button.icon_name
-                        b.icon = nil 
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy 'Use Icon' setting and icon to the group") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Show Text") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.show_text_with_icon = button.show_text_with_icon
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy 'Show Text' setting to the group") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Rounding") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.rounding = button.rounding
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy button rounding to the group") end
-            
-            if r.ImGui_Button(ctx, "Border Thick") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.border_thickness = button.border_thickness
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy border thickness to the group") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Border Color") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.border_color = button.border_color
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy border color to the group") end
-            r.ImGui_SameLine(ctx)
-            local all_borders = true
-            for _, b in ipairs(custom_buttons.buttons) do
-                if b.group == gname and b.show_border == false then all_borders = false break end
-            end
-            local border_label = all_borders and "No Borders" or "Borders"
-            if r.ImGui_Button(ctx, border_label .. "##grpToggleBorder") then
-                local new_border = not all_borders
-                for _, b in ipairs(custom_buttons.buttons) do if b.group == gname then b.show_border = new_border end end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                if all_borders then
-                    r.ImGui_SetTooltip(ctx, "Disable borders for entire group")
-                else
-                    r.ImGui_SetTooltip(ctx, "Enable borders for entire group")
-                end
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Text Color") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.text_color = button.text_color
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy text color to the group") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Text Size") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.font_size = button.font_size
-                        b.font = nil 
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy text size to the group") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Font") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.font_name = button.font_name
-                        b.font = nil 
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
         end
     end  
 
@@ -1244,6 +1367,92 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
         end 
         
     end  
+    
+    -- Copy/Paste Style buttons at the bottom of the editor
+    if custom_buttons.current_edit then
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+        
+        local has_sel = custom_buttons.current_edit ~= nil
+        
+        r.ImGui_Text(ctx, "Button Style:")
+        r.ImGui_SameLine(ctx)
+        
+        if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not has_sel) end
+        if r.ImGui_Button(ctx, "Copy Style", 100, 0) and has_sel then
+            CopyButtonStyle(custom_buttons.buttons[custom_buttons.current_edit])
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Copy style settings from this button")
+        end
+        if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "⚙##style_settings", 30, 0) then
+            style_settings_window.open = not style_settings_window.open
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Choose which style properties to copy")
+        end
+        
+        r.ImGui_SameLine(ctx)
+        local can_paste = has_sel and style_clipboard.has_data
+        if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_paste) end
+        if style_clipboard.has_data then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FF88)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5090FFAA)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x60A0FFCC)
+        end
+        if r.ImGui_Button(ctx, "Paste Style", 100, 0) and can_paste then
+            if PasteButtonStyle(custom_buttons.buttons[custom_buttons.current_edit]) then
+                custom_buttons.SaveCurrentButtons()
+                has_unsaved_changes = true
+            end
+        end
+        if style_clipboard.has_data then
+            r.ImGui_PopStyleColor(ctx, 3)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            if style_clipboard.has_data then
+                r.ImGui_SetTooltip(ctx, "Paste copied style to this button")
+            else
+                r.ImGui_SetTooltip(ctx, "No style copied yet")
+            end
+        end
+        if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        
+        -- Paste Style to Group button (only visible when button is in a group)
+        local button = custom_buttons.buttons[custom_buttons.current_edit]
+        if button and button.group and button.group ~= "" then
+            r.ImGui_SameLine(ctx)
+            local can_paste_group = style_clipboard.has_data
+            if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_paste_group) end
+            if style_clipboard.has_data then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00AA44FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x10BB55FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x20CC66FF)
+            end
+            if r.ImGui_Button(ctx, "Paste Style to Group", 150, 0) and can_paste_group then
+                if PasteStyleToGroup(button, custom_buttons) then
+                    custom_buttons.SaveCurrentButtons()
+                    has_unsaved_changes = true
+                end
+            end
+            if style_clipboard.has_data then
+                r.ImGui_PopStyleColor(ctx, 3)
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                if style_clipboard.has_data then
+                    r.ImGui_SetTooltip(ctx, "Paste the copied style to all buttons in group '" .. button.group .. "'\n(excluding position and alignment)")
+                else
+                    r.ImGui_SetTooltip(ctx, "No style copied yet. Use 'Copy Style' button first.")
+                end
+            end
+            if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        end
+        
+        r.ImGui_Spacing(ctx)
+    end
     
 
 end
@@ -2037,6 +2246,11 @@ function ButtonEditor.HandleIconBrowser(ctx, custom_buttons, settings)
         
         IconBrowser.selected_icon = nil
     end
+end
+
+-- Handle Style Settings Window
+function ButtonEditor.HandleStyleSettingsWindow(ctx)
+    ShowStyleSettingsWindow(ctx)
 end
 
 ButtonEditor.cb_section_states = cb_section_states

@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.9.6
+-- @version 0.9.7
 -- @changelog 
 --[[
 
@@ -1340,7 +1340,9 @@ function ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  
  r.ImGui_Separator(ctx)
  
+ r.ImGui_Spacing(ctx)
  r.ImGui_Text(ctx, "Colors:")
+ 
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
  
  if r.ImGui_BeginTable(ctx, "EnvelopeColors", 4, r.ImGui_TableFlags_SizingStretchSame()) then
@@ -1356,10 +1358,16 @@ function ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  rv, settings.env_button_color_active = r.ImGui_ColorEdit4(ctx, "Active", settings.env_button_color_active or 0x555555FF, color_flags)
  
  r.ImGui_TableSetColumnIndex(ctx, 3)
+ rv, settings.env_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.env_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.env_override_active_color = r.ImGui_ColorEdit4(ctx, "Override", settings.env_override_active_color or 0x66CC66FF, color_flags)
  
  r.ImGui_EndTable(ctx)
  end
+ 
+ r.ImGui_Separator(ctx)
  
  r.ImGui_Text(ctx, "Button Rounding:")
  r.ImGui_SetNextItemWidth(ctx, 150)
@@ -1418,12 +1426,12 @@ function ShowTempoBPMSettings(ctx, main_window_width, main_window_height)
  r.ImGui_Separator(ctx)
 
  r.ImGui_Spacing(ctx)
- r.ImGui_Text(ctx, "Button Colors:")
+ r.ImGui_Text(ctx, "Colors:")
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
  local rv
  
- if r.ImGui_BeginTable(ctx, "TempoColors", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "TempoColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
@@ -1432,8 +1440,13 @@ function ShowTempoBPMSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableSetColumnIndex(ctx, 1)
  rv, settings.tempo_button_color_hover = r.ImGui_ColorEdit4(ctx, "Hover", settings.tempo_button_color_hover or 0x444444FF, color_flags)
  
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.tempo_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.tempo_text_color or 0xFFFFFFFF, color_flags)
+ 
  r.ImGui_EndTable(ctx)
  end
+ 
+ r.ImGui_Separator(ctx)
  
  r.ImGui_Text(ctx, "Button Rounding:")
  r.ImGui_SetNextItemWidth(ctx, 150)
@@ -1492,11 +1505,11 @@ function ShowTimeSignatureSettings(ctx, main_window_width, main_window_height)
  r.ImGui_Separator(ctx)
 
  r.ImGui_Spacing(ctx)
- r.ImGui_Text(ctx, "Button Colors:")
+ r.ImGui_Text(ctx, "Colors:")
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
  
- if r.ImGui_BeginTable(ctx, "TimeSigColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "TimeSigColors", 4, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
@@ -1508,8 +1521,13 @@ function ShowTimeSignatureSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableSetColumnIndex(ctx, 2)
  rv, settings.timesig_button_color_active = r.ImGui_ColorEdit4(ctx, "Active", settings.timesig_button_color_active or 0x555555FF, color_flags)
  
+ r.ImGui_TableSetColumnIndex(ctx, 3)
+ rv, settings.timesig_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.timesig_text_color or 0xFFFFFFFF, color_flags)
+ 
  r.ImGui_EndTable(ctx)
  end
+ 
+ r.ImGui_Separator(ctx)
  
  r.ImGui_Text(ctx, "Button Rounding:")
  r.ImGui_SetNextItemWidth(ctx, 150)
@@ -1568,12 +1586,22 @@ function ShowTimeSelectionSettings(ctx, main_window_width, main_window_height)
  r.ImGui_Separator(ctx)
 
  r.ImGui_Spacing(ctx)
- r.ImGui_Text(ctx, "Button Color:")
+ r.ImGui_Text(ctx, "Colors:")
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
- rv, settings.timesel_color = r.ImGui_ColorEdit4(ctx, "Button Color", settings.timesel_color or 0x333333FF, color_flags)
  
- r.ImGui_SameLine(ctx)
+ if r.ImGui_BeginTable(ctx, "TimeSelColors", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.timesel_color = r.ImGui_ColorEdit4(ctx, "Normal", settings.timesel_color or 0x333333FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.timesel_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.timesel_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
  rv, settings.timesel_toggle_invisible = r.ImGui_Checkbox(ctx, "Toggle Invisible Button", settings.timesel_toggle_invisible or false)
  
  r.ImGui_Separator(ctx)
@@ -1648,7 +1676,7 @@ function ShowCursorPositionSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
- rv, settings.cursorpos_button_color = r.ImGui_ColorEdit4(ctx, "Button", settings.cursorpos_button_color or 0x333333FF, color_flags)
+ rv, settings.cursorpos_button_color = r.ImGui_ColorEdit4(ctx, "Normal", settings.cursorpos_button_color or 0x333333FF, color_flags)
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  rv, settings.cursorpos_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.cursorpos_text_color or 0xFFFFFFFF, color_flags)
@@ -1981,11 +2009,11 @@ function ShowTapTempoSettings(ctx, main_window_width, main_window_height)
  end
 
  r.ImGui_Separator(ctx)
- 
- r.ImGui_Text(ctx, "Button Colors:")
+
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Colors:")
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
- 
  if r.ImGui_BeginTable(ctx, "TapTempoColors", 4, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  
@@ -2031,8 +2059,10 @@ function ShowPlayrateSettings(ctx, main_window_width, main_window_height)
  
  r.ImGui_Separator(ctx)
  
- local color_flags = r.ImGui_ColorEditFlags_NoInputs()
+ r.ImGui_Spacing(ctx)
  r.ImGui_Text(ctx, "Colors:")
+ 
+ local color_flags = r.ImGui_ColorEditFlags_NoInputs()
  
  if r.ImGui_BeginTable(ctx, "PlayrateColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
@@ -3893,9 +3923,11 @@ function EnvelopeOverride(main_window_width, main_window_height)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.env_button_rounding or 0)
 
  if font_env then r.ImGui_PushFont(ctx, font_env, settings.env_font_size or settings.font_size) end
+ if settings.env_text_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.env_text_color) end
  if r.ImGui_Button(ctx, "ENV") or r.ImGui_IsItemClicked(ctx, 1) then
  r.ImGui_OpenPopup(ctx, "AutomationMenu")
  end
+ if settings.env_text_color then r.ImGui_PopStyleColor(ctx) end
  if font_env then r.ImGui_PopFont(ctx) end
  
  if settings.env_show_border then
@@ -5384,7 +5416,9 @@ function ShowTempo(main_window_width, main_window_height)
  local mbt_str = string.format("%d.%d.%02d", math.floor(measures+1), math.floor(beatsInMeasure+1), ticks)
  local combined_mbt = mbt_str
  if font_tempo then reaper.ImGui_PushFont(ctx, font_tempo, settings.tempo_font_size or settings.font_size) end
+ if settings.tempo_text_color then reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), settings.tempo_text_color) end
  reaper.ImGui_Button(ctx, tempo_text)
+ if settings.tempo_text_color then reaper.ImGui_PopStyleColor(ctx) end
  
  if settings.tempo_show_border then
  local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -5616,11 +5650,13 @@ function ShowTimeSignature(main_window_width, main_window_height)
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), settings.timesig_button_color or settings.button_normal)
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), settings.timesig_button_color_hover or settings.button_hovered)
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), settings.timesig_button_color_active or settings.button_active)
+ if settings.timesig_text_color then reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), settings.timesig_text_color) end
  
  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameBorderSize(), 0)
  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), settings.timesig_button_rounding or 0)
  
  local clicked_ts = reaper.ImGui_Button(ctx, ts_text)
+ if settings.timesig_text_color then reaper.ImGui_PopStyleColor(ctx) end
  reaper.ImGui_PopStyleColor(ctx, 3)
  
  if settings.timesig_show_border then
@@ -5777,11 +5813,15 @@ function ShowTimeSelection(main_window_width, main_window_height)
 
  if display_text == "" then
  if font_timesel then r.ImGui_PushFont(ctx, font_timesel, settings.timesel_font_size or settings.font_size) end
+ if settings.timesel_text_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.timesel_text_color) end
  r.ImGui_Button(ctx, "##TimeSelectionEmpty")
+ if settings.timesel_text_color then r.ImGui_PopStyleColor(ctx) end
  if font_timesel then r.ImGui_PopFont(ctx) end
  else
  if font_timesel then r.ImGui_PushFont(ctx, font_timesel, settings.timesel_font_size or settings.font_size) end
+ if settings.timesel_text_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.timesel_text_color) end
  r.ImGui_Button(ctx, display_text)
+ if settings.timesel_text_color then r.ImGui_PopStyleColor(ctx) end
  if font_timesel then r.ImGui_PopFont(ctx) end
  end
  
@@ -6230,6 +6270,7 @@ function Main()
  -- Handle IconBrowser outside of all other windows to prevent GUI conflicts
  if CustomButtons then
      ButtonEditor.HandleIconBrowser(ctx, CustomButtons, settings)
+     ButtonEditor.HandleStyleSettingsWindow(ctx)
  end
 
  if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem())
