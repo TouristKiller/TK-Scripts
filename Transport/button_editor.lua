@@ -59,6 +59,25 @@ local style_settings_window = {
     title = "Copy Style Settings"
 }
 
+-- Auto align spacing setting
+local auto_align_spacing = 3  -- default 3px
+
+-- Load auto align spacing from ExtState
+local function LoadAutoAlignSpacing()
+    local value = r.GetExtState("TK_TRANSPORT_BUTTON_EDITOR", "auto_align_spacing")
+    if value and value ~= "" then
+        local num = tonumber(value)
+        if num and num >= 0 and num <= 50 then
+            auto_align_spacing = num
+        end
+    end
+end
+
+-- Save auto align spacing to ExtState
+local function SaveAutoAlignSpacing()
+    r.SetExtState("TK_TRANSPORT_BUTTON_EDITOR", "auto_align_spacing", tostring(auto_align_spacing), true)
+end
+
 -- Load style copy settings from ExtState
 local function LoadStyleCopySettings()
     for key, _ in pairs(style_clipboard.copy_settings) do
@@ -81,6 +100,7 @@ end
 
 -- Load settings on module initialization
 LoadStyleCopySettings()
+LoadAutoAlignSpacing()
 
 local function to_int(value, default)
     value = tonumber(value)
@@ -463,6 +483,66 @@ local function PasteStyleToGroup(button, custom_buttons)
     end
     
     return changed
+end
+
+-- Function to calculate actual button width including icon and text
+local function CalculateButtonWidth(ctx, button)
+    if button.use_icon and button.icon_name then
+        if button.show_text_with_icon and button.name and button.name ~= "" then
+            -- Icon + text mode
+            local icon_size = button.width or 100
+            local icon_padding = (button.show_border ~= false) and 4 or 0
+            local separator_width = (button.show_border ~= false) and 12 or 4
+            local padding = 8
+            
+            -- Calculate text size (need to push font if custom)
+            local font_pushed = false
+            if button.font_name and button.font_size then
+                if not button.font then
+                    button.font = r.ImGui_CreateFont(button.font_name, button.font_size)
+                end
+                if button.font and r.ImGui_ValidatePtr(button.font, 'ImGui_Font*') then
+                    r.ImGui_PushFont(ctx, button.font, button.font_size)
+                    font_pushed = true
+                end
+            end
+            
+            local text_size = r.ImGui_CalcTextSize(ctx, button.name)
+            
+            if font_pushed then
+                r.ImGui_PopFont(ctx)
+            end
+            
+            local total_width = icon_padding + icon_size + separator_width + text_size + padding
+            return total_width
+        else
+            -- Icon only mode
+            return button.width or 100
+        end
+    else
+        -- Text only mode
+        local font_pushed = false
+        if button.font_name and button.font_size then
+            if not button.font then
+                button.font = r.ImGui_CreateFont(button.font_name, button.font_size)
+            end
+            if button.font and r.ImGui_ValidatePtr(button.font, 'ImGui_Font*') then
+                r.ImGui_PushFont(ctx, button.font, button.font_size)
+                font_pushed = true
+            end
+        end
+        
+        local text_size = r.ImGui_CalcTextSize(ctx, button.name or "")
+        local padding = 16  -- ImGui default button padding
+        
+        if font_pushed then
+            r.ImGui_PopFont(ctx)
+        end
+        
+        -- Use either calculated width or button.width, whichever is larger
+        local calculated = text_size + padding
+        return math.max(calculated, button.width or 0)
+    end
 end
 
 
@@ -1050,6 +1130,49 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Set all buttons in this group to the same Y position") end
+            
+            -- Auto Align X with spacing input
+            r.ImGui_Text(ctx, "Spacing:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 50)
+            local rv, new_spacing = r.ImGui_InputDouble(ctx, "px##alignSpacing", auto_align_spacing, 0, 0, "%.0f")
+            if rv then
+                auto_align_spacing = clamp(to_int(new_spacing, 3), 0, 50)
+                SaveAutoAlignSpacing()
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Spacing between buttons for Auto Align X (0-50 pixels)") end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Auto Align X") then
+                -- Collect all buttons in this group
+                local group_buttons = {}
+                for _, b in ipairs(custom_buttons.buttons) do
+                    if b.group == gname then
+                        table.insert(group_buttons, b)
+                    end
+                end
+                
+                -- Sort by current X position
+                table.sort(group_buttons, function(a, b)
+                    return (a.position_px or 0) < (b.position_px or 0)
+                end)
+                
+                -- Auto-align with user-defined spacing
+                local current_x = group_buttons[1] and group_buttons[1].position_px or 0
+                
+                for _, b in ipairs(group_buttons) do
+                    b.position_px = current_x
+                    b.position = current_x / math.max(1, canvas_w)
+                    sanitize_button_xy(b, canvas_w, canvas_h)
+                    
+                    -- Calculate actual button width (includes icon, text, padding)
+                    local button_width = CalculateButtonWidth(ctx, b)
+                    current_x = current_x + button_width + auto_align_spacing
+                end
+                
+                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Auto-align buttons horizontally with custom spacing\n(calculates actual width including text and icons)") end
         end
     end  
 
