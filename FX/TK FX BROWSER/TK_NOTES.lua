@@ -1,6 +1,6 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.0.4
+-- @version 2.0.5
 
 --------------------------------------------------------------------------------
 local r = reaper
@@ -3664,6 +3664,12 @@ local function DrawMenuBar()
 end
 
 local function HandleShortcuts()
+    -- Check for ESC key to close the window
+    if has_key_pressed and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+        should_close = true
+        return
+    end
+    
     if not state.can_edit then return end
     local function ctrl_combo(key_const)
         if has_key_chord then
