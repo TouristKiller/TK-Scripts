@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.9.8
+-- @version 0.9.9
 -- @changelog 
 --[[
 
@@ -168,10 +168,12 @@ local default_settings = {
  tempo_font_name = "Arial",
  timesig_font_name = "Arial",
  local_time_font_name = "Arial",
+ taptempo_font_name = "Arial",
  tempo_font_size = 12,
  timesig_font_size = 12, 
  show_timesig_button = false, 
  local_time_font_size = 12, 
+ taptempo_font_size = 12,
  center_transport = true,
  current_preset_name = "",
 
