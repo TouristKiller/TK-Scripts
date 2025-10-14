@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.9.3
+-- @version 1.9.4
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -577,6 +577,7 @@ function SetDefaultConfig()
         auto_refresh_fx_list = false,
         show_screenshot_in_search = false,
         show_screenshot_window = true,
+        show_fx_chain_preview = true,
         resize_screenshots_with_window = false,
         dock_screenshot_window = false, 
         dock_screenshot_left = true,
@@ -1835,16 +1836,24 @@ function ClearScreenshotCache(periodic_cleanup)
             texture_last_used[key] = nil
             texture_load_queue[key] = nil
         end
+        
+        -- DON'T cleanup FX chain texture cache during periodic cleanup
+        -- Only cleanup on full clear
     else
     
         if r.ImGui_DestroyImage then
             for key, texture in pairs(search_texture_cache) do
                 r.ImGui_DestroyImage(ctx, texture)
             end
+            -- Cleanup FX chain texture cache only on full clear
+            for fx_name, texture in pairs(fx_chain_texture_cache) do
+                r.ImGui_DestroyImage(ctx, texture)
+            end
         end
         search_texture_cache = {}
         texture_last_used = {}
         texture_load_queue = {}
+        fx_chain_texture_cache = {}
     end
 end
 
@@ -4729,6 +4738,361 @@ function ShowPluginScreenshot()
     end
 end
 
+-- FX CHAIN PREVIEW FUNCTIONS
+local fx_chain_cache = {}
+local fx_chain_texture_cache = {}
+
+function SimplifyPluginName(fx_name)
+    -- Remove plugin type prefix (VST3:, CLAP:, JS:, etc.)
+    local clean = fx_name:gsub("^[^:]+:%s*", "")
+    
+    -- Remove manufacturer in parentheses at the end
+    clean = clean:gsub("%s*%([^%)]+%)%s*$", "")
+    
+    -- Trim whitespace
+    clean = clean:match("^%s*(.-)%s*$")
+    
+    return clean
+end
+
+function DrawNoScreenshotPlaceholder(width, height, text)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+    
+    -- Draw black rectangle
+    r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + width, cursor_y + height, 0x000000FF)
+    
+    -- Draw border
+    r.ImGui_DrawList_AddRect(draw_list, cursor_x, cursor_y, cursor_x + width, cursor_y + height, 0x404040FF, 0, 0, 1)
+    
+    -- Reserve space for the rectangle
+    r.ImGui_Dummy(ctx, width, height)
+    
+    -- Draw text centered
+    if text then
+        local text_width = r.ImGui_CalcTextSize(ctx, text)
+        local text_x = cursor_x + (width - text_width) * 0.5
+        local text_y = cursor_y + (height - r.ImGui_GetTextLineHeight(ctx)) * 0.5
+        r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0x808080FF, text)
+    end
+end
+
+function ParseFxChainFile(chain_path)
+    if fx_chain_cache[chain_path] then
+        return fx_chain_cache[chain_path]
+    end
+    
+    local fx_list = {}
+    local file = io.open(chain_path, "r")
+    if not file then return fx_list end
+    
+    for line in file:lines() do
+        -- Check for VST/VST3 plugins
+        local vst_match = line:match('^<VST%s+"([^"]+)"')
+        if vst_match then
+            -- Keep the full name with VST prefix for screenshot matching
+            table.insert(fx_list, vst_match)
+        end
+        
+        -- Check for JS plugins
+        local js_match = line:match('^<JS%s+([^%s"]+)')
+        if js_match then
+            -- Keep the full path for JS plugins
+            table.insert(fx_list, "JS: " .. js_match)
+        end
+        
+        -- Check for CLAP plugins
+        local clap_match = line:match('^<CLAP%s+"([^"]+)"')
+        if clap_match then
+            -- Keep the full name with CLAP prefix for screenshot matching
+            table.insert(fx_list, clap_match)
+        end
+        
+        -- Check for AU plugins (Mac)
+        local au_match = line:match('^<AU%s+"([^"]+)"')
+        if au_match then
+            table.insert(fx_list, au_match)
+        end
+    end
+    file:close()
+    
+    fx_chain_cache[chain_path] = fx_list
+    return fx_list
+end
+
+function ShowFxChainPreview(chain_path, chain_name)
+    -- Check if screenshot window is enabled (controlled by on/off button)
+    if not SHOW_PREVIEW then 
+        return 
+    end
+    
+    local fx_list = ParseFxChainFile(chain_path)
+    if not fx_list or #fx_list == 0 then 
+        return 
+    end
+    
+    -- Layout option: "first_large" or "grid"
+    local layout = "grid" -- Can be changed to "grid" for 3-column grid of all FX
+    
+    local display_width = config.screenshot_display_size or 200
+    local spacing = 4
+    local padding = 10
+    
+    if layout == "first_large" then
+        -- First FX large, others small in 3-column grid
+        local small_width = math.floor(display_width * 0.45)
+        local text_height = r.ImGui_GetTextLineHeight(ctx) + 4
+        local cols = 3
+        
+        -- Load first FX screenshot
+        local first_fx = fx_list[1]
+        local first_screenshot = LoadChainFxScreenshot(first_fx)
+        
+        local first_height = display_width * 0.8
+        if first_screenshot then
+            local fw, fh = r.ImGui_Image_GetSize(first_screenshot)
+            if fw and fh then
+                first_height = display_width * (fh / fw)
+            end
+        end
+        
+        -- Calculate grid for remaining FX
+        local remaining_count = #fx_list - 1
+        local rows = math.ceil(remaining_count / cols)
+        local small_height = small_width * 0.8
+        local grid_height = rows * (small_height + text_height + spacing)
+        
+        -- Add space for chain name at top
+        local chain_name_height = chain_name and (r.ImGui_GetTextLineHeightWithSpacing(ctx) + 10) or 0
+        local total_width = math.max(display_width, cols * small_width + (cols - 1) * spacing) + 2 * padding
+        local total_height = chain_name_height + first_height + text_height + (remaining_count > 0 and (grid_height + spacing * 2) or 0) + 2 * padding + 30
+        
+        -- Position window
+        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+        local window_x, window_y = r.ImGui_GetWindowPos(ctx)
+        local viewport = r.ImGui_GetMainViewport(ctx)
+        local viewport_pos_x = r.ImGui_Viewport_GetPos(viewport)
+        local is_left_docked = (window_x - viewport_pos_x) < 20
+        
+        local window_pos_x = is_left_docked and (mouse_x + 20) or (mouse_x - total_width - 20)
+        local window_pos_y = mouse_y + 20
+        
+        r.ImGui_SetNextWindowSize(ctx, total_width, total_height)
+        r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
+        r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
+        
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 1)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 14)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), spacing, spacing)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), padding, padding)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 7)
+
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x000000FF)
+        
+        if r.ImGui_Begin(ctx, "FX Chain Preview", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+            
+            -- Draw chain name at top
+            if chain_name then
+                local chain_text_width = r.ImGui_CalcTextSize(ctx, chain_name)
+                r.ImGui_SetCursorPosX(ctx, (total_width - chain_text_width) * 0.5)
+                r.ImGui_Text(ctx, chain_name)
+                r.ImGui_Separator(ctx)
+                r.ImGui_Dummy(ctx, 0, 5)
+            end
+            
+            -- Draw first FX (full size)
+            if first_screenshot and r.ImGui_ValidatePtr(first_screenshot, 'ImGui_Image*') then
+                r.ImGui_Image(ctx, first_screenshot, display_width, first_height)
+                
+                -- Draw simplified plugin name under first screenshot
+                local simple_name = SimplifyPluginName(first_fx)
+                local name_width = r.ImGui_CalcTextSize(ctx, simple_name)
+                r.ImGui_SetCursorPosX(ctx, (display_width - name_width) * 0.5 + padding)
+                r.ImGui_Text(ctx, simple_name)
+            else
+                -- Placeholder for missing first screenshot
+                DrawNoScreenshotPlaceholder(display_width, first_height, "No Screenshot")
+                local simple_name = SimplifyPluginName(first_fx or "Unknown")
+                local name_width = r.ImGui_CalcTextSize(ctx, simple_name)
+                r.ImGui_SetCursorPosX(ctx, (display_width - name_width) * 0.5 + padding)
+                r.ImGui_Text(ctx, simple_name)
+            end
+            
+            -- Draw remaining FX in 3-column grid
+            if remaining_count > 0 then
+                r.ImGui_Dummy(ctx, 0, spacing)
+                
+                for i = 2, #fx_list do
+                    local col = (i - 2) % cols
+                    local fx_name = fx_list[i]
+                    
+                    r.ImGui_BeginGroup(ctx)
+                    
+                    local screenshot = LoadChainFxScreenshot(fx_name)
+                    if screenshot and r.ImGui_ValidatePtr(screenshot, 'ImGui_Image*') then
+                        local sw, sh = r.ImGui_Image_GetSize(screenshot)
+                        if sw and sh then
+                            local actual_small_height = small_width * (sh / sw)
+                            r.ImGui_Image(ctx, screenshot, small_width, actual_small_height)
+                        else
+                            DrawNoScreenshotPlaceholder(small_width, small_height, "No Image")
+                        end
+                    else
+                        -- Placeholder for missing screenshot
+                        DrawNoScreenshotPlaceholder(small_width, small_height, "No Image")
+                    end
+                    
+                    -- Draw simplified plugin name under screenshot
+                    local simple_name = SimplifyPluginName(fx_name)
+                    local name_width = r.ImGui_CalcTextSize(ctx, simple_name)
+                    if name_width > small_width then
+                        -- Truncate if too long
+                        local truncated = simple_name
+                        while r.ImGui_CalcTextSize(ctx, truncated .. "...") > small_width and #truncated > 3 do
+                            truncated = truncated:sub(1, -2)
+                        end
+                        simple_name = truncated .. "..."
+                        name_width = r.ImGui_CalcTextSize(ctx, simple_name)
+                    end
+                    r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + (small_width - name_width) * 0.5)
+                    r.ImGui_Text(ctx, simple_name)
+                    
+                    r.ImGui_EndGroup(ctx)
+                    
+                    if col < cols - 1 and i < #fx_list then
+                        r.ImGui_SameLine(ctx)
+                    end
+                end
+            end
+            
+            r.ImGui_End(ctx)
+        end
+        
+        r.ImGui_PopStyleVar(ctx, 5)
+        r.ImGui_PopStyleColor(ctx, 2)
+        
+    else -- "grid" layout
+        -- All FX in 3-column grid with same size
+        local small_width = math.floor(display_width * 0.45)
+        local small_height = small_width * 0.8
+        local text_height = r.ImGui_GetTextLineHeight(ctx) + 4
+        local cols = 3
+        local rows = math.ceil(#fx_list / cols)
+        
+        -- Add space for chain name at top and plugin names under each screenshot
+        local chain_name_height = chain_name and (r.ImGui_GetTextLineHeightWithSpacing(ctx) + 10) or 0
+        local total_width = cols * small_width + (cols - 1) * spacing + 2 * padding
+        local total_height = chain_name_height + rows * (small_height + text_height + spacing) + 2 * padding
+        
+        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+        local window_x, window_y = r.ImGui_GetWindowPos(ctx)
+        local viewport = r.ImGui_GetMainViewport(ctx)
+        local viewport_pos_x = r.ImGui_Viewport_GetPos(viewport)
+        local is_left_docked = (window_x - viewport_pos_x) < 20
+        
+        local window_pos_x = is_left_docked and (mouse_x + 20) or (mouse_x - total_width - 20)
+        local window_pos_y = mouse_y + 20
+        
+        r.ImGui_SetNextWindowSize(ctx, total_width, total_height)
+        r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
+        r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
+        
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 1)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 14)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), spacing, spacing)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), padding, padding)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 7)
+
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x000000FF)
+        
+        if r.ImGui_Begin(ctx, "FX Chain Preview", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+            
+            -- Draw chain name at top
+            if chain_name then
+                local chain_text_width = r.ImGui_CalcTextSize(ctx, chain_name)
+                r.ImGui_SetCursorPosX(ctx, (total_width - chain_text_width) * 0.5)
+                r.ImGui_Text(ctx, chain_name)
+                r.ImGui_Separator(ctx)
+                r.ImGui_Dummy(ctx, 0, 5)
+            end
+            
+            for i, fx_name in ipairs(fx_list) do
+                local col = (i - 1) % cols
+                
+                r.ImGui_BeginGroup(ctx)
+                
+                local screenshot = LoadChainFxScreenshot(fx_name)
+                if screenshot and r.ImGui_ValidatePtr(screenshot, 'ImGui_Image*') then
+                    local sw, sh = r.ImGui_Image_GetSize(screenshot)
+                    if sw and sh then
+                        local actual_height = small_width * (sh / sw)
+                        r.ImGui_Image(ctx, screenshot, small_width, actual_height)
+                    else
+                        DrawNoScreenshotPlaceholder(small_width, small_height, "No Image")
+                    end
+                else
+                    DrawNoScreenshotPlaceholder(small_width, small_height, "No Image")
+                end
+                
+                -- Draw simplified plugin name under screenshot
+                local simple_name = SimplifyPluginName(fx_name)
+                local name_width = r.ImGui_CalcTextSize(ctx, simple_name)
+                if name_width > small_width then
+                    -- Truncate if too long
+                    local truncated = simple_name
+                    while r.ImGui_CalcTextSize(ctx, truncated .. "...") > small_width and #truncated > 3 do
+                        truncated = truncated:sub(1, -2)
+                    end
+                    simple_name = truncated .. "..."
+                    name_width = r.ImGui_CalcTextSize(ctx, simple_name)
+                end
+                r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + (small_width - name_width) * 0.5)
+                r.ImGui_Text(ctx, simple_name)
+                
+                r.ImGui_EndGroup(ctx)
+                
+                if col < cols - 1 and i < #fx_list then
+                    r.ImGui_SameLine(ctx)
+                end
+            end
+            
+            r.ImGui_End(ctx)
+        end
+        
+        r.ImGui_PopStyleVar(ctx, 5)
+        r.ImGui_PopStyleColor(ctx, 2)
+    end
+end
+
+function LoadChainFxScreenshot(fx_name)
+    -- Check if we already have this texture cached
+    if fx_chain_texture_cache[fx_name] then
+        if r.ImGui_ValidatePtr(fx_chain_texture_cache[fx_name], 'ImGui_Image*') then
+            return fx_chain_texture_cache[fx_name]
+        else
+            -- Texture was destroyed, remove from cache
+            fx_chain_texture_cache[fx_name] = nil
+        end
+    end
+    
+    -- Use the same naming convention as the regular screenshot system
+    local safe_name = fx_name:gsub("[^%w%s-]", "_")
+    local screenshot_file = screenshot_path .. safe_name .. ".png"
+    
+    if r.file_exists(screenshot_file) then
+        local tex = LoadTexture(screenshot_file)
+        if tex then
+            -- Cache the texture for reuse
+            fx_chain_texture_cache[fx_name] = tex
+            return tex
+        end
+    end
+    
+    return nil
+end
+
 function GetCurrentProjectFX()
     local fx_list = {}
     local track_count = reaper.CountTracks(0)
@@ -6055,6 +6419,14 @@ function DrawFxChains(tbl, path)
                     end
                 end
             end
+            
+            -- FX CHAIN HOVER PREVIEW
+            if r.ImGui_IsItemHovered(ctx) then
+                local fx_chains_path = ResolveFxChainsRoot()
+                local chain_file_path = fx_chains_path .. path .. os_separator .. item .. extension
+                ShowFxChainPreview(chain_file_path, item)
+            end
+            
             if r.ImGui_IsItemClicked(ctx, 1) then
                 r.ImGui_OpenPopup(ctx, "FXChainOptions_" .. i)
             end
@@ -6109,6 +6481,14 @@ function DrawFxChains(tbl, path)
                             end
                         end
                     end
+                    
+                    -- FX CHAIN HOVER PREVIEW
+                    if r.ImGui_IsItemHovered(ctx) then
+                        local fx_chains_path = ResolveFxChainsRoot()
+                        local chain_file_path = fx_chains_path .. path .. os_separator .. item[j] .. extension
+                        ShowFxChainPreview(chain_file_path, item[j])
+                    end
+                    
                     if r.ImGui_IsItemClicked(ctx, 1) then
                         r.ImGui_OpenPopup(ctx, "FXChainOptions_" .. i .. "_" .. j)
                     end
@@ -12194,8 +12574,6 @@ if not general_visibility then
 end
 
 if not should_show_main_window then
-    config.show_screenshot_window = true
-    
     if config.show_screenshot_window then
         ShowScreenshotWindow()
     end
@@ -12257,6 +12635,7 @@ if visible then
                 r.ImGui_PushFont(ctx, IconFont, 12)
                 if r.ImGui_Button(ctx, '\u{0050}', 20, 20) then
                     config.show_screenshot_window = not config.show_screenshot_window
+                    SaveConfig()
                     ClearScreenshotCache()
                     GetPluginsForFolder(selected_folder)
                 end             
