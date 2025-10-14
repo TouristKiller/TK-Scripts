@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.8
+-- @version 1.0.9
 -- @changelog 
 --[[
 + FIXED: Overlay now properly repositions when returning to REAPER from other applications
@@ -2171,21 +2171,39 @@ function loop()
                     end
                 end
                 
+                -- Build a list of all tracks with their positions
+                local all_tracks = {}
                 for i = 0, track_count - 1 do
                     local track = r.GetTrack(0, i)
                     local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
                     local track_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
-                    local expected_y = pinned_tracks_height
-                    
-                    local gap = track_y - expected_y
+                    all_tracks[#all_tracks + 1] = {
+                        index = i,
+                        y = track_y,
+                        height = track_height,
+                        bottom = track_y + track_height
+                    }
+                end
+                
+                -- Sort tracks by Y position
+                table.sort(all_tracks, function(a, b) return a.y < b.y end)
+                
+                -- Detect pinned tracks based on continuous positioning from the top
+                local expected_y = pinned_tracks_height
+                for _, track_info in ipairs(all_tracks) do
+                    local gap = track_info.y - expected_y
                     if gap >= 0 and gap < 5 then
-                        pinned_status[i] = true
-                        pinned_tracks_height = track_y + track_height
+                        -- This track is pinned
+                        pinned_status[track_info.index] = true
+                        expected_y = track_info.bottom
                     else
-                        pinned_status[i] = false
-                        break 
+                        -- This track is not pinned (there's a gap)
+                        pinned_status[track_info.index] = false
                     end
                 end
+                
+                -- Calculate final pinned height
+                pinned_tracks_height = expected_y
                 
                 if pinned_tracks_height > 0 then
                     pinned_tracks_height = pinned_tracks_height + 2

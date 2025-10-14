@@ -231,11 +231,10 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.0.8" author="TouristKiller" time="2025-10-09T00:20:00Z">
+        <version name="1.0.9" author="TouristKiller" time="2025-10-15T02:00:00Z">
             <changelog><![CDATA[           
-+ FIXED: Overlay now properly repositions when returning to REAPER from other applications
-+ FIXED: FX windows and dialogs automatically move above overlay when REAPER regains focus
-+ FIXED: Script no longer switches focus between multiple REAPER instances when running simultaneously
+Problem: The pinned tracks detection used sequential track numbering and stopped at the first gap, causing overlay colors from unpinned tracks to bleed through any pinned track that wasn't part of a continuous sequence from track 1 (e.g., if tracks 1 and 3 were pinned but track 2 wasn't, track 3 would not be detected as pinned).
+Solution: Changed the detection logic to sort all tracks by Y-position first, then check for continuous physical positioning from top to bottom, allowing any track
 ]]>
             </changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
