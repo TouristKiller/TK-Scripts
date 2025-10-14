@@ -1,5 +1,5 @@
 -- @description TK Automation Item Manager (AIM)
--- @version 0.0.7
+-- @version 0.0.8
 -- @author TouristKiller
 -- @about
 --   Automation Item Manager with visual previews
@@ -39,8 +39,7 @@ local automation_items = {}
 local startup_warnings = {}
 
 function ValidateContext()
-    -- Voor ReaImGui is het beter om geen context te destroyen
-    -- We checken alleen of de pointer nog geldig is
+
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         ctx = r.ImGui_CreateContext(script_name)
     end
@@ -1212,7 +1211,7 @@ function DrawMainWindow()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x55555588)  
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 8.0)
         
-        if r.ImGui_Button(ctx, "⚙️", settings_button_width, 0) then
+        if r.ImGui_Button(ctx, "⚙", settings_button_width, 0) then
             r.ImGui_OpenPopup(ctx, "settings_menu")
         end
         
