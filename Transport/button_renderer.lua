@@ -49,6 +49,18 @@ ButtonRenderer.last_my = nil
 ButtonRenderer.drag_moved = false
 ButtonRenderer.popup_font_cache = {}  
 
+-- Helper function to apply transparency to button colors
+local function ApplyButtonTransparency(color, settings)
+    if settings and settings.use_transparent_buttons then
+        local alpha = settings.transparent_button_opacity or 0
+        local r = (color >> 24) & 0xFF
+        local g = (color >> 16) & 0xFF
+        local b = (color >> 8) & 0xFF
+        return (r << 24) | (g << 16) | (b << 8) | (alpha & 0xFF)
+    end
+    return color
+end
+
 local function PushTransportPopupStyling(ctx, settings)
  if not settings then return 0, false end
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.transport_popup_bg or settings.background)
@@ -171,9 +183,14 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
             r.ImGui_SetCursorPosX(ctx, x_pos)
             r.ImGui_SetCursorPosY(ctx, y_pos)
             
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button.color)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), button.hover_color)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button.active_color)
+            -- Apply transparency to custom buttons if enabled
+            local btn_color = ApplyButtonTransparency(button.color, settings)
+            local btn_hover_color = ApplyButtonTransparency(button.hover_color, settings)
+            local btn_active_color = ApplyButtonTransparency(button.active_color, settings)
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), btn_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), btn_hover_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), btn_active_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), button.text_color)
             
             local style_var_count = 0
@@ -298,9 +315,14 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                             r.ImGui_DrawList_AddRect(dl, button_min_x, button_min_y, button_max_x, button_max_y, col, button.rounding or 0, nil, thickness)
                         end
                     else
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button.color)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), button.hover_color)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button.active_color)
+                        -- Icon only (no text) - Apply transparency here too
+                        local btn_color = ApplyButtonTransparency(button.color, settings)
+                        local btn_hover_color = ApplyButtonTransparency(button.hover_color, settings)
+                        local btn_active_color = ApplyButtonTransparency(button.active_color, settings)
+                        
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), btn_color)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), btn_hover_color)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), btn_active_color)
                         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
                         
                         local cursorX, cursorY = r.ImGui_GetCursorPos(ctx)

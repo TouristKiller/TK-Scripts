@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 0.9.9
+-- @version 1.0.1
 -- @changelog 
 --[[
 
@@ -211,6 +211,16 @@ local default_settings = {
 
  -- Color settings
  background = 0x000000FF,
+ -- Gradient background settings
+ use_gradient_background = false,
+ gradient_color_top = 0x1A1A1AFF,
+ gradient_color_middle = 0x0D0D0DFF,
+ gradient_color_bottom = 0x000000FF,
+ 
+ -- Transparent buttons settings
+ use_transparent_buttons = false,
+ transparent_button_opacity = 0, -- 0 = fully transparent, 255 = fully opaque
+ 
  button_normal = 0x333333FF,
  play_active = 0x00FF00FF, 
  record_active = 0xFF0000FF, 
@@ -2736,6 +2746,53 @@ end
 
 LoadLastUsedPreset()
 
+-- Helper function to set alpha channel of a color
+function SetColorAlpha(color, alpha)
+ -- Extract RGB components and replace alpha
+ local r = (color >> 24) & 0xFF
+ local g = (color >> 16) & 0xFF
+ local b = (color >> 8) & 0xFF
+ return (r << 24) | (g << 16) | (b << 8) | (alpha & 0xFF)
+end
+
+-- Helper function to get button color with optional transparency
+function GetButtonColorWithTransparency(color)
+ if settings.use_transparent_buttons and color then
+  local alpha = settings.transparent_button_opacity or 0
+  return SetColorAlpha(color, alpha)
+ end
+ return color
+end
+
+-- Function to draw gradient background with 3 colors (top, middle, bottom)
+function DrawGradientBackground()
+ if not settings.use_gradient_background then return end
+ 
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local win_x, win_y = r.ImGui_GetWindowPos(ctx)
+ local win_w, win_h = r.ImGui_GetWindowSize(ctx)
+ 
+ local color_top = settings.gradient_color_top or 0x1A1A1AFF
+ local color_middle = settings.gradient_color_middle or 0x0D0D0DFF
+ local color_bottom = settings.gradient_color_bottom or 0x000000FF
+ 
+ local mid_y = win_y + (win_h * 0.5)
+ 
+ -- Draw top half (top to middle)
+ r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, 
+  win_x, win_y, 
+  win_x + win_w, mid_y, 
+  color_top, color_top, 
+  color_middle, color_middle)
+ 
+ -- Draw bottom half (middle to bottom)
+ r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, 
+  win_x, mid_y, 
+  win_x + win_w, win_y + win_h, 
+  color_middle, color_middle, 
+  color_bottom, color_bottom)
+end
+
 
 function SetStyle()
  -- Style setup
@@ -2776,7 +2833,9 @@ function SetTransportStyle()
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), settings.button_border_size)
  
  -- Transport-specific colors (minimal set)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), settings.transport_background or settings.background)
+ -- Use transparent background if gradient is enabled
+ local bg_color = settings.use_gradient_background and 0x00000000 or (settings.transport_background or settings.background)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), bg_color)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.border) 
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.transport_popup_bg or settings.background)
  
@@ -2787,9 +2846,22 @@ function SetTransportStyle()
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), settings.slider_grab)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), settings.slider_grab_active)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), settings.check_mark)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.button_normal)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.button_hovered)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.button_active)
+ 
+ -- Apply transparent buttons if enabled
+ local button_normal_color = settings.button_normal
+ local button_hovered_color = settings.button_hovered
+ local button_active_color = settings.button_active
+ 
+ if settings.use_transparent_buttons then
+  local alpha = settings.transparent_button_opacity or 0
+  button_normal_color = SetColorAlpha(settings.button_normal, alpha)
+  button_hovered_color = SetColorAlpha(settings.button_hovered, alpha)
+  button_active_color = SetColorAlpha(settings.button_active, alpha)
+ end
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_normal_color)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), button_hovered_color)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button_active_color)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.text_normal)
 end
 
@@ -3084,6 +3156,83 @@ function ShowSettings(main_window_width , main_window_height)
  col = (col + 1) % columns
  end
  r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ -- Gradient Background Section
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x4A90E2FF)
+ r.ImGui_Text(ctx, "GRADIENT BACKGROUND")
+ r.ImGui_PopStyleColor(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ local rv_gradient = r.ImGui_Checkbox(ctx, "Use Gradient Background", settings.use_gradient_background or false)
+ if rv_gradient then
+  settings.use_gradient_background = not settings.use_gradient_background
+  MarkTransportPresetChanged()
+ end
+ 
+ if settings.use_gradient_background then
+  r.ImGui_Spacing(ctx)
+  
+  if r.ImGui_BeginTable(ctx, '##gradient_colors', 2, r.ImGui_TableFlags_SizingStretchSame()) then
+   r.ImGui_TableNextRow(ctx)
+   r.ImGui_TableSetColumnIndex(ctx, 0)
+   local rv_top, new_top = r.ImGui_ColorEdit4(ctx, "Gradient Top Color", settings.gradient_color_top or 0x1A1A1AFF, flags)
+   if rv_top then 
+    settings.gradient_color_top = new_top
+    MarkTransportPresetChanged()
+   end
+   
+   r.ImGui_TableSetColumnIndex(ctx, 1)
+   local rv_middle, new_middle = r.ImGui_ColorEdit4(ctx, "Gradient Middle Color", settings.gradient_color_middle or 0x0D0D0DFF, flags)
+   if rv_middle then 
+    settings.gradient_color_middle = new_middle
+    MarkTransportPresetChanged()
+   end
+   
+   r.ImGui_TableNextRow(ctx)
+   r.ImGui_TableSetColumnIndex(ctx, 0)
+   local rv_bottom, new_bottom = r.ImGui_ColorEdit4(ctx, "Gradient Bottom Color", settings.gradient_color_bottom or 0x000000FF, flags)
+   if rv_bottom then 
+    settings.gradient_color_bottom = new_bottom
+    MarkTransportPresetChanged()
+   end
+   
+   r.ImGui_EndTable(ctx)
+  end
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ -- Transparent Buttons Section
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x4A90E2FF)
+ r.ImGui_Text(ctx, "TRANSPARENT BUTTONS")
+ r.ImGui_PopStyleColor(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ local rv_transparent = r.ImGui_Checkbox(ctx, "Use Transparent Buttons", settings.use_transparent_buttons or false)
+ if rv_transparent then
+  settings.use_transparent_buttons = not settings.use_transparent_buttons
+  MarkTransportPresetChanged()
+ end
+ 
+ if settings.use_transparent_buttons then
+  r.ImGui_Spacing(ctx)
+  r.ImGui_Text(ctx, "Button Opacity (0 = fully transparent):")
+  r.ImGui_SetNextItemWidth(ctx, -1)
+  local rv_opacity, new_opacity = r.ImGui_SliderInt(ctx, "##ButtonOpacity", settings.transparent_button_opacity or 0, 0, 255, "%d")
+  if rv_opacity then
+   settings.transparent_button_opacity = new_opacity
+   MarkTransportPresetChanged()
+  end
+  
+  r.ImGui_Spacing(ctx)
+  r.ImGui_PushFont(ctx, settings_ui_font_small, SETTINGS_UI_FONT_SMALL_SIZE)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xA0A0A0FF)
+  r.ImGui_TextWrapped(ctx, "Applies to: Tempo, Time Signature, Tap Tempo, ENV, and Custom Buttons. Main transport buttons (Play, Stop, etc.) keep their normal colors.")
+  r.ImGui_PopStyleColor(ctx)
+  r.ImGui_PopFont(ctx)
  end
  
  r.ImGui_Spacing(ctx)
@@ -3907,18 +4056,18 @@ function EnvelopeOverride(main_window_width, main_window_height)
  if r.GetToggleCommandState(mode.command) == 1 then
  current_mode = mode.name
  local override_col = settings.env_override_active_color or mode_loop_active
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), override_col)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), GetButtonColorWithTransparency(override_col))
  break
  end
  end
 
  if current_mode == "No override" then
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.env_button_color or settings.button_normal)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.env_button_color_hover or settings.button_hovered)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.env_button_color_active or settings.button_active)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), GetButtonColorWithTransparency(settings.env_button_color or settings.button_normal))
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(settings.env_button_color_hover or settings.button_hovered))
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(settings.env_button_color_active or settings.button_active))
  else
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.env_button_color_hover or settings.button_hovered)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.env_button_color_active or settings.button_active)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(settings.env_button_color_hover or settings.button_hovered))
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(settings.env_button_color_active or settings.button_active))
  end
 
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
@@ -4073,6 +4222,9 @@ function Transport_Buttons(main_window_width, main_window_height)
  local mode_loop_active = settings["loop_active" .. mode_suffix]
  if mode_loop_active == nil then mode_loop_active = 0x00FFFFFF end
 
+ -- NOTE: Transport buttons (play, stop, etc.) keep their normal colors
+ -- Transparency is NOT applied to these main transport controls
+
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), mode_rounding)
 
@@ -4168,16 +4320,22 @@ function Transport_Buttons(main_window_width, main_window_height)
  local default_hover = 0x555555FF
  local default_active = 0x777777FF
  
+ local color
  if r.ImGui_IsItemActive(ctx) then
- local color = settings["transport_button_active" .. mode_suffix]
- return color ~= nil and color or default_active
+ color = settings["transport_button_active" .. mode_suffix]
+ color = color ~= nil and color or default_active
  elseif r.ImGui_IsItemHovered(ctx) then
- local color = settings["transport_button_hover" .. mode_suffix]
- return color ~= nil and color or default_hover
+ color = settings["transport_button_hover" .. mode_suffix]
+ color = color ~= nil and color or default_hover
  else
- local color = settings["transport_button_normal" .. mode_suffix]
- return color ~= nil and color or default_normal
+ color = settings["transport_button_normal" .. mode_suffix]
+ color = color ~= nil and color or default_normal
  end
+ 
+ -- NOTE: Do NOT apply transparency to main transport buttons
+ -- They keep their normal colors
+ 
+ return color
  end
 
  local function update_group_bounds()
@@ -5399,9 +5557,9 @@ function ShowTempo(main_window_width, main_window_height)
  if settings.tempo_button_color then
  local hov = settings.tempo_button_color_hover or settings.tempo_button_color
  local act = hov
- reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), settings.tempo_button_color)
- reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), hov)
- reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), act)
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), GetButtonColorWithTransparency(settings.tempo_button_color))
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(hov))
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(act))
  end
  
  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameBorderSize(), 0)
@@ -5649,9 +5807,9 @@ function ShowTimeSignature(main_window_width, main_window_height)
 
  if font_timesig then reaper.ImGui_PushFont(ctx, font_timesig, settings.timesig_font_size or settings.font_size) end
  local ts_text = string.format("%d/%d", timesig_num, timesig_denom)
- reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), settings.timesig_button_color or settings.button_normal)
- reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), settings.timesig_button_color_hover or settings.button_hovered)
- reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), settings.timesig_button_color_active or settings.button_active)
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), GetButtonColorWithTransparency(settings.timesig_button_color or settings.button_normal))
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(settings.timesig_button_color_hover or settings.button_hovered))
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(settings.timesig_button_color_active or settings.button_active))
  if settings.timesig_text_color then reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), settings.timesig_text_color) end
  
  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameBorderSize(), 0)
@@ -6020,9 +6178,9 @@ function TapTempo(main_window_width, main_window_height)
  r.ImGui_SetCursorPosY(ctx, settings.taptempo_y_px and ScalePosY(settings.taptempo_y_px, main_window_height, settings) or (settings.taptempo_y * main_window_height))
  r.ImGui_AlignTextToFramePadding(ctx)
  
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.taptempo_button_color or settings.button_normal)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.taptempo_button_color_hover or settings.button_hovered)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.taptempo_button_color_active or settings.button_active)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), GetButtonColorWithTransparency(settings.taptempo_button_color or settings.button_normal))
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(settings.taptempo_button_color_hover or settings.button_hovered))
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(settings.taptempo_button_color_active or settings.button_active))
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.taptempo_text_color or 0xFFFFFFFF)
  
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
@@ -6148,6 +6306,9 @@ function Main()
  local visible, open = r.ImGui_Begin(ctx, 'Transport', true, window_flags)
  if visible then
  r.ImGui_SetScrollY(ctx, 0)
+ 
+ -- Draw gradient background if enabled
+ DrawGradientBackground()
  
  local main_window_width = r.ImGui_GetWindowWidth(ctx)
  local main_window_height = r.ImGui_GetWindowHeight(ctx)
