@@ -1181,7 +1181,61 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
         end
         
         if cb_section_states.actions_open then
-            r.ImGui_Text(ctx, "Left Click:")
+            -- Group Visibility Toggle Option
+            r.ImGui_Text(ctx, "Group Visibility Control:")
+            
+            if not button.is_group_visibility_toggle then
+                button.is_group_visibility_toggle = false
+            end
+            
+            local rv_grp_vis, new_grp_vis = r.ImGui_Checkbox(ctx, "Use as Group Visibility Toggle##grpVisToggle", button.is_group_visibility_toggle)
+            if rv_grp_vis then
+                button.is_group_visibility_toggle = new_grp_vis
+                changed = true
+                if new_grp_vis then
+                    -- Enable toggle state visualization when using as group toggle
+                    button.show_toggle_state = true
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Use this button to show/hide a group of buttons\n(Creates a menu switch)")
+            end
+            
+            if button.is_group_visibility_toggle then
+                r.ImGui_Text(ctx, "Target Group:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetNextItemWidth(ctx, 200)
+                
+                -- Get all available groups
+                local groups = custom_buttons.GetAllGroups()
+                local current_group = button.target_group or ""
+                
+                if r.ImGui_BeginCombo(ctx, "##targetGroup", current_group ~= "" and current_group or "Select Group...") then
+                    for _, group_name in ipairs(groups) do
+                        -- Don't allow selecting the button's own group
+                        if group_name ~= button.group then
+                            local is_selected = (group_name == current_group)
+                            if r.ImGui_Selectable(ctx, group_name, is_selected) then
+                                button.target_group = group_name
+                                changed = true
+                            end
+                            if is_selected then
+                                r.ImGui_SetItemDefaultFocus(ctx)
+                            end
+                        end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Select which group to show/hide with this button")
+                end
+                
+                r.ImGui_Separator(ctx)
+            end
+            
+            if not button.is_group_visibility_toggle then
+                -- Only show normal action fields if NOT a group visibility toggle
+                r.ImGui_Text(ctx, "Left Click:")
 
        
             r.ImGui_Text(ctx, "Name")
@@ -1244,6 +1298,69 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 if rv_type then button.alt_left_click.type = new_type; changed = true end
             end
 
+            if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
+
+            r.ImGui_Separator(ctx)
+            
+            end  -- End of "if not button.is_group_visibility_toggle"
+            
+            -- Toggle State Visualization (always shown)
+            r.ImGui_Text(ctx, "Toggle State Visualization:")
+            
+            if not button.show_toggle_state then
+                button.show_toggle_state = false
+            end
+            if not button.toggle_on_color then
+                button.toggle_on_color = 0x00FF00FF  -- Green
+            end
+            
+            local rv_toggle, new_toggle_state = r.ImGui_Checkbox(ctx, "Show Toggle State##toggleVis", button.show_toggle_state)
+            if rv_toggle then 
+                button.show_toggle_state = new_toggle_state
+                changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                local tooltip_text = "Visualize the ON/OFF state"
+                if button.is_group_visibility_toggle then
+                    tooltip_text = tooltip_text .. "\n(Shows if group is visible/hidden)"
+                else
+                    tooltip_text = tooltip_text .. " of the action\n(e.g., metronome, click, etc.)"
+                end
+                r.ImGui_SetTooltip(ctx, tooltip_text)
+            end
+            
+            if button.show_toggle_state then
+                local color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
+                
+                r.ImGui_Text(ctx, "Toggle ON Color:")
+                r.ImGui_SameLine(ctx)
+                rv, button.toggle_on_color = r.ImGui_ColorEdit4(ctx, "##toggleOnColor", button.toggle_on_color, color_flags)
+                if rv then changed = true end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Color when the action is ON")
+                end
+                
+                r.ImGui_Text(ctx, "Toggle OFF Color:")
+                r.ImGui_SameLine(ctx)
+                if button.toggle_off_color == nil then
+                    button.toggle_off_color = button.color or 0x333333FF
+                end
+                rv, button.toggle_off_color = r.ImGui_ColorEdit4(ctx, "##toggleOffColor", button.toggle_off_color, color_flags)
+                if rv then changed = true end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Color when the action is OFF\n(leave at default to use normal button color)")
+                end
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_SmallButton(ctx, "Reset##toggleOffReset") then
+                    button.toggle_off_color = nil
+                    changed = true
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Reset to use normal button colors when OFF")
+                end
+            end
+            
             if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
 
             r.ImGui_Separator(ctx)

@@ -29,6 +29,13 @@ function CustomButtons.CreateNewButton()
         hover_color = 0x444444FF,
         active_color = 0x555555FF,
         text_color = 0xFFFFFFFF,
+        -- Toggle state visualization
+        show_toggle_state = false,
+        toggle_on_color = 0x00FF00FF,  -- Green when toggle is ON
+        toggle_off_color = nil,  -- nil means use default color
+        -- Group visibility control
+        is_group_visibility_toggle = false,
+        target_group = nil,  -- Name of the group to control
         left_click = {
             command = nil,
             name = "No Action"
@@ -215,6 +222,106 @@ function CustomButtons.CheckForCommandPick()
             end
         end
     end
+end
+
+-- Get the toggle state of a command
+function CustomButtons.GetToggleState(button)
+    if not button or not button.show_toggle_state then
+        return nil
+    end
+    
+    -- Check if this is a group visibility toggle button
+    if button.is_group_visibility_toggle and button.target_group then
+        return CustomButtons.GetGroupVisibilityState(button.target_group)
+    end
+    
+    local command_id = button.left_click and button.left_click.command
+    if not command_id then
+        return nil
+    end
+    
+    -- Convert string command IDs to numbers if needed
+    if type(command_id) == "string" then
+        command_id = r.NamedCommandLookup(command_id)
+    end
+    
+    if not command_id or command_id == 0 then
+        return nil
+    end
+    
+    -- Check if it's a MIDI editor command
+    local cmd_type = button.left_click.type
+    if cmd_type == 1 then
+        -- MIDI Editor command
+        local editor = r.MIDIEditor_GetActive()
+        if editor then
+            return r.GetToggleCommandStateEx(32060, command_id)
+        end
+        return nil
+    else
+        -- Main action
+        return r.GetToggleCommandState(command_id)
+    end
+end
+
+-- Get the visibility state of a group (1 = visible, 0 = hidden)
+function CustomButtons.GetGroupVisibilityState(group_name)
+    if not group_name or group_name == "" then
+        return 0
+    end
+    
+    local any_visible = false
+    for _, btn in ipairs(CustomButtons.buttons) do
+        if btn.group == group_name and btn.visible then
+            any_visible = true
+            break
+        end
+    end
+    
+    return any_visible and 1 or 0
+end
+
+-- Toggle the visibility of a group
+function CustomButtons.ToggleGroupVisibility(group_name)
+    if not group_name or group_name == "" then
+        return
+    end
+    
+    -- Check current state
+    local any_visible = false
+    for _, btn in ipairs(CustomButtons.buttons) do
+        if btn.group == group_name and btn.visible then
+            any_visible = true
+            break
+        end
+    end
+    
+    -- Toggle to opposite state
+    local new_state = not any_visible
+    
+    for _, btn in ipairs(CustomButtons.buttons) do
+        if btn.group == group_name then
+            btn.visible = new_state
+        end
+    end
+    
+    CustomButtons.SaveCurrentButtons()
+end
+
+-- Get all unique group names
+function CustomButtons.GetAllGroups()
+    local groups = {}
+    local seen = {}
+    
+    for _, btn in ipairs(CustomButtons.buttons) do
+        if btn.group and btn.group ~= "" and not seen[btn.group] then
+            table.insert(groups, btn.group)
+            seen[btn.group] = true
+        end
+    end
+    
+    table.sort(groups)
+    return groups
 end
 
 CustomButtons.LoadLastUsedPreset()

@@ -10,6 +10,13 @@ local function round_to_grid(px, grid)
 end
 
 local function ExecuteButtonAction(ctx, button)
+    -- Check if this is a group visibility toggle button
+    if button.is_group_visibility_toggle and button.target_group then
+        local CustomButtons = require('custom_buttons')
+        CustomButtons.ToggleGroupVisibility(button.target_group)
+        return
+    end
+    
     local alt_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
     
     if alt_pressed and button.alt_left_click and button.alt_left_click.command then
@@ -183,10 +190,58 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
             r.ImGui_SetCursorPosX(ctx, x_pos)
             r.ImGui_SetCursorPosY(ctx, y_pos)
             
+            -- Check toggle state for this button
+            local toggle_state = nil
+            if button.show_toggle_state then
+                -- Check if this is a group visibility toggle button
+                if button.is_group_visibility_toggle and button.target_group then
+                    local CustomButtons = require('custom_buttons')
+                    toggle_state = CustomButtons.GetGroupVisibilityState(button.target_group)
+                elseif button.left_click and button.left_click.command then
+                    local command_id = button.left_click.command
+                    
+                    -- Convert string command IDs to numbers if needed
+                    if type(command_id) == "string" then
+                        command_id = r.NamedCommandLookup(command_id)
+                    end
+                    
+                    if command_id and command_id ~= 0 then
+                        -- Check if it's a MIDI editor command
+                        local cmd_type = button.left_click.type
+                        if cmd_type == 1 then
+                            -- MIDI Editor command
+                            local editor = r.MIDIEditor_GetActive()
+                            if editor then
+                                toggle_state = r.GetToggleCommandStateEx(32060, command_id)
+                            end
+                        else
+                            -- Main action
+                            toggle_state = r.GetToggleCommandState(command_id)
+                        end
+                    end
+                end
+            end
+            
             -- Apply transparency to custom buttons if enabled
-            local btn_color = ApplyButtonTransparency(button.color, settings)
-            local btn_hover_color = ApplyButtonTransparency(button.hover_color, settings)
-            local btn_active_color = ApplyButtonTransparency(button.active_color, settings)
+            -- If toggle state is ON and toggle colors are defined, use toggle colors
+            local btn_color, btn_hover_color, btn_active_color
+            
+            if toggle_state == 1 and button.toggle_on_color then
+                -- Toggle is ON - use toggle_on_color
+                btn_color = ApplyButtonTransparency(button.toggle_on_color, settings)
+                btn_hover_color = ApplyButtonTransparency(button.toggle_on_color, settings)
+                btn_active_color = ApplyButtonTransparency(button.toggle_on_color, settings)
+            elseif toggle_state == 0 and button.toggle_off_color then
+                -- Toggle is OFF - use toggle_off_color
+                btn_color = ApplyButtonTransparency(button.toggle_off_color, settings)
+                btn_hover_color = ApplyButtonTransparency(button.toggle_off_color, settings)
+                btn_active_color = ApplyButtonTransparency(button.toggle_off_color, settings)
+            else
+                -- No toggle state or no toggle colors defined - use normal colors
+                btn_color = ApplyButtonTransparency(button.color, settings)
+                btn_hover_color = ApplyButtonTransparency(button.hover_color, settings)
+                btn_active_color = ApplyButtonTransparency(button.active_color, settings)
+            end
             
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), btn_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), btn_hover_color)
@@ -252,12 +307,26 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         local icon_padding = (button.show_border ~= false) and 4 or 0
                         r.ImGui_SetCursorPos(ctx, cursorX + icon_padding, cursorY)
                         
+                        -- Determine UV coordinates based on toggle state or hover/active state
                         local uv_x = 0
-                        if is_hovered then
-                            uv_x = 0.33
-                        end
-                        if is_active then
-                            uv_x = 0.66
+                        
+                        if toggle_state ~= nil and button.show_toggle_state then
+                            -- Use toggle state for icon selection
+                            if toggle_state == 1 then
+                                -- Toggle ON: use 3rd state (active/on state)
+                                uv_x = 0.66
+                            else
+                                -- Toggle OFF: use 1st state (normal/off state)
+                                uv_x = 0
+                            end
+                        else
+                            -- Normal behavior: hover and active states
+                            if is_hovered then
+                                uv_x = 0.33
+                            end
+                            if is_active then
+                                uv_x = 0.66
+                            end
                         end
                         
                         r.ImGui_Image(ctx, button.icon, icon_size, icon_size, uv_x, 0, uv_x + 0.33, 1)
@@ -315,7 +384,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                             r.ImGui_DrawList_AddRect(dl, button_min_x, button_min_y, button_max_x, button_max_y, col, button.rounding or 0, nil, thickness)
                         end
                     else
-                        -- Icon only (no text) - Apply transparency here too
+                        -- Icon only (no text) - Use toggle state for UV coordinates if enabled
                         local btn_color = ApplyButtonTransparency(button.color, settings)
                         local btn_hover_color = ApplyButtonTransparency(button.hover_color, settings)
                         local btn_active_color = ApplyButtonTransparency(button.active_color, settings)
@@ -330,12 +399,26 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         
                         r.ImGui_SetCursorPos(ctx, cursorX, cursorY)
                         
+                        -- Determine UV coordinates based on toggle state or hover/active state
                         local uv_x = 0
-                        if r.ImGui_IsItemHovered(ctx) then
-                            uv_x = 0.33
-                        end
-                        if r.ImGui_IsItemActive(ctx) then
-                            uv_x = 0.66
+                        
+                        if toggle_state ~= nil and button.show_toggle_state then
+                            -- Use toggle state for icon selection
+                            if toggle_state == 1 then
+                                -- Toggle ON: use 3rd state (active/on state)
+                                uv_x = 0.66
+                            else
+                                -- Toggle OFF: use 1st state (normal/off state)
+                                uv_x = 0
+                            end
+                        else
+                            -- Normal behavior: hover and active states
+                            if r.ImGui_IsItemHovered(ctx) then
+                                uv_x = 0.33
+                            end
+                            if r.ImGui_IsItemActive(ctx) then
+                                uv_x = 0.66
+                            end
                         end
                         
                         r.ImGui_Image(ctx, button.icon, draw_w, draw_w, uv_x, 0, uv_x + 0.33, 1)
