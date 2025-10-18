@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.9.5
+-- @version 1.9.6
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -409,11 +409,31 @@ screenshot_search_results = screenshot_search_results or {}
 browser_panel_selected = browser_panel_selected or nil
 last_selected_folder_before_global = nil
 
+-- FX Chain viewing in screenshot window
+current_fx_chain_path = current_fx_chain_path or nil
+current_fx_chain_relative_path = current_fx_chain_relative_path or nil
+current_fx_chain_name = current_fx_chain_name or nil
+
 view_mode = view_mode or "screenshots" 
 
 search_texture_cache = search_texture_cache or {}
 texture_last_used    = texture_last_used    or {}
 texture_load_queue   = texture_load_queue   or {}
+
+-- Debug window
+show_debug_window = show_debug_window or false
+debug_messages = debug_messages or {}
+local MAX_DEBUG_MESSAGES = 100
+
+-- Debug logging cache (to prevent logging every frame)
+local debug_last_fx_chains_state = nil
+local debug_last_track_templates_state = nil
+local debug_fx_chains_header_was_open = false
+local debug_track_templates_header_was_open = false
+local debug_last_menu_log_time = 0
+local DEBUG_LOG_COOLDOWN = 2.0  -- seconds between repeated logs
+local debug_browser_panel_logged = false
+local debug_config_logged = false
 
 function SelectBrowserPanelItem(name)
     browser_panel_selected = name
@@ -437,6 +457,9 @@ function SelectFolderExclusive(name)
         current_filtered_fx = seeded
        
         screenshot_search_results = nil
+        current_fx_chain_path = nil
+        current_fx_chain_relative_path = nil
+        current_fx_chain_name = nil
     end
 end
 
@@ -532,6 +555,22 @@ function CheckPluginCrashHistory(plugin_name)
         file:close()
     end
     return false
+end
+--------------------------------------------------------------------------
+-- DEBUG LOGGING
+local function DebugLog(message)
+    if not config or not config.show_debug_window then return end
+    
+    local timestamp = os.date("%H:%M:%S")
+    table.insert(debug_messages, {
+        time = timestamp,
+        message = message
+    })
+    
+    -- Keep only last MAX_DEBUG_MESSAGES
+    while #debug_messages > MAX_DEBUG_MESSAGES do
+        table.remove(debug_messages, 1)
+    end
 end
 --------------------------------------------------------------------------
 -- CONFIG
@@ -674,6 +713,7 @@ function SetDefaultConfig()
         custom_fxchain_dir = "",
         use_custom_template_dir = false,
         custom_template_dir = "",
+        show_debug_window = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -765,13 +805,11 @@ if config and config.last_viewed_folder then
 end
 PROJECTS_DIR = config.last_used_project_location
 
--- Helpers: resolve roots and scan folders for FX Chains / Track Templates
--- Lightweight path existence check that works for files or directories
+
 local function PathExists(path)
     if not path or path == '' then return false end
     local ok, _, code = os.rename(path, path)
     if ok then return true end
-    -- code 13 = permission denied (still exists)
     if code == 13 then return true end
     return false
 end
@@ -798,20 +836,23 @@ local function PathJoin(a, b)
 end
 
 local function BuildTreeFromFS(base_dir, ext)
+    if not base_dir or base_dir == "" then
+        DebugLog("[BuildTreeFromFS] ERROR: Invalid base_dir")
+        return {}
+    end
+    
     local function scan(dir)
-        local node = { dir = dir:sub(#base_dir + 2) } -- relative dir name stored in .dir for UI menus
-        -- subfolders
-        for i = 0, math.huge do
+        local node = { dir = dir:sub(#base_dir + 2) } 
+        for i = 0, 999 do
             local sub = r.EnumerateSubdirectories(dir, i)
-            if not sub then break end
+            if not sub or sub == "" then break end
             local child = scan(PathJoin(dir, sub))
             child.dir = sub
             node[#node + 1] = child
         end
-        -- files
-        for i = 0, math.huge do
+        for i = 0, 9999 do
             local file = r.EnumerateFiles(dir, i)
-            if not file then break end
+            if not file or file == "" then break end
             if not ext or file:sub(-#ext):lower() == ext:lower() then
                 node[#node + 1] = file:gsub(ext .. "$", "")
             end
@@ -819,18 +860,16 @@ local function BuildTreeFromFS(base_dir, ext)
         return node
     end
     local root = {}
-    -- top-level subdirs
-    for i = 0, math.huge do
+    for i = 0, 999 do
         local sub = r.EnumerateSubdirectories(base_dir, i)
-        if not sub then break end
+        if not sub or sub == "" then break end
         local child = scan(PathJoin(base_dir, sub))
         child.dir = sub
         root[#root + 1] = child
     end
-    -- top-level files
-    for i = 0, math.huge do
+    for i = 0, 9999 do
         local file = r.EnumerateFiles(base_dir, i)
-        if not file then break end
+        if not file or file == "" then break end
         if not ext or file:sub(-#ext):lower() == ext:lower() then
             root[#root + 1] = file:gsub(ext .. "$", "")
         end
@@ -840,12 +879,76 @@ end
 
 local function GetFxChainsTree()
     local root = ResolveFxChainsRoot()
-    return BuildTreeFromFS(root, ".RfxChain"), root
+    
+    -- Create state signature for caching
+    local current_state = tostring(root) .. "|" .. tostring(config.use_custom_fxchain_dir)
+    
+    -- Only log if state changed
+    if debug_last_fx_chains_state ~= current_state then
+        DebugLog("[GetFxChainsTree] Root path: " .. tostring(root))
+        
+        if not root or root == "" then
+            DebugLog("[GetFxChainsTree] ERROR: Invalid root path")
+            debug_last_fx_chains_state = current_state
+            return {}, root
+        end
+        if not PathExists(root) then
+            DebugLog("[GetFxChainsTree] ERROR: Path does not exist!")
+            debug_last_fx_chains_state = current_state
+            return {}, root
+        end
+        
+        local tree = BuildTreeFromFS(root, ".RfxChain")
+        DebugLog("[GetFxChainsTree] Found " .. #tree .. " top-level entries")
+        debug_last_fx_chains_state = current_state
+        return tree, root
+    end
+    
+    if not root or root == "" then
+        return {}, root
+    end
+    if not PathExists(root) then
+        return {}, root
+    end
+    
+    local tree = BuildTreeFromFS(root, ".RfxChain")
+    return tree, root
 end
 
 local function GetTrackTemplatesTree()
     local root = ResolveTrackTemplatesRoot()
-    return BuildTreeFromFS(root, ".RTrackTemplate"), root
+    
+    local current_state = tostring(root) .. "|" .. tostring(config.use_custom_template_dir)
+    
+    if debug_last_track_templates_state ~= current_state then
+        DebugLog("[GetTrackTemplatesTree] Root path: " .. tostring(root))
+        
+        if not root or root == "" then
+            DebugLog("[GetTrackTemplatesTree] ERROR: Invalid root path")
+            debug_last_track_templates_state = current_state
+            return {}, root
+        end
+        if not PathExists(root) then
+            DebugLog("[GetTrackTemplatesTree] ERROR: Path does not exist!")
+            debug_last_track_templates_state = current_state
+            return {}, root
+        end
+        
+        local tree = BuildTreeFromFS(root, ".RTrackTemplate")
+        DebugLog("[GetTrackTemplatesTree] Found " .. #tree .. " top-level entries")
+        debug_last_track_templates_state = current_state
+        return tree, root
+    end
+    
+    if not root or root == "" then
+        return {}, root
+    end
+    if not PathExists(root) then
+        return {}, root
+    end
+    
+    local tree = BuildTreeFromFS(root, ".RTrackTemplate")
+    return tree, root
 end
 do
     local function ApplyStartupDedupe()
@@ -5093,6 +5196,52 @@ function LoadChainFxScreenshot(fx_name)
     return nil
 end
 
+function ShowFxChainInScreenshotWindow(chain_path, relative_path, chain_name)
+    -- Store the current FX chain for display in screenshot window
+    current_fx_chain_path = chain_path
+    current_fx_chain_relative_path = relative_path
+    current_fx_chain_name = chain_name
+    
+    -- Parse the FX chain to get list of plugins
+    local fx_list = ParseFxChainFile(chain_path)
+    if not fx_list or #fx_list == 0 then 
+        return 
+    end
+    
+    -- Clear previous search results and cache
+    screenshot_search_results = {}
+    selected_folder = nil
+    browser_panel_selected = nil
+    ClearScreenshotCache()
+    
+    -- Populate screenshot_search_results with the FX from the chain
+    for i, fx_name in ipairs(fx_list) do
+        table.insert(screenshot_search_results, {
+            name = fx_name,
+            is_fx_chain_item = true,
+            chain_path = chain_path,
+            chain_name = chain_name
+        })
+    end
+    
+    -- Pre-load textures for the FX in the chain
+    for i, fx_name in ipairs(fx_list) do
+        local safe_name = fx_name:gsub("[^%w%s-]", "_")
+        local screenshot_file = screenshot_path .. safe_name .. ".png"
+        if r.file_exists(screenshot_file) then
+            local relative_path = screenshot_file:gsub(screenshot_path, "")
+            local unique_key = relative_path .. "_" .. fx_name
+            if not texture_load_queue[unique_key] and not search_texture_cache[unique_key] then
+                texture_load_queue[unique_key] = { 
+                    file = screenshot_file, 
+                    queued_at = r.time_precise(), 
+                    plugin = fx_name 
+                }
+            end
+        end
+    end
+end
+
 function GetCurrentProjectFX()
     local fx_list = {}
     local track_count = reaper.CountTracks(0)
@@ -6376,15 +6525,24 @@ function ShowScreenshotControls()
         end
 
         r.ImGui_Separator(ctx)
+        
+        -- DEBUG WINDOW
+        if r.ImGui_MenuItem(ctx, "Debug Window", "", config.show_debug_window) then
+            config.show_debug_window = not config.show_debug_window
+            SaveConfig()
+        end
+        
+        r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
         if r.ImGui_MenuItem(ctx, "Close Window") then config.show_screenshot_window = false; SaveConfig() end
         r.ImGui_EndPopup(ctx)
     end
 end
 
-function DrawFxChains(tbl, path)
+function DrawFxChains(tbl, path, show_hover_preview)
     local extension = ".RfxChain"
     path = path or ""
+    if show_hover_preview == nil then show_hover_preview = true end  -- Default to showing preview
     local i = 1
     while i <= #tbl do
         local item = tbl[i]
@@ -6395,33 +6553,26 @@ function DrawFxChains(tbl, path)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), config.background_color) 
             if r.ImGui_BeginMenu(ctx, item.dir) then               
                 -- RECURSIEF SUBMAPPEN DOORLOPEN
-                DrawFxChains(item, table.concat({ path, os_separator, item.dir }))              
+                DrawFxChains(item, table.concat({ path, os_separator, item.dir }), show_hover_preview)              
                 r.ImGui_EndMenu(ctx)               
             end  
             reaper.ImGui_PopStyleColor(ctx)
         elseif type(item) == "string" then
             -- NORMALE FX CHAIN FILES
             if r.ImGui_Selectable(ctx, item .. "##fxchain_" .. i) then
-                if ADD_FX_TO_ITEM then
-                    local selected_item = r.GetSelectedMediaItem(0, 0)
-                    if selected_item then
-                        local take = r.GetActiveTake(selected_item)
-                        if take then
-                            r.TakeFX_AddByName(take, table.concat({ path, os_separator, item, extension }), 1)
-                        end
-                    end
-                else
-                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                        AddFXToTrack(TRACK, table.concat({ path, os_separator, item, extension }))
-                        if config.close_after_adding_fx then
-                            SHOULD_CLOSE_SCRIPT = true
-                        end
-                    end
-                end
+                -- Show FX Chain in screenshot window instead of adding directly
+                local fx_chains_path = ResolveFxChainsRoot()
+                local chain_file_path = fx_chains_path .. path .. os_separator .. item .. extension
+                local relative_path = table.concat({ path, os_separator, item, extension })
+                
+                -- Parse the FX chain and show in screenshot window
+                ShowFxChainInScreenshotWindow(chain_file_path, relative_path, item)
+                show_screenshot_window = true
+                screenshot_window_interactive = true
             end
             
-            -- FX CHAIN HOVER PREVIEW
-            if r.ImGui_IsItemHovered(ctx) then
+            -- FX CHAIN HOVER PREVIEW (alleen als show_hover_preview enabled is)
+            if show_hover_preview and r.ImGui_IsItemHovered(ctx) then
                 local fx_chains_path = ResolveFxChainsRoot()
                 local chain_file_path = fx_chains_path .. path .. os_separator .. item .. extension
                 ShowFxChainPreview(chain_file_path, item)
@@ -6431,6 +6582,56 @@ function DrawFxChains(tbl, path)
                 r.ImGui_OpenPopup(ctx, "FXChainOptions_" .. i)
             end
             if r.ImGui_BeginPopup(ctx, "FXChainOptions_" .. i) then
+                if r.ImGui_MenuItem(ctx, "Add to selected track(s)") then
+                    local fx_chains_path = ResolveFxChainsRoot()
+                    local chain_file_path = table.concat({ path, os_separator, item, extension })
+                    if ADD_FX_TO_ITEM then
+                        local selected_item = r.GetSelectedMediaItem(0, 0)
+                        if selected_item then
+                            local take = r.GetActiveTake(selected_item)
+                            if take then
+                                r.TakeFX_AddByName(take, chain_file_path, 1)
+                            end
+                        end
+                    else
+                        local selected_track_count = r.CountSelectedTracks(0)
+                        if selected_track_count > 0 then
+                            for i = 0, selected_track_count - 1 do
+                                local track = r.GetSelectedTrack(0, i)
+                                if track and r.ValidatePtr(track, "MediaTrack*") then
+                                    AddFXToTrack(track, chain_file_path)
+                                end
+                            end
+                            if config.close_after_adding_fx then
+                                SHOULD_CLOSE_SCRIPT = true
+                            end
+                        end
+                    end
+                end
+                if r.ImGui_MenuItem(ctx, "Replace selected track(s) FX") then
+                    local fx_chains_path = ResolveFxChainsRoot()
+                    local chain_file_path = table.concat({ path, os_separator, item, extension })
+                    local selected_track_count = r.CountSelectedTracks(0)
+                    if selected_track_count > 0 then
+                        for i = 0, selected_track_count - 1 do
+                            local track = r.GetSelectedTrack(0, i)
+                            if track and r.ValidatePtr(track, "MediaTrack*") then
+                                -- Remove all FX from track first
+                                local fx_count = r.TrackFX_GetCount(track)
+                                for j = fx_count - 1, 0, -1 do
+                                    r.TrackFX_Delete(track, j)
+                                end
+                                -- Then add the FX chain
+                                AddFXToTrack(track, chain_file_path)
+                            end
+                        end
+                        if config.close_after_adding_fx then
+                            SHOULD_CLOSE_SCRIPT = true
+                        end
+                    else
+                        r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Replace FX", 0)
+                    end
+                end
                 if r.ImGui_MenuItem(ctx, "Rename") then
                     local retval, new_name = r.GetUserInputs("Rename FX Chain", 1, "New name:", item)
                     if retval then
@@ -6464,26 +6665,19 @@ function DrawFxChains(tbl, path)
             for j = 1, #item do
                 if type(item[j]) == "string" then
                     if r.ImGui_Selectable(ctx, item[j] .. "##fxchain_" .. i .. "_" .. j) then
-                        if ADD_FX_TO_ITEM then
-                            local selected_item = r.GetSelectedMediaItem(0, 0)
-                            if selected_item then
-                                local take = r.GetActiveTake(selected_item)
-                                if take then
-                                    r.TakeFX_AddByName(take, table.concat({ path, os_separator, item[j], extension }), 1)
-                                end
-                            end
-                        else
-                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                AddFXToTrack(TRACK, table.concat({ path, os_separator, item[j], extension }))
-                                if config.close_after_adding_fx then
-                                    SHOULD_CLOSE_SCRIPT = true
-                                end
-                            end
-                        end
+                        -- Show FX Chain in screenshot window instead of adding directly
+                        local fx_chains_path = ResolveFxChainsRoot()
+                        local chain_file_path = fx_chains_path .. path .. os_separator .. item[j] .. extension
+                        local relative_path = table.concat({ path, os_separator, item[j], extension })
+                        
+                        -- Parse the FX chain and show in screenshot window
+                        ShowFxChainInScreenshotWindow(chain_file_path, relative_path, item[j])
+                        show_screenshot_window = true
+                        screenshot_window_interactive = true
                     end
                     
-                    -- FX CHAIN HOVER PREVIEW
-                    if r.ImGui_IsItemHovered(ctx) then
+                    -- FX CHAIN HOVER PREVIEW (alleen als show_hover_preview enabled is)
+                    if show_hover_preview and r.ImGui_IsItemHovered(ctx) then
                         local fx_chains_path = ResolveFxChainsRoot()
                         local chain_file_path = fx_chains_path .. path .. os_separator .. item[j] .. extension
                         ShowFxChainPreview(chain_file_path, item[j])
@@ -6493,6 +6687,56 @@ function DrawFxChains(tbl, path)
                         r.ImGui_OpenPopup(ctx, "FXChainOptions_" .. i .. "_" .. j)
                     end
                     if r.ImGui_BeginPopup(ctx, "FXChainOptions_" .. i .. "_" .. j) then
+                        if r.ImGui_MenuItem(ctx, "Add to selected track(s)") then
+                            local fx_chains_path = ResolveFxChainsRoot()
+                            local chain_file_path = table.concat({ path, os_separator, item[j], extension })
+                            if ADD_FX_TO_ITEM then
+                                local selected_item = r.GetSelectedMediaItem(0, 0)
+                                if selected_item then
+                                    local take = r.GetActiveTake(selected_item)
+                                    if take then
+                                        r.TakeFX_AddByName(take, chain_file_path, 1)
+                                    end
+                                end
+                            else
+                                local selected_track_count = r.CountSelectedTracks(0)
+                                if selected_track_count > 0 then
+                                    for k = 0, selected_track_count - 1 do
+                                        local track = r.GetSelectedTrack(0, k)
+                                        if track and r.ValidatePtr(track, "MediaTrack*") then
+                                            AddFXToTrack(track, chain_file_path)
+                                        end
+                                    end
+                                    if config.close_after_adding_fx then
+                                        SHOULD_CLOSE_SCRIPT = true
+                                    end
+                                end
+                            end
+                        end
+                        if r.ImGui_MenuItem(ctx, "Replace selected track(s) FX") then
+                            local fx_chains_path = ResolveFxChainsRoot()
+                            local chain_file_path = table.concat({ path, os_separator, item[j], extension })
+                            local selected_track_count = r.CountSelectedTracks(0)
+                            if selected_track_count > 0 then
+                                for k = 0, selected_track_count - 1 do
+                                    local track = r.GetSelectedTrack(0, k)
+                                    if track and r.ValidatePtr(track, "MediaTrack*") then
+                                        -- Remove all FX from track first
+                                        local fx_count = r.TrackFX_GetCount(track)
+                                        for m = fx_count - 1, 0, -1 do
+                                            r.TrackFX_Delete(track, m)
+                                        end
+                                        -- Then add the FX chain
+                                        AddFXToTrack(track, chain_file_path)
+                                    end
+                                end
+                                if config.close_after_adding_fx then
+                                    SHOULD_CLOSE_SCRIPT = true
+                                end
+                            else
+                                r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Replace FX", 0)
+                            end
+                        end
                         if r.ImGui_MenuItem(ctx, "Rename") then
                             local retval, new_name = r.GetUserInputs("Rename FX Chain", 1, "New name:", item[j])
                             if retval then
@@ -7247,6 +7491,19 @@ function ShowBrowserPanel()
         end
 
         -- Categories / Folders / Chains / Templates
+        
+        -- Debug: Log config settings once for FX Chains and Track Templates
+        if not debug_config_logged then
+            DebugLog("=== BROWSER PANEL CONFIG ===")
+            DebugLog("config.show_fx_chains = " .. tostring(config.show_fx_chains))
+            DebugLog("config.show_track_templates = " .. tostring(config.show_track_templates))
+            DebugLog("config.use_custom_fxchain_dir = " .. tostring(config.use_custom_fxchain_dir))
+            DebugLog("config.custom_fxchain_dir = " .. tostring(config.custom_fxchain_dir))
+            DebugLog("config.use_custom_template_dir = " .. tostring(config.use_custom_template_dir))
+            DebugLog("config.custom_template_dir = " .. tostring(config.custom_template_dir))
+            debug_config_logged = true
+        end
+        
         for i = 1, #CAT_TEST do
             local category_name = CAT_TEST[i].name
             if category_name ~= "CUSTOM" then
@@ -7456,26 +7713,53 @@ function ShowBrowserPanel()
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleVar(ctx)
                 end
+                if (category_name == "FX CHAINS") then
+                    if not debug_browser_panel_logged then
+                        DebugLog(">>> Checking FX CHAINS: config.show_fx_chains = " .. tostring(config.show_fx_chains))
+                    end
+                end
                 if (category_name == "FX CHAINS" and config.show_fx_chains) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
-                if r.ImGui_CollapsingHeader(ctx, "FX CHAINS") then
+                local header_is_open = r.ImGui_CollapsingHeader(ctx, "FX CHAINS")
+                
+                -- Only log when header state changes (from closed to open)
+                if header_is_open and not debug_fx_chains_header_was_open then
+                    DebugLog(">>> FX CHAINS header opened in browser panel")
+                end
+                debug_fx_chains_header_was_open = header_is_open
+                
+                if header_is_open then
                     r.ImGui_Indent(ctx, 10)
                     local tree = GetFxChainsTree()
-                    DrawFxChains(tree)
+                    DrawFxChains(tree, nil, false)  -- false = geen hover preview in browser panel
                     r.ImGui_Unindent(ctx, 10)
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleVar(ctx)
+                end
+                if (category_name == "TRACK TEMPLATES") then
+                    if not debug_browser_panel_logged then
+                        DebugLog(">>> Checking TRACK TEMPLATES: config.show_track_templates = " .. tostring(config.show_track_templates))
+                        debug_browser_panel_logged = true  -- Set flag after both checks
+                    end
                 end
                 if (category_name == "TRACK TEMPLATES" and config.show_track_templates) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
-                if r.ImGui_CollapsingHeader(ctx, "TRACK TEMPLATES") then
+                local header_is_open = r.ImGui_CollapsingHeader(ctx, "TRACK TEMPLATES")
+                
+                -- Only log when header state changes (from closed to open)
+                if header_is_open and not debug_track_templates_header_was_open then
+                    DebugLog(">>> TRACK TEMPLATES header opened in browser panel")
+                end
+                debug_track_templates_header_was_open = header_is_open
+                
+                if header_is_open then
                     r.ImGui_Indent(ctx, 10)
                     local tree = GetTrackTemplatesTree()
                     DrawTrackTemplates(tree)
@@ -8298,10 +8582,12 @@ function DrawHorizontalSeparatorBar(thickness, color)
     r.ImGui_Dummy(ctx, 0, t + ((config and config.compact_screenshots) and 4 or 8))
 end
 
-function DrawMasonryLayout(screenshots)
-    local initial_spacing = 0
+function DrawMasonryLayout(screenshots, top_offset)
+    top_offset = top_offset or 0  -- Default to 0 if not provided
+    
+    local initial_spacing = top_offset
     if not top_screenshot_spacing_applied then
-        initial_spacing = 6 
+        initial_spacing = initial_spacing + 6 
         top_screenshot_spacing_applied = true
     end
     local available_width = r.ImGui_GetContentRegionAvail(ctx)
@@ -8632,6 +8918,62 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
         end 
     r.ImGui_EndChild(ctx)
     return popped_view_stylevars
+end
+
+function ShowDebugWindow()
+    if not config.show_debug_window then return end
+    
+    local window_flags = r.ImGui_WindowFlags_NoCollapse()
+    r.ImGui_SetNextWindowSize(ctx, 600, 400, r.ImGui_Cond_FirstUseEver())
+    
+    local visible, open = r.ImGui_Begin(ctx, "TK FX Browser - Debug Log", true, window_flags)
+    if visible then
+        -- Clear button
+        if r.ImGui_Button(ctx, "Clear Log") then
+            debug_messages = {}
+        end
+        
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, string.format("Messages: %d / %d", #debug_messages, MAX_DEBUG_MESSAGES))
+        
+        r.ImGui_Separator(ctx)
+        
+        -- Scrollable log area
+        r.ImGui_BeginChild(ctx, "DebugLogArea", -1, -1)
+        
+        for i, msg in ipairs(debug_messages) do
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00FF00FF) -- Green for timestamp
+            r.ImGui_Text(ctx, "[" .. msg.time .. "]")
+            r.ImGui_PopStyleColor(ctx)
+            
+            r.ImGui_SameLine(ctx)
+            
+            -- Color based on message type
+            local color = 0xFFFFFFFF -- White by default
+            if msg.message:find("ERROR") then
+                color = 0xFF0000FF -- Red for errors
+            elseif msg.message:find("WARNING") then
+                color = 0xFFFF00FF -- Yellow for warnings
+            end
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), color)
+            r.ImGui_TextWrapped(ctx, msg.message)
+            r.ImGui_PopStyleColor(ctx)
+        end
+        
+        -- Auto-scroll to bottom when new messages arrive
+        if r.ImGui_GetScrollY(ctx) >= r.ImGui_GetScrollMaxY(ctx) then
+            r.ImGui_SetScrollHereY(ctx, 1.0)
+        end
+        
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_End(ctx)
+    
+    if not open then
+        config.show_debug_window = false
+        SaveConfig()
+    end
 end
 
 function ShowScreenshotWindow()
@@ -10474,36 +10816,40 @@ function ShowScreenshotWindow()
                                 prefix = prefix .. "★ "
                             end
                             local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##list_" .. i, false)
-                            local do_add = false
-                            if config.add_fx_with_double_click then
-                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-                                    do_add = true
+                            
+                            -- Only add on click if not an FX chain item
+                            if not fx.is_fx_chain_item then
+                                local do_add = false
+                                if config.add_fx_with_double_click then
+                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                                        do_add = true
+                                    end
+                                else
+                                    if activated then do_add = true end
                                 end
-                            else
-                                if activated then do_add = true end
-                            end
-                            if do_add then
-                                local plugin_name = fx.name
-                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    AddFXToTrack(TRACK, plugin_name)
-                                    LAST_USED_FX = plugin_name
-                                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                                if do_add then
+                                    local plugin_name = fx.name
+                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                        AddFXToTrack(TRACK, plugin_name)
+                                        LAST_USED_FX = plugin_name
+                                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                                    end
                                 end
                             end
+                            
                             ShowPluginContextMenu(fx.name, "list_ctx_" .. i)
                         end
                     end
                     r.ImGui_PopStyleVar(ctx)
                 else
                     if config.use_masonry_layout then
-                        -- Build a list of names while preserving special separators for subgroup dividers
                         local plain_names = {}
                         local messages = {}
                         for _, fx in ipairs(screenshot_search_results) do
                             if fx.is_message then
-                                messages[#messages+1] = fx -- behoud originele tabel (heeft is_message + name)
+                                messages[#messages+1] = fx 
                             elseif fx.is_separator then
-                                -- Convert structured separator to the string marker expected downstream
+                               
                                 if fx.kind == 'pinned_end' then
                                     plain_names[#plain_names+1] = "--Pinned End--"
                                 else
@@ -10516,6 +10862,70 @@ function ShowScreenshotWindow()
                         local with_shot, missing = SplitPluginsByScreenshot(plain_names)
                         local masonry_data = {}
                         for _, msg in ipairs(messages) do masonry_data[#masonry_data+1] = msg end
+                        
+                        local buttons_height = 0  
+                        if current_fx_chain_relative_path and current_fx_chain_name then
+                            local start_cursor_y = r.ImGui_GetCursorPosY(ctx)
+                            
+                            r.ImGui_Dummy(ctx, 0, 5)
+                            local window_width = r.ImGui_GetContentRegionAvail(ctx)
+                            local button_width = math.min(145, (window_width - 20) / 2)
+                            local total_width = button_width * 2 + 10
+                            local cursor_x = (window_width - total_width) * 0.5
+                            r.ImGui_SetCursorPosX(ctx, cursor_x)
+                            
+                            if r.ImGui_Button(ctx, "➕ Add##masonry_add", button_width, 30) then
+                                local selected_track_count = r.CountSelectedTracks(0)
+                                if selected_track_count > 0 then
+                                    for i = 0, selected_track_count - 1 do
+                                        local track = r.GetSelectedTrack(0, i)
+                                        if track and r.ValidatePtr(track, "MediaTrack*") then
+                                            AddFXToTrack(track, current_fx_chain_relative_path)
+                                        end
+                                    end
+                                    if config.close_after_adding_fx then
+                                        SHOULD_CLOSE_SCRIPT = true
+                                    end
+                                else
+                                    r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Add FX Chain", 0)
+                                end
+                            end
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_SetTooltip(ctx, "Add '" .. current_fx_chain_name .. "' to all selected tracks")
+                            end
+                            
+                            r.ImGui_SameLine(ctx, 0, 10)
+                            
+                            if r.ImGui_Button(ctx, "🔄 Replace##masonry_replace", button_width, 30) then
+                                local selected_track_count = r.CountSelectedTracks(0)
+                                if selected_track_count > 0 then
+                                    for i = 0, selected_track_count - 1 do
+                                        local track = r.GetSelectedTrack(0, i)
+                                        if track and r.ValidatePtr(track, "MediaTrack*") then
+                                            local fx_count = r.TrackFX_GetCount(track)
+                                            for j = fx_count - 1, 0, -1 do
+                                                r.TrackFX_Delete(track, j)
+                                            end
+                                            AddFXToTrack(track, current_fx_chain_relative_path)
+                                        end
+                                    end
+                                    if config.close_after_adding_fx then
+                                        SHOULD_CLOSE_SCRIPT = true
+                                    end
+                                else
+                                    r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Replace FX", 0)
+                                end
+                            end
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_SetTooltip(ctx, "Replace all FX on selected tracks with '" .. current_fx_chain_name .. "'")
+                            end
+                            
+                            r.ImGui_Dummy(ctx, 0, 10)
+                            
+                            local end_cursor_y = r.ImGui_GetCursorPosY(ctx)
+                            buttons_height = end_cursor_y - start_cursor_y
+                        end
+                        
                         for _, plugin_name in ipairs(with_shot) do
                             if plugin_name == "--Favorites End--" then
                                 masonry_data[#masonry_data+1] = {is_separator = true, kind = "favorites_end"}
@@ -10525,11 +10935,10 @@ function ShowScreenshotWindow()
                                 masonry_data[#masonry_data+1] = {name = plugin_name}
                             end
                         end
-                        DrawMasonryLayout(masonry_data)
+                        DrawMasonryLayout(masonry_data, buttons_height)
                         RenderMissingList(missing)
                     else
                         local num_columns = math.max(1, math.floor(available_width / display_size))
-                        -- Build a list of names while preserving special separators for subgroup dividers
                         local plain_names = {}
                         local messages = {}
                         for _, fx in ipairs(screenshot_search_results) do
@@ -10552,13 +10961,78 @@ function ShowScreenshotWindow()
                             r.ImGui_TextWrapped(ctx, display_name)
                             r.ImGui_PopStyleColor(ctx)
                         end
+                        
+                        if current_fx_chain_relative_path and current_fx_chain_name then
+                            r.ImGui_Dummy(ctx, 0, 5)
+                            local window_width = r.ImGui_GetContentRegionAvail(ctx)
+                            local button_width = math.min(145, (window_width - 20) / 2)
+                            local total_width = button_width * 2 + 10
+                            local cursor_x = (window_width - total_width) * 0.5
+                            r.ImGui_SetCursorPosX(ctx, cursor_x)
+                            
+                            if r.ImGui_Button(ctx, "➕ Add##normal_add", button_width, 30) then
+                                local selected_track_count = r.CountSelectedTracks(0)
+                                if selected_track_count > 0 then
+                                    for i = 0, selected_track_count - 1 do
+                                        local track = r.GetSelectedTrack(0, i)
+                                        if track and r.ValidatePtr(track, "MediaTrack*") then
+                                            AddFXToTrack(track, current_fx_chain_relative_path)
+                                        end
+                                    end
+                                    if config.close_after_adding_fx then
+                                        SHOULD_CLOSE_SCRIPT = true
+                                    end
+                                else
+                                    r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Add FX Chain", 0)
+                                end
+                            end
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_SetTooltip(ctx, "Add '" .. current_fx_chain_name .. "' to all selected tracks")
+                            end
+                            
+                            r.ImGui_SameLine(ctx, 0, 10)
+                            
+                            if r.ImGui_Button(ctx, "🔄 Replace##normal_replace", button_width, 30) then
+                                local selected_track_count = r.CountSelectedTracks(0)
+                                if selected_track_count > 0 then
+                                    for i = 0, selected_track_count - 1 do
+                                        local track = r.GetSelectedTrack(0, i)
+                                        if track and r.ValidatePtr(track, "MediaTrack*") then
+                                            local fx_count = r.TrackFX_GetCount(track)
+                                            for j = fx_count - 1, 0, -1 do
+                                                r.TrackFX_Delete(track, j)
+                                            end
+                                            AddFXToTrack(track, current_fx_chain_relative_path)
+                                        end
+                                    end
+                                    if config.close_after_adding_fx then
+                                        SHOULD_CLOSE_SCRIPT = true
+                                    end
+                                else
+                                    r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Replace FX", 0)
+                                end
+                            end
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_SetTooltip(ctx, "Replace all FX on selected tracks with '" .. current_fx_chain_name .. "'")
+                            end
+                            
+                            r.ImGui_Dummy(ctx, 0, 10)
+                        end
+                        
                         if #with_shot > 0 then ApplyTopScreenshotSpacing() end
                         for i, plugin_name in ipairs(with_shot) do
                             if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
-                                -- Draw the divider line and add breathing room below it
                                 DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
                                 r.ImGui_Dummy(ctx, 0, (config.compact_screenshots and 6 or 10))
                             else
+                            local is_fx_chain_item = false
+                            for _, fx in ipairs(screenshot_search_results) do
+                                if fx.name == plugin_name and fx.is_fx_chain_item then
+                                    is_fx_chain_item = true
+                                    break
+                                end
+                            end
+                            
                             local column = (i - 1) % num_columns
                             if column > 0 then r.ImGui_SameLine(ctx) end
                             r.ImGui_BeginGroup(ctx)
@@ -10581,39 +11055,43 @@ function ShowScreenshotWindow()
                                             local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                             DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
                                         end
-                                        if config.enable_drag_add_fx then
-                                            if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
-                                                potential_drag_fx_name = plugin_name
-                                                drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
-                                            end
-                                            if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx,0) then
-                                                local mx,my = r.ImGui_GetMousePos(ctx)
-                                                if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
-                                                    dragging_fx_name = plugin_name
+                                        
+                                        if not is_fx_chain_item then
+                                            if config.enable_drag_add_fx then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
+                                                    potential_drag_fx_name = plugin_name
+                                                    drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                                                end
+                                                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx,0) then
+                                                    local mx,my = r.ImGui_GetMousePos(ctx)
+                                                    if math.abs(mx-drag_start_x) > 3 or math.abs(my-drag_start_y) > 3 then
+                                                        dragging_fx_name = plugin_name
+                                                        potential_drag_fx_name = nil
+                                                    end
+                                                end
+                                                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx,0) then
                                                     potential_drag_fx_name = nil
                                                 end
                                             end
-                                            if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx,0) then
-                                                potential_drag_fx_name = nil
+                                            local do_add = false
+                                            if config.add_fx_with_double_click then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
+                                            else
+                                                if clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                             end
-                                        end
-                                        local do_add = false
-                                        if config.add_fx_with_double_click then
-                                            if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
-                                        else
-                                            if clicked and dragging_fx_name ~= plugin_name then do_add = true end
-                                        end
-                                        if do_add then
-                                            local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
-                                            if target_track then
-                                                local fx_index = AddFXToTrack(target_track, plugin_name)
-                                                LAST_USED_FX = plugin_name
-                                                if config.open_floating_after_adding and fx_index and fx_index >= 0 then
-                                                    r.TrackFX_Show(target_track, fx_index, 3)
+                                            if do_add then
+                                                local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                                if target_track then
+                                                    local fx_index = AddFXToTrack(target_track, plugin_name)
+                                                    LAST_USED_FX = plugin_name
+                                                    if config.open_floating_after_adding and fx_index and fx_index >= 0 then
+                                                        r.TrackFX_Show(target_track, fx_index, 3)
+                                                    end
+                                                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                                                 end
-                                                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                                             end
                                         end
+                                        
                                         ShowPluginContextMenu(plugin_name, "search_" .. i)
                                         if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
                                             r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
@@ -10639,12 +11117,11 @@ function ShowScreenshotWindow()
             end
             r.ImGui_Dummy(ctx, 0, 0)
             if is_screenshot_branch then
-                r.ImGui_EndChild(ctx) -- end ScreenshotList
+                r.ImGui_EndChild(ctx) 
             end
-            -- Close the main section selector (scripts/media/sends/actions/screenshots)
             end
         if not popped_view_stylevars then r.ImGui_PopStyleVar(ctx, 2) end
-        r.ImGui_EndChild(ctx) -- end ScreenshotSection
+        r.ImGui_EndChild(ctx) 
         config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
         r.ImGui_End(ctx)
         return visible
@@ -10786,6 +11263,9 @@ function FilterBox()
     if r.ImGui_Button(ctx, "X", x_button_width, button_height) then
         FILTER = ""
         screenshot_search_results = nil
+        current_fx_chain_path = nil
+        current_fx_chain_relative_path = nil
+        current_fx_chain_name = nil
         r.ImGui_SetScrollY(ctx, 0)
         show_screenshot_window = true
         show_media_browser = false
@@ -12098,13 +12578,27 @@ end
          
                 if r.ImGui_BeginMenu(ctx, CAT_TEST[i].name) then
                     if CAT_TEST[i].name == "FX CHAINS" then
+                        -- Only log once when menu first opens (with cooldown)
+                        local current_time = r.time_precise()
+                        if not debug_fx_chains_header_was_open or (current_time - debug_last_menu_log_time) > DEBUG_LOG_COOLDOWN then
+                            DebugLog(">>> FX CHAINS menu opened in main window")
+                            debug_fx_chains_header_was_open = true
+                            debug_last_menu_log_time = current_time
+                        end
                         local tree = GetFxChainsTree()
-                        DrawFxChains(tree)
+                        DrawFxChains(tree, nil, true)  -- true = toon hover preview in main window
                         if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end -- auto-expand FOLDERS header on startup when last opened was inside
                             r.ImGui_CloseCurrentPopup(ctx)
                         end
                     elseif CAT_TEST[i].name == "TRACK TEMPLATES" then
+                        -- Only log once when menu first opens (with cooldown)
+                        local current_time = r.time_precise()
+                        if not debug_track_templates_header_was_open or (current_time - debug_last_menu_log_time) > DEBUG_LOG_COOLDOWN then
+                            DebugLog(">>> TRACK TEMPLATES menu opened in main window")
+                            debug_track_templates_header_was_open = true
+                            debug_last_menu_log_time = current_time
+                        end
                         local tree = GetTrackTemplatesTree()
                         DrawTrackTemplates(tree)
                         if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
@@ -12576,6 +13070,10 @@ end
 if not should_show_main_window then
     if config.show_screenshot_window then
         ShowScreenshotWindow()
+    end
+    
+    if config.show_debug_window then
+        ShowDebugWindow()
     end
     
     if show_settings then
@@ -13756,6 +14254,9 @@ if visible then
         DrawBottomButtons()
         if show_settings then
             show_settings = ShowConfigWindow()
+        end
+        if config.show_debug_window then
+            ShowDebugWindow()
         end
         if show_add_script_popup then
             r.ImGui_OpenPopup(ctx, "Add User Script")
