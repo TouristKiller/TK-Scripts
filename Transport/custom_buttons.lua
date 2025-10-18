@@ -78,6 +78,8 @@ function CustomButtons.LoadCurrentButtons()
         local success, result = pcall(json.decode, content)
         if success then
             CustomButtons.buttons = result
+            -- Restore group visibility states after loading
+            CustomButtons.RestoreGroupVisibilityStates()
         else
             reaper.ShowMessageBox("Error loading custom buttons: " .. tostring(result) .. "\n\nResetting to default buttons.", "Custom Buttons Error", 0)
             CustomButtons.buttons = {}
@@ -107,6 +109,8 @@ function CustomButtons.LoadButtonPreset(name)
         if success then
             CustomButtons.buttons = result
             CustomButtons.current_preset = name
+            -- Restore group visibility states after loading preset
+            CustomButtons.RestoreGroupVisibilityStates()
             CustomButtons.SaveCurrentButtons()
             r.SetExtState("TK_TRANSPORT", "last_button_preset", name, true)
         else
@@ -281,6 +285,22 @@ function CustomButtons.GetGroupVisibilityState(group_name)
     return any_visible and 1 or 0
 end
 
+-- Save group visibility state to ExtState
+function CustomButtons.SaveGroupVisibilityState(group_name, is_visible)
+    if not group_name or group_name == "" then return end
+    local state_key = "group_visibility_" .. group_name
+    r.SetExtState("TK_TRANSPORT_GROUPS", state_key, is_visible and "1" or "0", true)
+end
+
+-- Load group visibility state from ExtState
+function CustomButtons.LoadGroupVisibilityState(group_name)
+    if not group_name or group_name == "" then return nil end
+    local state_key = "group_visibility_" .. group_name
+    local state = r.GetExtState("TK_TRANSPORT_GROUPS", state_key)
+    if state == "" then return nil end
+    return state == "1"
+end
+
 -- Toggle the visibility of a group
 function CustomButtons.ToggleGroupVisibility(group_name)
     if not group_name or group_name == "" then
@@ -305,7 +325,37 @@ function CustomButtons.ToggleGroupVisibility(group_name)
         end
     end
     
+    -- Save the visibility state
+    CustomButtons.SaveGroupVisibilityState(group_name, new_state)
     CustomButtons.SaveCurrentButtons()
+end
+
+-- Restore group visibility states from ExtState
+function CustomButtons.RestoreGroupVisibilityStates()
+    -- Early exit if no buttons loaded yet
+    if not CustomButtons.buttons or #CustomButtons.buttons == 0 then
+        return
+    end
+    
+    local groups = CustomButtons.GetAllGroups()
+    
+    for _, group_name in ipairs(groups) do
+        local saved_state = CustomButtons.LoadGroupVisibilityState(group_name)
+        
+        -- Only apply if there's a saved state
+        if saved_state ~= nil then
+            for _, btn in ipairs(CustomButtons.buttons) do
+                if btn.group == group_name then
+                    btn.visible = saved_state
+                end
+            end
+        end
+    end
+    
+    -- Save the restored state to current buttons
+    if #CustomButtons.buttons > 0 then
+        CustomButtons.SaveCurrentButtons()
+    end
 end
 
 -- Get all unique group names
