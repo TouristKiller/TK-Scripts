@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.5.0:
+-- @version 0.5.1:
 -- @changelog:
 --[[       
 + Complete remake    
@@ -2970,6 +2970,95 @@ local function handle_reaper_drop()
         insert_state.drop_track = nil
     end
 end
+
+local function insert_with_reasamplomatic(file_path)
+    local ext = file_path:match("%.([^%.]+)$")
+    if not ext then return end
+    ext = ext:lower()
+    
+    if ext == "mid" or ext == "midi" then
+        return
+    end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local track_idx = r.CountTracks(0)
+    r.InsertTrackAtIndex(track_idx, true)
+    local track = r.GetTrack(0, track_idx)
+    
+    if not track then
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock("Insert with ReaSamplomatic5000", -1)
+        return
+    end
+    
+    local item_name = file_path:match("([^/\\]+)$")
+    if item_name then
+        local name_without_ext = item_name:match("(.+)%..+$") or item_name
+        r.GetSetMediaTrackInfo_String(track, "P_NAME", name_without_ext, true)
+    end
+    
+    local fx_idx = r.TrackFX_AddByName(track, "ReaSamploMatic5000", false, -1)
+    
+    if fx_idx >= 0 then
+        r.TrackFX_SetNamedConfigParm(track, fx_idx, "FILE0", file_path)
+        r.TrackFX_SetNamedConfigParm(track, fx_idx, "DONE", "")
+    end
+    
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Insert with ReaSamplomatic5000", -1)
+end
+
+local function replace_reasamplomatic_sample(file_path)
+    local ext = file_path:match("%.([^%.]+)$")
+    if not ext then return end
+    ext = ext:lower()
+    
+    if ext == "mid" or ext == "midi" then
+        return
+    end
+    
+    local track = r.GetSelectedTrack(0, 0)
+    if not track then
+        r.MB("No track selected. Please select a track with ReaSamplomatic5000.", "Error", 0)
+        return
+    end
+    
+    local fx_count = r.TrackFX_GetCount(track)
+    local rs5k_idx = -1
+    
+    for i = 0, fx_count - 1 do
+        local _, fx_name = r.TrackFX_GetFXName(track, i, "")
+        if fx_name:match("ReaSamploMatic5000") or fx_name:match("RS5K") then
+            rs5k_idx = i
+            break
+        end
+    end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    if rs5k_idx == -1 then
+        rs5k_idx = r.TrackFX_AddByName(track, "ReaSamploMatic5000", false, -1)
+        if rs5k_idx < 0 then
+            r.PreventUIRefresh(-1)
+            r.MB("Failed to add ReaSamplomatic5000 to selected track.", "Error", 0)
+            r.Undo_EndBlock("Replace ReaSamplomatic5000 sample", -1)
+            return
+        end
+    end
+    
+    r.TrackFX_SetNamedConfigParm(track, rs5k_idx, "FILE0", file_path)
+    r.TrackFX_SetNamedConfigParm(track, rs5k_idx, "DONE", "")
+    
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Replace ReaSamplomatic5000 sample", -1)
+end
+
 local function get_audio_file_info(file_path)
     local source = r.PCM_Source_CreateFromFile(file_path)
     if not source then return nil end
@@ -3159,6 +3248,20 @@ local function draw_file_list()
                                             end
                                         end
                                         r.ImGui_Separator(ctx)
+                                    end
+                                    
+                                    local ext = file_path:match("%.([^%.]+)$")
+                                    if ext then
+                                        ext = ext:lower()
+                                        if ext ~= "mid" and ext ~= "midi" then
+                                            if r.ImGui_MenuItem(ctx, "Add to new track with ReaSamplomatic5000") then
+                                                insert_with_reasamplomatic(file_path)
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
+                                                replace_reasamplomatic_sample(file_path)
+                                            end
+                                            r.ImGui_Separator(ctx)
+                                        end
                                     end
                                     
                                     r.ImGui_Text(ctx, "Add to Collection:")
@@ -3654,6 +3757,20 @@ local function draw_file_list()
                                             clear_file_selection()
                                         end
                                         r.ImGui_Separator(ctx)
+                                    end
+                                    
+                                    local ext = file.full_path:match("%.([^%.]+)$")
+                                    if ext then
+                                        ext = ext:lower()
+                                        if ext ~= "mid" and ext ~= "midi" then
+                                            if r.ImGui_MenuItem(ctx, "Add to new track with ReaSamplomatic5000") then
+                                                insert_with_reasamplomatic(file.full_path)
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
+                                                replace_reasamplomatic_sample(file.full_path)
+                                            end
+                                            r.ImGui_Separator(ctx)
+                                        end
                                     end
                                     
                                     r.ImGui_Text(ctx, "Add to Collection:")
