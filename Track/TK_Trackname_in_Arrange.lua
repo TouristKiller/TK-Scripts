@@ -1,14 +1,12 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.1.0
+-- @version 1.1.1
 -- @changelog 
 --[[
-+ FIXED: Overlay now properly repositions when returning to REAPER from other applications
-+ FIXED: FX windows and dialogs automatically move above overlay when REAPER regains focus
-+ FIXED: Script no longer switches focus between multiple REAPER instances when running simultaneously
++ Simplified focus detection and overlay z-order management
 ]]--
 
-local SCRIPT_VERSION = "1.0.8"
+local SCRIPT_VERSION = "1.1.1"
 
 local r                  = reaper
 -- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
@@ -32,12 +30,6 @@ local needs_font_update  = false
 local ImGuiScale_saved   = nil
 local screen_scale       = nil
 local grid_divide_state  = 0
-local hasDrawingFocusBeenHandled = false
-local was_main_window_focused = false
-local last_position_check_time = 0
-local POSITION_CHECK_INTERVAL = 0.1  -- Check window focus every 0.1 seconds
-local reaper_just_gained_focus = false  -- Track when REAPER gains focus
-local focus_handle_delay = 0           -- Delay before handling focus
 local overlay_hwnd = nil               -- Store overlay window handle
 local zorder_handled_at_startup = false -- Only fix z-order once at startup
 
@@ -152,21 +144,6 @@ local function ensureOverlayBehindWindows()
     for _, hwnd in ipairs(windowsToReorder) do
         r.JS_Window_SetZOrder(hwnd, "TOP")
     end
-end
-
-local function handleDrawingFocus()
-    -- Only run once after REAPER gains focus, not continuously
-    if not reaper_just_gained_focus then return end
-    
-    -- Add small delay to let REAPER stabilize
-    local current_time = r.time_precise()
-    if current_time - focus_handle_delay < 0.5 then return end
-    
-    reaper_just_gained_focus = false
-    hasDrawingFocusBeenHandled = true
-    
-    -- After REAPER gains focus, ensure overlay is at the bottom
-    ensureOverlayBehindWindows()
 end
                                               
 local default_settings              = {
@@ -2049,47 +2026,16 @@ end
 profiler.run()
 profiler.start()]]--
 function loop()
-    local current_time = r.time_precise()
-    
-    -- Check if REAPER window gained focus (less frequent check)
-    if current_time - last_position_check_time >= POSITION_CHECK_INTERVAL then
-        local foreground = r.JS_Window_GetForeground()
-        local is_reaper_focused = false
-        
-        if foreground then
-            is_reaper_focused = (foreground == main) or (r.JS_Window_GetParent(foreground) == main)
-        end
-        
-        -- Detect transition from unfocused to focused
-        if is_reaper_focused and not was_main_window_focused then
-            reaper_just_gained_focus = true
-            focus_handle_delay = current_time
-            hasDrawingFocusBeenHandled = false
-        end
-        
-        was_main_window_focused = is_reaper_focused
-        last_position_check_time = current_time
-    end
-    
-    -- Handle startup z-order fix (only once)
-    if not zorder_handled_at_startup then
-        ensureOverlayBehindWindows()
-        zorder_handled_at_startup = true
-    end
-    
-    -- Only handle focus once after gaining focus, with delay
-    if reaper_just_gained_focus then
-        handleDrawingFocus()
-    end
-    
-    -- Force position update when needed
-    local force_position_update = hasDrawingFocusBeenHandled == false and was_main_window_focused
-    
     if r.GetExtState("TK_TRACKNAMES", "reload_settings") == "1" then
         LoadSettings()
         r.SetExtState("TK_TRACKNAMES", "reload_settings", "0", false)
     end
     
+    -- Handle startup z-order fix (only once, ever)
+    if not zorder_handled_at_startup then
+        ensureOverlayBehindWindows()
+        zorder_handled_at_startup = true
+    end
 
     settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
@@ -2111,7 +2057,7 @@ function loop()
         end
     end
 
-    DrawOverArrange(force_position_update)
+    DrawOverArrange(false)
     r.ImGui_PushFont(ctx, font_objects[settings.selected_font])
     local ImGuiScale = reaper.ImGui_GetWindowDpiScale(ctx)
     if ImGuiScale ~= ImGuiScale_saved then
