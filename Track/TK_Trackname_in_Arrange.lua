@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.0.9
+-- @version 1.1.0
 -- @changelog 
 --[[
 + FIXED: Overlay now properly repositions when returning to REAPER from other applications
@@ -33,11 +33,13 @@ local ImGuiScale_saved   = nil
 local screen_scale       = nil
 local grid_divide_state  = 0
 local hasDrawingFocusBeenHandled = false
-local last_focus_check_time = 0
-local FOCUS_CHECK_INTERVAL = 0.5  -- Check every 0.5 seconds instead of every frame
 local was_main_window_focused = false
 local last_position_check_time = 0
 local POSITION_CHECK_INTERVAL = 0.1  -- Check window focus every 0.1 seconds
+local reaper_just_gained_focus = false  -- Track when REAPER gains focus
+local focus_handle_delay = 0           -- Delay before handling focus
+local overlay_hwnd = nil               -- Store overlay window handle
+local zorder_handled_at_startup = false -- Only fix z-order once at startup
 
 local color_cache        = {}
 local cached_bg_color    = nil
@@ -90,48 +92,47 @@ local function DrawOverArrange(force_update)
     r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
 end
 
-local function handleDrawingFocus()
-    if hasDrawingFocusBeenHandled then return end
-    local windowsToFocus = {}
+local function ensureOverlayBehindWindows()
+    -- Get overlay window handle if we don't have it yet
+    if not overlay_hwnd then
+        overlay_hwnd = r.JS_Window_Find("Track Names Display", true)
+        if not overlay_hwnd then return end
+    end
     
+    -- Collect all visible REAPER child windows that should be above overlay
+    local windowsToReorder = {}
     local arr = r.new_array({}, 1024)
     local ret = r.JS_Window_ArrayAllTop(arr)
+    
     if ret >= 1 then
         local childs = arr.table()
         for j = 1, #childs do
             local hwnd = r.JS_Window_HandleFromAddress(childs[j])
-            if r.JS_Window_IsVisible(hwnd) then
+            
+            -- Skip the overlay itself and the main window
+            if hwnd ~= overlay_hwnd and hwnd ~= main and r.JS_Window_IsVisible(hwnd) then
                 local className = r.JS_Window_GetClassName(hwnd)
-                if className:match("^REAPER") or  
-                className == "#32770" or       
-                className:match("Lua_LICE") or 
-                className:match("^WDL")       
-                then
-                    local isOurWindow = false
+                local title = r.JS_Window_GetTitle(hwnd)
+                
+                -- Check if this is a REAPER window that should be above overlay
+                if className:match("^REAPER") or      -- All REAPER windows
+                   className == "#32770" or           -- Dialogs (Actions, Preferences, etc)
+                   className:match("Lua_LICE") or    -- Lua GUIs
+                   className:match("^WDL") or        -- WDL windows
+                   title:match("Media Explorer") or   -- Media Explorer by title
+                   title:match("FX Browser") then     -- FX Browser by title
                     
-                    if hwnd == main then
-                        isOurWindow = true
-                    else
-                        local parent = r.JS_Window_GetParent(hwnd)
-                        local depth = 0
-                        while parent and parent ~= 0 and depth < 10 do
-                            if parent == main then
-                                isOurWindow = true
-                                break
-                            end
-                            parent = r.JS_Window_GetParent(parent)
-                            depth = depth + 1
-                        end
-                    end
-                    
-                    if isOurWindow then
-                        table.insert(windowsToFocus, hwnd)
+                    -- Verify it's a child of REAPER main window or is a top-level REAPER window
+                    local parent = r.JS_Window_GetParent(hwnd)
+                    if parent == main or parent == 0 or parent == nil then
+                        table.insert(windowsToReorder, hwnd)
                     end
                 end
             end
         end
     end
     
+    -- Also check for floating FX windows
     local trackCount = r.CountTracks(0)
     for i = 0, trackCount - 1 do
         local track = r.GetTrack(0, i)
@@ -140,41 +141,32 @@ local function handleDrawingFocus()
             for fx = 0, fxCount - 1 do
                 local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fx)
                 if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
-                    table.insert(windowsToFocus, floatingHwnd)
+                    table.insert(windowsToReorder, floatingHwnd)
                 end
             end
         end
     end
-
-    local retval, tracknum, itemnum, fxnum = r.GetFocusedFX()
-    if retval == 1 then
-        local track = r.GetTrack(0, tracknum-1)
-        if track then
-            local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fxnum)
-            if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
-                table.insert(windowsToFocus, floatingHwnd)
-            end
-        end
+    
+    -- Bring these windows above overlay using SetZOrder with HWND_TOP
+    -- This doesn't change focus, just ensures they're above the overlay
+    for _, hwnd in ipairs(windowsToReorder) do
+        r.JS_Window_SetZOrder(hwnd, "TOP")
     end
+end
 
-    local retval, tracknum, fxnum = r.GetLastTouchedFX()
-    if retval then
-        local track = r.GetTrack(0, tracknum-1)
-        if track then
-            local floatingHwnd = r.TrackFX_GetFloatingWindow(track, fxnum)
-            if floatingHwnd and r.JS_Window_IsVisible(floatingHwnd) then
-                table.insert(windowsToFocus, floatingHwnd)
-            end
-        end
-    end
-    r.defer(function()
-        for _, hwnd in ipairs(windowsToFocus) do
-            r.defer(function()
-                r.JS_Window_SetForeground(hwnd)
-            end)
-        end
-        hasDrawingFocusBeenHandled = true
-    end)
+local function handleDrawingFocus()
+    -- Only run once after REAPER gains focus, not continuously
+    if not reaper_just_gained_focus then return end
+    
+    -- Add small delay to let REAPER stabilize
+    local current_time = r.time_precise()
+    if current_time - focus_handle_delay < 0.5 then return end
+    
+    reaper_just_gained_focus = false
+    hasDrawingFocusBeenHandled = true
+    
+    -- After REAPER gains focus, ensure overlay is at the bottom
+    ensureOverlayBehindWindows()
 end
                                               
 local default_settings              = {
@@ -2057,26 +2049,41 @@ end
 profiler.run()
 profiler.start()]]--
 function loop()
-    -- Only check focus every 0.5 seconds to reduce CPU usage
     local current_time = r.time_precise()
-    if current_time - last_focus_check_time >= FOCUS_CHECK_INTERVAL then
-        handleDrawingFocus()
-        last_focus_check_time = current_time
-    end
     
-    -- Check if main window regained focus and force position update if needed
-    local force_position_update = false
+    -- Check if REAPER window gained focus (less frequent check)
     if current_time - last_position_check_time >= POSITION_CHECK_INTERVAL then
         local foreground = r.JS_Window_GetForeground()
-        local is_reaper_focused = (foreground == main) or (r.JS_Window_GetParent(foreground) == main)
+        local is_reaper_focused = false
+        
+        if foreground then
+            is_reaper_focused = (foreground == main) or (r.JS_Window_GetParent(foreground) == main)
+        end
+        
+        -- Detect transition from unfocused to focused
         if is_reaper_focused and not was_main_window_focused then
-            -- REAPER just regained focus, force position update and re-handle focus for FX windows
-            force_position_update = true
+            reaper_just_gained_focus = true
+            focus_handle_delay = current_time
             hasDrawingFocusBeenHandled = false
         end
+        
         was_main_window_focused = is_reaper_focused
         last_position_check_time = current_time
     end
+    
+    -- Handle startup z-order fix (only once)
+    if not zorder_handled_at_startup then
+        ensureOverlayBehindWindows()
+        zorder_handled_at_startup = true
+    end
+    
+    -- Only handle focus once after gaining focus, with delay
+    if reaper_just_gained_focus then
+        handleDrawingFocus()
+    end
+    
+    -- Force position update when needed
+    local force_position_update = hasDrawingFocusBeenHandled == false and was_main_window_focused
     
     if r.GetExtState("TK_TRACKNAMES", "reload_settings") == "1" then
         LoadSettings()
