@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.9.6
+-- @version 1.9.7
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -649,6 +649,7 @@ function SetDefaultConfig()
         default_folder = nil,
         screenshot_size_option = 2, -- 1 = 128x128, 2 = 500x(to scale), 3 = original
         screenshot_default_folder_only = false,
+        screenshot_controls_layout = "horizontal", -- "horizontal", "vertical", or "auto"
         apply_type_priority = true,
         plugin_type_priority = { "CLAP", "VST3", "VST", "JS" },
         screenshot_delay = 0.5,
@@ -6061,8 +6062,17 @@ end
 
 function ShowCustomFolderDropdown()
     if next(config.custom_folders) then
-        r.ImGui_SameLine(ctx)
-        r.ImGui_PushItemWidth(ctx, 110)
+        -- Check layout mode - don't use SameLine in vertical mode
+        local layout = config.screenshot_controls_layout or "horizontal"
+        local available_width = r.ImGui_GetContentRegionAvail(ctx)
+        local is_vertical = (layout == "vertical" or (layout == "auto" and available_width < 300))
+        
+        if not is_vertical then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 110)
+        else
+            r.ImGui_PushItemWidth(ctx, -1)  -- Full width in vertical mode
+        end
         r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
         
         if r.ImGui_BeginCombo(ctx, "##CustomFolderDropdown", "Custom") then
@@ -6209,191 +6219,371 @@ function SortPlainPluginList(list, mode)
 end
 
 function ShowScreenshotControls()
-    r.ImGui_SameLine(ctx)
-    ShowFolderDropdown()
-    if not config.hide_custom_dropdown then
-        ShowCustomFolderDropdown()
-    end
-    show_screenshot_search = config.show_screenshot_search ~= false
-    if show_screenshot_search then
-        r.ImGui_SameLine(ctx)
-        r.ImGui_PushItemWidth(ctx, 70)
-    local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+    local layout = config.screenshot_controls_layout or "horizontal"
+    local available_width = r.ImGui_GetContentRegionAvail(ctx)
+    
+    -- Bepaal of we automatisch naar vertical moeten switchen bij smalle windows
+    local auto_vertical = (layout == "auto" and available_width < 300)
+    local is_vertical = (layout == "vertical" or auto_vertical)
+    
+    if layout == "vertical" or auto_vertical then
+        -- VERTICAL LAYOUT
+        r.ImGui_PushItemWidth(ctx, -1)
+        ShowFolderDropdown()
         r.ImGui_PopItemWidth(ctx)
-        r.ImGui_SameLine(ctx)
-
-        screenshot_sort_mode = screenshot_sort_mode or "alphabet"
-        local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
-        local sort_label = (effective_mode == "alphabet") and "A" or "R"
-        if r.ImGui_Button(ctx, sort_label, 20, 20) then
-            -- Toggle the main sort when available to keep UI in sync
-            if config then
-                config.sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
-                if SaveConfig then SaveConfig() end
-            else
-                screenshot_sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
-            end
-            SortScreenshotResults()
+        
+        if not config.hide_custom_dropdown then
+            r.ImGui_PushItemWidth(ctx, -1)
+            ShowCustomFolderDropdown()
+            r.ImGui_PopItemWidth(ctx)
         end
-        if r.ImGui_IsItemHovered(ctx) then
-            if effective_mode == "alphabet" then
-                r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
-            else
-                r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
-            end
-        end
-
-        r.ImGui_SameLine(ctx)
-        if browser_search_term == "" then
-            r.ImGui_BeginDisabled(ctx)
-        end
-    if r.ImGui_Button(ctx, "All", 20, 20) then
-            screenshot_search_results = {}
-            local MAX_RESULTS = 200
-            local term = browser_search_term:lower()
-            local matches = {}
-            for _, plugin in ipairs(PLUGIN_LIST) do
-                if plugin:lower():find(term, 1, true) then
-                    table.insert(matches, plugin)
-                end
-            end
-            if config.apply_type_priority then
-                matches = DedupeByTypePriority(matches)
-            end
-            local total = #matches
-            local limit = math.min(total, MAX_RESULTS)
-            for i = 1, limit do
-                table.insert(screenshot_search_results, { name = matches[i] })
-            end
-
-            SortScreenshotResults()
-            if total > MAX_RESULTS then
-                search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
-            end
-            new_search_performed = true
-            selected_folder = nil
-            browser_panel_selected = nil
-            last_selected_folder_before_global = nil
-            RequestClearScreenshotCache()
-        end
-        if browser_search_term == "" then
-            r.ImGui_EndDisabled(ctx)
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)")
-        end
-
-        if changed then
-            browser_search_term = new_search
-            if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
-            if browser_search_term == "" then
-                screenshot_search_results = {}
-                search_warning_message = nil
-                if current_filtered_fx and #current_filtered_fx > 0 then
-                    for _, plugin in ipairs(current_filtered_fx) do
-                        table.insert(screenshot_search_results, {name = plugin})
-                    end
-                elseif selected_folder then
-                    local filtered_plugins = GetPluginsForFolder(selected_folder)
-                    for _, plugin in ipairs(filtered_plugins) do
-                        table.insert(screenshot_search_results, {name = plugin})
-                    end
+        
+        show_screenshot_search = config.show_screenshot_search ~= false
+        if show_screenshot_search then
+            -- Bereken breedte voor search field (laat ruimte voor A en All knoppen)
+            local button_space = 50  -- ruimte voor 2 knoppen + spacing
+            local search_width = r.ImGui_GetContentRegionAvail(ctx) - button_space
+            
+            r.ImGui_PushItemWidth(ctx, search_width)
+            local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+            r.ImGui_PopItemWidth(ctx)
+            
+            r.ImGui_SameLine(ctx)
+            screenshot_sort_mode = screenshot_sort_mode or "alphabet"
+            local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
+            local sort_label = (effective_mode == "alphabet") and "A" or "R"
+            if r.ImGui_Button(ctx, sort_label, 20, 20) then
+                if config then
+                    config.sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                    if SaveConfig then SaveConfig() end
+                else
+                    screenshot_sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
                 end
                 SortScreenshotResults()
-                RequestClearScreenshotCache()
-                new_search_performed = true
-            else
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                if effective_mode == "alphabet" then
+                    r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
+                else
+                    r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+                end
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if browser_search_term == "" then r.ImGui_BeginDisabled(ctx) end
+            if r.ImGui_Button(ctx, "All", 20, 20) then
                 screenshot_search_results = {}
-                loaded_items_count = ITEMS_PER_BATCH
-                search_warning_message = nil
-
                 local MAX_RESULTS = 200
-                local too_many_results = false
-
-                local source_list = nil
-                if current_filtered_fx and #current_filtered_fx > 0 then
-                    source_list = current_filtered_fx
-                elseif selected_folder or browser_panel_selected then
-                    local folder_to_search = browser_panel_selected or selected_folder
-                    source_list = GetPluginsForFolder(folder_to_search)
-                end
-                if source_list then
-                    local count = 0
-                    local term_l = browser_search_term:lower()
-                    local matches = {}
-                    for _, plugin in ipairs(source_list) do
-                        if plugin:lower():find(term_l, 1, true) then
-                            matches[#matches+1] = plugin
-                        end
+                local term = browser_search_term:lower()
+                local matches = {}
+                for _, plugin in ipairs(PLUGIN_LIST) do
+                    if plugin:lower():find(term, 1, true) then
+                        table.insert(matches, plugin)
                     end
-                    if config.apply_type_priority then
-                        matches = DedupeByTypePriority(matches)
-                    end
-                    -- When browsing a non-folder subgroup (ALL/DEVELOPER/CATEGORY), apply pinned/favorites-first ordering
-                    if browser_panel_selected then
-                        local pinned, favorites, others = {}, {}, {}
-                        for _, p in ipairs(matches) do
-                            if IsPluginPinned and IsPluginPinned(p) then
-                                pinned[#pinned+1] = p
-                            elseif favorite_set and favorite_set[p] then
-                                favorites[#favorites+1] = p
-                            else
-                                others[#others+1] = p
-                            end
-                        end
-                        SortPlainPluginList(pinned, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
-                        if config and config.show_favorites_on_top then
-                            SortPlainPluginList(favorites, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
-                        end
-                        SortPlainPluginList(others, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
-                        local ordered = {}
-                        
-                        -- Add pinned plugins first if show_pinned_on_top is enabled
-                        if config and config.show_pinned_on_top then
-                            for _, p in ipairs(pinned) do ordered[#ordered+1] = p end
-                            if #pinned > 0 and ((config and config.show_favorites_on_top and (#favorites>0 or #others>0)) or (not (config and config.show_favorites_on_top) and #others>0)) then
-                                ordered[#ordered+1] = "--Pinned End--"
-                            end
-                        end
-                        
-                        if config and config.show_favorites_on_top then
-                            for _, p in ipairs(favorites) do ordered[#ordered+1] = p end
-                            if #favorites > 0 and #others > 0 then
-                                ordered[#ordered+1] = "--Favorites End--"
-                            end
-                        else
-                            for _, p in ipairs(favorites) do others[#others+1] = p end
-                        end
-                        
-                        -- Add pinned plugins to others if show_pinned_on_top is disabled
-                        if not (config and config.show_pinned_on_top) then
-                            for _, p in ipairs(pinned) do others[#others+1] = p end
-                        end
-                        
-                        for _, p in ipairs(others) do ordered[#ordered+1] = p end
-                        matches = ordered
-                    end
-
-                    for i = 1, math.min(MAX_RESULTS, #matches) do
-                        screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
-                    end
-                    count = #matches
-                    too_many_results = (count > MAX_RESULTS)
                 end
-
-                -- Keep explicit subgroup ordering; only apply generic sort when not in a subgroup
-                if not browser_panel_selected then
-                    SortScreenshotResults()
+                if config.apply_type_priority then
+                    matches = DedupeByTypePriority(matches)
                 end
-                RequestClearScreenshotCache()
-                if too_many_results then
-                    search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
+                local total = #matches
+                local limit = math.min(total, MAX_RESULTS)
+                for i = 1, limit do
+                    table.insert(screenshot_search_results, { name = matches[i] })
                 end
-
+                SortScreenshotResults()
+                if total > MAX_RESULTS then
+                    search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
+                end
                 new_search_performed = true
+                selected_folder = nil
+                browser_panel_selected = nil
+                last_selected_folder_before_global = nil
+                RequestClearScreenshotCache()
+            end
+            if browser_search_term == "" then r.ImGui_EndDisabled(ctx) end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)")
+            end
+
+            if changed then
+                browser_search_term = new_search
+                if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
+                if browser_search_term == "" then
+                    screenshot_search_results = {}
+                    search_warning_message = nil
+                    if current_filtered_fx and #current_filtered_fx > 0 then
+                        for _, plugin in ipairs(current_filtered_fx) do
+                            table.insert(screenshot_search_results, {name = plugin})
+                        end
+                    elseif selected_folder then
+                        local filtered_plugins = GetPluginsForFolder(selected_folder)
+                        for _, plugin in ipairs(filtered_plugins) do
+                            table.insert(screenshot_search_results, {name = plugin})
+                        end
+                    end
+                    SortScreenshotResults()
+                    RequestClearScreenshotCache()
+                    new_search_performed = true
+                else
+                    screenshot_search_results = {}
+                    loaded_items_count = ITEMS_PER_BATCH
+                    search_warning_message = nil
+                    local MAX_RESULTS = 200
+                    local too_many_results = false
+                    local source_list = nil
+                    if current_filtered_fx and #current_filtered_fx > 0 then
+                        source_list = current_filtered_fx
+                    elseif selected_folder or browser_panel_selected then
+                        local folder_to_search = browser_panel_selected or selected_folder
+                        source_list = GetPluginsForFolder(folder_to_search)
+                    end
+                    if source_list then
+                        local count = 0
+                        local term_l = browser_search_term:lower()
+                        local matches = {}
+                        for _, plugin in ipairs(source_list) do
+                            if plugin:lower():find(term_l, 1, true) then
+                                matches[#matches+1] = plugin
+                            end
+                        end
+                        if config.apply_type_priority then
+                            matches = DedupeByTypePriority(matches)
+                        end
+                        if browser_panel_selected then
+                            local pinned, favorites, others = {}, {}, {}
+                            for _, p in ipairs(matches) do
+                                if IsPluginPinned and IsPluginPinned(p) then
+                                    pinned[#pinned+1] = p
+                                elseif favorite_set and favorite_set[p] then
+                                    favorites[#favorites+1] = p
+                                else
+                                    others[#others+1] = p
+                                end
+                            end
+                            SortPlainPluginList(pinned, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                            if config and config.show_favorites_on_top then
+                                SortPlainPluginList(favorites, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                            end
+                            SortPlainPluginList(others, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                            local ordered = {}
+                            if config and config.show_pinned_on_top then
+                                for _, p in ipairs(pinned) do ordered[#ordered+1] = p end
+                                if #pinned > 0 and ((config and config.show_favorites_on_top and (#favorites>0 or #others>0)) or (not (config and config.show_favorites_on_top) and #others>0)) then
+                                    ordered[#ordered+1] = "--Pinned End--"
+                                end
+                            end
+                            if config and config.show_favorites_on_top then
+                                for _, p in ipairs(favorites) do ordered[#ordered+1] = p end
+                                if #favorites > 0 and #others > 0 then
+                                    ordered[#ordered+1] = "--Favorites End--"
+                                end
+                            else
+                                for _, p in ipairs(favorites) do others[#others+1] = p end
+                            end
+                            if not (config and config.show_pinned_on_top) then
+                                for _, p in ipairs(pinned) do others[#others+1] = p end
+                            end
+                            for _, p in ipairs(others) do ordered[#ordered+1] = p end
+                            matches = ordered
+                        end
+                        for i = 1, math.min(MAX_RESULTS, #matches) do
+                            screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+                        end
+                        count = #matches
+                        too_many_results = (count > MAX_RESULTS)
+                    end
+                    if not browser_panel_selected then
+                        SortScreenshotResults()
+                    end
+                    RequestClearScreenshotCache()
+                    if too_many_results then
+                        search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
+                    end
+                    new_search_performed = true
+                end
             end
         end
-   
+    else
+        -- HORIZONTAL LAYOUT (origineel)
+        r.ImGui_SameLine(ctx)
+        ShowFolderDropdown()
+        if not config.hide_custom_dropdown then
+            ShowCustomFolderDropdown()
+        end
+        show_screenshot_search = config.show_screenshot_search ~= false
+        if show_screenshot_search then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 70)
+            local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+
+            screenshot_sort_mode = screenshot_sort_mode or "alphabet"
+            local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
+            local sort_label = (effective_mode == "alphabet") and "A" or "R"
+            if r.ImGui_Button(ctx, sort_label, 20, 20) then
+                if config then
+                    config.sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                    if SaveConfig then SaveConfig() end
+                else
+                    screenshot_sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                end
+                SortScreenshotResults()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                if effective_mode == "alphabet" then
+                    r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
+                else
+                    r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+                end
+            end
+
+            r.ImGui_SameLine(ctx)
+            if browser_search_term == "" then
+                r.ImGui_BeginDisabled(ctx)
+            end
+            if r.ImGui_Button(ctx, "All", 20, 20) then
+                screenshot_search_results = {}
+                local MAX_RESULTS = 200
+                local term = browser_search_term:lower()
+                local matches = {}
+                for _, plugin in ipairs(PLUGIN_LIST) do
+                    if plugin:lower():find(term, 1, true) then
+                        table.insert(matches, plugin)
+                    end
+                end
+                if config.apply_type_priority then
+                    matches = DedupeByTypePriority(matches)
+                end
+                local total = #matches
+                local limit = math.min(total, MAX_RESULTS)
+                for i = 1, limit do
+                    table.insert(screenshot_search_results, { name = matches[i] })
+                end
+
+                SortScreenshotResults()
+                if total > MAX_RESULTS then
+                    search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
+                end
+                new_search_performed = true
+                selected_folder = nil
+                browser_panel_selected = nil
+                last_selected_folder_before_global = nil
+                RequestClearScreenshotCache()
+            end
+            if browser_search_term == "" then
+                r.ImGui_EndDisabled(ctx)
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)")
+            end
+
+            if changed then
+                browser_search_term = new_search
+                if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
+                if browser_search_term == "" then
+                    screenshot_search_results = {}
+                    search_warning_message = nil
+                    if current_filtered_fx and #current_filtered_fx > 0 then
+                        for _, plugin in ipairs(current_filtered_fx) do
+                            table.insert(screenshot_search_results, {name = plugin})
+                        end
+                    elseif selected_folder then
+                        local filtered_plugins = GetPluginsForFolder(selected_folder)
+                        for _, plugin in ipairs(filtered_plugins) do
+                            table.insert(screenshot_search_results, {name = plugin})
+                        end
+                    end
+                    SortScreenshotResults()
+                    RequestClearScreenshotCache()
+                    new_search_performed = true
+                else
+                    screenshot_search_results = {}
+                    loaded_items_count = ITEMS_PER_BATCH
+                    search_warning_message = nil
+
+                    local MAX_RESULTS = 200
+                    local too_many_results = false
+
+                    local source_list = nil
+                    if current_filtered_fx and #current_filtered_fx > 0 then
+                        source_list = current_filtered_fx
+                    elseif selected_folder or browser_panel_selected then
+                        local folder_to_search = browser_panel_selected or selected_folder
+                        source_list = GetPluginsForFolder(folder_to_search)
+                    end
+                    if source_list then
+                        local count = 0
+                        local term_l = browser_search_term:lower()
+                        local matches = {}
+                        for _, plugin in ipairs(source_list) do
+                            if plugin:lower():find(term_l, 1, true) then
+                                matches[#matches+1] = plugin
+                            end
+                        end
+                        if config.apply_type_priority then
+                            matches = DedupeByTypePriority(matches)
+                        end
+                        if browser_panel_selected then
+                            local pinned, favorites, others = {}, {}, {}
+                            for _, p in ipairs(matches) do
+                                if IsPluginPinned and IsPluginPinned(p) then
+                                    pinned[#pinned+1] = p
+                                elseif favorite_set and favorite_set[p] then
+                                    favorites[#favorites+1] = p
+                                else
+                                    others[#others+1] = p
+                                end
+                            end
+                            SortPlainPluginList(pinned, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                            if config and config.show_favorites_on_top then
+                                SortPlainPluginList(favorites, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                            end
+                            SortPlainPluginList(others, (config and config.sort_mode) or screenshot_sort_mode or "alphabet")
+                            local ordered = {}
+                            
+                            if config and config.show_pinned_on_top then
+                                for _, p in ipairs(pinned) do ordered[#ordered+1] = p end
+                                if #pinned > 0 and ((config and config.show_favorites_on_top and (#favorites>0 or #others>0)) or (not (config and config.show_favorites_on_top) and #others>0)) then
+                                    ordered[#ordered+1] = "--Pinned End--"
+                                end
+                            end
+                            
+                            if config and config.show_favorites_on_top then
+                                for _, p in ipairs(favorites) do ordered[#ordered+1] = p end
+                                if #favorites > 0 and #others > 0 then
+                                    ordered[#ordered+1] = "--Favorites End--"
+                                end
+                            else
+                                for _, p in ipairs(favorites) do others[#others+1] = p end
+                            end
+                            
+                            if not (config and config.show_pinned_on_top) then
+                                for _, p in ipairs(pinned) do others[#others+1] = p end
+                            end
+                            
+                            for _, p in ipairs(others) do ordered[#ordered+1] = p end
+                            matches = ordered
+                        end
+
+                        for i = 1, math.min(MAX_RESULTS, #matches) do
+                            screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+                        end
+                        count = #matches
+                        too_many_results = (count > MAX_RESULTS)
+                    end
+
+                    if not browser_panel_selected then
+                        SortScreenshotResults()
+                    end
+                    RequestClearScreenshotCache()
+                    if too_many_results then
+                        search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
+                    end
+
+                    new_search_performed = true
+                end
+            end
+        end
     end
 
     local window_width = r.ImGui_GetWindowWidth(ctx)
@@ -6417,6 +6607,26 @@ function ShowScreenshotControls()
         r.ImGui_Text(ctx, "TK FX BROWSER  v" .. GetScriptVersion())
         r.ImGui_PopStyleColor(ctx)
         r.ImGui_Separator(ctx)
+        
+        -- CONTROLS LAYOUT SUBMENU
+        if r.ImGui_BeginMenu(ctx, "Controls Layout") then
+            if r.ImGui_MenuItem(ctx, "Horizontal", "", config.screenshot_controls_layout == "horizontal") then
+                config.screenshot_controls_layout = "horizontal"
+                SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Vertical", "", config.screenshot_controls_layout == "vertical") then
+                config.screenshot_controls_layout = "vertical"
+                SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Auto (< 300px)", "", config.screenshot_controls_layout == "auto") then
+                config.screenshot_controls_layout = "auto"
+                SaveConfig()
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+        
+        r.ImGui_Separator(ctx)
+        
         -- VISIBILITY SUBMENU
         if r.ImGui_BeginMenu(ctx, "Visibility") then
             if r.ImGui_MenuItem(ctx, config.show_name_in_screenshot_window and "Hide Names" or "Show Names") then
@@ -6537,6 +6747,8 @@ function ShowScreenshotControls()
         if r.ImGui_MenuItem(ctx, "Close Window") then config.show_screenshot_window = false; SaveConfig() end
         r.ImGui_EndPopup(ctx)
     end
+    
+    return is_vertical
 end
 
 function DrawFxChains(tbl, path, show_hover_preview)
@@ -8736,8 +8948,12 @@ end
 
 function RenderScriptsLauncherSection(popped_view_stylevars)
     
-    ShowScreenshotControls()
+    local controls_vertical = ShowScreenshotControls()
     r.ImGui_Separator(ctx)
+    if controls_vertical then
+        local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+        r.ImGui_Dummy(ctx, 0, line_height * 1.5)
+    end
     
     if not popped_view_stylevars then
         r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
@@ -9148,8 +9364,12 @@ function ShowScreenshotWindow()
         if show_scripts_browser then
             popped_view_stylevars = RenderScriptsLauncherSection(popped_view_stylevars)
         elseif show_media_browser then
-            ShowScreenshotControls()
+            local controls_vertical = ShowScreenshotControls()
             r.ImGui_Separator(ctx)
+            if controls_vertical then
+                local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                r.ImGui_Dummy(ctx, 0, line_height * 1.5)
+            end
             local window_width = r.ImGui_GetContentRegionAvail(ctx)
 
             r.ImGui_PushItemWidth(ctx, window_width - 55)
@@ -9422,8 +9642,12 @@ function ShowScreenshotWindow()
     -----------------------------------------------------------------------------------        
             -- SEND/RECEIVE GEDEELTE:
             elseif show_sends_window then
-                ShowScreenshotControls()
+                local controls_vertical = ShowScreenshotControls()
                 r.ImGui_Separator(ctx)
+                if controls_vertical then
+                    local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                    r.ImGui_Dummy(ctx, 0, line_height * 1.5)
+                end
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local current_y = r.ImGui_GetCursorPosY(ctx)
                 local footer_height = 40
@@ -9755,15 +9979,32 @@ function ShowScreenshotWindow()
         -- ACTIONS GEDEELTE
         elseif show_action_browser then
             -- Keep the top controls (settings, dropdown, search) visible like other panels
-            ShowScreenshotControls()
+            local controls_vertical = ShowScreenshotControls()
             r.ImGui_Separator(ctx)
+            if controls_vertical then
+                local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                r.ImGui_Dummy(ctx, 0, line_height * 1.5)
+            end
             RenderActionsSection()
 
 --------------------------------------------------------------------------------------
         -- SCREENSHOTS GEDEELTE    
         else
     is_screenshot_branch = true
-        ShowScreenshotControls()
+        local controls_vertical = ShowScreenshotControls()
+        r.ImGui_Separator(ctx)
+        if controls_vertical then
+            -- In vertical mode hebben we meer ruimte nodig voor de controls
+            -- Bereken hoeveel regels er zijn: folder + custom (optioneel) + search = 2-3 regels
+            local num_control_rows = 2 -- folder + search minimum
+            if not config.hide_custom_dropdown and next(config.custom_folders) then
+                num_control_rows = num_control_rows + 1 -- custom dropdown erbij
+            end
+            -- Voeg voldoende spacing toe (line height * aantal regels + kleine marge)
+            local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+            local needed_space = line_height * (num_control_rows - 0.5) + 1
+            r.ImGui_Dummy(ctx, 0, needed_space)
+        end
         local available_width = r.ImGui_GetContentRegionAvail(ctx)
         if config.use_global_screenshot_size then
             display_size = config.global_screenshot_size
