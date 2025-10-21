@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.5.1:
+-- @version 0.5.2
 -- @changelog:
 --[[       
 + Complete remake    
@@ -4179,8 +4179,8 @@ local function handle_keyboard_navigation()
     local key_home = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Home())
     local key_end = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_End())
     if #ui.visible_files > 0 then
-        if key_up and ui.selected_index > 1 then
-            ui.selected_index = ui.selected_index - 1
+        if key_up and ui.selected_index < #ui.visible_files then
+            ui.selected_index = ui.selected_index + 1
             playback.selected_file = ui.visible_files[ui.selected_index].name
             waveform.selection_active = false
             waveform.is_dragging = false
@@ -4193,8 +4193,8 @@ local function handle_keyboard_navigation()
                 play_media(playback.current_playing_file)
             end
             return true
-        elseif key_down and ui.selected_index < #ui.visible_files then
-            ui.selected_index = ui.selected_index + 1
+        elseif key_down and ui.selected_index > 1 then
+            ui.selected_index = ui.selected_index - 1
             playback.selected_file = ui.visible_files[ui.selected_index].name
             waveform.selection_active = false
             waveform.is_dragging = false
