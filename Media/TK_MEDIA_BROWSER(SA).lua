@@ -1,9 +1,9 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.5.2
+-- @version 0.5.3
 -- @changelog:
 --[[       
-+ Complete remake    
++ Fixed key navigation in Tree View mode.   
 ]]--        
 --------------------------------------------------------------------------
 local r = reaper
@@ -3133,6 +3133,15 @@ local function draw_file_list()
                         if item.is_dir then
                             if folder_has_matching_files(item.items or {}, search_lower) then
                                 local tree_open = r.ImGui_TreeNode(ctx, icon .. " " .. item.name)
+                                
+                                if r.ImGui_IsItemFocused(ctx) then
+                                    if playback.auto_play and (playback.playing_preview or playback.is_midi_playback or playback.is_video_playback) then
+                                        stop_playback()
+                                    end
+                                    playback.selected_file = ""
+                                    ui.selected_index = 0
+                                end
+                                
                                 r.ImGui_SameLine(ctx)
                                 
                                 local button_id = "##add_folder_" .. path .. sep .. item.name
@@ -3212,6 +3221,33 @@ local function draw_file_list()
                                             break
                                         end
                                     end
+                                    if playback.auto_play then
+                                        play_media(file_path)
+                                    end
+                                end
+                                
+                                if r.ImGui_IsItemFocused(ctx) and playback.selected_file ~= item.name then
+                                    playback.selected_file = item.name
+                                    playback.current_playing_file = file_path
+                                    
+                                    waveform.selection_active = false
+                                    waveform.is_dragging = false
+                                    waveform.selection_start = 0
+                                    waveform.selection_end = 0
+                                    waveform.monitor_sel_start = 0
+                                    waveform.monitor_sel_end = 0
+                                    waveform.normalized_sel_start = 0
+                                    waveform.normalized_sel_end = 0
+                                    waveform.monitor_file_path = ""
+                                    waveform.play_cursor_position = 0
+                                    
+                                    for i, file in ipairs(ui.visible_files) do
+                                        if file.name == item.name and file.path == file_path then
+                                            ui.selected_index = i
+                                            break
+                                        end
+                                    end
+                                    
                                     if playback.auto_play then
                                         play_media(file_path)
                                     end
@@ -4168,9 +4204,11 @@ end
 local function handle_keyboard_navigation()
     local is_any_item_active = r.ImGui_IsAnyItemActive(ctx)
     local is_any_popup_open = r.ImGui_IsPopupOpen(ctx, '', r.ImGui_PopupFlags_AnyPopupId())
+    
     if is_any_item_active or is_any_popup_open then
         return false
     end
+    
     local key_up = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_UpArrow())
     local key_down = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow())
     local key_enter = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter())
@@ -4179,32 +4217,62 @@ local function handle_keyboard_navigation()
     local key_home = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Home())
     local key_end = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_End())
     if #ui.visible_files > 0 then
-        if key_up and ui.selected_index < #ui.visible_files then
-            ui.selected_index = ui.selected_index + 1
-            playback.selected_file = ui.visible_files[ui.selected_index].name
-            waveform.selection_active = false
-            waveform.is_dragging = false
-            if file_location.flat_view and ui.visible_files[ui.selected_index].full_path then
-                playback.current_playing_file = ui.visible_files[ui.selected_index].full_path
-            else
-                playback.current_playing_file = ui.visible_files[ui.selected_index].path
-            end
-            if playback.auto_play then
-                play_media(playback.current_playing_file)
-            end
-            return true
-        elseif key_down and ui.selected_index > 1 then
+        if key_up and ui.selected_index > 1 then
             ui.selected_index = ui.selected_index - 1
             playback.selected_file = ui.visible_files[ui.selected_index].name
+            
             waveform.selection_active = false
             waveform.is_dragging = false
-            if file_location.flat_view and ui.visible_files[ui.selected_index].full_path then
-                playback.current_playing_file = ui.visible_files[ui.selected_index].full_path
-            else
-                playback.current_playing_file = ui.visible_files[ui.selected_index].path
+            waveform.selection_start = 0
+            waveform.selection_end = 0
+            waveform.monitor_sel_start = 0
+            waveform.monitor_sel_end = 0
+            waveform.normalized_sel_start = 0
+            waveform.normalized_sel_end = 0
+            waveform.monitor_file_path = ""
+            waveform.play_cursor_position = 0
+            
+            local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
+            
+            if not playback.auto_play and playback.current_playing_file ~= file_path then
+                if playback.playing_preview or playback.is_midi_playback or playback.is_video_playback then
+                    stop_playback()
+                end
             end
+            
+            playback.current_playing_file = file_path
+            
             if playback.auto_play then
-                play_media(playback.current_playing_file)
+                play_media(file_path)
+            end
+            return true
+        elseif key_down and ui.selected_index < #ui.visible_files then
+            ui.selected_index = ui.selected_index + 1
+            playback.selected_file = ui.visible_files[ui.selected_index].name
+            
+            waveform.selection_active = false
+            waveform.is_dragging = false
+            waveform.selection_start = 0
+            waveform.selection_end = 0
+            waveform.monitor_sel_start = 0
+            waveform.monitor_sel_end = 0
+            waveform.normalized_sel_start = 0
+            waveform.normalized_sel_end = 0
+            waveform.monitor_file_path = ""
+            waveform.play_cursor_position = 0
+            
+            local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
+            
+            if not playback.auto_play and playback.current_playing_file ~= file_path then
+                if playback.playing_preview or playback.is_midi_playback or playback.is_video_playback then
+                    stop_playback()
+                end
+            end
+            
+            playback.current_playing_file = file_path
+            
+            if playback.auto_play then
+                play_media(file_path)
             end
             return true
         elseif key_page_up then
@@ -4212,8 +4280,30 @@ local function handle_keyboard_navigation()
             if new_index ~= ui.selected_index then
                 ui.selected_index = new_index
                 playback.selected_file = ui.visible_files[ui.selected_index].name
-                playback.current_playing_file = ui.visible_files[ui.selected_index].path
-                if playback.auto_play then play_media(playback.current_playing_file) end
+                
+                waveform.selection_active = false
+                waveform.is_dragging = false
+                waveform.selection_start = 0
+                waveform.selection_end = 0
+                waveform.monitor_sel_start = 0
+                waveform.monitor_sel_end = 0
+                waveform.normalized_sel_start = 0
+                waveform.normalized_sel_end = 0
+                waveform.monitor_file_path = ""
+                waveform.play_cursor_position = 0
+                
+                local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
+                
+                if not playback.auto_play and playback.current_playing_file ~= file_path then
+                    if playback.playing_preview or playback.is_midi_playback or playback.is_video_playback then
+                        stop_playback()
+                    end
+                end
+                
+                playback.current_playing_file = file_path
+                if playback.auto_play then
+                    play_media(file_path)
+                end
             end
             return true
         elseif key_page_down then
@@ -4221,33 +4311,99 @@ local function handle_keyboard_navigation()
             if new_index ~= ui.selected_index then
                 ui.selected_index = new_index
                 playback.selected_file = ui.visible_files[ui.selected_index].name
-                playback.current_playing_file = ui.visible_files[ui.selected_index].path
-                if playback.auto_play then play_media(playback.current_playing_file) end
+                
+                waveform.selection_active = false
+                waveform.is_dragging = false
+                waveform.selection_start = 0
+                waveform.selection_end = 0
+                waveform.monitor_sel_start = 0
+                waveform.monitor_sel_end = 0
+                waveform.normalized_sel_start = 0
+                waveform.normalized_sel_end = 0
+                waveform.monitor_file_path = ""
+                waveform.play_cursor_position = 0
+                
+                local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
+                
+                if not playback.auto_play and playback.current_playing_file ~= file_path then
+                    if playback.playing_preview or playback.is_midi_playback or playback.is_video_playback then
+                        stop_playback()
+                    end
+                end
+                
+                playback.current_playing_file = file_path
+                if playback.auto_play then
+                    play_media(file_path)
+                end
             end
             return true
         elseif key_home then
             if #ui.visible_files > 0 then
                 ui.selected_index = 1
                 playback.selected_file = ui.visible_files[ui.selected_index].name
-                playback.current_playing_file = ui.visible_files[ui.selected_index].path
-                if playback.auto_play then play_media(playback.current_playing_file) end
+                
+                waveform.selection_active = false
+                waveform.is_dragging = false
+                waveform.selection_start = 0
+                waveform.selection_end = 0
+                waveform.monitor_sel_start = 0
+                waveform.monitor_sel_end = 0
+                waveform.normalized_sel_start = 0
+                waveform.normalized_sel_end = 0
+                waveform.monitor_file_path = ""
+                waveform.play_cursor_position = 0
+                
+                local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
+                
+                if not playback.auto_play and playback.current_playing_file ~= file_path then
+                    if playback.playing_preview or playback.is_midi_playback or playback.is_video_playback then
+                        stop_playback()
+                    end
+                end
+                
+                playback.current_playing_file = file_path
+                if playback.auto_play then
+                    play_media(file_path)
+                end
             end
             return true
         elseif key_end then
             if #ui.visible_files > 0 then
                 ui.selected_index = #ui.visible_files
                 playback.selected_file = ui.visible_files[ui.selected_index].name
-                playback.current_playing_file = ui.visible_files[ui.selected_index].path
-                if playback.auto_play then play_media(playback.current_playing_file) end
+                
+                waveform.selection_active = false
+                waveform.is_dragging = false
+                waveform.selection_start = 0
+                waveform.selection_end = 0
+                waveform.monitor_sel_start = 0
+                waveform.monitor_sel_end = 0
+                waveform.normalized_sel_start = 0
+                waveform.normalized_sel_end = 0
+                waveform.monitor_file_path = ""
+                waveform.play_cursor_position = 0
+                
+                local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
+                
+                if not playback.auto_play and playback.current_playing_file ~= file_path then
+                    if playback.playing_preview or playback.is_midi_playback or playback.is_video_playback then
+                        stop_playback()
+                    end
+                end
+                
+                playback.current_playing_file = file_path
+                if playback.auto_play then
+                    play_media(file_path)
+                end
             end
             return true
         elseif key_enter and ui.selected_index >= 1 and ui.selected_index <= #ui.visible_files then
-            local file_path = ui.visible_files[ui.selected_index].path
+            local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
             if playback.current_playing_file == file_path and Play then
                 stop_playback(false)
             else
                 playback.current_playing_file = file_path
-                play_media(playback.current_playing_file)
+                play_media(file_path)
             end
             return true
         end
