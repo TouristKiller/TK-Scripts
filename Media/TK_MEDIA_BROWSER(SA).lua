@@ -1,9 +1,24 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.5.3
+-- @version 0.5.7
 -- @changelog:
 --[[       
-+ Fixed key navigation in Tree View mode.   
++ Independent playback: Media browser and project arrangement play independently by default
++ Link mode: Optional synchronization between media browser and project transport (LINK button)
+  - Right-click LINK button for "Start from edit cursor" option
+  - Bidirectional sync: transport controls also control media browser
+  - Transport startup wait loop (50ms) for reliable synchronization
++ SOLO toggle: Exclusive solo mode for MIDI/video files (appears left of GRID button)
+  - Works independently of playback status
+  - Automatic save/restore of solo states
+  - Isolated from play/stop functions (no automatic solo interference)
++ Use Selected Track for MIDI: New option to play MIDI files through selected track
+  - Uses existing FX chain on selected track (no automatic synth)
+  - Error message in MIDI info field when no track selected
+  - SOLO functionality works with selected track
++ Selection preservation: File list and waveform selections remain after stop
++ Bugfix: SOLO toggle no longer overridden by play/stop actions
++ Bugfix: Waveform seek click detection excludes SOLO button hover
 ]]--        
 --------------------------------------------------------------------------
 local r = reaper
@@ -50,6 +65,8 @@ local playback = {
     preview_volume = 1.0,
     use_original_speed = true,
     link_transport = false,
+    link_start_from_editcursor = false,
+    last_transport_state = 0,
     speed_manually_changed = false,
     prev_play_cursor = nil,
     pending_sync_refresh = false,
@@ -58,7 +75,8 @@ local playback = {
     video_preview_item = nil,
     is_video_playback = false,
     is_midi_playback = false,
-    saved_solo_states = {}  
+    saved_solo_states = {},
+    use_exclusive_solo = true  -- Default to true for MIDI/video playback
 }
 
 -- File & Location Management
@@ -101,6 +119,7 @@ local waveform = {
     midi_notes = {},
     midi_notes_file = "",
     midi_length = 0,
+    midi_info_message = nil,  -- Error/info message for MIDI playback
     selection_start = 0,
     selection_end = 0,
     is_dragging = false,
@@ -250,6 +269,7 @@ local ui_settings = {
     button_height = 25,
     use_numaplayer = false,
     numaplayer_preset = "",
+    use_selected_track_for_midi = false,
     
     pushed_color = 0,
     audio_buffer = {},
@@ -1790,6 +1810,8 @@ local function save_options()
             loop_play = playback.loop_play,
             use_original_speed = playback.use_original_speed,
             link_transport = playback.link_transport,
+            link_start_from_editcursor = playback.link_start_from_editcursor,
+            use_exclusive_solo = playback.use_exclusive_solo,
             preview_volume = playback.preview_volume,
             current_db = current_db,
             remember_last_location = file_location.remember_last_location,
@@ -1825,6 +1847,7 @@ local function save_options()
             button_height = ui_settings.button_height,
             use_numaplayer = ui_settings.use_numaplayer,
             numaplayer_preset = ui_settings.numaplayer_preset,
+            use_selected_track_for_midi = ui_settings.use_selected_track_for_midi,
             custom_folder_names = file_location.custom_folder_names,
             custom_folder_colors = file_location.custom_folder_colors,
             custom_collection_colors = file_location.custom_collection_colors,
@@ -1859,6 +1882,8 @@ local function load_options()
             playback.loop_play = options.loop_play
             playback.use_original_speed = options.use_original_speed
             playback.link_transport = options.link_transport or false
+            playback.link_start_from_editcursor = options.link_start_from_editcursor or false
+            playback.use_exclusive_solo = options.use_exclusive_solo ~= nil and options.use_exclusive_solo or true
             playback.preview_volume = options.preview_volume
             current_db = options.current_db
             file_location.remember_last_location = options.remember_last_location ~= nil and options.remember_last_location or true
@@ -1892,6 +1917,7 @@ local function load_options()
             ui_settings.button_height = options.button_height or 25
             ui_settings.use_numaplayer = options.use_numaplayer or false
             ui_settings.numaplayer_preset = options.numaplayer_preset or ""
+            ui_settings.use_selected_track_for_midi = options.use_selected_track_for_midi or false
             file_location.custom_folder_names = options.custom_folder_names or {}
             file_location.custom_folder_colors = options.custom_folder_colors or {}
             file_location.custom_collection_colors = options.custom_collection_colors or {}
@@ -2057,7 +2083,11 @@ end
 
 local function on_exit()
     save_options()
-    r.Main_OnCommand(1016, 0)
+    
+    -- Only stop project transport on exit if link was enabled
+    if playback.link_transport then
+        r.Main_OnCommand(1016, 0)
+    end
     
     local was_track_playback = playback.is_video_playback or playback.is_midi_playback
     
@@ -2078,6 +2108,7 @@ local function on_exit()
                     r.SetMediaTrackInfo_Value(track, "I_SOLO", solo_state)
                 end
             end
+            playback.saved_solo_states = {}  -- Always clear on exit
             playback.saved_solo_states = {}
         end
         playback.video_preview_item = nil
@@ -2494,14 +2525,6 @@ local function stop_playback(is_loop_restart)
         if playback.video_preview_item and playback.video_preview_track then
             safe_delete_media_item(playback.video_preview_track, playback.video_preview_item)
             r.SetMediaTrackInfo_Value(playback.video_preview_track, "I_SOLO", 0)
-            
-            for track_idx, solo_state in pairs(playback.saved_solo_states) do
-                local track = r.GetTrack(0, track_idx)
-                if track then
-                    r.SetMediaTrackInfo_Value(track, "I_SOLO", solo_state)
-                end
-            end
-            playback.saved_solo_states = {}
         end
         playback.video_preview_item = nil
         playback.is_video_playback = false
@@ -2524,7 +2547,9 @@ local function stop_playback(is_loop_restart)
     end
     if not is_loop_restart then
         playback.playing_path = nil
-        playback.current_playing_file = ""
+        -- DON'T reset current_playing_file to keep file selected in list
+        -- playback.current_playing_file = ""
+        -- DON'T reset waveform.monitor_file_path here - keep it to preserve selection
     end
     playback.is_paused = false
     playback.paused_position = 0
@@ -2535,9 +2560,12 @@ local function stop_playback(is_loop_restart)
     end
 end
 local function start_playback(file_path)
-    local reaper_playing = r.GetPlayState() & 1 == 1
-    if reaper_playing then
-        r.Main_OnCommand(1016, 0)  
+    -- Only stop REAPER project transport if link_transport is enabled
+    if playback.link_transport then
+        local reaper_playing = r.GetPlayState() & 1 == 1
+        if reaper_playing then
+            r.Main_OnCommand(1016, 0)  
+        end
     end
     
     local saved_paused_pos = playback.paused_position
@@ -2575,16 +2603,25 @@ local function start_playback(file_path)
         
         local track_count = r.CountTracks(0)
         local preview_track_obj = nil
-        local track_name = "__MEDIA_PREVIEW__"
         
-        for i = 0, track_count - 1 do
-            local track = r.GetTrack(0, i)
-            local _, name = r.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
-            if name == track_name then
-                preview_track_obj = track
-                break
+        if is_midi and ui_settings.use_selected_track_for_midi then
+            preview_track_obj = r.GetSelectedTrack(0, 0)
+            if not preview_track_obj then
+                waveform.midi_info_message = "No track selected!\nPlease select a track for MIDI playback."
+                return
             end
-        end
+            waveform.midi_info_message = nil
+        else
+            local track_name = "__MEDIA_PREVIEW__"
+            
+            for i = 0, track_count - 1 do
+                local track = r.GetTrack(0, i)
+                local _, name = r.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+                if name == track_name then
+                    preview_track_obj = track
+                    break
+                end
+            end
         
         if not preview_track_obj then
             r.InsertTrackAtIndex(track_count, false)
@@ -2602,7 +2639,7 @@ local function start_playback(file_path)
             end
             track_count = r.CountTracks(0)
             
-            if is_midi then
+            if is_midi and not ui_settings.use_selected_track_for_midi then
                 local synth_name = ui_settings.use_numaplayer and "Numa Player" or "ReaSynth (Cockos)"
                 local fx_index = r.TrackFX_AddByName(preview_track_obj, synth_name, false, -1)
                 if fx_index >= 0 then
@@ -2620,7 +2657,7 @@ local function start_playback(file_path)
                 end
             end
         else
-            if is_midi then
+            if is_midi and not ui_settings.use_selected_track_for_midi then
                 local synth_name = ui_settings.use_numaplayer and "Numa Player" or "ReaSynth"
                 local wrong_synth_name = ui_settings.use_numaplayer and "ReaSynth" or "Numa Player"
                 local has_correct_synth = false
@@ -2650,26 +2687,15 @@ local function start_playback(file_path)
                         if fx_index >= 0 then
                             r.TrackFX_Show(preview_track_obj, fx_index, 2)
                         end
+                        end
                     end
                 end
             end
         end
         
-        playback.saved_solo_states = {}
-        for i = 0, track_count - 1 do
-            local track = r.GetTrack(0, i)
-            if track ~= preview_track_obj then
-                local solo_state = r.GetMediaTrackInfo_Value(track, "I_SOLO")
-                playback.saved_solo_states[i] = solo_state
-                if solo_state ~= 0 then
-                    r.SetMediaTrackInfo_Value(track, "I_SOLO", 0)  
-                end
-            end
-        end
-        
-        r.SetMediaTrackInfo_Value(preview_track_obj, "I_SOLO", 1)
-        
-        local item_count = r.CountTrackMediaItems(preview_track_obj)
+        if playback.use_exclusive_solo then
+            r.SetMediaTrackInfo_Value(preview_track_obj, "I_SOLO", 1)
+        end        local item_count = r.CountTrackMediaItems(preview_track_obj)        
         for i = item_count - 1, 0, -1 do
             local item = r.GetTrackMediaItem(preview_track_obj, i)
             r.DeleteTrackMediaItem(preview_track_obj, item)
@@ -2714,6 +2740,10 @@ local function start_playback(file_path)
         end
         
         r.UpdateItemInProject(item)
+        
+        if is_midi then
+            waveform.midi_info_message = nil
+        end
         
         playback.video_preview_track = preview_track_obj
         playback.video_preview_item = item
@@ -2771,13 +2801,46 @@ local function start_playback(file_path)
     end
     
     r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", start_pos)
+    
+    if playback.link_transport then
+        local project_start_pos
+        if playback.link_start_from_editcursor then
+            project_start_pos = r.GetCursorPosition()
+        else
+            project_start_pos = start_pos
+            r.SetEditCurPos(project_start_pos, false, false)
+        end
+        
+        local reaper_state = r.GetPlayState()
+        if reaper_state & 1 == 0 then
+            r.CSurf_OnPlay()
+            
+            local max_wait = 50  
+            local wait_count = 0
+            while wait_count < max_wait do
+                local current_state = r.GetPlayState()
+                if current_state & 1 == 1 then  
+                    break
+                end
+                wait_count = wait_count + 1
+                local start_time = r.time_precise()
+                while r.time_precise() - start_time < 0.001 do end  
+            end
+        end
+    end
+    
     r.CF_Preview_Play(playback.playing_preview)
+    
     playback.is_paused = false
     playback.current_playing_file = file_path
     playback.playing_path = file_path
     playback.last_displayed_file = file_path
     playback.prev_play_cursor = start_pos
-    playback.paused_position = 0  
+    playback.paused_position = 0
+    
+    if not has_selection then
+        waveform.monitor_file_path = file_path
+    end
 end
 local function pause_playback()
     if playback.is_video_playback or playback.is_midi_playback then
@@ -2797,11 +2860,24 @@ local function pause_playback()
         local ok, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
         if ok then
             playback.paused_position = pos
-            playback.prev_play_cursor = pos  
+            playback.prev_play_cursor = pos
         end
+        
+        if playback.link_transport then
+            playback.paused_project_position = r.GetPlayPosition()
+        end
+        
         r.CF_Preview_Stop(playback.playing_preview)
         playback.playing_preview = nil
         playback.is_paused = true
+        
+        if playback.link_transport then
+            local project_playing = (r.GetPlayState() & 1) == 1
+            if project_playing then
+                r.CSurf_OnPause()
+            end
+        end
+        
     else
         if playback.playing_source and playback.paused_position then
             playback.playing_preview = r.CF_CreatePreview(playback.playing_source)
@@ -2811,6 +2887,17 @@ local function pause_playback()
                 r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", playback.current_pitch)
                 r.CF_Preview_SetValue(playback.playing_preview, "D_PLAYRATE", playback.effective_playrate or 1.0)
                 r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", playback.paused_position)
+                
+                if playback.link_transport then
+                    local resume_position = playback.paused_project_position or playback.paused_position
+                    r.SetEditCurPos(resume_position, false, false)
+                    
+                    local project_state = r.GetPlayState()
+                    if project_state & 1 == 0 then
+                        r.CSurf_OnPlay()
+                    end
+                end
+                
                 r.CF_Preview_Play(playback.playing_preview)
                 playback.prev_play_cursor = playback.paused_position  
                 playback.is_paused = false
@@ -2818,8 +2905,9 @@ local function pause_playback()
         end
     end
 end
+
 local function play_media(file_path)
-    if file_path ~= waveform.monitor_file_path then
+    if file_path ~= waveform.monitor_file_path and waveform.monitor_file_path ~= "" then
         waveform.monitor_sel_start = 0
         waveform.monitor_sel_end = 0
         waveform.normalized_sel_start = 0
@@ -2830,6 +2918,45 @@ local function play_media(file_path)
         waveform.selection_active = false
     end
     start_playback(file_path)
+end
+
+local function monitor_transport_state()
+    if not playback.link_transport then 
+        return 
+    end
+    
+    local current_state = r.GetPlayState()
+    local is_playing = (current_state & 1) == 1
+    local is_paused = (current_state & 2) == 2
+    
+    if is_playing and (playback.last_transport_state & 1) == 0 then
+        if playback.is_paused and playback.playing_source then
+            pause_playback() 
+        elseif playback.current_playing_file and playback.current_playing_file ~= "" and not playback.playing_preview then
+            play_media(playback.current_playing_file)
+        end
+    elseif is_paused and (playback.last_transport_state & 2) == 0 then
+        if playback.playing_preview and not playback.is_paused then
+            pause_playback()  
+        end
+    elseif not is_playing and not is_paused and (playback.last_transport_state & 1) == 1 then
+        if playback.playing_preview or playback.is_paused then
+            stop_playback(false)  
+        end
+    end
+    
+    playback.last_transport_state = current_state
+end
+
+local function sync_transport_with_preview()
+    if not playback.link_transport or not playback.playing_preview or playback.is_paused then
+        return
+    end
+    
+    if playback.is_video_playback or playback.is_midi_playback then
+        return
+    end
+
 end
 local function update_monitor_positions()
     if waveform.normalized_sel_start >= 0 and waveform.normalized_sel_end > waveform.normalized_sel_start and waveform.monitor_file_path ~= "" then
@@ -4505,6 +4632,9 @@ local function loop()
         playback.use_original_speed = video_open
         save_options()
     end
+    
+    sync_transport_with_preview()
+    
     r.ImGui_PushFont(ctx, normal_font, font_size)
     reaper.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
     local window_height = calculate_window_height()
@@ -5312,7 +5442,27 @@ local function loop()
                         hint)
                     r.ImGui_PopFont(ctx)
                 elseif ext == "mid" or ext == "midi" then
-                    if waveform.midi_notes_file == playback.current_playing_file and #waveform.midi_notes > 0 then
+                    if waveform.midi_info_message then
+                        r.ImGui_PushFont(ctx, small_font, small_font_size)
+                        local error_color = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.3, 0.3, 1.0)  -- Red color
+                        
+                        local lines = {}
+                        for line in waveform.midi_info_message:gmatch("[^\n]+") do
+                            table.insert(lines, line)
+                        end
+                        
+                        local line_height = 14
+                        local total_height = #lines * line_height
+                        local start_y = pos_y + (height - total_height) / 2
+                        
+                        for i, line in ipairs(lines) do
+                            local text_size_w = r.ImGui_CalcTextSize(ctx, line)
+                            local text_x = pos_x + (width - text_size_w) / 2
+                            local text_y = start_y + (i - 1) * line_height
+                            r.ImGui_DrawList_AddText(draw_list, text_x, text_y, error_color, line)
+                        end
+                        r.ImGui_PopFont(ctx)
+                    elseif waveform.midi_notes_file == playback.current_playing_file and #waveform.midi_notes > 0 then
                         local note_count = #waveform.midi_notes
                         local min_pitch = 127
                         local max_pitch = 0
@@ -5734,6 +5884,23 @@ local function loop()
             playback.link_transport = not playback.link_transport
             save_options()
         end
+        
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Link transport\nRight-click for options")
+        end
+        
+        if r.ImGui_BeginPopupContextItem(ctx, "##LinkOptions") then
+            local start_from_cursor = playback.link_start_from_editcursor
+            if r.ImGui_Checkbox(ctx, "Start arrange from edit cursor", start_from_cursor) then
+                playback.link_start_from_editcursor = not playback.link_start_from_editcursor
+                save_options()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "When enabled: Arrange starts from current edit cursor position\nWhen disabled: Arrange starts at same position as media preview")
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+        
         r.ImGui_PopStyleColor(ctx, 4)
         r.ImGui_PopStyleVar(ctx, 1)
         r.ImGui_PopFont(ctx)
@@ -6575,6 +6742,16 @@ local function loop()
                     end
                     
                     r.ImGui_Spacing(ctx)
+                    local selected_track_changed, new_selected_track = r.ImGui_Checkbox(ctx, "Use Selected Track for MIDI", ui_settings.use_selected_track_for_midi)
+                    if selected_track_changed then
+                        ui_settings.use_selected_track_for_midi = new_selected_track
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Play MIDI files through the currently selected track instead of creating a preview track.\nIf no track is selected, a message will be shown in the MIDI info field.")
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
                     r.ImGui_Spacing(ctx)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
                     r.ImGui_SeparatorText(ctx, "Table Columns Visibility")
@@ -7056,6 +7233,65 @@ local function loop()
             local accent_color = hsv_to_color(ui_settings.accent_hue)
             local text_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 1.0)
             
+            local current_file = playback.current_playing_file ~= "" and playback.current_playing_file or 
+                                (ui.selected_index > 0 and ui.visible_files[ui.selected_index] and ui.visible_files[ui.selected_index].path)
+            local is_midi_or_video = false
+            if current_file then
+                local ext = current_file:match("%.([^%.]+)$")
+                if ext then
+                    ext = ext:lower()
+                    is_midi_or_video = ext == "mid" or ext == "midi" or ext == "mp4" or ext == "avi" or ext == "mov" or ext == "mkv" or ext == "webm" or ext == "flv" or ext == "wmv"
+                end
+            end
+            
+            local solo_hovered = false
+            if is_midi_or_video then
+                local solo_text = "SOLO"
+                local solo_color = playback.use_exclusive_solo and accent_color or text_color
+                local solo_w, solo_h = r.ImGui_CalcTextSize(ctx, solo_text)
+                local solo_x = footer_x + footer_width - solo_w - 50  -- 50px left of GRID
+                local solo_y = footer_y + footer_height - solo_h - 5
+                
+                r.ImGui_DrawList_AddText(draw_list, solo_x, solo_y, solo_color, solo_text)
+                
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                solo_hovered = mouse_x >= solo_x - 4 and mouse_x <= solo_x + solo_w + 4 and 
+                                     mouse_y >= solo_y - 4 and mouse_y <= solo_y + solo_h + 4
+                if solo_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+                    playback.use_exclusive_solo = not playback.use_exclusive_solo
+                    save_options()
+                    
+                    local track_count = r.CountTracks(0)
+                    
+                    if playback.use_exclusive_solo then
+                        playback.saved_solo_states = {}
+                        for i = 0, track_count - 1 do
+                            local track = r.GetTrack(0, i)
+                            local is_preview_track = (playback.video_preview_track and track == playback.video_preview_track)
+                            if not is_preview_track then
+                                local solo_state = r.GetMediaTrackInfo_Value(track, "I_SOLO")
+                                playback.saved_solo_states[i] = solo_state
+                                r.SetMediaTrackInfo_Value(track, "I_SOLO", 0)
+                            end
+                        end
+                        if playback.video_preview_track then
+                            r.SetMediaTrackInfo_Value(playback.video_preview_track, "I_SOLO", 1)
+                        end
+                    else
+                        for track_idx, solo_state in pairs(playback.saved_solo_states) do
+                            local track = r.GetTrack(0, track_idx)
+                            if track then
+                                r.SetMediaTrackInfo_Value(track, "I_SOLO", solo_state)
+                            end
+                        end
+                        playback.saved_solo_states = {}
+                        if playback.video_preview_track then
+                            r.SetMediaTrackInfo_Value(playback.video_preview_track, "I_SOLO", 0)
+                        end
+                    end
+                end
+            end
+            
             local grid_text = "GRID"
             local grid_color = ui.waveform_grid_overlay and accent_color or text_color
             local grid_w, grid_h = r.ImGui_CalcTextSize(ctx, grid_text)
@@ -7078,7 +7314,7 @@ local function loop()
                 normalized_x = math.max(0, math.min(1, normalized_x))
                 local file_path = playback.current_playing_file ~= "" and playback.current_playing_file or (ui.selected_index > 0 and ui.visible_files[ui.selected_index] and ui.visible_files[ui.selected_index].path)
                 
-                if r.ImGui_IsMouseClicked(ctx, 0) and not grid_hovered then
+                if r.ImGui_IsMouseClicked(ctx, 0) and not grid_hovered and not solo_hovered then
                     waveform.play_cursor_position = normalized_x
                     
                     waveform.selection_active = false
@@ -7208,6 +7444,7 @@ local function loop()
     end
     
     draw_progress_window()
+    monitor_transport_state()
     
     r.ImGui_PopStyleColor(ctx, 4)
     r.ImGui_PopStyleVar(ctx, 1)

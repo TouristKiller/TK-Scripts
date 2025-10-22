@@ -5,6 +5,20 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 ## Ongeversioneerd (werk in uitvoering)
 
 ### Toegevoegd
+- **MIDI/Video playback options**:
+  - **Independent playback mode**: Media browser speelt nu standaard onafhankelijk van project transport af
+  - **Link mode**: Optionele synchronisatie tussen media browser en project playback (schakelbaar via LINK knop)
+    - Start from edit cursor optie (via rechtermuisklik op LINK knop)
+    - Bidirectionele synchronisatie: transport controls sturen ook media browser aan
+  - **SOLO toggle**: Exclusieve solo mode voor MIDI/video files (verschijnt links van GRID knop)
+    - Solo knop werkt onafhankelijk van playback status
+    - Automatisch opslaan/herstellen van solo states
+  - **Use Selected Track for MIDI**: Optie om MIDI files via geselecteerde track af te spelen
+    - Gebruikt bestaande FX chain op geselecteerde track (geen automatische synth)
+    - Error melding in MIDI info veld wanneer geen track geselecteerd is
+    - Solo functionaliteit werkt ook met geselecteerde track
+- **Selection preservation**: Bestandselectie in lijst en waveform blijven behouden tijdens playback start/stop
+- **Transport startup wait loop**: Verbeterde synchronisatie timing (50ms wait, 1ms intervals) voor betrouwbare link mode
 - **Pitch & Rate controls**: Volledige pitch en playback rate aanpassing van audio items met real-time preview
   - Pitch slider (-24 tot +24 semitonen) met fine-tuning
   - Rate slider (0.25x tot 4.0x speed) voor tempo aanpassingen  
@@ -32,6 +46,10 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 - Verwijderd: automatische responsive modi (icon-only / overflow) — altijd volledige knoppen tonen.
 
 ### Bugfixes
+- **SOLO toggle interferentie**: Verwijderd alle automatische solo logica uit play/stop functies; solo wordt nu alleen beheerd door toggle knop
+- **Waveform seek tijdens SOLO**: Play cursor sprong naar knop locatie bij klikken op SOLO → `solo_hovered` check toegevoegd aan waveform click detection
+- **Link mode timing**: Transport wait loop toegevoegd voor betrouwbare synchronisatie bij start
+- **Selection reset bij stop**: Bestandslijst selectie bleef niet behouden → monitor_file_path logica toegevoegd
 - Fix voor syntaxfout in info-knop callback (verkeerde multiple assignment).
 - Dubbele weergave navigatiepijlen opgelost (icon + text → alleen icon).
 - Collapse toggle werkte niet om uit te klappen → fallback hittest toegevoegd.

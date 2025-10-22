@@ -181,20 +181,27 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-    <version name="0.5.3" author="TouristKiller" time="2025-10-22T04:30:00Z">
+    <version name="0.5.7" author="TouristKiller" time="2025-10-22T21:07:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
     <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
     <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
                 <changelog><![CDATA[           
-+ Full MIDI file support with visualization and playback
-+ Waveform visualization with interactive timeline
-+ Real-time oscilloscope display
-+ Collections system with categories
-+ Extensive metadata support (25+ fields)
-+ Drag & drop with tempo matching
-+ Customizable UI theming
-+ Multi-file selection
-+ Advanced caching system
++ Independent playback: Media browser and project arrangement play independently by default
++ Link mode: Optional synchronization between media browser and project transport (LINK button)
+  - Right-click LINK button for "Start from edit cursor" option
+  - Bidirectional sync: transport controls also control media browser
+  - Transport startup wait loop (50ms) for reliable synchronization
++ SOLO toggle: Exclusive solo mode for MIDI/video files (appears left of GRID button)
+  - Works independently of playback status
+  - Automatic save/restore of solo states
+  - Isolated from play/stop functions (no automatic solo interference)
++ Use Selected Track for MIDI: New option to play MIDI files through selected track
+  - Uses existing FX chain on selected track (no automatic synth)
+  - Error message in MIDI info field when no track selected
+  - SOLO functionality works with selected track
++ Selection preservation: File list and waveform selections remain after stop
++ Bugfix: SOLO toggle no longer overridden by play/stop actions
++ Bugfix: Waveform seek click detection excludes SOLO button hover
 ]]></changelog>
     </version>
     </reapack>
