@@ -7,12 +7,22 @@ local IconBrowser = {
     columns = 10,
     image_cache = {}, 
     search_text = "", 
-    filtered_icons = {}, 
+    filtered_icons = {},
+    list_clipper = nil, -- List Clipper for virtual scrolling
+    images_per_frame = 1, -- Load max 1 image per frame to prevent freezing (very conservative)
+    pending_loads = {}, -- Queue of images waiting to be loaded
+    last_visible_range = {start = -999, finish = -999}, -- Track what was visible last frame
+    frame_counter = 0, -- Frame counter to throttle loading
 }
 
 function IconBrowser.LoadIcons()
+    if #IconBrowser.icons > 0 then 
+        return -- Already loaded
+    end
+    
     local resource_path = r.GetResourcePath() .. "/Data/toolbar_icons"
     local idx = 0
+    
     while true do
         local file = r.EnumerateFiles(resource_path, idx)
         if not file then break end
@@ -24,6 +34,9 @@ function IconBrowser.LoadIcons()
             table.insert(IconBrowser.icons, icon)
         end
         idx = idx + 1
+        
+        -- Safety limit
+        if idx > 10000 then break end
     end
 end
 
@@ -40,6 +53,43 @@ function IconBrowser.FilterIcons()
             end
         end
     end
+    
+    -- Clear pending loads when filter changes
+    IconBrowser.pending_loads = {}
+end
+
+-- Load images in batches to prevent UI freezing
+function IconBrowser.ProcessImageQueue()
+    if not IconBrowser.pending_loads or #IconBrowser.pending_loads == 0 then
+        return
+    end
+    
+    -- Increment frame counter
+    IconBrowser.frame_counter = (IconBrowser.frame_counter or 0) + 1
+    
+    -- Only load images every 3rd frame to keep UI responsive
+    if IconBrowser.frame_counter % 3 ~= 0 then
+        return
+    end
+    
+    local loaded = 0
+    local max_to_process = math.min(#IconBrowser.pending_loads, IconBrowser.images_per_frame)
+    
+    -- Process from the END of the array (more efficient than table.remove from start)
+    while loaded < max_to_process and #IconBrowser.pending_loads > 0 do
+        local icon_data = table.remove(IconBrowser.pending_loads) -- Remove from end
+        
+        if icon_data and icon_data.path then
+            -- Try to load the image (only if not already cached)
+            if not IconBrowser.image_cache[icon_data.name] then
+                local ok, img = pcall(r.ImGui_CreateImage, icon_data.path)
+                if ok and img then
+                    IconBrowser.image_cache[icon_data.name] = img
+                    loaded = loaded + 1
+                end
+            end
+        end
+    end
 end
 
 function IconBrowser.Show(ctx, settings)
@@ -47,43 +97,33 @@ function IconBrowser.Show(ctx, settings)
     
     if #IconBrowser.icons == 0 then
         IconBrowser.LoadIcons()
-        IconBrowser.FilterIcons() 
+        IconBrowser.FilterIcons()
     end
     
-    local window_flags = r.ImGui_WindowFlags_None()
-    
+    -- Fixed window size - no dynamic resizing, no title bar
+    local window_flags = r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoTitleBar()
     local width = 600
-    local height = 400
-    if settings then
-        width = settings.icon_browser_width and math.max(400, settings.icon_browser_width) or 600
-        height = settings.icon_browser_height and math.max(300, settings.icon_browser_height) or 400
-    end
+    local height = 500
     
-    r.ImGui_SetNextWindowSize(ctx, width, height, r.ImGui_Cond_FirstUseEver())
-    r.ImGui_SetNextWindowSizeConstraints(ctx, 400, 300, 800, 600)
+    r.ImGui_SetNextWindowSize(ctx, width, height, r.ImGui_Cond_Always())
+    
     local visible, open = r.ImGui_Begin(ctx, "TK Icon Browser", true, window_flags)
     
     if visible then
-        if settings then
-            -- Initialize defaults only if not set
-            settings.icon_browser_width = settings.icon_browser_width or 600
-            settings.icon_browser_height = settings.icon_browser_height or 400
-            
-            -- Only update if window was resized (with tolerance to prevent constant updates)
-            local current_width = r.ImGui_GetWindowWidth(ctx)
-            local current_height = r.ImGui_GetWindowHeight(ctx)
-            if current_width and settings.icon_browser_width and type(settings.icon_browser_width) == "number" then
-                if math.abs(current_width - settings.icon_browser_width) > 5 then
-                    settings.icon_browser_width = math.max(400, current_width)
-                end
-            end
-            if current_height and settings.icon_browser_height and type(settings.icon_browser_height) == "number" then
-                if math.abs(current_height - settings.icon_browser_height) > 5 then
-                    settings.icon_browser_height = math.max(300, current_height)
-                end
-            end
+        -- Title on the left
+        r.ImGui_SetCursorPosX(ctx, 5)
+        r.ImGui_SetCursorPosY(ctx, 5)
+        r.ImGui_Text(ctx, "Icon Browser")
+        
+        -- Close button in top-right corner on same line
+        local close_button_size = 20
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, width - close_button_size - 5)
+        if r.ImGui_Button(ctx, "X##close", close_button_size, close_button_size) then
+            open = false
         end
         
+        -- Search box
         local rv
         rv, IconBrowser.search_text = r.ImGui_InputText(ctx, "Search", IconBrowser.search_text)
         if rv then
@@ -95,88 +135,96 @@ function IconBrowser.Show(ctx, settings)
         
         r.ImGui_Separator(ctx)
         
-        r.ImGui_BeginChild(ctx, "IconScrollArea", 0, -20)
-        
-        local child_width = r.ImGui_GetWindowWidth(ctx)
-        local style_spacing_x = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
-        
-        if not child_width or not style_spacing_x then
-            child_width = child_width or 600
-            style_spacing_x = style_spacing_x or 8
-        end
-        
-        local icon_with_spacing = IconBrowser.grid_size + style_spacing_x
-        
-        local right_margin = 40 - IconBrowser.grid_size
-        local usable_width = child_width - right_margin
-        
-        local columns = math.floor(usable_width / icon_with_spacing)
-        columns = math.max(1, columns)  
-        
-        r.ImGui_Indent(ctx, 10)
-        
-        local scroll_y = r.ImGui_GetScrollY(ctx)
-        local window_height = r.ImGui_GetWindowHeight(ctx)
-        
-        if not scroll_y or not window_height then
-            scroll_y = scroll_y or 0
-            window_height = window_height or 400
-        end
-        
-        local row_height = IconBrowser.grid_size
-        
-        -- Ensure columns is valid
-        if not columns or columns <= 0 then
-            columns = 1
-        end
-        
-        local start_row = math.max(0, math.floor(scroll_y / row_height) - 1)
-        local end_row = math.ceil((scroll_y + window_height) / row_height) + 1
-        local total_rows = math.ceil(#IconBrowser.filtered_icons / columns)
-        
-        if start_row > 0 then
-            r.ImGui_Dummy(ctx, 1, start_row * row_height)
-        end
-        
-        local start_idx = start_row * columns + 1
-        local end_idx = math.min(#IconBrowser.filtered_icons, end_row * columns)
-        
-        for i = start_idx, end_idx do
-            local icon = IconBrowser.filtered_icons[i]
-            if not icon then break end
+        -- Virtual scrolling with proper row rendering
+        if r.ImGui_BeginChild(ctx, "IconScrollArea", 0, 0) then
+            local columns = 10 -- Reduced to 10 columns to fit better in 600px width
+            local total_icons = #IconBrowser.filtered_icons
+            local total_rows = math.ceil(total_icons / columns)
             
-            if i > start_idx then
-                if (i - start_idx) % columns ~= 0 then
-                    r.ImGui_SameLine(ctx)
+            local scroll_y = r.ImGui_GetScrollY(ctx) or 0
+            local window_height = r.ImGui_GetWindowHeight(ctx) or 400
+            local row_height = IconBrowser.grid_size + 4
+            
+            -- Calculate visible range
+            local start_row = math.max(0, math.floor(scroll_y / row_height))
+            local visible_rows = math.ceil(window_height / row_height) + 1
+            local end_row = math.min(total_rows - 1, start_row + visible_rows)
+            
+            -- Add space for rows above viewport
+            if start_row > 0 then
+                r.ImGui_Dummy(ctx, 1, start_row * row_height)
+            end
+            
+            -- Render visible rows
+            for row = start_row, end_row do
+                for col = 0, columns - 1 do
+                    local idx = row * columns + col + 1
+                    if idx <= total_icons then
+                        local icon = IconBrowser.filtered_icons[idx]
+                        if icon then
+                            if col > 0 then
+                                r.ImGui_SameLine(ctx)
+                            end
+                            
+                            -- Check if image exists in cache
+                            local has_image = IconBrowser.image_cache[icon.name] and 
+                                            r.ImGui_ValidatePtr(IconBrowser.image_cache[icon.name], 'ImGui_Image*')
+                            
+                            if has_image then
+                                -- Render with image - only show first third horizontally (normal state)
+                                -- UV coordinates: (0, 0) to (0.33, 1) to show only left third
+                                if r.ImGui_ImageButton(ctx, "##" .. idx, IconBrowser.image_cache[icon.name],
+                                    IconBrowser.grid_size, IconBrowser.grid_size, 0, 0, 0.33, 1) then
+                                    IconBrowser.selected_icon = icon.name
+                                end
+                            else
+                                -- Render placeholder and load on visibility
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x404040FF)
+                                if r.ImGui_Button(ctx, "##" .. idx, IconBrowser.grid_size, IconBrowser.grid_size) then
+                                    IconBrowser.selected_icon = icon.name
+                                end
+                                r.ImGui_PopStyleColor(ctx)
+                                
+                                -- Load image only if visible and not already loaded
+                                if r.ImGui_IsItemVisible(ctx) then
+                                    local ok, img = pcall(r.ImGui_CreateImage, icon.path)
+                                    if ok and img then
+                                        IconBrowser.image_cache[icon.name] = img
+                                    end
+                                end
+                            end
+                            
+                            -- Tooltip
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_BeginTooltip(ctx)
+                                r.ImGui_Text(ctx, icon.name)
+                                r.ImGui_EndTooltip(ctx)
+                            end
+                        end
+                    end
                 end
+                
+                -- Add invisible dummy at end of each row for right padding
+                r.ImGui_SameLine(ctx)
+                r.ImGui_Dummy(ctx, 20, 1)
             end
             
-            if not IconBrowser.image_cache[icon.name] or not r.ImGui_ValidatePtr(IconBrowser.image_cache[icon.name], 'ImGui_Image*') then
-                IconBrowser.image_cache[icon.name] = r.ImGui_CreateImage(icon.path)
+            -- Add space for rows below viewport
+            local remaining_rows = total_rows - end_row - 1
+            if remaining_rows > 0 then
+                r.ImGui_Dummy(ctx, 1, remaining_rows * row_height)
             end
             
-            if r.ImGui_ImageButton(ctx, "##" .. icon.name, IconBrowser.image_cache[icon.name],
-                IconBrowser.grid_size-10, IconBrowser.grid_size-10, 0, 0, 0.33, 1) then
-                IconBrowser.selected_icon = icon.name
-            end
-            
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_BeginTooltip(ctx)
-                r.ImGui_Text(ctx, icon.name)
-                r.ImGui_EndTooltip(ctx)
-            end
+            r.ImGui_EndChild(ctx)
         end
-        
-        local remaining_rows = total_rows - end_row
-        if remaining_rows > 0 then
-            r.ImGui_Dummy(ctx, 1, remaining_rows * row_height)
-        end
-        
-        r.ImGui_EndChild(ctx)
     end
     
     r.ImGui_End(ctx)
-    IconBrowser.show_window = open
+    
+    if not open then
+        IconBrowser.show_window = false
+    end
+    
     return IconBrowser.selected_icon
 end
 

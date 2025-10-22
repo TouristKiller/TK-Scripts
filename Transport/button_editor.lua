@@ -2472,7 +2472,20 @@ end
 
 -- Handle IconBrowser separately to avoid GUI conflicts with settings window
 function ButtonEditor.HandleIconBrowser(ctx, custom_buttons, settings)
-    local selected_icon = IconBrowser.Show(ctx, settings)
+    if not IconBrowser or not IconBrowser.show_window then
+        return
+    end
+    
+    -- Wrap in pcall to catch any ImGui Begin/End mismatch errors
+    local ok, selected_icon = pcall(IconBrowser.Show, ctx, settings)
+    
+    if not ok then
+        -- Error occurred, log it and close the browser
+        reaper.ShowConsoleMsg("IconBrowser error: " .. tostring(selected_icon) .. "\n")
+        IconBrowser.show_window = false
+        return
+    end
+    
     if selected_icon and active_icon_button then
         local ButtonRenderer = require('button_renderer')
         if active_icon_button.icon_name and ButtonRenderer.image_cache[active_icon_button.icon_name] then

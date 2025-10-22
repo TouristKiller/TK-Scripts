@@ -1,9 +1,13 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.0.3
+-- @version 1.0.6
 -- @changelog 
 --[[
-
+  + Visual Metronome: Added left-click to toggle metronome on/off (action 40364)
+  + Visual Metronome: Added right-click to open metronome settings (action 40363)
+  + Visual Metronome: Added green indicator dot to show metronome enabled state
+  + Time Display: Added "Hide Seconds" option to show only hours and minutes (HH:MM) for both local time and session elapsed time
+  + Icon Browser: Fixed performance issues with virtual scrolling and resolved ImGui_End error when adding icons in Buttons tab
 ]]--
 ---------------------------------------------------------------------------------------------
 local r = reaper
@@ -1096,6 +1100,11 @@ function ShowTimeDisplaySettings(ctx, main_window_width, main_window_height)
  r.ImGui_Separator(ctx)
  
  if settings.show_local_time then
+ r.ImGui_Spacing(ctx)
+ 
+ rv, settings.time_display_hide_seconds = r.ImGui_Checkbox(ctx, "Hide Seconds", settings.time_display_hide_seconds or false)
+ 
+ r.ImGui_Separator(ctx)
  r.ImGui_Spacing(ctx)
  
  r.ImGui_Text(ctx, "Position:")
@@ -2697,6 +2706,16 @@ function RenderVisualMetronome(main_window_width, main_window_height)
  r.ImGui_InvisibleButton(ctx, "##VisualMetronome", size, size)
  StoreElementRect("visual_metronome")
  
+ -- Handle left-click to toggle metronome on/off
+ if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Left()) then
+  r.Main_OnCommand(40364, 0) -- Metronome: Toggle metronome enabled
+ end
+ 
+ -- Handle right-click to open metronome settings
+ if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
+  r.Main_OnCommand(40363, 0) -- Metronome: Metronome settings
+ end
+ 
  local draw_list = r.ImGui_GetWindowDrawList(ctx)
  local center_x, center_y = r.ImGui_GetItemRectMin(ctx)
  center_x = center_x + size * 0.5
@@ -2705,6 +2724,16 @@ function RenderVisualMetronome(main_window_width, main_window_height)
  
  local bg_color = settings.visual_metronome_color_off or 0x808080FF
  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, bg_color)
+ 
+ -- Draw metronome enabled indicator (small dot in top-right corner)
+ local metronome_enabled = r.GetToggleCommandState(40364) == 1
+ if metronome_enabled then
+  local indicator_radius = size * 0.08
+  local indicator_x = center_x + radius * 0.7
+  local indicator_y = center_y - radius * 0.7
+  local indicator_color = 0x00FF00FF -- Green indicator
+  r.ImGui_DrawList_AddCircleFilled(draw_list, indicator_x, indicator_y, indicator_radius, indicator_color)
+ end
  
  if settings.visual_metronome_show_beat_flash then
  local flash_intensity = math.max(visual_metronome.beat_flash, visual_metronome.downbeat_flash)
@@ -6016,7 +6045,11 @@ local function format_session_time(seconds)
  local h = math.floor(seconds / 3600)
  local m = math.floor((seconds % 3600) / 60)
  local s = seconds % 60
- return string.format("%02d:%02d:%02d", h, m, s)
+ if settings.time_display_hide_seconds then
+  return string.format("%02d:%02d", h, m)
+ else
+  return string.format("%02d:%02d:%02d", h, m, s)
+ end
 end
 
 local function ShowLocalTime(main_window_width, main_window_height)
@@ -6028,8 +6061,9 @@ local function ShowLocalTime(main_window_width, main_window_height)
  display_text = format_session_time(elapsed)
  else
  if t ~= last_local_time_sec then
- cached_local_time = os.date("%H:%M:%S", t)
- last_local_time_sec = t
+  local format_str = settings.time_display_hide_seconds and "%H:%M" or "%H:%M:%S"
+  cached_local_time = os.date(format_str, t)
+  last_local_time_sec = t
  end
  display_text = cached_local_time
  end
