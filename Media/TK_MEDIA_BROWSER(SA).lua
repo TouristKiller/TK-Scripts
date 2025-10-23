@@ -1,24 +1,15 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.5.7
+-- @version 0.6.0
 -- @changelog:
 --[[       
-+ Independent playback: Media browser and project arrangement play independently by default
-+ Link mode: Optional synchronization between media browser and project transport (LINK button)
-  - Right-click LINK button for "Start from edit cursor" option
-  - Bidirectional sync: transport controls also control media browser
-  - Transport startup wait loop (50ms) for reliable synchronization
-+ SOLO toggle: Exclusive solo mode for MIDI/video files (appears left of GRID button)
-  - Works independently of playback status
-  - Automatic save/restore of solo states
-  - Isolated from play/stop functions (no automatic solo interference)
-+ Use Selected Track for MIDI: New option to play MIDI files through selected track
-  - Uses existing FX chain on selected track (no automatic synth)
-  - Error message in MIDI info field when no track selected
-  - SOLO functionality works with selected track
-+ Selection preservation: File list and waveform selections remain after stop
-+ Bugfix: SOLO toggle no longer overridden by play/stop actions
-+ Bugfix: Waveform seek click detection excludes SOLO button hover
++ SPECTRAL VIEW: FFT-based frequency visualization with 6-band color gradient
++ WAVEFORM ZOOM & SCROLL: Horizontal (1x-8x), vertical (0.5x-10x), mouse-centered
++ SETTINGS PRESETS: Save/load/delete/resave UI configurations as JSON
++ DYNAMIC WAVEFORM RESOLUTION: Adjustable detail level (1x-8x) in settings
++ KEYBOARD SHORTCUTS PANEL: Quick reference for all shortcuts
++ IMPROVED SETTINGS UI: Button color theming for sliders, dropdowns, and buttons with rounded corners
++ WAVEFORM FOOTER: Increased height for better visual balance
 ]]--        
 --------------------------------------------------------------------------
 local r = reaper
@@ -29,9 +20,11 @@ local json_path = script_path .. "json_tkmb.lua"
 local json = dofile(json_path)
 local cache_dir = script_path .. "CACHE" .. sep
 local collections_dir = script_path .. "COLLECTIONS" .. sep
+local presets_dir = script_path .. "PRESETS" .. sep
 local settings_image_path = script_path .. "TKMBSETTINGS.png"
 r.RecursiveCreateDirectory(cache_dir, 0)
 r.RecursiveCreateDirectory(collections_dir, 0)
+r.RecursiveCreateDirectory(presets_dir, 0)
 local ctx = r.ImGui_CreateContext('TK Media Browser')
 local font_size = 13
 local medium_font_size = 11  
@@ -76,7 +69,7 @@ local playback = {
     is_video_playback = false,
     is_midi_playback = false,
     saved_solo_states = {},
-    use_exclusive_solo = true  -- Default to true for MIDI/video playback
+    use_exclusive_solo = true  
 }
 
 -- File & Location Management
@@ -116,10 +109,13 @@ local waveform = {
     cache_file = "",
     oscilloscope_cache = {},
     oscilloscope_cache_file = "",
+    spectral_cache = {},
+    spectral_cache_file = "",
+    show_spectral_view = false,
     midi_notes = {},
     midi_notes_file = "",
     midi_length = 0,
-    midi_info_message = nil,  -- Error/info message for MIDI playback
+    midi_info_message = nil,  
     selection_start = 0,
     selection_end = 0,
     is_dragging = false,
@@ -132,7 +128,10 @@ local waveform = {
     grid_overlay = false,
     play_cursor_position = 0,  
     cached_length = 0,
-    cached_length_file = ""
+    cached_length_file = "",
+    zoom_level = 1.0,  
+    scroll_offset = 0.0, 
+    vertical_zoom = 1.0  
 }
 
 -- UI State & View Control
@@ -260,6 +259,7 @@ local ui_settings = {
     button_text_brightness = 1.0,
     waveform_hue = 0.55,
     waveform_thickness = 1.0,
+    waveform_resolution_multiplier = 2.0,
     accent_hue = 0.55,
     selection_hue = 0.16,
     selection_saturation = 1.0,
@@ -1838,6 +1838,7 @@ local function save_options()
             button_text_brightness = ui_settings.button_text_brightness,
             waveform_hue = ui_settings.waveform_hue,
             waveform_thickness = ui_settings.waveform_thickness,
+            waveform_resolution_multiplier = ui_settings.waveform_resolution_multiplier,
             accent_hue = ui_settings.accent_hue,
             selection_hue = ui_settings.selection_hue,
             selection_saturation = ui_settings.selection_saturation,
@@ -1851,12 +1852,155 @@ local function save_options()
             custom_folder_names = file_location.custom_folder_names,
             custom_folder_colors = file_location.custom_folder_colors,
             custom_collection_colors = file_location.custom_collection_colors,
-            visible_columns = ui_settings.visible_columns
+            visible_columns = ui_settings.visible_columns,
+            show_spectral_view = waveform.show_spectral_view
         }
         file:write(serialize(options))
         file:close()
     end
 end
+
+-- Preset management functions
+local function get_settings_table()
+    return {
+        auto_play = playback.auto_play,
+        loop_play = playback.loop_play,
+        use_original_speed = playback.use_original_speed,
+        link_transport = playback.link_transport,
+        link_start_from_editcursor = playback.link_start_from_editcursor,
+        use_exclusive_solo = playback.use_exclusive_solo,
+        preview_volume = playback.preview_volume,
+        show_oscilloscope = ui.show_oscilloscope,
+        waveform_grid_overlay = ui.waveform_grid_overlay,
+        flat_view = file_location.flat_view,
+        file_browser_open = ui_settings.file_browser_open,
+        browser_position_left = ui_settings.browser_position_left,
+        window_bg_brightness = ui_settings.window_bg_brightness,
+        window_opacity = ui_settings.window_opacity,
+        text_brightness = ui_settings.text_brightness,
+        grid_brightness = ui_settings.grid_brightness,
+        button_brightness = ui_settings.button_brightness,
+        button_text_brightness = ui_settings.button_text_brightness,
+        waveform_hue = ui_settings.waveform_hue,
+        waveform_thickness = ui_settings.waveform_thickness,
+        waveform_resolution_multiplier = ui_settings.waveform_resolution_multiplier,
+        accent_hue = ui_settings.accent_hue,
+        selection_hue = ui_settings.selection_hue,
+        selection_saturation = ui_settings.selection_saturation,
+        show_waveform_bg = ui_settings.show_waveform_bg,
+        hide_scrollbar = ui_settings.hide_scrollbar,
+        selected_font = ui_settings.selected_font,
+        button_height = ui_settings.button_height,
+        visible_columns = ui_settings.visible_columns,
+        show_spectral_view = waveform.show_spectral_view
+    }
+end
+
+local function apply_settings_from_table(settings)
+    if not settings then return false end
+    
+    playback.auto_play = settings.auto_play
+    playback.loop_play = settings.loop_play
+    playback.use_original_speed = settings.use_original_speed
+    playback.link_transport = settings.link_transport or false
+    playback.link_start_from_editcursor = settings.link_start_from_editcursor or false
+    playback.use_exclusive_solo = settings.use_exclusive_solo ~= nil and settings.use_exclusive_solo or true
+    playback.preview_volume = settings.preview_volume
+    ui.show_oscilloscope = settings.show_oscilloscope
+    ui.waveform_grid_overlay = settings.waveform_grid_overlay or false
+    waveform.show_spectral_view = settings.show_spectral_view or false
+    file_location.flat_view = settings.flat_view ~= nil and settings.flat_view or false
+    ui_settings.file_browser_open = settings.file_browser_open ~= nil and settings.file_browser_open or false
+    ui_settings.browser_position_left = settings.browser_position_left ~= nil and settings.browser_position_left or true
+    ui_settings.window_bg_brightness = settings.window_bg_brightness ~= nil and settings.window_bg_brightness or 0.12
+    ui_settings.window_opacity = settings.window_opacity ~= nil and settings.window_opacity or 0.94
+    ui_settings.text_brightness = settings.text_brightness ~= nil and settings.text_brightness or 1.0
+    ui_settings.grid_brightness = settings.grid_brightness ~= nil and settings.grid_brightness or 1.0
+    ui_settings.button_brightness = settings.button_brightness ~= nil and settings.button_brightness or 0.25
+    ui_settings.button_text_brightness = settings.button_text_brightness ~= nil and settings.button_text_brightness or 1.0
+    ui_settings.waveform_hue = settings.waveform_hue ~= nil and settings.waveform_hue or 0.55
+    ui_settings.waveform_thickness = settings.waveform_thickness ~= nil and settings.waveform_thickness or 1.0
+    ui_settings.waveform_resolution_multiplier = settings.waveform_resolution_multiplier ~= nil and settings.waveform_resolution_multiplier or 2.0
+    ui_settings.accent_hue = settings.accent_hue ~= nil and settings.accent_hue or 0.55
+    ui_settings.selection_hue = settings.selection_hue ~= nil and settings.selection_hue or 0.16
+    ui_settings.selection_saturation = settings.selection_saturation ~= nil and settings.selection_saturation or 1.0
+    ui_settings.show_waveform_bg = settings.show_waveform_bg ~= nil and settings.show_waveform_bg or false
+    ui_settings.hide_scrollbar = settings.hide_scrollbar ~= nil and settings.hide_scrollbar or false
+    ui_settings.selected_font = settings.selected_font or "Default"
+    ui_settings.button_height = settings.button_height or 20
+    ui_settings.visible_columns = settings.visible_columns or {name = true, size = true, date = true, duration = true, samplerate = true, bitdepth = true, channels = true}
+    
+    -- Reinitialize fonts when loading preset
+    font_objects = {}
+    update_fonts()
+    
+    save_options()
+    return true
+end
+
+local function save_preset(preset_name)
+    if not preset_name or preset_name == "" then return false end
+    
+    local settings = get_settings_table()
+    local json_string = json.encode(settings)
+    
+    local file = io.open(presets_dir .. preset_name .. ".json", "w")
+    if file then
+        file:write(json_string)
+        file:close()
+        return true
+    end
+    return false
+end
+
+local function load_preset(preset_name)
+    if not preset_name or preset_name == "" then return false, "No preset name provided" end
+    
+    local file = io.open(presets_dir .. preset_name .. ".json", "r")
+    if not file then
+        return false, "Preset file not found"
+    end
+    
+    local content = file:read("*all")
+    file:close()
+    
+    local success, settings = pcall(json.decode, content)
+    if not success then
+        return false, "Invalid JSON format in preset file"
+    end
+    
+    if not settings or type(settings) ~= "table" then
+        return false, "Corrupted preset data"
+    end
+    
+    local apply_success = apply_settings_from_table(settings)
+    if not apply_success then
+        return false, "Failed to apply settings"
+    end
+    
+    return true, "Success"
+end
+
+local function get_preset_list()
+    local presets = {}
+    local i = 0
+    repeat
+        local file = r.EnumerateFiles(presets_dir, i)
+        if file and file:match("%.json$") then
+            local name = file:gsub("%.json$", "")
+            table.insert(presets, name)
+        end
+        i = i + 1
+    until not file
+    return presets
+end
+
+local function delete_preset(preset_name)
+    if not preset_name or preset_name == "" then return false end
+    os.remove(presets_dir .. preset_name .. ".json")
+    return true
+end
+
 local function load_options()
     local file = io.open(r.GetResourcePath() .. "/Scripts/TK_media_browser_options.txt", "r")
     if file then
@@ -1874,6 +2018,7 @@ local function load_options()
             file_location.last_collection_name = options.last_collection_name
             ui.show_oscilloscope = options.show_oscilloscope
             ui.waveform_grid_overlay = options.waveform_grid_overlay or false
+            waveform.show_spectral_view = options.show_spectral_view or false
             if options.current_view_mode ~= "collections" then
                 file_location.flat_view = options.flat_view ~= nil and options.flat_view or false
             end
@@ -1900,6 +2045,7 @@ local function load_options()
             ui_settings.button_text_brightness = options.button_text_brightness ~= nil and options.button_text_brightness or 1.0
             ui_settings.waveform_hue = options.waveform_hue ~= nil and options.waveform_hue or 0.55
             ui_settings.waveform_thickness = options.waveform_thickness ~= nil and options.waveform_thickness or 1.0
+            ui_settings.waveform_resolution_multiplier = options.waveform_resolution_multiplier ~= nil and options.waveform_resolution_multiplier or 2.0
             ui_settings.accent_hue = options.accent_hue ~= nil and options.accent_hue or 0.55
             ui_settings.selection_hue = options.selection_hue ~= nil and options.selection_hue or 0.16
             ui_settings.selection_saturation = options.selection_saturation ~= nil and options.selection_saturation or 1.0
@@ -2048,6 +2194,151 @@ local function generate_peak_file(file_path)
         r.PCM_Source_Destroy(source)
     end
 end
+
+local function calculate_spectral_data(file_path, num_slices, num_freq_bands)
+    local spectral_data = {}
+    
+    local temp_track = r.GetTrack(0, 0)
+    if not temp_track then 
+        return spectral_data 
+    end
+    
+    local temp_item = r.AddMediaItemToTrack(temp_track)
+    if not temp_item then return spectral_data end
+    
+    local take = r.AddTakeToMediaItem(temp_item)
+    if not take then
+        r.DeleteTrackMediaItem(temp_track, temp_item)
+        return spectral_data
+    end
+    
+    local source = r.PCM_Source_CreateFromFile(file_path)
+    if not source then
+        r.DeleteTrackMediaItem(temp_track, temp_item)
+        return spectral_data
+    end
+    
+    r.SetMediaItemTake_Source(take, source)
+    local length = r.GetMediaSourceLength(source)
+    
+    if not length or length <= 0 then
+        r.DeleteTrackMediaItem(temp_track, temp_item)
+        return spectral_data
+    end
+    
+    r.SetMediaItemLength(temp_item, length, false)
+    r.UpdateItemInProject(temp_item)
+    
+    local accessor = r.CreateTakeAudioAccessor(take)
+    if accessor then
+        local samplerate = r.GetMediaSourceSampleRate(source) or 44100
+        local numch = 1 -- Use mono for spectral analysis
+        local fft_size = 1024
+        
+        local split1 = 0.16  -- Bass (kick drum range)
+        local split2 = 0.32  -- Low-mid (snare fundamental)
+        local split3 = 0.50  -- Mid (toms/vocals)
+        local split4 = 0.70  -- High-mid
+        local split5 = 0.85  -- High (cymbals/hats)
+        
+        for slice = 0, num_slices - 1 do
+            local start_time = (slice / num_slices) * length
+            local samplebuffer = r.new_array(fft_size * 2)
+            
+            local ok = r.GetAudioAccessorSamples(accessor, samplerate, numch, start_time, fft_size, samplebuffer)
+            
+            if ok > 0 then
+                samplebuffer.fft_real(fft_size, true)
+                
+                local bands = {0, 0, 0, 0, 0, 0}
+                local band_counts = {0, 0, 0, 0, 0, 0}
+                
+                for bin = 1, fft_size / 2 - 1 do
+                    local Re = samplebuffer[bin * 2]
+                    local Im = samplebuffer[bin * 2 + 1]
+                    local magnitude = math.sqrt(Re * Re + Im * Im)
+                    
+                    local ratio = bin / (fft_size / 2)
+                    local band_idx
+                    if ratio < split1 then
+                        band_idx = 1
+                    elseif ratio < split2 then
+                        band_idx = 2
+                    elseif ratio < split3 then
+                        band_idx = 3
+                    elseif ratio < split4 then
+                        band_idx = 4
+                    elseif ratio < split5 then
+                        band_idx = 5
+                    else
+                        band_idx = 6
+                    end
+                    
+                    bands[band_idx] = bands[band_idx] + magnitude
+                    band_counts[band_idx] = band_counts[band_idx] + 1
+                end
+                
+                for b = 1, 6 do
+                    if band_counts[b] > 0 then
+                        bands[b] = bands[b] / band_counts[b]
+                    end
+                end
+                
+                bands[1] = bands[1] * 0.15  -- Bass - reduce slightly more
+                bands[2] = bands[2] * 0.20  -- Low-mid
+                bands[3] = bands[3] * 0.35  -- Mid
+                bands[4] = bands[4] * 0.70  -- High-mid
+                bands[5] = bands[5] * 1.30  -- High - boost more
+                bands[6] = bands[6] * 2.20  -- Highest - boost more
+                
+                local total = 0
+                for b = 1, 6 do
+                    total = total + bands[b]
+                end
+                if total > 0 then
+                    for b = 1, 6 do
+                        bands[b] = bands[b] / total
+                    end
+                end
+                
+                for b = 1, 6 do
+                    bands[b] = bands[b] * bands[b]  -- ^2
+                end
+                
+                total = 0
+                for b = 1, 6 do
+                    total = total + bands[b]
+                end
+                if total > 0 then
+                    for b = 1, 6 do
+                        bands[b] = bands[b] / total
+                    end
+                end
+                
+                local weighted_sum = 0
+                for b = 1, 6 do
+                    weighted_sum = weighted_sum + (bands[b] * (b - 1))
+                end
+                
+                local spectral_value = weighted_sum / 5.0
+                
+                spectral_value = spectral_value ^ 0.7
+                
+                table.insert(spectral_data, spectral_value)
+            else
+                table.insert(spectral_data, 0.5) 
+            end
+            
+            samplebuffer.clear()
+        end
+        r.DestroyAudioAccessor(accessor)
+    end
+    
+    r.DeleteTrackMediaItem(temp_track, temp_item)
+    
+    return spectral_data
+end 
+
 local function is_video_window_open()
     local video_window_state = r.GetToggleCommandStateEx(0, 50125)
     return video_window_state == 1
@@ -2084,7 +2375,6 @@ end
 local function on_exit()
     save_options()
     
-    -- Only stop project transport on exit if link was enabled
     if playback.link_transport then
         r.Main_OnCommand(1016, 0)
     end
@@ -2108,7 +2398,7 @@ local function on_exit()
                     r.SetMediaTrackInfo_Value(track, "I_SOLO", solo_state)
                 end
             end
-            playback.saved_solo_states = {}  -- Always clear on exit
+            playback.saved_solo_states = {} 
             playback.saved_solo_states = {}
         end
         playback.video_preview_item = nil
@@ -2547,9 +2837,6 @@ local function stop_playback(is_loop_restart)
     end
     if not is_loop_restart then
         playback.playing_path = nil
-        -- DON'T reset current_playing_file to keep file selected in list
-        -- playback.current_playing_file = ""
-        -- DON'T reset waveform.monitor_file_path here - keep it to preserve selection
     end
     playback.is_paused = false
     playback.paused_position = 0
@@ -2560,7 +2847,6 @@ local function stop_playback(is_loop_restart)
     end
 end
 local function start_playback(file_path)
-    -- Only stop REAPER project transport if link_transport is enabled
     if playback.link_transport then
         local reaper_playing = r.GetPlayState() & 1 == 1
         if reaper_playing then
@@ -5444,7 +5730,7 @@ local function loop()
                 elseif ext == "mid" or ext == "midi" then
                     if waveform.midi_info_message then
                         r.ImGui_PushFont(ctx, small_font, small_font_size)
-                        local error_color = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.3, 0.3, 1.0)  -- Red color
+                        local error_color = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.3, 0.3, 1.0) 
                         
                         local lines = {}
                         for line in waveform.midi_info_message:gmatch("[^\n]+") do
@@ -6368,8 +6654,8 @@ local function loop()
             local is_folder_view = ui.current_view_mode == "folders"
             local refresh_enabled = is_folder_view and file_location.current_location ~= ""
             
-            local button_count = refresh_enabled and 3 or 2
-            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - (refresh_enabled and refresh_button_size or 0) - video_button_size - settings_button_size - quit_button_size - offset_left - (spacing * button_count))
+            local button_count = refresh_enabled and 4 or 3
+            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - (refresh_enabled and refresh_button_size or 0) - video_button_size - settings_button_size - settings_button_size - quit_button_size - offset_left - (spacing * button_count) - 1)
             r.ImGui_SetCursorPosY(ctx, buttons_y)
             
             local drawList = r.ImGui_GetWindowDrawList(ctx)
@@ -6457,7 +6743,39 @@ local function loop()
             if r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "Settings")
             end
-            r.ImGui_SameLine(ctx, 0, spacing + 3)
+            
+            -- Shortcuts button (keyboard icon)
+            r.ImGui_SameLine(ctx, 0, spacing - 1)
+            r.ImGui_SetCursorPosY(ctx, buttons_y)
+            local shortcuts_pos_x, shortcuts_pos_y = r.ImGui_GetCursorScreenPos(ctx)
+            if r.ImGui_InvisibleButton(ctx, "##shortcuts", settings_button_size, settings_button_size) then
+                if ui.current_view_mode ~= "shortcuts" then
+                    ui.current_view_mode = "shortcuts"
+                else
+                    ui.current_view_mode = "folders"
+                end
+            end
+            local shortcuts_color = r.ImGui_IsItemHovered(ctx) and hover_color or base_color
+            local kb_center_x = shortcuts_pos_x + settings_button_size / 2
+            local kb_center_y = shortcuts_pos_y + settings_button_size / 2
+            local kb_w = settings_button_size * 0.7
+            local kb_h = kb_w * 0.6
+            local kb_x = kb_center_x - kb_w / 2
+            local kb_y = kb_center_y - kb_h / 2
+            r.ImGui_DrawList_AddRect(drawList, kb_x, kb_y, kb_x + kb_w, kb_y + kb_h, shortcuts_color, 2, 0, 1.5)
+            local key_w = kb_w * 0.22
+            local key_h = kb_h * 0.55
+            local key_y = kb_y + kb_h * 0.22
+            local key_spacing = kb_w * 0.08
+            for i = 0, 2 do
+                local key_x = kb_x + kb_w * 0.12 + i * (key_w + key_spacing)
+                r.ImGui_DrawList_AddRectFilled(drawList, key_x, key_y, key_x + key_w, key_y + key_h, shortcuts_color, 1)
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Keyboard Shortcuts")
+            end
+            
+            r.ImGui_SameLine(ctx, 0, spacing + 2)
             r.ImGui_SetCursorPosY(ctx, buttons_y + 5)
             if r.ImGui_InvisibleButton(ctx, "##quit", quit_button_size, quit_button_size) then
                 open = false
@@ -6559,7 +6877,7 @@ local function loop()
             end
         end
         
-        if ui.current_view_mode ~= "settings" then
+        if ui.current_view_mode ~= "settings" and ui.current_view_mode ~= "shortcuts" then
             if (file_location.flat_view and file_location.current_location ~= "") or ui.current_view_mode == "collections" then
                 if ui.current_view_mode ~= "collections" then
                     r.ImGui_Dummy(ctx, 0, 3)
@@ -6589,7 +6907,7 @@ local function loop()
             end
         end
         
-        if ui.current_view_mode ~= "settings" then
+        if ui.current_view_mode ~= "settings" and ui.current_view_mode ~= "shortcuts" then
             r.ImGui_Separator(ctx)
         end
         
@@ -6602,9 +6920,107 @@ local function loop()
             if r.ImGui_BeginChild(ctx, "RightPanelContent", 0, -FOOTER_H) then
                 if ui.current_view_mode == "settings" then
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
+                    
+                    local accent_color = hsv_to_color(ui_settings.accent_hue)
+                    local accent_hover = hsv_to_color(ui_settings.accent_hue, 1.0, 0.8)
+                    local accent_active = hsv_to_color(ui_settings.accent_hue, 1.0, 0.6)
+                    
+                    local button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
+                    local button_hover = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, 1.0)
+                    local button_active = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.4, ui_settings.button_brightness * 1.4, ui_settings.button_brightness * 1.4, 1.0)
+                    
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), accent_color)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), accent_active)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_color)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), button_hover)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button_active)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), button_color)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), button_hover)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), button_active)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), accent_color)
+                    
                     r.ImGui_Spacing(ctx)
                     
                     local header_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 1.0)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
+                    r.ImGui_SeparatorText(ctx, "Settings Presets")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    
+                    r.ImGui_Spacing(ctx)
+                    
+                    local preset_list = get_preset_list()
+                    if not ui.selected_preset_index then ui.selected_preset_index = 1 end
+                    if not ui.new_preset_name then ui.new_preset_name = "" end
+                    
+                    if #preset_list > 0 then
+                        r.ImGui_Text(ctx, "Available Presets:")
+                        r.ImGui_SetNextItemWidth(ctx, 300)
+                        local combo_items = table.concat(preset_list, "\0") .. "\0"
+                        local changed, new_index = r.ImGui_Combo(ctx, "##presets", ui.selected_preset_index - 1, combo_items)
+                        if changed then
+                            ui.selected_preset_index = new_index + 1
+                        end
+                        
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "Load Preset") then
+                            if preset_list[ui.selected_preset_index] then
+                                local success, error_msg = load_preset(preset_list[ui.selected_preset_index])
+                                if not success then
+                                    r.ShowMessageBox("Failed to load preset: " .. error_msg, "Error", 0)
+                                end
+                            end
+                        end
+                        
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "Resave") then
+                            if preset_list[ui.selected_preset_index] then
+                                local preset_name = preset_list[ui.selected_preset_index]
+                                if save_preset(preset_name) then
+                                else
+                                    r.ShowMessageBox("Failed to resave preset", "Error", 0)
+                                end
+                            end
+                        end
+                        
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "Delete") then
+                            if preset_list[ui.selected_preset_index] then
+                                local ret = r.ShowMessageBox("Delete preset '" .. preset_list[ui.selected_preset_index] .. "'?", "Confirm", 4)
+                                if ret == 6 then 
+                                    delete_preset(preset_list[ui.selected_preset_index])
+                                    ui.selected_preset_index = 1
+                                end
+                            end
+                        end
+                    else
+                        r.ImGui_Text(ctx, "No presets found")
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Text(ctx, "Save Current Settings as Preset:")
+                    r.ImGui_SetNextItemWidth(ctx, 300)
+                    local ret, new_name = r.ImGui_InputText(ctx, "##preset_name", ui.new_preset_name)
+                    if ret then
+                        ui.new_preset_name = new_name
+                    end
+                    
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Save Preset") then
+                        if ui.new_preset_name and ui.new_preset_name ~= "" then
+                            if save_preset(ui.new_preset_name) then
+                                ui.new_preset_name = ""
+                            else
+                                r.ShowMessageBox("Failed to save preset", "Error", 0)
+                            end
+                        else
+                            r.ShowMessageBox("Please enter a preset name", "Error", 0)
+                        end
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+                    
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
                     r.ImGui_SeparatorText(ctx, "GUI Styling")
                     r.ImGui_PopStyleColor(ctx, 1)
@@ -6663,6 +7079,17 @@ local function loop()
                     local waveform_thickness_changed, new_waveform_thickness = r.ImGui_SliderDouble(ctx, "Waveform Line Thickness", ui_settings.waveform_thickness, 1.0, 5.0, "%.1f")
                     if waveform_thickness_changed then
                         ui_settings.waveform_thickness = new_waveform_thickness
+                        save_options()
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    local resolution_changed, new_resolution = r.ImGui_SliderDouble(ctx, "Waveform Resolution Detail", ui_settings.waveform_resolution_multiplier, 1.0, 8.0, "%.1fx")
+                    if resolution_changed then
+                        ui_settings.waveform_resolution_multiplier = new_resolution
+                        waveform.cache = {}
+                        waveform.cache_file = ""
+                        waveform.spectral_cache = {}
+                        waveform.spectral_cache_file = ""
                         save_options()
                     end
                     
@@ -6899,6 +7326,7 @@ local function loop()
                         ui_settings.button_text_brightness = 1.0
                         ui_settings.waveform_hue = 0.55
                         ui_settings.waveform_thickness = 1.0
+                        ui_settings.waveform_resolution_multiplier = 2.0
                         ui_settings.accent_hue = 0.55
                         ui_settings.selection_hue = 0.16
                         ui_settings.selection_saturation = 1.0
@@ -6912,7 +7340,91 @@ local function loop()
                     end
                     r.ImGui_PopStyleColor(ctx, 3)
                     
-                    r.ImGui_PopStyleVar(ctx, 1)
+                    r.ImGui_PopStyleColor(ctx, 9)
+                    r.ImGui_PopStyleVar(ctx, 2)
+                elseif ui.current_view_mode == "shortcuts" then
+                    -- Keyboard Shortcuts Panel
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue))
+                    r.ImGui_Text(ctx, "KEYBOARD SHORTCUTS")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+                    
+                    -- Playback Controls
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+                    r.ImGui_Text(ctx, "PLAYBACK")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_BulletText(ctx, "Enter/Return       Play File (no pause)")
+                    r.ImGui_BulletText(ctx, "Double-Click       Insert at Edit Cursor")
+                    r.ImGui_BulletText(ctx, "Click Waveform     Seek to Position")
+                    r.ImGui_BulletText(ctx, "Drag Waveform      Create Time Selection")
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+                    
+                    -- Zoom & Navigation
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+                    r.ImGui_Text(ctx, "ZOOM & NAVIGATION")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_BulletText(ctx, "Ctrl+Wheel         Horizontal Zoom (1x-8x)")
+                    r.ImGui_BulletText(ctx, "Ctrl+Alt+Wheel     Vertical Zoom (0.5x-10x)")
+                    r.ImGui_BulletText(ctx, "Wheel              Horizontal Scroll (when zoomed)")
+                    r.ImGui_BulletText(ctx, "RESET Button       Reset All Zoom (visible when zoomed)")
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+                    
+                    -- Navigation
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+                    r.ImGui_Text(ctx, "NAVIGATION")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_BulletText(ctx, "Up/Down Arrow      Navigate File List")
+                    r.ImGui_BulletText(ctx, "Page Up/Down       Jump Multiple Files")
+                    r.ImGui_BulletText(ctx, "Home/End           First/Last File")
+                    r.ImGui_BulletText(ctx, "Click              Select File")
+                    r.ImGui_BulletText(ctx, "Shift+Click        Range Selection")
+                    r.ImGui_BulletText(ctx, "Ctrl+Click         Multi-Selection")
+                    r.ImGui_BulletText(ctx, "Right-Click        Context Menu")
+                    r.ImGui_BulletText(ctx, "Enter              Open/Close Folder (Tree View)")
+                    r.ImGui_BulletText(ctx, "Left Arrow         Close Tree Node")
+                    r.ImGui_BulletText(ctx, "Right Arrow        Open Tree Node")
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+                    
+                    -- View Options
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+                    r.ImGui_Text(ctx, "VIEW OPTIONS")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_BulletText(ctx, "SPECTRAL Button    Toggle FFT Frequency Analysis")
+                    r.ImGui_BulletText(ctx, "GRID Button        Toggle Time Grid Overlay")
+                    r.ImGui_BulletText(ctx, "SOLO Button        Solo Selected File (others hidden)")
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+                    
+                    -- Waveform Features
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+                    r.ImGui_Text(ctx, "WAVEFORM FEATURES")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_BulletText(ctx, "Spectral Colors:   Red=Bass, Orange=Low-Mid, Green=Mid,")
+                    r.ImGui_Text(ctx, "                   Blue=High-Mid, Purple=High")
+                    r.ImGui_BulletText(ctx, "Zoom Indicators:   H: Xx (horizontal), V: X.Xx (vertical)")
+                    r.ImGui_BulletText(ctx, "Resolution:        Adjust in Settings (1x-8x detail)")
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+                    
+                    -- Settings & Presets
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+                    r.ImGui_Text(ctx, "SETTINGS & PRESETS")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_BulletText(ctx, "Settings Icon      Access All Visual Settings")
+                    r.ImGui_BulletText(ctx, "Save Preset        Store Current Settings to JSON")
+                    r.ImGui_BulletText(ctx, "Load Preset        Restore Saved Settings")
+                    r.ImGui_BulletText(ctx, "Delete Preset      Remove Saved Preset")
+                    
                 elseif ui.current_view_mode == "folders" or ui.current_view_mode == "collections" then
                     draw_file_list()
                 end
@@ -6925,7 +7437,7 @@ local function loop()
             
             r.ImGui_Separator(ctx)
             local footer_width = r.ImGui_GetContentRegionAvail(ctx)
-            local footer_height = 90
+            local footer_height = 92
             local ruler_height = 15
             local waveform_height = footer_height - ruler_height
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -6947,6 +7459,12 @@ local function loop()
             if file_to_show and file_to_show ~= "" then
                 local length = get_cached_file_length(file_to_show)
                 if length > 0 then
+                        local visible_duration = length / waveform.zoom_level
+                        local max_scroll_time = math.max(0, length - visible_duration)
+                        local scroll_time_offset = waveform.scroll_offset * max_scroll_time
+                        local visible_start_time = scroll_time_offset
+                        local visible_end_time = scroll_time_offset + visible_duration
+                        
                         local num_main_ticks = math.max(4, math.floor(footer_width / 80))
                         local num_subticks_per_interval = 4
                         
@@ -6980,7 +7498,7 @@ local function loop()
                             if playrate == 0 or playrate ~= playrate then 
                                 playrate = 1.0
                             end
-                            local time = progress * length / playrate
+                            local time = (visible_start_time + progress * visible_duration) / playrate
                             if time ~= time or time == math.huge or time == -math.huge then  
                                 time = 0
                             end
@@ -7036,7 +7554,7 @@ local function loop()
                     is_video_or_gif = video_extensions[ext] or false
                 end
                 
-                local pixels = math.floor(footer_width)
+                local pixels = math.floor(footer_width * ui_settings.waveform_resolution_multiplier)
                 if is_midi then
                     if waveform.midi_notes_file ~= file_to_show or #waveform.midi_notes == 0 then
                         waveform.midi_notes, waveform.midi_length = load_midi_notes(file_to_show)
@@ -7100,35 +7618,99 @@ local function loop()
                     end
                 end
                 if not is_midi and #waveform.cache > 0 then
-                  
-                    local h = ui_settings.waveform_hue
-                    local s = 1.0
-                    local v = 1.0
-                    
-                    local red, green, blue
-                    local i = math.floor(h * 6)
-                    local f = h * 6 - i
-                    local p = v * (1 - s)
-                    local q = v * (1 - f * s)
-                    local t = v * (1 - (1 - f) * s)
-                    
-                    i = i % 6
-                    if i == 0 then red, green, blue = v, t, p
-                    elseif i == 1 then red, green, blue = q, v, p
-                    elseif i == 2 then red, green, blue = p, v, t
-                    elseif i == 3 then red, green, blue = p, q, v
-                    elseif i == 4 then red, green, blue = t, p, v
-                    else red, green, blue = v, p, q
-                    end
-                    
-                    local waveform_color = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, 1.0)
-                    
-                    for i = 1, #waveform.cache do
-                        local peak = waveform.cache[i]
-                        local x = footer_x + (i - 1)
-                        local y_top = center_y - (peak * waveform_height * 0.45)
-                        local y_bottom = center_y + (peak * waveform_height * 0.45)
-                        r.ImGui_DrawList_AddLine(draw_list, x, y_top, x, y_bottom, waveform_color, ui_settings.waveform_thickness)
+                    if waveform.show_spectral_view then
+                        if waveform.spectral_cache_file ~= file_to_show or #waveform.spectral_cache ~= pixels then
+                            waveform.spectral_cache = calculate_spectral_data(file_to_show, pixels, 1)
+                            waveform.spectral_cache_file = file_to_show
+                        end
+                        
+                        if #waveform.spectral_cache > 0 then
+                            local total_samples = #waveform.cache
+                            local visible_samples = math.floor(total_samples / waveform.zoom_level)
+                            local max_scroll = math.max(0, total_samples - visible_samples)
+                            local scroll_sample_offset = math.floor(waveform.scroll_offset * max_scroll)
+                            
+                            for i = 1, visible_samples do
+                                local cache_index = scroll_sample_offset + i
+                                if cache_index >= 1 and cache_index <= total_samples then
+                                    local peak = waveform.cache[cache_index] * waveform.vertical_zoom
+                                    peak = math.min(peak, 1.0)  
+                                    local x = footer_x + (i - 1) * (footer_width / visible_samples)
+                                    local y_top = center_y - (peak * waveform_height * 0.45)
+                                    local y_bottom = center_y + (peak * waveform_height * 0.45)
+                                    
+                                    local spectral_index = math.floor((cache_index / #waveform.cache) * #waveform.spectral_cache) + 1
+                                    spectral_index = math.min(spectral_index, #waveform.spectral_cache)
+                                    local zcr_value = waveform.spectral_cache[spectral_index] or 0.5
+                                
+                                local red, green, blue
+                                
+                                if zcr_value < 0.25 then
+                                    local t = zcr_value / 0.25
+                                    red = 255
+                                    green = 51 + (119 * t)
+                                    blue = 0
+                                elseif zcr_value < 0.50 then
+                                    local t = (zcr_value - 0.25) / 0.25
+                                    red = 255 - (204 * t)
+                                    green = 170 + (34 * t)
+                                    blue = 0 + (51 * t)
+                                elseif zcr_value < 0.75 then
+                                    local t = (zcr_value - 0.50) / 0.25
+                                    red = 51
+                                    green = 204 - (51 * t)
+                                    blue = 51 + (204 * t)
+                                else
+                                    local t = (zcr_value - 0.75) / 0.25
+                                    red = 51 + (119 * t)
+                                    green = 153 - (102 * t)
+                                    blue = 255
+                                end
+                                
+                                    local color = r.ImGui_ColorConvertDouble4ToU32(red/255, green/255, blue/255, 1.0)
+                                    r.ImGui_DrawList_AddLine(draw_list, x, y_top, x, y_bottom, color, ui_settings.waveform_thickness)
+                                end
+                            end
+                        end
+                    else
+                        local h = ui_settings.waveform_hue
+                        local s = 1.0
+                        local v = 1.0
+                        
+                        local red, green, blue
+                        local i = math.floor(h * 6)
+                        local f = h * 6 - i
+                        local p = v * (1 - s)
+                        local q = v * (1 - f * s)
+                        local t = v * (1 - (1 - f) * s)
+                        
+                        i = i % 6
+                        if i == 0 then red, green, blue = v, t, p
+                        elseif i == 1 then red, green, blue = q, v, p
+                        elseif i == 2 then red, green, blue = p, v, t
+                        elseif i == 3 then red, green, blue = p, q, v
+                        elseif i == 4 then red, green, blue = t, p, v
+                        else red, green, blue = v, p, q
+                        end
+                        
+                        local waveform_color = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, 1.0)
+                        
+                        local total_samples = #waveform.cache
+                        local visible_samples = math.floor(total_samples / waveform.zoom_level)
+                        local max_scroll = math.max(0, total_samples - visible_samples)
+                        local scroll_sample_offset = math.floor(waveform.scroll_offset * max_scroll)
+                        
+                        for i = 1, visible_samples do
+                            local cache_index = scroll_sample_offset + i
+                            if cache_index >= 1 and cache_index <= total_samples then
+                                local peak = waveform.cache[cache_index] * waveform.vertical_zoom
+                                peak = math.min(peak, 1.0)  
+                                local x = footer_x + (i - 1) * (footer_width / visible_samples)
+                                local y_top = center_y - (peak * waveform_height * 0.45)
+                                local y_bottom = center_y + (peak * waveform_height * 0.45)
+                                r.ImGui_DrawList_AddLine(draw_list, x, y_top, x, y_bottom, waveform_color, ui_settings.waveform_thickness)
+                            end
+                        end
                     end
                 end
                 if file_to_show and file_to_show == playback.current_playing_file then
@@ -7145,30 +7727,63 @@ local function loop()
                             end
                             local adjusted_length = length / (playback.effective_playrate or 1.0)
                             local progress = math.min(play_pos / adjusted_length, 1)
-                            local cursor_x = footer_x + (progress * footer_width)
-                            r.ImGui_DrawList_AddLine(draw_list, cursor_x, footer_y, cursor_x, footer_y + footer_height, 0xFFFF00FF, 2)
+                            
+                            local visible_duration = 1.0 / waveform.zoom_level
+                            local max_scroll = math.max(0, 1.0 - visible_duration)
+                            local visible_start = waveform.scroll_offset * max_scroll
+                            local visible_end = visible_start + visible_duration
+                            
+                            if progress >= visible_start and progress <= visible_end then
+                                local visible_progress = (progress - visible_start) / visible_duration
+                                local cursor_x = footer_x + (visible_progress * footer_width)
+                                r.ImGui_DrawList_AddLine(draw_list, cursor_x, footer_y, cursor_x, footer_y + footer_height, 0xFFFF00FF, 2)
+                            end
                     end
                 end
                 if waveform.selection_active and waveform.selection_start ~= waveform.selection_end then
-                    local sel_start_x = footer_x + (waveform.selection_start * footer_width)
-                    local sel_end_x = footer_x + (waveform.selection_end * footer_width)
-                    if sel_start_x > sel_end_x then
-                        sel_start_x, sel_end_x = sel_end_x, sel_start_x
+                    local visible_duration = 1.0 / waveform.zoom_level
+                    local max_scroll = math.max(0, 1.0 - visible_duration)
+                    local visible_start = waveform.scroll_offset * max_scroll
+                    local visible_end = visible_start + visible_duration
+                    
+                    local sel_start = math.min(waveform.selection_start, waveform.selection_end)
+                    local sel_end = math.max(waveform.selection_start, waveform.selection_end)
+                    
+                    if sel_end >= visible_start and sel_start <= visible_end then
+                        local visible_sel_start = math.max(sel_start, visible_start)
+                        local visible_sel_end = math.min(sel_end, visible_end)
+                        
+                        local visible_start_progress = (visible_sel_start - visible_start) / visible_duration
+                        local visible_end_progress = (visible_sel_end - visible_start) / visible_duration
+                        
+                        local sel_start_x = footer_x + (visible_start_progress * footer_width)
+                        local sel_end_x = footer_x + (visible_end_progress * footer_width)
+                        
+                        local selection_color = hsv_to_color(ui_settings.selection_hue, ui_settings.selection_saturation, 1.0, 0.2)
+                        r.ImGui_DrawList_AddRectFilled(draw_list, sel_start_x, waveform_y, sel_end_x, footer_y + footer_height, selection_color)
                     end
-                    local selection_color = hsv_to_color(ui_settings.selection_hue, ui_settings.selection_saturation, 1.0, 0.2)
-                    r.ImGui_DrawList_AddRectFilled(draw_list, sel_start_x, waveform_y, sel_end_x, footer_y + footer_height, selection_color)
                 end
                 
                 if playback.selected_file ~= "" or playback.current_playing_file ~= "" then
-                    local cursor_x = footer_x + (waveform.play_cursor_position * footer_width)
-                    local play_cursor_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0, 1.0)
-                    r.ImGui_DrawList_AddLine(draw_list, cursor_x, waveform_y, cursor_x, footer_y + footer_height, play_cursor_color, 2)
+                    local visible_duration = 1.0 / waveform.zoom_level
+                    local max_scroll = math.max(0, 1.0 - visible_duration)
+                    local visible_start = waveform.scroll_offset * max_scroll
+                    local visible_end = visible_start + visible_duration
+                    
+                    if waveform.play_cursor_position >= visible_start and waveform.play_cursor_position <= visible_end then
+                        local visible_progress = (waveform.play_cursor_position - visible_start) / visible_duration
+                        local cursor_x = footer_x + (visible_progress * footer_width)
+                        local play_cursor_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0, 1.0)
+                        r.ImGui_DrawList_AddLine(draw_list, cursor_x, waveform_y, cursor_x, footer_y + footer_height, play_cursor_color, 2)
+                    end
                 end
             else
                 waveform.cache = {}
                 waveform.cache_file = ""
                 waveform.oscilloscope_cache = {}
                 waveform.oscilloscope_cache_file = ""
+                waveform.spectral_cache = {}
+                waveform.spectral_cache_file = ""
                 waveform.midi_notes = {}
                 waveform.midi_notes_file = ""
                 waveform.midi_length = 0
@@ -7195,6 +7810,7 @@ local function loop()
                             ui_settings.grid_brightness,
                             0.13
                         )
+                        
                         local num_main_ticks = math.max(4, math.floor(footer_width / 80))
                         local num_subticks_per_interval = 4
                         
@@ -7245,12 +7861,14 @@ local function loop()
             end
             
             local solo_hovered = false
+            local spectral_hovered = false
+            
             if is_midi_or_video then
                 local solo_text = "SOLO"
                 local solo_color = playback.use_exclusive_solo and accent_color or text_color
                 local solo_w, solo_h = r.ImGui_CalcTextSize(ctx, solo_text)
-                local solo_x = footer_x + footer_width - solo_w - 50  -- 50px left of GRID
-                local solo_y = footer_y + footer_height - solo_h - 5
+                local solo_x = footer_x + footer_width - solo_w - 50  
+                local solo_y = footer_y + footer_height - solo_h - 2  
                 
                 r.ImGui_DrawList_AddText(draw_list, solo_x, solo_y, solo_color, solo_text)
                 
@@ -7292,11 +7910,32 @@ local function loop()
                 end
             end
             
+            local is_audio_file = current_file and not is_video_or_image_file(current_file) and not is_midi_or_video
+            if is_audio_file then
+                local spectral_text = "SPECTRAL"
+                local spectral_color = waveform.show_spectral_view and accent_color or text_color
+                local spectral_w, spectral_h = r.ImGui_CalcTextSize(ctx, spectral_text)
+                local spectral_x = footer_x + footer_width - spectral_w - 55  
+                local spectral_y = footer_y + footer_height - spectral_h - 2 
+                
+                r.ImGui_DrawList_AddText(draw_list, spectral_x, spectral_y, spectral_color, spectral_text)
+                
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                spectral_hovered = mouse_x >= spectral_x - 4 and mouse_x <= spectral_x + spectral_w + 4 and 
+                                   mouse_y >= spectral_y - 4 and mouse_y <= spectral_y + spectral_h + 4
+                if spectral_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+                    waveform.show_spectral_view = not waveform.show_spectral_view
+                    save_options()
+                    waveform.spectral_cache = {}
+                    waveform.spectral_cache_file = ""
+                end
+            end
+            
             local grid_text = "GRID"
             local grid_color = ui.waveform_grid_overlay and accent_color or text_color
             local grid_w, grid_h = r.ImGui_CalcTextSize(ctx, grid_text)
             local grid_x = footer_x + footer_width - grid_w - 5
-            local grid_y = footer_y + footer_height - grid_h - 5
+            local grid_y = footer_y + footer_height - grid_h - 2  
             
             r.ImGui_DrawList_AddText(draw_list, grid_x, grid_y, grid_color, grid_text)
             
@@ -7308,13 +7947,100 @@ local function loop()
                 save_options()
             end
             
+            local reset_hovered = false
+            if is_audio_file and (waveform.zoom_level > 1.0 or waveform.vertical_zoom ~= 1.0) then
+                local reset_text = "RESET"
+                local reset_color = text_color
+                local reset_w, reset_h = r.ImGui_CalcTextSize(ctx, reset_text)
+                local reset_x = footer_x + 5  
+                local reset_y = footer_y + footer_height - reset_h - 2 
+                
+                r.ImGui_DrawList_AddText(draw_list, reset_x, reset_y, reset_color, reset_text)
+                
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                reset_hovered = mouse_x >= reset_x - 4 and mouse_x <= reset_x + reset_w + 4 and 
+                                mouse_y >= reset_y - 4 and mouse_y <= reset_y + reset_h + 4
+                if reset_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+                    waveform.zoom_level = 1.0
+                    waveform.scroll_offset = 0.0
+                    waveform.vertical_zoom = 1.0
+                end
+            end
+            
+            if is_audio_file then
+                local y_offset = footer_y + 20  
+                
+                if waveform.zoom_level > 1.0 then
+                    local zoom_text = string.format("H: %dx", math.floor(waveform.zoom_level))
+                    local zoom_w, zoom_h = r.ImGui_CalcTextSize(ctx, zoom_text)
+                    local zoom_x = footer_x + footer_width - zoom_w - 5
+                    
+                    r.ImGui_DrawList_AddText(draw_list, zoom_x, y_offset, text_color, zoom_text)
+                    y_offset = y_offset + zoom_h + 2  
+                end
+                
+                if waveform.vertical_zoom ~= 1.0 then
+                    local vzoom_text = string.format("V: %.1fx", waveform.vertical_zoom)
+                    local vzoom_w, vzoom_h = r.ImGui_CalcTextSize(ctx, vzoom_text)
+                    local vzoom_x = footer_x + footer_width - vzoom_w - 5
+                    
+                    r.ImGui_DrawList_AddText(draw_list, vzoom_x, y_offset, text_color, vzoom_text)
+                end
+            end
+            
             if r.ImGui_IsItemHovered(ctx) and (playback.selected_file ~= "" or playback.current_playing_file ~= "") then
                 local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
                 local normalized_x = (mouse_x - footer_x) / footer_width
                 normalized_x = math.max(0, math.min(1, normalized_x))
                 local file_path = playback.current_playing_file ~= "" and playback.current_playing_file or (ui.selected_index > 0 and ui.visible_files[ui.selected_index] and ui.visible_files[ui.selected_index].path)
                 
-                if r.ImGui_IsMouseClicked(ctx, 0) and not grid_hovered and not solo_hovered then
+                local wheel_delta = r.ImGui_GetMouseWheel(ctx)
+                if wheel_delta ~= 0 and is_audio_file then
+                    local ctrl_down = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+                    local alt_down = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
+                    
+                    if ctrl_down and alt_down then
+                        local zoom_factor = 1.1
+                        if wheel_delta > 0 then
+                            waveform.vertical_zoom = waveform.vertical_zoom * zoom_factor
+                        else
+                            waveform.vertical_zoom = waveform.vertical_zoom / zoom_factor
+                        end
+                        waveform.vertical_zoom = math.max(0.5, math.min(10.0, waveform.vertical_zoom))
+                    elseif ctrl_down then
+                        local old_zoom = waveform.zoom_level
+                        local old_visible_samples = 1.0 / old_zoom
+                        local old_max_scroll = math.max(0, 1.0 - old_visible_samples)
+                        local old_scroll_pos = waveform.scroll_offset * old_max_scroll
+                        local old_mouse_abs_pos = old_scroll_pos + (normalized_x * old_visible_samples)
+                        
+                        local zoom_factor = 1.1
+                        if wheel_delta > 0 then
+                            waveform.zoom_level = waveform.zoom_level * zoom_factor
+                        else
+                            waveform.zoom_level = waveform.zoom_level / zoom_factor
+                        end
+                        waveform.zoom_level = math.max(1.0, math.min(8.0, waveform.zoom_level))
+                        
+                        if waveform.zoom_level <= 1.0 then
+                            waveform.scroll_offset = 0.0
+                        else
+                            local new_visible_samples = 1.0 / waveform.zoom_level
+                            local new_max_scroll = math.max(0, 1.0 - new_visible_samples)
+                            local new_scroll_pos = old_mouse_abs_pos - (normalized_x * new_visible_samples)
+                            new_scroll_pos = math.max(0, math.min(new_max_scroll, new_scroll_pos))
+                            waveform.scroll_offset = new_max_scroll > 0 and (new_scroll_pos / new_max_scroll) or 0
+                        end
+                    else
+                        if waveform.zoom_level > 1.0 then
+                            local scroll_speed = 0.05
+                            waveform.scroll_offset = waveform.scroll_offset - (wheel_delta * scroll_speed)
+                            waveform.scroll_offset = math.max(0.0, math.min(1.0, waveform.scroll_offset))
+                        end
+                    end
+                end
+                
+                if r.ImGui_IsMouseClicked(ctx, 0) and not grid_hovered and not solo_hovered and not spectral_hovered then
                     waveform.play_cursor_position = normalized_x
                     
                     waveform.selection_active = false

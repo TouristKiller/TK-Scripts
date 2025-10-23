@@ -181,7 +181,7 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-    <version name="0.5.7" author="TouristKiller" time="2025-10-22T21:07:00Z">
+    <version name="0.6.0" author="TouristKiller" time="2025-10-23T06:07:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
     <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
     <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
@@ -202,6 +202,13 @@
 + Selection preservation: File list and waveform selections remain after stop
 + Bugfix: SOLO toggle no longer overridden by play/stop actions
 + Bugfix: Waveform seek click detection excludes SOLO button hover
++ SPECTRAL VIEW: FFT-based frequency visualization with 6-band color gradient
++ WAVEFORM ZOOM & SCROLL: Horizontal (1x-8x), vertical (0.5x-10x), mouse-centered
++ SETTINGS PRESETS: Save/load/delete/resave UI configurations as JSON
++ DYNAMIC WAVEFORM RESOLUTION: Adjustable detail level (1x-8x) in settings
++ KEYBOARD SHORTCUTS PANEL: Quick reference for all shortcuts
++ IMPROVED SETTINGS UI: Button color theming for sliders, dropdowns, and buttons with rounded corners
++ WAVEFORM FOOTER: Increased height for better visual balance
 ]]></changelog>
     </version>
     </reapack>

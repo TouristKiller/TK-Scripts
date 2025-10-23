@@ -48,6 +48,33 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 ### Bugfixes
 - **SOLO toggle interferentie**: Verwijderd alle automatische solo logica uit play/stop functies; solo wordt nu alleen beheerd door toggle knop
 - **Waveform seek tijdens SOLO**: Play cursor sprong naar knop locatie bij klikken op SOLO → `solo_hovered` check toegevoegd aan waveform click detection
+
+## [Recent Updates]
+
+### Toegevoegd
+- **Spectral View**: FFT-gebaseerde frequentie analyse met kleurverloop (rood=bass, oranje=low-mid, groen=mid, blauw=high-mid, paars=high)
+  - SPECTRAL toggle knop (alleen voor audio files)
+  - 6-band frequentie analyse met compensatie en weighting
+  - Cache systeem voor snelle weergave
+- **Settings Preset Systeem**: Opslaan en laden van volledige settings configuraties via JSON
+  - Save/Load/Delete presets in Settings view
+  - Presets opgeslagen in PRESETS subfolder
+  - Error handling voor corrupte bestanden
+- **Waveform Zoom & Scroll**:
+  - Horizontale zoom (Ctrl+Wheel, 1x tot 500x)
+  - Verticale zoom (Ctrl+Alt+Wheel, 0.5x tot 10x)
+  - Horizontaal scrollen (Wheel wanneer ingezoomd)
+  - Mouse-centered zoom (zoom blijft op cursor positie)
+  - Zoom indicators (H: % en V: % rechts boven)
+  - RESET knop (links onder) om zoom terug te zetten
+  - Alleen voor audio files (niet MIDI/video)
+- **Dynamische Waveform Resolutie**: Waveform resolutie past zich automatisch aan window breedte (2x pixels voor extra detail)
+- **Zoom-aware UI**: Ruler, play cursor, selection en grid overlay bewegen correct mee met zoom/scroll
+
+### Gewijzigd
+- SOLO, SPECTRAL en GRID knoppen verplaatst naar betere positie (10px omlaag)
+- Spectral view en normale waveform beide ondersteund met zoom/scroll
+- Waveform resolutie verhoogd van vaste 725 naar dynamisch 2x window breedte
 - **Link mode timing**: Transport wait loop toegevoegd voor betrouwbare synchronisatie bij start
 - **Selection reset bij stop**: Bestandslijst selectie bleef niet behouden → monitor_file_path logica toegevoegd
 - Fix voor syntaxfout in info-knop callback (verkeerde multiple assignment).
