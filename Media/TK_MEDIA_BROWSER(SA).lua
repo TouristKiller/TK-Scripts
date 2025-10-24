@@ -1,15 +1,10 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.0
+-- @version 0.6.1
 -- @changelog:
 --[[       
-+ SPECTRAL VIEW: FFT-based frequency visualization with 6-band color gradient
-+ WAVEFORM ZOOM & SCROLL: Horizontal (1x-8x), vertical (0.5x-10x), mouse-centered
-+ SETTINGS PRESETS: Save/load/delete/resave UI configurations as JSON
-+ DYNAMIC WAVEFORM RESOLUTION: Adjustable detail level (1x-8x) in settings
-+ KEYBOARD SHORTCUTS PANEL: Quick reference for all shortcuts
-+ IMPROVED SETTINGS UI: Button color theming for sliders, dropdowns, and buttons with rounded corners
-+ WAVEFORM FOOTER: Increased height for better visual balance
++ REAL-TIME PITCH TRACKING: Autocorrelation-based pitch detection during playback
+
 ]]--        
 --------------------------------------------------------------------------
 local r = reaper
@@ -131,7 +126,12 @@ local waveform = {
     cached_length_file = "",
     zoom_level = 1.0,  
     scroll_offset = 0.0, 
-    vertical_zoom = 1.0  
+    vertical_zoom = 1.0,
+    current_pitch_hz = nil,
+    current_pitch_note = nil,
+    last_pitch_update = 0,
+    pitch_history = {},  -- For smoothing
+    stable_pitch_timer = 0,  -- Timer for how long pitch has been stable
 }
 
 -- UI State & View Control
@@ -148,7 +148,8 @@ local ui = {
     show_collection_section = false,
     current_view_mode = "folders",  
     list_clipper = nil,
-    scroll_to_top = false
+    scroll_to_top = false,
+    pitch_detection_enabled = true
 }
 
 -- Available fonts (cross-platform compatible)
@@ -273,7 +274,7 @@ local ui_settings = {
     
     pushed_color = 0,
     audio_buffer = {},
-    buffer_size = 512,
+    buffer_size = 2048,
     last_audio_update = 0,
     
     visible_columns = {
@@ -406,6 +407,117 @@ local video_image_extensions = {
 local function is_video_or_image_file(filename)
     local ext = string.lower(string.match(filename, "%.([^%.]+)$") or "")
     return video_image_extensions[ext] or false
+end
+
+local function detect_pitch_autocorrelation(audio_buffer, sample_rate)
+    if not audio_buffer or #audio_buffer < 200 then
+        waveform.pitch_debug = "Buf too small"
+        return nil
+    end
+
+    local energy = 0
+    for i = 1, #audio_buffer do
+        energy = energy + audio_buffer[i] * audio_buffer[i]
+    end
+    energy = math.sqrt(energy / #audio_buffer)
+
+    if energy < 0.02 then
+        waveform.pitch_debug = string.format("Silence (%.4f)", energy)
+        return nil
+    end
+
+    local min_freq = 40
+    local max_freq = 1200
+
+    local min_period = math.floor(sample_rate / max_freq)
+    local max_period = math.min(math.floor(sample_rate / min_freq), math.floor(#audio_buffer / 3))
+
+    local best_correlation = -1
+    local best_period = 0
+    local samples_to_check = math.min(#audio_buffer - max_period, 2048)
+
+    for period = min_period, max_period, 1 do
+        local sum_diff = 0
+        local count = 0
+
+        for i = 1, samples_to_check do
+            if i + period <= #audio_buffer then
+                sum_diff = sum_diff + math.abs(audio_buffer[i] - audio_buffer[i + period])
+                count = count + 1
+            end
+        end
+
+        if count > 0 then
+            local avg_diff = sum_diff / count
+            local correlation = 1 - avg_diff
+
+            if correlation > best_correlation then
+                best_correlation = correlation
+                best_period = period
+            end
+        end
+    end
+
+    if best_period > min_period and best_period < max_period then
+        local sum_diff_prev = 0
+        local count_prev = 0
+        for i = 1, samples_to_check do
+            if i + best_period - 1 <= #audio_buffer then
+                sum_diff_prev = sum_diff_prev + math.abs(audio_buffer[i] - audio_buffer[i + best_period - 1])
+                count_prev = count_prev + 1
+            end
+        end
+        local prev_corr = count_prev > 0 and (1 - sum_diff_prev / count_prev) or -1
+
+        local sum_diff_next = 0
+        local count_next = 0
+        for i = 1, samples_to_check do
+            if i + best_period + 1 <= #audio_buffer then
+                sum_diff_next = sum_diff_next + math.abs(audio_buffer[i] - audio_buffer[i + best_period + 1])
+                count_next = count_next + 1
+            end
+        end
+        local next_corr = count_next > 0 and (1 - sum_diff_next / count_next) or -1
+    end
+
+    local energy_threshold = 0.55 - (energy - 0.02) * 2
+    energy_threshold = math.max(0.3, math.min(0.7, energy_threshold))
+
+    if best_period > 0 and best_correlation > energy_threshold then
+        local frequency = sample_rate / best_period
+        frequency = frequency / 2
+
+        if frequency >= min_freq and frequency <= max_freq then
+            waveform.pitch_debug = string.format("SR:%.0f C:%.3f E:%.3f T:%.1f P:%.1f F:%.0f", sample_rate, best_correlation, energy, energy_threshold, best_period, frequency)
+            return frequency
+        end
+    end
+
+    waveform.pitch_debug = string.format("Low C:%.3f", best_correlation)
+    return nil
+end
+
+local function freq_to_note(freq)
+    if not freq or freq <= 0 then
+        return nil
+    end
+
+    local note_names = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+
+    local a4 = 440.0
+
+    local c0 = a4 * (2 ^ -4.75)
+
+    local half_steps = 12 * (math.log(freq / c0) / math.log(2))
+
+    local note_index = math.floor((half_steps % 12) + 0.5) % 12 + 1
+    local octave = math.floor(half_steps / 12)
+
+    if octave < 0 or octave > 9 then
+        return nil
+    end
+
+    return note_names[note_index] .. octave
 end
 
 local function get_meta_first(source, keys)
@@ -1849,6 +1961,7 @@ local function save_options()
             use_numaplayer = ui_settings.use_numaplayer,
             numaplayer_preset = ui_settings.numaplayer_preset,
             use_selected_track_for_midi = ui_settings.use_selected_track_for_midi,
+            pitch_detection_enabled = ui.pitch_detection_enabled,
             custom_folder_names = file_location.custom_folder_names,
             custom_folder_colors = file_location.custom_folder_colors,
             custom_collection_colors = file_location.custom_collection_colors,
@@ -1892,7 +2005,8 @@ local function get_settings_table()
         selected_font = ui_settings.selected_font,
         button_height = ui_settings.button_height,
         visible_columns = ui_settings.visible_columns,
-        show_spectral_view = waveform.show_spectral_view
+        show_spectral_view = waveform.show_spectral_view,
+        pitch_detection_enabled = ui.pitch_detection_enabled
     }
 end
 
@@ -1929,8 +2043,8 @@ local function apply_settings_from_table(settings)
     ui_settings.selected_font = settings.selected_font or "Default"
     ui_settings.button_height = settings.button_height or 20
     ui_settings.visible_columns = settings.visible_columns or {name = true, size = true, date = true, duration = true, samplerate = true, bitdepth = true, channels = true}
+    ui.pitch_detection_enabled = settings.pitch_detection_enabled ~= nil and settings.pitch_detection_enabled or true
     
-    -- Reinitialize fonts when loading preset
     font_objects = {}
     update_fonts()
     
@@ -2064,6 +2178,7 @@ local function load_options()
             ui_settings.use_numaplayer = options.use_numaplayer or false
             ui_settings.numaplayer_preset = options.numaplayer_preset or ""
             ui_settings.use_selected_track_for_midi = options.use_selected_track_for_midi or false
+            ui.pitch_detection_enabled = options.pitch_detection_enabled ~= nil and options.pitch_detection_enabled or true
             file_location.custom_folder_names = options.custom_folder_names or {}
             file_location.custom_folder_colors = options.custom_folder_colors or {}
             file_location.custom_collection_colors = options.custom_collection_colors or {}
@@ -2129,6 +2244,7 @@ local function load_options()
                         ui_settings.selected_font = options2.selected_font or "Arial"
                         ui_settings.button_height = options2.button_height or 25
                         ui_settings.use_numaplayer = options2.use_numaplayer or false
+                        ui.pitch_detection_enabled = options2.pitch_detection_enabled ~= nil and options2.pitch_detection_enabled or true
                         file_location.custom_folder_names = options2.custom_folder_names or {}
                         if file_location.remember_last_location and options2.last_location_index then
                             file_location.selected_location_index = options2.last_location_index
@@ -2516,6 +2632,7 @@ end
 local function get_audio_data()
     if not playback.playing_preview then
         ui_settings.audio_buffer = {}
+        waveform.current_pitch_note = "No preview"
         return
     end
     local current_time = r.time_precise()
@@ -2526,15 +2643,36 @@ local function get_audio_data()
     ui_settings.audio_buffer = {}
     local ok_playing, is_playing = r.CF_Preview_GetValue(playback.playing_preview, "B_PLAYING")
     if not (ok_playing and is_playing) then
+        waveform.current_pitch_note = "Not playing"
         return
     end
     local buf_l = r.new_array(ui_settings.buffer_size)
     local buf_r = r.new_array(ui_settings.buffer_size)
     local ok = r.CF_Preview_GetSamples(playback.playing_preview, 0, ui_settings.buffer_size, buf_l, buf_r)
     if ok and ok > 0 then
+        waveform.current_pitch_note = "Got " .. ok .. " samples"
         for i = 1, math.min(ok, ui_settings.buffer_size) do
             local sample = buf_l[i] or 0
             ui_settings.audio_buffer[i] = math.max(-1, math.min(1, sample))
+        end
+        
+        if current_time - waveform.last_pitch_update > 0.1 then
+            if playback.playing_source then
+                local sample_rate = r.GetMediaSourceSampleRate(playback.playing_source)
+                if sample_rate and sample_rate > 0 and #ui_settings.audio_buffer > 0 then
+                    local detected_freq = detect_pitch_autocorrelation(ui_settings.audio_buffer, sample_rate)
+                    if detected_freq then
+                        waveform.current_pitch_hz = detected_freq
+                        waveform.current_pitch_note = freq_to_note(detected_freq)
+                    else
+                        waveform.current_pitch_hz = nil
+                        waveform.current_pitch_note = string.format("BufSize:%d SR:%d", #ui_settings.audio_buffer, sample_rate)
+                    end
+                    waveform.last_pitch_update = current_time
+                else
+                    waveform.current_pitch_note = playback.playing_source and "No SR" or "No Source"
+                end
+            end
         end
     else
         ui_settings.audio_buffer = {} 
@@ -2840,6 +2978,12 @@ local function stop_playback(is_loop_restart)
     end
     playback.is_paused = false
     playback.paused_position = 0
+    
+    -- Reset pitch detection
+    waveform.current_pitch_hz = nil
+    waveform.current_pitch_note = nil
+    waveform.last_pitch_update = 0
+    
     if waveform.monitor_sel_start and waveform.monitor_sel_end and math.abs(waveform.monitor_sel_end - waveform.monitor_sel_start) > 0.01 then
         playback.prev_play_cursor = waveform.monitor_sel_start
     else
@@ -5588,6 +5732,136 @@ local function loop()
             r.ImGui_Separator(ctx)
         end
         if ui.show_oscilloscope then
+            -- Update audio buffer for oscilloscope and pitch detection - ALTERNATIVE METHOD
+            if playback.playing_preview and playback.current_playing_file ~= "" then
+                local current_time = r.time_precise()
+                if current_time - (ui_settings.last_audio_update or 0) >= 0.05 then
+                    ui_settings.last_audio_update = current_time
+                    
+                    -- Get current playback position  
+                    local ok_pos, play_pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
+                    
+                    if ok_pos and play_pos and playback.playing_source then
+                        local ok_srate, sample_rate = r.CF_Preview_GetValue(playback.playing_preview, "D_SRATE")
+                        if not ok_srate then
+                            sample_rate = r.GetMediaSourceSampleRate(playback.playing_source)
+                        end
+                        
+                        if sample_rate then
+                            -- Get peaks for pitch detection
+                            local peaks_buf = r.new_array(ui_settings.buffer_size * 2)
+                            r.PCM_Source_GetPeaks(playback.playing_source, sample_rate, play_pos, 1, ui_settings.buffer_size, 0, peaks_buf)
+                            
+                            ui_settings.audio_buffer = {}
+                            for i = 1, ui_settings.buffer_size do
+                                local idx_min = (i - 1) * 2 + 1
+                                local idx_max = (i - 1) * 2 + 2
+                                local min_val = peaks_buf[idx_min] or 0
+                                local max_val = peaks_buf[idx_max] or 0
+                                local sample = (min_val + max_val) / 2  -- Use average of min/max for better approximation
+                                ui_settings.audio_buffer[i] = math.max(-1, math.min(1, sample))
+                            end
+                            
+                            -- Optional: Apply simple low-pass filter to reduce noise for better pitch detection
+                            -- local filtered_buffer = {}
+                            -- for i = 1, #ui_settings.audio_buffer do
+                            --     if i == 1 then
+                            --         filtered_buffer[i] = ui_settings.audio_buffer[i]
+                            --     else
+                            --         filtered_buffer[i] = 0.7 * ui_settings.audio_buffer[i] + 0.3 * filtered_buffer[i-1]
+                            --     end
+                            -- end
+                            -- ui_settings.audio_buffer = filtered_buffer
+                            
+                            if ui.pitch_detection_enabled and #ui_settings.audio_buffer > 200 and current_time - (waveform.last_pitch_update or 0) > 0.2 then
+                                waveform.pitch_debug = "Analyzing..."
+                                local success, detected_freq = pcall(detect_pitch_autocorrelation, ui_settings.audio_buffer, sample_rate)
+                                
+                                if success and detected_freq then
+                                    -- Add to pitch history for smoothing
+                                    table.insert(waveform.pitch_history, detected_freq)
+                                    
+                                    -- Keep only last 5 detections (longer history for better stability)
+                                    while #waveform.pitch_history > 5 do
+                                        table.remove(waveform.pitch_history, 1)
+                                    end
+                                    
+                                    -- Calculate average pitch
+                                    local avg_freq = 0
+                                    for _, freq in ipairs(waveform.pitch_history) do
+                                        avg_freq = avg_freq + freq
+                                    end
+                                    avg_freq = avg_freq / #waveform.pitch_history
+                                    
+                                    -- Only update stable pitch if we have enough history and pitch is reasonably consistent
+                                    if #waveform.pitch_history >= 3 then
+                                        -- Check consistency: all values should be within 15% of average (balanced for accuracy vs stability)
+                                        local is_consistent = true
+                                        for _, freq in ipairs(waveform.pitch_history) do
+                                            if math.abs(freq - avg_freq) / avg_freq > 0.15 then
+                                                is_consistent = false
+                                                break
+                                            end
+                                        end
+                                        
+                                        if is_consistent then
+                                            local new_stable_freq = avg_freq
+                                            local new_stable_note = freq_to_note(avg_freq)
+                                            
+                                            -- Check if pitch changed
+                                            if waveform.stable_pitch_hz and math.abs(new_stable_freq - waveform.stable_pitch_hz) / waveform.stable_pitch_hz < 0.05 then
+                                                -- Same pitch, increase timer
+                                                waveform.stable_pitch_timer = waveform.stable_pitch_timer + 0.2
+                                            else
+                                                -- Different pitch, reset timer
+                                                waveform.stable_pitch_timer = 0
+                                            end
+                                            
+                                            -- Only show stable pitch if it has been consistent for at least 0.6 seconds
+                                            if waveform.stable_pitch_timer >= 0.6 then
+                                                waveform.stable_pitch_hz = new_stable_freq
+                                                waveform.stable_pitch_note = new_stable_note
+                                            end
+                                        else
+                                            -- If not consistent, use the most recent detection but reset timer
+                                            waveform.stable_pitch_timer = 0
+                                            waveform.stable_pitch_hz = detected_freq
+                                            waveform.stable_pitch_note = freq_to_note(detected_freq)
+                                        end
+                                    else
+                                        -- Not enough history yet, use current detection
+                                        waveform.stable_pitch_timer = 0
+                                        waveform.stable_pitch_hz = detected_freq
+                                        waveform.stable_pitch_note = freq_to_note(detected_freq)
+                                    end
+                                    
+                                    waveform.current_pitch_hz = detected_freq
+                                    waveform.current_pitch_note = freq_to_note(detected_freq)
+                                    waveform.last_pitch_update = current_time
+                                elseif not success then
+                                    waveform.pitch_debug = "Error: " .. tostring(detected_freq):sub(1, 20)
+                                    waveform.current_pitch_hz = nil
+                                    waveform.current_pitch_note = nil
+                                    waveform.stable_pitch_hz = nil
+                                    waveform.stable_pitch_note = nil
+                                    waveform.pitch_history = {}  -- Clear history on error
+                                else
+                                    -- detected_freq is nil (silence or low confidence)
+                                    waveform.current_pitch_hz = nil
+                                    waveform.current_pitch_note = nil
+                                    waveform.stable_pitch_hz = nil
+                                    waveform.stable_pitch_note = nil
+                                    waveform.pitch_history = {}  -- Clear history when no pitch detected
+                                end
+                                waveform.last_pitch_update = current_time
+                            elseif #ui_settings.audio_buffer <= 100 then
+                                waveform.pitch_debug = "Buf too small: " .. #ui_settings.audio_buffer
+                            end
+                        end
+                    end
+                end
+            end
+            
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
             local pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
             local width = r.ImGui_GetContentRegionAvail(ctx)
@@ -5894,6 +6168,44 @@ local function loop()
                                         local y2 = pos_y + height/2 + waveform.oscilloscope_cache[i+1] * height/2
                                         r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, accent_color, 1)
                                     end
+                                    
+                                    if ui.pitch_detection_enabled then
+                                        r.ImGui_PushFont(ctx, small_font, small_font_size)
+                                        
+                                        local pitch_text = ""
+                                        if playback.playing_preview and waveform.stable_pitch_note and waveform.stable_pitch_hz then
+                                            pitch_text = waveform.stable_pitch_note .. " (" .. math.floor(waveform.stable_pitch_hz) .. "Hz)"
+                                        end
+                                        
+                                        local text_w, text_h = r.ImGui_CalcTextSize(ctx, pitch_text)
+                                        
+                                        local padding = 8
+                                        local box_padding = 5
+                                        local button_radius = 4
+                                        local button_margin = 5
+                                        
+                                        local button_x = pos_x + padding
+                                        local button_y = pos_y + padding + box_padding + text_h / 2
+                                        
+                                        local box_x = button_x + button_radius * 2 + button_margin
+                                        local box_y = pos_y + padding
+                                        local box_w = 70
+                                        local box_h = text_h + box_padding * 2
+                                        local text_x = box_x + box_padding
+                                        local text_y = box_y + box_padding
+                                        
+                                        local button_color = accent_color
+                                        r.ImGui_DrawList_AddCircleFilled(draw_list, button_x, button_y, button_radius, button_color)
+                                        
+                                        r.ImGui_DrawList_AddRect(draw_list, 
+                                            box_x, box_y, 
+                                            box_x + box_w, box_y + box_h, 
+                                            accent_color, 3, 0, 1)
+                                        
+                                        r.ImGui_DrawList_AddText(draw_list, text_x, text_y, accent_color, pitch_text)
+                                        
+                                        r.ImGui_PopFont(ctx)
+                                    end
                                 else
                                     r.ImGui_DrawList_AddLine(draw_list, pos_x, pos_y + height/2, pos_x + width, pos_y + height/2, accent_color, 1)
                                 end
@@ -5965,6 +6277,39 @@ local function loop()
                                 end
                             else
                                 r.ImGui_DrawList_AddLine(draw_list, pos_x, pos_y + height/2, pos_x + width, pos_y + height/2, accent_color, 1)
+                            end
+                            
+                            if ui.pitch_detection_enabled and playback.playing_preview then
+                                r.ImGui_PushFont(ctx, normal_font, font_size)
+                                
+                                local pitch_text = waveform.current_pitch_note or "Detecting..."
+                                local freq_text = waveform.current_pitch_hz and string.format("%.1f Hz", waveform.current_pitch_hz) or "No pitch"
+                                
+                                local pitch_w, pitch_h = r.ImGui_CalcTextSize(ctx, pitch_text)
+                                local freq_w, freq_h = r.ImGui_CalcTextSize(ctx, freq_text)
+                                
+                                -- Position: top-left corner with padding
+                                local padding = 10
+                                local text_x = pos_x + padding
+                                local pitch_y = pos_y + padding
+                                local freq_y = pitch_y + pitch_h + 2
+                                
+                                -- Semi-transparent background
+                                local bg_color = r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, 0.7)
+                                r.ImGui_DrawList_AddRectFilled(draw_list,
+                                    text_x - 6, pitch_y - 4,
+                                    text_x + math.max(pitch_w, freq_w) + 6, freq_y + freq_h + 4,
+                                    bg_color, 4)
+                                
+                                -- Draw pitch text (larger, accent color)
+                                local pitch_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
+                                r.ImGui_DrawList_AddText(draw_list, text_x, pitch_y, pitch_color, pitch_text)
+                                
+                                -- Draw frequency text (smaller, gray)
+                                local freq_color = r.ImGui_ColorConvertDouble4ToU32(0.8, 0.8, 0.8, 1.0)
+                                r.ImGui_DrawList_AddText(draw_list, text_x, freq_y, freq_color, freq_text)
+                                
+                                r.ImGui_PopFont(ctx)
                             end
                         else
                             local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
@@ -7176,6 +7521,16 @@ local function loop()
                     end
                     if r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_SetTooltip(ctx, "Play MIDI files through the currently selected track instead of creating a preview track.\nIf no track is selected, a message will be shown in the MIDI info field.")
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    local pitch_detection_changed, new_pitch_detection = r.ImGui_Checkbox(ctx, "Show Pitch Detection", ui.pitch_detection_enabled)
+                    if pitch_detection_changed then
+                        ui.pitch_detection_enabled = new_pitch_detection
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Show real-time pitch detection during audio playback in the waveform view.\nDisplays the detected musical note and frequency.")
                     end
                     
                     r.ImGui_Spacing(ctx)
