@@ -558,6 +558,7 @@ function ButtonEditor.ShowPresetsInline(ctx, custom_buttons, opts)
             if preset and type(preset) == "string" then
                 if r.ImGui_Selectable(ctx, preset, preset == current_preset) then
                     custom_buttons.LoadButtonPreset(preset)
+                    r.SetExtState("TK_TRANSPORT", "last_button_preset", preset, true)
                     custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
                     has_unsaved_changes = false
                 end
@@ -807,6 +808,13 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 else
                     width_label = "Icon Size" 
                 end
+            elseif button.use_image then
+                if button.show_text_with_icon then
+                    width_label = "Image Max Width"
+                    show_total_width = true
+                else
+                    width_label = "Max Width"
+                end
             end
             
             r.ImGui_Text(ctx, width_label)
@@ -868,7 +876,12 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 r.ImGui_TableNextRow(ctx)
                 r.ImGui_TableSetColumnIndex(ctx, 0)
                 
-                if r.ImGui_BeginTable(ctx, "CB_Props", 5, r.ImGui_TableFlags_SizingStretchProp()) then
+                if r.ImGui_BeginTable(ctx, "CB_Props", 5, r.ImGui_TableFlags_SizingFixedFit()) then
+                    r.ImGui_TableSetupColumn(ctx, "Col0", r.ImGui_TableColumnFlags_WidthFixed(), 110)
+                    r.ImGui_TableSetupColumn(ctx, "Col1", r.ImGui_TableColumnFlags_WidthFixed(), 80)
+                    r.ImGui_TableSetupColumn(ctx, "Col2", r.ImGui_TableColumnFlags_WidthFixed(), 120)
+                    r.ImGui_TableSetupColumn(ctx, "Col3", r.ImGui_TableColumnFlags_WidthFixed(), 90)
+                    r.ImGui_TableSetupColumn(ctx, "Col4", r.ImGui_TableColumnFlags_WidthStretch())
                     r.ImGui_TableNextRow(ctx)
                     r.ImGui_TableSetColumnIndex(ctx, 0)
                     local rv
@@ -884,33 +897,98 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                     changed = changed or rv_tt
 
                     r.ImGui_TableSetColumnIndex(ctx, 2)
-                    rv, button.use_icon = r.ImGui_Checkbox(ctx, "Use Icon", button.use_icon)
-                    changed = changed or rv
+                    local use_icon_or_image = button.use_icon or button.use_image
+                    rv, use_icon_or_image = r.ImGui_Checkbox(ctx, "Use Icon/Image", use_icon_or_image)
+                    if rv then
+                        if use_icon_or_image then
+                            if not button.use_icon and not button.use_image then
+                                button.use_icon = true
+                            end
+                        else
+                            button.use_icon = false
+                            button.use_image = false
+                        end
+                        changed = true
+                    end
 
                     r.ImGui_TableSetColumnIndex(ctx, 3)
-                    if button.use_icon then
+                    if button.use_icon or button.use_image then
                         rv, button.show_text_with_icon = r.ImGui_Checkbox(ctx, "Show Text", button.show_text_with_icon)
                         changed = changed or rv
                     end
 
                     r.ImGui_TableSetColumnIndex(ctx, 4)
-                    if button.use_icon then
+                    r.ImGui_SetNextItemWidth(ctx, -1)
+                    if button.use_image and button.show_text_with_icon then
+                        if not button.text_position then
+                            button.text_position = "right"
+                        end
+                        
+                        local pos_labels = {"Left", "Right", "Bottom", "Top", "Overlay Center", "Overlay Bottom", "Overlay Top"}
+                        local pos_values = {"left", "right", "bottom", "top", "overlay", "overlay_bottom", "overlay_top"}
+                        
+                        local current_idx = 0
+                        for i, val in ipairs(pos_values) do
+                            if button.text_position == val then
+                                current_idx = i - 1
+                                break
+                            end
+                        end
+                        
+                        local combo_label = pos_labels[current_idx + 1] or "Right"
+                        if r.ImGui_BeginCombo(ctx, "##textpos", combo_label) then
+                            for i, val in ipairs(pos_values) do
+                                local is_selected = (button.text_position == val)
+                                if r.ImGui_Selectable(ctx, pos_labels[i], is_selected) then
+                                    button.text_position = val
+                                    changed = true
+                                end
+                                if is_selected then
+                                    r.ImGui_SetItemDefaultFocus(ctx)
+                                end
+                            end
+                            r.ImGui_EndCombo(ctx)
+                        end
+                    else
+                        r.ImGui_BeginDisabled(ctx)
+                        if r.ImGui_BeginCombo(ctx, "##textpos_disabled", "") then
+                            r.ImGui_EndCombo(ctx)
+                        end
+                        r.ImGui_EndDisabled(ctx)
+                    end
+
+                    r.ImGui_TableNextRow(ctx)
+                    r.ImGui_TableSetColumnIndex(ctx, 0)
+                    if button.use_icon or button.use_image then
                         local is_browser_active = IconBrowser.show_window and active_icon_button == button
-                        if is_browser_active then
+                        
+                        if not is_browser_active then
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF4040FF)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF5555FF)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF2020FF)
+                        else
                             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
                         end
                         
-                        if r.ImGui_Button(ctx, is_browser_active and "Close Browser" or "Browse Icons") then
+                        if r.ImGui_Button(ctx, is_browser_active and "Close Browser##browse" or "Open Browser##browse") then
                             if is_browser_active then
                                 IconBrowser.show_window = false
                                 active_icon_button = nil
                             else
+                                if button.use_image and button.image_path then
+                                    local last_folder = button.image_path:match("(.+[/\\])") or ""
+                                    IconBrowser.SetBrowseMode("images", last_folder)
+                                else
+                                    IconBrowser.SetBrowseMode("icons")
+                                end
                                 IconBrowser.show_window = true
                                 active_icon_button = button
                             end
                         end
                         
-                        if is_browser_active then
+                        if not is_browser_active then
+                            r.ImGui_PopStyleColor(ctx, 3)
+                        else
                             r.ImGui_PopStyleColor(ctx)
                         end
                     end
@@ -2470,17 +2548,14 @@ function ButtonEditor.ShowImportInline(ctx, custom_buttons)
     end
 end
 
--- Handle IconBrowser separately to avoid GUI conflicts with settings window
 function ButtonEditor.HandleIconBrowser(ctx, custom_buttons, settings)
     if not IconBrowser or not IconBrowser.show_window then
         return
     end
     
-    -- Wrap in pcall to catch any ImGui Begin/End mismatch errors
     local ok, selected_icon = pcall(IconBrowser.Show, ctx, settings)
     
     if not ok then
-        -- Error occurred, log it and close the browser
         reaper.ShowConsoleMsg("IconBrowser error: " .. tostring(selected_icon) .. "\n")
         IconBrowser.show_window = false
         return
@@ -2488,16 +2563,30 @@ function ButtonEditor.HandleIconBrowser(ctx, custom_buttons, settings)
     
     if selected_icon and active_icon_button then
         local ButtonRenderer = require('button_renderer')
-        if active_icon_button.icon_name and ButtonRenderer.image_cache[active_icon_button.icon_name] then
-            ButtonRenderer.image_cache[active_icon_button.icon_name] = nil
+        
+        if IconBrowser.browse_mode == "images" and IconBrowser.selected_image_path then
+            active_icon_button.use_image = true
+            active_icon_button.use_icon = false
+            active_icon_button.image_path = IconBrowser.selected_image_path
+            active_icon_button.image = nil
+            if active_icon_button.image_path and ButtonRenderer.image_cache[active_icon_button.image_path] then
+                ButtonRenderer.image_cache[active_icon_button.image_path] = nil
+            end
+        else
+            active_icon_button.use_icon = true
+            active_icon_button.use_image = false
+            if active_icon_button.icon_name and ButtonRenderer.image_cache[active_icon_button.icon_name] then
+                ButtonRenderer.image_cache[active_icon_button.icon_name] = nil
+            end
+            active_icon_button.icon_name = selected_icon
+            active_icon_button.icon = nil
         end
         
-        active_icon_button.icon_name = selected_icon
-        active_icon_button.icon = nil
         custom_buttons.SaveCurrentButtons()
         has_unsaved_changes = true
         
         IconBrowser.selected_icon = nil
+        IconBrowser.selected_image_path = nil
     end
 end
 

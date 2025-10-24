@@ -2,7 +2,9 @@ local r = reaper
 local script_path = debug.getinfo(1, 'S').source:match([[^@?(.*[\/])[^\/]-$]])
 local json = require('json')
 local button_presets_path = script_path .. "tk_transport_buttons/presets/"
-local current_buttons_path = script_path .. "tk_transport_buttons/current_buttons.json"
+
+local instance_suffix = _G.TK_TRANSPORT_INSTANCE_NAME or ""
+local current_buttons_path = script_path .. "tk_transport_buttons/current_buttons" .. (instance_suffix ~= "" and "_" .. instance_suffix or "") .. ".json"
 
 local CustomButtons = {
     buttons = {},
@@ -51,7 +53,7 @@ function CustomButtons.PrepareForSave()
     for i, button in ipairs(CustomButtons.buttons) do
         local button_copy = {}
         for k, v in pairs(button) do
-            if k ~= "icon" and k ~= "font" then  
+            if k ~= "icon" and k ~= "font" and k ~= "image" then  
                 button_copy[k] = v
             end
         end
@@ -101,7 +103,8 @@ function CustomButtons.SaveButtonPreset(name)
 end
 
 function CustomButtons.LoadButtonPreset(name)
-    local file = io.open(button_presets_path .. name .. '.json', 'r')
+    local preset_file_path = button_presets_path .. name .. '.json'
+    local file = io.open(preset_file_path, 'r')
     if file then
         local content = file:read('*all')
         file:close()
@@ -109,7 +112,6 @@ function CustomButtons.LoadButtonPreset(name)
         if success then
             CustomButtons.buttons = result
             CustomButtons.current_preset = name
-            -- Restore group visibility states after loading preset
             CustomButtons.RestoreGroupVisibilityStates()
             CustomButtons.SaveCurrentButtons()
             r.SetExtState("TK_TRANSPORT", "last_button_preset", name, true)
@@ -144,8 +146,6 @@ function CustomButtons.LoadLastUsedPreset()
     local last_preset = r.GetExtState("TK_TRANSPORT", "last_button_preset")
     if last_preset ~= "" then
         CustomButtons.LoadButtonPreset(last_preset)
-    else
-        CustomButtons.LoadCurrentButtons()
     end
 end
 

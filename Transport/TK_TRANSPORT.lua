@@ -1,17 +1,39 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.0.6
+-- @version 1.0.7
 -- @changelog 
 --[[
-  + Visual Metronome: Added left-click to toggle metronome on/off (action 40364)
-  + Visual Metronome: Added right-click to open metronome settings (action 40363)
-  + Visual Metronome: Added green indicator dot to show metronome enabled state
-  + Time Display: Added "Hide Seconds" option to show only hours and minutes (HH:MM) for both local time and session elapsed time
-  + Icon Browser: Fixed performance issues with virtual scrolling and resolved ImGui_End error when adding icons in Buttons tab
-]]--
+  + Icon Browser: Added 150% and 200% icon scale options with folder support
+  + Custom Buttons: Added image support with custom folder selection (separate from icons)
+  + Custom Buttons: Added 7 text position options for images (left, right, top, bottom, overlay variants)
+  + Custom Buttons: Added rounded corners for images matching border rounding
+  + Custom Buttons: Image folder location persistence via ExtState
+  + Settings: Added "Lock Window Size" option to prevent accidental resizing
+  + Settings: Version number and instance name now shown in header
+  + Instance Support: Separate button presets per instance (fixed preset loading issues)
+  + UI: Fixed layout shifting in Custom Buttons tab
+  ]]--
 ---------------------------------------------------------------------------------------------
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
+
+local script_version = "unknown"
+do
+    local info = debug.getinfo(1, 'S')
+    if info and info.source then
+        local file = io.open(info.source:match("^@?(.*)"), "r")
+        if file then
+            for i = 1, 10 do
+                local line = file:read("*l")
+                if line and line:match("^%-%- @version") then
+                    script_version = line:match("@version%s+([%d%.]+)")
+                    break
+                end
+            end
+            file:close()
+        end
+    end
+end
 
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator = package.config:sub(1, 1)
@@ -142,8 +164,9 @@ local AUTOMATION_MODES = {
 local show_settings = false
 local show_instance_manager = false
 local instance_name_input = "" 
+local instance_start_empty = true
 local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
-local settings_flags = window_flags | r.ImGui_WindowFlags_NoResize() 
+local settings_flags = r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() 
 
 local text_sizes = {10, 12, 14, 16, 18}
 local fonts = {
@@ -165,6 +188,7 @@ local default_settings = {
  border_size = 1.0,
  current_font = "Arial",
  font_size = 12,
+ lock_window_size = false,
 
  -- Transport buttons font (independent of base font)
  transport_font_name = "Arial",
@@ -413,9 +437,33 @@ local default_settings = {
 }
 
 local settings = {}
+local is_new_empty_instance = false
 
-for k, v in pairs(default_settings) do
+if r.HasExtState("TK_TRANSPORT", "is_new_instance") then
+ is_new_empty_instance = true
+ for k, v in pairs(default_settings) do
  settings[k] = v
+ end
+ 
+ settings.show_transport = false
+ settings.show_timesel = false
+ settings.show_cursorpos = false
+ settings.show_tempo = false
+ settings.show_playrate = false
+ settings.show_timesig_button = false
+ settings.show_env_button = false
+ settings.show_taptempo = false
+ settings.show_shuttle_wheel = false
+ settings.show_visual_metronome = false
+ settings.show_local_time = false
+ settings.show_waveform_scrubber = false
+ settings.show_matrix_ticker = false
+ 
+ r.DeleteExtState("TK_TRANSPORT", "is_new_instance", true)
+else
+ for k, v in pairs(default_settings) do
+ settings[k] = v
+ end
 end
 
 local element_rects = {}
@@ -2476,8 +2524,14 @@ function LoadSettings()
 end
 LoadSettings()
 UpdateCustomImages()
-CustomButtons.LoadLastUsedPreset()
-CustomButtons.LoadCurrentButtons()
+if not is_new_empty_instance then
+ CustomButtons.LoadLastUsedPreset()
+ if #CustomButtons.buttons == 0 then
+ CustomButtons.LoadCurrentButtons()
+ end
+else
+ CustomButtons.buttons = {}
+end
 
 function ResetSettings()
  for k, v in pairs(default_settings) do
@@ -3001,6 +3055,19 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PopStyleColor(ctx)
  r.ImGui_SameLine(ctx)
  r.ImGui_Text(ctx, "TRANSPORT")
+ 
+ r.ImGui_SameLine(ctx)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+ r.ImGui_Text(ctx, "v" .. script_version)
+ r.ImGui_PopStyleColor(ctx)
+ 
+ local instance_name = _G.TK_TRANSPORT_INSTANCE_NAME
+ if instance_name and instance_name ~= "" then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+ r.ImGui_Text(ctx, "(" .. instance_name .. ")")
+ r.ImGui_PopStyleColor(ctx)
+ end
 
  r.ImGui_SameLine(ctx)
  r.ImGui_SetCursorPosX(ctx, window_width - 25)
@@ -3302,6 +3369,13 @@ function ShowSettings(main_window_width , main_window_height)
  local rvb
  
  if r.ImGui_BeginTable(ctx, "ScalingOptions", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rvb, settings.lock_window_size = r.ImGui_Checkbox(ctx, "Lock Window Size", settings.lock_window_size or false)
+ if rvb then
+ MarkTransportPresetChanged()
+ end
+ 
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  rvb, settings.custom_buttons_scale_with_width = r.ImGui_Checkbox(ctx, "Scale positions with window width", settings.custom_buttons_scale_with_width or false)
@@ -3818,6 +3892,7 @@ function ShowSettings(main_window_width , main_window_height)
  if not preset_input_name then preset_input_name = "" end
  if r.ImGui_BeginCombo(ctx, "##PresetCombo", display_name) then
  for _, preset in ipairs(presets) do
+ if preset and preset ~= "" then
  local is_selected = (preset == preset_name)
  if r.ImGui_Selectable(ctx, preset, is_selected) then
  preset_name = preset
@@ -3825,6 +3900,7 @@ function ShowSettings(main_window_width , main_window_height)
  SaveLastUsedPreset(preset)
  end
  if is_selected then r.ImGui_SetItemDefaultFocus(ctx) end
+ end
  end
  r.ImGui_EndCombo(ctx)
  end
@@ -3934,9 +4010,12 @@ function ShowInstanceManager()
  local rv
  rv, instance_name_input = r.ImGui_InputText(ctx, "##instancename", instance_name_input)
  
- r.ImGui_SameLine(ctx)
+ r.ImGui_Spacing(ctx)
+ rv, instance_start_empty = r.ImGui_Checkbox(ctx, "Start with empty canvas (all components disabled)", instance_start_empty)
+ r.ImGui_Spacing(ctx)
+ 
  if r.ImGui_Button(ctx, "Create") and instance_name_input ~= "" then
- CreateNamedInstance(instance_name_input)
+ CreateNamedInstance(instance_name_input, instance_start_empty)
  instance_name_input = ""
  end
  
@@ -3981,7 +4060,7 @@ function ShowInstanceManager()
  show_instance_manager = open
 end
 
-function CreateNamedInstance(name)
+function CreateNamedInstance(name, start_empty)
  local clean_name = name:gsub("[^%w_%-]", "_")
  local new_filename = "TK_TRANSPORT_" .. clean_name .. ".lua"
  local new_filepath = script_path .. new_filename
@@ -3991,13 +4070,28 @@ function CreateNamedInstance(name)
  
  local wrapper_content = 'local r = reaper\n'
  wrapper_content = wrapper_content .. 'local instance_name = "' .. clean_name .. '"\n\n'
+ 
+ if start_empty then
+ wrapper_content = wrapper_content .. 'local is_new_instance = not r.HasExtState("TK_TRANSPORT_" .. instance_name, "settings")\n'
+ wrapper_content = wrapper_content .. 'if is_new_instance then\n'
+ wrapper_content = wrapper_content .. ' r.SetExtState("TK_TRANSPORT_" .. instance_name, "is_new_instance", "1", true)\n'
+ wrapper_content = wrapper_content .. 'end\n\n'
+ end
+ 
  wrapper_content = wrapper_content .. 'local original_CreateContext = r.ImGui_CreateContext\n'
  wrapper_content = wrapper_content .. 'r.ImGui_CreateContext = function(title)\n'
  wrapper_content = wrapper_content .. ' return original_CreateContext("Transport Control " .. instance_name)\n'
  wrapper_content = wrapper_content .. 'end\n\n'
  wrapper_content = wrapper_content .. 'local original_GetExtState = r.GetExtState\n'
  wrapper_content = wrapper_content .. 'local original_SetExtState = r.SetExtState\n'
- wrapper_content = wrapper_content .. 'local original_DeleteExtState = r.DeleteExtState\n\n'
+ wrapper_content = wrapper_content .. 'local original_DeleteExtState = r.DeleteExtState\n'
+ wrapper_content = wrapper_content .. 'local original_HasExtState = r.HasExtState\n\n'
+ wrapper_content = wrapper_content .. 'r.HasExtState = function(section, key, ...)\n'
+ wrapper_content = wrapper_content .. ' if section == "TK_TRANSPORT" then\n'
+ wrapper_content = wrapper_content .. ' return original_HasExtState("TK_TRANSPORT_" .. instance_name, key, ...)\n'
+ wrapper_content = wrapper_content .. ' end\n'
+ wrapper_content = wrapper_content .. ' return original_HasExtState(section, key, ...)\n'
+ wrapper_content = wrapper_content .. 'end\n\n'
  wrapper_content = wrapper_content .. 'r.GetExtState = function(section, key, ...)\n'
  wrapper_content = wrapper_content .. ' if section == "TK_TRANSPORT" then\n'
  wrapper_content = wrapper_content .. ' return original_GetExtState("TK_TRANSPORT_" .. instance_name, key, ...)\n'
@@ -6337,7 +6431,12 @@ function Main()
 
  SetTransportStyle()
  
- local visible, open = r.ImGui_Begin(ctx, 'Transport', true, window_flags)
+ local current_window_flags = window_flags
+ if settings.lock_window_size then
+ current_window_flags = current_window_flags | r.ImGui_WindowFlags_NoResize()
+ end
+ 
+ local visible, open = r.ImGui_Begin(ctx, 'Transport', true, current_window_flags)
  if visible then
  r.ImGui_SetScrollY(ctx, 0)
  
