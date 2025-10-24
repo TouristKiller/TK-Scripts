@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.1
+-- @version 0.6.2
 -- @changelog:
 --[[       
 + REAL-TIME PITCH TRACKING: Autocorrelation-based pitch detection during playback
@@ -6059,12 +6059,20 @@ local function loop()
                             1.0
                         )
                         
+                        local playback_method = "ReaSynth"
+                        if ui_settings.use_selected_track_for_midi then
+                            playback_method = "Selected Track"
+                        elseif ui_settings.use_numaplayer then
+                            playback_method = "Numa Player"
+                        end
+                        
                         local info_lines = {
                             string.format("MIDI STATISTICS"),
                             string.format("Notes: %d", note_count),
                             string.format("Pitch Range: %s - %s", pitch_to_name(min_pitch), pitch_to_name(max_pitch)),
                             string.format("Channels: %d", channel_count),
-                            string.format("Avg Velocity: %d", avg_velocity)
+                            string.format("Avg Velocity: %d", avg_velocity),
+                            string.format("Playback: %s", playback_method)
                         }
                         
                         for i, line in ipairs(info_lines) do
