@@ -15,7 +15,8 @@ local CustomButtons = {
     last_command = nil,
     icon = nil,  
     use_icon = false,
-    current_preset = nil
+    current_preset = nil,
+    remember_toggle_states = false  -- Per-preset setting for toggle state memory
 }
 
 function CustomButtons.CreateNewButton()
@@ -80,8 +81,6 @@ function CustomButtons.LoadCurrentButtons()
         local success, result = pcall(json.decode, content)
         if success then
             CustomButtons.buttons = result
-            -- Restore group visibility states after loading
-            CustomButtons.RestoreGroupVisibilityStates()
         else
             reaper.ShowMessageBox("Error loading custom buttons: " .. tostring(result) .. "\n\nResetting to default buttons.", "Custom Buttons Error", 0)
             CustomButtons.buttons = {}
@@ -89,10 +88,55 @@ function CustomButtons.LoadCurrentButtons()
     end
 end
 
+function CustomButtons.ResetToggleStatesIfNeeded(settings)
+    -- Check if we should remember states (use per-preset setting)
+    local should_remember = CustomButtons.remember_toggle_states
+    
+    if not should_remember then
+        -- Reset all toggle buttons to OFF state
+        for _, button in ipairs(CustomButtons.buttons) do
+            if button.is_group_visibility_toggle then
+                button.toggle_state = false
+                if button.cycle_current_view then
+                    button.cycle_current_view = 1
+                end
+            end
+        end
+    end
+    
+    -- Always ensure at least one radio mode toggle is active (regardless of remember setting)
+    -- First check if any radio toggle is already active
+    local has_active_radio = false
+    for _, button in ipairs(CustomButtons.buttons) do
+        if button.is_group_visibility_toggle and button.toggle_mode == "radio" and button.toggle_state then
+            has_active_radio = true
+            break
+        end
+    end
+    
+    -- If no radio toggle is active, activate the first one
+    if not has_active_radio then
+        for _, button in ipairs(CustomButtons.buttons) do
+            if button.is_group_visibility_toggle and button.toggle_mode == "radio" then
+                button.toggle_state = true
+                break
+            end
+        end
+    end
+    
+    CustomButtons.SaveCurrentButtons()
+end
+
 function CustomButtons.SaveButtonPreset(name)
     r.RecursiveCreateDirectory(button_presets_path, 0)
     
-    local save_data = CustomButtons.PrepareForSave()
+    local save_data = {
+        buttons = CustomButtons.PrepareForSave(),
+        settings = {
+            remember_toggle_states = CustomButtons.remember_toggle_states
+        }
+    }
+    
     local file = io.open(button_presets_path .. name .. '.json', 'w')
     if file then
         file:write(json.encode(save_data))
@@ -110,9 +154,52 @@ function CustomButtons.LoadButtonPreset(name)
         file:close()
         local success, result = pcall(json.decode, content)
         if success then
-            CustomButtons.buttons = result
+            -- First, load current buttons to get the latest toggle states
+            local current_toggle_states = {}
+            local current_file = io.open(current_buttons_path, 'r')
+            if current_file then
+                local current_content = current_file:read('*all')
+                current_file:close()
+                local current_success, current_buttons = pcall(json.decode, current_content)
+                if current_success and current_buttons then
+                    -- Extract toggle states from current buttons
+                    for _, button in ipairs(current_buttons) do
+                        if button.is_group_visibility_toggle and button.name then
+                            current_toggle_states[button.name] = {
+                                toggle_state = button.toggle_state,
+                                cycle_current_view = button.cycle_current_view
+                            }
+                        end
+                    end
+                end
+            end
+            
+            -- Handle old format (array) and new format (table with buttons + settings)
+            if result.buttons then
+                -- New format
+                CustomButtons.buttons = result.buttons
+                if result.settings and result.settings.remember_toggle_states ~= nil then
+                    CustomButtons.remember_toggle_states = result.settings.remember_toggle_states
+                else
+                    CustomButtons.remember_toggle_states = false
+                end
+            else
+                -- Old format (just array of buttons)
+                CustomButtons.buttons = result
+                CustomButtons.remember_toggle_states = false
+            end
+            
+            -- Restore toggle states if remember is enabled
+            if CustomButtons.remember_toggle_states then
+                for _, button in ipairs(CustomButtons.buttons) do
+                    if button.is_group_visibility_toggle and button.name and current_toggle_states[button.name] then
+                        button.toggle_state = current_toggle_states[button.name].toggle_state
+                        button.cycle_current_view = current_toggle_states[button.name].cycle_current_view
+                    end
+                end
+            end
+            
             CustomButtons.current_preset = name
-            CustomButtons.RestoreGroupVisibilityStates()
             CustomButtons.SaveCurrentButtons()
             r.SetExtState("TK_TRANSPORT", "last_button_preset", name, true)
         else

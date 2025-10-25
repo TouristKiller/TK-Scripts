@@ -16,6 +16,7 @@ local cb_section_states = {
     left_open = false,
     right_open = false,
     actions_open = false,  
+    toggle_open = false,
 }
 
 local import_window = {
@@ -637,7 +638,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
         local button = custom_buttons.buttons[custom_buttons.current_edit]
         local changed = false
 
-    if not cb_section_states.actions_open then
+    if not cb_section_states.actions_open and not cb_section_states.toggle_open then
         do
             local has_sel = custom_buttons.current_edit ~= nil
             
@@ -1252,6 +1253,88 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Auto-align buttons horizontally with custom spacing\n(calculates actual width including text and icons)") end
         end
+        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+        
+        local has_sel = custom_buttons.current_edit ~= nil
+        
+        r.ImGui_Text(ctx, "Button Style:")
+        r.ImGui_SameLine(ctx)
+        
+        if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not has_sel) end
+        if r.ImGui_Button(ctx, "Copy Style", 100, 0) and has_sel then
+            CopyButtonStyle(custom_buttons.buttons[custom_buttons.current_edit])
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Copy style settings from this button")
+        end
+        if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "⚙##style_settings", 30, 0) then
+            style_settings_window.open = not style_settings_window.open
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Choose which style properties to copy")
+        end
+        
+        r.ImGui_SameLine(ctx)
+        local can_paste = has_sel and style_clipboard.has_data
+        if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_paste) end
+        if style_clipboard.has_data then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FF88)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5090FFAA)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x60A0FFCC)
+        end
+        if r.ImGui_Button(ctx, "Paste Style", 100, 0) and can_paste then
+            if PasteButtonStyle(custom_buttons.buttons[custom_buttons.current_edit]) then
+                custom_buttons.SaveCurrentButtons()
+                has_unsaved_changes = true
+            end
+        end
+        if style_clipboard.has_data then
+            r.ImGui_PopStyleColor(ctx, 3)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            if style_clipboard.has_data then
+                r.ImGui_SetTooltip(ctx, "Paste copied style to this button")
+            else
+                r.ImGui_SetTooltip(ctx, "No style copied yet")
+            end
+        end
+        if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        
+        local button = custom_buttons.buttons[custom_buttons.current_edit]
+        if button and button.group and button.group ~= "" then
+            r.ImGui_SameLine(ctx)
+            local can_paste_group = style_clipboard.has_data
+            if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_paste_group) end
+            if style_clipboard.has_data then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00AA44FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x10BB55FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x20CC66FF)
+            end
+            if r.ImGui_Button(ctx, "Paste Style to Group", 150, 0) and can_paste_group then
+                if PasteStyleToGroup(button, custom_buttons) then
+                    custom_buttons.SaveCurrentButtons()
+                    has_unsaved_changes = true
+                end
+            end
+            if style_clipboard.has_data then
+                r.ImGui_PopStyleColor(ctx, 3)
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                if style_clipboard.has_data then
+                    r.ImGui_SetTooltip(ctx, "Paste the copied style to all buttons in group '" .. button.group .. "'\n(excluding position and alignment)")
+                else
+                    r.ImGui_SetTooltip(ctx, "No style copied yet. Use 'Copy Style' button first.")
+                end
+            end
+            if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        end
+        
+        r.ImGui_Spacing(ctx)
     end  
 
         if opts and opts.render_global_offset then
@@ -1259,66 +1342,12 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
         end
         
         if cb_section_states.actions_open then
-            -- Group Visibility Toggle Option
-            r.ImGui_Text(ctx, "Group Visibility Control:")
-            
-            if not button.is_group_visibility_toggle then
-                button.is_group_visibility_toggle = false
-            end
-            
-            local rv_grp_vis, new_grp_vis = r.ImGui_Checkbox(ctx, "Use as Group Visibility Toggle##grpVisToggle", button.is_group_visibility_toggle)
-            if rv_grp_vis then
-                button.is_group_visibility_toggle = new_grp_vis
-                changed = true
-                if new_grp_vis then
-                    -- Enable toggle state visualization when using as group toggle
-                    button.show_toggle_state = true
-                end
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Use this button to show/hide a group of buttons\n(Creates a menu switch)")
-            end
-            
-            if button.is_group_visibility_toggle then
-                r.ImGui_Text(ctx, "Target Group:")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetNextItemWidth(ctx, 200)
-                
-                -- Get all available groups
-                local groups = custom_buttons.GetAllGroups()
-                local current_group = button.target_group or ""
-                
-                if r.ImGui_BeginCombo(ctx, "##targetGroup", current_group ~= "" and current_group or "Select Group...") then
-                    for _, group_name in ipairs(groups) do
-                        -- Don't allow selecting the button's own group
-                        if group_name ~= button.group then
-                            local is_selected = (group_name == current_group)
-                            if r.ImGui_Selectable(ctx, group_name, is_selected) then
-                                button.target_group = group_name
-                                changed = true
-                            end
-                            if is_selected then
-                                r.ImGui_SetItemDefaultFocus(ctx)
-                            end
-                        end
-                    end
-                    r.ImGui_EndCombo(ctx)
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Select which group to show/hide with this button")
-                end
-                
-                r.ImGui_Separator(ctx)
-            end
-            
-            if not button.is_group_visibility_toggle then
-                -- Only show normal action fields if NOT a group visibility toggle
-                r.ImGui_Text(ctx, "Left Click:")
+            r.ImGui_Text(ctx, "Left Click:")
 
        
             r.ImGui_Text(ctx, "Name")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 180)
+            r.ImGui_SetNextItemWidth(ctx, 160)
             do
                 local rv_name, new_name = r.ImGui_InputText(ctx, "##lcaName", button.left_click.name)
                 if rv_name then button.left_click.name = new_name; changed = true end
@@ -1327,16 +1356,49 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "ID")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 120)
+            r.ImGui_SetNextItemWidth(ctx, 100)
             do
                 local rv_cmd, new_command = r.ImGui_InputText(ctx, "##lcaCmd", button.left_click.command or "")
                 if rv_cmd then button.left_click.command = new_command; changed = true end
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Paste##lcaPaste", 50, 0) then
+                local clipboard = ""
+                if r.CF_GetClipboard then
+                    clipboard = r.CF_GetClipboard("")
+                end
+                
+                if clipboard and clipboard ~= "" then
+                    clipboard = clipboard:gsub("^%s+", ""):gsub("%s+$", "")
+                    
+                    local cmd_id = clipboard:match("^(_?%w+)$")
+                    if cmd_id then
+                        button.left_click.command = cmd_id
+                        local cmd_id_no_underscore = cmd_id:gsub("^_", "")
+                        local numeric_id = tonumber(cmd_id_no_underscore)
+                        if numeric_id then
+                            local retval, cmd_name = r.kbd_getTextFromCmd(numeric_id, 0)
+                            if retval and cmd_name and cmd_name ~= "" then
+                                button.left_click.name = cmd_name
+                            end
+                        end
+                        changed = true
+                    else
+                        r.MB("Could not parse command ID from clipboard.\nClipboard content: " .. clipboard, "Paste ID", 0)
+                    end
+                else
+                    r.MB("Clipboard is empty.\n\nCopy a command ID first.", "Paste ID", 0)
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Paste command ID from clipboard\n(Copy ID in Action List first)")
             end
 
             r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Type")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 100)
+            r.ImGui_SetNextItemWidth(ctx, 80)
             do
                 local rv_type, new_type = r.ImGui_Combo(ctx, "##lcaType", button.left_click.type or 0, "Main\0MIDI Editor\0")
                 if rv_type then button.left_click.type = new_type; changed = true end
@@ -1351,7 +1413,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
        
             r.ImGui_Text(ctx, "Name")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 180)
+            r.ImGui_SetNextItemWidth(ctx, 160)
             do
                 button.alt_left_click = button.alt_left_click or { name = "", command = "", type = 0 }
                 local rv_name, new_name = r.ImGui_InputText(ctx, "##alcaName", button.alt_left_click.name)
@@ -1361,16 +1423,49 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "ID")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 120)
+            r.ImGui_SetNextItemWidth(ctx, 100)
             do
                 local rv_cmd, new_command = r.ImGui_InputText(ctx, "##alcaCmd", button.alt_left_click.command or "")
                 if rv_cmd then button.alt_left_click.command = new_command; changed = true end
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Paste##alcaPaste", 50, 0) then
+                local clipboard = ""
+                if r.CF_GetClipboard then
+                    clipboard = r.CF_GetClipboard("")
+                end
+                
+                if clipboard and clipboard ~= "" then
+                    clipboard = clipboard:gsub("^%s+", ""):gsub("%s+$", "")
+                    
+                    local cmd_id = clipboard:match("^(_?%w+)$")
+                    if cmd_id then
+                        button.alt_left_click.command = cmd_id
+                        local cmd_id_no_underscore = cmd_id:gsub("^_", "")
+                        local numeric_id = tonumber(cmd_id_no_underscore)
+                        if numeric_id then
+                            local retval, cmd_name = r.kbd_getTextFromCmd(numeric_id, 0)
+                            if retval and cmd_name and cmd_name ~= "" then
+                                button.alt_left_click.name = cmd_name
+                            end
+                        end
+                        changed = true
+                    else
+                        r.MB("Could not parse command ID from clipboard.\nClipboard content: " .. clipboard, "Paste ID", 0)
+                    end
+                else
+                    r.MB("Clipboard is empty.\n\nCopy a command ID first.", "Paste ID", 0)
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Paste command ID from clipboard\n(Copy ID in Action List first)")
             end
 
             r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Type")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 100)
+            r.ImGui_SetNextItemWidth(ctx, 80)
             do
                 local rv_type, new_type = r.ImGui_Combo(ctx, "##alcaType", button.alt_left_click.type or 0, "Main\0MIDI Editor\0")
                 if rv_type then button.alt_left_click.type = new_type; changed = true end
@@ -1380,69 +1475,6 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
 
             r.ImGui_Separator(ctx)
             
-            end  -- End of "if not button.is_group_visibility_toggle"
-            
-            -- Toggle State Visualization (always shown)
-            r.ImGui_Text(ctx, "Toggle State Visualization:")
-            
-            if not button.show_toggle_state then
-                button.show_toggle_state = false
-            end
-            if not button.toggle_on_color then
-                button.toggle_on_color = 0x00FF00FF  -- Green
-            end
-            
-            local rv_toggle, new_toggle_state = r.ImGui_Checkbox(ctx, "Show Toggle State##toggleVis", button.show_toggle_state)
-            if rv_toggle then 
-                button.show_toggle_state = new_toggle_state
-                changed = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                local tooltip_text = "Visualize the ON/OFF state"
-                if button.is_group_visibility_toggle then
-                    tooltip_text = tooltip_text .. "\n(Shows if group is visible/hidden)"
-                else
-                    tooltip_text = tooltip_text .. " of the action\n(e.g., metronome, click, etc.)"
-                end
-                r.ImGui_SetTooltip(ctx, tooltip_text)
-            end
-            
-            if button.show_toggle_state then
-                local color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
-                
-                r.ImGui_Text(ctx, "Toggle ON Color:")
-                r.ImGui_SameLine(ctx)
-                rv, button.toggle_on_color = r.ImGui_ColorEdit4(ctx, "##toggleOnColor", button.toggle_on_color, color_flags)
-                if rv then changed = true end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Color when the action is ON")
-                end
-                
-                r.ImGui_Text(ctx, "Toggle OFF Color:")
-                r.ImGui_SameLine(ctx)
-                if button.toggle_off_color == nil then
-                    button.toggle_off_color = button.color or 0x333333FF
-                end
-                rv, button.toggle_off_color = r.ImGui_ColorEdit4(ctx, "##toggleOffColor", button.toggle_off_color, color_flags)
-                if rv then changed = true end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Color when the action is OFF\n(leave at default to use normal button color)")
-                end
-                
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_SmallButton(ctx, "Reset##toggleOffReset") then
-                    button.toggle_off_color = nil
-                    changed = true
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Reset to use normal button colors when OFF")
-                end
-            end
-            
-            if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
-
-            r.ImGui_Separator(ctx)
-
             r.ImGui_Text(ctx, "Right Click Menu:")
             r.ImGui_SameLine(ctx)
             r.ImGui_TextDisabled(ctx, "Drag items into folders to create submenus")
@@ -1456,14 +1488,15 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 local payload_type = "TK_BTN_RCMENU_ITEM"
 
                 
-                if r.ImGui_BeginTable(ctx, "RCM_TABLE", 5,
+                if r.ImGui_BeginTable(ctx, "RCM_TABLE", 6,
                         r.ImGui_TableFlags_SizingStretchProp()
                         | r.ImGui_TableFlags_BordersInnerV()
                     ) then
                     r.ImGui_TableSetupColumn(ctx, "Drag", r.ImGui_TableColumnFlags_WidthFixed(), 30)
                     r.ImGui_TableSetupColumn(ctx, "Name", 0)
                     r.ImGui_TableSetupColumn(ctx, "Cmd", r.ImGui_TableColumnFlags_WidthFixed(), 100)
-                    r.ImGui_TableSetupColumn(ctx, "Type", r.ImGui_TableColumnFlags_WidthFixed(), 70)
+                    r.ImGui_TableSetupColumn(ctx, "Paste", r.ImGui_TableColumnFlags_WidthFixed(), 40)
+                    r.ImGui_TableSetupColumn(ctx, "Type", r.ImGui_TableColumnFlags_WidthFixed(), 60)
                     r.ImGui_TableSetupColumn(ctx, "X", r.ImGui_TableColumnFlags_WidthFixed(), 20)
                     r.ImGui_TableHeadersRow(ctx)
 
@@ -1616,12 +1649,35 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
 
                         r.ImGui_TableSetColumnIndex(ctx, 3)
                         if not is_submenu then
+                            if r.ImGui_SmallButton(ctx, "Paste##paste" .. idx) then
+                                local clipboard = ""
+                                if r.CF_GetClipboard then
+                                    clipboard = r.CF_GetClipboard("")
+                                end
+                                
+                                if clipboard and clipboard ~= "" then
+                                    clipboard = clipboard:gsub("^%s+", ""):gsub("%s+$", "")
+                                    local cmd_id = clipboard:match("^(_?%w+)$")
+                                    if cmd_id then
+                                        item.command = cmd_id
+                                        custom_buttons.SaveCurrentButtons()
+                                        has_unsaved_changes = true
+                                    end
+                                end
+                            end
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_SetTooltip(ctx, "Paste command ID")
+                            end
+                        end
+
+                        r.ImGui_TableSetColumnIndex(ctx, 4)
+                        if not is_submenu then
                             r.ImGui_SetNextItemWidth(ctx, -1)
                             local rv_type, new_type = r.ImGui_Combo(ctx, "##type", item.type or 0, "Main\0MIDI Editor\0")
                             if rv_type then item.type = new_type; custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
                         end
 
-                        r.ImGui_TableSetColumnIndex(ctx, 4)
+                        r.ImGui_TableSetColumnIndex(ctx, 5)
                         r.ImGui_SetNextItemWidth(ctx, -1)
                         if r.ImGui_Button(ctx, "X##del") then
                             remove_index = idx
@@ -1680,97 +1736,359 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                     table.remove(button.right_menu.items, remove_index)
                     
                     custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-                end
-
-        end 
+        end  
         
     end  
     
-    -- Copy/Paste Style buttons at the bottom of the editor
-    if custom_buttons.current_edit then
+    if cb_section_states.toggle_open then
+        local rv_remember, new_remember = r.ImGui_Checkbox(ctx, "Remember Toggle States##rememberToggle", custom_buttons.remember_toggle_states)
+        if rv_remember then
+            custom_buttons.remember_toggle_states = new_remember
+            if custom_buttons.current_preset then
+                custom_buttons.SaveButtonPreset(custom_buttons.current_preset)
+            end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Remember the state of toggle buttons in this preset\n(Per-preset setting - each button preset can have its own behavior)")
+        end
+        
         r.ImGui_Separator(ctx)
-        r.ImGui_Spacing(ctx)
+        r.ImGui_Text(ctx, "Group Visibility Control:")
         
-        local has_sel = custom_buttons.current_edit ~= nil
-        
-        r.ImGui_Text(ctx, "Button Style:")
-        r.ImGui_SameLine(ctx)
-        
-        if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not has_sel) end
-        if r.ImGui_Button(ctx, "Copy Style", 100, 0) and has_sel then
-            CopyButtonStyle(custom_buttons.buttons[custom_buttons.current_edit])
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Copy style settings from this button")
-        end
-        if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
-        
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "⚙##style_settings", 30, 0) then
-            style_settings_window.open = not style_settings_window.open
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Choose which style properties to copy")
+        if not button.is_group_visibility_toggle then
+            button.is_group_visibility_toggle = false
         end
         
-        r.ImGui_SameLine(ctx)
-        local can_paste = has_sel and style_clipboard.has_data
-        if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_paste) end
-        if style_clipboard.has_data then
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FF88)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5090FFAA)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x60A0FFCC)
-        end
-        if r.ImGui_Button(ctx, "Paste Style", 100, 0) and can_paste then
-            if PasteButtonStyle(custom_buttons.buttons[custom_buttons.current_edit]) then
-                custom_buttons.SaveCurrentButtons()
-                has_unsaved_changes = true
+        local rv_grp_vis, new_grp_vis = r.ImGui_Checkbox(ctx, "Use as Group Visibility Toggle##grpVisToggle", button.is_group_visibility_toggle)
+        if rv_grp_vis then
+            button.is_group_visibility_toggle = new_grp_vis
+            changed = true
+            if new_grp_vis then
+                button.show_toggle_state = true
             end
         end
-        if style_clipboard.has_data then
-            r.ImGui_PopStyleColor(ctx, 3)
-        end
         if r.ImGui_IsItemHovered(ctx) then
-            if style_clipboard.has_data then
-                r.ImGui_SetTooltip(ctx, "Paste copied style to this button")
-            else
-                r.ImGui_SetTooltip(ctx, "No style copied yet")
-            end
+            r.ImGui_SetTooltip(ctx, "Use this button to show/hide groups of buttons")
         end
-        if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
         
-        -- Paste Style to Group button (only visible when button is in a group)
-        local button = custom_buttons.buttons[custom_buttons.current_edit]
-        if button and button.group and button.group ~= "" then
-            r.ImGui_SameLine(ctx)
-            local can_paste_group = style_clipboard.has_data
-            if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_paste_group) end
-            if style_clipboard.has_data then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00AA44FF)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x10BB55FF)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x20CC66FF)
-            end
-            if r.ImGui_Button(ctx, "Paste Style to Group", 150, 0) and can_paste_group then
-                if PasteStyleToGroup(button, custom_buttons) then
-                    custom_buttons.SaveCurrentButtons()
-                    has_unsaved_changes = true
+        if button.is_group_visibility_toggle then
+            r.ImGui_Spacing(ctx)
+            r.ImGui_Text(ctx, "Mode:")
+            
+            if button.toggle_mode == nil then
+                -- Migrate old toggle_radio_mode to new system
+                if button.toggle_radio_mode ~= nil then
+                    button.toggle_mode = button.toggle_radio_mode and "radio" or "toggle"
+                    button.toggle_radio_mode = nil
+                else
+                    button.toggle_mode = "radio"
                 end
             end
-            if style_clipboard.has_data then
-                r.ImGui_PopStyleColor(ctx, 3)
+            
+            local mode_changed = false
+            
+            if r.ImGui_RadioButton(ctx, "Radio Mode##radioMode", button.toggle_mode == "radio") then
+                button.toggle_mode = "radio"
+                mode_changed = true
             end
             if r.ImGui_IsItemHovered(ctx) then
-                if style_clipboard.has_data then
-                    r.ImGui_SetTooltip(ctx, "Paste the copied style to all buttons in group '" .. button.group .. "'\n(excluding position and alignment)")
+                r.ImGui_SetTooltip(ctx, "Only one toggle active at a time (stays active)")
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_RadioButton(ctx, "Toggle Mode##toggleMode", button.toggle_mode == "toggle") then
+                button.toggle_mode = "toggle"
+                mode_changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Click to activate, click again to deactivate and show all")
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_RadioButton(ctx, "Cycle Mode##cycleMode", button.toggle_mode == "cycle") then
+                button.toggle_mode = "cycle"
+                if not button.cycle_views then
+                    button.cycle_views = {{name = "View 1", visible_groups = {}}}
+                end
+                if not button.cycle_current_view then
+                    button.cycle_current_view = 1
+                end
+                mode_changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Click to cycle through different views")
+            end
+            
+            if mode_changed then
+                changed = true
+            end
+            
+            r.ImGui_Separator(ctx)
+            
+            if button.toggle_mode == "cycle" then
+                -- Cycle Mode UI
+                if not button.cycle_views then
+                    button.cycle_views = {{name = "View 1", visible_groups = {}}}
+                end
+                if not button.cycle_current_view then
+                    button.cycle_current_view = 1
+                end
+                
+                r.ImGui_Text(ctx, "Cycle Views:")
+                
+                -- Get all groups
+                local all_groups = {}
+                for _, btn in ipairs(custom_buttons.buttons) do
+                    if btn.group and btn.group ~= "" then
+                        local found = false
+                        for _, g in ipairs(all_groups) do
+                            if g == btn.group then
+                                found = true
+                                break
+                            end
+                        end
+                        if not found then
+                            table.insert(all_groups, btn.group)
+                        end
+                    end
+                end
+                table.sort(all_groups)
+                
+                local view_to_remove = nil
+                
+                if not button.editing_view_name then
+                    button.editing_view_name = {}
+                end
+                
+                for view_idx, view in ipairs(button.cycle_views) do
+                    r.ImGui_PushID(ctx, view_idx)
+                    
+                    -- Ensure view has a name
+                    if not view.name or view.name == "" then
+                        view.name = "View " .. view_idx
+                    end
+                    
+                    -- Highlight current view
+                    local header_color = (view_idx == button.cycle_current_view) and 0x4080FFFF or 0x404040FF
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), header_color)
+                    
+                    -- Use saved name for header to prevent collapse during editing
+                    if not button.editing_view_name[view_idx] then
+                        button.editing_view_name[view_idx] = view.name
+                    end
+                    
+                    local header_label = button.editing_view_name[view_idx] .. "##viewheader"
+                    local is_open = r.ImGui_CollapsingHeader(ctx, header_label, r.ImGui_TreeNodeFlags_DefaultOpen())
+                    
+                    r.ImGui_PopStyleColor(ctx)
+                    
+                    if is_open then
+                        r.ImGui_Indent(ctx)
+                        
+                        r.ImGui_Text(ctx, "View Name:")
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetNextItemWidth(ctx, 150)
+                        local rv_name, new_name = r.ImGui_InputText(ctx, "##viewName", view.name)
+                        if rv_name then 
+                            view.name = new_name
+                            changed = true 
+                        end
+                        
+                        -- Update header name when input loses focus
+                        if not r.ImGui_IsItemActive(ctx) then
+                            button.editing_view_name[view_idx] = view.name
+                        end
+                        
+                        -- Move up/down buttons
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "▲##up") and view_idx > 1 then
+                            button.cycle_views[view_idx], button.cycle_views[view_idx - 1] = 
+                                button.cycle_views[view_idx - 1], button.cycle_views[view_idx]
+                            if button.cycle_current_view == view_idx then
+                                button.cycle_current_view = view_idx - 1
+                            elseif button.cycle_current_view == view_idx - 1 then
+                                button.cycle_current_view = view_idx
+                            end
+                            changed = true
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Move view up in cycle order")
+                        end
+                        
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "▼##down") and view_idx < #button.cycle_views then
+                            button.cycle_views[view_idx], button.cycle_views[view_idx + 1] = 
+                                button.cycle_views[view_idx + 1], button.cycle_views[view_idx]
+                            if button.cycle_current_view == view_idx then
+                                button.cycle_current_view = view_idx + 1
+                            elseif button.cycle_current_view == view_idx + 1 then
+                                button.cycle_current_view = view_idx
+                            end
+                            changed = true
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Move view down in cycle order")
+                        end
+                        
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "✖##delete") and #button.cycle_views > 1 then
+                            view_to_remove = view_idx
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Delete this view")
+                        end
+                        
+                        r.ImGui_Spacing(ctx)
+                        r.ImGui_Text(ctx, "Visible groups in this view:")
+                        
+                        if not view.visible_groups then
+                            view.visible_groups = {}
+                            for _, g in ipairs(all_groups) do
+                                view.visible_groups[g] = true
+                            end
+                        end
+                        
+                        if #all_groups > 0 then
+                            for _, group_name in ipairs(all_groups) do
+                                if view.visible_groups[group_name] == nil then
+                                    view.visible_groups[group_name] = true
+                                end
+                                
+                                local rv_grp, new_grp = r.ImGui_Checkbox(ctx, group_name .. "##" .. view_idx, view.visible_groups[group_name])
+                                if rv_grp then 
+                                    view.visible_groups[group_name] = new_grp
+                                    changed = true 
+                                end
+                            end
+                        else
+                            r.ImGui_TextDisabled(ctx, "No groups available")
+                        end
+                        
+                        r.ImGui_Unindent(ctx)
+                    end
+                    
+                    r.ImGui_PopID(ctx)
+                end
+                
+                if view_to_remove then
+                    table.remove(button.cycle_views, view_to_remove)
+                    if button.cycle_current_view >= view_to_remove then
+                        button.cycle_current_view = math.max(1, button.cycle_current_view - 1)
+                    end
+                    changed = true
+                end
+                
+                r.ImGui_Spacing(ctx)
+                if r.ImGui_Button(ctx, "+ Add View") then
+                    table.insert(button.cycle_views, {
+                        name = "View " .. (#button.cycle_views + 1),
+                        visible_groups = {}
+                    })
+                    changed = true
+                end
+                
+            else
+                -- Radio/Toggle Mode UI
+                r.ImGui_Text(ctx, "Visible groups when active:")
+                r.ImGui_Separator(ctx)
+                
+                local all_groups = {}
+                for _, btn in ipairs(custom_buttons.buttons) do
+                    if btn.group and btn.group ~= "" then
+                        local found = false
+                        for _, g in ipairs(all_groups) do
+                            if g == btn.group then
+                                found = true
+                                break
+                            end
+                        end
+                        if not found then
+                            table.insert(all_groups, btn.group)
+                        end
+                    end
+                end
+                table.sort(all_groups)
+                
+                if not button.visible_groups then
+                    button.visible_groups = {}
+                    for _, g in ipairs(all_groups) do
+                        button.visible_groups[g] = true
+                    end
+                end
+                
+                if #all_groups > 0 then
+                    for _, group_name in ipairs(all_groups) do
+                        if button.visible_groups[group_name] == nil then
+                            button.visible_groups[group_name] = true
+                        end
+                        
+                        rv, button.visible_groups[group_name] = r.ImGui_Checkbox(ctx, group_name, button.visible_groups[group_name])
+                        if rv then changed = true end
+                    end
                 else
-                    r.ImGui_SetTooltip(ctx, "No style copied yet. Use 'Copy Style' button first.")
+                    r.ImGui_TextDisabled(ctx, "No groups available")
                 end
             end
-            if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+            
+            r.ImGui_Separator(ctx)
+            
+            r.ImGui_Text(ctx, "Toggle State Visualization:")
+            
+            if not button.show_toggle_state then
+                button.show_toggle_state = false
+            end
+            if not button.toggle_on_color then
+                button.toggle_on_color = 0x00FF00FF
+            end
+            
+            local rv_toggle, new_toggle_state = r.ImGui_Checkbox(ctx, "Show Toggle State##toggleVis", button.show_toggle_state)
+            if rv_toggle then 
+                button.show_toggle_state = new_toggle_state
+                changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Visualize the ON/OFF state (Shows if group is visible/hidden)")
+            end
+            
+            if button.show_toggle_state then
+                local color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
+                
+                r.ImGui_Text(ctx, "Toggle ON Color:")
+                r.ImGui_SameLine(ctx)
+                rv, button.toggle_on_color = r.ImGui_ColorEdit4(ctx, "##toggleOnColor", button.toggle_on_color, color_flags)
+                if rv then changed = true end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Color when the toggle is active (group visible)")
+                end
+                
+                r.ImGui_Text(ctx, "Toggle OFF Color:")
+                r.ImGui_SameLine(ctx)
+                if button.toggle_off_color == nil then
+                    button.toggle_off_color = button.color or 0x333333FF
+                end
+                rv, button.toggle_off_color = r.ImGui_ColorEdit4(ctx, "##toggleOffColor", button.toggle_off_color, color_flags)
+                if rv then changed = true end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Color when the toggle is inactive (group hidden)")
+                end
+                
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_SmallButton(ctx, "Reset##toggleOffReset") then
+                    button.toggle_off_color = nil
+                    changed = true
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Reset to use normal button colors when OFF")
+                end
+            end
+            
+            if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
+            
+            r.ImGui_Separator(ctx)
         end
-        
-        r.ImGui_Spacing(ctx)
     end
+    
+    end  
     
 
 end

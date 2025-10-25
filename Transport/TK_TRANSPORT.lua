@@ -1,17 +1,9 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.0.7
+-- @version 1.0.9
 -- @changelog 
 --[[
-  + Icon Browser: Added 150% and 200% icon scale options with folder support
-  + Custom Buttons: Added image support with custom folder selection (separate from icons)
-  + Custom Buttons: Added 7 text position options for images (left, right, top, bottom, overlay variants)
-  + Custom Buttons: Added rounded corners for images matching border rounding
-  + Custom Buttons: Image folder location persistence via ExtState
-  + Settings: Added "Lock Window Size" option to prevent accidental resizing
-  + Settings: Version number and instance name now shown in header
-  + Instance Support: Separate button presets per instance (fixed preset loading issues)
-  + UI: Fixed layout shifting in Custom Buttons tab
+
   ]]--
 ---------------------------------------------------------------------------------------------
 local r = reaper
@@ -293,6 +285,7 @@ local default_settings = {
  show_time_selection = true,
  show_beats_selection = true,
  show_env_button = true,
+ show_master_volume = false,
 
  -- Custom Transport Button settings
  use_custom_play_image = false,
@@ -478,6 +471,7 @@ local Layout = {
  settings["center_transport" .. mode_suffix] = false
  settings.center_transport = false
  end },
+ { name = "master_volume", showFlag = "show_master_volume", keyx = "master_volume_x", keyy = "master_volume_y" },
  { name = "cursorpos", showFlag = "show_cursorpos", keyx = "cursorpos_x", keyy = "cursorpos_y" },
  { name = "localtime", showFlag = "show_local_time", keyx = "local_time_x", keyy = "local_time_y" },
  { name = "tempo", showFlag = "show_tempo", keyx = "tempo_x", keyy = "tempo_y" },
@@ -638,6 +632,7 @@ local show_button_import_inline = false
 
 local transport_components = {
  { id = "transport_buttons", name = "Transport" },
+ { id = "master_volume", name = "Master Volume" },
  { id = "envelope", name = "Envelope" },
  { id = "tempo_bpm", name = "Tempo (BPM)" },
  { id = "time_signature", name = "Time Signature" },
@@ -688,6 +683,8 @@ function ShowComponentSettings(ctx, main_window_width, main_window_height)
  if r.ImGui_BeginChild(ctx, "ComponentSettingsScroll", avail_w, avail_h, r.ImGui_ChildFlags_None()) then
  if component_id == "transport_buttons" then
  ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "master_volume" then
+ ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "envelope" then
  ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "tempo_bpm" then
@@ -1358,6 +1355,141 @@ function ShowTimeDisplaySettings(ctx, main_window_width, main_window_height)
          r.ImGui_EndTable(ctx)
      end
  end
+ end
+end
+
+function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
+ local rv
+ rv, settings.show_master_volume = r.ImGui_Checkbox(ctx, "Show Master Volume Slider", settings.show_master_volume ~= false)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if settings.show_master_volume then
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Position:")
+ DrawPixelXYControls('master_volume_x', 'master_volume_y', main_window_width, main_window_height)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Slider Width:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local slider_width = settings.master_volume_width or 150
+ rv, slider_width = r.ImGui_SliderInt(ctx, "##MasterVolumeWidth", slider_width, 50, 400)
+ if rv then
+ settings.master_volume_width = slider_width
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ rv, settings.show_master_volume_label = r.ImGui_Checkbox(ctx, "Show Label", settings.show_master_volume_label ~= false)
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "MasterVolumeFontTable", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Font:")
+ local current_font = settings.master_volume_font_name or settings.current_font
+ local current_font_index = 0
+ for i, font_name in ipairs(fonts) do
+ if font_name == current_font then
+ current_font_index = i - 1
+ break
+ end
+ end
+ 
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, current_font_index = r.ImGui_Combo(ctx, "##MasterVolumeFont", current_font_index, table.concat(fonts, '\0') .. '\0')
+ if rv then
+ settings.master_volume_font_name = fonts[current_font_index + 1]
+ RebuildSectionFonts()
+ end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Size:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local font_size = settings.master_volume_font_size or settings.font_size
+ rv, font_size = r.ImGui_SliderInt(ctx, "##MasterVolumeFontSize", font_size, 8, 72)
+ if rv then
+ settings.master_volume_font_size = font_size
+ RebuildSectionFonts()
+ end
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Colors:")
+ 
+ local color_flags = r.ImGui_ColorEditFlags_NoInputs()
+ 
+ if r.ImGui_BeginTable(ctx, "MasterVolumeColors", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.master_volume_slider_bg = r.ImGui_ColorEdit4(ctx, "Slider BG", settings.master_volume_slider_bg or 0x333333FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.master_volume_slider_active = r.ImGui_ColorEdit4(ctx, "Slider Active", settings.master_volume_slider_active or 0x555555FF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.master_volume_grab = r.ImGui_ColorEdit4(ctx, "Handle", settings.master_volume_grab or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.master_volume_grab_active = r.ImGui_ColorEdit4(ctx, "Handle Hover", settings.master_volume_grab_active or 0xAAAAAAFF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.master_volume_text_color = r.ImGui_ColorEdit4(ctx, "Text Color", settings.master_volume_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Border & Rounding:")
+ 
+ rv, settings.master_volume_show_border = r.ImGui_Checkbox(ctx, "Show Border", settings.master_volume_show_border or false)
+ 
+ if settings.master_volume_show_border then
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "MasterVolumeBorderTable", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Border Color:")
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.master_volume_border_color = r.ImGui_ColorEdit4(ctx, "##MasterVolumeBorderColor", settings.master_volume_border_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Border Size:")
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.master_volume_border_size = r.ImGui_SliderDouble(ctx, "##MasterVolumeBorderSize", settings.master_volume_border_size or 1.0, 0.5, 5.0, "%.1f")
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Rounding:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.master_volume_rounding = r.ImGui_SliderDouble(ctx, "##MasterVolumeRounding", settings.master_volume_rounding or 0.0, 0.0, 12.0, "%.1f")
+ 
+ r.ImGui_Spacing(ctx)
  end
 end
 
@@ -2264,6 +2396,7 @@ end
 local font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
 local font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, settings.transport_font_size or settings.font_size)
 local font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, settings.env_font_size or settings.font_size)
+local font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, settings.master_volume_font_size or settings.font_size)
 local font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
 local font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
 local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
@@ -2278,6 +2411,7 @@ local settings_ui_font_small = r.ImGui_CreateFont(SETTINGS_UI_FONT_NAME, SETTING
 r.ImGui_Attach(ctx, font)
 r.ImGui_Attach(ctx, font_transport)
 r.ImGui_Attach(ctx, font_env)
+r.ImGui_Attach(ctx, font_master_volume)
 r.ImGui_Attach(ctx, font_tempo)
 r.ImGui_Attach(ctx, font_timesig)
 r.ImGui_Attach(ctx, font_timesel)
@@ -2409,6 +2543,7 @@ end
 function RebuildSectionFonts()
  local new_font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, settings.transport_font_size or settings.font_size)
  local new_font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, settings.env_font_size or settings.font_size)
+ local new_font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, settings.master_volume_font_size or settings.font_size)
  local new_font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
  local new_font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
  local new_font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
@@ -2419,6 +2554,7 @@ function RebuildSectionFonts()
  
  r.ImGui_Attach(ctx, new_font_transport)
  r.ImGui_Attach(ctx, new_font_env)
+ r.ImGui_Attach(ctx, new_font_master_volume)
  r.ImGui_Attach(ctx, new_font_tempo)
  r.ImGui_Attach(ctx, new_font_timesig)
  r.ImGui_Attach(ctx, new_font_timesel)
@@ -2429,6 +2565,7 @@ function RebuildSectionFonts()
  
  font_transport = new_font_transport
  font_env = new_font_env
+ font_master_volume = new_font_master_volume
  font_tempo = new_font_tempo
  font_timesig = new_font_timesig
  font_timesel = new_font_timesel
@@ -2529,6 +2666,7 @@ if not is_new_empty_instance then
  if #CustomButtons.buttons == 0 then
  CustomButtons.LoadCurrentButtons()
  end
+ CustomButtons.ResetToggleStatesIfNeeded(settings)
 else
  CustomButtons.buttons = {}
 end
@@ -3043,7 +3181,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), 0x1E1E1EFF)
  
- local settings_window_height = 600 
+ local settings_window_height = 650 
  r.ImGui_SetNextWindowSize(ctx, settings.settings_window_width or 780, settings_window_height)
  local settings_visible, settings_open = r.ImGui_Begin(ctx, 'Transport Settings', true, settings_flags)
  if settings_visible then
@@ -3810,13 +3948,60 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_Text(ctx, "Settings for: " .. (button.name or ("Button " .. button_index)))
  
  r.ImGui_SameLine(ctx)
- local toggle_label = ButtonEditor.cb_section_states.actions_open and "⚙ Properties" or "⚡ Actions"
- if r.ImGui_Button(ctx, toggle_label) then
- ButtonEditor.cb_section_states.actions_open = not ButtonEditor.cb_section_states.actions_open
+ local props_pushed = false
+ if not ButtonEditor.cb_section_states.actions_open and not ButtonEditor.cb_section_states.toggle_open then
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5090FFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3070FFFF)
+ props_pushed = true
+ end
+ if r.ImGui_Button(ctx, "⚙ Properties") then
+ ButtonEditor.cb_section_states.actions_open = false
+ ButtonEditor.cb_section_states.toggle_open = false
+ end
+ if props_pushed then
+ r.ImGui_PopStyleColor(ctx, 3)
  end
  if r.ImGui_IsItemHovered(ctx) then
- local tooltip = ButtonEditor.cb_section_states.actions_open and "Switch to Properties view" or "Switch to Actions view"
- r.ImGui_SetTooltip(ctx, tooltip)
+ r.ImGui_SetTooltip(ctx, "Show Properties view")
+ end
+ 
+ r.ImGui_SameLine(ctx)
+ local actions_pushed = false
+ if ButtonEditor.cb_section_states.actions_open then
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5090FFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3070FFFF)
+ actions_pushed = true
+ end
+ if r.ImGui_Button(ctx, "⚡ Actions") then
+ ButtonEditor.cb_section_states.actions_open = true
+ ButtonEditor.cb_section_states.toggle_open = false
+ end
+ if actions_pushed then
+ r.ImGui_PopStyleColor(ctx, 3)
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, "Show Actions view")
+ end
+ 
+ r.ImGui_SameLine(ctx)
+ local toggle_pushed = false
+ if ButtonEditor.cb_section_states.toggle_open then
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5090FFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3070FFFF)
+ toggle_pushed = true
+ end
+ if r.ImGui_Button(ctx, "🔄 Toggle") then
+ ButtonEditor.cb_section_states.actions_open = false
+ ButtonEditor.cb_section_states.toggle_open = true
+ end
+ if toggle_pushed then
+ r.ImGui_PopStyleColor(ctx, 3)
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, "Show Toggle settings")
  end
  else
  r.ImGui_Text(ctx, "Settings for: Unknown Button")
@@ -4726,6 +4911,125 @@ function Transport_Buttons(main_window_width, main_window_height)
  if group_min_x then
  StoreElementRectUnion("transport", group_min_x, group_min_y, group_max_x, group_max_y)
  end
+end
+
+function MasterVolumeSlider(main_window_width, main_window_height)
+ if not settings.show_master_volume then return end
+ 
+ local allow_input = not settings.edit_mode
+ 
+ -- Get master track
+ local master_track = r.GetMasterTrack(0)
+ if not master_track then return end
+ 
+ -- Get current volume
+ local volume_linear = r.GetMediaTrackInfo_Value(master_track, "D_VOL")
+ 
+ -- Convert to dB
+ local volume_db
+ if volume_linear < 0.0000000298023223876953125 then
+ volume_db = -150.0
+ elseif volume_linear > 3.981071705534969 then
+ volume_db = 12.0
+ else
+ volume_db = 20.0 * math.log(volume_linear, 10)
+ end
+ 
+ -- Position
+ local pos_x = settings.master_volume_x_px and ScalePosX(settings.master_volume_x_px, main_window_width, settings) 
+ or ((settings.master_volume_x or 0.5) * main_window_width)
+ local pos_y = settings.master_volume_y_px and ScalePosY(settings.master_volume_y_px, main_window_height, settings) 
+ or ((settings.master_volume_y or 0.7) * main_window_height)
+ 
+ r.ImGui_SetCursorPosX(ctx, pos_x)
+ r.ImGui_SetCursorPosY(ctx, pos_y)
+ 
+ -- Slider width
+ local slider_width = settings.master_volume_width or 150
+ 
+ -- Push style vars (border & rounding)
+ local rounding = settings.master_volume_rounding or 0.0
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), rounding)
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), rounding)
+ 
+ -- Push colors
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), settings.master_volume_grab or 0xFFFFFFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), settings.master_volume_grab_active or 0xAAAAAAFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), settings.master_volume_slider_bg or 0x333333FF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), settings.master_volume_slider_active or 0x555555FF)
+ if settings.master_volume_text_color then
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.master_volume_text_color)
+ end
+ 
+ -- Push font
+ if font_master_volume then 
+ r.ImGui_PushFont(ctx, font_master_volume, settings.master_volume_font_size or settings.font_size) 
+ end
+ 
+ -- Draw slider
+ r.ImGui_PushItemWidth(ctx, slider_width)
+ 
+ local rv, new_volume_db = r.ImGui_SliderDouble(ctx, "##MasterVolume", volume_db, -60.0, 12.0, "%.1f dB")
+ 
+ if allow_input and rv then
+ local new_volume_linear
+ if new_volume_db <= -150.0 then
+ new_volume_linear = 0.0
+ else
+ new_volume_linear = 10.0 ^ (new_volume_db / 20.0)
+ end
+ 
+ -- Set volume
+ r.SetMediaTrackInfo_Value(master_track, "D_VOL", new_volume_linear)
+ end
+ 
+ -- Right click to reset to 0 dB
+ if allow_input and r.ImGui_IsItemClicked(ctx, 1) then
+ r.SetMediaTrackInfo_Value(master_track, "D_VOL", 1.0) -- 1.0 linear = 0 dB
+ end
+ 
+ r.ImGui_PopItemWidth(ctx)
+ 
+ -- Store bounds for dragging
+ local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+ local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+ 
+ -- Draw border if enabled
+ if settings.master_volume_show_border then
+ local dl = r.ImGui_GetWindowDrawList(ctx)
+ local border_color = settings.master_volume_border_color or 0xFFFFFFFF
+ local border_size = settings.master_volume_border_size or 1.0
+ local border_rounding = settings.master_volume_rounding or 0.0
+ 
+ r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, border_color, border_rounding, nil, border_size)
+ end
+ 
+ -- Label (optional)
+ local show_label = settings.show_master_volume_label
+ if show_label == nil then show_label = true end -- default true
+ 
+ if show_label then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Master")
+ 
+ -- Update bounds to include label
+ local label_max_x, label_max_y = r.ImGui_GetItemRectMax(ctx)
+ max_x = label_max_x
+ max_y = math.max(max_y, label_max_y)
+ end
+ 
+ if font_master_volume then 
+ r.ImGui_PopFont(ctx) 
+ end
+ 
+ -- Pop colors
+ local color_count = settings.master_volume_text_color and 5 or 4
+ r.ImGui_PopStyleColor(ctx, color_count)
+ 
+ -- Pop style vars
+ r.ImGui_PopStyleVar(ctx, 2)
+ 
+ StoreElementRectUnion("master_volume", min_x, min_y, max_x, max_y)
 end
 
 function DrawTransportGraphics(drawList, x, y, size, color)
@@ -6200,25 +6504,32 @@ local function ShowLocalTime(main_window_width, main_window_height)
  r.ImGui_SameLine(ctx)
  r.ImGui_SetCursorPosX(ctx, settings.local_time_x_px and ScalePosX(settings.local_time_x_px, main_window_width, settings) or ((settings.local_time_x or 0.5) * main_window_width))
  r.ImGui_SetCursorPosY(ctx, settings.local_time_y_px and ScalePosY(settings.local_time_y_px, main_window_height, settings) or ((settings.local_time_y or 0.02) * main_window_height))
+ 
+ -- Push button styles to match other components
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.local_time_bg_color or 0x00000000)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.local_time_bg_color or 0x00000000)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.local_time_bg_color or 0x00000000)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
- local tw, th = r.ImGui_CalcTextSize(ctx, display_text)
- local pad = 6
- r.ImGui_InvisibleButton(ctx, "##LocalTimeHit", tw + pad * 2, th + pad * 2)
- StoreElementRect("localtime")
- local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
- local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
- local dl = r.ImGui_GetWindowDrawList(ctx)
- local tx = min_x + (max_x - min_x - tw) * 0.5
- local ty = min_y + (max_y - min_y - th) * 0.5
+ 
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.local_time_rounding or 0)
+ 
  if font_localtime then r.ImGui_PushFont(ctx, font_localtime, settings.local_time_font_size or settings.font_size) end
- r.ImGui_DrawList_AddText(dl, tx, ty, text_color, display_text)
- if font_localtime then r.ImGui_PopFont(ctx) end
- r.ImGui_PopStyleColor(ctx)
- if (not settings.edit_mode) and r.ImGui_IsItemClicked(ctx, 0) then
+ 
+ if r.ImGui_Button(ctx, display_text) then
+ if not settings.edit_mode then
  show_session_time = not show_session_time
  end
+ end
  
- if r.ImGui_IsItemClicked(ctx, 1) then
+ if font_localtime then r.ImGui_PopFont(ctx) end
+ 
+ StoreElementRect("localtime")
+ 
+ r.ImGui_PopStyleVar(ctx, 2)
+ r.ImGui_PopStyleColor(ctx, 4)
+ 
+ if (not settings.edit_mode) and r.ImGui_IsItemClicked(ctx, 1) then
  r.ImGui_OpenPopup(ctx, "TimeAlarmMenu")
  end
  
@@ -6463,6 +6774,7 @@ function Main()
  ShowTimeSelection(main_window_width, main_window_height)
  EnvelopeOverride(main_window_width, main_window_height)
  Transport_Buttons(main_window_width, main_window_height)
+ MasterVolumeSlider(main_window_width, main_window_height)
  ShowCursorPosition(main_window_width, main_window_height)
  ShowShuttleWheel(main_window_width, main_window_height)
  ShowWaveformScrubber(main_window_width, main_window_height)

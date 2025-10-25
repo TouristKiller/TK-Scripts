@@ -10,11 +10,73 @@ local function round_to_grid(px, grid)
 end
 
 local function ExecuteButtonAction(ctx, button)
-    -- Check if this is a group visibility toggle button
-    if button.is_group_visibility_toggle and button.target_group then
+    if button.is_group_visibility_toggle then
         local CustomButtons = require('custom_buttons')
-        CustomButtons.ToggleGroupVisibility(button.target_group)
-        return
+        local toggle_mode = button.toggle_mode or "radio"
+        
+        if toggle_mode == "cycle" then
+            -- Cycle Mode
+            if button.cycle_views and #button.cycle_views > 0 then
+                -- Advance to next view
+                button.cycle_current_view = (button.cycle_current_view or 1) + 1
+                if button.cycle_current_view > #button.cycle_views then
+                    button.cycle_current_view = 1
+                end
+                
+                -- Deactivate other toggles and reset their cycle position
+                for _, other_btn in ipairs(CustomButtons.buttons) do
+                    if other_btn.is_group_visibility_toggle and other_btn ~= button then
+                        other_btn.toggle_state = false
+                        if other_btn.toggle_mode == "cycle" then
+                            other_btn.cycle_current_view = 1
+                        end
+                    end
+                end
+                
+                button.toggle_state = true
+                CustomButtons.SaveCurrentButtons()
+            end
+            
+        elseif toggle_mode == "radio" then
+            -- Radio Mode
+            if not button.toggle_state then
+                for _, other_btn in ipairs(CustomButtons.buttons) do
+                    if other_btn.is_group_visibility_toggle and other_btn ~= button then
+                        other_btn.toggle_state = false
+                        if other_btn.toggle_mode == "cycle" then
+                            other_btn.cycle_current_view = 1
+                        end
+                    end
+                end
+                button.toggle_state = true
+            end
+            
+        else
+            -- Toggle Mode
+            button.toggle_state = not button.toggle_state
+            
+            if not button.toggle_state then
+                for _, other_btn in ipairs(CustomButtons.buttons) do
+                    if other_btn.is_group_visibility_toggle then
+                        other_btn.toggle_state = false
+                        if other_btn.toggle_mode == "cycle" then
+                            other_btn.cycle_current_view = 1
+                        end
+                    end
+                end
+            else
+                for _, other_btn in ipairs(CustomButtons.buttons) do
+                    if other_btn.is_group_visibility_toggle and other_btn ~= button then
+                        other_btn.toggle_state = false
+                        if other_btn.toggle_mode == "cycle" then
+                            other_btn.cycle_current_view = 1
+                        end
+                    end
+                end
+            end
+        end
+        
+        CustomButtons.SaveCurrentButtons()
     end
     
     local alt_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
@@ -154,8 +216,36 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
     local scale_w = (scale_with_w and ref_w and ref_w > 0) and (window_width / ref_w) or 1
     local scale_h = (scale_with_h and ref_h and ref_h > 0) and (window_height / ref_h) or 1
 
+    local active_toggle = nil
+    for _, btn in ipairs(custom_buttons.buttons) do
+        if btn.is_group_visibility_toggle and btn.toggle_state then
+            active_toggle = btn
+            break
+        end
+    end
+
     for i, button in ipairs(custom_buttons.buttons) do
-        if button.visible then
+        local should_show = true
+        
+        if active_toggle then
+            should_show = false
+            if button.is_group_visibility_toggle then
+                should_show = true
+            elseif button.group and button.group ~= "" then
+                -- Check if cycle mode
+                if active_toggle.toggle_mode == "cycle" and active_toggle.cycle_views then
+                    local current_view_idx = active_toggle.cycle_current_view or 1
+                    local current_view = active_toggle.cycle_views[current_view_idx]
+                    if current_view and current_view.visible_groups then
+                        should_show = current_view.visible_groups[button.group] == true
+                    end
+                elseif active_toggle.visible_groups then
+                    should_show = active_toggle.visible_groups[button.group] == true
+                end
+            end
+        end
+        
+        if button.visible and should_show then
             r.ImGui_SameLine(ctx)
             
             local font_pushed = false
@@ -190,17 +280,13 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
             r.ImGui_SetCursorPosX(ctx, x_pos)
             r.ImGui_SetCursorPosY(ctx, y_pos)
             
-            -- Check toggle state for this button
             local toggle_state = nil
             if button.show_toggle_state then
-                -- Check if this is a group visibility toggle button
-                if button.is_group_visibility_toggle and button.target_group then
-                    local CustomButtons = require('custom_buttons')
-                    toggle_state = CustomButtons.GetGroupVisibilityState(button.target_group)
+                if button.is_group_visibility_toggle then
+                    toggle_state = button.toggle_state and 1 or 0
                 elseif button.left_click and button.left_click.command then
                     local command_id = button.left_click.command
                     
-                    -- Convert string command IDs to numbers if needed
                     if type(command_id) == "string" then
                         command_id = r.NamedCommandLookup(command_id)
                     end
