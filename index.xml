@@ -181,7 +181,7 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.6.3" author="TouristKiller" time="2025-10-25T19:07:00Z">
+        <version name="0.6.4" author="TouristKiller" time="2025-10-25T19:17:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>

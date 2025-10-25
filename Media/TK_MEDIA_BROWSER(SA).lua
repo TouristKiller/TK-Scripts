@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.3
+-- @version 0.6.4
 -- @changelog:
 --[[       
 + REAL-TIME PITCH TRACKING: Autocorrelation-based pitch detection during playback
@@ -7030,7 +7030,7 @@ local function loop()
             
             -- Display version
             local version_text = "v" .. script_version
-            r.ImGui_PushFont(ctx, small_font)
+            r.ImGui_PushFont(ctx, small_font, small_font_size)
             local version_width = r.ImGui_CalcTextSize(ctx, version_text)
             local version_y = r.ImGui_GetCursorPosY(ctx)
             r.ImGui_SetCursorPosY(ctx, version_y + 2)  -- Slight vertical offset for alignment
