@@ -1,9 +1,8 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.4
+-- @version 0.6.5
 -- @changelog:
 --[[       
-+ REAL-TIME PITCH TRACKING: Autocorrelation-based pitch detection during playback
 
 ]]--        
 --------------------------------------------------------------------------
@@ -7034,7 +7033,9 @@ local function loop()
             local version_width = r.ImGui_CalcTextSize(ctx, version_text)
             local version_y = r.ImGui_GetCursorPosY(ctx)
             r.ImGui_SetCursorPosY(ctx, version_y + 2)  -- Slight vertical offset for alignment
-            r.ImGui_TextColored(ctx, ui_settings.text_brightness * 0.6, ui_settings.text_brightness * 0.6, ui_settings.text_brightness * 0.6, 1.0, version_text)
+            local version_brightness = ui_settings.text_brightness * 0.6
+            local version_color = r.ImGui_ColorConvertDouble4ToU32(version_brightness, version_brightness, version_brightness, 1.0)
+            r.ImGui_TextColored(ctx, version_color, version_text)
             r.ImGui_PopFont(ctx)
             r.ImGui_SameLine(ctx, 0, 8)  -- 8px spacing after version
             
