@@ -181,37 +181,13 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-    <version name="0.6.2" author="TouristKiller" time="2025-10-24T16:07:00Z">
-    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
-    <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
-    <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
-                <changelog><![CDATA[  
-+ REAL-TIME PITCH TRACKING: Autocorrelation-based pitch detection during playback                      
-+ Independent playback: Media browser and project arrangement play independently by default
-+ Link mode: Optional synchronization between media browser and project transport (LINK button)
-  - Right-click LINK button for "Start from edit cursor" option
-  - Bidirectional sync: transport controls also control media browser
-  - Transport startup wait loop (50ms) for reliable synchronization
-+ SOLO toggle: Exclusive solo mode for MIDI/video files (appears left of GRID button)
-  - Works independently of playback status
-  - Automatic save/restore of solo states
-  - Isolated from play/stop functions (no automatic solo interference)
-+ Use Selected Track for MIDI: New option to play MIDI files through selected track
-  - Uses existing FX chain on selected track (no automatic synth)
-  - Error message in MIDI info field when no track selected
-  - SOLO functionality works with selected track
-+ Selection preservation: File list and waveform selections remain after stop
-+ Bugfix: SOLO toggle no longer overridden by play/stop actions
-+ Bugfix: Waveform seek click detection excludes SOLO button hover
-+ SPECTRAL VIEW: FFT-based frequency visualization with 6-band color gradient
-+ WAVEFORM ZOOM & SCROLL: Horizontal (1x-8x), vertical (0.5x-10x), mouse-centered
-+ SETTINGS PRESETS: Save/load/delete/resave UI configurations as JSON
-+ DYNAMIC WAVEFORM RESOLUTION: Adjustable detail level (1x-8x) in settings
-+ KEYBOARD SHORTCUTS PANEL: Quick reference for all shortcuts
-+ IMPROVED SETTINGS UI: Button color theming for sliders, dropdowns, and buttons with rounded corners
-+ WAVEFORM FOOTER: Increased height for better visual balance
-]]></changelog>
-    </version>
+        <version name="0.6.3" author="TouristKiller" time="2025-10-25T19:07:00Z">
+        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
+        <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
+        <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
+        <changelog><![CDATA[ 
+     ]]></changelog>
+        </version>
     </reapack>
  </category>
 

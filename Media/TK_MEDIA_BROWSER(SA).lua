@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.2
+-- @version 0.6.3
 -- @changelog:
 --[[       
 + REAL-TIME PITCH TRACKING: Autocorrelation-based pitch detection during playback
@@ -529,6 +529,39 @@ local function get_meta_first(source, keys)
     end
     return nil
 end
+
+-- Get script version from metadata
+local script_version = "0.0.0"
+local function get_script_version()
+    if script_version ~= "0.0.0" then
+        return script_version
+    end
+    
+    -- Read from current file to extract version
+    local script_file = debug.getinfo(1, "S").source:match("@?(.*)")
+    if script_file then
+        local file = io.open(script_file, "r")
+        if file then
+            for line in file:lines() do
+                local version = line:match("^%-%-%s*@version%s+(.+)")
+                if version then
+                    script_version = version:gsub("%s+", "")
+                    file:close()
+                    return script_version
+                end
+                -- Stop after first 10 lines (metadata should be at top)
+                if line:match("^%-%-%-%-") or line:match("^local ") then
+                    break
+                end
+            end
+            file:close()
+        end
+    end
+    return script_version
+end
+
+-- Initialize version on load
+script_version = get_script_version()
 
 local function load_midi_notes(file_path)
     local notes = {}
@@ -6994,6 +7027,17 @@ local function loop()
             end
             end  
             r.ImGui_SameLine(ctx)
+            
+            -- Display version
+            local version_text = "v" .. script_version
+            r.ImGui_PushFont(ctx, small_font)
+            local version_width = r.ImGui_CalcTextSize(ctx, version_text)
+            local version_y = r.ImGui_GetCursorPosY(ctx)
+            r.ImGui_SetCursorPosY(ctx, version_y + 2)  -- Slight vertical offset for alignment
+            r.ImGui_TextColored(ctx, ui_settings.text_brightness * 0.6, ui_settings.text_brightness * 0.6, ui_settings.text_brightness * 0.6, 1.0, version_text)
+            r.ImGui_PopFont(ctx)
+            r.ImGui_SameLine(ctx, 0, 8)  -- 8px spacing after version
+            
             local avail_width = r.ImGui_GetContentRegionAvail(ctx)
             local quit_button_size = 10
             local settings_button_size = 20
