@@ -1,8 +1,9 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.5
+-- @version 0.6.6
 -- @changelog:
 --[[       
++ REAL-TIME PITCH TRACKING: Autocorrelation-based pitch detection during playback
 
 ]]--        
 --------------------------------------------------------------------------
