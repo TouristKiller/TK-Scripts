@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.1.3
+-- @version 1.1.4
 -- @changelog 
 --[[
 
@@ -32,7 +32,6 @@ local os_separator = package.config:sub(1, 1)
 package.path = script_path .. "?.lua;"
 
 local json = require("json")
-local font_path = script_path .. "Icons-Regular.otf"
 local preset_path = script_path .. "tk_transport_presets" .. os_separator
 local preset_name = ""
 local transport_preset_has_unsaved_changes = false
@@ -2506,7 +2505,6 @@ local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.c
 local font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, settings.cursorpos_font_size or settings.font_size)
 local font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
 local font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, settings.battery_font_size or 14)
-local font_icons = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
 local SETTINGS_UI_FONT_NAME = 'Segoe UI'
 local SETTINGS_UI_FONT_SIZE = 13
 local settings_ui_font = r.ImGui_CreateFont(SETTINGS_UI_FONT_NAME, SETTINGS_UI_FONT_SIZE)
@@ -2522,7 +2520,6 @@ r.ImGui_Attach(ctx, font_timesel)
 r.ImGui_Attach(ctx, font_cursorpos)
 r.ImGui_Attach(ctx, font_localtime)
 r.ImGui_Attach(ctx, font_battery)
-r.ImGui_Attach(ctx, font_icons)
 r.ImGui_Attach(ctx, settings_ui_font)
 r.ImGui_Attach(ctx, settings_ui_font_small)
 local font_needs_update = false
@@ -7081,7 +7078,6 @@ local function CleanupFonts()
  if font_timesel then r.ImGui_Detach(ctx, font_timesel) end
  if font_cursorpos then r.ImGui_Detach(ctx, font_cursorpos) end
  if font_localtime then r.ImGui_Detach(ctx, font_localtime) end
- if font_icons then r.ImGui_Detach(ctx, font_icons) end
  if settings_ui_font then r.ImGui_Detach(ctx, settings_ui_font) end
  if settings_ui_font_small then r.ImGui_Detach(ctx, settings_ui_font_small) end
  if font_popup then r.ImGui_Detach(ctx, font_popup) end

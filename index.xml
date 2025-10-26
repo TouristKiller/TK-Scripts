@@ -110,14 +110,13 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.1.3" author="TouristKiller" time="2026-10-26T21:35:00Z">
+        <version name="1.1.4" author="TouristKiller" time="2026-10-26T21:45:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
             <source file="button_renderer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_renderer.lua</source>
             <source file="custom_buttons.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/custom_buttons.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
-            <source file="Icons-Regular.otf">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/Icons-Regular.otf</source>
             <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
             
             <!-- Visible widgets (added to action list) -->
