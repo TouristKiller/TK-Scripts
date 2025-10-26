@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.0.9
+-- @version 1.1.0
 -- @changelog 
 --[[
 
@@ -98,6 +98,12 @@ local waveform_scrubber = {
  last_update_time = 0,
  cache_keys_lru = {}, 
  item_modification_times = {} 
+}
+
+local battery_status = {
+ level = -1,
+ is_charging = false,
+ manual_refresh = false
 }
 
 local visual_metronome = {
@@ -263,6 +269,20 @@ local default_settings = {
  show_local_time = true,
  local_time_color = 0xFFFFFFFF,
  timesel_invisible = false,
+
+ show_battery_status = false,
+ battery_x = 0.90,
+ battery_y = 0.02,
+ battery_font_name = "Arial",
+ battery_font_size = 14,
+ battery_show_icon = true,
+ battery_show_percentage = true,
+ battery_color_high = 0x00FF00FF,
+ battery_color_medium = 0xFFFF00FF,
+ battery_color_low = 0xFF0000FF,
+ battery_color_charging = 0x00FFFFFF,
+ battery_warning_threshold = 20,
+ battery_critical_threshold = 10,
 
  -- Time Signature button colors
  timesig_button_color = 0x333333FF,
@@ -474,6 +494,7 @@ local Layout = {
  { name = "master_volume", showFlag = "show_master_volume", keyx = "master_volume_x", keyy = "master_volume_y" },
  { name = "cursorpos", showFlag = "show_cursorpos", keyx = "cursorpos_x", keyy = "cursorpos_y" },
  { name = "localtime", showFlag = "show_local_time", keyx = "local_time_x", keyy = "local_time_y" },
+ { name = "battery_status", showFlag = "show_battery_status", keyx = "battery_x", keyy = "battery_y" },
  { name = "tempo", showFlag = "show_tempo", keyx = "tempo_x", keyy = "tempo_y" },
  { name = "playrate", showFlag = "show_playrate", keyx = "playrate_x", keyy = "playrate_y" },
  { name = "timesig", showFlag = "show_timesig_button", keyx = "timesig_x", keyy = "timesig_y" },
@@ -638,6 +659,7 @@ local transport_components = {
  { id = "time_signature", name = "Time Signature" },
  { id = "time_selection", name = "Time Selection" },
  { id = "time_display", name = "Time Display" },
+ { id = "battery_status", name = "Battery Status" },
  { id = "cursor_position", name = "Cursor Position" },
  { id = "wave_scrubber", name = "Wave Scrubber" },
  { id = "shuttle_wheel", name = "Shuttle Wheel" },
@@ -695,6 +717,8 @@ function ShowComponentSettings(ctx, main_window_width, main_window_height)
  ShowTimeSelectionSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "time_display" then
  ShowTimeDisplaySettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "battery_status" then
+ ShowBatteryStatusSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "cursor_position" then
  ShowCursorPositionSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "wave_scrubber" then
@@ -1355,6 +1379,85 @@ function ShowTimeDisplaySettings(ctx, main_window_width, main_window_height)
          r.ImGui_EndTable(ctx)
      end
  end
+ end
+end
+
+function ShowBatteryStatusSettings(ctx, main_window_width, main_window_height)
+ local rv
+ rv, settings.show_battery_status = r.ImGui_Checkbox(ctx, "Show Battery Status", settings.show_battery_status or false)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if settings.show_battery_status then
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_TextWrapped(ctx, "Manual Update Only: Click on battery display to refresh (prevents freezing)")
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Position:")
+ DrawPixelXYControls('battery_x', 'battery_y', main_window_width, main_window_height)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Display Options:")
+ rv, settings.battery_show_icon = r.ImGui_Checkbox(ctx, "Show Icon", settings.battery_show_icon ~= false)
+ rv, settings.battery_show_percentage = r.ImGui_Checkbox(ctx, "Show Percentage", settings.battery_show_percentage ~= false)
+ rv, settings.battery_use_custom_icon = r.ImGui_Checkbox(ctx, "Use Custom Icon (Advanced)", settings.battery_use_custom_icon or false)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "BatteryFontTable", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Font:")
+ 
+ local current_font = settings.battery_font_name or settings.current_font
+ local current_font_index = 0
+ for i, font_name in ipairs(fonts) do
+ if font_name == current_font then
+ current_font_index = i - 1
+ break
+ end
+ end
+ 
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, current_font_index = r.ImGui_Combo(ctx, "##BatteryFont", current_font_index, table.concat(fonts, '\0') .. '\0')
+ if rv then
+ settings.battery_font_name = fonts[current_font_index + 1]
+ RebuildSectionFonts()
+ end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Size:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.battery_font_size = r.ImGui_SliderInt(ctx, "##BatterySize", settings.battery_font_size or 14, 8, 48)
+ if rv then
+ RebuildSectionFonts()
+ end
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Colors:")
+ local color_flags = r.ImGui_ColorEditFlags_NoInputs()
+ rv, settings.battery_color_high = r.ImGui_ColorEdit4(ctx, "High (>60%)", settings.battery_color_high or 0x00FF00FF, color_flags)
+ rv, settings.battery_color_medium = r.ImGui_ColorEdit4(ctx, "Medium (20-60%)", settings.battery_color_medium or 0xFFFF00FF, color_flags)
+ rv, settings.battery_color_low = r.ImGui_ColorEdit4(ctx, "Low (<20%)", settings.battery_color_low or 0xFF0000FF, color_flags)
+ rv, settings.battery_color_charging = r.ImGui_ColorEdit4(ctx, "Charging", settings.battery_color_charging or 0x00FFFFFF, color_flags)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Warning Thresholds:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.battery_warning_threshold = r.ImGui_SliderInt(ctx, "Warning Level (%)", settings.battery_warning_threshold or 20, 5, 50)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.battery_critical_threshold = r.ImGui_SliderInt(ctx, "Critical Level (%) - Blinking", settings.battery_critical_threshold or 10, 5, 30)
  end
 end
 
@@ -2402,6 +2505,7 @@ local font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.c
 local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
 local font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, settings.cursorpos_font_size or settings.font_size)
 local font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
+local font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, settings.battery_font_size or 14)
 local font_icons = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
 local SETTINGS_UI_FONT_NAME = 'Segoe UI'
 local SETTINGS_UI_FONT_SIZE = 13
@@ -2417,6 +2521,7 @@ r.ImGui_Attach(ctx, font_timesig)
 r.ImGui_Attach(ctx, font_timesel)
 r.ImGui_Attach(ctx, font_cursorpos)
 r.ImGui_Attach(ctx, font_localtime)
+r.ImGui_Attach(ctx, font_battery)
 r.ImGui_Attach(ctx, font_icons)
 r.ImGui_Attach(ctx, settings_ui_font)
 r.ImGui_Attach(ctx, settings_ui_font_small)
@@ -2549,6 +2654,7 @@ function RebuildSectionFonts()
  local new_font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
  local new_font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, settings.cursorpos_font_size or settings.font_size)
  local new_font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
+ local new_font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, settings.battery_font_size or 14)
  local new_font_popup = r.ImGui_CreateFont(settings.transport_popup_font_name or settings.current_font, settings.transport_popup_font_size or settings.font_size)
  local new_font_taptempo = r.ImGui_CreateFont(settings.taptempo_font_name or settings.current_font, settings.taptempo_font_size or settings.font_size)
  
@@ -2560,6 +2666,7 @@ function RebuildSectionFonts()
  r.ImGui_Attach(ctx, new_font_timesel)
  r.ImGui_Attach(ctx, new_font_cursorpos)
  r.ImGui_Attach(ctx, new_font_localtime)
+ r.ImGui_Attach(ctx, new_font_battery)
  r.ImGui_Attach(ctx, new_font_popup)
  r.ImGui_Attach(ctx, new_font_taptempo)
  
@@ -2571,6 +2678,7 @@ function RebuildSectionFonts()
  font_timesel = new_font_timesel
  font_cursorpos = new_font_cursorpos
  font_localtime = new_font_localtime
+ font_battery = new_font_battery
  font_popup = new_font_popup
  font_taptempo = new_font_taptempo
 end
@@ -6450,6 +6558,216 @@ local function format_session_time(seconds)
  end
 end
 
+local function GetBatteryStatus()
+ battery_status.manual_refresh = false
+ 
+ if r.GetOS():match("Win") then
+  local handle = io.popen("wmic path Win32_Battery get EstimatedChargeRemaining,BatteryStatus /format:list 2>nul")
+  if handle then
+   local output = handle:read("*a")
+   handle:close()
+   
+   if output and output ~= "" then
+    local level = output:match("EstimatedChargeRemaining=(%d+)")
+    if level then
+     battery_status.level = tonumber(level)
+    end
+    
+    local status = output:match("BatteryStatus=(%d+)")
+    if status then
+     battery_status.is_charging = (tonumber(status) == 2)
+    end
+   else
+    battery_status.level = -1
+    battery_status.is_charging = false
+   end
+  end
+ 
+ elseif r.GetOS():match("OSX") or r.GetOS():match("macOS") then
+  local handle = io.popen("pmset -g batt 2>/dev/null")
+  if handle then
+   local output = handle:read("*a")
+   handle:close()
+   
+   if output then
+    local level = output:match("(%d+)%%")
+    if level then
+     battery_status.level = tonumber(level)
+    end
+    
+    battery_status.is_charging = output:match("charging") ~= nil
+   end
+  end
+ 
+ elseif r.GetOS():match("Linux") then
+  local capacity_file = io.open("/sys/class/power_supply/BAT0/capacity", "r")
+  if capacity_file then
+   local level = capacity_file:read("*n")
+   capacity_file:close()
+   if level then
+    battery_status.level = level
+   end
+   
+   local status_file = io.open("/sys/class/power_supply/BAT0/status", "r")
+   if status_file then
+    local status = status_file:read("*l")
+    status_file:close()
+    battery_status.is_charging = (status and status:match("Charging")) ~= nil
+   end
+  else
+   local handle = io.popen("upower -i $(upower -e | grep BAT) 2>/dev/null | grep -E 'percentage|state'")
+   if handle then
+    local output = handle:read("*a")
+    handle:close()
+    
+    if output and output ~= "" then
+     local level = output:match("percentage:%s*(%d+)%%")
+     if level then
+      battery_status.level = tonumber(level)
+     end
+     battery_status.is_charging = output:match("state:%s*charging") ~= nil
+    end
+   end
+  end
+ end
+ 
+ return battery_status.level, battery_status.is_charging
+end
+
+local function DrawBatteryIcon(draw_list, x, y, width, height, level, is_charging, color)
+ local body_x1 = x
+ local body_y1 = y + height * 0.1
+ local body_x2 = x + width * 0.85
+ local body_y2 = y + height * 0.9
+ local body_rounding = height * 0.1
+ 
+ local tip_x1 = x + width * 0.85
+ local tip_y1 = y + height * 0.35
+ local tip_x2 = x + width
+ local tip_y2 = y + height * 0.65
+ 
+ r.ImGui_DrawList_AddRect(draw_list, body_x1, body_y1, body_x2, body_y2, color, body_rounding, nil, 1.5)
+ 
+ r.ImGui_DrawList_AddRectFilled(draw_list, tip_x1, tip_y1, tip_x2, tip_y2, color)
+ 
+ if level > 0 then
+ local fill_width = (body_x2 - body_x1 - 4) * (level / 100)
+ local fill_x1 = body_x1 + 2
+ local fill_y1 = body_y1 + 2
+ local fill_x2 = fill_x1 + fill_width
+ local fill_y2 = body_y2 - 2
+ 
+ r.ImGui_DrawList_AddRectFilled(draw_list, fill_x1, fill_y1, fill_x2, fill_y2, color, body_rounding * 0.5)
+ end
+ 
+ if is_charging then
+ local bolt_x = x + width * 0.35
+ local bolt_y = y + height * 0.25
+ local bolt_w = width * 0.3
+ local bolt_h = height * 0.5
+ 
+ local charging_color = settings.battery_color_charging or 0x00FFFFFF
+ r.ImGui_DrawList_AddLine(draw_list, bolt_x + bolt_w * 0.5, bolt_y, bolt_x, bolt_y + bolt_h * 0.5, charging_color, 2)
+ r.ImGui_DrawList_AddLine(draw_list, bolt_x, bolt_y + bolt_h * 0.5, bolt_x + bolt_w * 0.5, bolt_y + bolt_h * 0.5, charging_color, 2)
+ r.ImGui_DrawList_AddLine(draw_list, bolt_x + bolt_w * 0.5, bolt_y + bolt_h * 0.5, bolt_x + bolt_w * 0.2, bolt_y + bolt_h, charging_color, 2)
+ end
+end
+
+local function ShowBatteryStatus(main_window_width, main_window_height)
+ if not settings.show_battery_status then return end
+ 
+ local level = battery_status.level
+ local is_charging = battery_status.is_charging
+ 
+ local display_text = ""
+ if level < 0 then
+  display_text = "🔋 Click to load"
+  level = 0
+  is_charging = false
+ else
+  if settings.battery_show_icon then
+   display_text = is_charging and "⚡" or "🔋"
+   if settings.battery_show_percentage then
+    display_text = display_text .. " "
+   end
+  end
+  if settings.battery_show_percentage then
+   display_text = display_text .. level .. "%"
+  end
+ end
+ 
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetCursorPosX(ctx, settings.battery_x_px and ScalePosX(settings.battery_x_px, main_window_width, settings) or ((settings.battery_x or 0.90) * main_window_width))
+ r.ImGui_SetCursorPosY(ctx, settings.battery_y_px and ScalePosY(settings.battery_y_px, main_window_height, settings) or ((settings.battery_y or 0.02) * main_window_height))
+ 
+ local battery_color
+ if is_charging then
+ battery_color = settings.battery_color_charging or 0x00FFFFFF
+ elseif level > 60 then
+ battery_color = settings.battery_color_high or 0x00FF00FF
+ elseif level > (settings.battery_warning_threshold or 20) then
+ battery_color = settings.battery_color_medium or 0xFFFF00FF
+ else
+ battery_color = settings.battery_color_low or 0xFF0000FF
+ end
+ 
+ if level <= (settings.battery_critical_threshold or 10) and not is_charging then
+ local blink = math.floor(r.time_precise() * 2) % 2
+ if blink == 0 then
+ battery_color = 0xFF000088
+ end
+ end
+ 
+ if font_battery then 
+ r.ImGui_PushFont(ctx, font_battery, settings.battery_font_size or 14) 
+ end
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), battery_color)
+ 
+ local screen_x, screen_y = r.ImGui_GetCursorScreenPos(ctx)
+ r.ImGui_Text(ctx, display_text)
+ local text_w, text_h = r.ImGui_CalcTextSize(ctx, display_text)
+ 
+ r.ImGui_PopStyleColor(ctx)
+ 
+ if settings.battery_use_custom_icon then
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local icon_size = (settings.battery_font_size or 14) * 1.2
+ DrawBatteryIcon(draw_list, screen_x - icon_size - 5, screen_y, icon_size, icon_size, level, is_charging, battery_color)
+ end
+ 
+ if font_battery then 
+ r.ImGui_PopFont(ctx) 
+ end
+ 
+ if r.ImGui_IsItemHovered(ctx) then
+ local status_text = is_charging and "Charging" or "Discharging"
+ local time_remaining = ""
+ 
+ if level > 0 and not is_charging then
+ local estimated_minutes = math.floor((level / 100) * 240)
+ local hours = math.floor(estimated_minutes / 60)
+ local minutes = estimated_minutes % 60
+ time_remaining = string.format("\nEstimated: %dh %dm remaining", hours, minutes)
+ end
+ 
+ local tooltip = string.format(
+ "Battery: %d%%\nStatus: %s%s\n\nClick to refresh", 
+ level, 
+ status_text,
+ time_remaining
+ )
+ r.ImGui_SetTooltip(ctx, tooltip)
+ 
+ if r.ImGui_IsItemClicked(ctx, 0) then
+ battery_status.manual_refresh = true
+ GetBatteryStatus()
+ end
+ end
+ 
+ StoreElementRect("battery_status")
+end
+
 local function ShowLocalTime(main_window_width, main_window_height)
  if not settings.show_local_time then return end
  local t = os.time()
@@ -6505,7 +6823,6 @@ local function ShowLocalTime(main_window_width, main_window_height)
  r.ImGui_SetCursorPosX(ctx, settings.local_time_x_px and ScalePosX(settings.local_time_x_px, main_window_width, settings) or ((settings.local_time_x or 0.5) * main_window_width))
  r.ImGui_SetCursorPosY(ctx, settings.local_time_y_px and ScalePosY(settings.local_time_y_px, main_window_height, settings) or ((settings.local_time_y or 0.02) * main_window_height))
  
- -- Push button styles to match other components
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.local_time_bg_color or 0x00000000)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.local_time_bg_color or 0x00000000)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.local_time_bg_color or 0x00000000)
@@ -6726,6 +7043,45 @@ function TapTempo(main_window_width, main_window_height)
  end
 end
 
+local function CleanupFonts()
+ if font then r.ImGui_Detach(ctx, font) end
+ if font_transport then r.ImGui_Detach(ctx, font_transport) end
+ if font_env then r.ImGui_Detach(ctx, font_env) end
+ if font_master_volume then r.ImGui_Detach(ctx, font_master_volume) end
+ if font_tempo then r.ImGui_Detach(ctx, font_tempo) end
+ if font_timesig then r.ImGui_Detach(ctx, font_timesig) end
+ if font_timesel then r.ImGui_Detach(ctx, font_timesel) end
+ if font_cursorpos then r.ImGui_Detach(ctx, font_cursorpos) end
+ if font_localtime then r.ImGui_Detach(ctx, font_localtime) end
+ if font_icons then r.ImGui_Detach(ctx, font_icons) end
+ if settings_ui_font then r.ImGui_Detach(ctx, settings_ui_font) end
+ if settings_ui_font_small then r.ImGui_Detach(ctx, settings_ui_font_small) end
+ if font_popup then r.ImGui_Detach(ctx, font_popup) end
+ if font_taptempo then r.ImGui_Detach(ctx, font_taptempo) end
+ 
+ if font_cache then
+ for key, font_handle in pairs(font_cache) do
+ if r.ImGui_ValidatePtr(font_handle, 'ImGui_Font*') then
+ r.ImGui_Detach(ctx, font_handle)
+ end
+ end
+ font_cache = {}
+ end
+ 
+ collectgarbage("collect")
+ collectgarbage("collect")
+end
+
+local function CleanupImages()
+ if transport_custom_images then
+ for key, img in pairs(transport_custom_images) do
+ transport_custom_images[key] = nil
+ end
+ end
+ 
+ collectgarbage("collect")
+end
+
 function Main()
  local needs_refresh = r.GetExtState("TK_TRANSPORT", "refresh_buttons")
  if needs_refresh == "1" then
@@ -6751,7 +7107,6 @@ function Main()
  if visible then
  r.ImGui_SetScrollY(ctx, 0)
  
- -- Draw gradient background if enabled
  DrawGradientBackground()
  
  local main_window_width = r.ImGui_GetWindowWidth(ctx)
@@ -6794,6 +7149,7 @@ function Main()
  TapTempo(main_window_width, main_window_height)
  RenderVisualMetronome(main_window_width, main_window_height)
  ShowLocalTime(main_window_width, main_window_height) 
+ ShowBatteryStatus(main_window_width, main_window_height) 
 
  if settings.edit_mode then
  local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -6875,7 +7231,6 @@ function Main()
  ShowSettings(main_window_width, main_window_height)
  ShowInstanceManager()
  
- -- Handle IconBrowser outside of all other windows to prevent GUI conflicts
  if CustomButtons then
      ButtonEditor.HandleIconBrowser(ctx, CustomButtons, settings)
      ButtonEditor.HandleStyleSettingsWindow(ctx)
@@ -6998,6 +7353,11 @@ function Main()
  r.defer(Main)
  else
  CustomButtons.SaveCurrentButtons()
+ CleanupImages()
+ CleanupFonts()
+ ButtonRenderer.Cleanup(ctx)
+ collectgarbage("collect")
+ collectgarbage("collect")
  end
 end
 
