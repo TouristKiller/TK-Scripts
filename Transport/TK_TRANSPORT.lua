@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.1.0
+-- @version 1.1.1
 -- @changelog 
 --[[
 
@@ -6681,7 +6681,7 @@ local function ShowBatteryStatus(main_window_width, main_window_height)
  
  local display_text = ""
  if level < 0 then
-  display_text = "🔋 Click to load"
+  display_text = "🔋 Click"
   level = 0
   is_charging = false
  else
@@ -6732,8 +6732,9 @@ local function ShowBatteryStatus(main_window_width, main_window_height)
  
  if settings.battery_use_custom_icon then
  local draw_list = r.ImGui_GetWindowDrawList(ctx)
- local icon_size = (settings.battery_font_size or 14) * 1.2
- DrawBatteryIcon(draw_list, screen_x - icon_size - 5, screen_y, icon_size, icon_size, level, is_charging, battery_color)
+ local icon_size = text_h * 0.9
+ local icon_y = screen_y - (icon_size - text_h) * 0.5 + 2
+ DrawBatteryIcon(draw_list, screen_x - icon_size - 5, icon_y, icon_size, icon_size, level, is_charging, battery_color)
  end
  
  if font_battery then 
