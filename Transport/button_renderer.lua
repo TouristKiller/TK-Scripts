@@ -1158,4 +1158,21 @@ if not ButtonRenderer._submenu_patched then
     ButtonRenderer._submenu_patched = true
 end
 
+function ButtonRenderer.Cleanup(ctx)
+    -- Cleanup popup fonts
+    for key, font in pairs(ButtonRenderer.popup_font_cache) do
+        if r.ImGui_ValidatePtr(font, 'ImGui_Font*') then
+            r.ImGui_Detach(ctx, font)
+        end
+    end
+    ButtonRenderer.popup_font_cache = {}
+    
+    -- Cleanup image cache
+    for key, img in pairs(ButtonRenderer.image_cache) do
+        ButtonRenderer.image_cache[key] = nil
+    end
+    
+    collectgarbage("collect")
+end
+
 return ButtonRenderer

@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.1.1
+-- @version 1.1.2
 -- @changelog 
 --[[
 
@@ -3195,23 +3195,50 @@ function SetTransportStyle()
 end
 
 -- Universal popup styling functions
-function PushTransportPopupStyling()
+function PushTransportPopupStyling(ctx, settings)
+ if not ctx then ctx = _G.ctx end
+ if not settings then settings = _G.settings end
+ if not font_cache then font_cache = {} end
  -- Push comprehensive popup styling that should work for all popup types
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.transport_popup_bg or settings.background)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.transport_popup_text or settings.text_normal)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.transport_border or settings.border)
- -- Add extra styling for menu items that might use different color targets
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), settings.transport_popup_bg or settings.background)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), settings.transport_border or settings.border)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), settings.transport_border or settings.border)
- -- Use dedicated popup font (overrides transport font)
- if font_popup then r.ImGui_PushFont(ctx, font_popup, settings.transport_popup_font_size or settings.font_size) end
- return 6 
+ local popup_font = nil
+ if settings.transport_popup_font_name and settings.transport_popup_font_size then
+ local cache_key = settings.transport_popup_font_name .. "_" .. settings.transport_popup_font_size
+ popup_font = font_cache[cache_key]
+ if not popup_font then
+ popup_font = r.ImGui_CreateFont(settings.transport_popup_font_name, settings.transport_popup_font_size)
+ if popup_font then
+ r.ImGui_Attach(ctx, popup_font)
+ font_cache[cache_key] = popup_font
+ end
+ end
+ if popup_font then
+ r.ImGui_PushFont(ctx, popup_font, settings.transport_popup_font_size)
+ return 6, true, popup_font 
+ end
+ end
+ r.ImGui_PushFont(ctx, nil, settings.font_size or 14)
+ return 6, true, nil
 end
 
-function PopTransportPopupStyling(color_count)
- if font_popup then r.ImGui_PopFont(ctx) end
- r.ImGui_PopStyleColor(ctx, color_count or 6)
+function PopTransportPopupStyling(...)
+ local arg1, arg2, arg3, arg4 = ...
+ if type(arg1) == "number" then
+  -- oude call: PopTransportPopupStyling(color_count)
+  local color_count = arg1
+  if font_popup then r.ImGui_PopFont(ctx) end
+  r.ImGui_PopStyleColor(ctx, color_count or 6)
+ else
+  -- nieuwe call: PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
+  local ctx, color_count, font_pushed, popup_font = arg1, arg2, arg3, arg4
+  if font_pushed then r.ImGui_PopFont(ctx) end
+  r.ImGui_PopStyleColor(ctx, color_count or 6)
+ end
 end
 
 function SetTransportPopupStyle()
@@ -4518,7 +4545,7 @@ function EnvelopeOverride(main_window_width, main_window_height)
  end
 
  if r.ImGui_BeginPopup(ctx, "AutomationMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  local envelopes_visible = r.GetToggleCommandState(40926) == 1
  if r.ImGui_MenuItem(ctx, "Toggle all active track envelopes", nil, envelopes_visible) then
@@ -4531,7 +4558,7 @@ function EnvelopeOverride(main_window_width, main_window_height)
  end
  end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  r.ImGui_EndPopup(ctx)
  end
 end
@@ -4542,7 +4569,7 @@ function ShowPlaySyncMenu()
  r.ImGui_OpenPopup(ctx, "SyncMenu")
  end
  if r.ImGui_BeginPopup(ctx, "SyncMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, "Timecode Sync Settings") then
  r.Main_OnCommand(40619, 0)
@@ -4551,7 +4578,7 @@ function ShowPlaySyncMenu()
  r.Main_OnCommand(40620, 0)
  end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  r.ImGui_EndPopup(ctx)
  end
 end
@@ -4563,7 +4590,7 @@ function ShowRecordMenu()
  end
  
  if r.ImGui_BeginPopup(ctx, "RecordMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, "Normal Record Mode") then
  r.Main_OnCommand(40252, 0)
@@ -4575,7 +4602,7 @@ function ShowRecordMenu()
  r.Main_OnCommand(40076, 0)
  end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  r.ImGui_EndPopup(ctx)
  end
 end
@@ -5258,11 +5285,11 @@ function PlayRate_Slider(main_window_width, main_window_height)
  r.Main_OnCommand(40521, 0)
  end
  if r.ImGui_IsItemHovered(ctx) then
- local color_count = PushTransportPopupStyling()
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  r.ImGui_BeginTooltip(ctx)
  r.ImGui_Text(ctx, 'click to reset')
  r.ImGui_EndTooltip(ctx)
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  end
  r.ImGui_SameLine(ctx)
  r.ImGui_SetCursorPosY(ctx, settings.playrate_y_px or (settings.playrate_y * main_window_height))
@@ -7243,7 +7270,7 @@ function Main()
  r.ImGui_OpenPopup(ctx, "TransportContextMenu")
  end
  if r.ImGui_BeginPopup(ctx, "TransportContextMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, settings.edit_mode and "Disable Edit Mode" or "Enable Edit Mode") then
  settings.edit_mode = not settings.edit_mode
@@ -7272,7 +7299,7 @@ function Main()
  open = false
  end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  r.ImGui_EndPopup(ctx)
  end
  
