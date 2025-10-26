@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.9.7
+-- @version 1.9.8
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -1670,12 +1670,94 @@ function exit()
         if r.ImGui_ValidatePtr(TinyFont, 'ImGui_Resource*') then
             r.ImGui_Detach(ctx, TinyFont)
         end
-        if r.ImGui_ValidatePtr(IconFont, 'ImGui_Resource*') then
-            r.ImGui_Detach(ctx, IconFont)
-        end
     end
 end
 r.atexit(exit)
+
+function DrawGearIcon(x, y, size, color)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local center_x = x + size / 2
+    local center_y = y + size / 2
+    local outer_radius = size * 0.45
+    local inner_radius = size * 0.28
+    local teeth = 8
+    local tooth_depth = size * 0.12
+    
+    for i = 0, teeth * 2 - 1 do
+        local angle1 = (i / (teeth * 2)) * math.pi * 2
+        local angle2 = ((i + 1) / (teeth * 2)) * math.pi * 2
+        local radius1 = (i % 2 == 0) and outer_radius or (outer_radius - tooth_depth)
+        local radius2 = ((i + 1) % 2 == 0) and outer_radius or (outer_radius - tooth_depth)
+        
+        local px1 = center_x + math.cos(angle1) * radius1
+        local py1 = center_y + math.sin(angle1) * radius1
+        local px2 = center_x + math.cos(angle2) * radius2
+        local py2 = center_y + math.sin(angle2) * radius2
+        
+        r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, center_y, px1, py1, px2, py2, color)
+    end
+    
+    local bg_color = config.bg_color or 0x1E1E1EFF
+    r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, inner_radius, bg_color)
+    r.ImGui_DrawList_AddCircle(draw_list, center_x, center_y, inner_radius * 0.5, color, 0, 1.5)
+end
+
+function DrawPlusIcon(x, y, size, color)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local center_x = x + size / 2
+    local center_y = y + size / 2
+    local thickness = size * 0.2
+    local length = size * 0.6
+    
+    r.ImGui_DrawList_AddRectFilled(draw_list, 
+        center_x - thickness / 2, center_y - length / 2,
+        center_x + thickness / 2, center_y + length / 2, color)
+    
+    r.ImGui_DrawList_AddRectFilled(draw_list, 
+        center_x - length / 2, center_y - thickness / 2,
+        center_x + length / 2, center_y + thickness / 2, color)
+end
+
+function DrawIconButton(icon_type, size, custom_color)
+    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+    
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)
+    
+    local clicked = r.ImGui_Button(ctx, "##" .. icon_type .. "_btn", size, size)
+    local is_hovered = r.ImGui_IsItemHovered(ctx)
+    
+    r.ImGui_PopStyleColor(ctx, 3)
+    
+    local base_color = custom_color or config.text_color or 0xFFFFFFFF
+    local hover_brightness = 1.3
+    
+    local icon_color = base_color
+    if is_hovered then
+        local r_val = ((base_color >> 24) & 0xFF) / 255
+        local g_val = ((base_color >> 16) & 0xFF) / 255
+        local b_val = ((base_color >> 8) & 0xFF) / 255
+        local a_val = (base_color & 0xFF) / 255
+        
+        r_val = math.min(1.0, r_val * hover_brightness)
+        g_val = math.min(1.0, g_val * hover_brightness)
+        b_val = math.min(1.0, b_val * hover_brightness)
+        
+        icon_color = (math.floor(r_val * 255) << 24) | 
+                     (math.floor(g_val * 255) << 16) | 
+                     (math.floor(b_val * 255) << 8) | 
+                     math.floor(a_val * 255)
+    end
+    
+    if icon_type == "gear" then
+        DrawGearIcon(cursor_x, cursor_y, size, icon_color)
+    elseif icon_type == "plus" then
+        DrawPlusIcon(cursor_x, cursor_y, size, icon_color)
+    end
+    
+    return clicked
+end
 
 function DrawDragOverlay()
     if dragging_fx_name then
@@ -1703,8 +1785,8 @@ function DrawDragOverlay()
                 r.ImGui_Text(ctx, 'Track: ' .. track_name)
             end
             r.ImGui_Text(ctx, 'Release to add')
+            r.ImGui_End(ctx)
         end
-        r.ImGui_End(ctx)
     end
 end
 
@@ -1733,12 +1815,10 @@ end
 NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
 TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
 LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
-IconFont = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
 
 r.ImGui_Attach(ctx, NormalFont)
 r.ImGui_Attach(ctx, LargeFont)
 r.ImGui_Attach(ctx, TinyFont)
-r.ImGui_Attach(ctx, IconFont)
 
 ---------------------------------------------------------------------
 function EnsureFileExists(filepath)
@@ -6591,15 +6671,9 @@ function ShowScreenshotControls()
     local button_height = 20
 
     r.ImGui_SetCursorPos(ctx, window_width - button_width - 2, -2)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-    r.ImGui_PushFont(ctx, IconFont, 12)
-    if r.ImGui_Button(ctx, "\u{0047}", button_height, button_width) then
+    if DrawIconButton("gear", button_height) then
         r.ImGui_OpenPopup(ctx, "ScreenshotControlsMenu")
     end
-    r.ImGui_PopFont(ctx)
-    r.ImGui_PopStyleColor(ctx, 3)
 
     if r.ImGui_BeginPopup(ctx, "ScreenshotControlsMenu") then
         -- Version header for the screenshot window settings
@@ -11365,11 +11439,8 @@ function ShowScreenshotWindow()
         r.ImGui_EndChild(ctx) 
         config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
         r.ImGui_End(ctx)
-        return visible
-    else
-        r.ImGui_End(ctx)
-        return visible
     end
+    return visible
 end
 
 function FilterTracksByTag(tag)
@@ -12958,14 +13029,14 @@ end
         local popup2_open = r.ImGui_BeginChild(ctx, "MainItemFXPanel", -1, available_height)
         if popup2_open then
             ShowItemFX()
+            r.ImGui_EndChild(ctx)
         end
-        r.ImGui_EndChild(ctx)
     else
         local popupp3_open = r.ImGui_BeginChild(ctx, "MainTrackFXPanel", -1, available_height)
         if popupp3_open then
             ShowTrackFX()
+            r.ImGui_EndChild(ctx)
         end
-        r.ImGui_EndChild(ctx)
     end
         if not r.ImGui_IsAnyItemHovered(ctx) then
             current_hovered_plugin = nil
@@ -13096,12 +13167,10 @@ function InitializeImGuiContext()
         NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
         TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
         LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
-        IconFont = r.ImGui_CreateFontFromFile(script_path .. 'Icons-Regular.otf', 0)
 
         r.ImGui_Attach(ctx, NormalFont)
         r.ImGui_Attach(ctx, TinyFont)
         r.ImGui_Attach(ctx, LargeFont)
-        r.ImGui_Attach(ctx, IconFont)
         
     end
 end
@@ -13299,8 +13368,8 @@ if not general_visibility then
     local hidden_visible, hidden_open = r.ImGui_Begin(ctx, 'TK FX BROWSER (Hidden)', true, invisible_flags)
     if hidden_visible then
         r.ImGui_Text(ctx, "") -- Empty content
+        r.ImGui_End(ctx)
     end
-    r.ImGui_End(ctx)
     
     if hidden_open then
         r.defer(Main)
@@ -13366,13 +13435,12 @@ if visible then
             
             local trackinfo_open = r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50)
             if trackinfo_open then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Transparante knop
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_SetCursorPos(ctx, 0, 0)
-                r.ImGui_PushFont(ctx, IconFont, 12)
-                if r.ImGui_Button(ctx, '\u{0050}', 20, 20) then
+                if DrawIconButton("plus", 20) then
                     config.show_screenshot_window = not config.show_screenshot_window
                     SaveConfig()
                     ClearScreenshotCache()
@@ -13382,12 +13450,8 @@ if visible then
                 
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPos(ctx, window_width - 20, 0)
-                if r.ImGui_Button(ctx, show_settings and '\u{0047}' or '\u{0047}', 20, 20) then
+                if DrawIconButton("gear", 20) then
                     show_settings = not show_settings
-                end
-                
-                if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
-                    r.ImGui_PopFont(ctx)
                 end
                 
                 r.ImGui_PopStyleColor(ctx, 4)
@@ -14478,12 +14542,8 @@ if visible then
             Frame()
         else
             r.ImGui_Text(ctx, "NO TRACK SELECTED")
-            r.ImGui_PushFont(ctx, IconFont, 12)
-            if r.ImGui_Button(ctx, show_settings and "\u{0047}" or "\u{0047}", 20, 20) then
+            if DrawIconButton("gear", 20) then
                 show_settings = not show_settings
-            end
-            if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
-                r.ImGui_PopFont(ctx)
             end
         end
         if SHOW_PREVIEW and current_hovered_plugin then 
