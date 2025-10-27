@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.9.9
+-- @version 2.0.0
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -4287,26 +4287,18 @@ end
 function CaptureARAScreenshot(track, fx_index, plugin_name)
     local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
     if hwnd then
-        r.TrackFX_Show(track, fx_index, 3)
-        r.defer(function()
-            r.time_precise()
-            r.defer(function()
-                local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                local filename = screenshot_path .. safe_name .. ".png"
-                local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
-                local w, h = right - left, bottom - top
-                
-                local srcDC = r.JS_GDI_GetClientDC(hwnd)
-                local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
-                local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
-                r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, config.srcx, config.srcy, w, h)
-                r.JS_LICE_WritePNG(filename, srcBmp, false)
-                r.JS_GDI_ReleaseDC(hwnd, srcDC)
-                r.JS_LICE_DestroyBitmap(srcBmp)
-                
-                r.TrackFX_Show(track, fx_index, 2)
-            end)
-        end)
+        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+        local filename = screenshot_path .. safe_name .. ".png"
+        local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+        local w, h = right - left, bottom - top
+        
+        local srcDC = r.JS_GDI_GetClientDC(hwnd)
+        local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
+        local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
+        r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, config.srcx, config.srcy, w, h)
+        r.JS_LICE_WritePNG(filename, srcBmp, false)
+        r.JS_GDI_ReleaseDC(hwnd, srcDC)
+        r.JS_LICE_DestroyBitmap(srcBmp)
     end
 end
 
