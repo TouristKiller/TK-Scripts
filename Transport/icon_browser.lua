@@ -318,9 +318,9 @@ function IconBrowser.Show(ctx, settings)
                                     IconBrowser.grid_size, IconBrowser.grid_size, 0, 0, uv_u2, 1) then
                                     if IconBrowser.browse_mode == "images" then
                                         IconBrowser.selected_image_path = icon.path
-                                        IconBrowser.selected_icon = icon.name
+                                        IconBrowser.selected_icon = icon.path
                                     else
-                                        IconBrowser.selected_icon = icon.name
+                                        IconBrowser.selected_icon = icon.path
                                         IconBrowser.selected_image_path = nil
                                     end
                                 end
@@ -329,9 +329,9 @@ function IconBrowser.Show(ctx, settings)
                                 if r.ImGui_Button(ctx, "##" .. idx, IconBrowser.grid_size, IconBrowser.grid_size) then
                                     if IconBrowser.browse_mode == "images" then
                                         IconBrowser.selected_image_path = icon.path
-                                        IconBrowser.selected_icon = icon.name
+                                        IconBrowser.selected_icon = icon.path
                                     else
-                                        IconBrowser.selected_icon = icon.name
+                                        IconBrowser.selected_icon = icon.path
                                         IconBrowser.selected_image_path = nil
                                     end
                                 end

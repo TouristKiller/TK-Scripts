@@ -2174,9 +2174,13 @@ function ButtonEditor.LoadIconForPreview(button)
     local ButtonRenderer = require('button_renderer')
     
     if not r.ImGui_ValidatePtr(ButtonRenderer.image_cache[button.icon_name], 'ImGui_Image*') then
-        local script_path = debug.getinfo(1, 'S').source:match([[^@?(.*[\/])[^\/]-$]])
-        local resource_path = script_path
-        local icon_path = resource_path .. "/Data/toolbar_icons/" .. button.icon_name
+        local icon_path
+        if button.icon_name:match("^/") or button.icon_name:match("^[A-Za-z]:") then
+            icon_path = button.icon_name
+        else
+            local resource_path = r.GetResourcePath()
+            icon_path = resource_path .. "/Data/toolbar_icons/" .. button.icon_name
+        end
         
         if r.file_exists(icon_path) then
             local img = r.ImGui_CreateImage(icon_path)
