@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 1.9.8
+-- @version 1.9.9
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -4123,11 +4123,10 @@ end
                             
 
 ------------
-local wait_time = config.screenshot_delay 
 function Wait(callback, start_time)
     start_time = start_time or r.time_precise()
     local function check()
-        if r.time_precise() - start_time >= wait_time then
+        if r.time_precise() - start_time >= config.screenshot_delay then
             callback()
         else
             r.defer(check)
