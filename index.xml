@@ -248,7 +248,6 @@
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/json.lua</source>
             <source file="track_icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/track_icon_browser.lua</source>
             <source file="track_icon_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/track_icon_manager.lua</source>
-            <source file="TRACK_ICONS_README.md">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TRACK_ICONS_README.md</source>
         </version>
     </reapack>
 
