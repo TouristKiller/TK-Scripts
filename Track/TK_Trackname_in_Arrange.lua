@@ -1,12 +1,14 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.1.1
+-- @version 1.2.0
 -- @changelog 
 --[[
-+ Simplified focus detection and overlay z-order management
++ Added Track Icon support
++ Icon browser for REAPER icons and custom images
++ Icons can be assigned per track with configurable size, opacity, and position
 ]]--
 
-local SCRIPT_VERSION = "1.1.1"
+local SCRIPT_VERSION = "1.2.0"
 
 local r                  = reaper
 -- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
@@ -15,6 +17,8 @@ local IS_LINUX           = OS:lower():find("linux") ~= nil
 local script_path        = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
 local preset_path        = script_path .. "TK_Trackname_Presets/"
 local json               = dofile(script_path .. "json.lua")
+local track_icon_browser = dofile(script_path .. "track_icon_browser.lua")
+local track_icon_manager = dofile(script_path .. "track_icon_manager.lua")
 package.path             = r.ImGui_GetBuiltinPath() .. '/?.lua;' .. package.path
 local im                 = require 'imgui' '0.9.3'
 local ctx                = im.CreateContext('Track Names')
@@ -230,6 +234,12 @@ local default_settings              = {
     fx_name_length                  = 1,
     fx_fixed_label_length           = 10,
     pass_through_overlay            = IS_LINUX,
+    -- Track Icon Settings
+    show_track_icons                = true,
+    icon_size                       = 24,
+    icon_position                   = 1,  -- 1=left, 2=right
+    icon_spacing                    = 8,
+    icon_opacity                    = 1.0,
 }
 
 local settings = {}
@@ -559,6 +569,7 @@ end
 
 function RefreshProjectState()
     UpdateBgColorCache()
+    track_icon_manager.RefreshAllIcons()
     if settings.custom_colors_enabled then
         UpdateGridColors()
         UpdateArrangeBG()
@@ -735,10 +746,10 @@ function ShowSettingsWindow()
     -- Use Sexan's positioning
     local _, DPI_RPR = r.get_config_var_string("uiscale")
     local window_x = LEFT + (RIGHT - LEFT - 520) / 2  
-    local window_y = TOP + (BOT - TOP - 650) / 2      
+    local window_y = TOP + (BOT - TOP - 800) / 2      
     
     r.ImGui_SetNextWindowPos(ctx, window_x, window_y, r.ImGui_Cond_FirstUseEver())
-    r.ImGui_SetNextWindowSize(ctx, 520, 650)
+    r.ImGui_SetNextWindowSize(ctx, 520, 800)
     
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -1348,6 +1359,46 @@ function ShowSettingsWindow()
             end
         end
         
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Track Icon Settings")
+        
+        changed, settings.show_track_icons = r.ImGui_Checkbox(ctx, "Show Track Icons", settings.show_track_icons)
+        
+        if settings.show_track_icons then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+            changed, settings.icon_size = r.ImGui_SliderInt(ctx, "Icon Size", settings.icon_size, 12, 64)
+            
+            changed, settings.icon_opacity = r.ImGui_SliderDouble(ctx, "Icon Opacity", settings.icon_opacity, 0.0, 1.0)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+            changed, settings.icon_spacing = r.ImGui_SliderInt(ctx, "Icon Spacing", settings.icon_spacing, 0, 40)
+            
+            r.ImGui_Text(ctx, "Icon Position:")
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_RadioButton(ctx, "Left of Text", settings.icon_position == 1) then
+                settings.icon_position = 1
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_RadioButton(ctx, "Right of Text", settings.icon_position == 2) then
+                settings.icon_position = 2
+            end
+            
+            if r.ImGui_Button(ctx, "Assign Icon to Selected Tracks", 250, 0) then
+                local sel_track_count = r.CountSelectedTracks(0)
+                if sel_track_count > 0 then
+                    track_icon_browser.show_window = true
+                end
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Clear Icons", 120, 0) then
+                for i = 0, r.CountSelectedTracks(0) - 1 do
+                    local track = r.GetSelectedTrack(0, i)
+                    track_icon_manager.ClearTrackIcon(track)
+                end
+            end
+        end
 
         r.ImGui_PopItemWidth(ctx)
         r.ImGui_End(ctx)
@@ -1438,6 +1489,56 @@ function TruncateTrackName(name, mode, fixed_len_override)
         end
     end
     return name
+end
+
+function RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height)
+    if not settings.show_track_icons then return text_x end
+    
+    local icon_path = track_icon_manager.GetTrackIcon(track)
+    if not icon_path then return text_x end
+    
+    local icon_img = track_icon_manager.GetIconImage(icon_path)
+    if not icon_img or not r.ImGui_ValidatePtr(icon_img, 'ImGui_Image*') then 
+        return text_x 
+    end
+    
+    local icon_size = settings.icon_size
+    local icon_spacing = settings.icon_spacing
+    
+    -- Calculate icon Y position - centered vertically in track
+    local icon_y = WY + track_y + (track_height * 0.5) - (icon_size * 0.5) + vertical_offset
+    
+    -- Only draw if within visible area
+    if not is_pinned and icon_y < WY + pinned_tracks_height then 
+        return text_x 
+    end
+    
+    local icon_x
+    local adjusted_text_x = text_x
+    
+    if settings.icon_position == 1 then 
+        -- Icon LEFT: draw icon before text, adjust text position right
+        icon_x = text_x
+        adjusted_text_x = text_x + icon_size + icon_spacing
+    else 
+        -- Icon RIGHT: draw icon after text, text stays in place
+        icon_x = text_x + text_width + icon_spacing
+    end
+    
+    -- UV coordinates
+    local uv0_x, uv0_y = 0, 0
+    local uv1_x, uv1_y = icon_path:find("toolbar_icons") and 0.33 or 1, 1
+    local tint_col = r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.icon_opacity)
+    
+    r.ImGui_DrawList_AddImage(
+        draw_list, icon_img,
+        icon_x, icon_y,
+        icon_x + icon_size, icon_y + icon_size,
+        uv0_x, uv0_y, uv1_x, uv1_y,
+        tint_col
+    )
+    
+    return adjusted_text_x
 end
 
 function DrawTrackIcon(track, x, y)
@@ -2580,6 +2681,9 @@ function loop()
                                 text_x = WX + settings.horizontal_offset
                             end
 
+                            -- Render Track Icon (before label and text)
+                            text_x = RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height)
+
                             if settings.show_label then
                                 local label_color = GetLabelColor(track)
                                 if is_pinned or text_y >= WY + pinned_tracks_height then
@@ -2607,10 +2711,18 @@ function loop()
                                 local track_text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
                                 local info_text_x
                                 
+                                -- Calculate extra offset if icon is shown
+                                local icon_offset = 0
+                                if settings.show_track_icons and track_icon_manager.GetTrackIcon(track) then
+                                    if settings.icon_position == 2 then -- Icon right of text
+                                        icon_offset = settings.icon_size + settings.icon_spacing
+                                    end
+                                end
+                                
                                 if settings.right_align then
                                     info_text_x = text_x - r.ImGui_CalcTextSize(ctx, info_text) - 20
                                 else
-                                    info_text_x = text_x + track_text_width + 20
+                                    info_text_x = text_x + track_text_width + icon_offset + 20
                                 end
                                 
                                 if is_pinned or text_y >= WY + pinned_tracks_height then
@@ -2732,6 +2844,23 @@ function loop()
 
     if settings_visible then
         ShowSettingsWindow()
+    end
+
+    -- Track Icon Browser
+    if track_icon_browser.show_window then
+        track_icon_browser.Show(ctx)
+        
+        -- Als een icon is geselecteerd, apply to alle geselecteerde tracks
+        if track_icon_browser.selected_icon then
+            local sel_track_count = r.CountSelectedTracks(0)
+            if sel_track_count > 0 then
+                for i = 0, sel_track_count - 1 do
+                    local track = r.GetSelectedTrack(0, i)
+                    track_icon_manager.SetTrackIcon(track, track_icon_browser.selected_icon)
+                end
+            end
+            track_icon_browser.selected_icon = nil
+        end
     end
 
     if needs_font_update then
