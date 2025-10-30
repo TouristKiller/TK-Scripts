@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.1.5
+-- @version 1.1.6
 -- @changelog 
 --[[
 
@@ -3195,6 +3195,8 @@ end
 function PushTransportPopupStyling(ctx, settings)
  if not ctx then ctx = _G.ctx end
  if not settings then settings = _G.settings end
+ if not ctx then return 0, false, nil end -- Safety check: return early if ctx is still nil
+ if not settings then return 0, false, nil end -- Safety check: return early if settings is still nil
  if not font_cache then font_cache = {} end
  -- Push comprehensive popup styling that should work for all popup types
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.transport_popup_bg or settings.background)
@@ -3239,7 +3241,7 @@ function PopTransportPopupStyling(...)
 end
 
 function SetTransportPopupStyle()
- return PushTransportPopupStyling()
+ return PushTransportPopupStyling(ctx, settings)
 end
 
 function PopTransportPopupStyle()
@@ -5324,7 +5326,7 @@ function PlayRate_Slider(main_window_width, main_window_height)
  end
 
  if r.ImGui_BeginPopup(ctx, "PlayRateMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, "Set playrate to 1.0") then
  r.Main_OnCommand(40521, 0)
@@ -5933,7 +5935,7 @@ function ShowCursorPosition(main_window_width, main_window_height)
  r.ImGui_PopStyleColor(ctx, 2) 
  end
  if r.ImGui_BeginPopup(ctx, "CursorPosModeMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, "Beats (MBT)", nil, mode=="beats") then settings.cursorpos_mode = "beats" end
  if r.ImGui_MenuItem(ctx, "Time", nil, mode=="time") then settings.cursorpos_mode = "time" end
@@ -6227,7 +6229,7 @@ end
  end
 
  if (not settings.edit_mode) and reaper.ImGui_BeginPopup(ctx, "TempoMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count = PushTransportPopupStyling(ctx, settings)
  
  reaper.ImGui_Text(ctx, "Set Tempo:")
  reaper.ImGui_PushItemWidth(ctx, 100)
@@ -6395,7 +6397,7 @@ function ShowTimeSignature(main_window_width, main_window_height)
  StoreElementRect("timesig")
  if font_timesig then reaper.ImGui_PopFont(ctx) end
  if reaper.ImGui_BeginPopup(ctx, "TimeSigPopup") then
- local color_count = PushTransportPopupStyling()
+ local color_count = PushTransportPopupStyling(ctx, settings)
  
  reaper.ImGui_Text(ctx, "Set Time Signature")
  reaper.ImGui_Separator(ctx)
@@ -6876,7 +6878,7 @@ local function ShowLocalTime(main_window_width, main_window_height)
  end
  
  if r.ImGui_BeginPopup(ctx, "TimeAlarmMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count = PushTransportPopupStyling(ctx, settings)
  
  local rv
  
@@ -7040,7 +7042,7 @@ function TapTempo(main_window_width, main_window_height)
  r.ImGui_OpenPopup(ctx, "TapTempoMenu")
  end
  if r.ImGui_BeginPopup(ctx, "TapTempoMenu") then
- local color_count = PushTransportPopupStyling()
+ local color_count = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, "Reset Taps") then
  tap_times = {}
@@ -7069,6 +7071,11 @@ function TapTempo(main_window_width, main_window_height)
 end
 
 local function CleanupFonts()
+ -- Check if context is valid before attempting to detach fonts
+ if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+  return
+ end
+ 
  if font then r.ImGui_Detach(ctx, font) end
  if font_transport then r.ImGui_Detach(ctx, font_transport) end
  if font_env then r.ImGui_Detach(ctx, font_env) end
@@ -7107,6 +7114,10 @@ local function CleanupImages()
 end
 
 function Main()
+ local styles_pushed = false
+ local font_pushed = false
+ local visible, open
+ 
  local needs_refresh = r.GetExtState("TK_TRANSPORT", "refresh_buttons")
  if needs_refresh == "1" then
  CustomButtons.LoadLastUsedPreset()
@@ -7118,18 +7129,22 @@ function Main()
  font_needs_update = false
  end
  
- r.ImGui_PushFont(ctx, font, settings.font_size)
+ -- Check if context is valid before pushing styles
+ if ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
+  r.ImGui_PushFont(ctx, font, settings.font_size)
+  font_pushed = true
 
- SetTransportStyle()
+  SetTransportStyle()
+  styles_pushed = true
  
- local current_window_flags = window_flags
- if settings.lock_window_size then
- current_window_flags = current_window_flags | r.ImGui_WindowFlags_NoResize()
- end
+  local current_window_flags = window_flags
+  if settings.lock_window_size then
+   current_window_flags = current_window_flags | r.ImGui_WindowFlags_NoResize()
+  end
  
- local visible, open = r.ImGui_Begin(ctx, 'Transport', true, current_window_flags)
- if visible then
- r.ImGui_SetScrollY(ctx, 0)
+  visible, open = r.ImGui_Begin(ctx, 'Transport', true, current_window_flags)
+  if visible then
+   r.ImGui_SetScrollY(ctx, 0)
  
  DrawGradientBackground()
  
@@ -7314,20 +7329,20 @@ function Main()
  end
  
  if settings.time_alarm_triggered and settings.time_alarm_popup_enabled then
- local current_time = os.time()
+  local current_time = os.time()
  
- if settings.time_alarm_auto_dismiss and settings.time_alarm_start_time > 0 then
- local elapsed = current_time - settings.time_alarm_start_time
- if elapsed >= (settings.time_alarm_auto_dismiss_seconds or 10) then
- settings.time_alarm_triggered = false
- settings.time_alarm_start_time = 0
- end
- end
+  if settings.time_alarm_auto_dismiss and settings.time_alarm_start_time > 0 then
+   local elapsed = current_time - settings.time_alarm_start_time
+   if elapsed >= (settings.time_alarm_auto_dismiss_seconds or 10) then
+    settings.time_alarm_triggered = false
+    settings.time_alarm_start_time = 0
+   end
+  end
  
- if settings.time_alarm_triggered then
- local viewport_x, viewport_y = r.ImGui_GetMainViewport(ctx)
- local display_w, display_h = r.ImGui_Viewport_GetSize(viewport_x)
- local popup_size = settings.time_alarm_popup_size or 300
+  if settings.time_alarm_triggered then
+   local viewport_x, viewport_y = r.ImGui_GetMainViewport(ctx)
+   local display_w, display_h = r.ImGui_Viewport_GetSize(viewport_x)
+   local popup_size = settings.time_alarm_popup_size or 300
  r.ImGui_SetNextWindowPos(ctx, (display_w - popup_size) * 0.5, (display_h - popup_size * 0.5) * 0.5)
  r.ImGui_SetNextWindowSize(ctx, popup_size, popup_size * 0.5)
  
@@ -7335,43 +7350,48 @@ function Main()
  local current_ms = math.floor(current_time * 1000) % (flash_interval * 2)
  local flash_color = (current_ms < flash_interval) and (settings.time_alarm_flash_color or 0xFF0000FF) or 0xFFFFFFFF
  
- local popup_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoTitleBar()
+   local popup_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoTitleBar()
  
- if r.ImGui_Begin(ctx, "##ALARM_POPUP", true, popup_flags) then
- local text = settings.time_alarm_popup_text or "? ALARM! ?"
+   if r.ImGui_Begin(ctx, "##ALARM_POPUP", true, popup_flags) then
+    local text = settings.time_alarm_popup_text or "? ALARM! ?"
  
- local large_font_size = settings.time_alarm_popup_text_size or 20
- local alarm_font = r.ImGui_CreateFont("Arial", large_font_size)
- r.ImGui_Attach(ctx, alarm_font)
+    local large_font_size = settings.time_alarm_popup_text_size or 20
+    local alarm_font = r.ImGui_CreateFont("Arial", large_font_size)
+    r.ImGui_Attach(ctx, alarm_font)
  
- r.ImGui_PushFont(ctx, alarm_font, large_font_size)
+    r.ImGui_PushFont(ctx, alarm_font, large_font_size)
  
- local text_w, text_h = r.ImGui_CalcTextSize(ctx, text)
- local window_w = r.ImGui_GetWindowWidth(ctx)
- local window_h = r.ImGui_GetWindowHeight(ctx)
+    local text_w, text_h = r.ImGui_CalcTextSize(ctx, text)
+    local window_w = r.ImGui_GetWindowWidth(ctx)
+    local window_h = r.ImGui_GetWindowHeight(ctx)
  
- r.ImGui_SetCursorPosX(ctx, (window_w - text_w) * 0.5)
- r.ImGui_SetCursorPosY(ctx, (window_h - text_h) * 0.4)
+    r.ImGui_SetCursorPosX(ctx, (window_w - text_w) * 0.5)
+    r.ImGui_SetCursorPosY(ctx, (window_h - text_h) * 0.4)
  
- r.ImGui_TextColored(ctx, flash_color, text)
- r.ImGui_PopFont(ctx)
+    r.ImGui_TextColored(ctx, flash_color, text)
+    r.ImGui_PopFont(ctx)
  
- r.ImGui_SetCursorPosX(ctx, (window_w - 100) * 0.5)
- r.ImGui_SetCursorPosY(ctx, window_h - 60)
+    r.ImGui_SetCursorPosX(ctx, (window_w - 100) * 0.5)
+    r.ImGui_SetCursorPosY(ctx, window_h - 60)
  
- if r.ImGui_Button(ctx, "STOP ALARM", 100, 30) then
- settings.time_alarm_triggered = false
- settings.time_alarm_start_time = 0
+    if r.ImGui_Button(ctx, "STOP ALARM", 100, 30) then
+     settings.time_alarm_triggered = false
+     settings.time_alarm_start_time = 0
+    end
+ 
+    r.ImGui_End(ctx)
+   end
+  end
  end
+ end -- End of context validation if block
  
- r.ImGui_End(ctx)
+ if font_pushed then
+  r.ImGui_PopFont(ctx)
  end
+ if styles_pushed then
+  r.ImGui_PopStyleVar(ctx, 8)
+  r.ImGui_PopStyleColor(ctx, 13)
  end
- end
- 
- r.ImGui_PopFont(ctx)
- r.ImGui_PopStyleVar(ctx, 8)
- r.ImGui_PopStyleColor(ctx, 13)
  
  if open then
  r.defer(Main)
