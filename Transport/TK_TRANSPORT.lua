@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.1.6
+-- @version 1.1.7
 -- @changelog 
 --[[
 
@@ -5326,7 +5326,7 @@ function PlayRate_Slider(main_window_width, main_window_height)
  end
 
  if r.ImGui_BeginPopup(ctx, "PlayRateMenu") then
- local color_count = PushTransportPopupStyling(ctx, settings)
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, "Set playrate to 1.0") then
  r.Main_OnCommand(40521, 0)
@@ -5336,7 +5336,7 @@ function PlayRate_Slider(main_window_width, main_window_height)
  r.Main_OnCommand(40671, 0)
  end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  r.ImGui_EndPopup(ctx)
  end
 
@@ -5935,13 +5935,13 @@ function ShowCursorPosition(main_window_width, main_window_height)
  r.ImGui_PopStyleColor(ctx, 2) 
  end
  if r.ImGui_BeginPopup(ctx, "CursorPosModeMenu") then
- local color_count = PushTransportPopupStyling(ctx, settings)
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, "Beats (MBT)", nil, mode=="beats") then settings.cursorpos_mode = "beats" end
  if r.ImGui_MenuItem(ctx, "Time", nil, mode=="time") then settings.cursorpos_mode = "time" end
  if r.ImGui_MenuItem(ctx, "Both", nil, mode=="both") then settings.cursorpos_mode = "both" end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  r.ImGui_EndPopup(ctx)
  end
 end
@@ -6229,7 +6229,7 @@ end
  end
 
  if (not settings.edit_mode) and reaper.ImGui_BeginPopup(ctx, "TempoMenu") then
- local color_count = PushTransportPopupStyling(ctx, settings)
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  reaper.ImGui_Text(ctx, "Set Tempo:")
  reaper.ImGui_PushItemWidth(ctx, 100)
@@ -6323,7 +6323,7 @@ end
  SetProjectTempoGlobal(120.0)
  end
 
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  reaper.ImGui_EndPopup(ctx)
  end
 
@@ -6397,7 +6397,7 @@ function ShowTimeSignature(main_window_width, main_window_height)
  StoreElementRect("timesig")
  if font_timesig then reaper.ImGui_PopFont(ctx) end
  if reaper.ImGui_BeginPopup(ctx, "TimeSigPopup") then
- local color_count = PushTransportPopupStyling(ctx, settings)
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  reaper.ImGui_Text(ctx, "Set Time Signature")
  reaper.ImGui_Separator(ctx)
@@ -6451,7 +6451,7 @@ function ShowTimeSignature(main_window_width, main_window_height)
  reaper.ImGui_CloseCurrentPopup(ctx) 
  end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  reaper.ImGui_EndPopup(ctx)
  else
  timesig_popup_num = nil
@@ -6878,7 +6878,7 @@ local function ShowLocalTime(main_window_width, main_window_height)
  end
  
  if r.ImGui_BeginPopup(ctx, "TimeAlarmMenu") then
- local color_count = PushTransportPopupStyling(ctx, settings)
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  local rv
  
@@ -6915,7 +6915,7 @@ local function ShowLocalTime(main_window_width, main_window_height)
  end
  end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  r.ImGui_EndPopup(ctx)
  end
  
@@ -7042,7 +7042,7 @@ function TapTempo(main_window_width, main_window_height)
  r.ImGui_OpenPopup(ctx, "TapTempoMenu")
  end
  if r.ImGui_BeginPopup(ctx, "TapTempoMenu") then
- local color_count = PushTransportPopupStyling(ctx, settings)
+ local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
  
  if r.ImGui_MenuItem(ctx, "Reset Taps") then
  tap_times = {}
@@ -7065,7 +7065,7 @@ function TapTempo(main_window_width, main_window_height)
  end
  end
  
- PopTransportPopupStyling(color_count)
+ PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
  r.ImGui_EndPopup(ctx)
  end
 end
