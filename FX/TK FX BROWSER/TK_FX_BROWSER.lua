@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.0.1
+-- @version 2.0.2
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -1096,11 +1096,9 @@ end
 function NormalizePluginNameForMatch(name)
     if not name then return '' end
     
-    -- Check cache first
     local cached = normalized_name_cache[name]
     if cached then return cached end
     
-    -- Perform normalization
     local result = name:lower()
     result = result:gsub('^vst3i?:%s*',''):gsub('^vsti?:%s*',''):gsub('^vst3:%s*',''):gsub('^vst:%s*',''):gsub('^js:%s*',''):gsub('^clapi?:%s*',''):gsub('^clap:%s*',''):gsub('^lv2:%s*','')
     result = result:gsub('%s*%(%d+%s*ch%)$',''):gsub('%s*%(%d+in%s*%d+out%)$','')
@@ -1109,7 +1107,6 @@ function NormalizePluginNameForMatch(name)
     result = result:gsub('%s+',' ')
     result = result:gsub('[^%w]+','')
     
-    -- Cache the result
     normalized_name_cache[name] = result
     return result
 end
@@ -1117,11 +1114,9 @@ end
 function GetPluginType(name)
     if not name or name == '' then return 'OTHER' end
     
-    -- Check cache first
     local cached = plugin_type_cache[name]
     if cached then return cached end
     
-    -- Determine type
     local result = 'OTHER'
     if name:match('^VST3i?:') then 
         result = 'VST3' 
@@ -1137,12 +1132,10 @@ function GetPluginType(name)
         result = 'LV2' 
     end
     
-    -- Cache the result
     plugin_type_cache[name] = result
     return result
 end
 
--- Determine if a plugin is an instrument (VSTi/VST3i/CLAPi/AUi/LV2i)
 function IsInstrumentPlugin(name)
     if not name or name == '' then return false end
     return name:match('^VSTi:')
@@ -1153,7 +1146,6 @@ function IsInstrumentPlugin(name)
         or false
 end
 
--- Add FX with optional instrument-on-top behavior
 function AddFXToTrack(track, plugin_name)
     if not track or not plugin_name or plugin_name == '' then return -1 end
     local dest_index = r.TrackFX_GetCount(track)
@@ -1165,8 +1157,32 @@ function AddFXToTrack(track, plugin_name)
     return fx_index or -1
 end
 
+function CreateInstrumentTrack(plugin_name, midi_input_value)
+    local track_idx = r.CountTracks(0)
+    r.InsertTrackAtIndex(track_idx, true)
+    local new_track = r.GetTrack(0, track_idx)
+    
+    AddFXToTrack(new_track, plugin_name)
+    r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name, true)
+    
+    local input_value
+    if midi_input_value == 6112 then
+        input_value = 4096 
+    else
+        local device_index = midi_input_value - 6113
+        input_value = (device_index * 32) + 4096  
+    end
+    
+    r.SetMediaTrackInfo_Value(new_track, "I_RECINPUT", input_value)
+    
+    r.SetMediaTrackInfo_Value(new_track, "I_RECMODE", 1)
+    
+    r.SetOnlyTrackSelected(new_track)
+    
+    r.UpdateArrange()
+end
+
 function BuildTypePriorityIndex()
-    -- Use cached version if available and config hasn't changed
     if type_priority_cache and config._priority_cache_version == config._current_version then
         return type_priority_cache
     end
@@ -1178,7 +1194,6 @@ function BuildTypePriorityIndex()
         end
     end
     
-    -- Cache the result
     type_priority_cache = idx
     config._priority_cache_version = config._current_version or 1
     return idx
@@ -1189,7 +1204,6 @@ DedupeByTypePriority = function(list)
         return list 
     end
     
-    -- Early exit for small lists
     if #list <= 1 then return list end
     
     local priority = BuildTypePriorityIndex()
@@ -5806,6 +5820,28 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                     local output_num = (k * 2) + 1
                     r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name .. " Out " .. output_num .. "-" .. (output_num + 1), true)
                 end
+            end
+        end
+
+        if IsInstrumentPlugin(plugin_name) then
+            if r.ImGui_BeginMenu(ctx, "Add as virtual instrument to new track") then
+                -- All MIDI inputs option
+                if r.ImGui_MenuItem(ctx, "All MIDI inputs") then
+                    CreateInstrumentTrack(plugin_name, 6112)
+                end
+                
+                -- Individual MIDI inputs
+                local num_midi_inputs = r.GetNumMIDIInputs()
+                for i = 0, num_midi_inputs - 1 do
+                    local retval, name = r.GetMIDIInputName(i, "")
+                    if retval and name ~= "" then
+                        if r.ImGui_MenuItem(ctx, name) then
+                            CreateInstrumentTrack(plugin_name, 6113 + i)
+                        end
+                    end
+                end
+                
+                r.ImGui_EndMenu(ctx)
             end
         end
 
