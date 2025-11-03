@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.0.2
+-- @version 2.0.3
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -7460,6 +7460,28 @@ function DrawBrowserItems(tbl, main_cat_name)
                     end
                     SortScreenshotResults()
                     RequestClearScreenshotCache()
+                    
+                    -- Force texture reload for new page
+                    for j = new_start, new_end do
+                        local plugin_name = filtered_fx[j]
+                        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+                        local screenshot_file = screenshot_path .. safe_name .. ".png"
+                        if r.file_exists(screenshot_file) then
+                            local relative_path = screenshot_file:gsub(screenshot_path, "")
+                            local unique_key = relative_path .. "_" .. plugin_name
+                            -- Remove from cache to force reload
+                            search_texture_cache[unique_key] = nil
+                            texture_last_used[unique_key] = nil
+                            -- Add to queue for immediate loading
+                            if not texture_load_queue[unique_key] then
+                                texture_load_queue[unique_key] = { 
+                                    file = screenshot_file, 
+                                    queued_at = r.time_precise(), 
+                                    plugin = plugin_name 
+                                }
+                            end
+                        end
+                    end
                 end
                 r.ImGui_SameLine(ctx)
                 r.ImGui_Text(ctx, string.format("%d/%d", tbl[i].current_page, total_pages))
@@ -7478,6 +7500,28 @@ function DrawBrowserItems(tbl, main_cat_name)
                     end
                     SortScreenshotResults()
                     RequestClearScreenshotCache()
+                    
+                    -- Force texture reload for new page
+                    for j = new_start, new_end do
+                        local plugin_name = filtered_fx[j]
+                        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+                        local screenshot_file = screenshot_path .. safe_name .. ".png"
+                        if r.file_exists(screenshot_file) then
+                            local relative_path = screenshot_file:gsub(screenshot_path, "")
+                            local unique_key = relative_path .. "_" .. plugin_name
+                            -- Remove from cache to force reload
+                            search_texture_cache[unique_key] = nil
+                            texture_last_used[unique_key] = nil
+                            -- Add to queue for immediate loading
+                            if not texture_load_queue[unique_key] then
+                                texture_load_queue[unique_key] = { 
+                                    file = screenshot_file, 
+                                    queued_at = r.time_precise(), 
+                                    plugin = plugin_name 
+                                }
+                            end
+                        end
+                    end
                 end
                 r.ImGui_Unindent(ctx, 20)
             end
