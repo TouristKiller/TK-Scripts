@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.0.0
+-- @version 2.0.1
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -6272,6 +6272,8 @@ function SortScreenshotResults()
 end
 
 function SortPlainPluginList(list, mode)
+    local default_type_order = {"VST3", "VST", "CLAP", "JS", "AU", "LV2", "OTHER"}
+    if not config.type_order then config.type_order = default_type_order end
     if not list or #list == 0 then return end
     local effective_mode = mode or screenshot_sort_mode or "alphabet"
     if effective_mode == "rating" then
@@ -6279,21 +6281,42 @@ function SortPlainPluginList(list, mode)
             local ra = plugin_ratings[a] or 0
             local rb = plugin_ratings[b] or 0
             if ra == rb then
-                return a:lower() < b:lower()
+                local na = a:match('^[^:]+: (.+)$') or a
+                local nb = b:match('^[^:]+: (.+)$') or b
+                return na:lower() < nb:lower()
             else
                 return ra > rb
             end
         end)
+    elseif effective_mode == "type" then
+        table.sort(list, function(a,b)
+            local ta = GetPluginType(a)
+            local tb = GetPluginType(b)
+            if ta == tb then
+                local na = a:match('^[^:]+: (.+)$') or a
+                local nb = b:match('^[^:]+: (.+)$') or b
+                return na:lower() < nb:lower()
+            else
+                local order = {}
+                for i, t in ipairs(config.type_order) do order[t] = i end
+                return (order[ta] or 8) < (order[tb] or 8)
+            end
+        end)
     else 
-        table.sort(list, function(a,b) return a:lower() < b:lower() end)
+        table.sort(list, function(a,b) 
+            local na = a:match('^[^:]+: (.+)$') or a
+            local nb = b:match('^[^:]+: (.+)$') or b
+            return na:lower() < nb:lower() 
+        end)
     end
 end
 
 function ShowScreenshotControls()
+    local show_type_order_popup = false
+    local show_customize_popup = false
     local layout = config.screenshot_controls_layout or "horizontal"
     local available_width = r.ImGui_GetContentRegionAvail(ctx)
     
-    -- Bepaal of we automatisch naar vertical moeten switchen bij smalle windows
     local auto_vertical = (layout == "auto" and available_width < 300)
     local is_vertical = (layout == "vertical" or auto_vertical)
     
@@ -6311,7 +6334,6 @@ function ShowScreenshotControls()
         
         show_screenshot_search = config.show_screenshot_search ~= false
         if show_screenshot_search then
-            -- Bereken breedte voor search field (laat ruimte voor A en All knoppen)
             local button_space = 50  -- ruimte voor 2 knoppen + spacing
             local search_width = r.ImGui_GetContentRegionAvail(ctx) - button_space
             
@@ -6322,21 +6344,34 @@ function ShowScreenshotControls()
             r.ImGui_SameLine(ctx)
             screenshot_sort_mode = screenshot_sort_mode or "alphabet"
             local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
-            local sort_label = (effective_mode == "alphabet") and "A" or "R"
+            local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
             if r.ImGui_Button(ctx, sort_label, 20, 20) then
+                local next_mode
+                if effective_mode == "alphabet" then
+                    next_mode = "rating"
+                elseif effective_mode == "rating" then
+                    next_mode = "type"
+                else
+                    next_mode = "alphabet"
+                end
                 if config then
-                    config.sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                    config.sort_mode = next_mode
                     if SaveConfig then SaveConfig() end
                 else
-                    screenshot_sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                    screenshot_sort_mode = next_mode
                 end
                 SortScreenshotResults()
+            end
+            if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
+                show_type_order_popup = true
             end
             if r.ImGui_IsItemHovered(ctx) then
                 if effective_mode == "alphabet" then
                     r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
+                elseif effective_mode == "rating" then
+                    r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Prefix)")
                 else
-                    r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+                    r.ImGui_SetTooltip(ctx, "Prefix sorting (click to switch to Alphabetic)")
                 end
             end
             
@@ -6490,21 +6525,34 @@ function ShowScreenshotControls()
 
             screenshot_sort_mode = screenshot_sort_mode or "alphabet"
             local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
-            local sort_label = (effective_mode == "alphabet") and "A" or "R"
+            local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
             if r.ImGui_Button(ctx, sort_label, 20, 20) then
+                local next_mode
+                if effective_mode == "alphabet" then
+                    next_mode = "rating"
+                elseif effective_mode == "rating" then
+                    next_mode = "type"
+                else
+                    next_mode = "alphabet"
+                end
                 if config then
-                    config.sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                    config.sort_mode = next_mode
                     if SaveConfig then SaveConfig() end
                 else
-                    screenshot_sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                    screenshot_sort_mode = next_mode
                 end
                 SortScreenshotResults()
+            end
+            if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
+                show_type_order_popup = true
             end
             if r.ImGui_IsItemHovered(ctx) then
                 if effective_mode == "alphabet" then
                     r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
+                elseif effective_mode == "rating" then
+                    r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Prefix)")
                 else
-                    r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+                    r.ImGui_SetTooltip(ctx, "Prefix sorting (click to switch to Alphabetic)")
                 end
             end
 
@@ -6810,6 +6858,54 @@ function ShowScreenshotControls()
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
         if r.ImGui_MenuItem(ctx, "Close Window") then config.show_screenshot_window = false; SaveConfig() end
+        r.ImGui_EndPopup(ctx)
+    end
+    
+    if show_type_order_popup then
+        r.ImGui_OpenPopup(ctx, "TypeOrderPopup")
+        show_type_order_popup = false
+    end
+    if r.ImGui_BeginPopup(ctx, "TypeOrderPopup") then
+        if r.ImGui_Selectable(ctx, "Default (VST3 > VST > CLAP > JS > AU > LV2 > OTHER)") then
+            config.type_order = {"VST3", "VST", "CLAP", "JS", "AU", "LV2", "OTHER"}
+            SaveConfig()
+        end
+        if r.ImGui_Selectable(ctx, "Alphabetical (AU > CLAP > JS > LV2 > OTHER > VST > VST3)") then
+            config.type_order = {"AU", "CLAP", "JS", "LV2", "OTHER", "VST", "VST3"}
+            SaveConfig()
+        end
+        if r.ImGui_Selectable(ctx, "Reverse (OTHER > LV2 > AU > JS > CLAP > VST > VST3)") then
+            config.type_order = {"OTHER", "LV2", "AU", "JS", "CLAP", "VST", "VST3"}
+            SaveConfig()
+        end
+        if r.ImGui_Selectable(ctx, "Customize Order...") then
+            show_customize_popup = true
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+    if show_customize_popup then
+        r.ImGui_OpenPopup(ctx, "CustomizeOrderPopup")
+        show_customize_popup = false
+    end
+    if r.ImGui_BeginPopup(ctx, "CustomizeOrderPopup") then
+        r.ImGui_Text(ctx, "Use buttons to reorder:")
+        for i, t in ipairs(config.type_order) do
+            r.ImGui_Text(ctx, tostring(i) .. ". " .. t)
+            r.ImGui_SameLine(ctx)
+            if i > 1 and r.ImGui_Button(ctx, "Up##" .. i, 30, 0) then
+                config.type_order[i], config.type_order[i-1] = config.type_order[i-1], config.type_order[i]
+                SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            if i < #config.type_order and r.ImGui_Button(ctx, "Down##" .. i, 40, 0) then
+                config.type_order[i], config.type_order[i+1] = config.type_order[i+1], config.type_order[i]
+                SaveConfig()
+            end
+        end
+        if r.ImGui_Button(ctx, "Reset to Default", -1, 0) then
+            config.type_order = {"VST3", "VST", "CLAP", "JS", "AU", "LV2", "OTHER"}
+            SaveConfig()
+        end
         r.ImGui_EndPopup(ctx)
     end
     
@@ -7590,21 +7686,31 @@ function ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
         local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
-        local sort_label = (effective_mode == "alphabet") and "A" or "R"
+        local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
         if r.ImGui_Button(ctx, sort_label, 20, 20) then
+            local next_mode
+            if effective_mode == "alphabet" then
+                next_mode = "rating"
+            elseif effective_mode == "rating" then
+                next_mode = "type"
+            else
+                next_mode = "alphabet"
+            end
             if config then
-                config.sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                config.sort_mode = next_mode
                 if SaveConfig then SaveConfig() end
             else
-                screenshot_sort_mode = (effective_mode == "alphabet") and "rating" or "alphabet"
+                screenshot_sort_mode = next_mode
             end
             SortScreenshotResults()
         end
         if r.ImGui_IsItemHovered(ctx) then
             if effective_mode == "alphabet" then
                 r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
+            elseif effective_mode == "rating" then
+                r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Prefix)")
             else
-                r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+                r.ImGui_SetTooltip(ctx, "Prefix sorting (click to switch to Alphabetic)")
             end
         end
         r.ImGui_SameLine(ctx)
@@ -11476,6 +11582,9 @@ function Filter_actions(filter_text)
 end
 
 function FilterBox()
+    local default_type_order = {"VST3", "VST", "CLAP", "JS", "AU", "LV2", "OTHER"}
+    if not config.type_order then config.type_order = default_type_order end
+    local show_customize_popup = false
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local window_height = r.ImGui_GetWindowHeight(ctx)
     local track_info_width = math.max(window_width - 10, 125)
@@ -11483,7 +11592,7 @@ function FilterBox()
     local margin = 3
     local search_width = track_info_width - (x_button_width * 3) - (margin * 2)
    
-    local sort_mode = config.sort_mode or "score" -- "score", "alphabet", "rating"
+    local sort_mode = config.sort_mode or "score" -- "score", "alphabet", "rating", "type"
 
     local top_buttons_height = config.hideTopButtons and 5 or 30
     local tags_height = config.show_tags and current_tag_window_height or 0
@@ -11545,21 +11654,75 @@ function FilterBox()
         SaveConfig()
     end
     r.ImGui_SameLine(ctx)
-    local sort_label_main = (sort_mode == "alphabet") and "A" or ((sort_mode == "rating") and "R" or "A")
+    local sort_label_main = (sort_mode == "alphabet") and "A" or ((sort_mode == "rating") and "R" or ((sort_mode == "type") and "P" or "Sc"))
     if r.ImGui_Button(ctx, sort_label_main, x_button_width, button_height) then
-        if sort_mode == "alphabet" then
-            sort_mode = "rating"
-        else
+        if sort_mode == "score" then
             sort_mode = "alphabet"
+        elseif sort_mode == "alphabet" then
+            sort_mode = "rating"
+        elseif sort_mode == "rating" then
+            sort_mode = "type"
+        else
+            sort_mode = "score"
         end
         config.sort_mode = sort_mode
         SaveConfig()
     end
+    if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
+        r.ImGui_OpenPopup(ctx, "TypeOrderPopup")
+    end
+    if r.ImGui_BeginPopup(ctx, "TypeOrderPopup") then
+        if r.ImGui_Selectable(ctx, "Default (VST3 > VST > CLAP > JS > AU > LV2 > OTHER)") then
+            config.type_order = {"VST3", "VST", "CLAP", "JS", "AU", "LV2", "OTHER"}
+            SaveConfig()
+        end
+        if r.ImGui_Selectable(ctx, "Alphabetical (AU > CLAP > JS > LV2 > OTHER > VST > VST3)") then
+            config.type_order = {"AU", "CLAP", "JS", "LV2", "OTHER", "VST", "VST3"}
+            SaveConfig()
+        end
+        if r.ImGui_Selectable(ctx, "Reverse (OTHER > LV2 > AU > JS > CLAP > VST > VST3)") then
+            config.type_order = {"OTHER", "LV2", "AU", "JS", "CLAP", "VST", "VST3"}
+            SaveConfig()
+        end
+        if r.ImGui_Selectable(ctx, "Customize Order...") then
+            show_customize_popup = true
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+    if show_customize_popup then
+        r.ImGui_OpenPopup(ctx, "CustomizeOrderPopup")
+        show_customize_popup = false
+    end
+    if r.ImGui_BeginPopup(ctx, "CustomizeOrderPopup") then
+        r.ImGui_Text(ctx, "Use buttons to reorder:")
+        for i, t in ipairs(config.type_order) do
+            r.ImGui_Text(ctx, tostring(i) .. ". " .. t)
+            r.ImGui_SameLine(ctx)
+            if i > 1 and r.ImGui_Button(ctx, "Up##" .. i, 30, 0) then
+                config.type_order[i], config.type_order[i-1] = config.type_order[i-1], config.type_order[i]
+                SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            if i < #config.type_order and r.ImGui_Button(ctx, "Down##" .. i, 40, 0) then
+                config.type_order[i], config.type_order[i+1] = config.type_order[i+1], config.type_order[i]
+                SaveConfig()
+            end
+        end
+        if r.ImGui_Button(ctx, "Reset to Default", -1, 0) then
+            config.type_order = {"VST3", "VST", "CLAP", "JS", "AU", "LV2", "OTHER"}
+            SaveConfig()
+        end
+        r.ImGui_EndPopup(ctx)
+    end
     if r.ImGui_IsItemHovered(ctx) then
-        if sort_mode == "alphabet" then
+        if sort_mode == "score" then
+            r.ImGui_SetTooltip(ctx, "Score sorting (click to switch to Alphabetic)")
+        elseif sort_mode == "alphabet" then
             r.ImGui_SetTooltip(ctx, "Alphabetic sorting (click to switch to Rating)")
         elseif sort_mode == "rating" then
-            r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Alphabetic)")
+            r.ImGui_SetTooltip(ctx, "Rating sorting (click to switch to Prefix)")
+        else
+            r.ImGui_SetTooltip(ctx, "Prefix sorting (click to switch to Score)\nRight-click for type order options")
         end
     end
     r.ImGui_SameLine(ctx)
@@ -11642,22 +11805,42 @@ end
     local filtered_fx = Filter_actions(FILTER)
     if sort_mode == "alphabet" then
         table.sort(filtered_fx, function(a, b) 
-            return a.name:lower() < b.name:lower() 
+            local na = a.name:match('^[^:]+: (.+)$') or a.name
+            local nb = b.name:match('^[^:]+: (.+)$') or b.name
+            return na:lower() < nb:lower() 
         end)
     elseif sort_mode == "rating" then
         table.sort(filtered_fx, function(a, b)
             local ra = plugin_ratings[a.name] or 0
             local rb = plugin_ratings[b.name] or 0
             if ra == rb then
-                return a.name:lower() < b.name:lower()
+                local na = a.name:match('^[^:]+: (.+)$') or a.name
+                local nb = b.name:match('^[^:]+: (.+)$') or b.name
+                return na:lower() < nb:lower()
             else
                 return ra > rb
+            end
+        end)
+    elseif sort_mode == "type" then
+        table.sort(filtered_fx, function(a, b)
+            local ta = GetPluginType(a.name)
+            local tb = GetPluginType(b.name)
+            if ta == tb then
+                local na = a.name:match('^[^:]+: (.+)$') or a.name
+                local nb = b.name:match('^[^:]+: (.+)$') or b.name
+                return na:lower() < nb:lower()
+            else
+                local order = {}
+                for i, t in ipairs(config.type_order) do order[t] = i end
+                return (order[ta] or 8) < (order[tb] or 8)
             end
         end)
     else -- default: score
         table.sort(filtered_fx, function(a, b)
             if a.score == b.score then
-                return a.name:lower() < b.name:lower()
+                local na = a.name:match('^[^:]+: (.+)$') or a.name
+                local nb = b.name:match('^[^:]+: (.+)$') or b.name
+                return na:lower() < nb:lower()
             end
             return a.score < b.score
         end)
