@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.1.7
+-- @version 1.1.8
 -- @changelog 
 --[[
 
@@ -5879,12 +5879,17 @@ function ShowCursorPosition(main_window_width, main_window_height)
  if not retval then timesig_num, timesig_denom = 4, 4 end
  local _, measures, cml, fullbeats = reaper.TimeMap2_timeToBeats(0, position)
  measures = measures or 0
+ -- Get project measure offset to handle projects that start at bar 0
+ local _, projmeasoffs = reaper.get_config_var_string("projmeasoffs")
+ local measure_correction = (projmeasoffs and tonumber(projmeasoffs) == 0) and 1 or 0
+ -- reaper.ShowConsoleMsg(string.format("measures: %f, projmeasoffs: %s, correction: %d, result: %d\n", measures, tostring(projmeasoffs), measure_correction, math.floor(measures + measure_correction)))
  local beatsInMeasure = fullbeats % timesig_num
  local ticks = math.floor((beatsInMeasure - math.floor(beatsInMeasure)) * 960/10)
  local minutes = math.floor(position / 60)
  local seconds = position % 60
  local time_str = string.format("%d:%06.3f", minutes, seconds)
- local mbt_str = string.format("%d.%d.%02d", math.floor(measures+1), math.floor(beatsInMeasure+1), ticks)
+ -- TimeMap2_timeToBeats accounts for project measure offset, but needs +1 correction when starting at bar 1
+ local mbt_str = string.format("%d.%d.%02d", math.floor(measures + measure_correction), math.floor(beatsInMeasure+1), ticks)
  local mode = settings.cursorpos_mode or "both"
  local label
  if mode == "beats" then
@@ -6468,6 +6473,10 @@ function ShowTimeSelection(main_window_width, main_window_height)
  local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = r.GetTempoTimeSigMarker(0, 0)
  if not retval then timesig_num, timesig_denom = 4, 4 end
  
+ -- Get project measure offset to handle projects that start at bar 0
+ local _, projmeasoffs = r.get_config_var_string("projmeasoffs")
+ local measure_correction = (projmeasoffs and tonumber(projmeasoffs) == 0) and 1 or 0
+ 
  local minutes_start = math.floor(start_time / 60)
  local seconds_start = start_time % 60
  local sec_format = string.format("%d:%06.3f", minutes_start, seconds_start)
@@ -6476,7 +6485,7 @@ function ShowTimeSelection(main_window_width, main_window_height)
  local beatsInMeasure_start = fullbeats_start % timesig_num
  local ticks_start = math.floor((beatsInMeasure_start - math.floor(beatsInMeasure_start)) * 960/10)
  local start_midi = string.format("%d.%d.%02d",
- math.floor(measures_start+1),
+ math.floor(measures_start + measure_correction),
  math.floor(beatsInMeasure_start+1),
  ticks_start)
  
@@ -6488,7 +6497,7 @@ function ShowTimeSelection(main_window_width, main_window_height)
  local beatsInMeasure_end = fullbeats_end % timesig_num
  local ticks_end = math.floor((beatsInMeasure_end - math.floor(beatsInMeasure_end)) * 960/10)
  local end_midi = string.format("%d.%d.%02d",
- math.floor(measures_end+1),
+ math.floor(measures_end + measure_correction),
  math.floor(beatsInMeasure_end+1),
  ticks_end)
  
