@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.0.5
+-- @version 2.0.6
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -6887,6 +6887,19 @@ function ShowScreenshotControls()
             SaveConfig()
         end
         
+        r.ImGui_Separator(ctx)
+        if r.ImGui_MenuItem(ctx, "Sync All Data") then
+            LoadConfig()
+            LoadPluginRatings()
+            LoadCustomFolders()
+            LoadScriptsLauncher()
+            LoadTags()
+            ClearPerformanceCaches()
+            DebugLog("Manual sync all data triggered")
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Reload all config, ratings, custom folders, scripts launcher, and tags from files")
+        end
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
         if r.ImGui_MenuItem(ctx, "Close Window") then config.show_screenshot_window = false; SaveConfig() end

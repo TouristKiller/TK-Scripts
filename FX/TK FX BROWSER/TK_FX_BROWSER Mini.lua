@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.0.1
+-- @version 0.0.2
 -- @changelog:
 --[[     
 
@@ -6851,6 +6851,19 @@ function ShowScreenshotControls()
             SaveConfig()
         end
         
+        r.ImGui_Separator(ctx)
+        if r.ImGui_MenuItem(ctx, "Sync All Data") then
+            LoadConfig()
+            LoadPluginRatings()
+            LoadCustomFolders()
+            LoadScriptsLauncher()
+            LoadTags()
+            ClearPerformanceCaches()
+            DebugLog("Manual sync all data triggered")
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Reload all config, ratings, custom folders, scripts launcher, and tags from files")
+        end
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
         if r.ImGui_MenuItem(ctx, "Notes") then LaunchTKNotes() end
