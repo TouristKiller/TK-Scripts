@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.0.3
+-- @version 2.0.4
 -- @changelog:
 --[[     
 ++ Fixed bug
@@ -1167,7 +1167,7 @@ function CreateInstrumentTrack(plugin_name, midi_input_value)
     
     local input_value
     if midi_input_value == 6112 then
-        input_value = 4096 
+        input_value = 6112 
     else
         local device_index = midi_input_value - 6113
         input_value = (device_index * 32) + 4096  
@@ -1176,6 +1176,7 @@ function CreateInstrumentTrack(plugin_name, midi_input_value)
     r.SetMediaTrackInfo_Value(new_track, "I_RECINPUT", input_value)
     
     r.SetMediaTrackInfo_Value(new_track, "I_RECMODE", 1)
+    r.SetMediaTrackInfo_Value(new_track, "I_RECMON", 2)
     
     r.SetOnlyTrackSelected(new_track)
     
