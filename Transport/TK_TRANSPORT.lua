@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.1.9
+-- @version 1.2.0
 -- @changelog 
 --[[
 
@@ -1761,11 +1761,11 @@ end
 
 function ShowTimeSignatureSettings(ctx, main_window_width, main_window_height)
  local rv
- rv, settings.show_timesig = r.ImGui_Checkbox(ctx, "Show Time Signature", settings.show_timesig ~= false)
+ rv, settings.show_timesig_button = r.ImGui_Checkbox(ctx, "Show Time Signature", settings.show_timesig_button ~= false)
  
  r.ImGui_Separator(ctx)
  
- if settings.show_timesig then
+ if settings.show_timesig_button then
  r.ImGui_Spacing(ctx)
  
  r.ImGui_Text(ctx, "Position:")
