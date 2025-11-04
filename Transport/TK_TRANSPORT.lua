@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.1.8
+-- @version 1.1.9
 -- @changelog 
 --[[
 
@@ -2773,7 +2773,7 @@ if not is_new_empty_instance then
  end
  CustomButtons.ResetToggleStatesIfNeeded(settings)
 else
- CustomButtons.buttons = {}
+ CustomButtons.LoadLastUsedPreset()  
 end
 
 function ResetSettings()
@@ -3003,12 +3003,10 @@ function RenderVisualMetronome(main_window_width, main_window_height)
  r.ImGui_InvisibleButton(ctx, "##VisualMetronome", size, size)
  StoreElementRect("visual_metronome")
  
- -- Handle left-click to toggle metronome on/off
  if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Left()) then
   r.Main_OnCommand(40364, 0) -- Metronome: Toggle metronome enabled
  end
  
- -- Handle right-click to open metronome settings
  if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
   r.Main_OnCommand(40363, 0) -- Metronome: Metronome settings
  end
@@ -3022,13 +3020,12 @@ function RenderVisualMetronome(main_window_width, main_window_height)
  local bg_color = settings.visual_metronome_color_off or 0x808080FF
  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, bg_color)
  
- -- Draw metronome enabled indicator (small dot in top-right corner)
  local metronome_enabled = r.GetToggleCommandState(40364) == 1
  if metronome_enabled then
   local indicator_radius = size * 0.08
   local indicator_x = center_x + radius * 0.7
   local indicator_y = center_y - radius * 0.7
-  local indicator_color = 0x00FF00FF -- Green indicator
+  local indicator_color = 0x00FF00FF 
   r.ImGui_DrawList_AddCircleFilled(draw_list, indicator_x, indicator_y, indicator_radius, indicator_color)
  end
  
@@ -3072,16 +3069,13 @@ end
 
 LoadLastUsedPreset()
 
--- Helper function to set alpha channel of a color
 function SetColorAlpha(color, alpha)
- -- Extract RGB components and replace alpha
  local r = (color >> 24) & 0xFF
  local g = (color >> 16) & 0xFF
  local b = (color >> 8) & 0xFF
  return (r << 24) | (g << 16) | (b << 8) | (alpha & 0xFF)
 end
 
--- Helper function to get button color with optional transparency
 function GetButtonColorWithTransparency(color)
  if settings.use_transparent_buttons and color then
   local alpha = settings.transparent_button_opacity or 0
@@ -3090,7 +3084,6 @@ function GetButtonColorWithTransparency(color)
  return color
 end
 
--- Function to draw gradient background with 3 colors (top, middle, bottom)
 function DrawGradientBackground()
  if not settings.use_gradient_background then return end
  
@@ -3104,14 +3097,12 @@ function DrawGradientBackground()
  
  local mid_y = win_y + (win_h * 0.5)
  
- -- Draw top half (top to middle)
  r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, 
   win_x, win_y, 
   win_x + win_w, mid_y, 
   color_top, color_top, 
   color_middle, color_middle)
  
- -- Draw bottom half (middle to bottom)
  r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, 
   win_x, mid_y, 
   win_x + win_w, win_y + win_h, 
@@ -3159,7 +3150,6 @@ function SetTransportStyle()
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), settings.button_border_size)
  
  -- Transport-specific colors (minimal set)
- -- Use transparent background if gradient is enabled
  local bg_color = settings.use_gradient_background and 0x00000000 or (settings.transport_background or settings.background)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), bg_color)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.border) 
@@ -3173,7 +3163,6 @@ function SetTransportStyle()
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), settings.slider_grab_active)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), settings.check_mark)
  
- -- Apply transparent buttons if enabled
  local button_normal_color = settings.button_normal
  local button_hovered_color = settings.button_hovered
  local button_active_color = settings.button_active
@@ -3191,14 +3180,12 @@ function SetTransportStyle()
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.text_normal)
 end
 
--- Universal popup styling functions
 function PushTransportPopupStyling(ctx, settings)
  if not ctx then ctx = _G.ctx end
  if not settings then settings = _G.settings end
- if not ctx then return 0, false, nil end -- Safety check: return early if ctx is still nil
- if not settings then return 0, false, nil end -- Safety check: return early if settings is still nil
+ if not ctx then return 0, false, nil end 
+ if not settings then return 0, false, nil end 
  if not font_cache then font_cache = {} end
- -- Push comprehensive popup styling that should work for all popup types
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.transport_popup_bg or settings.background)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.transport_popup_text or settings.text_normal)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.transport_border or settings.border)
@@ -3228,12 +3215,10 @@ end
 function PopTransportPopupStyling(...)
  local arg1, arg2, arg3, arg4 = ...
  if type(arg1) == "number" then
-  -- oude call: PopTransportPopupStyling(color_count)
   local color_count = arg1
   if font_popup then r.ImGui_PopFont(ctx) end
   r.ImGui_PopStyleColor(ctx, color_count or 6)
  else
-  -- nieuwe call: PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
   local ctx, color_count, font_pushed, popup_font = arg1, arg2, arg3, arg4
   if font_pushed then r.ImGui_PopFont(ctx) end
   r.ImGui_PopStyleColor(ctx, color_count or 6)
@@ -3290,7 +3275,6 @@ end
 function ShowSettings(main_window_width , main_window_height)
  if not show_settings then return end
  
- -- Settings window has its own independent styling
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 2)
@@ -3300,7 +3284,6 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
  
- -- Settings window colors (fixed, not influenced by transport settings)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x1E1E1EFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x2D2D2DFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x3D3D3DFF)
@@ -3528,7 +3511,6 @@ function ShowSettings(main_window_width , main_window_height)
  
  r.ImGui_Spacing(ctx)
  
- -- Gradient Background Section
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x4A90E2FF)
  r.ImGui_Text(ctx, "GRADIENT BACKGROUND")
  r.ImGui_PopStyleColor(ctx)
@@ -3573,7 +3555,6 @@ function ShowSettings(main_window_width , main_window_height)
  
  r.ImGui_Spacing(ctx)
  
- -- Transparent Buttons Section
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x4A90E2FF)
  r.ImGui_Text(ctx, "TRANSPARENT BUTTONS")
  r.ImGui_PopStyleColor(ctx)
@@ -4291,7 +4272,6 @@ end
 function ShowInstanceManager()
  if not show_instance_manager then return end
  
- -- Instance Manager has the same styling as Settings window
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 2)
@@ -4301,7 +4281,6 @@ function ShowInstanceManager()
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
  
- -- Instance Manager colors (same as Settings window)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x1E1E1EFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x2D2D2DFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x3D3D3DFF)
@@ -4388,7 +4367,8 @@ function CreateNamedInstance(name, start_empty)
  local escaped_path = current_script_path:gsub("\\", "\\\\"):gsub('"', '\\"')
  
  local wrapper_content = 'local r = reaper\n'
- wrapper_content = wrapper_content .. 'local instance_name = "' .. clean_name .. '"\n\n'
+ wrapper_content = wrapper_content .. 'local instance_name = "' .. clean_name .. '"\n'
+ wrapper_content = wrapper_content .. '_G.TK_TRANSPORT_INSTANCE_NAME = instance_name\n\n'
  
  if start_empty then
  wrapper_content = wrapper_content .. 'local is_new_instance = not r.HasExtState("TK_TRANSPORT_" .. instance_name, "settings")\n'
@@ -4480,11 +4460,22 @@ function DeleteInstance(instance_name)
  local result = r.ShowMessageBox("Are you sure you want to delete this instance?\n\n" .. instance_name .. "\n\nThis action cannot be undone.", "Delete Instance", 4)
  
  if result == 6 then 
- r.AddRemoveReaScript(false, 0, script_file, true)
+  LaunchInstance(instance_name)
+  
+  r.AddRemoveReaScript(false, 0, script_file, true)
+  os.remove(script_file)
  
- os.remove(script_file)
+  local clean_instance_name = instance_name:gsub("TK_TRANSPORT_", "")
+  local current_buttons_file = script_path .. "tk_transport_buttons/current_buttons_" .. clean_instance_name .. ".json"
+  os.remove(current_buttons_file)
  
- r.ShowMessageBox("Instance deleted successfully!", "Instance Manager", 0)
+  local section = "TK_TRANSPORT_" .. clean_instance_name
+  r.DeleteExtState(section, "settings", true)
+  r.DeleteExtState(section, "last_preset", true)
+  r.DeleteExtState(section, "last_button_preset", true)
+  r.DeleteExtState(section, "is_new_instance", true)
+ 
+  r.ShowMessageBox("Instance deleted successfully!", "Instance Manager", 0)
  end
 end
 
@@ -4664,8 +4655,6 @@ function Transport_Buttons(main_window_width, main_window_height)
  local mode_loop_active = settings["loop_active" .. mode_suffix]
  if mode_loop_active == nil then mode_loop_active = 0x00FFFFFF end
 
- -- NOTE: Transport buttons (play, stop, etc.) keep their normal colors
- -- Transparency is NOT applied to these main transport controls
 
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), mode_rounding)
@@ -4774,8 +4763,6 @@ function Transport_Buttons(main_window_width, main_window_height)
  color = color ~= nil and color or default_normal
  end
  
- -- NOTE: Do NOT apply transparency to main transport buttons
- -- They keep their normal colors
  
  return color
  end
@@ -5052,14 +5039,11 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  
  local allow_input = not settings.edit_mode
  
- -- Get master track
  local master_track = r.GetMasterTrack(0)
  if not master_track then return end
  
- -- Get current volume
  local volume_linear = r.GetMediaTrackInfo_Value(master_track, "D_VOL")
  
- -- Convert to dB
  local volume_db
  if volume_linear < 0.0000000298023223876953125 then
  volume_db = -150.0
@@ -5069,7 +5053,6 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  volume_db = 20.0 * math.log(volume_linear, 10)
  end
  
- -- Position
  local pos_x = settings.master_volume_x_px and ScalePosX(settings.master_volume_x_px, main_window_width, settings) 
  or ((settings.master_volume_x or 0.5) * main_window_width)
  local pos_y = settings.master_volume_y_px and ScalePosY(settings.master_volume_y_px, main_window_height, settings) 
@@ -5078,15 +5061,12 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  r.ImGui_SetCursorPosX(ctx, pos_x)
  r.ImGui_SetCursorPosY(ctx, pos_y)
  
- -- Slider width
  local slider_width = settings.master_volume_width or 150
  
- -- Push style vars (border & rounding)
  local rounding = settings.master_volume_rounding or 0.0
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), rounding)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), rounding)
  
- -- Push colors
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), settings.master_volume_grab or 0xFFFFFFFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), settings.master_volume_grab_active or 0xAAAAAAFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), settings.master_volume_slider_bg or 0x333333FF)
@@ -5095,12 +5075,10 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.master_volume_text_color)
  end
  
- -- Push font
  if font_master_volume then 
  r.ImGui_PushFont(ctx, font_master_volume, settings.master_volume_font_size or settings.font_size) 
  end
  
- -- Draw slider
  r.ImGui_PushItemWidth(ctx, slider_width)
  
  local rv, new_volume_db = r.ImGui_SliderDouble(ctx, "##MasterVolume", volume_db, -60.0, 12.0, "%.1f dB")
@@ -5113,22 +5091,18 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  new_volume_linear = 10.0 ^ (new_volume_db / 20.0)
  end
  
- -- Set volume
  r.SetMediaTrackInfo_Value(master_track, "D_VOL", new_volume_linear)
  end
  
- -- Right click to reset to 0 dB
  if allow_input and r.ImGui_IsItemClicked(ctx, 1) then
- r.SetMediaTrackInfo_Value(master_track, "D_VOL", 1.0) -- 1.0 linear = 0 dB
+ r.SetMediaTrackInfo_Value(master_track, "D_VOL", 1.0) 
  end
  
  r.ImGui_PopItemWidth(ctx)
  
- -- Store bounds for dragging
  local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
  local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
  
- -- Draw border if enabled
  if settings.master_volume_show_border then
  local dl = r.ImGui_GetWindowDrawList(ctx)
  local border_color = settings.master_volume_border_color or 0xFFFFFFFF
@@ -5138,15 +5112,13 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, border_color, border_rounding, nil, border_size)
  end
  
- -- Label (optional)
  local show_label = settings.show_master_volume_label
- if show_label == nil then show_label = true end -- default true
+ if show_label == nil then show_label = true end 
  
  if show_label then
  r.ImGui_SameLine(ctx)
  r.ImGui_Text(ctx, "Master")
  
- -- Update bounds to include label
  local label_max_x, label_max_y = r.ImGui_GetItemRectMax(ctx)
  max_x = label_max_x
  max_y = math.max(max_y, label_max_y)
@@ -5156,11 +5128,9 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  r.ImGui_PopFont(ctx) 
  end
  
- -- Pop colors
  local color_count = settings.master_volume_text_color and 5 or 4
  r.ImGui_PopStyleColor(ctx, color_count)
  
- -- Pop style vars
  r.ImGui_PopStyleVar(ctx, 2)
  
  StoreElementRectUnion("master_volume", min_x, min_y, max_x, max_y)
@@ -5879,16 +5849,13 @@ function ShowCursorPosition(main_window_width, main_window_height)
  if not retval then timesig_num, timesig_denom = 4, 4 end
  local _, measures, cml, fullbeats = reaper.TimeMap2_timeToBeats(0, position)
  measures = measures or 0
- -- Get project measure offset to handle projects that start at bar 0
  local _, projmeasoffs = reaper.get_config_var_string("projmeasoffs")
  local measure_correction = (projmeasoffs and tonumber(projmeasoffs) == 0) and 1 or 0
- -- reaper.ShowConsoleMsg(string.format("measures: %f, projmeasoffs: %s, correction: %d, result: %d\n", measures, tostring(projmeasoffs), measure_correction, math.floor(measures + measure_correction)))
  local beatsInMeasure = fullbeats % timesig_num
  local ticks = math.floor((beatsInMeasure - math.floor(beatsInMeasure)) * 960/10)
  local minutes = math.floor(position / 60)
  local seconds = position % 60
  local time_str = string.format("%d:%06.3f", minutes, seconds)
- -- TimeMap2_timeToBeats accounts for project measure offset, but needs +1 correction when starting at bar 1
  local mbt_str = string.format("%d.%d.%02d", math.floor(measures + measure_correction), math.floor(beatsInMeasure+1), ticks)
  local mode = settings.cursorpos_mode or "both"
  local label
@@ -6473,7 +6440,6 @@ function ShowTimeSelection(main_window_width, main_window_height)
  local retval, pos, measurepos, beatpos, bpm, timesig_num, timesig_denom = r.GetTempoTimeSigMarker(0, 0)
  if not retval then timesig_num, timesig_denom = 4, 4 end
  
- -- Get project measure offset to handle projects that start at bar 0
  local _, projmeasoffs = r.get_config_var_string("projmeasoffs")
  local measure_correction = (projmeasoffs and tonumber(projmeasoffs) == 0) and 1 or 0
  
@@ -7080,7 +7046,6 @@ function TapTempo(main_window_width, main_window_height)
 end
 
 local function CleanupFonts()
- -- Check if context is valid before attempting to detach fonts
  if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
   return
  end
@@ -7138,7 +7103,6 @@ function Main()
  font_needs_update = false
  end
  
- -- Check if context is valid before pushing styles
  if ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
   r.ImGui_PushFont(ctx, font, settings.font_size)
   font_pushed = true
@@ -7302,7 +7266,6 @@ function Main()
  changed, settings.edit_grid_show = r.ImGui_MenuItem(ctx, "Show Grid", nil, settings.edit_grid_show or false)
  if changed then SaveSettings() end
  
- -- Grid Size slider
  r.ImGui_SetNextItemWidth(ctx, 150)
  changed, settings.edit_grid_size_px = r.ImGui_SliderInt(ctx, "Grid Size", settings.edit_grid_size_px or 16, 1, 15, "%d px")
  if changed then SaveSettings() end
@@ -7392,7 +7355,7 @@ function Main()
    end
   end
  end
- end -- End of context validation if block
+ end 
  
  if font_pushed then
   r.ImGui_PopFont(ctx)

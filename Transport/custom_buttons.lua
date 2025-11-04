@@ -1,9 +1,9 @@
 local r = reaper
 local script_path = debug.getinfo(1, 'S').source:match([[^@?(.*[\/])[^\/]-$]])
 local json = require('json')
+local instance_suffix = _G.TK_TRANSPORT_INSTANCE_NAME or ""
 local button_presets_path = script_path .. "tk_transport_buttons/presets/"
 
-local instance_suffix = _G.TK_TRANSPORT_INSTANCE_NAME or ""
 local current_buttons_path = script_path .. "tk_transport_buttons/current_buttons" .. (instance_suffix ~= "" and "_" .. instance_suffix or "") .. ".json"
 
 local CustomButtons = {
@@ -460,8 +460,6 @@ function CustomButtons.GetAllGroups()
     table.sort(groups)
     return groups
 end
-
-CustomButtons.LoadLastUsedPreset()
 
 return CustomButtons
 
