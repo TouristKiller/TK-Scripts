@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.0.4
+-- @version 0.0.5
 -- @changelog:
 --[[     
 
@@ -511,7 +511,7 @@ end
 --------------------------------------------------------------------------
 
 --------------------------------------------------------------------------
-ctx = r.ImGui_CreateContext('TK FX BROWSER')
+ctx = r.ImGui_CreateContext('TK FX BROWSER MINI')
 --------------------------------------------------------------------------
 -- FX LIST
 local TRACK, LAST_USED_FX, FILTER, ADDFX_Sel_Entry
@@ -2449,7 +2449,7 @@ function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 780
+    local window_height = 820
 
     local column1_width = 10
     local column2_width = 120
@@ -2463,10 +2463,16 @@ function ShowConfigWindow()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
     if visible then
         r.ImGui_PushFont(ctx, LargeFont, 15)
-        r.ImGui_Text(ctx, "TK FX BROWSER SETTINGS  v" .. GetScriptVersion())
+        r.ImGui_Text(ctx, "TK FX BROWSER MINI SETTINGS  v" .. GetScriptVersion())
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
+        
+        -- Info message about shared settings
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFAA00FF)  -- Orange color
+        r.ImGui_TextWrapped(ctx, "Note: Settings are shared between TK FX BROWSER and Mini versions")
+        r.ImGui_PopStyleColor(ctx)
+        
         r.ImGui_Separator(ctx)
         if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
             if r.ImGui_BeginTabItem(ctx, "GUI & VIEW") then
@@ -6717,7 +6723,7 @@ function ShowScreenshotControls()
     if r.ImGui_BeginPopup(ctx, "ScreenshotControlsMenu") then
         -- Version header for the screenshot window settings
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-        r.ImGui_Text(ctx, "TK FX BROWSER  v" .. GetScriptVersion())
+        r.ImGui_Text(ctx, "TK FX BROWSER MINI  v" .. GetScriptVersion())
         r.ImGui_PopStyleColor(ctx)
         r.ImGui_Separator(ctx)
         
@@ -9585,7 +9591,7 @@ function ShowScreenshotWindow()
     r.ImGui_SetNextWindowSizeConstraints(ctx, min_width, 200, FLT_MAX, FLT_MAX)
     r.ImGui_SetNextWindowSize(ctx, math.max(min_width, config.screenshot_window_width), config.screenshot_window_height or 600, r.ImGui_Cond_FirstUseEver())
     
-    local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
+    local visible, open = r.ImGui_Begin(ctx, "Screenshots MINI##NoTitle", true, window_flags)
     if visible then
         ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
@@ -13623,7 +13629,7 @@ if not general_visibility then
     
     r.ImGui_SetNextWindowPos(ctx, -1000, -1000)
     r.ImGui_SetNextWindowSize(ctx, 1, 1)
-    local hidden_visible, hidden_open = r.ImGui_Begin(ctx, 'TK FX BROWSER (Hidden)', true, invisible_flags)
+    local hidden_visible, hidden_open = r.ImGui_Begin(ctx, 'TK FX BROWSER MINI (Hidden)', true, invisible_flags)
     if hidden_visible then
         r.ImGui_Text(ctx, "") -- Empty content
         r.ImGui_End(ctx)

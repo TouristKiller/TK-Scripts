@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.0.8
+-- @version 2.0.9
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -2454,7 +2454,7 @@ function ShowConfigWindow()
     end
     local config_open = true
     local window_width = 480
-    local window_height = 780
+    local window_height = 820
 
     local column1_width = 10
     local column2_width = 120
@@ -2472,6 +2472,12 @@ function ShowConfigWindow()
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
+        
+        -- Info message about shared settings
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFAA00FF)  -- Orange color
+        r.ImGui_TextWrapped(ctx, "Note: Settings are shared between TK FX BROWSER and Mini versions")
+        r.ImGui_PopStyleColor(ctx)
+        
         r.ImGui_Separator(ctx)
         if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
             if r.ImGui_BeginTabItem(ctx, "GUI & VIEW") then
