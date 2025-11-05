@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.0.6
+-- @version 2.0.7
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -1170,7 +1170,8 @@ function CreateInstrumentTrack(plugin_name, midi_input_value)
     
     r.SetMediaTrackInfo_Value(new_track, "I_RECINPUT", input_value)
     
-    r.SetMediaTrackInfo_Value(new_track, "I_RECMODE", 1)
+    -- Set record mode to MIDI input (not output)
+    r.SetMediaTrackInfo_Value(new_track, "I_RECMODE", 0)  -- 0 = input (MIDI), 1 = output
     r.SetMediaTrackInfo_Value(new_track, "I_RECMON", 2)
     
     r.SetOnlyTrackSelected(new_track)
@@ -8387,8 +8388,10 @@ function ShowBrowserPanel()
         end
 
     end
-    r.ImGui_EndChild(ctx) -- BrowserContent
-    r.ImGui_PopStyleVar(ctx) -- ScrollbarSize
+    if content_open then
+        r.ImGui_EndChild(ctx) -- BrowserContent
+        r.ImGui_PopStyleVar(ctx) -- ScrollbarSize (from BrowserContent)
+    end
 
    
     if config.show_screenshot_info_box then
