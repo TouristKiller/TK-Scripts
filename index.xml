@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.0.7" author="TouristKiller" time="2025-11-05T20:00:00Z">
+    <version name="2.0.8" author="TouristKiller" time="2025-11-05T21:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -51,6 +51,24 @@
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER_TOGGLE_VISIBILITY.lua</source>
                 <changelog><![CDATA[           
 + Initial release - Toggle FX Browser window visibility while keeping it running in background
+]]></changelog>
+    </version>
+    </reapack>
+
+    <reapack name="TK_FX_BROWSER_Mini_TOGGLE_VISIBILITY.lua" type="script" desc="TK FX BROWSER Mini - Toggle Visibility">
+    <version name="1.0.0" author="TouristKiller" time="2025-11-05T21:30:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER_Mini_TOGGLE_VISIBILITY.lua</source>
+                <changelog><![CDATA[           
++ Initial release - Toggle FX Browser Mini window visibility while keeping it running in background
+]]></changelog>
+    </version>
+    </reapack>
+
+    <reapack name="TK_FX_BROWSER_TOGGLE_BOTH.lua" type="script" desc="TK FX BROWSER - Toggle Both (Main + Mini)">
+    <version name="1.0.0" author="TouristKiller" time="2025-11-05T21:30:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER_TOGGLE_BOTH.lua</source>
+                <changelog><![CDATA[           
++ Initial release - Toggle visibility of both TK FX BROWSER and Mini windows simultaneously
 ]]></changelog>
     </version>
     </reapack>

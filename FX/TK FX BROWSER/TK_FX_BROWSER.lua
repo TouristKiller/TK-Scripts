@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.0.7
+-- @version 2.0.8
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua

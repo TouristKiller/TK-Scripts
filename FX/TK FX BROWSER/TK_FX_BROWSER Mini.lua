@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.0.3
+-- @version 0.0.4
 -- @changelog:
 --[[     
 
@@ -137,7 +137,7 @@ end
 
 local last_visibility_state = nil
 local function CheckVisibilityState()
-    local visibility_state = r.GetExtState("TK_FX_BROWSER", "visibility")
+    local visibility_state = r.GetExtState("TK_FX_BROWSER_MINI", "visibility")
     local is_visible = visibility_state ~= "hidden"
     
   
@@ -158,7 +158,7 @@ local function ShouldShowMainWindow()
 end
 
 local function SetRunningState(running)
-    r.SetExtState("TK_FX_BROWSER", "running", running and "true" or "false", true)
+    r.SetExtState("TK_FX_BROWSER_MINI", "running", running and "true" or "false", true)
 end
 
 local did_initial_refresh = false
@@ -13666,9 +13666,9 @@ if not should_show_main_window then
 end
 
 end
-local initial_visibility = r.GetExtState("TK_FX_BROWSER", "visibility")
+local initial_visibility = r.GetExtState("TK_FX_BROWSER_MINI", "visibility")
 if initial_visibility == "" then
-    r.SetExtState("TK_FX_BROWSER", "visibility", "visible", true)
+    r.SetExtState("TK_FX_BROWSER_MINI", "visibility", "visible", true)
 end
 
 InitializeImGuiContext()
