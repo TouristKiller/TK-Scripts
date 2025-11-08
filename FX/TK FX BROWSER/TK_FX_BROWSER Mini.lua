@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.0.5
+-- @version 0.0.6
 -- @changelog:
 --[[     
 
@@ -8,6 +8,9 @@
 --------------------------------------------------------------------------
 local r                     = reaper
 local script_path           = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
+local script_name           = debug.getinfo(1, "S").source:match("([^/\\]+)$")
+local is_mini              = string.find(script_name, "Mini") ~= nil
+local browser_panel_key     = "show_browser_panel" .. (is_mini and "_mini" or "_main")
 local os_separator          = package.config:sub(1, 1)
 package.path                = script_path .. "?.lua;"
 local json                  = require("json")
@@ -415,6 +418,25 @@ show_debug_window = show_debug_window or false
 debug_messages = debug_messages or {}
 local MAX_DEBUG_MESSAGES = 100
 
+-- Custom folder popup variables
+show_add_subfolder_popup = show_add_subfolder_popup or false
+selected_folder_for_subfolder = selected_folder_for_subfolder or nil
+new_subfolder_name = new_subfolder_name or ""
+subfolder_plugin_action = subfolder_plugin_action or 0 -- 0=keep, 1=move, 2=remove
+parent_folder_has_plugins = parent_folder_has_plugins or false
+show_add_root_folder_popup = show_add_root_folder_popup or false
+new_root_folder_name = new_root_folder_name or ""
+show_create_parent_folder_popup = show_create_parent_folder_popup or false
+selected_folder_for_parent = selected_folder_for_parent or nil
+new_parent_folder_name = new_parent_folder_name or ""
+show_rename_folder_popup = show_rename_folder_popup or false
+folder_to_rename = folder_to_rename or nil
+folder_to_rename_path = folder_to_rename_path or ""
+new_folder_name_for_rename = new_folder_name_for_rename or ""
+
+-- Config window tab selection
+config_window_selected_tab = config_window_selected_tab or 1
+
 -- Debug logging cache (to prevent logging every frame)
 local debug_last_fx_chains_state = nil
 local debug_last_track_templates_state = nil
@@ -623,7 +645,11 @@ function SetDefaultConfig()
         show_projects = true,
         show_sends = true,
         show_actions = true,
-        show_scripts = true, 
+        show_scripts = true,
+        browser_segment_favorites_visible = true,
+        browser_segment_custom_folders_visible = true,
+        browser_segment_main_categories_visible = true,
+        browser_segment_utilities_visible = true,
         bulk_screenshot_vst = true,
         bulk_screenshot_vst3 = true,
         bulk_screenshot_js = true,
@@ -669,11 +695,17 @@ function SetDefaultConfig()
         show_only_dropdown = false,
         create_sends_folder = false,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
+    font_size = 11,  -- Default font size
+    -- Custom folder font settings
+    custom_folder_use_default_font = true,
+    custom_folder_font_size = 11,
         
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
         show_project_info = show_project_info or true,
         hide_main_window = true,  -- Mini version: always hide main window
         show_browser_panel = true,
+        show_browser_panel_main = true,
+        show_browser_panel_mini = true,
         browser_panel_width = browser_panel_width or 200,
         screenshot_section_width = screenshot_section_width or 600, 
         use_pagination = true,
@@ -734,12 +766,149 @@ function MaybeClearCaches()
 end
 
 function SaveConfig()
+    -- Temporarily remove data that has its own files
+    local custom_folders_backup = config.custom_folders
+    local pinned_plugins_backup = config.pinned_plugins
+    local pinned_subgroups_backup = config.pinned_subgroups
+    local pinned_custom_subfolders_backup = config.pinned_custom_subfolders
+    
+    config.custom_folders = nil
+    config.pinned_plugins = nil
+    config.pinned_subgroups = nil
+    config.pinned_custom_subfolders = nil
+    
+    -- First encode to JSON (if this fails, we don't touch the file)
+    local success, json_string = pcall(json.encode, config)
+    
+    -- Restore all data immediately
+    config.custom_folders = custom_folders_backup
+    config.pinned_plugins = pinned_plugins_backup
+    config.pinned_subgroups = pinned_subgroups_backup
+    config.pinned_custom_subfolders = pinned_custom_subfolders_backup
+    
+    -- Restore custom_folders immediately
+    config.custom_folders = custom_folders_backup
+    
+    if not success then
+        r.ShowConsoleMsg("Error: Could not encode config to JSON: " .. tostring(json_string) .. "\n")
+        r.ShowConsoleMsg("Config will not be saved this time to prevent corruption.\n")
+        -- Don't save, but don't break the script either
+        return
+    end
+    
+    -- Create backup of existing config before writing new one
+    local backup_path = script_path .. "config_backup.json"
+    local existing_file = io.open(script_path .. "config.json", "r")
+    if existing_file then
+        local existing_content = existing_file:read("*all")
+        existing_file:close()
+        if existing_content and existing_content ~= "" then
+            local backup_file = io.open(backup_path, "w")
+            if backup_file then
+                backup_file:write(existing_content)
+                backup_file:close()
+            end
+        end
+    end
+    
+    -- Only now open the file (after successful encoding)
     local file = io.open(script_path .. "config.json", "w")
     if file then
-        file:write(json.encode(config))
+        file:write(json_string)
         file:close()
         ClearPerformanceCaches()
+    else
+        r.ShowConsoleMsg("Error: Could not open config.json for writing\n")
     end
+end
+
+function SavePinned()
+    local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
+    local file = io.open(script_path .. "pinned_plugins.txt", "w")
+    if file then
+        -- Save pinned plugins
+        if config.pinned_plugins then
+            for _, plugin in ipairs(config.pinned_plugins) do
+                file:write("PLUGIN:" .. plugin .. "\n")
+            end
+        end
+        -- Save pinned subgroups (organized by category)
+        if config.pinned_subgroups then
+            for cat, list in pairs(config.pinned_subgroups) do
+                if type(list) == "table" then
+                    for _, subgroup in ipairs(list) do
+                        file:write("SUBGROUP:" .. cat .. ":" .. subgroup .. "\n")
+                    end
+                end
+            end
+        end
+        -- Save pinned custom subfolders
+        if config.pinned_custom_subfolders then
+            for _, subfolder in ipairs(config.pinned_custom_subfolders) do
+                file:write("CUSTOMFOLDER:" .. subfolder .. "\n")
+            end
+        end
+        file:close()
+    end
+end
+
+function LoadPinned()
+    local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
+    local file = io.open(script_path .. "pinned_plugins.txt", "r")
+    if file then
+        config.pinned_plugins = {}
+        config.pinned_subgroups = {}
+        config.pinned_custom_subfolders = {}
+        
+        for line in file:lines() do
+            if line:match("^PLUGIN:") then
+                local plugin_name = line:sub(8) -- Remove "PLUGIN:" prefix
+                table.insert(config.pinned_plugins, plugin_name)
+            elseif line:match("^SUBGROUP:") then
+                -- New format: SUBGROUP:CATEGORY:NAME
+                local rest = line:sub(10) -- Remove "SUBGROUP:" prefix
+                local cat, name = rest:match("^([^:]+):(.+)$")
+                if cat and name then
+                    if not config.pinned_subgroups[cat] then
+                        config.pinned_subgroups[cat] = {}
+                    end
+                    table.insert(config.pinned_subgroups[cat], name)
+                else
+                    -- Old format (backwards compatibility): just the name
+                    -- Try to add to a default category or skip
+                    -- This shouldn't happen after migration
+                end
+            elseif line:match("^CUSTOMFOLDER:") then
+                local folder_name = line:sub(14) -- Remove "CUSTOMFOLDER:" prefix
+                table.insert(config.pinned_custom_subfolders, folder_name)
+            end
+        end
+        file:close()
+        
+        -- Rebuild pinned_set from loaded data
+        pinned_set = {}
+        for _, name in ipairs(config.pinned_plugins) do
+            if type(name) == 'string' and name ~= '' then
+                pinned_set[name] = true
+            end
+        end
+        
+        -- Rebuild pinned_norm_set if normalization function exists
+        if type(NormalizePluginNameForMatch) == 'function' then
+            pinned_norm_set = {}
+            for name, v in pairs(pinned_set) do
+                if v and type(name) == 'string' then
+                    local norm = NormalizePluginNameForMatch(name)
+                    if norm then
+                        pinned_norm_set[norm] = true
+                    end
+                end
+            end
+        end
+        
+        return true -- Successfully loaded from file
+    end
+    return false -- File doesn't exist yet
 end
 
 function LoadConfig()
@@ -747,7 +916,50 @@ function LoadConfig()
     if file then
         local content = file:read("*all")
         file:close()
-        local loaded_config = json.decode(content)
+        
+        -- Check if content is empty or only whitespace
+        if not content or content == "" or content:match("^%s*$") then
+            r.ShowConsoleMsg("Warning: config.json is empty, trying backup...\n")
+            
+            -- Try to load from backup
+            local backup_file = io.open(script_path .. "config_backup.json", "r")
+            if backup_file then
+                content = backup_file:read("*all")
+                backup_file:close()
+                r.ShowConsoleMsg("Loaded config from backup file\n")
+            else
+                r.ShowConsoleMsg("No backup found, using default config\n")
+                SetDefaultConfig()
+                return
+            end
+        end
+        
+        local success, loaded_config = pcall(json.decode, content)
+        if not success or not loaded_config then
+            r.ShowConsoleMsg("Warning: Could not parse config.json: " .. tostring(loaded_config) .. "\n")
+            
+            -- Try to load from backup
+            local backup_file = io.open(script_path .. "config_backup.json", "r")
+            if backup_file then
+                local backup_content = backup_file:read("*all")
+                backup_file:close()
+                
+                local backup_success, backup_config = pcall(json.decode, backup_content)
+                if backup_success and backup_config then
+                    r.ShowConsoleMsg("Successfully loaded config from backup file\n")
+                    loaded_config = backup_config
+                else
+                    r.ShowConsoleMsg("Backup also corrupt, using default config\n")
+                    SetDefaultConfig()
+                    return
+                end
+            else
+                r.ShowConsoleMsg("No backup found, using default config\n")
+                SetDefaultConfig()
+                return
+            end
+        end
+        
         for k, v in pairs(loaded_config) do
             config[k] = v
         end
@@ -758,30 +970,58 @@ function LoadConfig()
             config.show_favorite_overlay = true
         end
         config.folder_specific_sizes = loaded_config.folder_specific_sizes or {}
-    
-        config.pinned_plugins = loaded_config.pinned_plugins or config.pinned_plugins or {}
-        pinned_set = {}
-        for _, name in ipairs(config.pinned_plugins) do
-            if type(name) == 'string' and name ~= '' then
-                pinned_set[name] = true
+        
+        -- Try to load pinned data from separate file first
+        local loaded_from_file = LoadPinned()
+        
+        -- Migration: If pinned_plugins.txt doesn't exist yet but config has pinned data, migrate it
+        if not loaded_from_file then
+            if loaded_config.pinned_plugins and #loaded_config.pinned_plugins > 0 then
+                config.pinned_plugins = loaded_config.pinned_plugins
+                config.pinned_subgroups = loaded_config.pinned_subgroups or {}
+                config.pinned_custom_subfolders = loaded_config.pinned_custom_subfolders or {}
+                
+                -- Save to new file format
+                SavePinned()
+                
+                -- Clean up old data from config.json by saving config without pinned data
+                SaveConfig()
+                
+                r.ShowConsoleMsg("TK FX Browser Mini: Migrated pinned data to separate file (pinned_plugins.txt)\n")
+            else
+                -- No pinned data anywhere, initialize empty
+                config.pinned_plugins = {}
+                config.pinned_subgroups = {}
+                config.pinned_custom_subfolders = {}
             end
-        end
-        if type(NormalizePluginNameForMatch) == 'function' then
-            pinned_norm_set = {}
-            for name, v in pairs(pinned_set) do
-                if v and type(name) == 'string' then
-                    local k = NormalizePluginNameForMatch(name)
-                    if k ~= '' then pinned_norm_set[k] = true end
+            
+            -- Build the sets
+            pinned_set = {}
+            for _, name in ipairs(config.pinned_plugins) do
+                if type(name) == 'string' and name ~= '' then
+                    pinned_set[name] = true
+                end
+            end
+            if type(NormalizePluginNameForMatch) == 'function' then
+                pinned_norm_set = {}
+                for name, v in pairs(pinned_set) do
+                    if v and type(name) == 'string' then
+                        local k = NormalizePluginNameForMatch(name)
+                        if k ~= '' then pinned_norm_set[k] = true end
+                    end
                 end
             end
         end
+        -- Note: If loaded_from_file is true, LoadPinned() already rebuilt the sets
 
-        config.pinned_subgroups = loaded_config.pinned_subgroups or {}
-    
-        config.pinned_custom_subfolders = loaded_config.pinned_custom_subfolders or {}
     
         if loaded_config.flicker_guard_enabled == nil then
             config.flicker_guard_enabled = false
+        end
+        
+        -- Ensure font_size has a default value
+        if not config.font_size then
+            config.font_size = 11
         end
    
         legacy_scripts_launcher = loaded_config.scripts_launcher
@@ -791,7 +1031,9 @@ function LoadConfig()
 end
 LoadConfig()
 
-if config and config.last_viewed_folder then
+if config and config.last_viewed_folder_mini then
+    last_viewed_folder = config.last_viewed_folder_mini
+elseif config and config.last_viewed_folder then
     last_viewed_folder = config.last_viewed_folder
 end
 PROJECTS_DIR = config.last_used_project_location
@@ -995,29 +1237,57 @@ function ResetConfig()
 end
 
 -- CUSTOM FOLDERS HELPERS
-function IsPluginArray(folder_content)
-    if type(folder_content) ~= "table" then return false end
-    if next(folder_content) == nil then return true end 
-    
-    for i, item in ipairs(folder_content) do
-        if type(item) ~= "string" then return false end
+-- Get plugins from a folder (numeric keys only)
+function GetFolderPlugins(folder_content)
+    if type(folder_content) ~= "table" then return {} end
+    local plugins = {}
+    for k, v in pairs(folder_content) do
+        if type(k) == "number" and type(v) == "string" then
+            plugins[#plugins + 1] = v
+        end
     end
-    
-    for key, value in pairs(folder_content) do
-        if type(key) ~= "number" then return false end
-    end
-    return true
+    return plugins
 end
 
-function IsSubfolderStructure(folder_content)
-    if type(folder_content) ~= "table" then return false end
-    if next(folder_content) == nil then return false end 
-    
-    for key, value in pairs(folder_content) do
-        if type(key) ~= "string" then return false end
-        if type(value) ~= "table" then return false end
+-- Get subfolders from a folder (string keys that are tables)
+function GetFolderSubfolders(folder_content)
+    if type(folder_content) ~= "table" then return {} end
+    local subfolders = {}
+    for k, v in pairs(folder_content) do
+        if type(k) == "string" and type(v) == "table" then
+            subfolders[k] = v
+        end
     end
-    return true
+    return subfolders
+end
+
+-- Check if folder has any subfolders
+function HasSubfolders(folder_content)
+    if type(folder_content) ~= "table" then return false end
+    for k, v in pairs(folder_content) do
+        if type(k) == "string" and type(v) == "table" then
+            return true
+        end
+    end
+    return false
+end
+
+-- Check if folder has any plugins
+function HasPlugins(folder_content)
+    if type(folder_content) ~= "table" then return false end
+    for k, v in pairs(folder_content) do
+        if type(k) == "number" and type(v) == "string" then
+            return true
+        end
+    end
+    return false
+end
+
+-- Legacy compatibility aliases
+IsSubfolderStructure = HasSubfolders
+IsPluginArray = function(folder_content)
+    -- Old logic: pure plugin array (only numeric keys, no subfolders)
+    return not HasSubfolders(folder_content) and HasPlugins(folder_content)
 end
 
 function CleanPluginName(name)
@@ -1285,7 +1555,7 @@ function PinPlugin(name)
             local k = NormalizePluginNameForMatch(name)
             if k ~= '' then pinned_norm_set[k] = true end
         end
-    SaveConfig()
+    SavePinned()
     if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
     end
 end
@@ -1306,7 +1576,7 @@ function UnpinPlugin(name)
             local k = NormalizePluginNameForMatch(name)
             if k ~= '' then pinned_norm_set[k] = nil end
         end
-    SaveConfig()
+    SavePinned()
     if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
     end
 end
@@ -1447,23 +1717,70 @@ function CreateNestedFolder(folder_path, is_subfolder_of)
     end
 end
 
+function IsCustomFolder(folder_path)
+    if not folder_path or folder_path == "" then return false end
+    
+    -- Navigate to folder using path
+    local target = config.custom_folders
+    for folder in folder_path:gmatch("[^/]+") do
+        if not target or type(target) ~= "table" then return false end
+        target = target[folder]
+    end
+    
+    return target ~= nil
+end
+
+function GetCustomFolderPlugins(folder_path, folders)
+    if not folder_path or folder_path == "" then return {} end
+    
+    -- Navigate to folder using path
+    local target = folders
+    for folder in folder_path:gmatch("[^/]+") do
+        if not target then return {} end
+        target = target[folder]
+    end
+    
+    if not target then return {} end
+    
+    -- Extract plugins from folder
+    local plugins = {}
+    for k, v in pairs(target) do
+        if type(k) == "number" and type(v) == "string" then
+            table.insert(plugins, v)
+        end
+    end
+    
+    return plugins
+end
+
 function SaveCustomFolders()
     
     local function convertForJSON(folders)
         local result = {}
         for folder_name, folder_content in pairs(folders) do
-            if IsPluginArray(folder_content) then
+            if type(folder_name) == "string" and type(folder_content) == "table" then
                 
-                result[folder_name] = {
-                    _type = "plugins",
-                    plugins = folder_content
-                }
-            elseif IsSubfolderStructure(folder_content) then
-            
-                result[folder_name] = {
-                    _type = "folder",
-                    subfolders = convertForJSON(folder_content)
-                }
+                local plugins = GetFolderPlugins(folder_content)
+                local subfolders = GetFolderSubfolders(folder_content)
+                
+                local folder_data = {}
+                
+                -- Always save plugins if present
+                if #plugins > 0 then
+                    folder_data.plugins = plugins
+                end
+                
+                -- Always save subfolders if present (recurse)
+                if next(subfolders) ~= nil then
+                    folder_data.subfolders = convertForJSON(subfolders)
+                end
+                
+                -- If folder is completely empty, mark it
+                if #plugins == 0 and next(subfolders) == nil then
+                    folder_data._empty = true
+                end
+                
+                result[folder_name] = folder_data
             end
         end
         return result
@@ -1471,9 +1788,10 @@ function SaveCustomFolders()
     
     local json_data = convertForJSON(config.custom_folders)
     
+    -- Debug: log what we're trying to save
     local success, json_string = pcall(json.encode, json_data)
     
-    if success then
+    if success and json_string then
         local file = io.open(script_path .. "custom_folders.json", "w")
         if file then
             file:write(json_string)
@@ -1482,7 +1800,14 @@ function SaveCustomFolders()
             r.ShowConsoleMsg("Error: Could not open custom_folders.json for writing\n")
         end
     else
-        r.ShowConsoleMsg("Error: Could not encode custom folders to JSON: " .. tostring(json_string) .. "\n")
+        r.ShowConsoleMsg("Error: Could not encode custom folders to JSON\n")
+        r.ShowConsoleMsg("Error details: " .. tostring(json_string) .. "\n")
+        -- Try to save a safe empty structure instead
+        local file = io.open(script_path .. "custom_folders.json", "w")
+        if file then
+            file:write("{}")
+            file:close()
+        end
     end
 end
 
@@ -1492,9 +1817,25 @@ function LoadCustomFolders()
         local content = file:read("*all")
         file:close()
         
+        -- Check if content is empty or only whitespace
         if not content or content == "" or content:match("^%s*$") then
-           
             config.custom_folders = {}
+            return
+        end
+        
+        -- Trim whitespace and check if it starts with valid JSON
+        content = content:match("^%s*(.-)%s*$")
+        if not content:match("^[%[{]") then
+            r.ShowConsoleMsg("Warning: custom_folders.json does not start with valid JSON\n")
+            config.custom_folders = {}
+            -- Create backup
+            local backup_path = script_path .. "custom_folders_backup_corrupt.json"
+            local backup_file = io.open(backup_path, "w")
+            if backup_file then
+                backup_file:write(content)
+                backup_file:close()
+                r.ShowConsoleMsg("Corrupt file backed up to: " .. backup_path .. "\n")
+            end
             return
         end
         
@@ -1505,23 +1846,25 @@ function LoadCustomFolders()
             local function convertFromJSON(data)
                 local result = {}
                 for folder_name, folder_data in pairs(data) do
-                    if type(folder_data) == "table" then
-                        if folder_data._type == "plugins" then
-                            
-                            result[folder_name] = folder_data.plugins or {}
-                        elseif folder_data._type == "folder" then
-                            
-                            result[folder_name] = convertFromJSON(folder_data.subfolders or {})
-                        else
-                            
-                            if folder_data[1] and type(folder_data[1]) == "string" then
-                               
-                                result[folder_name] = folder_data
-                            else
-                                
-                                result[folder_name] = convertFromJSON(folder_data)
+                    if type(folder_name) == "string" and type(folder_data) == "table" then
+                        local folder_table = {}
+                        
+                        -- Load plugins if present (numeric keys)
+                        if folder_data.plugins and type(folder_data.plugins) == "table" then
+                            for i, plugin in ipairs(folder_data.plugins) do
+                                folder_table[i] = plugin
                             end
                         end
+                        
+                        -- Load subfolders if present (string keys) - recurse
+                        if folder_data.subfolders and type(folder_data.subfolders) == "table" then
+                            local subfolders = convertFromJSON(folder_data.subfolders)
+                            for subfolder_name, subfolder_content in pairs(subfolders) do
+                                folder_table[subfolder_name] = subfolder_content
+                            end
+                        end
+                        
+                        result[folder_name] = folder_table
                     end
                 end
                 return result
@@ -1652,6 +1995,7 @@ local TKFXfonts = {
     "Times New Roman",
     "Georgia",
     "Courier New",
+    "Consolas",
     "Trebuchet MS",
     "Impact",
     "Roboto",
@@ -1807,24 +2151,33 @@ function UpdateFonts()
     if r.ImGui_ValidatePtr(TinyFont, 'ImGui_Resource*') then
         r.ImGui_Detach(ctx, TinyFont)
     end
+    if r.ImGui_ValidatePtr(CustomFolderFont, 'ImGui_Resource*') then
+        r.ImGui_Detach(ctx, CustomFolderFont)
+    end
 
     
-    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
-    TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
-    LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
+    NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size)
+    TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size - 2)
+    LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size + 4)
+    -- Custom folder font (can be independent size)
+    local cfs = config.custom_folder_use_default_font and config.font_size or (config.custom_folder_font_size or config.font_size)
+    CustomFolderFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], cfs)
 
     r.ImGui_Attach(ctx, NormalFont)
     r.ImGui_Attach(ctx, TinyFont)
     r.ImGui_Attach(ctx, LargeFont)
+    r.ImGui_Attach(ctx, CustomFolderFont)
 end
 
-NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 11)
-TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 9)
-LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 15)
+NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size)
+TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size - 2)
+LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size + 4)
+CustomFolderFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.custom_folder_use_default_font and config.font_size or (config.custom_folder_font_size or config.font_size))
 
 r.ImGui_Attach(ctx, NormalFont)
 r.ImGui_Attach(ctx, LargeFont)
 r.ImGui_Attach(ctx, TinyFont)
+r.ImGui_Attach(ctx, CustomFolderFont)
 
 ---------------------------------------------------------------------
 function EnsureFileExists(filepath)
@@ -1968,7 +2321,6 @@ function LoadFavorites()
 end
 LoadFavorites()
 
-
 function SaveTags()
     local tags_data = {
         tracks = track_tags,
@@ -2066,7 +2418,7 @@ function UpdateLastViewedFolder(new_folder)
         new_folder ~= "Sends/Receives" then
         last_viewed_folder = new_folder 
        
-        config.last_viewed_folder = new_folder
+        config.last_viewed_folder_mini = new_folder
         SaveConfig()
     end
 end
@@ -2157,6 +2509,8 @@ end
 
 
 local search_filter = ""
+local search_filter_pending = ""
+local search_filter_last_change_time = 0
 local filtered_plugins = {}
 function InitializeFilteredPlugins()
     filtered_plugins = {}
@@ -2231,10 +2585,17 @@ function ShowPluginManagerTab()
     end
     r.ImGui_SameLine(ctx)
     r.ImGui_PushItemWidth(ctx, 120)
-            config.last_viewed_folder = new_folder
+    local changed, new_search_filter = r.ImGui_InputTextWithHint(ctx, "##PluginManagerSearch", "Search plugins...", search_filter_pending or "")
     r.ImGui_PopItemWidth(ctx)
     if changed then
-        search_filter = new_search_filter
+        search_filter_pending = new_search_filter
+        search_filter_last_change_time = r.time_precise()
+    end
+    
+    -- Apply search filter after 300ms delay
+    local current_time = r.time_precise()
+    if search_filter_pending ~= search_filter and (current_time - search_filter_last_change_time) >= 0.3 then
+        search_filter = search_filter_pending
         filtered_plugins = {}
         BuildScreenshotIndex(true)
         for _, plugin in ipairs(PLUGIN_LIST) do
@@ -2438,7 +2799,7 @@ end
 function ShowConfigWindow()
     local function NewSection(title)
         r.ImGui_Spacing(ctx)
-        r.ImGui_PushFont(ctx, NormalFont, 11)
+        r.ImGui_PushFont(ctx, NormalFont, config.font_size)
         r.ImGui_Text(ctx, title)
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
@@ -2448,21 +2809,27 @@ function ShowConfigWindow()
         r.ImGui_Spacing(ctx)
     end
     local config_open = true
-    local window_width = 480
-    local window_height = 820
+    
+    -- Scale config window based on font size (11 is default)
+    local font_scale = (config.font_size or 11) / 11
+    local window_width = math.floor(480 * font_scale)
+    -- Height only scales up, not down (minimum is base size)
+    local base_height = 550
+    local window_height = font_scale > 1.0 and math.floor(base_height * font_scale) or base_height
 
-    local column1_width = 10
-    local column2_width = 120
-    local column3_width = 250
-    local column4_width = 360
-    local slider_width = 110
+    local column1_width = math.floor(10 * font_scale)
+    local column2_width = math.floor(120 * font_scale)
+    local column3_width = math.floor(250 * font_scale)
+    local column4_width = math.floor(360 * font_scale)
+    local slider_width = math.floor(110 * font_scale)
+    
     r.ImGui_SetNextWindowSize(ctx, window_width, window_height, r.ImGui_Cond_Always())
     r.ImGui_SetNextWindowSizeConstraints(ctx, window_width, window_height, window_width, window_height)
     local visible, open = r.ImGui_Begin(ctx, "Settings", true, window_flags | r.ImGui_WindowFlags_NoResize())
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x666666FF)  -- normale staat
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
     if visible then
-        r.ImGui_PushFont(ctx, LargeFont, 15)
+        r.ImGui_PushFont(ctx, LargeFont, config.font_size + 4)
         r.ImGui_Text(ctx, "TK FX BROWSER MINI SETTINGS  v" .. GetScriptVersion())
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
@@ -2475,7 +2842,7 @@ function ShowConfigWindow()
         
         r.ImGui_Separator(ctx)
         if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
-            if r.ImGui_BeginTabItem(ctx, "GUI & VIEW") then
+            if r.ImGui_BeginTabItem(ctx, "GUI") then
             NewSection("GUI:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Background")
@@ -2634,6 +3001,89 @@ function ShowConfigWindow()
                 config.slider_active_gray = new_slider_active_gray
                 config.slider_active_color = r.ImGui_ColorConvertDouble4ToU32(new_slider_active_gray/255, new_slider_active_gray/255, new_slider_active_gray/255, 1)
             end
+            r.ImGui_PopItemWidth(ctx)
+            
+            r.ImGui_Dummy(ctx, 0, 10)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Font:")
+            r.ImGui_SameLine(ctx, 0, 10)
+            if r.ImGui_BeginCombo(ctx, "##Font", TKFXfonts[config.selected_font]) then
+                for i, font_name in ipairs(TKFXfonts) do
+                    local is_selected = (config.selected_font == i)
+                    if r.ImGui_Selectable(ctx, font_name, is_selected) then
+                        config.selected_font = i
+                        needs_font_update = true
+                        SaveConfig()
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Size:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            if r.ImGui_BeginCombo(ctx, "##FontSize", tostring(config.font_size)) then
+                for size = 9, 14 do
+                    local is_selected = (config.font_size == size)
+                    if r.ImGui_Selectable(ctx, tostring(size), is_selected) then
+                        config.font_size = size
+                        needs_font_update = true
+                        SaveConfig()
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            
+            -- Custom folder font option
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local changed_use_default, new_use_default = r.ImGui_Checkbox(ctx, "Use global font size for custom folders", config.custom_folder_use_default_font)
+            if changed_use_default then
+                config.custom_folder_use_default_font = new_use_default
+                needs_font_update = true
+                SaveConfig()
+            end
+            if not config.custom_folder_use_default_font then
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column4_width)
+                r.ImGui_PushItemWidth(ctx, slider_width)
+                if r.ImGui_BeginCombo(ctx, "##CustomFolderSize", tostring(config.custom_folder_font_size)) then
+                    for size = 9, 14 do
+                        local is_selected = (config.custom_folder_font_size == size)
+                        if r.ImGui_Selectable(ctx, tostring(size), is_selected) then
+                            config.custom_folder_font_size = size
+                            needs_font_update = true
+                            SaveConfig()
+                        end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                r.ImGui_PopItemWidth(ctx)
+            end
+
+            r.ImGui_SetCursorPosY(ctx, window_height - 30)
+            r.ImGui_Separator(ctx)
+            local button_width = (window_width - 20) / 3
+            if r.ImGui_Button(ctx, "Save", button_width, 20) then
+                SaveConfig()
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset", button_width, 20) then
+                ResetConfig()
+            end
+            
+            r.ImGui_EndTabItem(ctx)
+            end
+
+            if r.ImGui_BeginTabItem(ctx, "VIEW") then
             r.ImGui_Dummy(ctx, 0, 5)
             NewSection("OVERALL VIEW OPTIONS:")
             local changed, new_value
@@ -2786,43 +3236,10 @@ function ShowConfigWindow()
             end
             
 
-             r.ImGui_Dummy(ctx, 0, 8)
+            r.ImGui_Dummy(ctx, 0, 8)
 
             NewSection("SCREENSHOT WINDOW:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            local changed, new_value = r.ImGui_Checkbox(ctx, "Show Window", config.show_screenshot_window)
-            if changed then
-                config.show_screenshot_window = new_value
-                RequestClearScreenshotCache()
-            end
-            
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
-            local dock_changed, new_dock_value = r.ImGui_Checkbox(ctx, "Dock", config.dock_screenshot_window)
-            if dock_changed then
-                local main_dock_id = r.ImGui_GetWindowDockID(ctx)
-                if main_dock_id == 0 then
-                    config.dock_screenshot_window = new_dock_value
-                    config.show_screenshot_window = true
-                else
-                    config.dock_screenshot_window = false
-                end
-                SaveConfig()
-            end
-            
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            local dock_side_changed, new_dock_side = r.ImGui_Checkbox(ctx, "Dock Left", config.dock_screenshot_left)
-            if dock_side_changed then
-                local main_dock_id = r.ImGui_GetWindowDockID(ctx)
-                if main_dock_id == 0 then
-                    config.dock_screenshot_left = new_dock_side
-                    config.show_screenshot_window = true
-                end
-                SaveConfig()
-            end  
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
             local single_selected = not config.add_fx_with_double_click
             if r.ImGui_RadioButton(ctx, "Single Click##AddFXMode", single_selected) then
                 config.add_fx_with_double_click = false
@@ -2830,6 +3247,12 @@ function ShowConfigWindow()
             end
             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click on its screenshot.")
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            if r.ImGui_RadioButton(ctx, "Double Click##AddFXMode", config.add_fx_with_double_click) then
+                config.add_fx_with_double_click = true
+                SaveConfig()
             end
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -2841,13 +3264,8 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.remove_manufacturer_names = r.ImGui_Checkbox(ctx, "Hide Developer", config.remove_manufacturer_names)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            if r.ImGui_RadioButton(ctx, "Double Click##AddFXMode", config.add_fx_with_double_click) then
-                config.add_fx_with_double_click = true
-                SaveConfig()
-            end
-             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+            
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click.")
             end
             -- r.ImGui_SameLine(ctx)
@@ -2958,23 +3376,6 @@ function ShowConfigWindow()
             end
 
             r.ImGui_PopItemWidth(ctx)
-            r.ImGui_SameLine(ctx)
-
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_Text(ctx, "Font:")
-            r.ImGui_SameLine(ctx, 0, 10)
-            if r.ImGui_BeginCombo(ctx, "##Font", TKFXfonts[config.selected_font]) then
-                for i, font_name in ipairs(TKFXfonts) do
-                    local is_selected = (config.selected_font == i)
-                    if r.ImGui_Selectable(ctx, font_name, is_selected) then
-                        config.selected_font = i
-                        needs_font_update = true
-                        SaveConfig()
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end
-
 
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -3406,354 +3807,6 @@ function ShowConfigWindow()
             ShowPluginManagerTab()
             r.ImGui_EndTabItem(ctx)
         end
-
-if r.ImGui_BeginTabItem(ctx, "CUSTOM FOLDERS") then
-    r.ImGui_Text(ctx, "Manage Custom Plugin Folders:")
-    r.ImGui_Separator(ctx)
-    
-    -- Add new folder section
-    r.ImGui_Text(ctx, "Add New Folder:")
-    r.ImGui_PushItemWidth(ctx, 200)
-    local changed, new_folder_name = r.ImGui_InputTextWithHint(ctx, "##NewFolderName", "Enter folder name", new_custom_folder_name or "")
-    if changed then
-        new_custom_folder_name = new_folder_name
-    end
-    r.ImGui_PopItemWidth(ctx)
-    
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Add Folder") then
-        if new_custom_folder_name and new_custom_folder_name ~= "" then
-            CreateNestedFolder(new_custom_folder_name, current_folder_context)
-            SaveCustomFolders()
-            new_custom_folder_name = ""
-        end
-    end
-    
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Add Subfolder") then
-        if new_custom_folder_name and new_custom_folder_name ~= "" and current_folder_context then
-            CreateNestedFolder(new_custom_folder_name, current_folder_context)
-            SaveCustomFolders()
-            new_custom_folder_name = ""
-        end
-    end
-    
-    -- Breadcrumb navigation
-    if current_folder_context then
-        r.ImGui_Text(ctx, "Current: " .. current_folder_context)
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Back to Root") then
-            current_folder_context = nil
-        end
-    end
-    
-    r.ImGui_Separator(ctx)
-    
-function DisplayFolderTree(folders, path_prefix)
-    path_prefix = path_prefix or ""
-    
-    -- SORTEER DE FOLDER NAMEN ALFABETISCH
-    local sorted_folder_names = {}
-    for folder_name, _ in pairs(folders) do
-        table.insert(sorted_folder_names, folder_name)
-    end
-    table.sort(sorted_folder_names, function(a, b) 
-        return a:lower() < b:lower() 
-    end)
-    
-    -- GEBRUIK DE GESORTEERDE NAMEN
-    for _, folder_name in ipairs(sorted_folder_names) do
-        local folder_content = folders[folder_name]
-        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
-        r.ImGui_PushID(ctx, full_path)
-            
-            if IsPluginArray(folder_content) then
-                -- Plugin folder
-                if r.ImGui_CollapsingHeader(ctx, folder_name .. " (" .. #folder_content .. " plugins)") then
-                    r.ImGui_Indent(ctx, 20)
-                    
-                    -- Set context for adding plugins
-                    if r.ImGui_Button(ctx, "Set as Context##" .. full_path) then
-                        current_folder_context = full_path
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Browse##" .. full_path) then
-                        selected_custom_folder_for_browse = full_path
-                        show_plugin_browser = true
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Rename##" .. full_path) then
-                        rename_folder_path = full_path
-                        rename_folder_new_name = folder_name
-                        show_rename_folder_popup = true
-                    end
-                    
-                    -- PLUGIN TOEVOEG SECTIE - HANDMATIG
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_Text(ctx, "Add Plugin:")
-                    r.ImGui_PushItemWidth(ctx, 250)
-                    if not plugin_input_text then
-                        plugin_input_text = {}
-                    end
-                    if not plugin_input_text[full_path] then
-                        plugin_input_text[full_path] = ""
-                    end
-                    local plugin_changed, new_plugin = r.ImGui_InputTextWithHint(ctx, "##AddPlugin" .. full_path, "Enter plugin name", plugin_input_text[full_path])
-                    if plugin_changed then
-                        plugin_input_text[full_path] = new_plugin
-                    end
-                    r.ImGui_PopItemWidth(ctx)
-
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Add##" .. full_path) then
-                        if plugin_input_text[full_path] and plugin_input_text[full_path] ~= "" then
-                            -- Check if plugin exists in PLUGIN_LIST
-                            local plugin_exists = false
-                            local exact_plugin_name = nil
-                            for _, existing_plugin in ipairs(PLUGIN_LIST) do
-                                if existing_plugin:lower():find(plugin_input_text[full_path]:lower(), 1, true) then
-                                    plugin_exists = true
-                                    exact_plugin_name = existing_plugin
-                                    break
-                                end
-                            end
-                            
-                            if plugin_exists then
-                                if not table.contains(folder_content, exact_plugin_name) then
-                                    table.insert(folder_content, exact_plugin_name)
-                                    SaveCustomFolders()
-                                    plugin_input_text[full_path] = ""  -- Clear input after successful add
-                                else
-                                    r.ShowMessageBox("Plugin already in folder!", "Info", 0)
-                                end
-                            else
-                                r.ShowMessageBox("Plugin not found in installed plugins!\nTry typing part of the plugin name.", "Error", 0)
-                            end
-                        end
-                    end
-                    
-                    r.ImGui_Separator(ctx)
-                    
-                    -- List plugins
-                    for i, plugin in ipairs(folder_content) do
-                        r.ImGui_Text(ctx, plugin)
-                        r.ImGui_SameLine(ctx)
-                        r.ImGui_SetCursorPosX(ctx, r.ImGui_GetWindowWidth(ctx) - 80)
-                        if r.ImGui_Button(ctx, "Remove##" .. i .. full_path) then
-                            table.remove(folder_content, i)
-                            SaveCustomFolders()
-                        end
-                    end
-                    
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
-                    if r.ImGui_Button(ctx, "Delete Folder##" .. full_path) then
-                        -- Remove from nested structure
-                        local parts = {}
-                        for part in full_path:gmatch("[^/]+") do
-                            table.insert(parts, part)
-                        end
-                        
-                        local current = config.custom_folders
-                        for i = 1, #parts - 1 do
-                            current = current[parts[i]]
-                        end
-                        current[parts[#parts]] = nil
-                        
-                        SaveCustomFolders()
-                    end
-                    r.ImGui_PopStyleColor(ctx)
-                    
-                    r.ImGui_Unindent(ctx, 20)
-                end
-                
-            elseif IsSubfolderStructure(folder_content) then
-                -- Parent folder with subfolders
-                if r.ImGui_CollapsingHeader(ctx, folder_name .. " (folder)") then
-                    r.ImGui_Indent(ctx, 20)
-                    
-                    if r.ImGui_Button(ctx, "Set as Context##" .. full_path) then
-                        current_folder_context = full_path
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "Rename##" .. full_path) then
-                        rename_folder_path = full_path
-                        rename_folder_new_name = folder_name
-                        show_rename_folder_popup = true
-                    end
-                    
-                    r.ImGui_Separator(ctx)
-                    
-                    -- Recursively display subfolders
-                    DisplayFolderTree(folder_content, full_path)
-                    
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
-                    if r.ImGui_Button(ctx, "Delete Folder##" .. full_path) then
-                        local parts = {}
-                        for part in full_path:gmatch("[^/]+") do
-                            table.insert(parts, part)
-                        end
-                        
-                        local current = config.custom_folders
-                        for i = 1, #parts - 1 do
-                            current = current[parts[i]]
-                        end
-                        current[parts[#parts]] = nil
-                        
-                        SaveCustomFolders()
-                    end
-                    r.ImGui_PopStyleColor(ctx)
-                    
-                    r.ImGui_Unindent(ctx, 20)
-                end
-            end
-            
-            r.ImGui_PopID(ctx)
-        end
-    end
-    
-    -- Display the folder tree
-    local custom_folders_open = r.ImGui_BeginChild(ctx, "CustomFoldersList", -1, -50)
-    if custom_folders_open then
-        DisplayFolderTree(config.custom_folders)
-    end
-    r.ImGui_EndChild(ctx)
-    
-    -- Rename folder popup
-    if show_rename_folder_popup then
-        r.ImGui_OpenPopup(ctx, "Rename Folder")
-    end
-    
-    if r.ImGui_BeginPopupModal(ctx, "Rename Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
-        r.ImGui_Text(ctx, "Rename folder: " .. (rename_folder_path or ""))
-        r.ImGui_Separator(ctx)
-        
-        r.ImGui_PushItemWidth(ctx, 300)
-        local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##RenameFolder", "Enter new name", rename_folder_new_name or "")
-        if changed then
-            rename_folder_new_name = new_name
-        end
-        r.ImGui_PopItemWidth(ctx)
-        
-        r.ImGui_Separator(ctx)
-        if r.ImGui_Button(ctx, "Rename", 100, 0) then
-            if rename_folder_new_name and rename_folder_new_name ~= "" and rename_folder_path then
-                local parts = {}
-                for part in rename_folder_path:gmatch("[^/]+") do
-                    table.insert(parts, part)
-                end
-                
-                if #parts > 0 then
-                    local current = config.custom_folders
-                    for i = 1, #parts - 1 do
-                        current = current[parts[i]]
-                    end
-                    
-                    local old_name = parts[#parts]
-                    local folder_content = current[old_name]
-                    
-                    current[old_name] = nil
-                    current[rename_folder_new_name] = folder_content
-                    
-                    SaveCustomFolders()
-                end
-            end
-            show_rename_folder_popup = false
-            rename_folder_path = nil
-            rename_folder_new_name = ""
-            r.ImGui_CloseCurrentPopup(ctx)
-        end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
-            show_rename_folder_popup = false
-            rename_folder_path = nil
-            rename_folder_new_name = ""
-            r.ImGui_CloseCurrentPopup(ctx)
-        end
-        
-        r.ImGui_EndPopup(ctx)
-    end
-    
-    if show_plugin_browser then
-        r.ImGui_OpenPopup(ctx, "Plugin Browser")
-    end
-    
-    if r.ImGui_BeginPopupModal(ctx, "Plugin Browser", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
-        r.ImGui_Text(ctx, "Select plugins to add to: " .. (selected_custom_folder_for_browse or ""))
-        r.ImGui_Separator(ctx)
-        
-        r.ImGui_PushItemWidth(ctx, 300)
-        local search_changed, search_text = r.ImGui_InputTextWithHint(ctx, "##SearchPlugins", "Search plugins...", plugin_search_text or "")
-        if search_changed then
-            plugin_search_text = search_text
-        end
-        r.ImGui_PopItemWidth(ctx)
-        
-    local plugin_browser_open = r.ImGui_BeginChild(ctx, "PluginBrowserList", 400, 300)
-    if plugin_browser_open then
-            for _, plugin in ipairs(PLUGIN_LIST) do
-                if not plugin_search_text or plugin_search_text == "" or 
-                plugin:lower():find(plugin_search_text:lower(), 1, true) then
-                    
-                    local already_in_folder = false
-                    local folder_plugins = GetPluginsFromCustomFolder(selected_custom_folder_for_browse)
-                    if folder_plugins then
-                        already_in_folder = table.contains(folder_plugins, plugin)
-                    end
-                    
-                    if not already_in_folder then
-                        local display_plugin = GetDisplayPluginName(plugin)
-                        if r.ImGui_Selectable(ctx, display_plugin .. "  " .. GetStarsString(plugin)) then
-                            local parts = {}
-                            for part in selected_custom_folder_for_browse:gmatch("[^/]+") do
-                                table.insert(parts, part)
-                            end
-                            
-                            local current = config.custom_folders
-                            for _, part in ipairs(parts) do
-                                if current[part] then
-                                    current = current[part]
-                                else
-                                    return
-                                end
-                            end
-                            
-                            if IsPluginArray(current) then
-                                table.insert(current, plugin)
-                                SaveCustomFolders()
-                            end
-                        end
-                    else
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                        r.ImGui_Text(ctx, plugin .. " (already added)")
-                        r.ImGui_PopStyleColor(ctx)
-                    end
-                end
-            end
-        end
-        r.ImGui_EndChild(ctx)
-        
-        r.ImGui_Separator(ctx)
-        if r.ImGui_Button(ctx, "Close", 100, 0) then
-            show_plugin_browser = false
-            selected_custom_folder_for_browse = nil
-            plugin_search_text = ""
-            r.ImGui_CloseCurrentPopup(ctx)
-        end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
-            show_plugin_browser = false
-            selected_custom_folder_for_browse = nil
-            plugin_search_text = ""
-            r.ImGui_CloseCurrentPopup(ctx)
-        end
-        
-        r.ImGui_EndPopup(ctx)
-    end
-    
-    r.ImGui_EndTabItem(ctx)
-end
 
 r.ImGui_EndTabBar(ctx)
 end
@@ -4393,9 +4446,9 @@ function MakeScreenshot(plugin_name, callback, is_individual)
 end
 
 
-local bulk_screenshot_progress = 0
-local total_fx_count = 0
-local loaded_fx_count = 0  
+bulk_screenshot_progress = 0
+total_fx_count = 0
+loaded_fx_count = 0  
 local fx_list = {}
 function EnumerateInstalledFX()
     fx_list = {}
@@ -5682,24 +5735,62 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                     path_prefix = path_prefix or ""
                     
                     for folder_name, folder_content in pairs(folders) do
+                        if type(folder_name) ~= "string" or type(folder_content) ~= "table" then
+                            goto continue
+                        end
+                        
                         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
                         
-                        if IsPluginArray(folder_content) then
-                            if r.ImGui_MenuItem(ctx, folder_name .. " (" .. #folder_content .. ")") then
-                                if not table.contains(folder_content, plugin_name) then
-                                    table.insert(folder_content, plugin_name)
-                                    SaveCustomFolders()
-                                    r.ShowMessageBox("Plugin added to " .. folder_name, "Success", 0)
-                                else
-                                    r.ShowMessageBox("Plugin already exists in " .. folder_name, "Info", 0)
-                                end
-                            end
-                        elseif IsSubfolderStructure(folder_content) then
+                        local has_subfolders = HasSubfolders(folder_content)
+                        local plugin_count = #GetFolderPlugins(folder_content)
+                        
+                        if has_subfolders then
+                            -- Has subfolders - show as submenu only (cannot add plugins to container folders)
                             if r.ImGui_BeginMenu(ctx, folder_name) then
+                                -- Show subfolders
                                 ShowCustomFolderMenu(folder_content, full_path)
                                 r.ImGui_EndMenu(ctx)
                             end
+                        else
+                            -- No subfolders - leaf folder, can add plugins
+                            if r.ImGui_MenuItem(ctx, folder_name .. " (" .. plugin_count .. ")") then
+                                -- Navigate to correct location
+                                local target = config.custom_folders
+                                if path_prefix ~= "" then
+                                    for folder in path_prefix:gmatch("[^/]+") do
+                                        target = target[folder]
+                                        if not target then break end
+                                    end
+                                end
+                                
+                                if target and target[folder_name] then
+                                    local target_folder = target[folder_name]
+                                    
+                                    -- Check if plugin already exists
+                                    local already_exists = false
+                                    for k, v in pairs(target_folder) do
+                                        if type(k) == "number" and v == plugin_name then
+                                            already_exists = true
+                                            break
+                                        end
+                                    end
+                                    
+                                    if not already_exists then
+                                        -- Find next available numeric index
+                                        local max_index = 0
+                                        for k in pairs(target_folder) do
+                                            if type(k) == "number" and k > max_index then
+                                                max_index = k
+                                            end
+                                        end
+                                        target_folder[max_index + 1] = plugin_name
+                                        SaveCustomFolders()
+                                    end
+                                end
+                            end
                         end
+                        
+                        ::continue::
                     end
                 end
                 
@@ -5712,6 +5803,73 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 end
                 
                 r.ImGui_EndMenu(ctx)
+            end
+        end
+        
+        -- REMOVE FROM CUSTOM FOLDER SECTIE
+        if next(config.custom_folders) then
+            -- Check if plugin exists in any custom folder
+            local function FindPluginInFolders(folders, plugin, path_prefix, results)
+                path_prefix = path_prefix or ""
+                results = results or {}
+                
+                for folder_name, folder_content in pairs(folders) do
+                    if folder_name ~= "__folder_marker__" and type(folder_content) == "table" then
+                        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+                        
+                        -- Check if this folder contains the plugin
+                        local contains_plugin = false
+                        for k, v in pairs(folder_content) do
+                            if type(v) == "string" and v == plugin then
+                                contains_plugin = true
+                                table.insert(results, {path = full_path, key = k})
+                                break
+                            end
+                        end
+                        
+                        -- Recurse into subfolders
+                        if not contains_plugin then
+                            FindPluginInFolders(folder_content, plugin, full_path, results)
+                        end
+                    end
+                end
+                
+                return results
+            end
+            
+            local found_in = FindPluginInFolders(config.custom_folders, plugin_name)
+            
+            if #found_in > 0 then
+                if r.ImGui_BeginMenu(ctx, "Remove from Custom Folder") then
+                    for _, location in ipairs(found_in) do
+                        if r.ImGui_MenuItem(ctx, location.path) then
+                            -- Navigate to folder and remove plugin
+                            local target = config.custom_folders
+                            for folder in location.path:gmatch("[^/]+") do
+                                target = target[folder]
+                                if not target then break end
+                            end
+                            
+                            if target then
+                                target[location.key] = nil
+                                SaveCustomFolders()
+                                
+                                -- Refresh if we're viewing this folder
+                                if selected_folder and IsCustomFolder(selected_folder) then
+                                    local plugins = GetCustomFolderPlugins(selected_folder, config.custom_folders)
+                                    screenshot_search_results = {}
+                                    for _, p in ipairs(plugins) do
+                                        table.insert(screenshot_search_results, {name = p})
+                                    end
+                                    ClearScreenshotCache()
+                                end
+                                
+                                r.ShowMessageBox("Plugin removed from " .. location.path, "Success", 0)
+                            end
+                        end
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
             end
         end
         
@@ -5961,24 +6119,62 @@ function ShowFXContextMenu(plugin, menu_id)
                     path_prefix = path_prefix or ""
                     
                     for folder_name, folder_content in pairs(folders) do
+                        if type(folder_name) ~= "string" or type(folder_content) ~= "table" then
+                            goto continue
+                        end
+                        
                         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
                         
-                        if IsPluginArray(folder_content) then
-                            if r.ImGui_MenuItem(ctx, folder_name .. " (" .. #folder_content .. ")") then
-                                if not table.contains(folder_content, fx_name) then
-                                    table.insert(folder_content, fx_name)
-                                    SaveCustomFolders()
-                                    r.ShowMessageBox("Plugin added to " .. folder_name, "Success", 0)
-                                else
-                                    r.ShowMessageBox("Plugin already exists in " .. folder_name, "Info", 0)
-                                end
-                            end
-                        elseif IsSubfolderStructure(folder_content) then
+                        local has_subfolders = HasSubfolders(folder_content)
+                        local plugin_count = #GetFolderPlugins(folder_content)
+                        
+                        if has_subfolders then
+                            -- Has subfolders - show as submenu only (cannot add plugins to container folders)
                             if r.ImGui_BeginMenu(ctx, folder_name) then
+                                -- Show subfolders
                                 ShowCustomFolderMenu(folder_content, full_path)
                                 r.ImGui_EndMenu(ctx)
                             end
+                        else
+                            -- No subfolders - leaf folder, can add plugins
+                            if r.ImGui_MenuItem(ctx, folder_name .. " (" .. plugin_count .. ")") then
+                                -- Navigate to correct location
+                                local target = config.custom_folders
+                                if path_prefix ~= "" then
+                                    for folder in path_prefix:gmatch("[^/]+") do
+                                        target = target[folder]
+                                        if not target then break end
+                                    end
+                                end
+                                
+                                if target and target[folder_name] then
+                                    local target_folder = target[folder_name]
+                                    
+                                    -- Check if plugin already exists
+                                    local already_exists = false
+                                    for k, v in pairs(target_folder) do
+                                        if type(k) == "number" and v == fx_name then
+                                            already_exists = true
+                                            break
+                                        end
+                                    end
+                                    
+                                    if not already_exists then
+                                        -- Find next available numeric index
+                                        local max_index = 0
+                                        for k in pairs(target_folder) do
+                                            if type(k) == "number" and k > max_index then
+                                                max_index = k
+                                            end
+                                        end
+                                        target_folder[max_index + 1] = fx_name
+                                        SaveCustomFolders()
+                                    end
+                                end
+                            end
                         end
+                        
+                        ::continue::
                     end
                 end
                 
@@ -6158,7 +6354,9 @@ function ShowCustomFolderDropdown()
                 -- SORTEER DE FOLDER NAMEN ALFABETISCH
                 local sorted_folder_names = {}
                 for folder_name, _ in pairs(folders) do
-                    table.insert(sorted_folder_names, folder_name)
+                    if type(folder_name) == "string" then
+                        table.insert(sorted_folder_names, folder_name)
+                    end
                 end
                 table.sort(sorted_folder_names, function(a, b) 
                     return a:lower() < b:lower() 
@@ -6757,8 +6955,8 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, config.show_screenshot_scrollbar and "Hide Scrollbar" or "Show Scrollbar") then
                 config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar; SaveConfig()
             end
-            if r.ImGui_MenuItem(ctx, config.show_browser_panel and "Hide Browser Panel" or "Show Browser Panel") then
-                config.show_browser_panel = not config.show_browser_panel; SaveConfig()
+            if r.ImGui_MenuItem(ctx, config.show_browser_panel_mini and "Hide Browser Panel" or "Show Browser Panel") then
+                config.show_browser_panel_mini = not config.show_browser_panel_mini; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, (config.show_missing_list ~= false) and "Hide Missing List" or "Show Missing List") then
                 config.show_missing_list = not (config.show_missing_list ~= false); SaveConfig()
@@ -6861,6 +7059,7 @@ function ShowScreenshotControls()
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Sync All Data") then
             LoadConfig()
+            LoadPinned()
             LoadPluginRatings()
             LoadCustomFolders()
             LoadScriptsLauncher()
@@ -6874,7 +7073,7 @@ function ShowScreenshotControls()
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
         if r.ImGui_MenuItem(ctx, "Notes") then LaunchTKNotes() end
-        if r.ImGui_MenuItem(ctx, "Close Window") then config.show_screenshot_window = false; SaveConfig() end
+        if r.ImGui_MenuItem(ctx, "Close Script") then SHOULD_CLOSE_SCRIPT = true end
         r.ImGui_EndPopup(ctx)
     end
     
@@ -7259,11 +7458,11 @@ function DrawBrowserItems(tbl, main_cat_name)
     end
     local function PinSubgroup(cat, name)
         local lst = EnsurePinnedList(cat)
-        if not IsSubgroupPinned(cat, name) then table.insert(lst, name); SaveConfig() end
+        if not IsSubgroupPinned(cat, name) then table.insert(lst, name); SavePinned() end
     end
     local function UnpinSubgroup(cat, name)
         local lst = EnsurePinnedList(cat)
-        for i=#lst,1,-1 do if lst[i] == name then table.remove(lst, i); SaveConfig(); break end end
+        for i=#lst,1,-1 do if lst[i] == name then table.remove(lst, i); SavePinned(); break end end
     end
     local function BuildSubgroupDrawOrder(cat, items)
         local index_by_name = {}
@@ -7560,17 +7759,24 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
     end
     local function PinCustom(full_path)
         config.pinned_custom_subfolders = config.pinned_custom_subfolders or {}
-        if not IsCustomPinned(full_path) then table.insert(config.pinned_custom_subfolders, full_path); SaveConfig() end
+        if not IsCustomPinned(full_path) then 
+            table.insert(config.pinned_custom_subfolders, full_path)
+            SavePinned()
+        end
     end
     local function UnpinCustom(full_path)
         if not config.pinned_custom_subfolders then return end
         for i=#config.pinned_custom_subfolders,1,-1 do
-            if config.pinned_custom_subfolders[i] == full_path then table.remove(config.pinned_custom_subfolders, i); SaveConfig(); break end
+            if config.pinned_custom_subfolders[i] == full_path then table.remove(config.pinned_custom_subfolders, i); SavePinned(); break end
         end
     end
     
     local sorted_folder_names = {}
-    for folder_name, _ in pairs(folders) do table.insert(sorted_folder_names, folder_name) end
+    for folder_name, _ in pairs(folders) do 
+        if folder_name ~= "__folder_marker__" and type(folder_name) == "string" then
+            table.insert(sorted_folder_names, folder_name)
+        end
+    end
     table.sort(sorted_folder_names, function(a, b)
         local pa = (path_prefix == "" and a or (path_prefix .. "/" .. a))
         local pb = (path_prefix == "" and b or (path_prefix .. "/" .. b))
@@ -7585,90 +7791,18 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
         local folder_content = folders[folder_name]
         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
         
-        if IsPluginArray(folder_content) then
-            local is_selected = (selected_folder == full_path)
-            local is_pinned = IsCustomPinned(full_path)
-            if is_selected then
-                local dl = r.ImGui_GetWindowDrawList(ctx)
-                local x,y = r.ImGui_GetCursorScreenPos(ctx)
-                local text_w = r.ImGui_CalcTextSize(ctx, folder_name:upper())
-                local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-                local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
-            end
-            local label = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_name:upper()
-            if r.ImGui_Selectable(ctx, label, is_selected) then
-                browser_panel_selected = nil
-                selected_folder = full_path
-                UpdateLastViewedFolder(full_path)
-                show_media_browser = false
-                show_sends_window = false
-                show_action_browser = false
-                screenshot_search_results = {}
-                local term_l = browser_search_term:lower()
-                local matches = {}
-                for _, plugin in ipairs(folder_content) do
-                    if plugin:lower():find(term_l, 1, true) then
-                        matches[#matches+1] = plugin
-                    end
-                end
-                if config.apply_type_priority then
-                    matches = DedupeByTypePriority(matches)
-                end
-                for i = 1, #matches do
-                    screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
-                end
-                ClearScreenshotCache()
-            end
-
-            if r.ImGui_IsItemClicked(ctx, 1) then
-                r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
-            end
-            if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
-                if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
-                    show_create_parent_folder_popup = true
-                    selected_folder_for_parent = full_path
-                    selected_folder_name = folder_name
-                end
-                local toggle_label = (view_mode == "screenshots" and "Show List" or "Show Screenshots")
-                if r.ImGui_MenuItem(ctx, toggle_label) then
-                    local prev = view_mode
-                    view_mode = (view_mode == "screenshots" and "list" or "screenshots")
-                    if view_mode == "screenshots" and prev ~= "screenshots" then ClearScreenshotCache() end
-                end
-                if is_pinned then
-                    if r.ImGui_MenuItem(ctx, "Unpin Folder") then UnpinCustom(full_path) end
-                else
-                    if r.ImGui_MenuItem(ctx, "Pin Folder") then PinCustom(full_path) end
-                end
-                if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-                    StartFolderScreenshots(full_path)
-                end
-                r.ImGui_EndPopup(ctx)
-            end
-            
-        else
-            if custom_folders_open[full_path] then
-                r.ImGui_Indent(ctx, 1)
-                for i, plugin in ipairs(folder_content) do
-                    local display_plugin = GetDisplayPluginName(plugin)
-                    if r.ImGui_Selectable(ctx, display_plugin .. "  " .. GetStarsString(plugin)) then
-                        selected_folder = nil
-                        selected_individual_item = plugin
-                        screenshot_search_results = {{name = plugin}}
-                        ClearScreenshotCache()
-                    end
-                    ShowPluginContextMenu(plugin, "custom_" .. full_path .. "_" .. i)
-                end
-                r.ImGui_Unindent(ctx, 1)
-            end
-        end
-
+        -- Save original cursor position
+        local original_cursor_x = r.ImGui_GetCursorPosX(ctx)
+        
+        -- Check if folder has subfolder structure (tree node display for container folders)
         if IsSubfolderStructure(folder_content) then
-            local original_cursor_x = r.ImGui_GetCursorPosX(ctx)
-            r.ImGui_SetCursorPosX(ctx, math.max(original_cursor_x - 8, -2))
+            -- TreeNode for folders WITH subfolders (container folders)
+            -- Compensate for TreeNode automatic indentation using Unindent BEFORE TreeNode
+            local unindent_amount = path_prefix == "" and 1 or 10  -- Root less, nested more compensation
+            r.ImGui_Unindent(ctx, unindent_amount)
+            
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemInnerSpacing(), 0, 0)
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 3, 3)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)  -- Smaller padding for less vertical space
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
@@ -7692,22 +7826,253 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             local line_h = r.ImGui_GetTextLineHeight(ctx)
             local text_w, text_h = r.ImGui_CalcTextSize(ctx, display_label)
             local spacing = r.ImGui_GetTreeNodeToLabelSpacing(ctx)
-            local text_x = item_min_x + math.max(spacing - 3, 0)
+            local text_x = item_min_x + spacing  -- Use normal spacing for more distance from arrow
             local text_y = item_min_y + (line_h - text_h) * 0.5 + 3
             local text_col = r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
+            -- Draw folder label using the custom-folder font (or global font)
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
-            r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_col, display_label)
+            -- Save original screen cursor and use absolute positioning for the text
+            local orig_sx, orig_sy = r.ImGui_GetCursorScreenPos(ctx)
+            local font_to_use = CustomFolderFont or NormalFont
+            r.ImGui_PushFont(ctx, font_to_use, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
+            r.ImGui_SetCursorScreenPos(ctx, text_x, text_y)
+            r.ImGui_Text(ctx, display_label)
+            r.ImGui_PopFont(ctx)
+            -- Restore cursor screen pos
+            r.ImGui_SetCursorScreenPos(ctx, orig_sx, orig_sy)
+            
+            -- Context menu for tree node (subfolder structure)
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "TreeContextMenu_" .. full_path)
+            end
+            if r.ImGui_BeginPopup(ctx, "TreeContextMenu_" .. full_path) then
+                if r.ImGui_MenuItem(ctx, "Add Subfolder") then
+                    selected_folder_for_subfolder = full_path
+                    selected_folder_name = folder_name
+                    new_subfolder_name = ""
+                    show_add_subfolder_popup = true
+                end
+                if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
+                    show_create_parent_folder_popup = true
+                    selected_folder_for_parent = full_path
+                    selected_folder_name = folder_name
+                end
+                local is_pinned = IsCustomPinned(full_path)
+                if is_pinned then
+                    if r.ImGui_MenuItem(ctx, "Unpin Folder") then UnpinCustom(full_path) end
+                else
+                    if r.ImGui_MenuItem(ctx, "Pin Folder") then PinCustom(full_path) end
+                end
+                if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
+                    StartFolderScreenshots(full_path)
+                end
+                r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "Rename Folder") then
+                    show_rename_folder_popup = true
+                    folder_to_rename = folder_name
+                    folder_to_rename_path = path_prefix
+                    new_folder_name_for_rename = folder_name
+                end
+                if r.ImGui_MenuItem(ctx, "Delete Folder") then
+                    -- Confirm deletion
+                    local result = r.MB("Are you sure you want to delete '" .. folder_name .. "' and all its contents?", "Confirm Delete", 4)
+                    if result == 6 then -- Yes
+                        -- Navigate to parent and remove this folder
+                        if path_prefix == "" then
+                            -- Root level folder
+                            config.custom_folders[folder_name] = nil
+                        else
+                            -- Nested folder - navigate to parent
+                            local target = config.custom_folders
+                            local path_parts = {}
+                            for part in path_prefix:gmatch("[^/]+") do
+                                table.insert(path_parts, part)
+                            end
+                            for i = 1, #path_parts do
+                                target = target[path_parts[i]]
+                                if not target then break end
+                            end
+                            if target then
+                                target[folder_name] = nil
+                            end
+                        end
+                        SaveCustomFolders()
+                        
+                        -- Clear selection if deleted folder was selected
+                        if selected_folder == full_path or (selected_folder and selected_folder:find("^" .. full_path .. "/")) then
+                            selected_folder = nil
+                            screenshot_search_results = {}
+                        end
+                        
+                        r.ShowMessageBox("Folder '" .. folder_name .. "' deleted", "Success", 0)
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+            
             if open then
-                r.ImGui_Indent(ctx, 1)
+                -- No extra indent for subfolders - they already have TreeNode spacing
                 DisplayCustomFoldersInBrowser(folder_content, full_path)
-                r.ImGui_Unindent(ctx, 1)
                 r.ImGui_TreePop(ctx)
             end
             r.ImGui_PopStyleColor(ctx, 3)
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleVar(ctx)
+            
+            -- Restore indent that we removed before TreeNode
+            local unindent_amount = path_prefix == "" and 1 or 10
+            r.ImGui_Indent(ctx, unindent_amount)
+            
             r.ImGui_SetCursorPosX(ctx, original_cursor_x)
-            r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 2)
+            -- Add spacing after TreeNode: more for root level (to separate from next section), less for nested
+            local spacing_after = path_prefix == "" and 1 or -2
+            r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + spacing_after)
+        else
+            -- Selectable for folders WITHOUT subfolders (plugin folders)
+            -- Apply same indent compensation as TreeNodes when nested
+            if path_prefix ~= "" then
+                r.ImGui_Unindent(ctx, 10)  -- Move nested selectables left to align with other items
+            end
+            
+            -- Apply consistent hover color for root level selectables
+            if path_prefix == "" then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x3F3F3F3F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
+            end
+            
+            local is_selected = (selected_folder == full_path)
+            local is_pinned = IsCustomPinned(full_path)
+            if is_selected then
+                local dl = r.ImGui_GetWindowDrawList(ctx)
+                local x,y = r.ImGui_GetCursorScreenPos(ctx)
+                local text_w = r.ImGui_CalcTextSize(ctx, folder_name:upper())
+                local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
+            end
+            local label = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_name:upper()
+            
+            -- Apply custom folder font
+            local font_to_use = CustomFolderFont or NormalFont
+            r.ImGui_PushFont(ctx, font_to_use, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
+            
+            if r.ImGui_Selectable(ctx, label, is_selected) then
+                browser_panel_selected = nil
+                selected_folder = full_path
+                UpdateLastViewedFolder(full_path)
+                show_media_browser = false
+                show_sends_window = false
+                show_action_browser = false
+                screenshot_search_results = {}
+                local term_l = browser_search_term:lower()
+                local matches = {}
+                for k, plugin in pairs(folder_content) do
+                    if type(k) == "number" and type(plugin) == "string" then
+                        if plugin:lower():find(term_l, 1, true) then
+                            matches[#matches+1] = plugin
+                        end
+                    end
+                end
+                if config.apply_type_priority then
+                    matches = DedupeByTypePriority(matches)
+                end
+                for i = 1, #matches do
+                    screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+                end
+                ClearScreenshotCache()
+            end
+            
+            r.ImGui_PopFont(ctx)
+
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
+            end
+            if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
+                if r.ImGui_MenuItem(ctx, "Add Subfolder") then
+                    show_add_subfolder_popup = true
+                    selected_folder_for_subfolder = full_path
+                    selected_folder_name = folder_name
+                    new_subfolder_name = ""
+                end
+                if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
+                    show_create_parent_folder_popup = true
+                    selected_folder_for_parent = full_path
+                    selected_folder_name = folder_name
+                end
+                local toggle_label = (view_mode == "screenshots" and "Show List" or "Show Screenshots")
+                if r.ImGui_MenuItem(ctx, toggle_label) then
+                    local prev = view_mode
+                    view_mode = (view_mode == "screenshots" and "list" or "screenshots")
+                    if view_mode == "screenshots" and prev ~= "screenshots" then ClearScreenshotCache() end
+                end
+                if is_pinned then
+                    if r.ImGui_MenuItem(ctx, "Unpin Folder") then UnpinCustom(full_path) end
+                else
+                    if r.ImGui_MenuItem(ctx, "Pin Folder") then PinCustom(full_path) end
+                end
+                if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
+                    StartFolderScreenshots(full_path)
+                end
+                r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "Rename Folder") then
+                    show_rename_folder_popup = true
+                    folder_to_rename = folder_name
+                    folder_to_rename_path = path_prefix
+                    new_folder_name_for_rename = folder_name
+                end
+                if r.ImGui_MenuItem(ctx, "Delete Folder") then
+                    -- Confirm deletion
+                    local result = r.MB("Are you sure you want to delete '" .. folder_name .. "' and all its plugins?", "Confirm Delete", 4)
+                    if result == 6 then -- Yes
+                        -- Navigate to parent and remove this folder
+                        if path_prefix == "" then
+                            -- Root level folder
+                            config.custom_folders[folder_name] = nil
+                        else
+                            -- Nested folder - navigate to parent
+                            local target = config.custom_folders
+                            local path_parts = {}
+                            for part in path_prefix:gmatch("[^/]+") do
+                                table.insert(path_parts, part)
+                            end
+                            for i = 1, #path_parts do
+                                target = target[path_parts[i]]
+                                if not target then break end
+                            end
+                            if target then
+                                target[folder_name] = nil
+                            end
+                        end
+                        SaveCustomFolders()
+                        
+                        -- Clear selection if deleted folder was selected
+                        if selected_folder == full_path then
+                            selected_folder = nil
+                            screenshot_search_results = {}
+                        end
+                        
+                        r.ShowMessageBox("Folder '" .. folder_name .. "' deleted", "Success", 0)
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+            
+            -- Restore indent for nested selectables
+            if path_prefix ~= "" then
+                r.ImGui_Indent(ctx, 10)
+            end
+            
+            -- Pop style colors for root level selectables
+            if path_prefix == "" then
+                r.ImGui_PopStyleColor(ctx, 3)
+            end
+            
+            -- Reset cursor position and add vertical spacing
+            r.ImGui_SetCursorPosX(ctx, original_cursor_x)
+            -- Smaller spacing for root folders (no TreeNode), normal spacing for nested
+            local spacing = path_prefix == "" and -1 or 2
+            r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + spacing)
         end
     end
 end
@@ -7716,7 +8081,7 @@ footer_resize_active = footer_resize_active or false
 footer_last_mouse_y  = footer_last_mouse_y or 0
 
 function ShowBrowserPanel()
-    if not config.show_browser_panel then return end
+    if not config[browser_panel_key] then return end
 
     if not initial_header_auto_expand_done
        and config.default_folder == LAST_OPENED_SENTINEL
@@ -7735,7 +8100,7 @@ function ShowBrowserPanel()
     local section_start_y = section_pos_y 
 
     -- Header
-    local header_open = r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 25 or 4)
+    local header_open = r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 26 or 4)
     if header_open then
     if config.show_browser_search then
         r.ImGui_PushItemWidth(ctx, 70)
@@ -7806,6 +8171,13 @@ function ShowBrowserPanel()
         end
         if browser_search_term == "" then r.ImGui_EndDisabled(ctx) end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)") end
+        
+        -- Separator binnen header
+        local cur_y = r.ImGui_GetCursorPosY(ctx)
+        r.ImGui_SetCursorPosY(ctx, cur_y - 2)
+        r.ImGui_Separator(ctx)
+        local cur_y2 = r.ImGui_GetCursorPosY(ctx)
+        r.ImGui_SetCursorPosY(ctx, cur_y2 - 4)
     else
         r.ImGui_Dummy(ctx, 0, 2)
     end
@@ -7820,13 +8192,18 @@ function ShowBrowserPanel()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     local content_open = r.ImGui_BeginChild(ctx, "BrowserContent", -1, content_h)
     if content_open then
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
-
-        -- FAVORITES (respect config setting)
-        if config.show_favorites then
+        -- SEGMENT 1: FAVORITES + PROJECT FX
+        if config.browser_segment_favorites_visible then
+            local segment_start_screen_x, segment_start_screen_y = r.ImGui_GetCursorScreenPos(ctx)
+            local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
+            
+            -- FAVORITES (respect config setting)
+            if config.show_favorites then
             local fav_is_selected = (selected_folder == "Favorites")
             if fav_is_selected then
                 local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -7925,30 +8302,152 @@ function ShowBrowserPanel()
             end
             GetPluginsForFolder("Current Project FX")
         end
+        
+            -- Draw collapse button overlay at top-right using DrawList
+            local dl = r.ImGui_GetForegroundDrawList(ctx)
+            local button_size = 16
+            local button_x = segment_start_screen_x + segment_avail_w - button_size
+            local button_y = segment_start_screen_y
+            
+            -- Check if mouse is over button
+            local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+            local is_hovered = mouse_x >= button_x and mouse_x <= button_x + button_size and 
+                               mouse_y >= button_y and mouse_y <= button_y + button_size
+            local is_clicked = is_hovered and r.ImGui_IsMouseClicked(ctx, 0)
+            
+            -- Draw button background
+            local bg_color = is_hovered and 0x3F3F3F3F or 0x00000000
+            if is_clicked then bg_color = 0x5F5F5F5F end
+            if bg_color ~= 0x00000000 then
+                r.ImGui_DrawList_AddRectFilled(dl, button_x, button_y, button_x + button_size, button_y + button_size, bg_color, 2)
+            end
+            
+            -- Draw "-" text centered
+            local text_size_w, text_size_h = r.ImGui_CalcTextSize(ctx, "-")
+            local text_x = button_x + (button_size - text_size_w) * 0.5
+            local text_y = button_y + (button_size - text_size_h) * 0.5
+            r.ImGui_DrawList_AddText(dl, text_x, text_y, 0xFFFFFFFF, "-")
+            
+            -- Handle click
+            if is_clicked then
+                config.browser_segment_favorites_visible = false
+                SaveConfig()
+            end
+            
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx)
+        else
+            -- Show collapsed state with "+" button to expand
+            local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+            if r.ImGui_Button(ctx, "+##FavoritesCollapse", 16, 16) then
+                config.browser_segment_favorites_visible = true
+                SaveConfig()
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show Favorites & Project FX")
+            end
+        end
 
-        r.ImGui_PopStyleColor(ctx, 3)
-         r.ImGui_PopStyleVar(ctx)
         r.ImGui_Separator(ctx)
 
         if config.show_custom_folders then
-            DisplayCustomFoldersInBrowser(config.custom_folders)
+            if config.browser_segment_custom_folders_visible then
+                -- Store cursor and screen position for collapse button overlay
+                local start_y = r.ImGui_GetCursorPosY(ctx)
+                local start_screen_x, start_screen_y = r.ImGui_GetCursorScreenPos(ctx)
+                local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                
+                DisplayCustomFoldersInBrowser(config.custom_folders)
+                
+                -- Draw collapse button overlay at top-right using DrawList
+                local end_y = r.ImGui_GetCursorPosY(ctx)
+                local dl = r.ImGui_GetForegroundDrawList(ctx)
+                local button_size = 16
+                local button_x = start_screen_x + avail_w - button_size
+                local button_y = start_screen_y
+                
+                -- Check if mouse is over button
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                local is_hovered = mouse_x >= button_x and mouse_x <= button_x + button_size and 
+                                   mouse_y >= button_y and mouse_y <= button_y + button_size
+                local is_clicked = is_hovered and r.ImGui_IsMouseClicked(ctx, 0)
+                
+                -- Draw button background
+                local bg_color = is_hovered and 0x3F3F3F3F or 0x00000000
+                if is_clicked then bg_color = 0x5F5F5F5F end
+                if bg_color ~= 0x00000000 then
+                    r.ImGui_DrawList_AddRectFilled(dl, button_x, button_y, button_x + button_size, button_y + button_size, bg_color, 2)
+                end
+                
+                -- Draw "-" text centered
+                local text_size_w, text_size_h = r.ImGui_CalcTextSize(ctx, "-")
+                local text_x = button_x + (button_size - text_size_w) * 0.5
+                local text_y = button_y + (button_size - text_size_h) * 0.5
+                r.ImGui_DrawList_AddText(dl, text_x, text_y, 0xFFFFFFFF, "-")
+                
+                -- Handle click
+                if is_clicked then
+                    config.browser_segment_custom_folders_visible = false
+                    SaveConfig()
+                end
+                
+                -- Add "+" button to create new root custom folder (invisible button)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+                local button_clicked = r.ImGui_Button(ctx, "+", -1, 18)
+                r.ImGui_PopStyleColor(ctx, 3)
+                if button_clicked then
+                    show_add_root_folder_popup = true
+                    new_root_folder_name = ""
+                    r.ImGui_OpenPopup(ctx, "Add Custom Folder")
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Create a new custom folder")
+                end
+            else
+                -- Show collapsed state with "+" button to expand
+                local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                r.ImGui_SetCursorPosX(ctx, avail_w - 16 + r.ImGui_GetScrollX(ctx))
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+                if r.ImGui_Button(ctx, "+##CustomFoldersCollapse", 16, 16) then
+                    config.browser_segment_custom_folders_visible = true
+                    SaveConfig()
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Show Custom Folders")
+                end
+            end
+            
+            r.ImGui_Separator(ctx)
         end
 
-        -- Categories / Folders / Chains / Templates
-        
-        -- Debug: Log config settings once for FX Chains and Track Templates
-        if not debug_config_logged then
-            DebugLog("=== BROWSER PANEL CONFIG ===")
-            DebugLog("config.show_fx_chains = " .. tostring(config.show_fx_chains))
-            DebugLog("config.show_track_templates = " .. tostring(config.show_track_templates))
-            DebugLog("config.use_custom_fxchain_dir = " .. tostring(config.use_custom_fxchain_dir))
-            DebugLog("config.custom_fxchain_dir = " .. tostring(config.custom_fxchain_dir))
-            DebugLog("config.use_custom_template_dir = " .. tostring(config.use_custom_template_dir))
-            DebugLog("config.custom_template_dir = " .. tostring(config.custom_template_dir))
-            debug_config_logged = true
-        end
-        
-        for i = 1, #CAT_TEST do
+        -- SEGMENT 3: Categories / Folders / Chains / Templates
+        if config.browser_segment_main_categories_visible then
+            local segment_start_screen_x, segment_start_screen_y = r.ImGui_GetCursorScreenPos(ctx)
+            local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            
+            -- Debug: Log config settings once for FX Chains and Track Templates
+            if not debug_config_logged then
+                DebugLog("=== BROWSER PANEL CONFIG ===")
+                DebugLog("config.show_fx_chains = " .. tostring(config.show_fx_chains))
+                DebugLog("config.show_track_templates = " .. tostring(config.show_track_templates))
+                DebugLog("config.use_custom_fxchain_dir = " .. tostring(config.use_custom_fxchain_dir))
+                DebugLog("config.custom_fxchain_dir = " .. tostring(config.custom_fxchain_dir))
+                DebugLog("config.use_custom_template_dir = " .. tostring(config.use_custom_template_dir))
+                DebugLog("config.custom_template_dir = " .. tostring(config.custom_template_dir))
+                debug_config_logged = true
+            end
+            
+            for i = 1, #CAT_TEST do
             local category_name = CAT_TEST[i].name
             if category_name ~= "CUSTOM" then
                 if (category_name == "ALL PLUGINS" and config.show_all_plugins) then
@@ -8064,11 +8563,11 @@ function ShowBrowserPanel()
                     end
                     local function Pin(name)
                         local lst = EnsurePinnedList()
-                        if not IsPinned(name) then table.insert(lst, name); SaveConfig() end
+                        if not IsPinned(name) then table.insert(lst, name); SavePinned() end
                     end
                     local function Unpin(name)
                         local lst = EnsurePinnedList()
-                        for k=#lst,1,-1 do if lst[k] == name then table.remove(lst, k); SaveConfig(); break end end
+                        for k=#lst,1,-1 do if lst[k] == name then table.remove(lst, k); SavePinned(); break end end
                     end
                     local index_by_name = {}
                     for idx=1,#CAT_TEST[i].list do index_by_name[CAT_TEST[i].list[idx].name] = idx end
@@ -8214,10 +8713,61 @@ function ShowBrowserPanel()
                 end
             end
         end
-        r.ImGui_Dummy(ctx, 0, 4)
+        
+        -- Draw collapse button overlay at top-right using DrawList for segment 3
+        local dl = r.ImGui_GetForegroundDrawList(ctx)
+        local button_size = 16
+        local button_x = segment_start_screen_x + segment_avail_w - button_size
+        local button_y = segment_start_screen_y
+        
+        -- Check if mouse is over button
+        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+        local is_hovered = mouse_x >= button_x and mouse_x <= button_x + button_size and 
+                           mouse_y >= button_y and mouse_y <= button_y + button_size
+        local is_clicked = is_hovered and r.ImGui_IsMouseClicked(ctx, 0)
+        
+        -- Draw button background
+        local bg_color = is_hovered and 0x3F3F3F3F or 0x00000000
+        if is_clicked then bg_color = 0x5F5F5F5F end
+        if bg_color ~= 0x00000000 then
+            r.ImGui_DrawList_AddRectFilled(dl, button_x, button_y, button_x + button_size, button_y + button_size, bg_color, 2)
+        end
+        
+        -- Draw "-" text centered
+        local text_size_w, text_size_h = r.ImGui_CalcTextSize(ctx, "-")
+        local text_x = button_x + (button_size - text_size_w) * 0.5
+        local text_y = button_y + (button_size - text_size_h) * 0.5
+        r.ImGui_DrawList_AddText(dl, text_x, text_y, 0xFFFFFFFF, "-")
+        
+        -- Handle click
+        if is_clicked then
+            config.browser_segment_main_categories_visible = false
+            SaveConfig()
+        end
+    else
+        -- Show collapsed state with "+" button to expand
+        local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+        r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+        if r.ImGui_Button(ctx, "+##MainCategoriesCollapse", 16, 16) then
+            config.browser_segment_main_categories_visible = true
+            SaveConfig()
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Show Plugin Categories")
+        end
+    end
+    
         r.ImGui_Separator(ctx)
-        r.ImGui_Dummy(ctx, 0, 4)
 
+        -- SEGMENT 4: Utilities (Container, Video Processor, Projects, Media, Scripts, Recent)
+        if config.browser_segment_utilities_visible then
+            local segment_start_screen_x, segment_start_screen_y = r.ImGui_GetCursorScreenPos(ctx)
+            local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            
         if config.show_container then
             if r.ImGui_Selectable(ctx, "CONTAINER") then
                 AddFXToTrack(TRACK, "Container")
@@ -8357,6 +8907,53 @@ function ShowBrowserPanel()
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
         end
+        
+        -- Draw collapse button overlay at top-right using DrawList for segment 4
+        local dl = r.ImGui_GetForegroundDrawList(ctx)
+        local button_size = 16
+        local button_x = segment_start_screen_x + segment_avail_w - button_size
+        local button_y = segment_start_screen_y
+        
+        -- Check if mouse is over button
+        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+        local is_hovered = mouse_x >= button_x and mouse_x <= button_x + button_size and 
+                           mouse_y >= button_y and mouse_y <= button_y + button_size
+        local is_clicked = is_hovered and r.ImGui_IsMouseClicked(ctx, 0)
+        
+        -- Draw button background
+        local bg_color = is_hovered and 0x3F3F3F3F or 0x00000000
+        if is_clicked then bg_color = 0x5F5F5F5F end
+        if bg_color ~= 0x00000000 then
+            r.ImGui_DrawList_AddRectFilled(dl, button_x, button_y, button_x + button_size, button_y + button_size, bg_color, 2)
+        end
+        
+        -- Draw "-" text centered
+        local text_size_w, text_size_h = r.ImGui_CalcTextSize(ctx, "-")
+        local text_x = button_x + (button_size - text_size_w) * 0.5
+        local text_y = button_y + (button_size - text_size_h) * 0.5
+        r.ImGui_DrawList_AddText(dl, text_x, text_y, 0xFFFFFFFF, "-")
+        
+        -- Handle click
+        if is_clicked then
+            config.browser_segment_utilities_visible = false
+            SaveConfig()
+        end
+    else
+        -- Show collapsed state with "+" button to expand
+        local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+        r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+        if r.ImGui_Button(ctx, "+##UtilitiesCollapse", 16, 16) then
+            config.browser_segment_utilities_visible = true
+            SaveConfig()
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Show Utilities")
+        end
+    end
 
     end
     if content_open then
@@ -8431,9 +9028,12 @@ function ShowBrowserPanel()
                     
                     local header_text = string.format("%s: %s", track_num_display, track_name)
                     local text_width = r.ImGui_CalcTextSize(ctx, header_text)
+                    local text_height = r.ImGui_GetTextLineHeight(ctx)
                     local avail_width = r.ImGui_GetContentRegionAvail(ctx)
                     
-                    r.ImGui_SetCursorPosX(ctx, (avail_width - text_width) * 0.5) 
+                    -- Center horizontally and vertically
+                    r.ImGui_SetCursorPosX(ctx, (avail_width - text_width) * 0.5)
+                    r.ImGui_SetCursorPosY(ctx, (header_height - text_height) * 0.5)
                     r.ImGui_Text(ctx, header_text)
                     
                     r.ImGui_EndChild(ctx)
@@ -9552,56 +10152,39 @@ function ShowScreenshotWindow()
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
     local main_window_height = r.ImGui_GetWindowHeight(ctx)
 
-    local browser_panel_width = config.show_browser_panel and config.browser_panel_width or 0
+    local browser_panel_width = config[browser_panel_key] and config.browser_panel_width or 0
     local screenshot_min_width = 145  
     local total_min_width = browser_panel_width + screenshot_min_width + 5 
 
-    local min_width = config.show_browser_panel and total_min_width or screenshot_min_width
+    local min_width = config[browser_panel_key] and total_min_width or screenshot_min_width
     local window_flags = r.ImGui_WindowFlags_NoTitleBar() |
                     r.ImGui_WindowFlags_NoFocusOnAppearing() |
                     
                     r.ImGui_WindowFlags_NoScrollbar()
 
-    if config.dock_screenshot_window then
-        local viewport = r.ImGui_GetMainViewport(ctx)
-        local viewport_pos_x, viewport_pos_y = r.ImGui_Viewport_GetPos(viewport)
-        local viewport_width = r.ImGui_Viewport_GetWorkSize(viewport)
-        local gap = 10
-
-        local is_main_window_left_docked = (main_window_pos_x - viewport_pos_x) < 20
-        local is_main_window_right_docked = (main_window_pos_x + main_window_width) > (viewport_pos_x + viewport_width - 20)
-        
-        if is_main_window_left_docked then
-            config.dock_screenshot_left = false
-        elseif is_main_window_right_docked then
-            config.dock_screenshot_left = true
-        end
-        
-        if config.dock_screenshot_left then
-            local browser_offset = (config.show_browser_panel and config.dock_screenshot_left) and (config.browser_panel_width + 5) or 0
-            local left_pos = main_window_pos_x - config.screenshot_window_width - (2 * gap) - browser_offset
-            r.ImGui_SetNextWindowPos(ctx, left_pos, main_window_pos_y, r.ImGui_Cond_Always())
-        else
-            local right_pos = main_window_pos_x + main_window_width + (gap / 2)
-            r.ImGui_SetNextWindowPos(ctx, right_pos, main_window_pos_y, r.ImGui_Cond_Always())
-        end
-    end
-
+    -- Mini version always shows screenshot window (no docking)
                     
     r.ImGui_SetNextWindowSizeConstraints(ctx, min_width, 200, FLT_MAX, FLT_MAX)
-    r.ImGui_SetNextWindowSize(ctx, math.max(min_width, config.screenshot_window_width), config.screenshot_window_height or 600, r.ImGui_Cond_FirstUseEver())
+    
+    -- Add extra height for progress bar if bulk screenshots are running
+    local window_height = config.screenshot_window_height or 600
+    -- Mini version: window height is static (no progress bar adjustment needed - shown in separate window)
+    local window_height = config.screenshot_window_height or 600
+    
+    r.ImGui_SetNextWindowSize(ctx, math.max(min_width, config.screenshot_window_width), window_height, r.ImGui_Cond_Always())
     
     local visible, open = r.ImGui_Begin(ctx, "Screenshots MINI##NoTitle", true, window_flags)
     if visible then
         ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
+        
         r.ImGui_BeginChild(ctx, "ScreenshotSection", -1, -1)
        
       
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
         local popped_view_stylevars = false
-        r.ImGui_PushFont(ctx, NormalFont, 11)
+        r.ImGui_PushFont(ctx, NormalFont, config.font_size)
     
         if show_media_browser and not popped_view_stylevars then
             r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
@@ -11623,11 +12206,362 @@ function ShowScreenshotWindow()
             end
             end
         if not popped_view_stylevars then r.ImGui_PopStyleVar(ctx, 2) end
-        r.ImGui_EndChild(ctx) 
+        
+        r.ImGui_EndChild(ctx) -- End ScreenshotList
+        
         config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
+        -- Store window height without progress bar adjustment
+        local current_height = r.ImGui_GetWindowHeight(ctx)
+        if bulk_screenshot_progress > 0 and bulk_screenshot_progress < 1 then
+            config.screenshot_window_height = current_height - 30
+        else
+            config.screenshot_window_height = current_height
+        end
         r.ImGui_End(ctx)
     end
+    
+    -- Add Root Custom Folder popup (outside main window, always available)
+    if show_add_root_folder_popup then
+        r.ImGui_OpenPopup(ctx, "Add Custom Folder")
+        show_add_root_folder_popup = false  -- Reset flag after opening
+    end
+    
+    if r.ImGui_BeginPopupModal(ctx, "Add Custom Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Create a new custom folder")
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_PushItemWidth(ctx, 300)
+        local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##NewRootFolder", "Enter folder name", new_root_folder_name or "")
+        if changed then
+            new_root_folder_name = new_name
+        end
+        r.ImGui_PopItemWidth(ctx)
+        
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Create", 100, 0) then
+            if new_root_folder_name and new_root_folder_name ~= "" then
+                -- Create new root-level custom folder
+                if not config.custom_folders then
+                    config.custom_folders = {}
+                end
+                
+                if not config.custom_folders[new_root_folder_name] then
+                    -- Use folder marker to force it to be recognized as a folder structure
+                    config.custom_folders[new_root_folder_name] = { ["__folder_marker__"] = true }
+                    SaveCustomFolders()
+                end
+            end
+            new_root_folder_name = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            new_root_folder_name = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+    
+    -- Add Subfolder popup (outside main window, always available)
+    if show_add_subfolder_popup then
+        r.ImGui_OpenPopup(ctx, "Add Subfolder")
+        show_add_subfolder_popup = false  -- Reset flag after opening
+        
+        -- Check if parent folder has plugins
+        parent_folder_has_plugins = false
+        if selected_folder_for_subfolder then
+            local parts = {}
+            for part in selected_folder_for_subfolder:gmatch("[^/]+") do
+                table.insert(parts, part)
+            end
+            
+            local current = config.custom_folders
+            for i = 1, #parts do
+                if current[parts[i]] then
+                    current = current[parts[i]]
+                end
+            end
+            
+            parent_folder_has_plugins = HasPlugins(current)
+        end
+    end
+    
+    if r.ImGui_BeginPopupModal(ctx, "Add Subfolder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Add subfolder to: " .. (selected_folder_for_subfolder or ""))
+        
+        -- Warning if parent has plugins
+        if parent_folder_has_plugins then
+            r.ImGui_Spacing(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4444FF)
+            r.ImGui_TextWrapped(ctx, "This folder currently contains plugins.")
+            r.ImGui_TextWrapped(ctx, "Folders with subfolders cannot contain plugins.")
+            r.ImGui_TextWrapped(ctx, "What do you want to do with them?")
+            r.ImGui_PopStyleColor(ctx)
+            r.ImGui_Spacing(ctx)
+            
+            -- Radio buttons for choice (0=move, 1=remove)
+            subfolder_plugin_action = subfolder_plugin_action or 0
+            
+            local changed, new_action = r.ImGui_RadioButtonEx(ctx, "Move plugins to new subfolder", subfolder_plugin_action, 0)
+            if changed then subfolder_plugin_action = new_action end
+            
+            changed, new_action = r.ImGui_RadioButtonEx(ctx, "Remove all plugins", subfolder_plugin_action, 1)
+            if changed then subfolder_plugin_action = new_action end
+            
+            r.ImGui_Spacing(ctx)
+        end
+        
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_PushItemWidth(ctx, 300)
+        local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##NewSubfolder", "Enter subfolder name", new_subfolder_name or "")
+        if changed then
+            new_subfolder_name = new_name
+        end
+        r.ImGui_PopItemWidth(ctx)
+        
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Create", 100, 0) then
+            if new_subfolder_name and new_subfolder_name ~= "" and selected_folder_for_subfolder then
+                local parts = {}
+                for part in selected_folder_for_subfolder:gmatch("[^/]+") do
+                    table.insert(parts, part)
+                end
+                
+                -- Navigate to the parent folder
+                local current = config.custom_folders
+                for i = 1, #parts do
+                    if not current[parts[i]] then
+                        current[parts[i]] = {}
+                    end
+                    current = current[parts[i]]
+                end
+                
+                -- Handle existing plugins based on user choice
+                if parent_folder_has_plugins then
+                    local action = subfolder_plugin_action or 0 -- 0=move, 1=remove
+                    
+                    if action == 0 then -- move
+                        -- Move plugins to new subfolder
+                        local plugins = GetFolderPlugins(current)
+                        -- Remove plugins from parent
+                        for k in pairs(current) do
+                            if type(k) == "number" then
+                                current[k] = nil
+                            end
+                        end
+                        -- Create new subfolder with plugins
+                        current[new_subfolder_name] = {}
+                        for i, plugin in ipairs(plugins) do
+                            current[new_subfolder_name][i] = plugin
+                        end
+                    else -- 1 = remove
+                        -- Remove all plugins from parent
+                        for k in pairs(current) do
+                            if type(k) == "number" then
+                                current[k] = nil
+                            end
+                        end
+                        -- Create empty subfolder
+                        current[new_subfolder_name] = {}
+                    end
+                else
+                    -- No plugins, just create empty subfolder
+                    current[new_subfolder_name] = {}
+                end
+                
+                SaveCustomFolders()
+            end
+            new_subfolder_name = ""
+            selected_folder_for_subfolder = nil
+            subfolder_plugin_action = 0
+            parent_folder_has_plugins = false
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            new_subfolder_name = ""
+            selected_folder_for_subfolder = nil
+            subfolder_plugin_action = 0
+            parent_folder_has_plugins = false
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+    
+    -- Create Parent Folder popup (outside main window, always available)
+    if show_create_parent_folder_popup then
+        r.ImGui_OpenPopup(ctx, "Create Parent Folder")
+        show_create_parent_folder_popup = false  -- Reset flag after opening
+    end
+    
+    if r.ImGui_BeginPopupModal(ctx, "Create Parent Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Create parent folder above: " .. (selected_folder_for_parent or ""))
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_PushItemWidth(ctx, 300)
+        local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##NewParentFolder", "Enter parent folder name", new_parent_folder_name or "")
+        if changed then
+            new_parent_folder_name = new_name
+        end
+        r.ImGui_PopItemWidth(ctx)
+        
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Create", 100, 0) then
+            if new_parent_folder_name and new_parent_folder_name ~= "" and selected_folder_for_parent then
+                -- Parse the current folder path
+                local parts = {}
+                for part in selected_folder_for_parent:gmatch("[^/]+") do
+                    table.insert(parts, part)
+                end
+                
+                -- Navigate to the parent of the selected folder
+                local current = config.custom_folders
+                for i = 1, #parts - 1 do
+                    if not current[parts[i]] then
+                        current[parts[i]] = {}
+                    end
+                    current = current[parts[i]]
+                end
+                
+                -- Get the selected folder name (last part)
+                local folder_name = parts[#parts]
+                
+                -- Store the contents of the selected folder
+                local folder_content = current[folder_name]
+                
+                -- Create the new parent folder
+                if not current[new_parent_folder_name] then
+                    current[new_parent_folder_name] = { ["__folder_marker__"] = true }
+                end
+                
+                -- Move the selected folder under the new parent
+                current[new_parent_folder_name][folder_name] = folder_content
+                
+                -- Remove the old location
+                current[folder_name] = nil
+                
+                SaveCustomFolders()
+            end
+            new_parent_folder_name = ""
+            selected_folder_for_parent = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            new_parent_folder_name = ""
+            selected_folder_for_parent = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+    
+    -- Rename Folder popup
+    if show_rename_folder_popup then
+        r.ImGui_OpenPopup(ctx, "Rename Folder")
+        show_rename_folder_popup = false
+    end
+    
+    if r.ImGui_BeginPopupModal(ctx, "Rename Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Rename folder: " .. (folder_to_rename or ""))
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_PushItemWidth(ctx, 300)
+        local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##RenameFolder", "Enter new folder name", new_folder_name_for_rename or "")
+        if changed then
+            new_folder_name_for_rename = new_name
+        end
+        r.ImGui_PopItemWidth(ctx)
+        r.ImGui_Spacing(ctx)
+        
+        if r.ImGui_Button(ctx, "Rename", 100, 0) then
+            if new_folder_name_for_rename and new_folder_name_for_rename ~= "" and new_folder_name_for_rename ~= folder_to_rename then
+                -- Navigate to the folder's parent
+                local target = config.custom_folders
+                if folder_to_rename_path ~= "" then
+                    for part in folder_to_rename_path:gmatch("[^/]+") do
+                        target = target[part]
+                        if not target then break end
+                    end
+                end
+                
+                if target and target[folder_to_rename] then
+                    -- Check if new name already exists
+                    if target[new_folder_name_for_rename] then
+                        r.ShowMessageBox("A folder with that name already exists!", "Error", 0)
+                    else
+                        -- Rename: copy content to new key and remove old key
+                        target[new_folder_name_for_rename] = target[folder_to_rename]
+                        target[folder_to_rename] = nil
+                        SaveCustomFolders()
+                        
+                        -- Update selected_folder if it was the renamed folder
+                        if selected_folder then
+                            local old_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. folder_to_rename
+                            local new_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. new_folder_name_for_rename
+                            if selected_folder == old_path then
+                                selected_folder = new_path
+                            end
+                        end
+                    end
+                end
+            end
+            folder_to_rename = nil
+            folder_to_rename_path = ""
+            new_folder_name_for_rename = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            folder_to_rename = nil
+            folder_to_rename_path = ""
+            new_folder_name_for_rename = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+    
     return visible
+end
+
+function ShowBulkScreenshotProgressWindow()
+    if bulk_screenshot_progress <= 0 or bulk_screenshot_progress >= 1 then
+        return
+    end
+    
+    -- Get viewport size for centering
+    local viewport = r.ImGui_GetMainViewport(ctx)
+    local work_x, work_y = r.ImGui_Viewport_GetWorkPos(viewport)
+    local work_w, work_h = r.ImGui_Viewport_GetWorkSize(viewport)
+    
+    r.ImGui_SetNextWindowSize(ctx, 400, 80, r.ImGui_Cond_Always())
+    r.ImGui_SetNextWindowPos(ctx, work_x + work_w / 2 - 200, work_y + work_h / 2 - 40, r.ImGui_Cond_Always())
+    
+    local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoScrollbar()
+    local visible, open = r.ImGui_Begin(ctx, "Bulk Screenshot Progress", true, window_flags)
+    
+    if visible then
+        r.ImGui_Text(ctx, "Creating plugin screenshots...")
+        r.ImGui_Spacing(ctx)
+        
+        local progress_text = string.format("%d / %d plugins (%.1f%%)", loaded_fx_count, total_fx_count, bulk_screenshot_progress * 100)
+        r.ImGui_ProgressBar(ctx, bulk_screenshot_progress, -1, 30, progress_text)
+        
+        r.ImGui_Spacing(ctx)
+        if r.ImGui_Button(ctx, "Cancel", -1, 25) then
+            STOP_REQUESTED = true
+        end
+        
+        r.ImGui_End(ctx)
+    end
+    
+    if not open then
+        STOP_REQUESTED = true
+    end
 end
 
 function FilterTracksByTag(tag)
@@ -12536,7 +13470,7 @@ function DrawBottomButtons()
             r.ImGui_PopItemWidth(ctx)
         end
     end
-    r.ImGui_PushFont(ctx, NormalFont, 10)
+    r.ImGui_PushFont(ctx, NormalFont, config.font_size - 1)
     r.ImGui_SetCursorPosY(ctx, windowHeight - buttonHeight)
     -- Eerste rij knoppen
     local num_buttons_row1 = 3
@@ -12957,7 +13891,9 @@ function DrawCustomFoldersMenu(folders, path_prefix)
     -- SORTEER DE FOLDER NAMEN ALFABETISCH
     local sorted_folder_names = {}
     for folder_name, _ in pairs(folders) do
-        table.insert(sorted_folder_names, folder_name)
+        if type(folder_name) == "string" then
+            table.insert(sorted_folder_names, folder_name)
+        end
     end
     table.sort(sorted_folder_names, function(a, b) 
         return a:lower() < b:lower() 
@@ -12985,6 +13921,12 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                 end
                 
                 if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
+                    if r.ImGui_MenuItem(ctx, "Add Subfolder") then
+                        show_add_subfolder_popup = true
+                        selected_folder_for_subfolder = full_path
+                        selected_folder_name = folder_name
+                        new_subfolder_name = ""
+                    end
                     if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
                         show_create_parent_folder_popup = true
                         selected_folder_for_parent = full_path
@@ -13508,6 +14450,38 @@ function HandleDragAndDrop()
 end
 
 -----------------------------------------------------------------------------------------
+local fx_browser_open = false
+local last_fx_file_time = 0
+local needs_screenshot_refresh = false
+
+local function CheckFXBrowserWindow()
+    -- Venster detectie via command state (40271 = FX Browser toggle) of JS
+    local toggle = r.GetToggleCommandState(40271)
+    local hwnd = r.JS_Window_Find and r.JS_Window_Find("FX Browser", true) or nil
+    local was_open = fx_browser_open
+    if toggle == 1 or hwnd then
+        fx_browser_open = true
+    else
+        fx_browser_open = false
+    end
+    
+    -- Melding bij verandering
+    if fx_browser_open and not was_open then
+        -- Popup wordt getoond in pauze branch
+    elseif not fx_browser_open and was_open then
+        needs_screenshot_refresh = true  -- Forceer refresh van screenshots na hervat
+    end
+    
+    -- Bestandswatching voor reaper-fx.ini
+    local fx_file = r.GetResourcePath() .. "/reaper-fx.ini"
+    local current_time = r.file_exists(fx_file) and r.GetFileTime(fx_file) or 0
+    if current_time ~= last_fx_file_time and last_fx_file_time ~= 0 then
+        fx_browser_open = true
+        r.ShowConsoleMsg("TK FX BROWSER: Mogelijke FX scan gedetecteerd via bestandswijziging – script pauzeert.\n")
+    end
+    last_fx_file_time = current_time
+end
+
 function Main()
     SetRunningState(true)
     MaybeClearCaches()
@@ -13560,6 +14534,10 @@ function Main()
         last_selected_track = TRACK
         
         ProcessTextureLoadQueue()
+        if needs_screenshot_refresh then
+            ClearScreenshotCache()
+            needs_screenshot_refresh = false
+        end
         if r.time_precise() % 300 < 1 then
             ClearScreenshotCache(true)
         end
@@ -13584,12 +14562,43 @@ function Main()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), config.slider_active_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
-            r.ImGui_PushFont(ctx, NormalFont, 11)
+            r.ImGui_PushFont(ctx, NormalFont, config.font_size)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         else
             pushed_main_styles = false
             InitializeImGuiContext()
         end
+
+    CheckFXBrowserWindow()
+    if fx_browser_open then
+        -- Pop styles om fout te voorkomen
+        if pushed_main_styles then
+            r.ImGui_PopFont(ctx)
+            r.ImGui_PopStyleColor(ctx, 13) -- 13 StyleColors
+            r.ImGui_PopStyleVar(ctx, 6)    -- 6 StyleVars
+        end
+        -- Toon pauze venster
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0xFF8000FF)  -- Oranje rand
+        r.ImGui_SetNextWindowSize(ctx, 350, 80)
+        r.ImGui_SetNextWindowPos(ctx, 100, 100)
+        local visible, open = r.ImGui_Begin(ctx, "TK FX BROWSER Paused", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoCollapse())
+        if visible then
+            local window_width = r.ImGui_GetWindowWidth(ctx)
+            local text1 = "To prevent conflicts, TK FX BROWSER is temporarily paused."
+            local text2 = "It will resume after closing the FX Browser."
+            local text1_width = r.ImGui_CalcTextSize(ctx, text1)
+            local text2_width = r.ImGui_CalcTextSize(ctx, text2)
+            r.ImGui_SetCursorPosX(ctx, (window_width - text1_width) / 2)
+            r.ImGui_Text(ctx, text1)
+            r.ImGui_SetCursorPosX(ctx, (window_width - text2_width) / 2)
+            r.ImGui_Text(ctx, text2)
+        end
+        if open then
+            r.ImGui_End(ctx)
+        end
+        r.ImGui_PopStyleColor(ctx)
+        return r.defer(Main)  -- Pauzeer na ImGui setup, venster blijft bestaan
+    end
 
 local fx_list_height = 0
 if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
@@ -13616,6 +14625,7 @@ if not general_visibility then
         r.ImGui_PopFont(ctx)
         r.ImGui_PopStyleColor(ctx, 13) -- 13 StyleColors
         r.ImGui_PopStyleVar(ctx, 6)    -- 6 StyleVars
+        pushed_main_styles = false     -- Reset flag om dubbels te voorkomen
     end
     
     -- Create a minimal invisible window to keep the script active
@@ -13642,9 +14652,11 @@ if not general_visibility then
 end
 
 if not should_show_main_window then
-    if config.show_screenshot_window then
-        ShowScreenshotWindow()
-    end
+    -- Mini version always shows screenshot window
+    ShowScreenshotWindow()
+    
+    -- Show bulk screenshot progress in separate window
+    ShowBulkScreenshotProgressWindow()
     
     if config.show_debug_window then
         ShowDebugWindow()
@@ -13665,6 +14677,11 @@ if not should_show_main_window then
         r.ImGui_PopFont(ctx)
         r.ImGui_PopStyleColor(ctx, 13) -- 13 StyleColors
         r.ImGui_PopStyleVar(ctx, 6)    -- 6 StyleVars
+    end
+    
+    if SHOULD_CLOSE_SCRIPT then
+        SetRunningState(false)
+        return
     end
     
     r.defer(Main)
