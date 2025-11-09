@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.0.6
+-- @version 0.0.7
 -- @changelog:
 --[[     
 
@@ -3981,6 +3981,25 @@ end
     
     if not (config and config.show_screenshot_window) then return end
     if not texture_load_queue or next(texture_load_queue) == nil then return end
+   
+    -- PERFORMANCE: Limit queue size to prevent disk I/O bottleneck
+    local queue_count = 0
+    for _ in pairs(texture_load_queue) do queue_count = queue_count + 1 end
+    
+    if queue_count > 500 then
+        DebugLog("WARNING: Texture queue overflow (" .. queue_count .. " items). Clearing oldest 50% to prevent slowdown.")
+        -- Keep only newest 250 entries
+        local sorted_queue = {}
+        for k, v in pairs(texture_load_queue) do
+            table.insert(sorted_queue, {key = k, time = v.queued_at or 0})
+        end
+        table.sort(sorted_queue, function(a,b) return a.time > b.time end) -- Newest first
+        texture_load_queue = {}
+        for i = 1, math.min(250, #sorted_queue) do
+            local entry = sorted_queue[i]
+            texture_load_queue[entry.key] = {queued_at = entry.time}
+        end
+    end
    
     local VISIBLE_BUFFER = 30
     local keep_set = {}
@@ -8193,7 +8212,22 @@ function ShowBrowserPanel()
     local content_open = r.ImGui_BeginChild(ctx, "BrowserContent", -1, content_h)
     if content_open then
         -- SEGMENT 1: FAVORITES + PROJECT FX
-        if config.browser_segment_favorites_visible then
+        if not config.browser_segment_favorites_visible then
+            -- Show collapsed state with "+" button to expand (lightweight)
+            local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+            if r.ImGui_Button(ctx, "+##FavoritesCollapse", 16, 16) then
+                config.browser_segment_favorites_visible = true
+                SaveConfig()
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show Favorites & Project FX")
+            end
+        else
             local segment_start_screen_x, segment_start_screen_y = r.ImGui_GetCursorScreenPos(ctx)
             local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
             
@@ -8336,27 +8370,27 @@ function ShowBrowserPanel()
             
             r.ImGui_PopStyleColor(ctx, 3)
             r.ImGui_PopStyleVar(ctx)
-        else
-            -- Show collapsed state with "+" button to expand
-            local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
-            r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
-            if r.ImGui_Button(ctx, "+##FavoritesCollapse", 16, 16) then
-                config.browser_segment_favorites_visible = true
-                SaveConfig()
-            end
-            r.ImGui_PopStyleColor(ctx, 3)
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Show Favorites & Project FX")
-            end
-        end
+        end -- End of segment 1 (expanded state)
 
         r.ImGui_Separator(ctx)
 
         if config.show_custom_folders then
-            if config.browser_segment_custom_folders_visible then
+            if not config.browser_segment_custom_folders_visible then
+                -- Show collapsed state with "+" button to expand (lightweight)
+                local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                r.ImGui_SetCursorPosX(ctx, avail_w - 16 + r.ImGui_GetScrollX(ctx))
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+                if r.ImGui_Button(ctx, "+##CustomFoldersCollapse", 16, 16) then
+                    config.browser_segment_custom_folders_visible = true
+                    SaveConfig()
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Show Custom Folders")
+                end
+            else
                 -- Store cursor and screen position for collapse button overlay
                 local start_y = r.ImGui_GetCursorPosY(ctx)
                 local start_screen_x, start_screen_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -8410,28 +8444,28 @@ function ShowBrowserPanel()
                 if r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_SetTooltip(ctx, "Create a new custom folder")
                 end
-            else
-                -- Show collapsed state with "+" button to expand
-                local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-                r.ImGui_SetCursorPosX(ctx, avail_w - 16 + r.ImGui_GetScrollX(ctx))
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
-                if r.ImGui_Button(ctx, "+##CustomFoldersCollapse", 16, 16) then
-                    config.browser_segment_custom_folders_visible = true
-                    SaveConfig()
-                end
-                r.ImGui_PopStyleColor(ctx, 3)
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Show Custom Folders")
-                end
-            end
+            end -- End of custom folders (expanded state)
             
             r.ImGui_Separator(ctx)
         end
 
         -- SEGMENT 3: Categories / Folders / Chains / Templates
-        if config.browser_segment_main_categories_visible then
+        if not config.browser_segment_main_categories_visible then
+            -- Show collapsed state with "+" button to expand (lightweight)
+            local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+            if r.ImGui_Button(ctx, "+##MainCategoriesCollapse", 16, 16) then
+                config.browser_segment_main_categories_visible = true
+                SaveConfig()
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show Plugin Categories")
+            end
+        else
             local segment_start_screen_x, segment_start_screen_y = r.ImGui_GetCursorScreenPos(ctx)
             local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
             
@@ -8744,27 +8778,27 @@ function ShowBrowserPanel()
             config.browser_segment_main_categories_visible = false
             SaveConfig()
         end
-    else
-        -- Show collapsed state with "+" button to expand
-        local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
-        r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
-        if r.ImGui_Button(ctx, "+##MainCategoriesCollapse", 16, 16) then
-            config.browser_segment_main_categories_visible = true
-            SaveConfig()
-        end
-        r.ImGui_PopStyleColor(ctx, 3)
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show Plugin Categories")
-        end
-    end
+    end -- End of segment 3 (expanded state)
     
         r.ImGui_Separator(ctx)
 
         -- SEGMENT 4: Utilities (Container, Video Processor, Projects, Media, Scripts, Recent)
-        if config.browser_segment_utilities_visible then
+        if not config.browser_segment_utilities_visible then
+            -- Show collapsed state with "+" button to expand (lightweight)
+            local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+            if r.ImGui_Button(ctx, "+##UtilitiesCollapse", 16, 16) then
+                config.browser_segment_utilities_visible = true
+                SaveConfig()
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show Utilities")
+            end
+        else
             local segment_start_screen_x, segment_start_screen_y = r.ImGui_GetCursorScreenPos(ctx)
             local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
             
@@ -8938,22 +8972,7 @@ function ShowBrowserPanel()
             config.browser_segment_utilities_visible = false
             SaveConfig()
         end
-    else
-        -- Show collapsed state with "+" button to expand
-        local segment_avail_w = r.ImGui_GetContentRegionAvail(ctx)
-        r.ImGui_SetCursorPosX(ctx, segment_avail_w - 16 + r.ImGui_GetScrollX(ctx))
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
-        if r.ImGui_Button(ctx, "+##UtilitiesCollapse", 16, 16) then
-            config.browser_segment_utilities_visible = true
-            SaveConfig()
-        end
-        r.ImGui_PopStyleColor(ctx, 3)
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show Utilities")
-        end
-    end
+    end -- End of segment 4 (expanded state)
 
     end
     if content_open then
