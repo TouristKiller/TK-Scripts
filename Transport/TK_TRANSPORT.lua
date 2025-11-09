@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.1
+-- @version 1.2.2
 -- @changelog 
 --[[
 
@@ -168,7 +168,7 @@ local settings_flags = r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoTi
 local text_sizes = {10, 12, 14, 16, 18}
 local fonts = {
  "Arial", "Helvetica", "Verdana", "Tahoma", "Times New Roman",
- "Georgia", "Courier New", "Trebuchet MS", "Impact", "Roboto",
+ "Georgia", "Courier New", "Consolas", "Trebuchet MS", "Impact", "Roboto",
  "Open Sans", "Ubuntu", "Segoe UI", "Noto Sans", "Liberation Sans",
  "DejaVu Sans"
 }
@@ -294,6 +294,21 @@ local default_settings = {
  env_button_color_active = 0x555555FF,
  env_override_active_color = 0x66CC66FF,
 
+ -- Color Picker settings
+ show_color_picker = true,
+ color_picker_target = 0,  -- 0=Track, 1=Item, 2=Take, 3=Marker, 4=Region
+ color_picker_x = 0.85,
+ color_picker_y = 0.05,
+ color_picker_button_size = 20,
+ color_picker_spacing = 2,
+ color_picker_rounding = 0,
+ color_picker_layout = 0,  -- 0=Grid, 1=Horizontal, 2=Vertical
+ color_picker_num_colors = 16,  -- 4, 8, 12, or 16
+ color_picker_show_background = true,
+ color_picker_bg_color = 0x000000AA,
+ color_picker_show_border = true,
+ color_picker_border_color = 0x888888FF,
+ 
  -- Visibility settings
  use_graphic_buttons = false,
  graphic_style = 0,  -- 0=Filled, 1=Outlined, 2=Rounded, 3=Sharp, 4=Alien, 5=Retro, 6=Gaming, 7=Neon, 8=Organic, 9=Industrial, 10=Circus, 11=Crystal
@@ -306,6 +321,12 @@ local default_settings = {
  show_beats_selection = true,
  show_env_button = true,
  show_master_volume = false,
+ master_volume_style = 0,
+ master_volume_display = 0,
+ 
+ show_monitor_volume = false,
+ monitor_volume_style = 0,
+ monitor_volume_display = 0,
 
  -- Custom Transport Button settings
  use_custom_play_image = false,
@@ -492,6 +513,7 @@ local Layout = {
  settings.center_transport = false
  end },
  { name = "master_volume", showFlag = "show_master_volume", keyx = "master_volume_x", keyy = "master_volume_y" },
+ { name = "monitor_volume", showFlag = "show_monitor_volume", keyx = "monitor_volume_x", keyy = "monitor_volume_y" },
  { name = "cursorpos", showFlag = "show_cursorpos", keyx = "cursorpos_x", keyy = "cursorpos_y" },
  { name = "localtime", showFlag = "show_local_time", keyx = "local_time_x", keyy = "local_time_y" },
  { name = "battery_status", showFlag = "show_battery_status", keyx = "battery_x", keyy = "battery_y" },
@@ -505,6 +527,7 @@ local Layout = {
  { name = "shuttle_wheel", showFlag = "show_shuttle_wheel", keyx = "shuttle_wheel_x", keyy = "shuttle_wheel_y" },
  { name = "waveform_scrubber", showFlag = "show_waveform_scrubber", keyx = "waveform_scrubber_x", keyy = "waveform_scrubber_y" },
  { name = "matrix_ticker", showFlag = "show_matrix_ticker", keyx = "matrix_ticker_x", keyy = "matrix_ticker_y" },
+ { name = "color_picker", showFlag = "show_color_picker", keyx = "color_picker_x", keyy = "color_picker_y" },
  }
 }
 function Layout.move_frac(dx, dy, keyx, keyy)
@@ -641,7 +664,7 @@ local function StoreElementRectUnion(name, min_x, min_y, max_x, max_y)
  element_rects[name] = {min_x=min_x, min_y=min_y, max_x=max_x, max_y=max_y}
 end
 
-local settings_active_tab = 0 -- 0 = Global, 1 = Transport, 2 = Buttons, 3 = Images & Graphics, 4 = Widgets
+local settings_active_tab = 0
 
 local layout_selected_component = "transport_buttons" 
 local selected_transport_component = "base_style"
@@ -653,7 +676,9 @@ local show_button_import_inline = false
 
 local transport_components = {
  { id = "transport_buttons", name = "Transport" },
+ { id = "color_picker", name = "Color Picker" },
  { id = "master_volume", name = "Master Volume" },
+ { id = "monitor_volume", name = "Monitor Volume" },
  { id = "envelope", name = "Envelope" },
  { id = "tempo_bpm", name = "Tempo (BPM)" },
  { id = "time_signature", name = "Time Signature" },
@@ -705,8 +730,12 @@ function ShowComponentSettings(ctx, main_window_width, main_window_height)
  if r.ImGui_BeginChild(ctx, "ComponentSettingsScroll", avail_w, avail_h, r.ImGui_ChildFlags_None()) then
  if component_id == "transport_buttons" then
  ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "color_picker" then
+ ShowColorPickerSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "master_volume" then
  ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "monitor_volume" then
+ ShowMonitorVolumeSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "envelope" then
  ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "tempo_bpm" then
@@ -823,7 +852,6 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  r.ImGui_PopStyleColor(ctx)
  end
  
- -- Graphic Style dropdown (alleen zichtbaar als graphic mode actief is, op nieuwe regel)
  if graphic_mode_active then
  r.ImGui_Text(ctx, "Graphic Style:")
  r.ImGui_SameLine(ctx)
@@ -1474,6 +1502,105 @@ function ShowBatteryStatusSettings(ctx, main_window_width, main_window_height)
  end
 end
 
+function ShowColorPickerSettings(ctx, main_window_width, main_window_height)
+ local rv
+ rv, settings.show_color_picker = r.ImGui_Checkbox(ctx, "Show Color Picker", settings.show_color_picker ~= false)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if settings.show_color_picker then
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Position:")
+ DrawPixelXYControls('color_picker_x', 'color_picker_y', main_window_width, main_window_height)
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "ColorPickerSize", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Button Size:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.color_picker_button_size = r.ImGui_SliderInt(ctx, "##ButtonSize", settings.color_picker_button_size or 20, 10, 50, "%d px")
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Spacing:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.color_picker_spacing = r.ImGui_SliderInt(ctx, "##Spacing", settings.color_picker_spacing or 2, 0, 10, "%d px")
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Text(ctx, "Button Rounding:")
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ rv, settings.color_picker_rounding = r.ImGui_SliderInt(ctx, "##Rounding", settings.color_picker_rounding or 0, 0, 20, "%d px")
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "ColorPickerLayout", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Layout:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local layout_names = "Grid\0Horizontal\0Vertical\0"
+ rv, settings.color_picker_layout = r.ImGui_Combo(ctx, "##Layout", settings.color_picker_layout or 0, layout_names)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Number of Colors:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local num_colors_names = "4\0008\00012\00016\0"
+ local num_colors_map = {4, 8, 12, 16}
+ local current_index = 3
+ for i, v in ipairs(num_colors_map) do
+ if v == (settings.color_picker_num_colors or 16) then
+ current_index = i - 1
+ break
+ end
+ end
+ rv, current_index = r.ImGui_Combo(ctx, "##NumColors", current_index, num_colors_names)
+ if rv then
+ settings.color_picker_num_colors = num_colors_map[current_index + 1]
+ end
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Apply color to:")
+ local target_names = "Track\0Item\0Take\0Marker\0Region\0"
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ rv, settings.color_picker_target = r.ImGui_Combo(ctx, "##ColorTarget", settings.color_picker_target or 0, target_names)
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ rv, settings.color_picker_show_background = r.ImGui_Checkbox(ctx, "Show Background", settings.color_picker_show_background ~= false)
+ 
+ if settings.color_picker_show_background then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Color:")
+ r.ImGui_SameLine(ctx)
+ local color_flags = r.ImGui_ColorEditFlags_NoInputs()
+ rv, settings.color_picker_bg_color = r.ImGui_ColorEdit4(ctx, "##BgColor", settings.color_picker_bg_color or 0x000000AA, color_flags)
+ 
+ rv, settings.color_picker_show_border = r.ImGui_Checkbox(ctx, "Show Border", settings.color_picker_show_border ~= false)
+ 
+ if settings.color_picker_show_border then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Color:")
+ r.ImGui_SameLine(ctx)
+ rv, settings.color_picker_border_color = r.ImGui_ColorEdit4(ctx, "##BorderColor", settings.color_picker_border_color or 0xFFFFFFFF, color_flags)
+ end
+ end
+ end
+end
+
 function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  local rv
  rv, settings.show_master_volume = r.ImGui_Checkbox(ctx, "Show Master Volume Slider", settings.show_master_volume ~= false)
@@ -1485,6 +1612,18 @@ function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  
  r.ImGui_Text(ctx, "Position:")
  DrawPixelXYControls('master_volume_x', 'master_volume_y', main_window_width, main_window_height)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local style_names = "Slider\0Fader\0"
+ rv, settings.master_volume_style = r.ImGui_Combo(ctx, "##MasterVolumeStyle", settings.master_volume_style or 0, style_names)
+ 
+ r.ImGui_Text(ctx, "Display:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local display_names = "dB\0Percentage\0"
+ rv, settings.master_volume_display = r.ImGui_Combo(ctx, "##MasterVolumeDisplay", settings.master_volume_display or 0, display_names)
  
  r.ImGui_Separator(ctx)
  
@@ -1548,7 +1687,7 @@ function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
- rv, settings.master_volume_slider_bg = r.ImGui_ColorEdit4(ctx, "Slider BG", settings.master_volume_slider_bg or 0x333333FF, color_flags)
+ rv, settings.master_volume_slider_bg = r.ImGui_ColorEdit4(ctx, "BG (Slider/Fader)", settings.master_volume_slider_bg or 0x333333FF, color_flags)
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  rv, settings.master_volume_slider_active = r.ImGui_ColorEdit4(ctx, "Slider Active", settings.master_volume_slider_active or 0x555555FF, color_flags)
@@ -1556,7 +1695,7 @@ function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
- rv, settings.master_volume_grab = r.ImGui_ColorEdit4(ctx, "Handle", settings.master_volume_grab or 0xFFFFFFFF, color_flags)
+ rv, settings.master_volume_grab = r.ImGui_ColorEdit4(ctx, "Handle / Fader Fill", settings.master_volume_grab or 0xFFFFFFFF, color_flags)
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  rv, settings.master_volume_grab_active = r.ImGui_ColorEdit4(ctx, "Handle Hover", settings.master_volume_grab_active or 0xAAAAAAFF, color_flags)
@@ -1604,6 +1743,153 @@ function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  r.ImGui_Text(ctx, "Rounding:")
  r.ImGui_SetNextItemWidth(ctx, -1)
  rv, settings.master_volume_rounding = r.ImGui_SliderDouble(ctx, "##MasterVolumeRounding", settings.master_volume_rounding or 0.0, 0.0, 12.0, "%.1f")
+ 
+ r.ImGui_Spacing(ctx)
+ end
+end
+
+function ShowMonitorVolumeSettings(ctx, main_window_width, main_window_height)
+ local rv
+ rv, settings.show_monitor_volume = r.ImGui_Checkbox(ctx, "Show Monitor Volume Slider", settings.show_monitor_volume ~= false)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if settings.show_monitor_volume then
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Position:")
+ DrawPixelXYControls('monitor_volume_x', 'monitor_volume_y', main_window_width, main_window_height)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local style_names = "Slider\0Fader\0"
+ rv, settings.monitor_volume_style = r.ImGui_Combo(ctx, "##MonitorVolumeStyle", settings.monitor_volume_style or 0, style_names)
+ 
+ r.ImGui_Text(ctx, "Display:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local display_names = "dB\0Percentage\0"
+ rv, settings.monitor_volume_display = r.ImGui_Combo(ctx, "##MonitorVolumeDisplay", settings.monitor_volume_display or 0, display_names)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Slider Width:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local slider_width = settings.monitor_volume_width or 150
+ rv, slider_width = r.ImGui_SliderInt(ctx, "##MonitorVolumeWidth", slider_width, 50, 400)
+ if rv then
+ settings.monitor_volume_width = slider_width
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ rv, settings.show_monitor_volume_label = r.ImGui_Checkbox(ctx, "Show Label", settings.show_monitor_volume_label ~= false)
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "MonitorVolumeFontTable", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Font:")
+ local current_font = settings.monitor_volume_font_name or settings.current_font
+ local current_font_index = 0
+ for i, font_name in ipairs(fonts) do
+ if font_name == current_font then
+ current_font_index = i - 1
+ break
+ end
+ end
+ 
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, current_font_index = r.ImGui_Combo(ctx, "##MonitorVolumeFont", current_font_index, table.concat(fonts, '\0') .. '\0')
+ if rv then
+ settings.monitor_volume_font_name = fonts[current_font_index + 1]
+ RebuildSectionFonts()
+ end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Size:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local font_size = settings.monitor_volume_font_size or settings.font_size
+ rv, font_size = r.ImGui_SliderInt(ctx, "##MonitorVolumeFontSize", font_size, 8, 72)
+ if rv then
+ settings.monitor_volume_font_size = font_size
+ RebuildSectionFonts()
+ end
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Colors:")
+ 
+ local color_flags = r.ImGui_ColorEditFlags_NoInputs()
+ 
+ if r.ImGui_BeginTable(ctx, "MonitorVolumeColors", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.monitor_volume_slider_bg = r.ImGui_ColorEdit4(ctx, "BG (Slider/Fader)", settings.monitor_volume_slider_bg or 0x333333FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.monitor_volume_slider_active = r.ImGui_ColorEdit4(ctx, "Slider Active", settings.monitor_volume_slider_active or 0x555555FF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.monitor_volume_grab = r.ImGui_ColorEdit4(ctx, "Handle / Fader Fill", settings.monitor_volume_grab or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.monitor_volume_grab_active = r.ImGui_ColorEdit4(ctx, "Handle Hover", settings.monitor_volume_grab_active or 0xAAAAAAFF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.monitor_volume_text_color = r.ImGui_ColorEdit4(ctx, "Text Color", settings.monitor_volume_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Border & Rounding:")
+ 
+ rv, settings.monitor_volume_show_border = r.ImGui_Checkbox(ctx, "Show Border", settings.monitor_volume_show_border or false)
+ 
+ if settings.monitor_volume_show_border then
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "MonitorVolumeBorderTable", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Border Color:")
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.monitor_volume_border_color = r.ImGui_ColorEdit4(ctx, "##MonitorVolumeBorderColor", settings.monitor_volume_border_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Border Size:")
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.monitor_volume_border_size = r.ImGui_SliderDouble(ctx, "##MonitorVolumeBorderSize", settings.monitor_volume_border_size or 1.0, 0.5, 5.0, "%.1f")
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Rounding:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.monitor_volume_rounding = r.ImGui_SliderDouble(ctx, "##MonitorVolumeRounding", settings.monitor_volume_rounding or 0.0, 0.0, 12.0, "%.1f")
  
  r.ImGui_Spacing(ctx)
  end
@@ -2513,6 +2799,7 @@ local font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
 local font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, settings.transport_font_size or settings.font_size)
 local font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, settings.env_font_size or settings.font_size)
 local font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, settings.master_volume_font_size or settings.font_size)
+local font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, settings.monitor_volume_font_size or settings.font_size)
 local font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
 local font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
 local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
@@ -2660,6 +2947,7 @@ function RebuildSectionFonts()
  local new_font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, settings.transport_font_size or settings.font_size)
  local new_font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, settings.env_font_size or settings.font_size)
  local new_font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, settings.master_volume_font_size or settings.font_size)
+ local new_font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, settings.monitor_volume_font_size or settings.font_size)
  local new_font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
  local new_font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
  local new_font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
@@ -2672,6 +2960,7 @@ function RebuildSectionFonts()
  r.ImGui_Attach(ctx, new_font_transport)
  r.ImGui_Attach(ctx, new_font_env)
  r.ImGui_Attach(ctx, new_font_master_volume)
+ r.ImGui_Attach(ctx, new_font_monitor_volume)
  r.ImGui_Attach(ctx, new_font_tempo)
  r.ImGui_Attach(ctx, new_font_timesig)
  r.ImGui_Attach(ctx, new_font_timesel)
@@ -2684,6 +2973,7 @@ function RebuildSectionFonts()
  font_transport = new_font_transport
  font_env = new_font_env
  font_master_volume = new_font_master_volume
+ font_monitor_volume = new_font_monitor_volume
  font_tempo = new_font_tempo
  font_timesig = new_font_timesig
  font_timesel = new_font_timesel
@@ -2901,6 +3191,135 @@ function Color_FromRGBA(r, g, b, a)
  return (math.floor(a*255) << 24) | (math.floor(r*255) << 16) | (math.floor(g*255) << 8) | math.floor(b*255)
 end
 
+function GetReaperCustomColors()
+ local colors = {}
+ 
+ local ini_file = r.get_ini_file()
+ 
+ local default_colors = {
+ 0x0000FF, 0x00FF00, 0xFF0000, 0x00FFFF, 
+ 0xFF00FF, 0xFFFF00, 0x0080FF, 0xFF0080,
+ 0x008000, 0x800000, 0x000080, 0x808000,
+ 0x008080, 0x800080, 0xC0C0C0, 0x808080,
+ }
+ 
+ local custcolors_string = nil
+ 
+ if ini_file then
+ local f = io.open(ini_file, "r")
+ if f then
+ for line in f:lines() do
+ local match = line:match("^custcolors=(%x+)")
+ if match then
+ custcolors_string = match
+ break
+ end
+ end
+ f:close()
+ end
+ end
+ 
+ for i = 1, 16 do
+ local colorNative = nil
+ local color_imgui = nil
+ 
+ if custcolors_string and #custcolors_string >= i * 8 then
+ local start_pos = (i - 1) * 8 + 1
+ local color_hex = custcolors_string:sub(start_pos, start_pos + 7)
+ 
+ local full_value = tonumber(color_hex, 16)
+ if full_value then
+ local rgb_value = full_value >> 8
+ 
+ local rr = (rgb_value >> 16) & 0xFF
+ local gg = (rgb_value >> 8) & 0xFF
+ local bb = rgb_value & 0xFF
+ 
+ colorNative = (bb << 16) | (gg << 8) | rr
+ 
+ color_imgui = (rr << 24) | (gg << 16) | (bb << 8) | 0xFF
+ end
+ end
+ 
+ if not colorNative then
+ colorNative = default_colors[i]
+ local rr = colorNative & 0xFF
+ local gg = (colorNative >> 8) & 0xFF
+ local bb = (colorNative >> 16) & 0xFF
+ color_imgui = (rr << 24) | (gg << 16) | (bb << 8) | 0xFF
+ end
+ 
+ colors[i] = {native = colorNative, imgui = color_imgui}
+ end
+ 
+ return colors
+end
+
+function ApplyColorToTracks(colorNative)
+ local track_count = r.CountSelectedTracks(0)
+ if track_count == 0 then return false end
+ 
+ for i = 0, track_count - 1 do
+ local track = r.GetSelectedTrack(0, i)
+ r.SetTrackColor(track, colorNative | 0x1000000)
+ end
+ r.UpdateArrange()
+ return true
+end
+
+function ApplyColorToItems(colorNative)
+ local item_count = r.CountSelectedMediaItems(0)
+ if item_count == 0 then return false end
+ 
+ for i = 0, item_count - 1 do
+ local item = r.GetSelectedMediaItem(0, i)
+ r.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", colorNative | 0x1000000)
+ end
+ r.UpdateArrange()
+ return true
+end
+
+function ApplyColorToTakes(colorNative)
+ local item_count = r.CountSelectedMediaItems(0)
+ if item_count == 0 then return false end
+ 
+ for i = 0, item_count - 1 do
+ local item = r.GetSelectedMediaItem(0, i)
+ local take = r.GetActiveTake(item)
+ if take then
+ r.SetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR", colorNative | 0x1000000)
+ end
+ end
+ r.UpdateArrange()
+ return true
+end
+
+function ApplyColorToMarkers(colorNative, is_region)
+ local start_time, end_time = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
+ if start_time == end_time then return false end
+ 
+ local retval, num_markers, num_regions = r.CountProjectMarkers(0)
+ local total = num_markers + num_regions
+ local applied = false
+ 
+ for i = 0, total - 1 do
+ local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
+ if retval then
+ if (is_region and isrgn) or (not is_region and not isrgn) then
+ if pos >= start_time and pos <= end_time then
+ r.SetProjectMarkerByIndex(0, i, isrgn, pos, rgnend, markrgnindexnumber, name, colorNative | 0x1000000)
+ applied = true
+ end
+ end
+ end
+ end
+ 
+ if applied then
+ r.UpdateArrange()
+ end
+ return applied
+end
+
 function InitializeVisualMetronome()
  if not settings.show_visual_metronome then return end
  visual_metronome.last_beat_number = -1
@@ -3018,11 +3437,11 @@ function RenderVisualMetronome(main_window_width, main_window_height)
  StoreElementRect("visual_metronome")
  
  if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Left()) then
-  r.Main_OnCommand(40364, 0) -- Metronome: Toggle metronome enabled
+  r.Main_OnCommand(40364, 0)
  end
  
  if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
-  r.Main_OnCommand(40363, 0) -- Metronome: Metronome settings
+  r.Main_OnCommand(40363, 0)
  end
  
  local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -3126,7 +3545,6 @@ end
 
 
 function SetStyle()
- -- Style setup
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), settings.window_rounding)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.frame_rounding)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 2)
@@ -3136,7 +3554,6 @@ function SetStyle()
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), settings.border_size)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), settings.button_border_size)
  
- -- Colors setup
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), settings.background)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), settings.frame_bg)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), settings.frame_bg_hovered)
@@ -3153,7 +3570,6 @@ function SetStyle()
 end
 
 function SetTransportStyle()
- -- Transport-specific style setup
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), settings.transport_window_rounding or settings.window_rounding)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.frame_rounding) 
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 2)
@@ -3163,13 +3579,11 @@ function SetTransportStyle()
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0) 
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), settings.button_border_size)
  
- -- Transport-specific colors (minimal set)
  local bg_color = settings.use_gradient_background and 0x00000000 or (settings.transport_background or settings.background)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), bg_color)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.border) 
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.transport_popup_bg or settings.background)
  
- -- Use default colors for everything else (so settings window can override them)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), settings.frame_bg)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), settings.frame_bg_hovered)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), settings.frame_bg_active)
@@ -5076,7 +5490,88 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  r.ImGui_SetCursorPosY(ctx, pos_y)
  
  local slider_width = settings.master_volume_width or 150
+ local style = settings.master_volume_style or 0
+ local display_mode = settings.master_volume_display or 0
  
+ local percentage = math.floor(((volume_db + 60) / 72) * 100 + 0.5)
+ if percentage < 0 then percentage = 0 end
+ if percentage > 100 then percentage = 100 end
+ 
+ if style == 1 then
+ local slider_height = 20
+ 
+ local screen_x, screen_y = r.ImGui_GetCursorScreenPos(ctx)
+ 
+ r.ImGui_InvisibleButton(ctx, "##MasterVolumeFader", slider_width, slider_height)
+ 
+ if allow_input and r.ImGui_IsItemActive(ctx) then
+ local mouse_x, _ = r.ImGui_GetMousePos(ctx)
+ local rel_x = mouse_x - screen_x
+ local new_pct = (rel_x / slider_width) * 100
+ new_pct = math.max(0, math.min(100, new_pct))
+ local new_db = (new_pct / 100) * 72 - 60
+ local new_volume_linear = 10.0 ^ (new_db / 20.0)
+ r.SetMediaTrackInfo_Value(master_track, "D_VOL", new_volume_linear)
+ end
+ 
+ if allow_input and r.ImGui_IsItemClicked(ctx, 1) then
+ r.SetMediaTrackInfo_Value(master_track, "D_VOL", 1.0)
+ end
+ 
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local bg_color = settings.master_volume_slider_bg or 0x808080FF
+ local fill_color = settings.master_volume_grab or 0x00AA00FF
+ local text_color = settings.master_volume_text_color or 0xFFFFFFFF
+ local border_color = settings.master_volume_border_color or 0xFFFFFFFF
+ 
+ local fill_width = (percentage / 100) * slider_width
+ 
+ local rounding = settings.master_volume_rounding or 0.0
+ r.ImGui_DrawList_AddRectFilled(draw_list, screen_x, screen_y, screen_x + slider_width, screen_y + slider_height, bg_color, rounding)
+ r.ImGui_DrawList_AddRectFilled(draw_list, screen_x, screen_y, screen_x + fill_width, screen_y + slider_height, fill_color, rounding)
+ 
+ if settings.master_volume_show_border then
+ local border_size = settings.master_volume_border_size or 1.0
+ r.ImGui_DrawList_AddRect(draw_list, screen_x, screen_y, screen_x + slider_width, screen_y + slider_height, border_color, rounding, 0, border_size)
+ end
+ 
+ if font_master_volume then 
+ r.ImGui_PushFont(ctx, font_master_volume, settings.master_volume_font_size or settings.font_size)
+ end
+ 
+ local display_text = display_mode == 0 and string.format("%.1f dB", volume_db) or string.format("%d%%", percentage)
+ local text_width, text_height = r.ImGui_CalcTextSize(ctx, display_text)
+ local text_x = screen_x + (slider_width - text_width) / 2
+ local text_y = screen_y + (slider_height - text_height) / 2
+ r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, display_text)
+ 
+ if font_master_volume then 
+ r.ImGui_PopFont(ctx)
+ end
+ 
+ local min_x, min_y = screen_x, screen_y
+ local max_x, max_y = screen_x + slider_width, screen_y + slider_height
+ 
+ local show_label = settings.show_master_volume_label
+ if show_label == nil then show_label = true end 
+ 
+ if show_label then
+ r.ImGui_SameLine(ctx)
+ if font_master_volume then 
+ r.ImGui_PushFont(ctx, font_master_volume, settings.master_volume_font_size or settings.font_size) 
+ end
+ r.ImGui_Text(ctx, "Master")
+ if font_master_volume then 
+ r.ImGui_PopFont(ctx) 
+ end
+ 
+ local label_max_x, label_max_y = r.ImGui_GetItemRectMax(ctx)
+ max_x = label_max_x
+ max_y = math.max(max_y, label_max_y)
+ end
+ 
+ StoreElementRectUnion("master_volume", min_x, min_y, max_x, max_y)
+ else
  local rounding = settings.master_volume_rounding or 0.0
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), rounding)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), rounding)
@@ -5095,14 +5590,27 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  
  r.ImGui_PushItemWidth(ctx, slider_width)
  
- local rv, new_volume_db = r.ImGui_SliderDouble(ctx, "##MasterVolume", volume_db, -60.0, 12.0, "%.1f dB")
+ local display_text = display_mode == 0 and "%.1f dB" or "%d%%"
+ local display_value = display_mode == 0 and volume_db or percentage
+ local rv, new_value
+ 
+ if display_mode == 0 then
+ rv, new_value = r.ImGui_SliderDouble(ctx, "##MasterVolume", display_value, -60.0, 12.0, display_text)
+ else
+ rv, new_value = r.ImGui_SliderInt(ctx, "##MasterVolume", display_value, 0, 100, display_text)
+ end
  
  if allow_input and rv then
  local new_volume_linear
- if new_volume_db <= -150.0 then
+ if display_mode == 0 then
+ if new_value <= -150.0 then
  new_volume_linear = 0.0
  else
- new_volume_linear = 10.0 ^ (new_volume_db / 20.0)
+ new_volume_linear = 10.0 ^ (new_value / 20.0)
+ end
+ else
+ local new_db = (new_value / 100) * 72 - 60
+ new_volume_linear = 10.0 ^ (new_db / 20.0)
  end
  
  r.SetMediaTrackInfo_Value(master_track, "D_VOL", new_volume_linear)
@@ -5148,10 +5656,218 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  r.ImGui_PopStyleVar(ctx, 2)
  
  StoreElementRectUnion("master_volume", min_x, min_y, max_x, max_y)
+ end
+end
+
+function MonitorVolumeSlider(main_window_width, main_window_height)
+ if not settings.show_monitor_volume then return end
+ 
+ local allow_input = not settings.edit_mode
+ 
+ local command_id_up = r.NamedCommandLookup("_SWS_MAST_O1_1")
+ local command_id_down = r.NamedCommandLookup("_SWS_MAST_O1_-1")
+ local command_id_reset = r.NamedCommandLookup("_SWS_MAST_O1_0")
+ 
+ if not command_id_up or command_id_up == 0 then
+ r.ImGui_Text(ctx, "SWS Extension required for Monitor Volume")
+ return
+ end
+ 
+ local volume_db = r.GetExtState("TK_TRANSPORT", "monitor_volume_cache")
+ volume_db = tonumber(volume_db) or 0.0
+ 
+ local pos_x = settings.monitor_volume_x_px and ScalePosX(settings.monitor_volume_x_px, main_window_width, settings) 
+ or ((settings.monitor_volume_x or 0.5) * main_window_width)
+ local pos_y = settings.monitor_volume_y_px and ScalePosY(settings.monitor_volume_y_px, main_window_height, settings) 
+ or ((settings.monitor_volume_y or 0.7) * main_window_height)
+ 
+ r.ImGui_SetCursorPosX(ctx, pos_x)
+ r.ImGui_SetCursorPosY(ctx, pos_y)
+ 
+ local slider_width = settings.monitor_volume_width or 150
+ local style = settings.monitor_volume_style or 0
+ local display_mode = settings.monitor_volume_display or 0
+ 
+ local percentage = math.floor(((volume_db + 60) / 72) * 100 + 0.5)
+ if percentage < 0 then percentage = 0 end
+ if percentage > 100 then percentage = 100 end
+ 
+ if style == 1 then
+ local slider_height = 20
+ 
+ local screen_x, screen_y = r.ImGui_GetCursorScreenPos(ctx)
+ 
+ r.ImGui_InvisibleButton(ctx, "##MonitorVolumeFader", slider_width, slider_height)
+ 
+ if allow_input and r.ImGui_IsItemActive(ctx) then
+ local mouse_x, _ = r.ImGui_GetMousePos(ctx)
+ local rel_x = mouse_x - screen_x
+ local new_pct = (rel_x / slider_width) * 100
+ new_pct = math.max(0, math.min(100, new_pct))
+ local new_db = (new_pct / 100) * 72 - 60
+ 
+ local db_change = new_db - volume_db
+ if math.abs(db_change) >= 0.5 then
+ local steps = math.floor(db_change + 0.5)
+ local cmd = steps > 0 and command_id_up or command_id_down
+ for i = 1, math.abs(steps) do
+ r.Main_OnCommand(cmd, 0)
+ end
+ volume_db = new_db
+ r.SetExtState("TK_TRANSPORT", "monitor_volume_cache", tostring(volume_db), false)
+ end
+ end
+ 
+ if allow_input and r.ImGui_IsItemClicked(ctx, 1) then
+ r.Main_OnCommand(command_id_reset, 0)
+ volume_db = 0.0
+ r.SetExtState("TK_TRANSPORT", "monitor_volume_cache", "0.0", false)
+ end
+ 
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local bg_color = settings.monitor_volume_slider_bg or 0x808080FF
+ local fill_color = settings.monitor_volume_grab or 0x00AA00FF
+ local text_color = settings.monitor_volume_text_color or 0xFFFFFFFF
+ local border_color = settings.monitor_volume_border_color or 0xFFFFFFFF
+ 
+ local fill_width = (percentage / 100) * slider_width
+ 
+ local rounding = settings.monitor_volume_rounding or 0.0
+ r.ImGui_DrawList_AddRectFilled(draw_list, screen_x, screen_y, screen_x + slider_width, screen_y + slider_height, bg_color, rounding)
+ r.ImGui_DrawList_AddRectFilled(draw_list, screen_x, screen_y, screen_x + fill_width, screen_y + slider_height, fill_color, rounding)
+ 
+ if settings.monitor_volume_show_border then
+ local border_size = settings.monitor_volume_border_size or 1.0
+ r.ImGui_DrawList_AddRect(draw_list, screen_x, screen_y, screen_x + slider_width, screen_y + slider_height, border_color, rounding, 0, border_size)
+ end
+ 
+ if font_monitor_volume then 
+ r.ImGui_PushFont(ctx, font_monitor_volume, settings.monitor_volume_font_size or settings.font_size)
+ end
+ 
+ local display_text = display_mode == 0 and string.format("%.1f dB", volume_db) or string.format("%d%%", percentage)
+ local text_width, text_height = r.ImGui_CalcTextSize(ctx, display_text)
+ local text_x = screen_x + (slider_width - text_width) / 2
+ local text_y = screen_y + (slider_height - text_height) / 2
+ r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, display_text)
+ 
+ if font_monitor_volume then 
+ r.ImGui_PopFont(ctx)
+ end
+ 
+ local min_x, min_y = screen_x, screen_y
+ local max_x, max_y = screen_x + slider_width, screen_y + slider_height
+ 
+ local show_label = settings.show_monitor_volume_label
+ if show_label == nil then show_label = true end 
+ 
+ if show_label then
+ r.ImGui_SameLine(ctx)
+ if font_monitor_volume then 
+ r.ImGui_PushFont(ctx, font_monitor_volume, settings.monitor_volume_font_size or settings.font_size) 
+ end
+ r.ImGui_Text(ctx, "Monitor")
+ if font_monitor_volume then 
+ r.ImGui_PopFont(ctx) 
+ end
+ 
+ local label_max_x, label_max_y = r.ImGui_GetItemRectMax(ctx)
+ max_x = label_max_x
+ max_y = math.max(max_y, label_max_y)
+ end
+ 
+ StoreElementRectUnion("monitor_volume", min_x, min_y, max_x, max_y)
+ else
+ local rounding = settings.monitor_volume_rounding or 0.0
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), rounding)
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), rounding)
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), settings.monitor_volume_grab or 0xFFFFFFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), settings.monitor_volume_grab_active or 0xAAAAAAFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), settings.monitor_volume_slider_bg or 0x333333FF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), settings.monitor_volume_slider_active or 0x555555FF)
+ if settings.monitor_volume_text_color then
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.monitor_volume_text_color)
+ end
+ 
+ if font_monitor_volume then 
+ r.ImGui_PushFont(ctx, font_monitor_volume, settings.monitor_volume_font_size or settings.font_size) 
+ end
+ 
+ r.ImGui_PushItemWidth(ctx, slider_width)
+ 
+ local display_text = display_mode == 0 and "%.1f dB" or "%d%%"
+ local display_value = display_mode == 0 and volume_db or percentage
+ local rv, new_value
+ 
+ if display_mode == 0 then
+ rv, new_value = r.ImGui_SliderDouble(ctx, "##MonitorVolume", display_value, -60.0, 12.0, display_text)
+ else
+ rv, new_value = r.ImGui_SliderInt(ctx, "##MonitorVolume", display_value, 0, 100, display_text)
+ end
+ 
+ if allow_input and rv then
+ local new_db = display_mode == 0 and new_value or ((new_value / 100) * 72 - 60)
+ local db_change = new_db - volume_db
+ 
+ if math.abs(db_change) >= 0.5 then
+ local steps = math.floor(db_change + 0.5)
+ local cmd = steps > 0 and command_id_up or command_id_down
+ for i = 1, math.abs(steps) do
+ r.Main_OnCommand(cmd, 0)
+ end
+ volume_db = new_db
+ r.SetExtState("TK_TRANSPORT", "monitor_volume_cache", tostring(volume_db), false)
+ end
+ end
+ 
+ if allow_input and r.ImGui_IsItemClicked(ctx, 1) then
+ r.Main_OnCommand(command_id_reset, 0)
+ volume_db = 0.0
+ r.SetExtState("TK_TRANSPORT", "monitor_volume_cache", "0.0", false)
+ end
+ 
+ r.ImGui_PopItemWidth(ctx)
+ 
+ local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+ local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+ 
+ if settings.monitor_volume_show_border then
+ local dl = r.ImGui_GetWindowDrawList(ctx)
+ local border_color = settings.monitor_volume_border_color or 0xFFFFFFFF
+ local border_size = settings.monitor_volume_border_size or 1.0
+ local border_rounding = settings.monitor_volume_rounding or 0.0
+ 
+ r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, border_color, border_rounding, nil, border_size)
+ end
+ 
+ local show_label = settings.show_monitor_volume_label
+ if show_label == nil then show_label = true end 
+ 
+ if show_label then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Monitor")
+ 
+ local label_max_x, label_max_y = r.ImGui_GetItemRectMax(ctx)
+ max_x = label_max_x
+ max_y = math.max(max_y, label_max_y)
+ end
+ 
+ if font_monitor_volume then 
+ r.ImGui_PopFont(ctx) 
+ end
+ 
+ local color_count = settings.monitor_volume_text_color and 5 or 4
+ r.ImGui_PopStyleColor(ctx, color_count)
+ 
+ r.ImGui_PopStyleVar(ctx, 2)
+ 
+ StoreElementRectUnion("monitor_volume", min_x, min_y, max_x, max_y)
+ end
 end
 
 function DrawTransportGraphics(drawList, x, y, size, color)
- local style = settings.graphic_style or 0  -- 0=Filled, 1=Outlined, 2=Rounded, 3=Sharp, 4=Alien, 5=Retro
+ local style = settings.graphic_style or 0
 
  local function DrawPlay(x, y, size)
  local adjustedSize = size
@@ -5161,19 +5877,19 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + adjustedSize, y + size / 2
  }
  
- if style == 1 then  -- Outlined
+ if style == 1 then
  r.ImGui_DrawList_AddTriangle(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color, 2.5)
- elseif style == 2 then  -- Rounded (using filled for now, rounded triangles are complex)
+ elseif style == 2 then
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color)
- elseif style == 3 then  -- Sharp (larger, more angular)
+ elseif style == 3 then
  local sharpPoints = {
  x + size * 0.05, y + size * 0.05,
  x + size * 0.05, y + size * 1.05,
@@ -5184,7 +5900,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  sharpPoints[3], sharpPoints[4],
  sharpPoints[5], sharpPoints[6],
  color)
- elseif style == 4 then  -- Alien: Triple chevron
+ elseif style == 4 then
  for i = 0, 2 do
  local offset = i * size * 0.25
  local px1 = x + size * 0.2 + offset
@@ -5195,14 +5911,12 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  px2, y + size * 0.5,
  color)
  end
- elseif style == 5 then  -- Retro: Classic cassette-style
- -- Draw classic play triangle with inner detail
+ elseif style == 5 then
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color)
- -- Add inner triangle for retro look
  local innerPoints = {
  x + size * 0.3, y + size * 0.3,
  x + size * 0.3, y + size * 0.7,
@@ -5213,7 +5927,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  innerPoints[3], innerPoints[4],
  innerPoints[5], innerPoints[6],
  color & 0xFFFFFF88, 1.5)
- elseif style == 6 then  -- Gaming: Pixelated triangle
+ elseif style == 6 then
  local pixelSize = size / 8
  for py = 0, 7 do
  local row_width = math.floor(py / 2)
@@ -5226,13 +5940,12 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  color)
  end
  end
- elseif style == 7 then  -- Neon: Double outline glow
+ elseif style == 7 then
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color)
- -- Outer glow
  local glowPoints = {
  points[1] - size * 0.08, points[2] - size * 0.08,
  points[3] - size * 0.08, points[4] + size * 0.08,
@@ -5243,7 +5956,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  glowPoints[3], glowPoints[4],
  glowPoints[5], glowPoints[6],
  color & 0xFFFFFF66, 2.5)
- elseif style == 8 then  -- Organic: Curved, leaf-like
+ elseif style == 8 then
  local cx, cy = x + size / 2, y + size / 2
  r.ImGui_DrawList_PathClear(drawList)
  for i = 0, 20 do
@@ -5254,13 +5967,12 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  r.ImGui_DrawList_PathLineTo(drawList, x + size * 0.1, y + size * 0.1)
  r.ImGui_DrawList_PathFillConvex(drawList, color)
- elseif style == 9 then  -- Industrial: Triangle with bolts
+ elseif style == 9 then
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color)
- -- Add "bolts" in corners
  local boltSize = size * 0.08
  local bolts = {
  {points[1], points[2]},
@@ -5271,7 +5983,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  r.ImGui_DrawList_AddCircleFilled(drawList, bolt[1], bolt[2], boltSize, color & 0xFFFFFF88)
  r.ImGui_DrawList_AddCircle(drawList, bolt[1], bolt[2], boltSize, color, 8, 1)
  end
- elseif style == 10 then  -- Circus: Spiral play
+ elseif style == 10 then
  local cx = x + size * 0.4
  local cy = y + size / 2
  r.ImGui_DrawList_PathClear(drawList)
@@ -5284,7 +5996,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  cy + radius * math.sin(angle))
  end
  r.ImGui_DrawList_PathStroke(drawList, color, 0, 3)
- elseif style == 11 then  -- Crystal: Faceted gem
+ elseif style == 11 then
  local cx, cy = x + size / 2, y + size / 2
  local vertices = {
  {x + size * 0.15, y + size * 0.5},
@@ -5293,7 +6005,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  {x + size * 0.9, y + size * 0.7},
  {x + size * 0.3, y + size * 0.8}
  }
- -- Draw facets
  for i = 1, #vertices do
  local next_i = (i % #vertices) + 1
  r.ImGui_DrawList_AddTriangleFilled(drawList,
@@ -5302,7 +6013,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  vertices[next_i][1], vertices[next_i][2],
  i % 2 == 0 and color or (color & 0xFFFFFFCC))
  end
- else  -- Filled (default)
+ else
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
@@ -5315,26 +6026,25 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local adjustedSize = size
  local rounding = 0
  
- if style == 1 then  -- Outlined
+ if style == 1 then
  r.ImGui_DrawList_AddRect(drawList,
  x + size * 0.1, y + size * 0.1,
  x + adjustedSize, y + adjustedSize,
  color, 0, nil, 2.5)
- elseif style == 2 then  -- Rounded
+ elseif style == 2 then
  rounding = size * 0.15
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.1, y + size * 0.1,
  x + adjustedSize, y + adjustedSize,
  color, rounding)
- elseif style == 3 then  -- Sharp
+ elseif style == 3 then
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.05, y + size * 0.05,
  x + size * 1.05, y + size * 1.05,
  color, 0)
- elseif style == 4 then  -- Alien: X shape
+ elseif style == 4 then
  local cx, cy = x + size / 2, y + size / 2
  local radius = size * 0.5
- -- Draw X with two crossed rectangles
  r.ImGui_DrawList_PathClear(drawList)
  local angle = math.pi / 4
  for i = 0, 3 do
@@ -5349,7 +6059,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  r.ImGui_DrawList_PathLineTo(drawList, cx + radius * math.cos(a), cy + radius * math.sin(a))
  end
  r.ImGui_DrawList_PathFillConvex(drawList, color)
- elseif style == 5 then  -- Retro: Square with border
+ elseif style == 5 then
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.15, y + size * 0.15,
  x + size * 0.85, y + size * 0.85,
@@ -5358,7 +6068,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size * 0.1, y + size * 0.1,
  x + size * 0.9, y + size * 0.9,
  color, 0, nil, 2)
- elseif style == 6 then  -- Gaming: Pixelated square
+ elseif style == 6 then
  local pixelSize = size / 8
  for py = 1, 6 do
  for px = 1, 6 do
@@ -5370,7 +6080,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  color)
  end
  end
- elseif style == 7 then  -- Neon: Glowing square
+ elseif style == 7 then
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.2, y + size * 0.2,
  x + size * 0.8, y + size * 0.8,
@@ -5383,7 +6093,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size * 0.08, y + size * 0.08,
  x + size * 0.92, y + size * 0.92,
  color & 0xFFFFFF44, 0, nil, 2)
- elseif style == 8 then  -- Organic: Rounded blob
+ elseif style == 8 then
  local cx, cy = x + size / 2, y + size / 2
  r.ImGui_DrawList_PathClear(drawList)
  for i = 0, 16 do
@@ -5394,12 +6104,11 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  cy + radius * math.sin(angle))
  end
  r.ImGui_DrawList_PathFillConvex(drawList, color)
- elseif style == 9 then  -- Industrial: Square with rivets
+ elseif style == 9 then
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.15, y + size * 0.15,
  x + size * 0.85, y + size * 0.85,
  color)
- -- Corner rivets
  local rivetSize = size * 0.06
  local corners = {
  {0.2, 0.2}, {0.8, 0.2}, {0.2, 0.8}, {0.8, 0.8}
@@ -5409,7 +6118,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  r.ImGui_DrawList_AddCircleFilled(drawList, rx, ry, rivetSize, color & 0xFFFFFF66)
  r.ImGui_DrawList_AddCircle(drawList, rx, ry, rivetSize * 0.6, color & 0xFFFFFFAA, 6, 1)
  end
- elseif style == 10 then  -- Circus: Striped square
+ elseif style == 10 then
  for i = 0, 8 do
  local stripe_x = x + size * 0.1 + (i * size * 0.8 / 8)
  local stripe_color = (i % 2 == 0) and color or (color & 0xFFFFFF88)
@@ -5418,7 +6127,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  stripe_x + size * 0.8 / 8, y + size * 0.9,
  stripe_color)
  end
- elseif style == 11 then  -- Crystal: Diamond shape
+ elseif style == 11 then
  local cx, cy = x + size / 2, y + size / 2
  local points = {
  {cx, y + size * 0.1},
@@ -5426,7 +6135,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  {cx, y + size * 0.9},
  {x + size * 0.1, cy}
  }
- -- Draw diamond with facets
  for i = 1, #points do
  local next_i = (i % #points) + 1
  r.ImGui_DrawList_AddTriangleFilled(drawList,
@@ -5435,7 +6143,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  points[next_i][1], points[next_i][2],
  i % 2 == 0 and color or (color & 0xFFFFFFDD))
  end
- else  -- Filled
+ else
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.1, y + size * 0.1,
  x + adjustedSize, y + adjustedSize,
@@ -5448,7 +6156,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local barWidth = adjustedSize / 3
  local rounding = (style == 2) and (size * 0.1) or 0
  
- if style == 1 then  -- Outlined
+ if style == 1 then
  r.ImGui_DrawList_AddRect(drawList,
  x + size * 0.1, y + size * 0.1,
  x + size * 0.1 + barWidth, y + adjustedSize,
@@ -5457,7 +6165,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + adjustedSize - barWidth, y + size * 0.1,
  x + adjustedSize, y + adjustedSize,
  color, 0, nil, 2.5)
- elseif style == 3 then  -- Sharp (thinner bars)
+ elseif style == 3 then
  local sharpWidth = adjustedSize / 3.5
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.1, y + size * 0.05,
@@ -5467,14 +6175,14 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + adjustedSize - sharpWidth + size * 0.1, y + size * 0.05,
  x + adjustedSize + size * 0.1, y + size * 1.05,
  color)
- elseif style == 4 then  -- Alien: Three dots
+ elseif style == 4 then
  local dotRadius = size * 0.15
  local cy = y + size / 2
  for i = 0, 2 do
  local cx = x + size * 0.25 + (i * size * 0.25)
  r.ImGui_DrawList_AddCircleFilled(drawList, cx, cy, dotRadius, color)
  end
- elseif style == 5 then  -- Retro: Double bars with gaps
+ elseif style == 5 then
  local barWidth = adjustedSize / 3.2
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.15, y + size * 0.1,
@@ -5484,7 +6192,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size * 0.55, y + size * 0.1,
  x + size * 0.55 + barWidth, y + adjustedSize,
  color)
- elseif style == 6 then  -- Gaming: Pixelated bars
+ elseif style == 6 then
  local pixelSize = size / 8
  for bar = 0, 1 do
  local bar_x = bar == 0 and 2 or 5
@@ -5499,9 +6207,8 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  end
  end
- elseif style == 7 then  -- Neon: Glowing bars
+ elseif style == 7 then
  local barWidth = adjustedSize / 3.5
- -- Inner bars
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.2, y + size * 0.15,
  x + size * 0.2 + barWidth, y + size * 0.85,
@@ -5510,7 +6217,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size * 0.6, y + size * 0.15,
  x + size * 0.6 + barWidth, y + size * 0.85,
  color)
- -- Glow effect
  r.ImGui_DrawList_AddRect(drawList,
  x + size * 0.15, y + size * 0.1,
  x + size * 0.2 + barWidth + size * 0.05, y + size * 0.9,
@@ -5519,7 +6225,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size * 0.55, y + size * 0.1,
  x + size * 0.6 + barWidth + size * 0.05, y + size * 0.9,
  color & 0xFFFFFF66, 0, nil, 2)
- elseif style == 8 then  -- Organic: Wave bars
+ elseif style == 8 then
  local barWidth = adjustedSize / 3.5
  for bar = 0, 1 do
  local bar_x = x + size * (bar == 0 and 0.2 or 0.55)
@@ -5538,7 +6244,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  r.ImGui_DrawList_PathFillConvex(drawList, color)
  end
- elseif style == 9 then  -- Industrial: Bars with texture
+ elseif style == 9 then
  local barWidth = adjustedSize / 3.2
  for bar = 0, 1 do
  local bar_x = x + size * (bar == 0 and 0.2 or 0.55)
@@ -5546,7 +6252,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  bar_x, y + size * 0.1,
  bar_x + barWidth, y + size * 0.9,
  color)
- -- Add horizontal lines for industrial look
  for i = 1, 4 do
  local line_y = y + size * (0.1 + i * 0.16)
  r.ImGui_DrawList_AddLine(drawList,
@@ -5555,7 +6260,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  color & 0xFFFFFF44, 1)
  end
  end
- elseif style == 10 then  -- Circus: Polka dot bars
+ elseif style == 10 then
  local barWidth = adjustedSize / 3.2
  for bar = 0, 1 do
  local bar_x = x + size * (bar == 0 and 0.2 or 0.55)
@@ -5563,7 +6268,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  bar_x, y + size * 0.1,
  bar_x + barWidth, y + size * 0.9,
  color)
- -- Add dots
  for i = 0, 4 do
  local dot_y = y + size * (0.2 + i * 0.15)
  r.ImGui_DrawList_AddCircleFilled(drawList,
@@ -5572,12 +6276,11 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  color & 0xFFFFFF66)
  end
  end
- elseif style == 11 then  -- Crystal: Faceted bars
+ elseif style == 11 then
  local barWidth = adjustedSize / 3.2
  for bar = 0, 1 do
  local bar_x = x + size * (bar == 0 and 0.2 or 0.55)
  local cx = bar_x + barWidth / 2
- -- Create faceted bar with triangles
  for i = 0, 5 do
  local y1 = y + size * (0.1 + i * 0.13)
  local y2 = y + size * (0.1 + (i + 1) * 0.13)
@@ -5594,7 +6297,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  col)
  end
  end
- else  -- Filled or Rounded
+ else
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.1, y + size * 0.1,
  x + size * 0.1 + barWidth, y + adjustedSize,
@@ -5609,22 +6312,21 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local function DrawRecord(x, y, size)
  local adjustedSize = size * 1.1
  
- if style == 1 then  -- Outlined
+ if style == 1 then
  r.ImGui_DrawList_AddCircle(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2,
  color, 32, 2.5)
- elseif style == 2 then  -- Rounded (slightly larger)
+ elseif style == 2 then
  r.ImGui_DrawList_AddCircleFilled(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 1.9,
  color)
- elseif style == 3 then  -- Sharp (octagon)
+ elseif style == 3 then
  local cx, cy = x + size / 2, y + size / 2
  local radius = adjustedSize / 2
  local segments = 8
  
- -- Draw octagon using PathLineTo for a proper outline
  r.ImGui_DrawList_PathClear(drawList)
  for i = 0, segments - 1 do
  local angle = (i * math.pi * 2 / segments) - math.pi / 8
@@ -5633,7 +6335,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  r.ImGui_DrawList_PathLineTo(drawList, px, py)
  end
  r.ImGui_DrawList_PathFillConvex(drawList, color)
- elseif style == 4 then  -- Alien: Pulsing star
+ elseif style == 4 then
  local cx, cy = x + size / 2, y + size / 2
  local outerRadius = adjustedSize / 2
  local innerRadius = outerRadius * 0.4
@@ -5646,7 +6348,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  r.ImGui_DrawList_PathLineTo(drawList, cx + radius * math.cos(angle), cy + radius * math.sin(angle))
  end
  r.ImGui_DrawList_PathFillConvex(drawList, color)
- elseif style == 5 then  -- Retro: Circle with ring
+ elseif style == 5 then
  r.ImGui_DrawList_AddCircleFilled(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2.5,
@@ -5655,7 +6357,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size / 2, y + size / 2,
  adjustedSize / 2,
  color, 32, 2)
- elseif style == 6 then  -- Gaming: Pixelated circle
+ elseif style == 6 then
  local cx, cy = x + size / 2, y + size / 2
  local radius = size * 0.4
  for angle = 0, 360, 15 do
@@ -5668,7 +6370,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  px + pixelSize / 2, py + pixelSize / 2,
  color)
  end
- elseif style == 7 then  -- Neon: Pulsing circle with glow
+ elseif style == 7 then
  r.ImGui_DrawList_AddCircleFilled(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2.5,
@@ -5681,7 +6383,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size / 2, y + size / 2,
  adjustedSize / 1.6,
  color & 0xFFFFFF44, 32, 2)
- elseif style == 8 then  -- Organic: Flower-like
+ elseif style == 8 then
  local cx, cy = x + size / 2, y + size / 2
  for i = 0, 7 do
  local angle = (i / 8) * math.pi * 2
@@ -5696,19 +6398,18 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  cx, cy,
  size * 0.2,
  color)
- elseif style == 9 then  -- Industrial: Target circles
+ elseif style == 9 then
  for i = 3, 1, -1 do
  r.ImGui_DrawList_AddCircleFilled(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / (2 + (3 - i) * 0.6),
  i % 2 == 0 and color or (color & 0xFFFFFF88))
  end
- -- Center cross
  local cx, cy = x + size / 2, y + size / 2
  local cross_size = size * 0.15
  r.ImGui_DrawList_AddLine(drawList, cx - cross_size, cy, cx + cross_size, cy, color & 0xFFFFFFDD, 2)
  r.ImGui_DrawList_AddLine(drawList, cx, cy - cross_size, cx, cy + cross_size, color & 0xFFFFFFDD, 2)
- elseif style == 10 then  -- Circus: Spinning pinwheel
+ elseif style == 10 then
  local cx, cy = x + size / 2, y + size / 2
  for i = 0, 5 do
  local angle1 = (i / 6) * math.pi * 2
@@ -5720,7 +6421,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  i % 2 == 0 and color or (color & 0xFFFFFF99))
  end
  r.ImGui_DrawList_AddCircleFilled(drawList, cx, cy, size * 0.15, color)
- elseif style == 11 then  -- Crystal: Gem with facets
+ elseif style == 11 then
  local cx, cy = x + size / 2, y + size / 2
  local radius = adjustedSize / 2
  for i = 0, 11 do
@@ -5733,7 +6434,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  cx + radius * math.cos(angle2), cy + radius * math.sin(angle2),
  col)
  end
- else  -- Filled
+ else
  r.ImGui_DrawList_AddCircleFilled(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2,
@@ -5745,28 +6446,25 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local adjustedSize = size
  local thickness = (style == 1) and 2.5 or 2
  
- if style == 4 then  -- Alien: Spiral-ish infinity symbol
+ if style == 4 then
  local cx, cy = x + size / 2, y + size / 2
  local radius = size * 0.3
  
- -- Left circle
  r.ImGui_DrawList_AddCircle(drawList,
  cx - radius * 0.7, cy,
  radius * 0.7,
  color, 16, thickness)
  
- -- Right circle
  r.ImGui_DrawList_AddCircle(drawList,
  cx + radius * 0.7, cy,
  radius * 0.7,
  color, 16, thickness)
  
- -- Connecting lines to make infinity-like
  r.ImGui_DrawList_AddLine(drawList,
  cx - radius * 0.2, cy - radius * 0.5,
  cx + radius * 0.2, cy + radius * 0.5,
  color, thickness)
- elseif style == 5 then  -- Retro: Double circle with arrows
+ elseif style == 5 then
  r.ImGui_DrawList_AddCircle(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2.5,
@@ -5777,7 +6475,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  adjustedSize / 2,
  color, 32, thickness)
  
- -- Arrows
  local arrowSize = adjustedSize / 5
  local positions = {{-0.3, -0.3}, {0.3, 0.3}}
  for _, pos in ipairs(positions) do
@@ -5789,10 +6486,9 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  ax + arrowSize / 2, ay + arrowSize / 2,
  color)
  end
- elseif style == 6 then  -- Gaming: Pixelated loop
+ elseif style == 6 then
  local cx, cy = x + size / 2, y + size / 2
  local pixelSize = size * 0.08
- -- Draw pixelated circle
  for angle = 0, 360, 20 do
  local rad = math.rad(angle)
  local px = cx + size * 0.4 * math.cos(rad)
@@ -5802,7 +6498,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  px + pixelSize / 2, py + pixelSize / 2,
  color)
  end
- -- Pixelated arrow
  local arrow_pixels = {
  {-0.15, 0}, {-0.05, -0.1}, {0.05, -0.1}, {0.05, 0.1}, {-0.05, 0.1}
  }
@@ -5812,7 +6507,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  cx + size * pixel[1] + pixelSize, cy + size * pixel[2] + pixelSize,
  color)
  end
- elseif style == 7 then  -- Neon: Glowing loop
+ elseif style == 7 then
  r.ImGui_DrawList_AddCircle(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2.5,
@@ -5825,7 +6520,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size / 2, y + size / 2,
  adjustedSize / 1.6,
  color & 0xFFFFFF44, 32, 2)
- -- Glowing arrow
  local arrowSize = adjustedSize / 4
  local ax = x + size / 12
  local ay = y + size / 2
@@ -5834,7 +6528,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  ax - arrowSize / 2, ay + arrowSize / 2,
  ax + arrowSize / 2, ay + arrowSize / 2,
  color)
- elseif style == 8 then  -- Organic: Flowing loop
+ elseif style == 8 then
  local cx, cy = x + size / 2, y + size / 2
  r.ImGui_DrawList_PathClear(drawList)
  for i = 0, 32 do
@@ -5845,7 +6539,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  cy + radius * math.sin(angle))
  end
  r.ImGui_DrawList_PathStroke(drawList, color, r.ImGui_DrawFlags_Closed(), 3)
- -- Organic arrow
  local arrowSize = size * 0.12
  local ax = x + size * 0.15
  local ay = y + size / 2
@@ -5854,7 +6547,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  r.ImGui_DrawList_PathLineTo(drawList, ax - arrowSize, ay)
  r.ImGui_DrawList_PathLineTo(drawList, ax, ay + arrowSize)
  r.ImGui_DrawList_PathFillConvex(drawList, color)
- elseif style == 9 then  -- Industrial: Gear-like loop
+ elseif style == 9 then
  local cx, cy = x + size / 2, y + size / 2
  local teeth = 12
  r.ImGui_DrawList_PathClear(drawList)
@@ -5870,11 +6563,9 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  r.ImGui_DrawList_PathLineTo(drawList, cx + innerR * math.cos(angle3), cy + innerR * math.sin(angle3))
  end
  r.ImGui_DrawList_PathStroke(drawList, color, r.ImGui_DrawFlags_Closed(), 2)
- -- Center hole
  r.ImGui_DrawList_AddCircle(drawList, cx, cy, size * 0.15, color, 16, 2)
- elseif style == 10 then  -- Circus: Ribbon loop
+ elseif style == 10 then
  local cx, cy = x + size / 2, y + size / 2
- -- Draw ribbon-like twisted loop
  for pass = 0, 1 do
  r.ImGui_DrawList_PathClear(drawList)
  for i = 0, 24 do
@@ -5888,7 +6579,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  r.ImGui_DrawList_PathStroke(drawList, pass == 0 and color or (color & 0xFFFFFF88), r.ImGui_DrawFlags_Closed(), 3)
  end
- elseif style == 11 then  -- Crystal: Faceted ring
+ elseif style == 11 then
  local cx, cy = x + size / 2, y + size / 2
  local segments = 16
  for i = 0, segments - 1 do
@@ -5897,14 +6588,13 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local outerR = size * 0.45
  local innerR = size * 0.3
  local col = i % 2 == 0 and color or (color & 0xFFFFFFDD)
- -- Outer triangle
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  cx + outerR * math.cos(angle1), cy + outerR * math.sin(angle1),
  cx + outerR * math.cos(angle2), cy + outerR * math.sin(angle2),
  cx + innerR * math.cos((angle1 + angle2) / 2), cy + innerR * math.sin((angle1 + angle2) / 2),
  col)
  end
- else  -- Standard loop
+ else
  r.ImGui_DrawList_AddCircle(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2,
@@ -5914,7 +6604,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local ax = x + size / 12
  local ay = y + size / 2
  
- if style == 1 then  -- Outlined arrow
+ if style == 1 then
  r.ImGui_DrawList_AddTriangle(drawList,
  ax, ay,
  ax - arrowSize / 2, ay + arrowSize / 2,
@@ -5935,50 +6625,48 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local spacing = size / 6
  local yCenter = y + size / 2
  
- if style == 3 then  -- Sharp style - larger, more aggressive
+ if style == 3 then
  arrowSize = size / 1.6
  spacing = size / 8
- elseif style == 4 then  -- Alien: Chevrons with gaps
+ elseif style == 4 then
  arrowSize = size / 2
  spacing = size / 10
- elseif style == 5 then  -- Retro: Classic arrows with outline
+ elseif style == 5 then
  arrowSize = size / 2.2
  spacing = size / 8
- elseif style == 6 then  -- Gaming: Pixelated
+ elseif style == 6 then
  arrowSize = size / 2
  spacing = size / 12
- elseif style == 7 then  -- Neon
+ elseif style == 7 then
  arrowSize = size / 2
  spacing = size / 10
- elseif style == 8 then  -- Organic
+ elseif style == 8 then
  arrowSize = size / 1.9
  spacing = size / 9
- elseif style == 9 then  -- Industrial
+ elseif style == 9 then
  arrowSize = size / 1.8
  spacing = size / 8
- elseif style == 10 then  -- Circus
+ elseif style == 10 then
  arrowSize = size / 2.1
  spacing = size / 12
- elseif style == 11 then  -- Crystal
+ elseif style == 11 then
  arrowSize = size / 2
  spacing = size / 10
  end
 
- if style == 4 then  -- Alien style with special chevrons
+ if style == 4 then
  for i = 0, 1 do
  local startX = x + (i * (arrowSize + spacing * 2))
  local cx = startX + arrowSize / 2
  local width = arrowSize * 0.3
  
  if forward then
- -- Right-pointing chevron
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  cx - width, yCenter - arrowSize / 2,
  cx - width, yCenter + arrowSize / 2,
  cx + width, yCenter,
  color)
  else
- -- Left-pointing chevron
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  cx + width, yCenter - arrowSize / 2,
  cx + width, yCenter + arrowSize / 2,
@@ -5987,7 +6675,6 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  end
  else
- -- Standard arrows (works for all other styles)
  for i = 0, 1 do
  local startX = x + (i * (arrowSize + spacing))
  local points
@@ -6006,13 +6693,13 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  }
  end
 
- if style == 1 then  -- Outlined
+ if style == 1 then
  r.ImGui_DrawList_AddTriangle(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color, 2.5)
- elseif style == 5 then  -- Retro with double outline
+ elseif style == 5 then
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
@@ -6023,7 +6710,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  points[3], points[4],
  points[5], points[6],
  color & 0xFFFFFF88, 1.5)
- elseif style == 6 then  -- Gaming: Pixelated arrows
+ elseif style == 6 then
  local pixelSize = size * 0.12
  local pattern = forward and {
  {0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 4},
@@ -6040,13 +6727,12 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  startX + (pix[1] + 1) * pixelSize, yCenter - arrowSize / 2 + (pix[2] + 1) * pixelSize,
  color)
  end
- elseif style == 7 then  -- Neon: Glowing arrows
+ elseif style == 7 then
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color)
- -- Outer glow
  local glow_offset = size * 0.06
  local glow_points = forward and {
  points[1] - glow_offset, points[2] - glow_offset,
@@ -6062,7 +6748,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  glow_points[3], glow_points[4],
  glow_points[5], glow_points[6],
  color & 0xFFFFFF66, 2)
- elseif style == 8 then  -- Organic: Curved arrows
+ elseif style == 8 then
  r.ImGui_DrawList_PathClear(drawList)
  for t = 0, 1, 0.1 do
  local curve = math.sin(t * math.pi) * size * 0.05
@@ -6089,13 +6775,12 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  end
  r.ImGui_DrawList_PathFillConvex(drawList, color)
- elseif style == 9 then  -- Industrial: Arrows with panel lines
+ elseif style == 9 then
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color)
- -- Add panel lines
  for j = 1, 3 do
  local line_t = j / 4
  local lx = forward and (startX + arrowSize * line_t) or (startX + arrowSize * (1 - line_t))
@@ -6103,7 +6788,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local ly2 = yCenter + arrowSize / 2 * (1 - line_t)
  r.ImGui_DrawList_AddLine(drawList, lx, ly1, lx, ly2, color & 0xFFFFFF44, 1)
  end
- elseif style == 10 then  -- Circus: Spiral arrows
+ elseif style == 10 then
  r.ImGui_DrawList_PathClear(drawList)
  local turns = 1.5
  for t = 0, 1, 0.05 do
@@ -6120,8 +6805,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  end
  r.ImGui_DrawList_PathStroke(drawList, color, 0, 3)
- elseif style == 11 then  -- Crystal: Faceted arrows
- -- Draw arrow as collection of triangular facets
+ elseif style == 11 then
  local segments = 4
  for seg = 0, segments - 1 do
  local t1 = seg / segments
@@ -6964,6 +7648,157 @@ function ShowMatrixTicker(main_window_width, main_window_height)
  end
  
  StoreElementRect("matrix_ticker")
+end
+
+function ShowColorPicker(main_window_width, main_window_height)
+ if not settings.show_color_picker then return end
+ 
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetCursorPosX(ctx, settings.color_picker_x_px and ScalePosX(settings.color_picker_x_px, main_window_width, settings) or (settings.color_picker_x * main_window_width))
+ r.ImGui_SetCursorPosY(ctx, settings.color_picker_y_px and ScalePosY(settings.color_picker_y_px, main_window_height, settings) or (settings.color_picker_y * main_window_height))
+ 
+ local colors = GetReaperCustomColors()
+ local button_size = settings.color_picker_button_size or 20
+ local spacing = settings.color_picker_spacing or 2
+ local layout = settings.color_picker_layout or 0
+ local num_colors = settings.color_picker_num_colors or 16
+ 
+ local columns, rows
+ if layout == 0 then
+ if num_colors == 4 then
+ columns, rows = 2, 2
+ elseif num_colors == 8 then
+ columns, rows = 4, 2
+ elseif num_colors == 12 then
+ columns, rows = 4, 3
+ else
+ columns, rows = 4, 4
+ end
+ elseif layout == 1 then
+ columns, rows = num_colors, 1
+ else
+ columns, rows = 1, num_colors
+ end
+ 
+ local padding = 4
+ local total_width = (button_size * columns) + (spacing * (columns - 1)) + (padding * 2)
+ local total_height = (button_size * rows) + (spacing * (rows - 1)) + (padding * 2)
+ 
+ local screen_x, screen_y = r.ImGui_GetCursorScreenPos(ctx)
+ 
+ if settings.color_picker_show_background then
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local bg_color = settings.color_picker_bg_color or 0x000000AA
+ r.ImGui_DrawList_AddRectFilled(draw_list, screen_x, screen_y, screen_x + total_width, screen_y + total_height, bg_color, 3)
+ 
+ if settings.color_picker_show_border then
+ local border_color = settings.color_picker_border_color or 0x888888FF
+ r.ImGui_DrawList_AddRect(draw_list, screen_x, screen_y, screen_x + total_width, screen_y + total_height, border_color, 3, 0, 2)
+ end
+ end
+ 
+ for i = 1, num_colors do
+ local color_data = colors[i]
+ if not color_data then break end
+ 
+ local row, col
+ if layout == 0 then
+ row = math.floor((i - 1) / columns)
+ col = (i - 1) % columns
+ elseif layout == 1 then
+ row = 0
+ col = i - 1
+ else
+ row = i - 1
+ col = 0
+ end
+ 
+ local button_x = screen_x + padding + (col * (button_size + spacing))
+ local button_y = screen_y + padding + (row * (button_size + spacing))
+ r.ImGui_SetCursorScreenPos(ctx, button_x, button_y)
+ 
+ local c = color_data.imgui
+ local a = ((c >> 24) & 0xFF) / 255
+ local r_val = ((c >> 16) & 0xFF) / 255
+ local g_val = ((c >> 8) & 0xFF) / 255
+ local b_val = (c & 0xFF) / 255
+ 
+ r_val = math.min(1.0, r_val * 1.3)
+ g_val = math.min(1.0, g_val * 1.3)
+ b_val = math.min(1.0, b_val * 1.3)
+ 
+ local bright_color = (math.floor(a*255) << 24) | 
+ (math.floor(r_val*255) << 16) | 
+ (math.floor(g_val*255) << 8) | 
+ math.floor(b_val*255)
+ 
+ local rounding = settings.color_picker_rounding or 0
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), rounding)
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), color_data.imgui)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), bright_color)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), bright_color)
+ 
+ if r.ImGui_Button(ctx, "##color" .. i, button_size, button_size) then
+ local applied = false
+ local target = settings.color_picker_target or 0
+ 
+ if target == 0 then
+ applied = ApplyColorToTracks(color_data.native)
+ elseif target == 1 then
+ applied = ApplyColorToItems(color_data.native)
+ elseif target == 2 then
+ applied = ApplyColorToTakes(color_data.native)
+ elseif target == 3 then
+ applied = ApplyColorToMarkers(color_data.native, false)
+ elseif target == 4 then
+ applied = ApplyColorToMarkers(color_data.native, true)
+ end
+ end
+ 
+ r.ImGui_PopStyleColor(ctx, 3)
+ r.ImGui_PopStyleVar(ctx, 1)
+ 
+ if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
+ r.ImGui_OpenPopup(ctx, "ColorPickerTargetMenu")
+ end
+ 
+ if r.ImGui_IsItemHovered(ctx) then
+ local target_names = {"tracks", "items", "takes", "markers", "regions"}
+ r.ImGui_SetTooltip(ctx, "Click color to apply to selected " .. (target_names[settings.color_picker_target + 1] or "items") .. "\nRight-click to change target")
+ end
+ end
+ 
+ r.ImGui_SetCursorScreenPos(ctx, screen_x + total_width, screen_y + total_height)
+ r.ImGui_Dummy(ctx, 0, 0)
+ 
+ if r.ImGui_BeginPopup(ctx, "ColorPickerTargetMenu") then
+ r.ImGui_Text(ctx, "Apply color to:")
+ r.ImGui_Separator(ctx)
+ if r.ImGui_MenuItem(ctx, "Track", nil, settings.color_picker_target == 0) then
+ settings.color_picker_target = 0
+ SaveSettings()
+ end
+ if r.ImGui_MenuItem(ctx, "Item", nil, settings.color_picker_target == 1) then
+ settings.color_picker_target = 1
+ SaveSettings()
+ end
+ if r.ImGui_MenuItem(ctx, "Take", nil, settings.color_picker_target == 2) then
+ settings.color_picker_target = 2
+ SaveSettings()
+ end
+ if r.ImGui_MenuItem(ctx, "Marker", nil, settings.color_picker_target == 3) then
+ settings.color_picker_target = 3
+ SaveSettings()
+ end
+ if r.ImGui_MenuItem(ctx, "Region", nil, settings.color_picker_target == 4) then
+ settings.color_picker_target = 4
+ SaveSettings()
+ end
+ r.ImGui_EndPopup(ctx)
+ end
+ 
+ StoreElementRect("color_picker")
 end
 
 local function SetProjectTempoGlobal(new_tempo)
@@ -8076,10 +8911,12 @@ function Main()
  EnvelopeOverride(main_window_width, main_window_height)
  Transport_Buttons(main_window_width, main_window_height)
  MasterVolumeSlider(main_window_width, main_window_height)
+ MonitorVolumeSlider(main_window_width, main_window_height)
  ShowCursorPosition(main_window_width, main_window_height)
  ShowShuttleWheel(main_window_width, main_window_height)
  ShowWaveformScrubber(main_window_width, main_window_height)
  ShowMatrixTicker(main_window_width, main_window_height)
+ ShowColorPicker(main_window_width, main_window_height)
  
  CustomButtons.x_offset_px = settings.custom_buttons_x_offset_px or (settings.custom_buttons_x_offset * main_window_width)
  CustomButtons.y_offset_px = settings.custom_buttons_y_offset_px or (settings.custom_buttons_y_offset * main_window_height)
