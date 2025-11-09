@@ -80,11 +80,37 @@ local function ExecuteButtonAction(ctx, button)
     end
     
     local alt_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
+    local shift_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+    local ctrl_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
     
     if alt_pressed and button.alt_left_click and button.alt_left_click.command then
         local command_id = tonumber(button.alt_left_click.command) or r.NamedCommandLookup(button.alt_left_click.command)
         if command_id then
             if button.alt_left_click.type == 1 then
+                local editor = r.MIDIEditor_GetActive()
+                if editor then
+                    r.MIDIEditor_OnCommand(editor, command_id)
+                end
+            else
+                r.Main_OnCommand(command_id, 0)
+            end
+        end
+    elseif shift_pressed and button.shift_left_click and button.shift_left_click.command then
+        local command_id = tonumber(button.shift_left_click.command) or r.NamedCommandLookup(button.shift_left_click.command)
+        if command_id then
+            if button.shift_left_click.type == 1 then
+                local editor = r.MIDIEditor_GetActive()
+                if editor then
+                    r.MIDIEditor_OnCommand(editor, command_id)
+                end
+            else
+                r.Main_OnCommand(command_id, 0)
+            end
+        end
+    elseif ctrl_pressed and button.ctrl_left_click and button.ctrl_left_click.command then
+        local command_id = tonumber(button.ctrl_left_click.command) or r.NamedCommandLookup(button.ctrl_left_click.command)
+        if command_id then
+            if button.ctrl_left_click.type == 1 then
                 local editor = r.MIDIEditor_GetActive()
                 if editor then
                     r.MIDIEditor_OnCommand(editor, command_id)
@@ -571,7 +597,9 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
                             local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
                             local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
-                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") then
+                            local shift_tip = button.shift_left_click and (button.shift_left_click.name or button.shift_left_click.command) or nil
+                            local ctrl_tip = button.ctrl_left_click and (button.ctrl_left_click.name or button.ctrl_left_click.command) or nil
+                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") or (shift_tip and shift_tip ~= "") or (ctrl_tip and ctrl_tip ~= "") then
                                 local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
                                 r.ImGui_BeginTooltip(ctx)
                                 if tip and tip ~= "" then
@@ -579,6 +607,12 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                                 end
                                 if alt_tip and alt_tip ~= "" then
                                     r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                                end
+                                if shift_tip and shift_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Shift: " .. tostring(shift_tip))
+                                end
+                                if ctrl_tip and ctrl_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Ctrl: " .. tostring(ctrl_tip))
                                 end
                                 if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
                                     r.ImGui_Separator(ctx)
@@ -629,7 +663,9 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
                             local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
                             local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
-                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") then
+                            local shift_tip = button.shift_left_click and (button.shift_left_click.name or button.shift_left_click.command) or nil
+                            local ctrl_tip = button.ctrl_left_click and (button.ctrl_left_click.name or button.ctrl_left_click.command) or nil
+                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") or (shift_tip and shift_tip ~= "") or (ctrl_tip and ctrl_tip ~= "") then
                                 local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
                                 r.ImGui_BeginTooltip(ctx)
                                 if tip and tip ~= "" then
@@ -637,6 +673,12 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                                 end
                                 if alt_tip and alt_tip ~= "" then
                                     r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                                end
+                                if shift_tip and shift_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Shift: " .. tostring(shift_tip))
+                                end
+                                if ctrl_tip and ctrl_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Ctrl: " .. tostring(ctrl_tip))
                                 end
                                 if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
                                     r.ImGui_Separator(ctx)
@@ -737,7 +779,9 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
                             local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
                             local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
-                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") then
+                            local shift_tip = button.shift_left_click and (button.shift_left_click.name or button.shift_left_click.command) or nil
+                            local ctrl_tip = button.ctrl_left_click and (button.ctrl_left_click.name or button.ctrl_left_click.command) or nil
+                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") or (shift_tip and shift_tip ~= "") or (ctrl_tip and ctrl_tip ~= "") then
                                 local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
                                 r.ImGui_BeginTooltip(ctx)
                                 if tip and tip ~= "" then
@@ -745,6 +789,12 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                                 end
                                 if alt_tip and alt_tip ~= "" then
                                     r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                                end
+                                if shift_tip and shift_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Shift: " .. tostring(shift_tip))
+                                end
+                                if ctrl_tip and ctrl_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Ctrl: " .. tostring(ctrl_tip))
                                 end
                                 if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
                                     r.ImGui_Separator(ctx)
@@ -814,7 +864,9 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
                             local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
                             local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
-                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") then
+                            local shift_tip = button.shift_left_click and (button.shift_left_click.name or button.shift_left_click.command) or nil
+                            local ctrl_tip = button.ctrl_left_click and (button.ctrl_left_click.name or button.ctrl_left_click.command) or nil
+                            if (tip and tip ~= "") or (alt_tip and alt_tip ~= "") or (shift_tip and shift_tip ~= "") or (ctrl_tip and ctrl_tip ~= "") then
                                 local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
                                 r.ImGui_BeginTooltip(ctx)
                                 if tip and tip ~= "" then
@@ -822,6 +874,12 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                                 end
                                 if alt_tip and alt_tip ~= "" then
                                     r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                                end
+                                if shift_tip and shift_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Shift: " .. tostring(shift_tip))
+                                end
+                                if ctrl_tip and ctrl_tip ~= "" then
+                                    r.ImGui_Text(ctx, "Ctrl: " .. tostring(ctrl_tip))
                                 end
                                 if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
                                     r.ImGui_Separator(ctx)
@@ -854,12 +912,20 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                     if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
                         local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
                         local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
+                        local shift_tip = button.shift_left_click and (button.shift_left_click.name or button.shift_left_click.command) or nil
+                        local ctrl_tip = button.ctrl_left_click and (button.ctrl_left_click.name or button.ctrl_left_click.command) or nil
                         if tip and tip ~= "" then
                             local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
                             r.ImGui_BeginTooltip(ctx)
                             r.ImGui_Text(ctx, tostring(tip))
                             if alt_tip and alt_tip ~= "" then
                                 r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                            end
+                            if shift_tip and shift_tip ~= "" then
+                                r.ImGui_Text(ctx, "Shift: " .. tostring(shift_tip))
+                            end
+                            if ctrl_tip and ctrl_tip ~= "" then
+                                r.ImGui_Text(ctx, "Ctrl: " .. tostring(ctrl_tip))
                             end
                             if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
                                 r.ImGui_Separator(ctx)
@@ -890,12 +956,20 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                 if (settings and settings.show_custom_button_tooltip) and (not edit_mode) and r.ImGui_IsItemHovered(ctx) then
                     local tip = button.left_click and (button.left_click.name or button.left_click.command) or nil
                     local alt_tip = button.alt_left_click and (button.alt_left_click.name or button.alt_left_click.command) or nil
+                    local shift_tip = button.shift_left_click and (button.shift_left_click.name or button.shift_left_click.command) or nil
+                    local ctrl_tip = button.ctrl_left_click and (button.ctrl_left_click.name or button.ctrl_left_click.command) or nil
                     if tip and tip ~= "" then
                         local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
                         r.ImGui_BeginTooltip(ctx)
                         r.ImGui_Text(ctx, tostring(tip))
                         if alt_tip and alt_tip ~= "" then
                             r.ImGui_Text(ctx, "Alt: " .. tostring(alt_tip))
+                        end
+                        if shift_tip and shift_tip ~= "" then
+                            r.ImGui_Text(ctx, "Shift: " .. tostring(shift_tip))
+                        end
+                        if ctrl_tip and ctrl_tip ~= "" then
+                            r.ImGui_Text(ctx, "Ctrl: " .. tostring(ctrl_tip))
                         end
                         if button.right_menu and button.right_menu.items and #button.right_menu.items > 0 then
                             r.ImGui_Separator(ctx)

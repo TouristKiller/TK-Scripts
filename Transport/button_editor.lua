@@ -1475,6 +1475,140 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
 
             r.ImGui_Separator(ctx)
             
+            r.ImGui_Text(ctx, "Shift+Left Click:")
+
+       
+            r.ImGui_Text(ctx, "Name")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 160)
+            do
+                button.shift_left_click = button.shift_left_click or { name = "", command = "", type = 0 }
+                local rv_name, new_name = r.ImGui_InputText(ctx, "##slcaName", button.shift_left_click.name)
+                if rv_name then button.shift_left_click.name = new_name; changed = true end
+            end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "ID")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 100)
+            do
+                local rv_cmd, new_command = r.ImGui_InputText(ctx, "##slcaCmd", button.shift_left_click.command or "")
+                if rv_cmd then button.shift_left_click.command = new_command; changed = true end
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Paste##slcaPaste", 50, 0) then
+                local clipboard = ""
+                if r.CF_GetClipboard then
+                    clipboard = r.CF_GetClipboard("")
+                end
+                
+                if clipboard and clipboard ~= "" then
+                    clipboard = clipboard:gsub("^%s+", ""):gsub("%s+$", "")
+                    
+                    local cmd_id = clipboard:match("^(_?%w+)$")
+                    if cmd_id then
+                        button.shift_left_click.command = cmd_id
+                        local cmd_id_no_underscore = cmd_id:gsub("^_", "")
+                        local numeric_id = tonumber(cmd_id_no_underscore)
+                        if numeric_id then
+                            local retval, cmd_name = r.kbd_getTextFromCmd(numeric_id, 0)
+                            if retval and cmd_name and cmd_name ~= "" then
+                                button.shift_left_click.name = cmd_name
+                            end
+                        end
+                        changed = true
+                    else
+                        r.MB("Could not parse command ID from clipboard.\nClipboard content: " .. clipboard, "Paste ID", 0)
+                    end
+                else
+                    r.MB("Clipboard is empty.\n\nCopy a command ID first.", "Paste ID", 0)
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Paste command ID from clipboard\n(Copy ID in Action List first)")
+            end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Type")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 80)
+            do
+                local rv_type, new_type = r.ImGui_Combo(ctx, "##slcaType", button.shift_left_click.type or 0, "Main\0MIDI Editor\0")
+                if rv_type then button.shift_left_click.type = new_type; changed = true end
+            end
+
+            if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
+
+            r.ImGui_Separator(ctx)
+            
+            r.ImGui_Text(ctx, "Ctrl+Left Click:")
+
+       
+            r.ImGui_Text(ctx, "Name")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 160)
+            do
+                button.ctrl_left_click = button.ctrl_left_click or { name = "", command = "", type = 0 }
+                local rv_name, new_name = r.ImGui_InputText(ctx, "##clcaName", button.ctrl_left_click.name)
+                if rv_name then button.ctrl_left_click.name = new_name; changed = true end
+            end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "ID")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 100)
+            do
+                local rv_cmd, new_command = r.ImGui_InputText(ctx, "##clcaCmd", button.ctrl_left_click.command or "")
+                if rv_cmd then button.ctrl_left_click.command = new_command; changed = true end
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Paste##clcaPaste", 50, 0) then
+                local clipboard = ""
+                if r.CF_GetClipboard then
+                    clipboard = r.CF_GetClipboard("")
+                end
+                
+                if clipboard and clipboard ~= "" then
+                    clipboard = clipboard:gsub("^%s+", ""):gsub("%s+$", "")
+                    
+                    local cmd_id = clipboard:match("^(_?%w+)$")
+                    if cmd_id then
+                        button.ctrl_left_click.command = cmd_id
+                        local cmd_id_no_underscore = cmd_id:gsub("^_", "")
+                        local numeric_id = tonumber(cmd_id_no_underscore)
+                        if numeric_id then
+                            local retval, cmd_name = r.kbd_getTextFromCmd(numeric_id, 0)
+                            if retval and cmd_name and cmd_name ~= "" then
+                                button.ctrl_left_click.name = cmd_name
+                            end
+                        end
+                        changed = true
+                    else
+                        r.MB("Could not parse command ID from clipboard.\nClipboard content: " .. clipboard, "Paste ID", 0)
+                    end
+                else
+                    r.MB("Clipboard is empty.\n\nCopy a command ID first.", "Paste ID", 0)
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Paste command ID from clipboard\n(Copy ID in Action List first)")
+            end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Type")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 80)
+            do
+                local rv_type, new_type = r.ImGui_Combo(ctx, "##clcaType", button.ctrl_left_click.type or 0, "Main\0MIDI Editor\0")
+                if rv_type then button.ctrl_left_click.type = new_type; changed = true end
+            end
+
+            if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
+
+            r.ImGui_Separator(ctx)
+            
             r.ImGui_Text(ctx, "Right Click Menu:")
             r.ImGui_SameLine(ctx)
             r.ImGui_TextDisabled(ctx, "Drag items into folders to create submenus")

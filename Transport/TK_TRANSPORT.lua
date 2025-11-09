@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.2.1
 -- @changelog 
 --[[
 
@@ -296,6 +296,7 @@ local default_settings = {
 
  -- Visibility settings
  use_graphic_buttons = false,
+ graphic_style = 0,  -- 0=Filled, 1=Outlined, 2=Rounded, 3=Sharp, 4=Alien, 5=Retro, 6=Gaming, 7=Neon, 8=Organic, 9=Industrial, 10=Circus, 11=Crystal
  show_timesel = true,
  show_transport = true,
  show_cursorpos = true,
@@ -820,6 +821,19 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  end
  if custom_mode_active then
  r.ImGui_PopStyleColor(ctx)
+ end
+ 
+ -- Graphic Style dropdown (alleen zichtbaar als graphic mode actief is, op nieuwe regel)
+ if graphic_mode_active then
+ r.ImGui_Text(ctx, "Graphic Style:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ local style_names = "Filled\0Outlined\0Rounded\0Sharp\0Alien\0Retro\0Gaming\0Neon\0Organic\0Industrial\0Circus\0Crystal\0"
+ local rv, new_style = r.ImGui_Combo(ctx, "##GraphicStyle", settings.graphic_style or 0, style_names)
+ if rv then
+ settings.graphic_style = new_style
+ SaveSettings()
+ end
  end
  
  r.ImGui_Separator(ctx)
@@ -5137,6 +5151,7 @@ function MasterVolumeSlider(main_window_width, main_window_height)
 end
 
 function DrawTransportGraphics(drawList, x, y, size, color)
+ local style = settings.graphic_style or 0  -- 0=Filled, 1=Outlined, 2=Rounded, 3=Sharp, 4=Alien, 5=Retro
 
  local function DrawPlay(x, y, size)
  local adjustedSize = size
@@ -5145,49 +5160,672 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  x + size * 0.1, y + adjustedSize,
  x + adjustedSize, y + size / 2
  }
+ 
+ if style == 1 then  -- Outlined
+ r.ImGui_DrawList_AddTriangle(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color, 2.5)
+ elseif style == 2 then  -- Rounded (using filled for now, rounded triangles are complex)
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color)
+ elseif style == 3 then  -- Sharp (larger, more angular)
+ local sharpPoints = {
+ x + size * 0.05, y + size * 0.05,
+ x + size * 0.05, y + size * 1.05,
+ x + size * 1.05, y + size / 2
+ }
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ sharpPoints[1], sharpPoints[2],
+ sharpPoints[3], sharpPoints[4],
+ sharpPoints[5], sharpPoints[6],
+ color)
+ elseif style == 4 then  -- Alien: Triple chevron
+ for i = 0, 2 do
+ local offset = i * size * 0.25
+ local px1 = x + size * 0.2 + offset
+ local px2 = x + size * 0.5 + offset
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ px1, y + size * 0.2,
+ px1, y + size * 0.8,
+ px2, y + size * 0.5,
+ color)
+ end
+ elseif style == 5 then  -- Retro: Classic cassette-style
+ -- Draw classic play triangle with inner detail
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color)
+ -- Add inner triangle for retro look
+ local innerPoints = {
+ x + size * 0.3, y + size * 0.3,
+ x + size * 0.3, y + size * 0.7,
+ x + size * 0.7, y + size / 2
+ }
+ r.ImGui_DrawList_AddTriangle(drawList,
+ innerPoints[1], innerPoints[2],
+ innerPoints[3], innerPoints[4],
+ innerPoints[5], innerPoints[6],
+ color & 0xFFFFFF88, 1.5)
+ elseif style == 6 then  -- Gaming: Pixelated triangle
+ local pixelSize = size / 8
+ for py = 0, 7 do
+ local row_width = math.floor(py / 2)
+ for px = 0, row_width do
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.15 + px * pixelSize,
+ y + size * 0.15 + py * pixelSize,
+ x + size * 0.15 + (px + 1) * pixelSize,
+ y + size * 0.15 + (py + 1) * pixelSize,
+ color)
+ end
+ end
+ elseif style == 7 then  -- Neon: Double outline glow
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color)
+ -- Outer glow
+ local glowPoints = {
+ points[1] - size * 0.08, points[2] - size * 0.08,
+ points[3] - size * 0.08, points[4] + size * 0.08,
+ points[5] + size * 0.08, points[6]
+ }
+ r.ImGui_DrawList_AddTriangle(drawList,
+ glowPoints[1], glowPoints[2],
+ glowPoints[3], glowPoints[4],
+ glowPoints[5], glowPoints[6],
+ color & 0xFFFFFF66, 2.5)
+ elseif style == 8 then  -- Organic: Curved, leaf-like
+ local cx, cy = x + size / 2, y + size / 2
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, 20 do
+ local t = i / 20
+ local curve_x = x + size * 0.1 + (size * 0.9 * (1 - math.abs(t * 2 - 1)))
+ local curve_y = y + size * 0.1 + size * 0.8 * t
+ r.ImGui_DrawList_PathLineTo(drawList, curve_x, curve_y)
+ end
+ r.ImGui_DrawList_PathLineTo(drawList, x + size * 0.1, y + size * 0.1)
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ elseif style == 9 then  -- Industrial: Triangle with bolts
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color)
+ -- Add "bolts" in corners
+ local boltSize = size * 0.08
+ local bolts = {
+ {points[1], points[2]},
+ {points[3], points[4]},
+ {points[5], points[6]}
+ }
+ for _, bolt in ipairs(bolts) do
+ r.ImGui_DrawList_AddCircleFilled(drawList, bolt[1], bolt[2], boltSize, color & 0xFFFFFF88)
+ r.ImGui_DrawList_AddCircle(drawList, bolt[1], bolt[2], boltSize, color, 8, 1)
+ end
+ elseif style == 10 then  -- Circus: Spiral play
+ local cx = x + size * 0.4
+ local cy = y + size / 2
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, 30 do
+ local t = i / 30
+ local angle = t * math.pi * 3
+ local radius = size * 0.15 + size * 0.35 * t
+ r.ImGui_DrawList_PathLineTo(drawList,
+ cx + radius * math.cos(angle),
+ cy + radius * math.sin(angle))
+ end
+ r.ImGui_DrawList_PathStroke(drawList, color, 0, 3)
+ elseif style == 11 then  -- Crystal: Faceted gem
+ local cx, cy = x + size / 2, y + size / 2
+ local vertices = {
+ {x + size * 0.15, y + size * 0.5},
+ {x + size * 0.3, y + size * 0.2},
+ {x + size * 0.9, y + size * 0.3},
+ {x + size * 0.9, y + size * 0.7},
+ {x + size * 0.3, y + size * 0.8}
+ }
+ -- Draw facets
+ for i = 1, #vertices do
+ local next_i = (i % #vertices) + 1
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ cx, cy,
+ vertices[i][1], vertices[i][2],
+ vertices[next_i][1], vertices[next_i][2],
+ i % 2 == 0 and color or (color & 0xFFFFFFCC))
+ end
+ else  -- Filled (default)
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color)
  end
+ end
 
  local function DrawStop(x, y, size)
  local adjustedSize = size
+ local rounding = 0
+ 
+ if style == 1 then  -- Outlined
+ r.ImGui_DrawList_AddRect(drawList,
+ x + size * 0.1, y + size * 0.1,
+ x + adjustedSize, y + adjustedSize,
+ color, 0, nil, 2.5)
+ elseif style == 2 then  -- Rounded
+ rounding = size * 0.15
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.1, y + size * 0.1,
+ x + adjustedSize, y + adjustedSize,
+ color, rounding)
+ elseif style == 3 then  -- Sharp
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.05, y + size * 0.05,
+ x + size * 1.05, y + size * 1.05,
+ color, 0)
+ elseif style == 4 then  -- Alien: X shape
+ local cx, cy = x + size / 2, y + size / 2
+ local radius = size * 0.5
+ -- Draw X with two crossed rectangles
+ r.ImGui_DrawList_PathClear(drawList)
+ local angle = math.pi / 4
+ for i = 0, 3 do
+ local a = angle + (i * math.pi / 2)
+ r.ImGui_DrawList_PathLineTo(drawList, cx + radius * math.cos(a), cy + radius * math.sin(a))
+ end
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ 
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, 3 do
+ local a = -angle + (i * math.pi / 2)
+ r.ImGui_DrawList_PathLineTo(drawList, cx + radius * math.cos(a), cy + radius * math.sin(a))
+ end
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ elseif style == 5 then  -- Retro: Square with border
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.15, y + size * 0.15,
+ x + size * 0.85, y + size * 0.85,
+ color)
+ r.ImGui_DrawList_AddRect(drawList,
+ x + size * 0.1, y + size * 0.1,
+ x + size * 0.9, y + size * 0.9,
+ color, 0, nil, 2)
+ elseif style == 6 then  -- Gaming: Pixelated square
+ local pixelSize = size / 8
+ for py = 1, 6 do
+ for px = 1, 6 do
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.15 + px * pixelSize,
+ y + size * 0.15 + py * pixelSize,
+ x + size * 0.15 + (px + 1) * pixelSize,
+ y + size * 0.15 + (py + 1) * pixelSize,
+ color)
+ end
+ end
+ elseif style == 7 then  -- Neon: Glowing square
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.2, y + size * 0.2,
+ x + size * 0.8, y + size * 0.8,
+ color)
+ r.ImGui_DrawList_AddRect(drawList,
+ x + size * 0.15, y + size * 0.15,
+ x + size * 0.85, y + size * 0.85,
+ color & 0xFFFFFF88, 0, nil, 2)
+ r.ImGui_DrawList_AddRect(drawList,
+ x + size * 0.08, y + size * 0.08,
+ x + size * 0.92, y + size * 0.92,
+ color & 0xFFFFFF44, 0, nil, 2)
+ elseif style == 8 then  -- Organic: Rounded blob
+ local cx, cy = x + size / 2, y + size / 2
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, 16 do
+ local angle = (i / 16) * math.pi * 2
+ local radius = size * (0.35 + 0.05 * math.sin(angle * 3))
+ r.ImGui_DrawList_PathLineTo(drawList,
+ cx + radius * math.cos(angle),
+ cy + radius * math.sin(angle))
+ end
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ elseif style == 9 then  -- Industrial: Square with rivets
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.15, y + size * 0.15,
+ x + size * 0.85, y + size * 0.85,
+ color)
+ -- Corner rivets
+ local rivetSize = size * 0.06
+ local corners = {
+ {0.2, 0.2}, {0.8, 0.2}, {0.2, 0.8}, {0.8, 0.8}
+ }
+ for _, corner in ipairs(corners) do
+ local rx, ry = x + size * corner[1], y + size * corner[2]
+ r.ImGui_DrawList_AddCircleFilled(drawList, rx, ry, rivetSize, color & 0xFFFFFF66)
+ r.ImGui_DrawList_AddCircle(drawList, rx, ry, rivetSize * 0.6, color & 0xFFFFFFAA, 6, 1)
+ end
+ elseif style == 10 then  -- Circus: Striped square
+ for i = 0, 8 do
+ local stripe_x = x + size * 0.1 + (i * size * 0.8 / 8)
+ local stripe_color = (i % 2 == 0) and color or (color & 0xFFFFFF88)
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ stripe_x, y + size * 0.1,
+ stripe_x + size * 0.8 / 8, y + size * 0.9,
+ stripe_color)
+ end
+ elseif style == 11 then  -- Crystal: Diamond shape
+ local cx, cy = x + size / 2, y + size / 2
+ local points = {
+ {cx, y + size * 0.1},
+ {x + size * 0.9, cy},
+ {cx, y + size * 0.9},
+ {x + size * 0.1, cy}
+ }
+ -- Draw diamond with facets
+ for i = 1, #points do
+ local next_i = (i % #points) + 1
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ cx, cy,
+ points[i][1], points[i][2],
+ points[next_i][1], points[next_i][2],
+ i % 2 == 0 and color or (color & 0xFFFFFFDD))
+ end
+ else  -- Filled
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.1, y + size * 0.1,
  x + adjustedSize, y + adjustedSize,
  color)
+ end
  end
 
  local function DrawPause(x, y, size)
  local adjustedSize = size
  local barWidth = adjustedSize / 3
+ local rounding = (style == 2) and (size * 0.1) or 0
+ 
+ if style == 1 then  -- Outlined
+ r.ImGui_DrawList_AddRect(drawList,
+ x + size * 0.1, y + size * 0.1,
+ x + size * 0.1 + barWidth, y + adjustedSize,
+ color, 0, nil, 2.5)
+ r.ImGui_DrawList_AddRect(drawList,
+ x + adjustedSize - barWidth, y + size * 0.1,
+ x + adjustedSize, y + adjustedSize,
+ color, 0, nil, 2.5)
+ elseif style == 3 then  -- Sharp (thinner bars)
+ local sharpWidth = adjustedSize / 3.5
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.1, y + size * 0.05,
+ x + size * 0.1 + sharpWidth, y + size * 1.05,
+ color)
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + adjustedSize - sharpWidth + size * 0.1, y + size * 0.05,
+ x + adjustedSize + size * 0.1, y + size * 1.05,
+ color)
+ elseif style == 4 then  -- Alien: Three dots
+ local dotRadius = size * 0.15
+ local cy = y + size / 2
+ for i = 0, 2 do
+ local cx = x + size * 0.25 + (i * size * 0.25)
+ r.ImGui_DrawList_AddCircleFilled(drawList, cx, cy, dotRadius, color)
+ end
+ elseif style == 5 then  -- Retro: Double bars with gaps
+ local barWidth = adjustedSize / 3.2
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.15, y + size * 0.1,
+ x + size * 0.15 + barWidth, y + adjustedSize,
+ color)
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.55, y + size * 0.1,
+ x + size * 0.55 + barWidth, y + adjustedSize,
+ color)
+ elseif style == 6 then  -- Gaming: Pixelated bars
+ local pixelSize = size / 8
+ for bar = 0, 1 do
+ local bar_x = bar == 0 and 2 or 5
+ for py = 1, 6 do
+ for px = 0, 1 do
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.15 + (bar_x + px) * pixelSize,
+ y + size * 0.15 + py * pixelSize,
+ x + size * 0.15 + (bar_x + px + 1) * pixelSize,
+ y + size * 0.15 + (py + 1) * pixelSize,
+ color)
+ end
+ end
+ end
+ elseif style == 7 then  -- Neon: Glowing bars
+ local barWidth = adjustedSize / 3.5
+ -- Inner bars
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.2, y + size * 0.15,
+ x + size * 0.2 + barWidth, y + size * 0.85,
+ color)
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ x + size * 0.6, y + size * 0.15,
+ x + size * 0.6 + barWidth, y + size * 0.85,
+ color)
+ -- Glow effect
+ r.ImGui_DrawList_AddRect(drawList,
+ x + size * 0.15, y + size * 0.1,
+ x + size * 0.2 + barWidth + size * 0.05, y + size * 0.9,
+ color & 0xFFFFFF66, 0, nil, 2)
+ r.ImGui_DrawList_AddRect(drawList,
+ x + size * 0.55, y + size * 0.1,
+ x + size * 0.6 + barWidth + size * 0.05, y + size * 0.9,
+ color & 0xFFFFFF66, 0, nil, 2)
+ elseif style == 8 then  -- Organic: Wave bars
+ local barWidth = adjustedSize / 3.5
+ for bar = 0, 1 do
+ local bar_x = x + size * (bar == 0 and 0.2 or 0.55)
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, 20 do
+ local t = i / 20
+ local wave_x = bar_x + size * 0.03 * math.sin(t * math.pi * 4)
+ local wave_y = y + size * 0.1 + size * 0.8 * t
+ r.ImGui_DrawList_PathLineTo(drawList, wave_x, wave_y)
+ end
+ for i = 20, 0, -1 do
+ local t = i / 20
+ local wave_x = bar_x + barWidth + size * 0.03 * math.sin(t * math.pi * 4)
+ local wave_y = y + size * 0.1 + size * 0.8 * t
+ r.ImGui_DrawList_PathLineTo(drawList, wave_x, wave_y)
+ end
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ end
+ elseif style == 9 then  -- Industrial: Bars with texture
+ local barWidth = adjustedSize / 3.2
+ for bar = 0, 1 do
+ local bar_x = x + size * (bar == 0 and 0.2 or 0.55)
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ bar_x, y + size * 0.1,
+ bar_x + barWidth, y + size * 0.9,
+ color)
+ -- Add horizontal lines for industrial look
+ for i = 1, 4 do
+ local line_y = y + size * (0.1 + i * 0.16)
+ r.ImGui_DrawList_AddLine(drawList,
+ bar_x, line_y,
+ bar_x + barWidth, line_y,
+ color & 0xFFFFFF44, 1)
+ end
+ end
+ elseif style == 10 then  -- Circus: Polka dot bars
+ local barWidth = adjustedSize / 3.2
+ for bar = 0, 1 do
+ local bar_x = x + size * (bar == 0 and 0.2 or 0.55)
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ bar_x, y + size * 0.1,
+ bar_x + barWidth, y + size * 0.9,
+ color)
+ -- Add dots
+ for i = 0, 4 do
+ local dot_y = y + size * (0.2 + i * 0.15)
+ r.ImGui_DrawList_AddCircleFilled(drawList,
+ bar_x + barWidth / 2, dot_y,
+ size * 0.04,
+ color & 0xFFFFFF66)
+ end
+ end
+ elseif style == 11 then  -- Crystal: Faceted bars
+ local barWidth = adjustedSize / 3.2
+ for bar = 0, 1 do
+ local bar_x = x + size * (bar == 0 and 0.2 or 0.55)
+ local cx = bar_x + barWidth / 2
+ -- Create faceted bar with triangles
+ for i = 0, 5 do
+ local y1 = y + size * (0.1 + i * 0.13)
+ local y2 = y + size * (0.1 + (i + 1) * 0.13)
+ local col = i % 2 == 0 and color or (color & 0xFFFFFFDD)
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ bar_x, y1,
+ cx, (y1 + y2) / 2,
+ bar_x, y2,
+ col)
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ bar_x + barWidth, y1,
+ cx, (y1 + y2) / 2,
+ bar_x + barWidth, y2,
+ col)
+ end
+ end
+ else  -- Filled or Rounded
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + size * 0.1, y + size * 0.1,
  x + size * 0.1 + barWidth, y + adjustedSize,
- color)
+ color, rounding)
  r.ImGui_DrawList_AddRectFilled(drawList,
  x + adjustedSize - barWidth, y + size * 0.1,
  x + adjustedSize, y + adjustedSize,
- color)
+ color, rounding)
+ end
  end
 
  local function DrawRecord(x, y, size)
  local adjustedSize = size * 1.1
+ 
+ if style == 1 then  -- Outlined
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2,
+ color, 32, 2.5)
+ elseif style == 2 then  -- Rounded (slightly larger)
+ r.ImGui_DrawList_AddCircleFilled(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 1.9,
+ color)
+ elseif style == 3 then  -- Sharp (octagon)
+ local cx, cy = x + size / 2, y + size / 2
+ local radius = adjustedSize / 2
+ local segments = 8
+ 
+ -- Draw octagon using PathLineTo for a proper outline
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, segments - 1 do
+ local angle = (i * math.pi * 2 / segments) - math.pi / 8
+ local px = cx + radius * math.cos(angle)
+ local py = cy + radius * math.sin(angle)
+ r.ImGui_DrawList_PathLineTo(drawList, px, py)
+ end
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ elseif style == 4 then  -- Alien: Pulsing star
+ local cx, cy = x + size / 2, y + size / 2
+ local outerRadius = adjustedSize / 2
+ local innerRadius = outerRadius * 0.4
+ local points = 8
+ 
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, points * 2 - 1 do
+ local angle = (i * math.pi / points) - math.pi / 2
+ local radius = (i % 2 == 0) and outerRadius or innerRadius
+ r.ImGui_DrawList_PathLineTo(drawList, cx + radius * math.cos(angle), cy + radius * math.sin(angle))
+ end
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ elseif style == 5 then  -- Retro: Circle with ring
+ r.ImGui_DrawList_AddCircleFilled(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2.5,
+ color)
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2,
+ color, 32, 2)
+ elseif style == 6 then  -- Gaming: Pixelated circle
+ local cx, cy = x + size / 2, y + size / 2
+ local radius = size * 0.4
+ for angle = 0, 360, 15 do
+ local rad = math.rad(angle)
+ local px = cx + radius * math.cos(rad)
+ local py = cy + radius * math.sin(rad)
+ local pixelSize = size * 0.1
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ px - pixelSize / 2, py - pixelSize / 2,
+ px + pixelSize / 2, py + pixelSize / 2,
+ color)
+ end
+ elseif style == 7 then  -- Neon: Pulsing circle with glow
+ r.ImGui_DrawList_AddCircleFilled(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2.5,
+ color)
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2,
+ color & 0xFFFFFF88, 32, 2.5)
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 1.6,
+ color & 0xFFFFFF44, 32, 2)
+ elseif style == 8 then  -- Organic: Flower-like
+ local cx, cy = x + size / 2, y + size / 2
+ for i = 0, 7 do
+ local angle = (i / 8) * math.pi * 2
+ local petal_x = cx + size * 0.25 * math.cos(angle)
+ local petal_y = cy + size * 0.25 * math.sin(angle)
+ r.ImGui_DrawList_AddCircleFilled(drawList,
+ petal_x, petal_y,
+ size * 0.15,
+ color & 0xFFFFFFAA)
+ end
+ r.ImGui_DrawList_AddCircleFilled(drawList,
+ cx, cy,
+ size * 0.2,
+ color)
+ elseif style == 9 then  -- Industrial: Target circles
+ for i = 3, 1, -1 do
+ r.ImGui_DrawList_AddCircleFilled(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / (2 + (3 - i) * 0.6),
+ i % 2 == 0 and color or (color & 0xFFFFFF88))
+ end
+ -- Center cross
+ local cx, cy = x + size / 2, y + size / 2
+ local cross_size = size * 0.15
+ r.ImGui_DrawList_AddLine(drawList, cx - cross_size, cy, cx + cross_size, cy, color & 0xFFFFFFDD, 2)
+ r.ImGui_DrawList_AddLine(drawList, cx, cy - cross_size, cx, cy + cross_size, color & 0xFFFFFFDD, 2)
+ elseif style == 10 then  -- Circus: Spinning pinwheel
+ local cx, cy = x + size / 2, y + size / 2
+ for i = 0, 5 do
+ local angle1 = (i / 6) * math.pi * 2
+ local angle2 = ((i + 0.3) / 6) * math.pi * 2
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ cx, cy,
+ cx + size * 0.45 * math.cos(angle1), cy + size * 0.45 * math.sin(angle1),
+ cx + size * 0.45 * math.cos(angle2), cy + size * 0.45 * math.sin(angle2),
+ i % 2 == 0 and color or (color & 0xFFFFFF99))
+ end
+ r.ImGui_DrawList_AddCircleFilled(drawList, cx, cy, size * 0.15, color)
+ elseif style == 11 then  -- Crystal: Gem with facets
+ local cx, cy = x + size / 2, y + size / 2
+ local radius = adjustedSize / 2
+ for i = 0, 11 do
+ local angle1 = (i / 12) * math.pi * 2
+ local angle2 = ((i + 1) / 12) * math.pi * 2
+ local col = i % 3 == 0 and color or (i % 3 == 1 and (color & 0xFFFFFFDD) or (color & 0xFFFFFFBB))
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ cx, cy,
+ cx + radius * math.cos(angle1), cy + radius * math.sin(angle1),
+ cx + radius * math.cos(angle2), cy + radius * math.sin(angle2),
+ col)
+ end
+ else  -- Filled
  r.ImGui_DrawList_AddCircleFilled(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2,
  color)
  end
+ end
 
  local function DrawLoop(x, y, size)
  local adjustedSize = size
+ local thickness = (style == 1) and 2.5 or 2
+ 
+ if style == 4 then  -- Alien: Spiral-ish infinity symbol
+ local cx, cy = x + size / 2, y + size / 2
+ local radius = size * 0.3
+ 
+ -- Left circle
+ r.ImGui_DrawList_AddCircle(drawList,
+ cx - radius * 0.7, cy,
+ radius * 0.7,
+ color, 16, thickness)
+ 
+ -- Right circle
+ r.ImGui_DrawList_AddCircle(drawList,
+ cx + radius * 0.7, cy,
+ radius * 0.7,
+ color, 16, thickness)
+ 
+ -- Connecting lines to make infinity-like
+ r.ImGui_DrawList_AddLine(drawList,
+ cx - radius * 0.2, cy - radius * 0.5,
+ cx + radius * 0.2, cy + radius * 0.5,
+ color, thickness)
+ elseif style == 5 then  -- Retro: Double circle with arrows
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2.5,
+ color, 32, thickness)
+ 
  r.ImGui_DrawList_AddCircle(drawList,
  x + size / 2, y + size / 2,
  adjustedSize / 2,
- color, 32, 2)
-
+ color, 32, thickness)
+ 
+ -- Arrows
+ local arrowSize = adjustedSize / 5
+ local positions = {{-0.3, -0.3}, {0.3, 0.3}}
+ for _, pos in ipairs(positions) do
+ local ax = x + size / 2 + size * pos[1]
+ local ay = y + size / 2 + size * pos[2]
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ ax, ay - arrowSize / 2,
+ ax - arrowSize / 2, ay + arrowSize / 2,
+ ax + arrowSize / 2, ay + arrowSize / 2,
+ color)
+ end
+ elseif style == 6 then  -- Gaming: Pixelated loop
+ local cx, cy = x + size / 2, y + size / 2
+ local pixelSize = size * 0.08
+ -- Draw pixelated circle
+ for angle = 0, 360, 20 do
+ local rad = math.rad(angle)
+ local px = cx + size * 0.4 * math.cos(rad)
+ local py = cy + size * 0.4 * math.sin(rad)
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ px - pixelSize / 2, py - pixelSize / 2,
+ px + pixelSize / 2, py + pixelSize / 2,
+ color)
+ end
+ -- Pixelated arrow
+ local arrow_pixels = {
+ {-0.15, 0}, {-0.05, -0.1}, {0.05, -0.1}, {0.05, 0.1}, {-0.05, 0.1}
+ }
+ for _, pixel in ipairs(arrow_pixels) do
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ cx + size * pixel[1], cy + size * pixel[2],
+ cx + size * pixel[1] + pixelSize, cy + size * pixel[2] + pixelSize,
+ color)
+ end
+ elseif style == 7 then  -- Neon: Glowing loop
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2.5,
+ color, 32, 3)
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2,
+ color & 0xFFFFFF88, 32, 2.5)
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 1.6,
+ color & 0xFFFFFF44, 32, 2)
+ -- Glowing arrow
  local arrowSize = adjustedSize / 4
  local ax = x + size / 12
  local ay = y + size / 2
@@ -5196,13 +5834,160 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  ax - arrowSize / 2, ay + arrowSize / 2,
  ax + arrowSize / 2, ay + arrowSize / 2,
  color)
+ elseif style == 8 then  -- Organic: Flowing loop
+ local cx, cy = x + size / 2, y + size / 2
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, 32 do
+ local angle = (i / 32) * math.pi * 2
+ local radius = size * (0.35 + 0.05 * math.sin(angle * 3))
+ r.ImGui_DrawList_PathLineTo(drawList,
+ cx + radius * math.cos(angle),
+ cy + radius * math.sin(angle))
+ end
+ r.ImGui_DrawList_PathStroke(drawList, color, r.ImGui_DrawFlags_Closed(), 3)
+ -- Organic arrow
+ local arrowSize = size * 0.12
+ local ax = x + size * 0.15
+ local ay = y + size / 2
+ r.ImGui_DrawList_PathClear(drawList)
+ r.ImGui_DrawList_PathLineTo(drawList, ax, ay - arrowSize)
+ r.ImGui_DrawList_PathLineTo(drawList, ax - arrowSize, ay)
+ r.ImGui_DrawList_PathLineTo(drawList, ax, ay + arrowSize)
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ elseif style == 9 then  -- Industrial: Gear-like loop
+ local cx, cy = x + size / 2, y + size / 2
+ local teeth = 12
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, teeth - 1 do
+ local angle1 = (i / teeth) * math.pi * 2
+ local angle2 = ((i + 0.4) / teeth) * math.pi * 2
+ local angle3 = ((i + 0.6) / teeth) * math.pi * 2
+ local outerR = size * 0.45
+ local innerR = size * 0.35
+ r.ImGui_DrawList_PathLineTo(drawList, cx + outerR * math.cos(angle1), cy + outerR * math.sin(angle1))
+ r.ImGui_DrawList_PathLineTo(drawList, cx + outerR * math.cos(angle2), cy + outerR * math.sin(angle2))
+ r.ImGui_DrawList_PathLineTo(drawList, cx + innerR * math.cos(angle2), cy + innerR * math.sin(angle2))
+ r.ImGui_DrawList_PathLineTo(drawList, cx + innerR * math.cos(angle3), cy + innerR * math.sin(angle3))
+ end
+ r.ImGui_DrawList_PathStroke(drawList, color, r.ImGui_DrawFlags_Closed(), 2)
+ -- Center hole
+ r.ImGui_DrawList_AddCircle(drawList, cx, cy, size * 0.15, color, 16, 2)
+ elseif style == 10 then  -- Circus: Ribbon loop
+ local cx, cy = x + size / 2, y + size / 2
+ -- Draw ribbon-like twisted loop
+ for pass = 0, 1 do
+ r.ImGui_DrawList_PathClear(drawList)
+ for i = 0, 24 do
+ local t = i / 24
+ local angle = t * math.pi * 2
+ local radius = size * 0.4
+ local twist = math.sin(angle * 2) * size * 0.08
+ local px = cx + (radius + twist * (pass == 0 and 1 or -1)) * math.cos(angle)
+ local py = cy + (radius + twist * (pass == 0 and 1 or -1)) * math.sin(angle)
+ r.ImGui_DrawList_PathLineTo(drawList, px, py)
+ end
+ r.ImGui_DrawList_PathStroke(drawList, pass == 0 and color or (color & 0xFFFFFF88), r.ImGui_DrawFlags_Closed(), 3)
+ end
+ elseif style == 11 then  -- Crystal: Faceted ring
+ local cx, cy = x + size / 2, y + size / 2
+ local segments = 16
+ for i = 0, segments - 1 do
+ local angle1 = (i / segments) * math.pi * 2
+ local angle2 = ((i + 1) / segments) * math.pi * 2
+ local outerR = size * 0.45
+ local innerR = size * 0.3
+ local col = i % 2 == 0 and color or (color & 0xFFFFFFDD)
+ -- Outer triangle
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ cx + outerR * math.cos(angle1), cy + outerR * math.sin(angle1),
+ cx + outerR * math.cos(angle2), cy + outerR * math.sin(angle2),
+ cx + innerR * math.cos((angle1 + angle2) / 2), cy + innerR * math.sin((angle1 + angle2) / 2),
+ col)
+ end
+ else  -- Standard loop
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ adjustedSize / 2,
+ color, 32, thickness)
+
+ local arrowSize = adjustedSize / 4
+ local ax = x + size / 12
+ local ay = y + size / 2
+ 
+ if style == 1 then  -- Outlined arrow
+ r.ImGui_DrawList_AddTriangle(drawList,
+ ax, ay,
+ ax - arrowSize / 2, ay + arrowSize / 2,
+ ax + arrowSize / 2, ay + arrowSize / 2,
+ color, thickness)
+ else
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ ax, ay,
+ ax - arrowSize / 2, ay + arrowSize / 2,
+ ax + arrowSize / 2, ay + arrowSize / 2,
+ color)
+ end
+ end
  end
 
  local function DrawArrows(x, y, size, forward)
  local arrowSize = size / 1.8
  local spacing = size / 6
  local yCenter = y + size / 2
+ 
+ if style == 3 then  -- Sharp style - larger, more aggressive
+ arrowSize = size / 1.6
+ spacing = size / 8
+ elseif style == 4 then  -- Alien: Chevrons with gaps
+ arrowSize = size / 2
+ spacing = size / 10
+ elseif style == 5 then  -- Retro: Classic arrows with outline
+ arrowSize = size / 2.2
+ spacing = size / 8
+ elseif style == 6 then  -- Gaming: Pixelated
+ arrowSize = size / 2
+ spacing = size / 12
+ elseif style == 7 then  -- Neon
+ arrowSize = size / 2
+ spacing = size / 10
+ elseif style == 8 then  -- Organic
+ arrowSize = size / 1.9
+ spacing = size / 9
+ elseif style == 9 then  -- Industrial
+ arrowSize = size / 1.8
+ spacing = size / 8
+ elseif style == 10 then  -- Circus
+ arrowSize = size / 2.1
+ spacing = size / 12
+ elseif style == 11 then  -- Crystal
+ arrowSize = size / 2
+ spacing = size / 10
+ end
 
+ if style == 4 then  -- Alien style with special chevrons
+ for i = 0, 1 do
+ local startX = x + (i * (arrowSize + spacing * 2))
+ local cx = startX + arrowSize / 2
+ local width = arrowSize * 0.3
+ 
+ if forward then
+ -- Right-pointing chevron
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ cx - width, yCenter - arrowSize / 2,
+ cx - width, yCenter + arrowSize / 2,
+ cx + width, yCenter,
+ color)
+ else
+ -- Left-pointing chevron
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ cx + width, yCenter - arrowSize / 2,
+ cx + width, yCenter + arrowSize / 2,
+ cx - width, yCenter,
+ color)
+ end
+ end
+ else
+ -- Standard arrows (works for all other styles)
  for i = 0, 1 do
  local startX = x + (i * (arrowSize + spacing))
  local points
@@ -5221,11 +6006,160 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  }
  end
 
+ if style == 1 then  -- Outlined
+ r.ImGui_DrawList_AddTriangle(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color, 2.5)
+ elseif style == 5 then  -- Retro with double outline
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  points[1], points[2],
  points[3], points[4],
  points[5], points[6],
  color)
+ r.ImGui_DrawList_AddTriangle(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color & 0xFFFFFF88, 1.5)
+ elseif style == 6 then  -- Gaming: Pixelated arrows
+ local pixelSize = size * 0.12
+ local pattern = forward and {
+ {0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 4},
+ {1, 1}, {1, 2}, {1, 3},
+ {2, 2}
+ } or {
+ {2, 0}, {2, 1}, {2, 2}, {2, 3}, {2, 4},
+ {1, 1}, {1, 2}, {1, 3},
+ {0, 2}
+ }
+ for _, pix in ipairs(pattern) do
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ startX + pix[1] * pixelSize, yCenter - arrowSize / 2 + pix[2] * pixelSize,
+ startX + (pix[1] + 1) * pixelSize, yCenter - arrowSize / 2 + (pix[2] + 1) * pixelSize,
+ color)
+ end
+ elseif style == 7 then  -- Neon: Glowing arrows
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color)
+ -- Outer glow
+ local glow_offset = size * 0.06
+ local glow_points = forward and {
+ points[1] - glow_offset, points[2] - glow_offset,
+ points[3] - glow_offset, points[4] + glow_offset,
+ points[5] + glow_offset, points[6]
+ } or {
+ points[1] + glow_offset, points[2] - glow_offset,
+ points[3] + glow_offset, points[4] + glow_offset,
+ points[5] - glow_offset, points[6]
+ }
+ r.ImGui_DrawList_AddTriangle(drawList,
+ glow_points[1], glow_points[2],
+ glow_points[3], glow_points[4],
+ glow_points[5], glow_points[6],
+ color & 0xFFFFFF66, 2)
+ elseif style == 8 then  -- Organic: Curved arrows
+ r.ImGui_DrawList_PathClear(drawList)
+ for t = 0, 1, 0.1 do
+ local curve = math.sin(t * math.pi) * size * 0.05
+ if forward then
+ local px = startX + arrowSize * t
+ local py = yCenter - arrowSize / 2 + arrowSize * t + curve
+ r.ImGui_DrawList_PathLineTo(drawList, px, py)
+ else
+ local px = startX + arrowSize * (1 - t)
+ local py = yCenter - arrowSize / 2 + arrowSize * t + curve
+ r.ImGui_DrawList_PathLineTo(drawList, px, py)
+ end
+ end
+ for t = 1, 0, -0.1 do
+ local curve = math.sin(t * math.pi) * size * 0.05
+ if forward then
+ local px = startX + arrowSize * t
+ local py = yCenter + arrowSize / 2 - arrowSize * (1 - t) + curve
+ r.ImGui_DrawList_PathLineTo(drawList, px, py)
+ else
+ local px = startX + arrowSize * (1 - t)
+ local py = yCenter + arrowSize / 2 - arrowSize * (1 - t) + curve
+ r.ImGui_DrawList_PathLineTo(drawList, px, py)
+ end
+ end
+ r.ImGui_DrawList_PathFillConvex(drawList, color)
+ elseif style == 9 then  -- Industrial: Arrows with panel lines
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color)
+ -- Add panel lines
+ for j = 1, 3 do
+ local line_t = j / 4
+ local lx = forward and (startX + arrowSize * line_t) or (startX + arrowSize * (1 - line_t))
+ local ly1 = yCenter - arrowSize / 2 * (1 - line_t)
+ local ly2 = yCenter + arrowSize / 2 * (1 - line_t)
+ r.ImGui_DrawList_AddLine(drawList, lx, ly1, lx, ly2, color & 0xFFFFFF44, 1)
+ end
+ elseif style == 10 then  -- Circus: Spiral arrows
+ r.ImGui_DrawList_PathClear(drawList)
+ local turns = 1.5
+ for t = 0, 1, 0.05 do
+ local angle = t * turns * math.pi * 2
+ local radius = arrowSize * 0.3 * (1 - t)
+ if forward then
+ local px = startX + arrowSize * t + radius * math.cos(angle)
+ local py = yCenter + radius * math.sin(angle)
+ r.ImGui_DrawList_PathLineTo(drawList, px, py)
+ else
+ local px = startX + arrowSize * (1 - t) - radius * math.cos(angle)
+ local py = yCenter + radius * math.sin(angle)
+ r.ImGui_DrawList_PathLineTo(drawList, px, py)
+ end
+ end
+ r.ImGui_DrawList_PathStroke(drawList, color, 0, 3)
+ elseif style == 11 then  -- Crystal: Faceted arrows
+ -- Draw arrow as collection of triangular facets
+ local segments = 4
+ for seg = 0, segments - 1 do
+ local t1 = seg / segments
+ local t2 = (seg + 1) / segments
+ local col = seg % 2 == 0 and color or (color & 0xFFFFFFDD)
+ 
+ if forward then
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ startX + arrowSize * t1, yCenter - arrowSize / 2 * (1 - t1),
+ startX + arrowSize * t2, yCenter - arrowSize / 2 * (1 - t2),
+ startX + arrowSize * ((t1 + t2) / 2), yCenter,
+ col)
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ startX + arrowSize * t1, yCenter + arrowSize / 2 * (1 - t1),
+ startX + arrowSize * t2, yCenter + arrowSize / 2 * (1 - t2),
+ startX + arrowSize * ((t1 + t2) / 2), yCenter,
+ col)
+ else
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ startX + arrowSize * (1 - t1), yCenter - arrowSize / 2 * (1 - t1),
+ startX + arrowSize * (1 - t2), yCenter - arrowSize / 2 * (1 - t2),
+ startX + arrowSize * (1 - (t1 + t2) / 2), yCenter,
+ col)
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ startX + arrowSize * (1 - t1), yCenter + arrowSize / 2 * (1 - t1),
+ startX + arrowSize * (1 - t2), yCenter + arrowSize / 2 * (1 - t2),
+ startX + arrowSize * (1 - (t1 + t2) / 2), yCenter,
+ col)
+ end
+ end
+ else
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ points[1], points[2],
+ points[3], points[4],
+ points[5], points[6],
+ color)
+ end
+ end
  end
  end
 
