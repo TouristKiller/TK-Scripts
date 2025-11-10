@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.2
+-- @version 1.2.3
 -- @changelog 
 --[[
 
@@ -327,6 +327,37 @@ local default_settings = {
  show_monitor_volume = false,
  monitor_volume_style = 0,
  monitor_volume_display = 0,
+ 
+ -- Simple Mixer settings
+ show_simple_mixer_button = false,
+ simple_mixer_window_open = false,
+ simple_mixer_tracks = {},
+ simple_mixer_presets = {},
+ simple_mixer_current_preset = "",
+ simple_mixer_window_width = 400,
+ simple_mixer_window_height = 600,
+ simple_mixer_slider_height = 200,
+ simple_mixer_use_track_color = true,
+ simple_mixer_auto_height = true,
+ simple_mixer_show_mute_solo = true,
+ simple_mixer_show_arm = true,
+ simple_mixer_show_pan = true,
+ simple_mixer_font = 1,
+ simple_mixer_font_size = 12,
+ simple_mixer_save_fader_positions = false,
+ -- Simple Mixer Button styling
+ simple_mixer_button_font = 1,
+ simple_mixer_button_font_size = 14,
+ simple_mixer_button_width = 60,
+ simple_mixer_button_height = 25,
+ simple_mixer_button_use_icon = false,
+ simple_mixer_button_color_closed = 0x808080FF,
+ simple_mixer_button_color_open = 0x00AA00FF,
+ simple_mixer_button_hover_color = 0xAAAAAAFF,
+ simple_mixer_button_rounding = 0,
+ simple_mixer_button_border_size = 0,
+ simple_mixer_button_border_color = 0xFFFFFFFF,
+ simple_mixer_button_text_color = 0xFFFFFFFF,
 
  -- Custom Transport Button settings
  use_custom_play_image = false,
@@ -679,6 +710,7 @@ local transport_components = {
  { id = "color_picker", name = "Color Picker" },
  { id = "master_volume", name = "Master Volume" },
  { id = "monitor_volume", name = "Monitor Volume" },
+ { id = "simple_mixer", name = "Simple Mixer" },
  { id = "envelope", name = "Envelope" },
  { id = "tempo_bpm", name = "Tempo (BPM)" },
  { id = "time_signature", name = "Time Signature" },
@@ -736,6 +768,8 @@ function ShowComponentSettings(ctx, main_window_width, main_window_height)
  ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "monitor_volume" then
  ShowMonitorVolumeSettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "simple_mixer" then
+ ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "envelope" then
  ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "tempo_bpm" then
@@ -1895,6 +1929,212 @@ function ShowMonitorVolumeSettings(ctx, main_window_width, main_window_height)
  end
 end
 
+function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
+ local rv
+ rv, settings.show_simple_mixer_button = r.ImGui_Checkbox(ctx, "Show Simple Mixer Button", settings.show_simple_mixer_button ~= false)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if settings.show_simple_mixer_button then
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Position:")
+ DrawPixelXYControls('simple_mixer_button_x', 'simple_mixer_button_y', main_window_width, main_window_height)
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Button Styling:")
+ 
+ local combo_width = 150
+ r.ImGui_SetNextItemWidth(ctx, combo_width)
+ if r.ImGui_BeginCombo(ctx, "##SimpleMixerButtonFont", fonts[settings.simple_mixer_button_font or 1]) then
+ for i, font in ipairs(fonts) do
+ local is_selected = (settings.simple_mixer_button_font == i)
+ if r.ImGui_Selectable(ctx, font, is_selected) then
+ settings.simple_mixer_button_font = i
+ RebuildSectionFonts()
+ end
+ if is_selected then
+ r.ImGui_SetItemDefaultFocus(ctx)
+ end
+ end
+ r.ImGui_EndCombo(ctx)
+ end
+ 
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Size:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.simple_mixer_button_font_size = r.ImGui_SliderInt(ctx, "##SimpleMixerButtonFontSize", settings.simple_mixer_button_font_size or 14, 10, 20, "%d")
+ if rv then
+ RebuildSectionFonts()
+ end
+ 
+ r.ImGui_Text(ctx, "Dimensions:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.simple_mixer_button_width = r.ImGui_SliderInt(ctx, "Width##SimpleMixerButtonWidth", settings.simple_mixer_button_width or 60, 40, 120, "%d px")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.simple_mixer_button_height = r.ImGui_SliderInt(ctx, "Height##SimpleMixerButtonHeight", settings.simple_mixer_button_height or 25, 20, 50, "%d px")
+ 
+ r.ImGui_Text(ctx, "Rounding & Border:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.simple_mixer_button_rounding = r.ImGui_SliderDouble(ctx, "Rounding##SimpleMixerButtonRounding", settings.simple_mixer_button_rounding or 0, 0.0, 10.0, "%.1f px")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.simple_mixer_button_border_size = r.ImGui_SliderDouble(ctx, "Border##SimpleMixerButtonBorder", settings.simple_mixer_button_border_size or 0, 0.0, 5.0, "%.1f px")
+ 
+ rv, settings.simple_mixer_button_use_icon = r.ImGui_Checkbox(ctx, "Use Icon Instead of Text", settings.simple_mixer_button_use_icon or false)
+ 
+ r.ImGui_Text(ctx, "Colors:")
+ if r.ImGui_BeginTable(ctx, "SimpleMixerButtonColors", 2) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableNextColumn(ctx)
+ rv, settings.simple_mixer_button_color_closed = r.ImGui_ColorEdit4(ctx, "Button Closed##SimpleMixerBtnClosed", settings.simple_mixer_button_color_closed or 0x808080FF, r.ImGui_ColorEditFlags_NoInputs())
+ r.ImGui_TableNextColumn(ctx)
+ rv, settings.simple_mixer_button_color_open = r.ImGui_ColorEdit4(ctx, "Button Open##SimpleMixerBtnOpen", settings.simple_mixer_button_color_open or 0x00AA00FF, r.ImGui_ColorEditFlags_NoInputs())
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableNextColumn(ctx)
+ rv, settings.simple_mixer_button_hover_color = r.ImGui_ColorEdit4(ctx, "Hover##SimpleMixerBtnHover", settings.simple_mixer_button_hover_color or 0xAAAAAAFF, r.ImGui_ColorEditFlags_NoInputs())
+ r.ImGui_TableNextColumn(ctx)
+ rv, settings.simple_mixer_button_border_color = r.ImGui_ColorEdit4(ctx, "Border##SimpleMixerBtnBorderColor", settings.simple_mixer_button_border_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs())
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableNextColumn(ctx)
+ rv, settings.simple_mixer_button_text_color = r.ImGui_ColorEdit4(ctx, "Text##SimpleMixerBtnTextColor", settings.simple_mixer_button_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs())
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Slider Height:")
+ 
+ rv, settings.simple_mixer_auto_height = r.ImGui_Checkbox(ctx, "Auto Height (adapt to window)", settings.simple_mixer_auto_height ~= false)
+ 
+ if not settings.simple_mixer_auto_height then
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.simple_mixer_slider_height = r.ImGui_SliderInt(ctx, "##MixerSliderHeight", settings.simple_mixer_slider_height or 200, 100, 400, "%d px")
+ end
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ rv, settings.simple_mixer_use_track_color = r.ImGui_Checkbox(ctx, "Color Slider with Track Color", settings.simple_mixer_use_track_color ~= false)
+ rv, settings.simple_mixer_save_fader_positions = r.ImGui_Checkbox(ctx, "Save Fader Positions (Volume/Pan)", settings.simple_mixer_save_fader_positions or false)
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Show Controls:")
+ rv, settings.simple_mixer_show_mute_solo = r.ImGui_Checkbox(ctx, "Show Mute & Solo Buttons", settings.simple_mixer_show_mute_solo ~= false)
+ rv, settings.simple_mixer_show_arm = r.ImGui_Checkbox(ctx, "Show Arm Button", settings.simple_mixer_show_arm ~= false)
+ rv, settings.simple_mixer_show_pan = r.ImGui_Checkbox(ctx, "Show Pan Slider", settings.simple_mixer_show_pan ~= false)
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Font:")
+ local combo_width = 150
+ r.ImGui_SetNextItemWidth(ctx, combo_width)
+ if r.ImGui_BeginCombo(ctx, "##SimpleMixerFont", fonts[settings.simple_mixer_font or 1]) then
+ for i, font in ipairs(fonts) do
+ local is_selected = (settings.simple_mixer_font == i)
+ if r.ImGui_Selectable(ctx, font, is_selected) then
+ settings.simple_mixer_font = i
+ RebuildSectionFonts()
+ end
+ if is_selected then
+ r.ImGui_SetItemDefaultFocus(ctx)
+ end
+ end
+ r.ImGui_EndCombo(ctx)
+ end
+ 
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Size:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.simple_mixer_font_size = r.ImGui_SliderInt(ctx, "##SimpleMixerFontSize", settings.simple_mixer_font_size or 12, 10, 15, "%d")
+ if rv then
+ RebuildSectionFonts()
+ end
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Presets:")
+ 
+ if r.ImGui_Button(ctx, "Save Current as Preset", -1, 0) then
+ r.ImGui_OpenPopup(ctx, "SaveMixerPreset")
+ end
+ 
+ if r.ImGui_BeginPopup(ctx, "SaveMixerPreset") then
+ r.ImGui_Text(ctx, "Preset Name:")
+ rv, settings.simple_mixer_preset_name_input = r.ImGui_InputText(ctx, "##PresetName", settings.simple_mixer_preset_name_input or "")
+ 
+ settings.simple_mixer_preset_is_global = settings.simple_mixer_preset_is_global or false
+ rv, settings.simple_mixer_preset_is_global = r.ImGui_Checkbox(ctx, "Global (all projects)", settings.simple_mixer_preset_is_global)
+ 
+ if r.ImGui_Button(ctx, "Save", 100, 0) then
+ if settings.simple_mixer_preset_name_input and settings.simple_mixer_preset_name_input ~= "" then
+ settings.simple_mixer_presets = settings.simple_mixer_presets or {}
+ local project_tracks = GetProjectMixerTracks()
+ settings.simple_mixer_presets[settings.simple_mixer_preset_name_input] = {
+ tracks = {},
+ is_global = settings.simple_mixer_preset_is_global
+ }
+ for i, track_guid in ipairs(project_tracks) do
+ table.insert(settings.simple_mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
+ end
+ SaveSettings()
+ r.ImGui_CloseCurrentPopup(ctx)
+ end
+ end
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+ r.ImGui_CloseCurrentPopup(ctx)
+ end
+ r.ImGui_EndPopup(ctx)
+ end
+ 
+ if settings.simple_mixer_presets then
+ for preset_name, preset_data in pairs(settings.simple_mixer_presets) do
+ local track_list = preset_data.tracks or preset_data
+ local is_global = preset_data.is_global or false
+ local display_name = preset_name .. (is_global and " [Global]" or " [Project]")
+ 
+ if r.ImGui_Selectable(ctx, display_name, settings.simple_mixer_current_preset == preset_name) then
+ settings.simple_mixer_current_preset = preset_name
+ local new_tracks = {}
+ for i, guid in ipairs(track_list) do
+ table.insert(new_tracks, guid)
+ end
+ SaveProjectMixerTracks(new_tracks)
+ end
+ 
+ if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
+ r.ImGui_OpenPopup(ctx, "DeletePreset_" .. preset_name)
+ end
+ 
+ if r.ImGui_BeginPopup(ctx, "DeletePreset_" .. preset_name) then
+ if r.ImGui_MenuItem(ctx, "Delete Preset") then
+ settings.simple_mixer_presets[preset_name] = nil
+ if settings.simple_mixer_current_preset == preset_name then
+ settings.simple_mixer_current_preset = ""
+ end
+ SaveSettings()
+ end
+ r.ImGui_EndPopup(ctx)
+ end
+ end
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ end
+end
+
 function ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  local rv
  rv, settings.show_env_button = r.ImGui_Checkbox(ctx, "Show Envelope Button", settings.show_env_button ~= false)
@@ -2800,6 +3040,8 @@ local font_transport = r.ImGui_CreateFont(settings.transport_font_name or settin
 local font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, settings.env_font_size or settings.font_size)
 local font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, settings.master_volume_font_size or settings.font_size)
 local font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, settings.monitor_volume_font_size or settings.font_size)
+local font_simple_mixer = r.ImGui_CreateFont(fonts[settings.simple_mixer_font or 1], settings.simple_mixer_font_size or 12)
+local font_simple_mixer_button = r.ImGui_CreateFont(fonts[settings.simple_mixer_button_font or 1], settings.simple_mixer_button_font_size or 14)
 local font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
 local font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
 local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
@@ -2815,6 +3057,9 @@ r.ImGui_Attach(ctx, font)
 r.ImGui_Attach(ctx, font_transport)
 r.ImGui_Attach(ctx, font_env)
 r.ImGui_Attach(ctx, font_master_volume)
+r.ImGui_Attach(ctx, font_monitor_volume)
+r.ImGui_Attach(ctx, font_simple_mixer)
+r.ImGui_Attach(ctx, font_simple_mixer_button)
 r.ImGui_Attach(ctx, font_tempo)
 r.ImGui_Attach(ctx, font_timesig)
 r.ImGui_Attach(ctx, font_timesel)
@@ -2948,6 +3193,8 @@ function RebuildSectionFonts()
  local new_font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, settings.env_font_size or settings.font_size)
  local new_font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, settings.master_volume_font_size or settings.font_size)
  local new_font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, settings.monitor_volume_font_size or settings.font_size)
+ local new_font_simple_mixer = r.ImGui_CreateFont(fonts[settings.simple_mixer_font or 1], settings.simple_mixer_font_size or 12)
+ local new_font_simple_mixer_button = r.ImGui_CreateFont(fonts[settings.simple_mixer_button_font or 1], settings.simple_mixer_button_font_size or 14)
  local new_font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
  local new_font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
  local new_font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
@@ -2961,6 +3208,8 @@ function RebuildSectionFonts()
  r.ImGui_Attach(ctx, new_font_env)
  r.ImGui_Attach(ctx, new_font_master_volume)
  r.ImGui_Attach(ctx, new_font_monitor_volume)
+ r.ImGui_Attach(ctx, new_font_simple_mixer)
+ r.ImGui_Attach(ctx, new_font_simple_mixer_button)
  r.ImGui_Attach(ctx, new_font_tempo)
  r.ImGui_Attach(ctx, new_font_timesig)
  r.ImGui_Attach(ctx, new_font_timesel)
@@ -2974,6 +3223,8 @@ function RebuildSectionFonts()
  font_env = new_font_env
  font_master_volume = new_font_master_volume
  font_monitor_volume = new_font_monitor_volume
+ font_simple_mixer = new_font_simple_mixer
+ font_simple_mixer_button = new_font_simple_mixer_button
  font_tempo = new_font_tempo
  font_timesig = new_font_timesig
  font_timesel = new_font_timesel
@@ -5863,6 +6114,490 @@ function MonitorVolumeSlider(main_window_width, main_window_height)
  r.ImGui_PopStyleVar(ctx, 2)
  
  StoreElementRectUnion("monitor_volume", min_x, min_y, max_x, max_y)
+ end
+end
+
+function SimpleMixerButton(main_window_width, main_window_height)
+ if not settings.show_simple_mixer_button then return end
+ 
+ local allow_input = not settings.edit_mode
+ 
+ local pos_x = settings.simple_mixer_button_x_px and ScalePosX(settings.simple_mixer_button_x_px, main_window_width, settings)
+ or ((settings.simple_mixer_button_x or 0.5) * main_window_width)
+ local pos_y = settings.simple_mixer_button_y_px and ScalePosY(settings.simple_mixer_button_y_px, main_window_height, settings)
+ or ((settings.simple_mixer_button_y or 0.8) * main_window_height)
+ 
+ r.ImGui_SetCursorPosX(ctx, pos_x)
+ r.ImGui_SetCursorPosY(ctx, pos_y)
+ 
+ -- Apply styling
+ local button_width = settings.simple_mixer_button_width or 60
+ local button_height = settings.simple_mixer_button_height or 25
+ local button_color = settings.simple_mixer_window_open and (settings.simple_mixer_button_color_open or 0x00AA00FF) or (settings.simple_mixer_button_color_closed or 0x808080FF)
+ local hover_color = settings.simple_mixer_button_hover_color or 0xAAAAAAFF
+ local text_color = settings.simple_mixer_button_text_color or 0xFFFFFFFF
+ local rounding = settings.simple_mixer_button_rounding or 0
+ local use_icon = settings.simple_mixer_button_use_icon or false
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_color)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), hover_color)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button_color | 0x88000000)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), rounding)
+ 
+ if not use_icon and font_simple_mixer_button then
+ r.ImGui_PushFont(ctx, font_simple_mixer_button, settings.simple_mixer_button_font_size or 14)
+ end
+ 
+ local button_label = "MIXER"
+ if use_icon then
+ button_label = "##SimpleMixerIcon"  
+ end
+ 
+ if r.ImGui_Button(ctx, button_label, button_width, button_height) and allow_input then
+ settings.simple_mixer_window_open = not settings.simple_mixer_window_open
+ end
+ 
+ if use_icon then
+ local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+ local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+ local dl = r.ImGui_GetWindowDrawList(ctx)
+ local center_x = (min_x + max_x) / 2
+ local center_y = (min_y + max_y) / 2
+ local icon_size = math.min(button_width, button_height) * 0.6
+ 
+ for i = 0, 2 do
+ local x_offset = (i - 1) * (icon_size / 3)
+ local fader_x = center_x + x_offset
+ local fader_top = center_y - icon_size / 3
+ local fader_bottom = center_y + icon_size / 3
+ local fader_knob_y = center_y - (icon_size / 6) + (i * icon_size / 9)  
+ 
+ r.ImGui_DrawList_AddLine(dl, fader_x, fader_top, fader_x, fader_bottom, text_color, 2)
+ r.ImGui_DrawList_AddRectFilled(dl, fader_x - 2, fader_knob_y - 1.5, fader_x + 2, fader_knob_y + 1.5, text_color, 0.5)
+ end
+ end
+ 
+ if not use_icon and font_simple_mixer_button then
+ r.ImGui_PopFont(ctx)
+ end
+ 
+ r.ImGui_PopStyleVar(ctx, 1)
+ r.ImGui_PopStyleColor(ctx, 4)
+ 
+ if settings.simple_mixer_button_border_size and settings.simple_mixer_button_border_size > 0 then
+ local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+ local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+ local dl = r.ImGui_GetWindowDrawList(ctx)
+ local border_color = settings.simple_mixer_button_border_color or 0xFFFFFFFF
+ local border_size = settings.simple_mixer_button_border_size
+ r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, border_color, rounding, 0, border_size)
+ end
+ 
+ local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+ local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+ StoreElementRectUnion("simple_mixer_button", min_x, min_y, max_x, max_y)
+end
+
+function GetProjectMixerTracks()
+ local project_file = r.GetProjectPath("")
+ if project_file == "" then return {} end
+ 
+ local key = "simple_mixer_tracks_" .. project_file
+ local tracks_json = r.GetExtState("TK_TRANSPORT", key)
+ 
+ if tracks_json ~= "" then
+ local success, tracks = pcall(function() return json.decode(tracks_json) end)
+ if success and tracks then
+ return tracks
+ end
+ end
+ return {}
+end
+
+function SaveProjectMixerTracks(tracks)
+ local project_file = r.GetProjectPath("")
+ if project_file == "" then return end
+ 
+ local key = "simple_mixer_tracks_" .. project_file
+ local tracks_json = json.encode(tracks)
+ r.SetExtState("TK_TRANSPORT", key, tracks_json, true)
+end
+
+function DrawSimpleMixerWindow()
+ if not settings.simple_mixer_window_open then return end
+ 
+ local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar()
+ local mixer_ctx = ctx
+ 
+ local project_mixer_tracks = GetProjectMixerTracks()
+ 
+ if font_simple_mixer then
+ r.ImGui_PushFont(mixer_ctx, font_simple_mixer, settings.simple_mixer_font_size or 12)
+ end
+ 
+ r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_WindowRounding(), 8)
+ 
+ r.ImGui_SetNextWindowSize(mixer_ctx, settings.simple_mixer_window_width or 400, settings.simple_mixer_window_height or 600, r.ImGui_Cond_FirstUseEver())
+ 
+ local visible, open = r.ImGui_Begin(mixer_ctx, "Simple Mixer", true, window_flags)
+ if visible then
+ 
+ if r.ImGui_Button(mixer_ctx, "+", 30, 0) then
+ local num_sel_tracks = r.CountSelectedTracks(0)
+ if num_sel_tracks > 0 then
+ for i = 0, num_sel_tracks - 1 do
+ local track = r.GetSelectedTrack(0, i)
+ local guid = r.GetTrackGUID(track)
+ local already_added = false
+ for _, existing_guid in ipairs(project_mixer_tracks) do
+ if existing_guid == guid then
+ already_added = true
+ break
+ end
+ end
+ if not already_added then
+ table.insert(project_mixer_tracks, guid)
+ end
+ end
+ SaveProjectMixerTracks(project_mixer_tracks)
+ end
+ end
+ if r.ImGui_IsItemHovered(mixer_ctx) then
+ r.ImGui_SetTooltip(mixer_ctx, "Add Selected Tracks")
+ end
+ 
+ r.ImGui_SameLine(mixer_ctx)
+ if r.ImGui_Button(mixer_ctx, "Save", 60, 0) then
+ r.ImGui_OpenPopup(mixer_ctx, "SaveMixerPresetInWindow")
+ end
+ 
+ if r.ImGui_BeginPopup(mixer_ctx, "SaveMixerPresetInWindow") then
+ r.ImGui_Text(mixer_ctx, "Preset Name:")
+ local rv
+ rv, settings.simple_mixer_preset_name_input = r.ImGui_InputText(mixer_ctx, "##PresetNameInWindow", settings.simple_mixer_preset_name_input or "")
+ 
+ settings.simple_mixer_preset_is_global = settings.simple_mixer_preset_is_global or false
+ rv, settings.simple_mixer_preset_is_global = r.ImGui_Checkbox(mixer_ctx, "Global (all projects)", settings.simple_mixer_preset_is_global)
+ 
+ if r.ImGui_Button(mixer_ctx, "Save", 100, 0) then
+ if settings.simple_mixer_preset_name_input and settings.simple_mixer_preset_name_input ~= "" then
+ settings.simple_mixer_presets = settings.simple_mixer_presets or {}
+ settings.simple_mixer_presets[settings.simple_mixer_preset_name_input] = {
+ tracks = {},
+ is_global = settings.simple_mixer_preset_is_global
+ }
+ 
+ for i, track_guid in ipairs(project_mixer_tracks) do
+ if settings.simple_mixer_save_fader_positions then
+ local track = r.BR_GetMediaTrackByGUID(0, track_guid)
+ if track then
+ local volume = r.GetMediaTrackInfo_Value(track, "D_VOL")
+ local pan = r.GetMediaTrackInfo_Value(track, "D_PAN")
+ table.insert(settings.simple_mixer_presets[settings.simple_mixer_preset_name_input].tracks, {
+ guid = track_guid,
+ volume = volume,
+ pan = pan
+ })
+ else
+ table.insert(settings.simple_mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
+ end
+ else
+ table.insert(settings.simple_mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
+ end
+ end
+ 
+ SaveSettings()  
+ r.ImGui_CloseCurrentPopup(mixer_ctx)
+ end
+ end
+ r.ImGui_SameLine(mixer_ctx)
+ if r.ImGui_Button(mixer_ctx, "Cancel", 100, 0) then
+ r.ImGui_CloseCurrentPopup(mixer_ctx)
+ end
+ r.ImGui_EndPopup(mixer_ctx)
+ end
+ 
+ r.ImGui_SameLine(mixer_ctx)
+ r.ImGui_SetNextItemWidth(mixer_ctx, 60)
+ if r.ImGui_BeginCombo(mixer_ctx, "##LoadPresetInWindow", settings.simple_mixer_current_preset or "Load") then
+ for preset_name, preset_data in pairs(settings.simple_mixer_presets or {}) do
+ local project_path = r.GetProjectPath("")
+ local display_name = preset_name
+ if preset_data.is_global then
+ display_name = preset_name .. " [Global]"
+ else
+ display_name = preset_name .. " [Project]"
+ end
+ 
+ if preset_data.is_global or project_path ~= "" then
+ if r.ImGui_Selectable(mixer_ctx, display_name, false) then
+ project_mixer_tracks = {}
+ if preset_data.tracks then
+ for _, track_data in ipairs(preset_data.tracks) do
+ if type(track_data) == "string" then
+ table.insert(project_mixer_tracks, track_data)
+ elseif type(track_data) == "table" and track_data.guid then
+ table.insert(project_mixer_tracks, track_data.guid)
+ 
+ if track_data.volume and track_data.pan then
+ local track = r.BR_GetMediaTrackByGUID(0, track_data.guid)
+ if track then
+ r.SetMediaTrackInfo_Value(track, "D_VOL", track_data.volume)
+ r.SetMediaTrackInfo_Value(track, "D_PAN", track_data.pan)
+ end
+ end
+ end
+ end
+ end
+ SaveProjectMixerTracks(project_mixer_tracks)
+ settings.simple_mixer_current_preset = preset_name
+ end
+ 
+ if r.ImGui_IsItemClicked(mixer_ctx, r.ImGui_MouseButton_Right()) then
+ settings.simple_mixer_presets[preset_name] = nil
+ if settings.simple_mixer_current_preset == preset_name then
+ settings.simple_mixer_current_preset = ""
+ end
+ SaveSettings()  
+ end
+ end
+ end
+ r.ImGui_EndCombo(mixer_ctx)
+ end
+ 
+ r.ImGui_SameLine(mixer_ctx)
+ local rv
+ rv, settings.simple_mixer_save_fader_positions = r.ImGui_Checkbox(mixer_ctx, "Save Faders", settings.simple_mixer_save_fader_positions or false)
+ if r.ImGui_IsItemHovered(mixer_ctx) then
+ r.ImGui_SetTooltip(mixer_ctx, "Save Volume & Pan Positions")
+ end
+ 
+ r.ImGui_Separator(mixer_ctx)
+ 
+ if project_mixer_tracks and #project_mixer_tracks > 0 then
+ local slider_height
+ if settings.simple_mixer_auto_height then
+ local _, window_height = r.ImGui_GetWindowSize(mixer_ctx)
+ local overhead = 90
+ if settings.simple_mixer_show_mute_solo then overhead = overhead + 50 end  
+ if settings.simple_mixer_show_arm then overhead = overhead + 25 end 
+ if settings.simple_mixer_show_pan then overhead = overhead + 25 end 
+ slider_height = window_height - overhead
+ if slider_height < 100 then slider_height = 100 end
+ else
+ slider_height = settings.simple_mixer_slider_height or 200
+ end
+ local track_width = 50
+ 
+ local avail_width, avail_height = r.ImGui_GetContentRegionAvail(mixer_ctx)
+ 
+ if r.ImGui_BeginChild(mixer_ctx, "MixerTracks", 0, avail_height, r.ImGui_ChildFlags_None()) then
+ local tracks_to_remove = {}
+ 
+ for idx, track_guid in ipairs(project_mixer_tracks) do
+ local track = r.BR_GetMediaTrackByGUID(0, track_guid)
+ 
+ if track then
+ local _, track_name = r.GetTrackName(track)
+ 
+ r.ImGui_BeginGroup(mixer_ctx)
+ 
+ r.ImGui_PushID(mixer_ctx, idx)
+ 
+ if settings.simple_mixer_show_mute_solo then
+ local is_muted = r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
+ local is_solo = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
+ 
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), is_muted and 0xFF0000FF or 0x404040FF)
+ if r.ImGui_Button(mixer_ctx, "M", track_width, 25) then
+ r.SetMediaTrackInfo_Value(track, "B_MUTE", is_muted and 0 or 1)
+ end
+ r.ImGui_PopStyleColor(mixer_ctx, 1)
+ 
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), is_solo and 0xFFFF00FF or 0x404040FF)
+ if r.ImGui_Button(mixer_ctx, "S", track_width, 25) then
+ r.SetMediaTrackInfo_Value(track, "I_SOLO", is_solo and 0 or 1)
+ end
+ r.ImGui_PopStyleColor(mixer_ctx, 1)
+ end
+ 
+ if settings.simple_mixer_show_arm then
+ local is_armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), is_armed and 0xFF0000FF or 0x404040FF)
+ if r.ImGui_Button(mixer_ctx, "R", track_width, 25) then
+ r.SetMediaTrackInfo_Value(track, "I_RECARM", is_armed and 0 or 1)
+ end
+ r.ImGui_PopStyleColor(mixer_ctx, 1)
+ end
+ 
+ if settings.simple_mixer_show_pan then
+ local pan = r.GetMediaTrackInfo_Value(track, "D_PAN")
+ r.ImGui_PushItemWidth(mixer_ctx, track_width)
+ local rv_pan, new_pan = r.ImGui_SliderDouble(mixer_ctx, "##pan", pan, -1.0, 1.0, "")
+ if rv_pan then
+ r.SetMediaTrackInfo_Value(track, "D_PAN", new_pan)
+ end
+ r.ImGui_PopItemWidth(mixer_ctx)
+ 
+ if r.ImGui_IsItemHovered(mixer_ctx) then
+ local pan_text
+ if new_pan == 0 then
+ pan_text = "Center"
+ elseif new_pan < 0 then
+ pan_text = string.format("%.0f%% L", math.abs(new_pan) * 100)
+ else
+ pan_text = string.format("%.0f%% R", new_pan * 100)
+ end
+ r.ImGui_SetTooltip(mixer_ctx, "Pan: " .. pan_text .. " (Right-click to reset)")
+ end
+ 
+ if r.ImGui_IsItemClicked(mixer_ctx, r.ImGui_MouseButton_Right()) then
+ r.SetMediaTrackInfo_Value(track, "D_PAN", 0.0)
+ end
+ end
+ 
+ local volume = r.GetMediaTrackInfo_Value(track, "D_VOL")
+ local volume_db = 20.0 * math.log(volume, 10)
+ 
+ if settings.simple_mixer_use_track_color then
+ local track_color = r.GetTrackColor(track)
+ if track_color ~= 0 then
+ local r_val, g_val, b_val = r.ColorFromNative(track_color)
+ 
+ local imgui_color_full = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
+ local imgui_color_bg = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.25)
+ local imgui_color_hover = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.38)
+ local imgui_color_active = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.5)
+ local imgui_color_grab_active = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.87)
+ 
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_FrameBg(), imgui_color_bg)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_FrameBgHovered(), imgui_color_hover)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_FrameBgActive(), imgui_color_active)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_SliderGrab(), imgui_color_full)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_SliderGrabActive(), imgui_color_grab_active)
+ end
+ end
+ 
+ r.ImGui_PushItemWidth(mixer_ctx, track_width)
+ local rv, new_vol_db = r.ImGui_VSliderDouble(mixer_ctx, "##vol", track_width, slider_height, volume_db, -60.0, 12.0, "%.1f dB")
+ if rv then
+ local new_volume = 10.0 ^ (new_vol_db / 20.0)
+ r.SetMediaTrackInfo_Value(track, "D_VOL", new_volume)
+ end
+ r.ImGui_PopItemWidth(mixer_ctx)
+ 
+ if r.ImGui_IsItemClicked(mixer_ctx, r.ImGui_MouseButton_Right()) then
+ r.SetMediaTrackInfo_Value(track, "D_VOL", 1.0)
+ end
+ 
+ if settings.simple_mixer_use_track_color then
+ local track_color = r.GetTrackColor(track)
+ if track_color ~= 0 then
+ r.ImGui_PopStyleColor(mixer_ctx, 5)
+ end
+ end
+ 
+ r.ImGui_Dummy(mixer_ctx, 0, 2)
+ 
+ local display_name = track_name
+ if #display_name > 10 then
+ display_name = display_name:sub(1, 10) .. "..."
+ end
+ r.ImGui_Text(mixer_ctx, display_name)
+ 
+ if r.ImGui_IsItemHovered(mixer_ctx) then
+ r.ImGui_SetTooltip(mixer_ctx, track_name)
+ end
+ 
+ local button_width = (track_width - 5) / 2
+ 
+ local is_selected = r.IsTrackSelected(track)
+ if is_selected then
+ local track_color = r.GetTrackColor(track)
+ if track_color ~= 0 then
+ local r_val, g_val, b_val = r.ColorFromNative(track_color)
+ local select_color = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), select_color)
+ else
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x00FF00FF) 
+ end
+ else
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x404040FF) 
+ end
+ 
+ if r.ImGui_Button(mixer_ctx, "T", button_width, 20) then
+ local ctrl = r.ImGui_IsKeyDown(mixer_ctx, r.ImGui_Mod_Ctrl())
+ local shift = r.ImGui_IsKeyDown(mixer_ctx, r.ImGui_Mod_Shift())
+ 
+ if ctrl then
+ r.SetTrackSelected(track, not is_selected)
+ elseif shift then
+ local last_touched = r.GetLastTouchedTrack()
+ if last_touched and last_touched ~= track then
+ local start_idx = r.CSurf_TrackToID(last_touched, false)
+ local end_idx = r.CSurf_TrackToID(track, false)
+ 
+ if start_idx > end_idx then
+ start_idx, end_idx = end_idx, start_idx
+ end
+ 
+ for i = start_idx, end_idx do
+ local range_track = r.CSurf_TrackFromID(i, false)
+ if range_track then
+ r.SetTrackSelected(range_track, true)
+ end
+ end
+ else
+ r.SetTrackSelected(track, true)
+ end
+ else
+ r.SetOnlyTrackSelected(track)
+ end
+ end
+ r.ImGui_PopStyleColor(mixer_ctx, 1)
+ 
+ r.ImGui_SameLine(mixer_ctx, 0, 5)
+ if r.ImGui_Button(mixer_ctx, "X", button_width, 20) then
+ table.insert(tracks_to_remove, idx)
+ end
+ 
+ r.ImGui_PopID(mixer_ctx)
+ r.ImGui_EndGroup(mixer_ctx)
+ 
+ if idx < #project_mixer_tracks then
+ r.ImGui_SameLine(mixer_ctx)
+ end
+ else
+ table.insert(tracks_to_remove, idx)
+ end
+ end
+ 
+ for i = #tracks_to_remove, 1, -1 do
+ table.remove(project_mixer_tracks, tracks_to_remove[i])
+ end
+ 
+ if #tracks_to_remove > 0 then
+ SaveProjectMixerTracks(project_mixer_tracks)
+ end
+ 
+ r.ImGui_EndChild(mixer_ctx)
+ end
+ else
+ r.ImGui_Text(mixer_ctx, "No tracks added. Select tracks and click '+ Add Selected Tracks'")
+ end
+ 
+ r.ImGui_End(mixer_ctx)
+ 
+ r.ImGui_PopStyleVar(mixer_ctx, 1)
+ 
+ if font_simple_mixer then
+ r.ImGui_PopFont(mixer_ctx)
+ end
+ end
+ 
+ if not open then
+ settings.simple_mixer_window_open = false
  end
 end
 
@@ -8912,6 +9647,7 @@ function Main()
  Transport_Buttons(main_window_width, main_window_height)
  MasterVolumeSlider(main_window_width, main_window_height)
  MonitorVolumeSlider(main_window_width, main_window_height)
+ SimpleMixerButton(main_window_width, main_window_height)
  ShowCursorPosition(main_window_width, main_window_height)
  ShowShuttleWheel(main_window_width, main_window_height)
  ShowWaveformScrubber(main_window_width, main_window_height)
@@ -9070,6 +9806,8 @@ function Main()
  
  r.ImGui_End(ctx)
  end
+ 
+ DrawSimpleMixerWindow()
  
  if settings.time_alarm_triggered and settings.time_alarm_popup_enabled then
   local current_time = os.time()
