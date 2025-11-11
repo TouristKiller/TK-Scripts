@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.3
+-- @version 1.2.4
 -- @changelog 
 --[[
 
@@ -103,6 +103,22 @@ local battery_status = {
  level = -1,
  is_charging = false,
  manual_refresh = false
+}
+
+-- Quick FX Zoeker variabelen
+local quick_fx = {
+ search_text = "",
+ results = {},
+ show_results = false,
+ selected_index = -1,
+ last_search = "",
+ result_window_open = false,
+ fx_list = {},
+ fx_list_loaded = false,
+ fx_list_path = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/FX_LIST.txt",
+ font = nil,  -- Cache voor font object
+ last_text_change_time = 0,  -- Timestamp voor debounce
+ debounce_delay = 0.3  -- Vertraging in seconden (300ms)
 }
 
 local visual_metronome = {
@@ -499,6 +515,27 @@ local default_settings = {
  matrix_ticker_grid_size = 2,              
  matrix_ticker_show_bezel = true,           
 
+ -- Quick FX Zoeker settings
+ show_quick_fx = false,
+ quick_fx_x = 0.30,
+ quick_fx_y = 0.50,
+ quick_fx_font_name = "Arial",
+ quick_fx_font_size = 12,
+ quick_fx_search_width = 200,
+ quick_fx_button_width = 40,
+ quick_fx_bg_color = 0x222222FF,
+ quick_fx_text_color = 0xFFFFFFFF,
+ quick_fx_border_color = 0x666666FF,
+ quick_fx_show_border = true,
+ quick_fx_border_size = 1.0,
+ quick_fx_rounding = 4.0,
+ quick_fx_result_bg_color = 0x1E1E1EFF,
+ quick_fx_result_highlight_color = 0x0078D7FF,
+ quick_fx_strip_prefix = true,
+ quick_fx_strip_developer = false,
+ quick_fx_result_width = nil,  -- nil = auto-calculate
+ quick_fx_result_height = nil, -- nil = auto-calculate
+
 }
 
 local settings = {}
@@ -558,6 +595,7 @@ local Layout = {
  { name = "shuttle_wheel", showFlag = "show_shuttle_wheel", keyx = "shuttle_wheel_x", keyy = "shuttle_wheel_y" },
  { name = "waveform_scrubber", showFlag = "show_waveform_scrubber", keyx = "waveform_scrubber_x", keyy = "waveform_scrubber_y" },
  { name = "matrix_ticker", showFlag = "show_matrix_ticker", keyx = "matrix_ticker_x", keyy = "matrix_ticker_y" },
+ { name = "quick_fx", showFlag = "show_quick_fx", keyx = "quick_fx_x", keyy = "quick_fx_y" },
  { name = "color_picker", showFlag = "show_color_picker", keyx = "color_picker_x", keyy = "color_picker_y" },
  }
 }
@@ -723,7 +761,8 @@ local transport_components = {
  { id = "visual_metronome", name = "Visual Metronome" },
  { id = "taptempo", name = "TapTempo" },
  { id = "playrate", name = "Playrate" },
- { id = "matrix_ticker", name = "Matrix Ticker" }
+ { id = "matrix_ticker", name = "Matrix Ticker" },
+ { id = "quick_fx", name = "Quick FX" }
 }
 
 function ShowComponentList(ctx)
@@ -796,6 +835,8 @@ function ShowComponentSettings(ctx, main_window_width, main_window_height)
  ShowPlayrateSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "matrix_ticker" then
  ShowMatrixTickerSettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "quick_fx" then
+ ShowQuickFXSettings(ctx, main_window_width, main_window_height)
  else
  r.ImGui_TextDisabled(ctx, "Settings for this component are not yet implemented")
  end
@@ -2805,6 +2846,146 @@ function ShowMatrixTickerSettings(ctx, main_window_width, main_window_height)
  end
 end
 
+function ShowQuickFXSettings(ctx, main_window_width, main_window_height)
+ local rv
+ 
+ rv, settings.show_quick_fx = r.ImGui_Checkbox(ctx, "Show Quick FX", settings.show_quick_fx or false)
+ 
+ if r.file_exists(quick_fx.fx_list_path) then
+ r.ImGui_TextColored(ctx, 0x00FF00FF, "✓ FX_LIST.txt found")
+ if quick_fx.fx_list_loaded then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, string.format("(%d plugins loaded)", #quick_fx.fx_list))
+ end
+ else
+ r.ImGui_TextColored(ctx, 0xFF0000FF, "⚠ FX_LIST.txt not found")
+ r.ImGui_Text(ctx, "Run: Sexan FX Browser Parser to generate list")
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if settings.show_quick_fx then
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Position:")
+ DrawPixelXYControls('quick_fx_x', 'quick_fx_y', main_window_width, main_window_height)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "QuickFXFont", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Font:")
+ 
+ local current_font = settings.quick_fx_font_name or "Arial"
+ local current_font_index = 0
+ for i, font_name in ipairs(fonts) do
+ if font_name == current_font then
+ current_font_index = i - 1
+ break
+ end
+ end
+ 
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, current_font_index = r.ImGui_Combo(ctx, "##QuickFXFont", current_font_index, table.concat(fonts, '\0') .. '\0')
+ if rv then
+ settings.quick_fx_font_name = fonts[current_font_index + 1]
+ end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Size:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.quick_fx_font_size = r.ImGui_SliderInt(ctx, "##QuickFXSize", settings.quick_fx_font_size or 12, 8, 24)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "QuickFXSize", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Search Width:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.quick_fx_search_width = r.ImGui_SliderInt(ctx, "##SearchWidth", settings.quick_fx_search_width or 200, 100, 400)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Button Width:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.quick_fx_button_width = r.ImGui_SliderInt(ctx, "##ButtonWidth", settings.quick_fx_button_width or 40, 30, 100)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "QuickFXDisplay", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.quick_fx_strip_prefix = r.ImGui_Checkbox(ctx, "Strip prefix", settings.quick_fx_strip_prefix ~= false)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.quick_fx_strip_developer = r.ImGui_Checkbox(ctx, "Strip developer", settings.quick_fx_strip_developer or false)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Colors:")
+ local color_flags = r.ImGui_ColorEditFlags_NoInputs()
+ 
+ if r.ImGui_BeginTable(ctx, "QuickFXColors", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.quick_fx_bg_color = r.ImGui_ColorEdit4(ctx, "Background", settings.quick_fx_bg_color or 0x222222FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.quick_fx_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.quick_fx_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.quick_fx_border_color = r.ImGui_ColorEdit4(ctx, "Border", settings.quick_fx_border_color or 0x666666FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.quick_fx_result_highlight_color = r.ImGui_ColorEdit4(ctx, "Highlight", settings.quick_fx_result_highlight_color or 0x0078D7FF, color_flags)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "QuickFXBorder", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.quick_fx_show_border = r.ImGui_Checkbox(ctx, "Show Border", settings.quick_fx_show_border ~= false)
+ if settings.quick_fx_show_border then
+ r.ImGui_Text(ctx, "Border Size:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.quick_fx_border_size = r.ImGui_SliderDouble(ctx, "##BorderSize", settings.quick_fx_border_size or 1.0, 0.5, 5.0)
+ end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Rounding:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.quick_fx_rounding = r.ImGui_SliderDouble(ctx, "##Rounding", settings.quick_fx_rounding or 4.0, 0.0, 12.0)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Result Window:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.quick_fx_result_bg_color = r.ImGui_ColorEdit4(ctx, "Result Background", settings.quick_fx_result_bg_color or 0x1E1E1EFF, color_flags)
+ end
+end
+
 function ShowTapTempoSettings(ctx, main_window_width, main_window_height)
  local rv
  rv, settings.show_taptempo = r.ImGui_Checkbox(ctx, "Show TapTempo", settings.show_taptempo ~= false)
@@ -3403,6 +3584,11 @@ end
 
 LoadPreset(preset_name)
 
+if r.HasExtState("TK_TRANSPORT", "simple_mixer_window_open") then
+ local mixer_state = r.GetExtState("TK_TRANSPORT", "simple_mixer_window_open")
+ settings.simple_mixer_window_open = (mixer_state == "true")
+end
+
 function GetPresetList()
  local presets = {}
  local idx = 0
@@ -3427,6 +3613,10 @@ function LoadLastUsedPreset()
  if last_preset ~= "" then
  preset_name = last_preset
  LoadPreset(last_preset)
+ if r.HasExtState("TK_TRANSPORT", "simple_mixer_window_open") then
+ local mixer_state = r.GetExtState("TK_TRANSPORT", "simple_mixer_window_open")
+ settings.simple_mixer_window_open = (mixer_state == "true")
+ end
  end
 end
 
@@ -6130,7 +6320,6 @@ function SimpleMixerButton(main_window_width, main_window_height)
  r.ImGui_SetCursorPosX(ctx, pos_x)
  r.ImGui_SetCursorPosY(ctx, pos_y)
  
- -- Apply styling
  local button_width = settings.simple_mixer_button_width or 60
  local button_height = settings.simple_mixer_button_height or 25
  local button_color = settings.simple_mixer_window_open and (settings.simple_mixer_button_color_open or 0x00AA00FF) or (settings.simple_mixer_button_color_closed or 0x808080FF)
@@ -6156,6 +6345,7 @@ function SimpleMixerButton(main_window_width, main_window_height)
  
  if r.ImGui_Button(ctx, button_label, button_width, button_height) and allow_input then
  settings.simple_mixer_window_open = not settings.simple_mixer_window_open
+ r.SetExtState("TK_TRANSPORT", "simple_mixer_window_open", tostring(settings.simple_mixer_window_open), true)
  end
  
  if use_icon then
@@ -6598,6 +6788,7 @@ function DrawSimpleMixerWindow()
  
  if not open then
  settings.simple_mixer_window_open = false
+ r.SetExtState("TK_TRANSPORT", "simple_mixer_window_open", "false", true)
  end
 end
 
@@ -8385,6 +8576,340 @@ function ShowMatrixTicker(main_window_width, main_window_height)
  StoreElementRect("matrix_ticker")
 end
 
+---------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------------
+
+local function StringToTable(str)
+ local f, err = load("return " .. str)
+ return f ~= nil and f() or nil
+end
+
+local function LoadFXList()
+ if quick_fx.fx_list_loaded then
+ return true
+ end
+ 
+ if not r.file_exists(quick_fx.fx_list_path) then
+ return false
+ end
+ 
+ local file = io.open(quick_fx.fx_list_path, "r")
+ if not file then
+ return false
+ end
+ 
+ local content = file:read("*all")
+ file:close()
+ 
+ local fx_table = StringToTable(content)
+ if fx_table then
+ quick_fx.fx_list = fx_table
+ quick_fx.fx_list_loaded = true
+ return true
+ end
+ 
+ return false
+end
+
+local function SearchFX(search_term)
+ if not search_term or search_term == "" then
+ return {}
+ end
+ 
+ if not quick_fx.fx_list_loaded then
+ if not LoadFXList() then
+ return {}
+ end
+ end
+ 
+ local results = {}
+ local search_lower = search_term:lower()
+ local seen_base_names = {}  -- Track base names om duplicaten te detecteren
+ 
+ local function get_plugin_type(fx_name)
+ if fx_name:match("VST3:") or fx_name:match("VST3i:") then
+ return 1  -- VST3 hoogste prioriteit
+ elseif fx_name:match("CLAP:") or fx_name:match("CLAPi:") then
+ return 2  -- CLAP tweede
+ elseif fx_name:match("VST:") or fx_name:match("VSTi:") then
+ return 3  -- VST2 derde
+ elseif fx_name:match("JS:") then
+ return 4  -- JS vierde
+ elseif fx_name:match("AU:") or fx_name:match("AUi:") then
+ return 5  -- AU vijfde
+ else
+ return 6  -- Overige
+ end
+ end
+ 
+ local function get_base_name(fx_name)
+ return fx_name:gsub("^(%S+: )", "")  -- Verwijder "VST3: ", "CLAP: ", etc.
+ end
+ 
+ for i = 1, #quick_fx.fx_list do
+ local fx_name = quick_fx.fx_list[i]
+ if fx_name:lower():find(search_lower, 1, true) then
+ local base_name = get_base_name(fx_name)
+ local plugin_type = get_plugin_type(fx_name)
+ 
+ if not seen_base_names[base_name] or plugin_type < seen_base_names[base_name].type then
+ local score = fx_name:len() - search_term:len()
+ 
+ seen_base_names[base_name] = {
+ type = plugin_type,
+ data = {
+ name = fx_name,
+ score = score,
+ plugin_type = plugin_type,
+ base_name = base_name
+ }
+ }
+ end
+ end
+ end
+ 
+ for _, entry in pairs(seen_base_names) do
+ table.insert(results, entry.data)
+ end
+ 
+ if #results >= 2 then
+ table.sort(results, function(a, b)
+ if a.plugin_type ~= b.plugin_type then
+ return a.plugin_type < b.plugin_type
+ end
+ if a.score ~= b.score then
+ return a.score < b.score
+ end
+ return a.name:lower() < b.name:lower()
+ end)
+ end
+ 
+ return results
+end
+
+local function AddFXToSelectedTrack(fx_name)
+ local track = r.GetSelectedTrack(0, 0)
+ if not track then
+ return false
+ end
+ 
+ local fx_index = r.TrackFX_AddByName(track, fx_name, false, -1000 - r.TrackFX_GetCount(track))
+ if fx_index >= 0 then
+ r.TrackFX_Show(track, fx_index, 3) -- Open FX window
+ return true
+ end
+ 
+ return false
+end
+
+function ShowQuickFX(main_window_width, main_window_height)
+ if not settings.show_quick_fx then return end
+ 
+ local pos_x = settings.quick_fx_x_px and ScalePosX(settings.quick_fx_x_px, main_window_width, settings)
+ or ((settings.quick_fx_x or 0.30) * main_window_width)
+ local pos_y = settings.quick_fx_y_px and ScalePosY(settings.quick_fx_y_px, main_window_height, settings)
+ or ((settings.quick_fx_y or 0.50) * main_window_height)
+ 
+ r.ImGui_SetCursorPosX(ctx, pos_x)
+ r.ImGui_SetCursorPosY(ctx, pos_y)
+ 
+ if not quick_fx.font then
+ quick_fx.font = r.ImGui_CreateFont(
+ settings.quick_fx_font_name or "Arial",
+ settings.quick_fx_font_size or 12
+ )
+ r.ImGui_Attach(ctx, quick_fx.font)
+ end
+ r.ImGui_PushFont(ctx, quick_fx.font, settings.quick_fx_font_size or 12)
+ 
+ if not quick_fx.fx_list_loaded then
+ if not LoadFXList() then
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF0000FF)
+ r.ImGui_Text(ctx, "FX_LIST.txt not found!")
+ r.ImGui_PopStyleColor(ctx, 1)
+ r.ImGui_Text(ctx, "Use scripts like TK FX BROWSER or PARANORMAL FX")
+ r.ImGui_Text(ctx, "to scan and create the plugin list first.")
+ r.ImGui_PopFont(ctx)
+ return
+ end
+ end
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), settings.quick_fx_bg_color or 0x222222FF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.quick_fx_text_color or 0xFFFFFFFF)
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.quick_fx_rounding or 4.0)
+ 
+ r.ImGui_SetNextItemWidth(ctx, settings.quick_fx_search_width or 200)
+ local rv, new_text = r.ImGui_InputTextWithHint(ctx, "##QuickFXSearch", "Search FX...", quick_fx.search_text)
+ if rv then
+ quick_fx.search_text = new_text
+ quick_fx.last_text_change_time = r.time_precise()
+ end
+ 
+ local search_field_x, search_field_y = r.ImGui_GetItemRectMin(ctx)
+ local search_field_max_x, search_field_max_y = r.ImGui_GetItemRectMax(ctx)
+ 
+ if quick_fx.result_window_open and quick_fx.search_text ~= "" then
+ local current_time = r.time_precise()
+ if current_time - quick_fx.last_text_change_time >= quick_fx.debounce_delay then
+ if quick_fx.search_text ~= quick_fx.last_search then
+ quick_fx.results = SearchFX(quick_fx.search_text)
+ quick_fx.last_search = quick_fx.search_text
+ quick_fx.selected_index = -1
+ end
+ end
+ end
+ 
+ if settings.quick_fx_show_border then
+ local dl = r.ImGui_GetWindowDrawList(ctx)
+ local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+ local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+ r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y,
+ settings.quick_fx_border_color or 0x666666FF,
+ settings.quick_fx_rounding or 4.0, 0,
+ settings.quick_fx_border_size or 1.0)
+ end
+ 
+ if r.ImGui_IsItemFocused(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+ if quick_fx.search_text ~= "" then
+ quick_fx.results = SearchFX(quick_fx.search_text)
+ quick_fx.last_search = quick_fx.search_text
+ quick_fx.result_window_open = true
+ quick_fx.selected_index = -1  -- Geen selectie, zodat Enter niet direct een plugin laadt
+ end
+ end
+ 
+ r.ImGui_SameLine(ctx)
+ 
+ if r.ImGui_Button(ctx, "X", settings.quick_fx_button_width or 40, 0) then
+ quick_fx.search_text = ""
+ quick_fx.result_window_open = false
+ quick_fx.results = {}
+ quick_fx.last_search = ""
+ quick_fx.selected_index = -1
+ end
+ 
+ r.ImGui_PopStyleVar(ctx, 1)
+ r.ImGui_PopStyleColor(ctx, 2)
+ r.ImGui_PopFont(ctx)
+ 
+ StoreElementRect("quick_fx")
+ 
+ if quick_fx.result_window_open and #quick_fx.results > 0 then
+ local result_x = search_field_x
+ local result_y = search_field_max_y + 2 -- 2px spacing onder het zoekveld
+ 
+ local result_width = settings.quick_fx_result_width or ((settings.quick_fx_search_width or 200) + (settings.quick_fx_button_width or 40) + 5)
+ local result_height = settings.quick_fx_result_height or math.min(#quick_fx.results * 25 + 60, 400)
+ 
+ r.ImGui_SetNextWindowPos(ctx, result_x, result_y, r.ImGui_Cond_Always())
+ r.ImGui_SetNextWindowSize(ctx, result_width, result_height, r.ImGui_Cond_FirstUseEver())
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), settings.quick_fx_result_bg_color or 0x1E1E1EFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.quick_fx_border_color or 0x666666FF)
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8.0)
+ 
+ local window_flags = r.ImGui_WindowFlags_NoTitleBar() | 
+                      r.ImGui_WindowFlags_NoMove()
+ 
+ local result_visible, result_open = r.ImGui_Begin(ctx, "##QuickFXResults", true, window_flags)
+ if result_visible then
+ local current_width, current_height = r.ImGui_GetWindowSize(ctx)
+ if current_width ~= result_width or current_height ~= result_height then
+ settings.quick_fx_result_width = current_width
+ settings.quick_fx_result_height = current_height
+ end
+ r.ImGui_PushFont(ctx, quick_fx.font, settings.quick_fx_font_size or 12)
+ 
+ local window_width = r.ImGui_GetWindowWidth(ctx)
+ if r.ImGui_Button(ctx, "Cancel", 60, 0) then
+ quick_fx.result_window_open = false
+ quick_fx.search_text = ""
+ end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetCursorPosX(ctx, 70) -- Start tekst na de knop
+ r.ImGui_Text(ctx, string.format("%d results", #quick_fx.results))
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_BeginChild(ctx, "##ResultsList", 0, 0) then
+ for i = 1, #quick_fx.results do
+ local is_selected = (quick_fx.selected_index == i)
+ 
+ if is_selected then
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), settings.quick_fx_result_highlight_color or 0x0078D7FF)
+ end
+ 
+ local display_name = quick_fx.results[i].name
+ if settings.quick_fx_strip_prefix then
+ display_name = display_name:gsub("^(%S+: )", "")
+ end
+ 
+ if settings.quick_fx_strip_developer then
+ display_name = display_name:gsub('^%s*[%w_]+%s*:%s*', '')
+ display_name = display_name:gsub('%s*%([^)]-%)%s*$', '')
+ display_name = display_name:gsub('^%s+', ''):gsub('%s+$', '')
+ end
+ 
+ if r.ImGui_Selectable(ctx, display_name, is_selected, r.ImGui_SelectableFlags_AllowDoubleClick()) then
+ quick_fx.selected_index = i
+ 
+ if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+ if AddFXToSelectedTrack(quick_fx.results[i].name) then
+ quick_fx.result_window_open = false
+ quick_fx.search_text = ""
+ else
+ r.ShowMessageBox("Could not add FX. Make sure a track is selected.", "Quick FX", 0)
+ end
+ end
+ end
+ 
+ if is_selected then
+ r.ImGui_PopStyleColor(ctx, 1)
+ end
+ 
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, quick_fx.results[i].name .. "\n\nDouble-click to add to selected track")
+ end
+ end
+ r.ImGui_EndChild(ctx)
+ end
+ 
+ if quick_fx.selected_index > 0 and quick_fx.selected_index <= #quick_fx.results and r.ImGui_IsWindowFocused(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+ if AddFXToSelectedTrack(quick_fx.results[quick_fx.selected_index].name) then
+ quick_fx.result_window_open = false
+ quick_fx.search_text = ""
+ else
+ r.ShowMessageBox("Could not add FX. Make sure a track is selected.", "Quick FX", 0)
+ end
+ end
+ 
+ if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_UpArrow()) then
+ if quick_fx.selected_index <= 0 then
+ quick_fx.selected_index = #quick_fx.results  -- Ga naar laatste item
+ else
+ quick_fx.selected_index = math.max(1, quick_fx.selected_index - 1)
+ end
+ elseif r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) then
+ if quick_fx.selected_index < 0 then
+ quick_fx.selected_index = 1  -- Ga naar eerste item
+ else
+ quick_fx.selected_index = math.min(#quick_fx.results, quick_fx.selected_index + 1)
+ end
+ end
+ 
+ r.ImGui_PopFont(ctx)
+ r.ImGui_End(ctx)
+ end
+ 
+ r.ImGui_PopStyleVar(ctx, 1)
+ r.ImGui_PopStyleColor(ctx, 2)
+ 
+ if not result_open then
+ quick_fx.result_window_open = false
+ end
+ end
+end
+
 function ShowColorPicker(main_window_width, main_window_height)
  if not settings.show_color_picker then return end
  
@@ -9652,6 +10177,7 @@ function Main()
  ShowShuttleWheel(main_window_width, main_window_height)
  ShowWaveformScrubber(main_window_width, main_window_height)
  ShowMatrixTicker(main_window_width, main_window_height)
+ ShowQuickFX(main_window_width, main_window_height)
  ShowColorPicker(main_window_width, main_window_height)
  
  CustomButtons.x_offset_px = settings.custom_buttons_x_offset_px or (settings.custom_buttons_x_offset * main_window_width)
