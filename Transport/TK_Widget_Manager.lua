@@ -61,6 +61,13 @@ local widgets = {
         description = "Tap to set the tempo",
         command_id = "",
         is_open = false
+    },
+    {
+        name = "FX Search",
+        script = "TK_Widget_FXSearch.lua",
+        description = "Quick search for FX plugins to add to selected track",
+        command_id = "",
+        is_open = false
     }
 }
 
