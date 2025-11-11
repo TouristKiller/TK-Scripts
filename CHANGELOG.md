@@ -5,6 +5,14 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 ## Ongeversioneerd (werk in uitvoering)
 
 ### Toegevoegd
+- **Transport Widgets - FX Search**: Nieuw widget voor snel zoeken en toevoegen van FX plugins
+  - Standalone zoekfunctie onafhankelijk van TK_RAW_fx browser
+  - Zoekresultaten in dropdown/popup venster
+  - Dubbelklik om FX toe te voegen aan geselecteerde track
+  - Keyboard navigatie (pijltjes omhoog/omlaag, Enter om toe te voegen, Escape om te annuleren)
+  - Filtert instrumenten uit, toont alleen effects geschikt voor tracks
+  - Gebruikt Sexan's FX Parser V7 voor plugin lijst
+  - Configureerbaar maximaal aantal resultaten (standaard 50)
 - **MIDI/Video playback options**:
   - **Independent playback mode**: Media browser speelt nu standaard onafhankelijk van project transport af
   - **Link mode**: Optionele synchronisatie tussen media browser en project playback (schakelbaar via LINK knop)

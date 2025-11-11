@@ -25,6 +25,8 @@ local filtered_results = {}
 local selected_index = 1
 local show_popup = false
 local popup_opened_this_frame = false
+local last_added_fx = ""
+local last_added_time = 0
 
 -- Default settings
 local default_settings = {
@@ -33,8 +35,8 @@ local default_settings = {
     rel_pos_y = 0.3,
     font_size = 12,
     show_background = true,
-    widget_width = 400,
-    widget_height = 300,
+    widget_width = 350,
+    widget_height = 60,
     use_tk_transport_theme = true,
     current_preset = "",
     window_rounding = 12.0,
@@ -60,7 +62,8 @@ local default_settings = {
     last_pos_x = 100,
     last_pos_y = 100,
     max_results = 50,
-    search_width = 200
+    search_width = 250,
+    results_height = 200
 }
 
 local widget = handler.init("FX Search Widget", default_settings)
@@ -240,6 +243,9 @@ local function add_fx_to_selected_track(addname)
     
     local fx_index = r.TrackFX_AddByName(track, addname, false, -1)
     if fx_index >= 0 then
+        -- Store last added for status display
+        last_added_fx = addname
+        last_added_time = r.time_precise and r.time_precise() or os.clock()
         -- Optionally open FX window
         -- r.TrackFX_Show(track, fx_index, 3)
         return true
@@ -333,6 +339,14 @@ function ShowFXSearch(h)
         r.ImGui_Text(h.ctx, "Click to load plugins")
     end
     
+    -- Show status message when FX was recently added
+    local now = r.time_precise and r.time_precise() or os.clock()
+    if last_added_fx ~= "" and (now - last_added_time) < 2.0 then
+        r.ImGui_PushStyleColor(h.ctx, r.ImGui_Col_Text(), 0x00FF00FF) -- Green
+        r.ImGui_Text(h.ctx, "Added: " .. last_added_fx)
+        r.ImGui_PopStyleColor(h.ctx, 1)
+    end
+    
     -- Results dropdown/popup
     if show_popup and #filtered_results > 0 then
         -- Position popup below search field
@@ -344,13 +358,13 @@ function ShowFXSearch(h)
         end
         popup_opened_this_frame = false
         
-        r.ImGui_SetNextWindowSize(h.ctx, h.settings.search_width + 100, 200)
+        r.ImGui_SetNextWindowSize(h.ctx, h.settings.search_width + 100, h.settings.results_height)
         
         local popup_flags = r.ImGui_WindowFlags_NoTitleBar()
             | r.ImGui_WindowFlags_NoResize()
             | r.ImGui_WindowFlags_NoMove()
         
-        if r.ImGui_BeginChild(h.ctx, "##results_popup", h.settings.search_width + 100, 200, r.ImGui_ChildFlags_Border()) then
+        if r.ImGui_BeginChild(h.ctx, "##results_popup", h.settings.search_width + 100, h.settings.results_height, r.ImGui_ChildFlags_Border()) then
             r.ImGui_Text(h.ctx, string.format("Results (%d):", #filtered_results))
             r.ImGui_Separator(h.ctx)
             
