@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.4
+-- @version 1.2.5
 -- @changelog 
 --[[
 
@@ -4538,12 +4538,10 @@ function ShowSettings(main_window_width , main_window_height)
  
  r.ImGui_TableSetColumnIndex(ctx, 2)
  if r.ImGui_Button(ctx, "Auto Set (Current)") then
- local current_width, current_height = r.ImGui_GetWindowSize(ctx)
- local main_window_width, main_window_height = r.ImGui_GetWindowSize(ctx)
- settings.custom_buttons_ref_width = main_window_width
- settings.custom_buttons_ref_height = main_window_height
- ref_w = main_window_width
- ref_h = main_window_height
+ settings.custom_buttons_ref_width = math.floor(main_window_width)
+ settings.custom_buttons_ref_height = math.floor(main_window_height)
+ ref_w = math.floor(main_window_width)
+ ref_h = math.floor(main_window_height)
  changed_scaling = true
  end
  
@@ -5599,10 +5597,23 @@ function Transport_Buttons(main_window_width, main_window_height)
  local mode_x_px = settings["transport_x" .. mode_suffix .. "_px"]
  local mode_y_px = settings["transport_y" .. mode_suffix .. "_px"]
  
- local base_x_px = mode_center and math.max(0, math.floor((main_window_width - total_width) / 2)) or (mode_x_px or math.floor(mode_x * main_window_width))
- local base_y_px = mode_y_px or math.floor(mode_y * main_window_height)
- if mode_x_px then base_x_px = ScalePosX(base_x_px, main_window_width, settings) end
- if mode_y_px then base_y_px = ScalePosY(base_y_px, main_window_height, settings) end
+ local base_x_px, base_y_px
+ 
+ if mode_center then
+ base_x_px = math.max(0, math.floor((main_window_width - total_width) / 2))
+ else
+ if mode_x_px then
+ base_x_px = ScalePosX(mode_x_px, main_window_width, settings)
+ else
+ base_x_px = math.floor(mode_x * main_window_width)
+ end
+ end
+ 
+ if mode_y_px then
+ base_y_px = ScalePosY(mode_y_px, main_window_height, settings)
+ else
+ base_y_px = math.floor(mode_y * main_window_height)
+ end
 
  group_min_x, group_min_y, group_max_x, group_max_y = nil, nil, nil, nil
 
