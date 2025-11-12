@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.5
+-- @version 1.2.6
 -- @changelog 
 --[[
 
@@ -202,6 +202,8 @@ local default_settings = {
  current_font = "Arial",
  font_size = 12,
  lock_window_size = false,
+ lock_window_position = false,
+ snap_to_reaper_transport = false,
 
  -- Transport buttons font (independent of base font)
  transport_font_name = "Arial",
@@ -361,7 +363,8 @@ local default_settings = {
  simple_mixer_font = 1,
  simple_mixer_font_size = 12,
  simple_mixer_save_fader_positions = false,
- -- Simple Mixer Button styling
+ simple_mixer_window_bg_color = 0x1E1E1EFF,
+ simple_mixer_border_color = 0x444444FF,
  simple_mixer_button_font = 1,
  simple_mixer_button_font_size = 14,
  simple_mixer_button_width = 60,
@@ -597,8 +600,40 @@ local Layout = {
  { name = "matrix_ticker", showFlag = "show_matrix_ticker", keyx = "matrix_ticker_x", keyy = "matrix_ticker_y" },
  { name = "quick_fx", showFlag = "show_quick_fx", keyx = "quick_fx_x", keyy = "quick_fx_y" },
  { name = "color_picker", showFlag = "show_color_picker", keyx = "color_picker_x", keyy = "color_picker_y" },
+ { name = "simple_mixer_button", showFlag = "show_simple_mixer_button", keyx = "simple_mixer_button_x", keyy = "simple_mixer_button_y" },
  }
 }
+
+-- Variables to track REAPER transport snapping
+local last_reaper_transport_x = nil
+local last_reaper_transport_y = nil
+local force_snap_position = false
+local window_name_suffix = ""
+
+-- Function to get REAPER transport position using js_ReaScriptAPI
+local function GetReaperTransportPosition()
+ if not reaper.JS_Window_Find then
+ return nil, nil, nil, nil
+ end
+ 
+ -- Find the transport window (lowercase "transport" is important!)
+ local transport_hwnd = reaper.JS_Window_Find("transport", true)
+ if not transport_hwnd then
+ return nil, nil, nil, nil
+ end
+ 
+ -- Get the position and size
+ local retval, left, top, right, bottom = reaper.JS_Window_GetRect(transport_hwnd)
+ if retval then
+ -- Convert native coordinates to ImGui coordinates
+ local imgui_left, imgui_top = r.ImGui_PointConvertNative(ctx, left, top)
+ local imgui_right, imgui_bottom = r.ImGui_PointConvertNative(ctx, right, bottom)
+ return imgui_left, imgui_top, imgui_right - imgui_left, imgui_bottom - imgui_top
+ end
+ 
+ return nil, nil, nil, nil
+end
+
 function Layout.move_frac(dx, dy, keyx, keyy)
  settings[keyx] = math.max(0, math.min(1, (settings[keyx] or 0) + dx))
  settings[keyy] = math.max(0, math.min(1, (settings[keyy] or 0) + dy))
@@ -2100,6 +2135,20 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
  rv, settings.simple_mixer_font_size = r.ImGui_SliderInt(ctx, "##SimpleMixerFontSize", settings.simple_mixer_font_size or 12, 10, 15, "%d")
  if rv then
  RebuildSectionFonts()
+ end
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Window Colors:")
+ if r.ImGui_BeginTable(ctx, "SimpleMixerWindowColors", 2) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableNextColumn(ctx)
+ rv, settings.simple_mixer_window_bg_color = r.ImGui_ColorEdit4(ctx, "Background##SimpleMixerWinBg", settings.simple_mixer_window_bg_color or 0x1E1E1EFF, r.ImGui_ColorEditFlags_NoInputs())
+ r.ImGui_TableNextColumn(ctx)
+ rv, settings.simple_mixer_border_color = r.ImGui_ColorEdit4(ctx, "Border##SimpleMixerBorder", settings.simple_mixer_border_color or 0x444444FF, r.ImGui_ColorEditFlags_NoInputs())
+ 
+ r.ImGui_EndTable(ctx)
  end
  
  r.ImGui_Separator(ctx)
@@ -4498,6 +4547,49 @@ function ShowSettings(main_window_width , main_window_height)
  MarkTransportPresetChanged()
  end
  
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rvb, settings.lock_window_position = r.ImGui_Checkbox(ctx, "Lock Window Position", settings.lock_window_position or false)
+ if rvb then
+ MarkTransportPresetChanged()
+ end
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ local snap_changed
+ snap_changed, settings.snap_to_reaper_transport = r.ImGui_Checkbox(ctx, "Snap to REAPER Transport", settings.snap_to_reaper_transport or false)
+ if snap_changed then
+ MarkTransportPresetChanged()
+ -- Reset cached position when toggling to force immediate update
+ last_reaper_transport_x = nil
+ last_reaper_transport_y = nil
+ -- Force ImGui to reposition by clearing its window settings
+ if settings.snap_to_reaper_transport then
+ -- Automatically enable lock position and size when snapping
+ settings.lock_window_position = true
+ settings.lock_window_size = true
+ -- Change window name to force ImGui to reset position state
+ window_name_suffix = "_snap"
+ -- Set flag to force position update on next frame
+ force_snap_position = true
+ -- Get the transport position immediately
+ local transport_x, transport_y, transport_w, transport_h = GetReaperTransportPosition()
+ if transport_x and transport_y then
+ -- Store for next frame
+ last_reaper_transport_x = transport_x
+ last_reaper_transport_y = transport_y
+ end
+ else
+ window_name_suffix = ""
+ end
+ end
+ if settings.snap_to_reaper_transport then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_TextDisabled(ctx, "(?)")
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, "Positions this window on top of REAPER's transport bar.\nRequires js_ReaScriptAPI extension.")
+ end
+ end
+ 
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  rvb, settings.custom_buttons_scale_with_width = r.ImGui_Checkbox(ctx, "Scale positions with window width", settings.custom_buttons_scale_with_width or false)
@@ -6438,6 +6530,8 @@ function DrawSimpleMixerWindow()
  end
  
  r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_WindowRounding(), 8)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_WindowBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Border(), settings.simple_mixer_border_color or 0x444444FF)
  
  r.ImGui_SetNextWindowSize(mixer_ctx, settings.simple_mixer_window_width or 400, settings.simple_mixer_window_height or 600, r.ImGui_Cond_FirstUseEver())
  
@@ -6580,7 +6674,8 @@ function DrawSimpleMixerWindow()
  local slider_height
  if settings.simple_mixer_auto_height then
  local _, window_height = r.ImGui_GetWindowSize(mixer_ctx)
- local overhead = 90
+ local font_size = settings.simple_mixer_font_size or 12
+ local overhead = 70 + font_size + 10
  if settings.simple_mixer_show_mute_solo then overhead = overhead + 50 end  
  if settings.simple_mixer_show_arm then overhead = overhead + 25 end 
  if settings.simple_mixer_show_pan then overhead = overhead + 25 end 
@@ -6589,7 +6684,7 @@ function DrawSimpleMixerWindow()
  else
  slider_height = settings.simple_mixer_slider_height or 200
  end
- local track_width = 50
+ local track_width = 70
  
  local avail_width, avail_height = r.ImGui_GetContentRegionAvail(mixer_ctx)
  
@@ -6702,10 +6797,18 @@ function DrawSimpleMixerWindow()
  r.ImGui_Dummy(mixer_ctx, 0, 2)
  
  local display_name = track_name
- if #display_name > 10 then
- display_name = display_name:sub(1, 10) .. "..."
+ local font_size = settings.simple_mixer_font_size or 12
+ local estimated_char_width = font_size * 0.65
+ local max_chars = math.floor(track_width / estimated_char_width)
+ if max_chars < 2 then max_chars = 2 end
+ 
+ if #display_name > max_chars then
+ display_name = display_name:sub(1, max_chars)
  end
+ 
+ r.ImGui_PushItemWidth(mixer_ctx, track_width)
  r.ImGui_Text(mixer_ctx, display_name)
+ r.ImGui_PopItemWidth(mixer_ctx)
  
  if r.ImGui_IsItemHovered(mixer_ctx) then
  r.ImGui_SetTooltip(mixer_ctx, track_name)
@@ -6790,6 +6893,7 @@ function DrawSimpleMixerWindow()
  
  r.ImGui_End(mixer_ctx)
  
+ r.ImGui_PopStyleColor(mixer_ctx, 2)
  r.ImGui_PopStyleVar(mixer_ctx, 1)
  
  if font_simple_mixer then
@@ -8407,10 +8511,13 @@ function ShowCursorPosition(main_window_width, main_window_height)
  local _, projmeasoffs = reaper.get_config_var_string("projmeasoffs")
  local measure_correction = (projmeasoffs and tonumber(projmeasoffs) == 0) and 1 or 0
  local beatsInMeasure = fullbeats % timesig_num
- local ticks = math.floor((beatsInMeasure - math.floor(beatsInMeasure)) * 960/10)
- local minutes = math.floor(position / 60)
+ local beat_fraction = beatsInMeasure - math.floor(beatsInMeasure)
+ local ticks = math.floor(beat_fraction * 100 + 0.5)
+ if ticks >= 100 then ticks = 99 end
+ local hours = math.floor(position / 3600)
+ local minutes = math.floor((position % 3600) / 60)
  local seconds = position % 60
- local time_str = string.format("%d:%06.3f", minutes, seconds)
+ local time_str = (hours > 0) and string.format("%d:%02d:%06.3f", hours, minutes, seconds) or string.format("%d:%06.3f", minutes, seconds)
  local mbt_str = string.format("%d.%d.%02d", math.floor(measures + measure_correction), math.floor(beatsInMeasure+1), ticks)
  local mode = settings.cursorpos_mode or "both"
  local label
@@ -8807,10 +8914,19 @@ function ShowQuickFX(main_window_width, main_window_height)
  
  if quick_fx.result_window_open and #quick_fx.results > 0 then
  local result_x = search_field_x
- local result_y = search_field_max_y + 2 -- 2px spacing onder het zoekveld
- 
  local result_width = settings.quick_fx_result_width or ((settings.quick_fx_search_width or 200) + (settings.quick_fx_button_width or 40) + 5)
  local result_height = settings.quick_fx_result_height or math.min(#quick_fx.results * 25 + 60, 400)
+ 
+ local viewport = r.ImGui_GetMainViewport(ctx)
+ local display_w, display_h = r.ImGui_Viewport_GetSize(viewport)
+ local space_below = display_h - search_field_max_y
+ local result_y
+ 
+ if space_below < result_height then
+  result_y = search_field_y - result_height - 2
+ else
+  result_y = search_field_max_y + 2
+ end
  
  r.ImGui_SetNextWindowPos(ctx, result_x, result_y, r.ImGui_Cond_Always())
  r.ImGui_SetNextWindowSize(ctx, result_width, result_height, r.ImGui_Cond_FirstUseEver())
@@ -10150,14 +10266,43 @@ function Main()
   SetTransportStyle()
   styles_pushed = true
  
+  -- Snap to REAPER transport position if enabled
+  if settings.snap_to_reaper_transport then
+   local transport_x, transport_y, transport_w, transport_h = GetReaperTransportPosition()
+   if transport_x and transport_y then
+    -- Set position without condition to force update every frame
+    r.ImGui_SetNextWindowPos(ctx, transport_x, transport_y)
+    last_reaper_transport_x = transport_x
+    last_reaper_transport_y = transport_y
+   elseif last_reaper_transport_x and last_reaper_transport_y then
+    -- Use last known position if transport not found this frame
+    r.ImGui_SetNextWindowPos(ctx, last_reaper_transport_x, last_reaper_transport_y)
+   end
+  end
+ 
   local current_window_flags = window_flags
   if settings.lock_window_size then
    current_window_flags = current_window_flags | r.ImGui_WindowFlags_NoResize()
   end
+  if settings.lock_window_position then
+   current_window_flags = current_window_flags | r.ImGui_WindowFlags_NoMove()
+  end
  
-  visible, open = r.ImGui_Begin(ctx, 'Transport', true, current_window_flags)
+  visible, open = r.ImGui_Begin(ctx, 'Transport' .. window_name_suffix, true, current_window_flags)
   if visible then
    r.ImGui_SetScrollY(ctx, 0)
+   
+   -- Force window position if snap is enabled and we have a position
+   -- Use force_snap_position flag for immediate update when toggling the option
+   if settings.snap_to_reaper_transport and last_reaper_transport_x and last_reaper_transport_y then
+    if force_snap_position then
+     -- Force position multiple times to overcome ImGui's resistance
+     r.ImGui_SetWindowPos(ctx, last_reaper_transport_x, last_reaper_transport_y)
+     force_snap_position = false -- Reset flag after one frame
+    else
+     r.ImGui_SetWindowPos(ctx, last_reaper_transport_x, last_reaper_transport_y)
+    end
+   end
  
  DrawGradientBackground()
  
