@@ -1,8 +1,13 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.8
+-- @version 1.3.0
 -- @changelog 
 --[[
+Removed widgets tab from settings menu (Widgets are obsolete)
+Added window transparency setting
+Added snap to Reaper transport and TCP offsets
+Added topmost window option
+Fixed button border view (there was an issue where borders wouldn't show correctly with transparent buttons
 
   ]]--
 ---------------------------------------------------------------------------------------------
@@ -40,7 +45,6 @@ local transport_preset_has_unsaved_changes = false
 local CustomButtons = require('custom_buttons')
 local ButtonEditor = require('button_editor')
 local ButtonRenderer = require('button_renderer')
-local WidgetManager = require('widget_manager')
 
 
 local PLAY_COMMAND = 1007
@@ -203,8 +207,11 @@ local default_settings = {
  font_size = 12,
  lock_window_size = false,
  lock_window_position = false,
+ window_topmost = true,
  snap_to_reaper_transport = false,
  snap_to_reaper_tcp = false,
+ snap_offset_x = 0,
+ snap_offset_y = 0,
 
  transport_font_name = "Arial",
  transport_font_size = 12,
@@ -254,6 +261,7 @@ local default_settings = {
 
  -- Color settings
  background = 0x000000FF,
+ window_alpha = 1.0, -- Window transparency (0.0 = fully transparent, 1.0 = fully opaque)
  -- Gradient background settings
  use_gradient_background = false,
  gradient_color_top = 0x1A1A1AFF,
@@ -4357,7 +4365,6 @@ function ShowSettings(main_window_width , main_window_height)
  "Transport",
  "Scaling",
  "Buttons",
- "Widgets",
  }
  local total = 0
  local per_tab_padding = 28 
@@ -4377,7 +4384,6 @@ function ShowSettings(main_window_width , main_window_height)
 
  local transport_tab_active = false
  local buttons_tab_active = false
- local widgets_tab_active = false
  
  local SETTINGS_TAB_HEIGHT = -30 
 
@@ -4527,6 +4533,21 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_Spacing(ctx)
  
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x4A90E2FF)
+ r.ImGui_Text(ctx, "WINDOW TRANSPARENCY")
+ r.ImGui_PopStyleColor(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_PushItemWidth(ctx, -1)
+ local rv_alpha, new_alpha = r.ImGui_SliderDouble(ctx, "##WindowAlpha", settings.window_alpha or 1.0, 0.0, 1.0, "Opacity: %.2f")
+ r.ImGui_PopItemWidth(ctx)
+ if rv_alpha then
+  settings.window_alpha = new_alpha
+  MarkTransportPresetChanged()
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x4A90E2FF)
  r.ImGui_Text(ctx, "GRADIENT BACKGROUND")
  r.ImGui_PopStyleColor(ctx)
  r.ImGui_Separator(ctx)
@@ -4652,6 +4673,13 @@ function ShowSettings(main_window_width , main_window_height)
  
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
+ rvb, settings.window_topmost = r.ImGui_Checkbox(ctx, "Window Always On Top", settings.window_topmost ~= false)
+ if rvb then
+ MarkTransportPresetChanged()
+ end
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  local snap_changed
  snap_changed, settings.snap_to_reaper_transport = r.ImGui_Checkbox(ctx, "Snap to REAPER Transport", settings.snap_to_reaper_transport or false)
  if snap_changed then
@@ -4709,6 +4737,34 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_TextDisabled(ctx, "(?)")
  if r.ImGui_IsItemHovered(ctx) then
  r.ImGui_SetTooltip(ctx, "Positions this window on top of REAPER's track control panel.\nRequires js_ReaScriptAPI extension.")
+ end
+ end
+ 
+ -- Snap offset controls (only show when snap is enabled)
+ if settings.snap_to_reaper_transport or settings.snap_to_reaper_tcp then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Snap Offset X:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_PushItemWidth(ctx, -1)
+ local offset_x_changed, new_offset_x = r.ImGui_DragInt(ctx, "##SnapOffsetX", settings.snap_offset_x or 0, 1, -1000, 1000)
+ r.ImGui_PopItemWidth(ctx)
+ if offset_x_changed then
+  settings.snap_offset_x = new_offset_x
+  force_snap_position = true
+  MarkTransportPresetChanged()
+ end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Snap Offset Y:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_PushItemWidth(ctx, -1)
+ local offset_y_changed, new_offset_y = r.ImGui_DragInt(ctx, "##SnapOffsetY", settings.snap_offset_y or 0, 1, -1000, 1000)
+ r.ImGui_PopItemWidth(ctx)
+ if offset_y_changed then
+  settings.snap_offset_y = new_offset_y
+  force_snap_position = true
+  MarkTransportPresetChanged()
  end
  end
  
@@ -5240,16 +5296,6 @@ function ShowSettings(main_window_width , main_window_height)
  end
  
  
- r.ImGui_EndTabItem(ctx)
- end
-
- pushed_tab = PushTabColors(0x40E0D0FF) 
- local widgets_open = r.ImGui_BeginTabItem(ctx, "Widgets")
- if pushed_tab and pushed_tab < 0 then DrawTabUnderlineAccent(0x40E0D0FF, widgets_open) end
- if pushed_tab and pushed_tab ~= 0 then PopTabColors(pushed_tab) end
- if widgets_open then
- widgets_tab_active = true
- WidgetManager.RenderWidgetManagerUI(ctx, script_path)
  r.ImGui_EndTabItem(ctx)
  end
  
@@ -10398,17 +10444,21 @@ function Main()
   if settings.snap_to_reaper_transport then
    local transport_x, transport_y, transport_w, transport_h = GetReaperTransportPosition()
    if transport_x and transport_y then
-    r.ImGui_SetNextWindowPos(ctx, transport_x, transport_y)
-    last_reaper_transport_x = transport_x
-    last_reaper_transport_y = transport_y
+    local offset_x = settings.snap_offset_x or 0
+    local offset_y = settings.snap_offset_y or 0
+    r.ImGui_SetNextWindowPos(ctx, transport_x + offset_x, transport_y + offset_y)
+    last_reaper_transport_x = transport_x + offset_x
+    last_reaper_transport_y = transport_y + offset_y
    elseif last_reaper_transport_x and last_reaper_transport_y then
     r.ImGui_SetNextWindowPos(ctx, last_reaper_transport_x, last_reaper_transport_y)
    end
   elseif settings.snap_to_reaper_tcp then
    local tcp_x, tcp_y, tcp_w, tcp_h = GetReaperTCPPosition()
    if tcp_x and tcp_y then
-    last_reaper_tcp_x = tcp_x
-    last_reaper_tcp_y = tcp_y
+    local offset_x = settings.snap_offset_x or 0
+    local offset_y = settings.snap_offset_y or 0
+    last_reaper_tcp_x = tcp_x + offset_x
+    last_reaper_tcp_y = tcp_y + offset_y
    end
    if last_reaper_tcp_x and last_reaper_tcp_y then
     local estimated_height = last_our_window_height or 100
@@ -10418,11 +10468,21 @@ function Main()
   end
  
   local current_window_flags = window_flags
+  -- Add or remove TopMost flag based on setting
+  if settings.window_topmost == false then
+   -- Remove TopMost flag if disabled
+   current_window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+  end
   if settings.lock_window_size then
    current_window_flags = current_window_flags | r.ImGui_WindowFlags_NoResize()
   end
   if settings.lock_window_position then
    current_window_flags = current_window_flags | r.ImGui_WindowFlags_NoMove()
+  end
+ 
+  -- Set window transparency
+  if settings.window_alpha and settings.window_alpha < 1.0 then
+   r.ImGui_SetNextWindowBgAlpha(ctx, settings.window_alpha)
   end
  
   visible, open = r.ImGui_Begin(ctx, 'Transport' .. window_name_suffix, true, current_window_flags)
