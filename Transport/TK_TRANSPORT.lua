@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.1
+-- @version 1.3.2
 -- @changelog 
 --[[
 Removed widgets tab from settings menu (Widgets are obsolete)
@@ -9087,17 +9087,25 @@ function ShowQuickFX(main_window_width, main_window_height)
  
  local viewport = r.ImGui_GetMainViewport(ctx)
  local display_w, display_h = r.ImGui_Viewport_GetSize(viewport)
+ 
+ result_width = math.min(result_width, display_w * 0.8)
+ result_height = math.min(result_height, math.min(display_h * 0.8, 900))
+ 
  local space_below = display_h - search_field_max_y
  local result_y
  
  if space_below < result_height then
-  result_y = search_field_y - result_height - 2
+  result_y = math.max(10, search_field_y - result_height - 2)
  else
   result_y = search_field_max_y + 2
  end
  
+ result_x = math.max(0, math.min(result_x, display_w - result_width))
+ result_y = math.max(0, math.min(result_y, display_h - result_height))
+ 
  r.ImGui_SetNextWindowPos(ctx, result_x, result_y, r.ImGui_Cond_Always())
- r.ImGui_SetNextWindowSize(ctx, result_width, result_height, r.ImGui_Cond_FirstUseEver())
+ r.ImGui_SetNextWindowSize(ctx, result_width, result_height, r.ImGui_Cond_Always())
+ r.ImGui_SetNextWindowSizeConstraints(ctx, 200, 100, display_w * 0.8, 900)
  
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), settings.quick_fx_result_bg_color or 0x1E1E1EFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.quick_fx_border_color or 0x666666FF)
