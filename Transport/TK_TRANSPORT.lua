@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.7
+-- @version 1.2.8
 -- @changelog 
 --[[
 
@@ -3637,6 +3637,13 @@ end
 function LoadSettings()
  if not settings.tempo_presets or type(settings.tempo_presets) ~= 'table' or #settings.tempo_presets == 0 then
  settings.tempo_presets = {60,80,100,120,140,160,180}
+ end
+ 
+ if settings.snap_to_reaper_transport or settings.snap_to_reaper_tcp then
+  window_name_suffix = "_snap"
+  force_snap_position = true
+  settings.lock_window_position = true
+  settings.lock_window_size = true
  end
 end
 LoadSettings()
@@ -10380,6 +10387,13 @@ function Main()
 
   SetTransportStyle()
   styles_pushed = true
+ 
+  if (settings.snap_to_reaper_transport or settings.snap_to_reaper_tcp) and window_name_suffix == "" then
+   window_name_suffix = "_snap"
+   force_snap_position = true
+   settings.lock_window_position = true
+   settings.lock_window_size = true
+  end
  
   if settings.snap_to_reaper_transport then
    local transport_x, transport_y, transport_w, transport_h = GetReaperTransportPosition()

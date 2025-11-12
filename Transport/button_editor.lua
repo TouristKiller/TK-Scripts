@@ -1031,7 +1031,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                         
                         local fonts = {
                             "Arial", "Helvetica", "Verdana", "Tahoma", "Times New Roman",
-                            "Georgia", "Courier New", "Trebuchet MS", "Impact", "Roboto",
+                            "Georgia", "Courier New", "Consolas", "Trebuchet MS", "Impact", "Roboto",
                             "Open Sans", "Ubuntu", "Segoe UI", "Noto Sans", "Liberation Sans",
                             "DejaVu Sans"
                         }
