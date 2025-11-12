@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.2.6
+-- @version 1.2.7
 -- @changelog 
 --[[
 
@@ -204,8 +204,8 @@ local default_settings = {
  lock_window_size = false,
  lock_window_position = false,
  snap_to_reaper_transport = false,
+ snap_to_reaper_tcp = false,
 
- -- Transport buttons font (independent of base font)
  transport_font_name = "Arial",
  transport_font_size = 12,
  tempo_font_name = "Arial",
@@ -604,31 +604,121 @@ local Layout = {
  }
 }
 
--- Variables to track REAPER transport snapping
 local last_reaper_transport_x = nil
 local last_reaper_transport_y = nil
+local last_reaper_tcp_x = nil
+local last_reaper_tcp_y = nil
+local last_our_window_height = nil
 local force_snap_position = false
 local window_name_suffix = ""
 
--- Function to get REAPER transport position using js_ReaScriptAPI
+local our_window_hwnd = nil
+
 local function GetReaperTransportPosition()
  if not reaper.JS_Window_Find then
- return nil, nil, nil, nil
+  return nil, nil, nil, nil
  end
  
- -- Find the transport window (lowercase "transport" is important!)
- local transport_hwnd = reaper.JS_Window_Find("transport", true)
+ local main_hwnd = reaper.GetMainHwnd()
+ if not main_hwnd then
+  return nil, nil, nil, nil
+ end
+ 
+ local retval, list = reaper.JS_Window_ListAllChild(main_hwnd)
+ if not retval or not list then
+  return nil, nil, nil, nil
+ end
+ 
+ local script_windows = {}
+ for addr in list:gmatch("[^,]+") do
+  local hwnd = reaper.JS_Window_HandleFromAddress(tonumber(addr))
+  if hwnd then
+   local class = reaper.JS_Window_GetClassName(hwnd)
+   if class == "ImGuiWindow" then
+    local title = reaper.JS_Window_GetTitle(hwnd)
+    if title and title:match("^Transport") then
+     script_windows[hwnd] = true
+    end
+   end
+  end
+ end
+ 
+ local transport_hwnd = nil
+ for addr in list:gmatch("[^,]+") do
+  local hwnd = reaper.JS_Window_HandleFromAddress(tonumber(addr))
+  if hwnd and not script_windows[hwnd] then
+   local title = reaper.JS_Window_GetTitle(hwnd)
+   if title and title:lower() == "transport" then
+    transport_hwnd = hwnd
+    break
+   end
+  end
+ end
+ 
  if not transport_hwnd then
- return nil, nil, nil, nil
+  return nil, nil, nil, nil
  end
  
- -- Get the position and size
- local retval, left, top, right, bottom = reaper.JS_Window_GetRect(transport_hwnd)
- if retval then
- -- Convert native coordinates to ImGui coordinates
- local imgui_left, imgui_top = r.ImGui_PointConvertNative(ctx, left, top)
- local imgui_right, imgui_bottom = r.ImGui_PointConvertNative(ctx, right, bottom)
- return imgui_left, imgui_top, imgui_right - imgui_left, imgui_bottom - imgui_top
+ local retval2, left, top, right, bottom = reaper.JS_Window_GetRect(transport_hwnd)
+ if retval2 then
+  local imgui_left, imgui_top = r.ImGui_PointConvertNative(ctx, left, top)
+  local imgui_right, imgui_bottom = r.ImGui_PointConvertNative(ctx, right, bottom)
+  return imgui_left, imgui_top, imgui_right - imgui_left, imgui_bottom - imgui_top
+ end
+ 
+ return nil, nil, nil, nil
+end
+
+local function GetReaperTCPPosition()
+ if not reaper.JS_Window_Find then
+  return nil, nil, nil, nil
+ end
+ 
+ local main_hwnd = reaper.GetMainHwnd()
+ if not main_hwnd then
+  return nil, nil, nil, nil
+ end
+ 
+ local retval, list = reaper.JS_Window_ListAllChild(main_hwnd)
+ if not retval or not list then
+  return nil, nil, nil, nil
+ end
+ 
+ local script_windows = {}
+ for addr in list:gmatch("[^,]+") do
+  local hwnd = reaper.JS_Window_HandleFromAddress(tonumber(addr))
+  if hwnd then
+   local class = reaper.JS_Window_GetClassName(hwnd)
+   if class == "ImGuiWindow" then
+    local title = reaper.JS_Window_GetTitle(hwnd)
+    if title and title:match("^Transport") then
+     script_windows[hwnd] = true
+    end
+   end
+  end
+ end
+ 
+ local tcp_hwnd = nil
+ for addr in list:gmatch("[^,]+") do
+  local hwnd = reaper.JS_Window_HandleFromAddress(tonumber(addr))
+  if hwnd and not script_windows[hwnd] then
+   local class = reaper.JS_Window_GetClassName(hwnd)
+   if class and (class:match("tracklistwnd") or class:match("TCPDisplay")) then
+    tcp_hwnd = hwnd
+    break
+   end
+  end
+ end
+ 
+ if not tcp_hwnd then
+  return nil, nil, nil, nil
+ end
+ 
+ local retval2, left, top, right, bottom = reaper.JS_Window_GetRect(tcp_hwnd)
+ if retval2 then
+  local imgui_left, imgui_top = r.ImGui_PointConvertNative(ctx, left, top)
+  local imgui_right, imgui_bottom = r.ImGui_PointConvertNative(ctx, right, bottom)
+  return imgui_left, imgui_top, imgui_right - imgui_left, imgui_bottom - imgui_top
  end
  
  return nil, nil, nil, nil
@@ -4559,22 +4649,16 @@ function ShowSettings(main_window_width , main_window_height)
  snap_changed, settings.snap_to_reaper_transport = r.ImGui_Checkbox(ctx, "Snap to REAPER Transport", settings.snap_to_reaper_transport or false)
  if snap_changed then
  MarkTransportPresetChanged()
- -- Reset cached position when toggling to force immediate update
  last_reaper_transport_x = nil
  last_reaper_transport_y = nil
- -- Force ImGui to reposition by clearing its window settings
  if settings.snap_to_reaper_transport then
- -- Automatically enable lock position and size when snapping
+ settings.snap_to_reaper_tcp = false
  settings.lock_window_position = true
  settings.lock_window_size = true
- -- Change window name to force ImGui to reset position state
  window_name_suffix = "_snap"
- -- Set flag to force position update on next frame
  force_snap_position = true
- -- Get the transport position immediately
  local transport_x, transport_y, transport_w, transport_h = GetReaperTransportPosition()
  if transport_x and transport_y then
- -- Store for next frame
  last_reaper_transport_x = transport_x
  last_reaper_transport_y = transport_y
  end
@@ -4587,6 +4671,37 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_TextDisabled(ctx, "(?)")
  if r.ImGui_IsItemHovered(ctx) then
  r.ImGui_SetTooltip(ctx, "Positions this window on top of REAPER's transport bar.\nRequires js_ReaScriptAPI extension.")
+ end
+ end
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ local tcp_changed
+ tcp_changed, settings.snap_to_reaper_tcp = r.ImGui_Checkbox(ctx, "Snap to REAPER TCP (Track Panel)", settings.snap_to_reaper_tcp or false)
+ if tcp_changed then
+ MarkTransportPresetChanged()
+ last_reaper_tcp_x = nil
+ last_reaper_tcp_y = nil
+ if settings.snap_to_reaper_tcp then
+ settings.snap_to_reaper_transport = false
+ settings.lock_window_position = true
+ settings.lock_window_size = true
+ window_name_suffix = "_snap"
+ force_snap_position = true
+ local tcp_x, tcp_y, tcp_w, tcp_h = GetReaperTCPPosition()
+ if tcp_x and tcp_y then
+ last_reaper_tcp_x = tcp_x
+ last_reaper_tcp_y = tcp_y
+ end
+ else
+ window_name_suffix = ""
+ end
+ end
+ if settings.snap_to_reaper_tcp then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_TextDisabled(ctx, "(?)")
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, "Positions this window on top of REAPER's track control panel.\nRequires js_ReaScriptAPI extension.")
  end
  end
  
@@ -10266,17 +10381,25 @@ function Main()
   SetTransportStyle()
   styles_pushed = true
  
-  -- Snap to REAPER transport position if enabled
   if settings.snap_to_reaper_transport then
    local transport_x, transport_y, transport_w, transport_h = GetReaperTransportPosition()
    if transport_x and transport_y then
-    -- Set position without condition to force update every frame
     r.ImGui_SetNextWindowPos(ctx, transport_x, transport_y)
     last_reaper_transport_x = transport_x
     last_reaper_transport_y = transport_y
    elseif last_reaper_transport_x and last_reaper_transport_y then
-    -- Use last known position if transport not found this frame
     r.ImGui_SetNextWindowPos(ctx, last_reaper_transport_x, last_reaper_transport_y)
+   end
+  elseif settings.snap_to_reaper_tcp then
+   local tcp_x, tcp_y, tcp_w, tcp_h = GetReaperTCPPosition()
+   if tcp_x and tcp_y then
+    last_reaper_tcp_x = tcp_x
+    last_reaper_tcp_y = tcp_y
+   end
+   if last_reaper_tcp_x and last_reaper_tcp_y then
+    local estimated_height = last_our_window_height or 100
+    local final_y = last_reaper_tcp_y - estimated_height
+    r.ImGui_SetNextWindowPos(ctx, last_reaper_tcp_x, final_y)
    end
   end
  
@@ -10292,15 +10415,23 @@ function Main()
   if visible then
    r.ImGui_SetScrollY(ctx, 0)
    
-   -- Force window position if snap is enabled and we have a position
-   -- Use force_snap_position flag for immediate update when toggling the option
+   local our_window_height = r.ImGui_GetWindowHeight(ctx)
+   last_our_window_height = our_window_height
+   
    if settings.snap_to_reaper_transport and last_reaper_transport_x and last_reaper_transport_y then
     if force_snap_position then
-     -- Force position multiple times to overcome ImGui's resistance
      r.ImGui_SetWindowPos(ctx, last_reaper_transport_x, last_reaper_transport_y)
-     force_snap_position = false -- Reset flag after one frame
+     force_snap_position = false
     else
      r.ImGui_SetWindowPos(ctx, last_reaper_transport_x, last_reaper_transport_y)
+    end
+   elseif settings.snap_to_reaper_tcp and last_reaper_tcp_x and last_reaper_tcp_y then
+    local final_y = last_reaper_tcp_y - our_window_height
+    if force_snap_position then
+     r.ImGui_SetWindowPos(ctx, last_reaper_tcp_x, final_y)
+     force_snap_position = false
+    else
+     r.ImGui_SetWindowPos(ctx, last_reaper_tcp_x, final_y)
     end
    end
  
