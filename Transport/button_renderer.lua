@@ -365,17 +365,16 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), button.rounding)
                 style_var_count = style_var_count + 1
             end
-            if button.border_thickness then
-                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), button.border_thickness)
-                style_var_count = style_var_count + 1
-            end
             
+            -- Handle border: show_border=false always overrides border_thickness
             local border_for_button = (button.show_border ~= false) and 1 or 0
-            if border_for_button == 0 and style_var_count == 0 then
+            if border_for_button == 0 then
+                -- show_border is false, force border to 0
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
-                style_var_count = 1
-            elseif border_for_button == 0 and not button.border_thickness then
-                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+                style_var_count = style_var_count + 1
+            elseif button.border_thickness then
+                -- show_border is true and border_thickness is set
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), button.border_thickness)
                 style_var_count = style_var_count + 1
             end
             local draw_w = button.width
