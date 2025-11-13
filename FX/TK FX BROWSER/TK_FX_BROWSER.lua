@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.1.1
+-- @version 2.1.2
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -136,7 +136,15 @@ function _build_screenshot_signature()
     local priority = table.concat(cfg.plugin_type_priority or {}, ",")
     local apply = tostring(cfg.apply_type_priority or false)
     local respect = tostring(cfg.respect_search_exclusions_in_screenshots or false)
-    return table.concat({folder, subgroup, term, mode, stype, page, priority, apply, respect}, "|")
+    
+    local track_id = ""
+    if folder == "Current Track FX" and (stype == "1" or stype == "2") then
+        if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
+            track_id = r.GetTrackGUID(TRACK)
+        end
+    end
+    
+    return table.concat({folder, subgroup, term, mode, stype, page, priority, apply, respect, track_id}, "|")
 end
 
 local last_visibility_state = nil
@@ -14289,9 +14297,13 @@ function Main()
             TRACK = selected_track
             is_master_track_selected = false
         end
-        if TRACK ~= last_selected_track and selected_folder == "Current Track FX" then
-            ClearScreenshotCache()
-
+        
+        if TRACK ~= last_selected_track then
+            if selected_folder == "Current Track FX" then
+                filtered_plugins = GetCurrentTrackFX()
+                current_filtered_fx = GetPluginsForFolder("Current Track FX")
+                ClearScreenshotCache()
+            end
         end
         
         last_selected_track = TRACK
