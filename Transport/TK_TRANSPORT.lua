@@ -1,13 +1,9 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.4
+-- @version 1.3.5
 -- @changelog 
 --[[
-Removed widgets tab from settings menu (Widgets are obsolete)
-Added window transparency setting
-Added snap to Reaper transport and TCP offsets
-Added topmost window option
-Fixed button border view (there was an issue where borders wouldn't show correctly with transparent buttons
+
 
   ]]--
 ---------------------------------------------------------------------------------------------
