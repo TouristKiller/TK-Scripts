@@ -1,6 +1,6 @@
 -- @description TK_Item gridlines
 -- @author TouristKiller
--- @version 0.1.4
+-- @version 0.1.5
 -- @changelog 
 --[[
 + Improved handleDrawingFocus function. overlay is set to background in all circumstances
@@ -45,6 +45,8 @@ local manual_selection_mode = false
 local config = {
     line_thickness = 1.0,
     opacity = 0.8,
+    horizontal_thickness = 1.0,
+    horizontal_opacity = 0.8,
     color = 0x000000FF,
     text_color = 0x000000FF,
     auto_grid = true,  
@@ -53,7 +55,8 @@ local config = {
     show_beat_numbers = true,
     all_items_active = false,
     measure_only = false,
-    show_horizontal_lines = true
+    show_horizontal_lines = true,
+    show_vertical_lines = true
 }
 
 local compound_time_signatures = {
@@ -116,8 +119,10 @@ function ShowConfigWindow()
         r.ImGui_PopStyleColor(ctx, 3)
         r.ImGui_Separator(ctx)
         ImGui.PushItemWidth(ctx, 250)
-        changed, config.line_thickness = ImGui.SliderDouble(ctx, 'Thickness', config.line_thickness, 0.1, 5.0, '%.3f')
-        changed, config.opacity = ImGui.SliderDouble(ctx, 'Opacity', config.opacity, 0.0, 1.0, '%.3f')       
+        changed, config.line_thickness = ImGui.SliderDouble(ctx, 'Vertical Thickness', config.line_thickness, 0.1, 5.0, '%.3f')
+        changed, config.opacity = ImGui.SliderDouble(ctx, 'Vertical Opacity', config.opacity, 0.0, 1.0, '%.3f')
+        changed, config.horizontal_thickness = ImGui.SliderDouble(ctx, 'Horizontal Thickness', config.horizontal_thickness, 0.1, 5.0, '%.3f')
+        changed, config.horizontal_opacity = ImGui.SliderDouble(ctx, 'Horizontal Opacity', config.horizontal_opacity, 0.0, 1.0, '%.3f')
         ImGui.PopItemWidth(ctx)
         local current_color = "Black"
         local current_text_color = "Black"
@@ -212,9 +217,14 @@ function ShowConfigWindow()
             end
         end
         if show_full_grid then
-            local changed, new_value = ImGui.Checkbox(ctx, "horizontal Lines", config.show_horizontal_lines)
+            local changed, new_value = ImGui.Checkbox(ctx, "Horizontal", config.show_horizontal_lines)
             if changed then
                 config.show_horizontal_lines = new_value
+            end
+            ImGui.SameLine(ctx)
+            local changed_v, new_value_v = ImGui.Checkbox(ctx, "Vertical", config.show_vertical_lines)
+            if changed_v then
+                config.show_vertical_lines = new_value_v
             end
         end
         ImGui.SameLine(ctx)           
@@ -329,6 +339,9 @@ function RenderGridLines(draw_list, track_y, track_height, window_y, item_pos, i
         track_y = 0
         track_height = BOT - TOP - scroll_size 
         if config.show_horizontal_lines then
+            local h_base_color = config.color & 0xFFFFFF00
+            local h_alpha = math.floor(config.horizontal_opacity * 255)
+            local h_color = h_base_color | h_alpha
             local num_tracks = r.CountTracks(0)
             for i = 0, num_tracks - 1 do
                 local track = r.GetTrack(0, i)
@@ -337,10 +350,13 @@ function RenderGridLines(draw_list, track_y, track_height, window_y, item_pos, i
                 ImGui.DrawList_AddLine(draw_list,
                     LEFT, window_y + y + h,
                     RIGHT - scroll_size, window_y + y + h,
-                    color, config.line_thickness)
+                    h_color, config.horizontal_thickness)
             end
         end
     end
+    
+    if not config.show_vertical_lines then return end
+    
     local tempo = r.Master_GetTempo()
     local actual_numerator = config.numerator
     local actual_denominator = config.denominator
