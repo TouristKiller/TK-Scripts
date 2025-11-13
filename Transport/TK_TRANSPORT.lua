@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.3
+-- @version 1.3.4
 -- @changelog 
 --[[
 Removed widgets tab from settings menu (Widgets are obsolete)
@@ -4011,11 +4011,6 @@ function CaptureWindowSetScreenshot(slot_number)
  return false, "Invalid window dimensions"
  end
  
- local max_width = 300
- local scale = max_width / w
- local newW = max_width
- local newH = math.floor(h * scale)
- 
  EnsureWindowSetScreenshotFolder()
  local filename = windowset_screenshots.folder_path .. "windowset_" .. slot_number .. ".png"
  
@@ -4037,10 +4032,8 @@ function CaptureWindowSetScreenshot(slot_number)
  local src_y = capture_mode == 1 and 0 or top
  r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, src_x, src_y, w, h)
  
- local destBmp = r.JS_LICE_CreateBitmap(true, newW, newH)
- r.JS_LICE_ScaledBlit(destBmp, 0, 0, newW, newH, srcBmp, 0, 0, w, h, 1, "FAST")
- 
- local save_result = r.JS_LICE_WritePNG(filename, destBmp, false)
+ -- Save in full resolution
+ local save_result = r.JS_LICE_WritePNG(filename, srcBmp, false)
  
  if capture_mode == 1 then
  r.JS_GDI_ReleaseDC(hwnd, srcDC)
@@ -4049,13 +4042,12 @@ function CaptureWindowSetScreenshot(slot_number)
  end
  
  r.JS_LICE_DestroyBitmap(srcBmp)
- r.JS_LICE_DestroyBitmap(destBmp)
  
  if windowset_screenshots.textures[slot_number] then
  windowset_screenshots.textures[slot_number] = nil
  end
  
- return true, filename, newW, newH
+ return true, filename, w, h
 end
 
 function LoadWindowSetScreenshot(slot_number)
