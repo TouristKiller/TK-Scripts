@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.2
+-- @version 1.3.3
 -- @changelog 
 --[[
 Removed widgets tab from settings menu (Widgets are obsolete)
@@ -143,6 +143,22 @@ local visual_metronome = {
  ring_thickness = 3,
  show_beat_numbers = true,
  current_beat_in_measure = 0
+}
+
+local windowset_screenshots = {
+ textures = {},
+ folder_path = script_path .. "windowset_screenshots" .. os_separator,
+ resolution_presets = {
+  {name = "1280x720 (HD)", w = 1280, h = 720},
+  {name = "1600x900 (HD+)", w = 1600, h = 900},
+  {name = "1920x1080 (Full HD)", w = 1920, h = 1080},
+  {name = "2560x1440 (QHD)", w = 2560, h = 1440},
+  {name = "3440x1440 (UW QHD)", w = 3440, h = 1440},
+  {name = "3840x2160 (4K UHD)", w = 3840, h = 2160},
+  {name = "4096x2160 (DCI 4K)", w = 4096, h = 2160},
+  {name = "5120x2880 (5K)", w = 5120, h = 2880},
+  {name = "7680x4320 (8K)", w = 7680, h = 4320},
+ }
 }
 
 local section_states = {
@@ -547,6 +563,33 @@ local default_settings = {
  quick_fx_result_width = nil,  -- nil = auto-calculate
  quick_fx_result_height = nil, -- nil = auto-calculate
 
+ -- Window Set Picker settings
+ show_window_set_picker = false,
+ window_set_picker_x = 0.50,
+ window_set_picker_y = 0.80,
+ window_set_picker_button_count = 10,
+ window_set_picker_button_width = 40,
+ window_set_picker_button_height = 30,
+ window_set_picker_spacing = 4,
+ window_set_picker_font_size = 12,
+ window_set_picker_font_name = "Arial",
+ window_set_picker_show_names = false,
+ window_set_picker_button_color = 0x444444FF,
+ window_set_picker_button_hover_color = 0x666666FF,
+ window_set_picker_button_active_color = 0x888888FF,
+ window_set_picker_text_color = 0xFFFFFFFF,
+ window_set_picker_border_color = 0x888888FF,
+ window_set_picker_border_size = 1,
+ window_set_picker_rounding = 4,
+ window_set_picker_show_border = true,
+ window_set_picker_names = {},
+ window_set_picker_screenshot_mode = 1,
+ window_set_picker_show_screenshot_preview = true,
+ window_set_picker_resolution_preset = 3,
+ window_set_picker_fullscreen_width = 1920,
+ window_set_picker_fullscreen_height = 1080,
+
+
 }
 
 local settings = {}
@@ -609,6 +652,7 @@ local Layout = {
  { name = "quick_fx", showFlag = "show_quick_fx", keyx = "quick_fx_x", keyy = "quick_fx_y" },
  { name = "color_picker", showFlag = "show_color_picker", keyx = "color_picker_x", keyy = "color_picker_y" },
  { name = "simple_mixer_button", showFlag = "show_simple_mixer_button", keyx = "simple_mixer_button_x", keyy = "simple_mixer_button_y" },
+ { name = "window_set_picker", showFlag = "show_window_set_picker", keyx = "window_set_picker_x", keyy = "window_set_picker_y" },
  }
 }
 
@@ -895,7 +939,8 @@ local transport_components = {
  { id = "taptempo", name = "TapTempo" },
  { id = "playrate", name = "Playrate" },
  { id = "matrix_ticker", name = "Matrix Ticker" },
- { id = "quick_fx", name = "Quick FX" }
+ { id = "quick_fx", name = "Quick FX" },
+ { id = "window_set_picker", name = "Window Set Picker" }
 }
 
 function ShowComponentList(ctx)
@@ -970,6 +1015,8 @@ function ShowComponentSettings(ctx, main_window_width, main_window_height)
  ShowMatrixTickerSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "quick_fx" then
  ShowQuickFXSettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "window_set_picker" then
+ ShowWindowSetPickerSettings(ctx, main_window_width, main_window_height)
  else
  r.ImGui_TextDisabled(ctx, "Settings for this component are not yet implemented")
  end
@@ -2920,6 +2967,228 @@ function ShowVisualMetronomeSettings(ctx, main_window_width, main_window_height)
  end
 end
 
+function ShowWindowSetPickerSettings(ctx, main_window_width, main_window_height)
+ local rv
+ rv, settings.show_window_set_picker = r.ImGui_Checkbox(ctx, "Show Window Set Picker", settings.show_window_set_picker ~= false)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if settings.show_window_set_picker then
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Position:")
+ DrawPixelXYControls('window_set_picker_x', 'window_set_picker_y', main_window_width, main_window_height)
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Button Count:")
+ rv, settings.window_set_picker_button_count = r.ImGui_SliderInt(ctx, "Count (2-10)", settings.window_set_picker_button_count or 10, 2, 10, "%d")
+ r.ImGui_TextDisabled(ctx, "Choose how many window set buttons to show")
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Display:")
+ rv, settings.window_set_picker_show_names = r.ImGui_Checkbox(ctx, "Show Window Set Names", settings.window_set_picker_show_names or false)
+ r.ImGui_TextDisabled(ctx, "Show custom names instead of numbers")
+ 
+ -- Show name inputs if names are enabled
+ if settings.window_set_picker_show_names then
+  r.ImGui_Spacing(ctx)
+  r.ImGui_Text(ctx, "Custom Names:")
+  
+  -- Initialize names table if needed
+  if not settings.window_set_picker_names then
+   settings.window_set_picker_names = {}
+  end
+  
+  -- Show input fields for each window set
+  for i = 1, 10 do
+   r.ImGui_PushID(ctx, "wsname" .. i)
+   r.ImGui_SetNextItemWidth(ctx, 150)
+   local current_name = settings.window_set_picker_names[i] or ""
+   rv, settings.window_set_picker_names[i] = r.ImGui_InputText(ctx, "Set " .. i, current_name)
+   r.ImGui_PopID(ctx)
+   
+   -- Show 2 per row
+   if i % 2 == 1 and i < 10 then
+    r.ImGui_SameLine(ctx)
+   end
+  end
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Size:")
+ rv, settings.window_set_picker_button_width = r.ImGui_SliderInt(ctx, "Button Width", settings.window_set_picker_button_width or 40, 20, 100, "%d px")
+ rv, settings.window_set_picker_button_height = r.ImGui_SliderInt(ctx, "Button Height", settings.window_set_picker_button_height or 30, 20, 80, "%d px")
+ rv, settings.window_set_picker_spacing = r.ImGui_SliderInt(ctx, "Spacing", settings.window_set_picker_spacing or 4, 0, 20, "%d px")
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Font:")
+ 
+ -- Font type selector
+ local current_font = settings.window_set_picker_font_name or "Arial"
+ local current_font_index = 1
+ for i, font_name in ipairs(fonts) do
+  if font_name == current_font then
+   current_font_index = i
+   break
+  end
+ end
+ 
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ if r.ImGui_BeginCombo(ctx, "Font Type##windowsetpicker", current_font) then
+  for i, font_name in ipairs(fonts) do
+   local is_selected = (i == current_font_index)
+   if r.ImGui_Selectable(ctx, font_name, is_selected) then
+    settings.window_set_picker_font_name = font_name
+    RebuildSectionFonts()
+   end
+   if is_selected then
+    r.ImGui_SetItemDefaultFocus(ctx)
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
+ 
+ r.ImGui_SameLine(ctx)
+ rv, settings.window_set_picker_font_size = r.ImGui_SliderInt(ctx, "Font Size##windowsetpicker", settings.window_set_picker_font_size or 12, 8, 24, "%d")
+ if rv then
+  RebuildSectionFonts()
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Colors:")
+ 
+ local color_flags = r.ImGui_ColorEditFlags_NoInputs()
+ 
+ if r.ImGui_BeginTable(ctx, "WindowSetPickerColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.window_set_picker_button_color = r.ImGui_ColorEdit4(ctx, "Normal", settings.window_set_picker_button_color or 0x444444FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.window_set_picker_button_hover_color = r.ImGui_ColorEdit4(ctx, "Hover", settings.window_set_picker_button_hover_color or 0x666666FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.window_set_picker_button_active_color = r.ImGui_ColorEdit4(ctx, "Active", settings.window_set_picker_button_active_color or 0x888888FF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.window_set_picker_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.window_set_picker_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.window_set_picker_border_color = r.ImGui_ColorEdit4(ctx, "Border", settings.window_set_picker_border_color or 0x888888FF, color_flags)
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Border:")
+ rv, settings.window_set_picker_show_border = r.ImGui_Checkbox(ctx, "Show Border", settings.window_set_picker_show_border ~= false)
+ if settings.window_set_picker_show_border then
+ rv, settings.window_set_picker_border_size = r.ImGui_SliderInt(ctx, "Border Size", settings.window_set_picker_border_size or 1, 1, 5, "%d px")
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Rounding:")
+ rv, settings.window_set_picker_rounding = r.ImGui_SliderInt(ctx, "Corner Rounding", settings.window_set_picker_rounding or 4, 0, 20, "%d px")
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Screenshot Mode:")
+ settings.window_set_picker_screenshot_mode = settings.window_set_picker_screenshot_mode or 1
+ local mode_changed, new_mode = r.ImGui_RadioButtonEx(ctx, "REAPER Window Only", settings.window_set_picker_screenshot_mode, 1)
+ if mode_changed then 
+ settings.window_set_picker_screenshot_mode = new_mode
+ SaveSettings()
+ end
+ r.ImGui_SameLine(ctx)
+ mode_changed, new_mode = r.ImGui_RadioButtonEx(ctx, "Full Screen", settings.window_set_picker_screenshot_mode, 2)
+ if mode_changed then 
+ settings.window_set_picker_screenshot_mode = new_mode
+ SaveSettings()
+ end
+ 
+ if settings.window_set_picker_screenshot_mode == 2 then
+ r.ImGui_Spacing(ctx)
+ r.ImGui_TextDisabled(ctx, "Full Screen captures entire screen including ImGui windows")
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Resolution Preset:")
+ local preset_names = {}
+ for i, preset in ipairs(windowset_screenshots.resolution_presets) do
+ preset_names[i] = preset.name
+ end
+ local preset_list = table.concat(preset_names, "\0") .. "\0"
+ 
+ settings.window_set_picker_resolution_preset = settings.window_set_picker_resolution_preset or 3
+ r.ImGui_SetNextItemWidth(ctx, 250)
+ local changed, new_preset = r.ImGui_Combo(ctx, "##preset", settings.window_set_picker_resolution_preset - 1, preset_list)
+ if changed then
+ settings.window_set_picker_resolution_preset = new_preset + 1
+ local preset = windowset_screenshots.resolution_presets[settings.window_set_picker_resolution_preset]
+ if preset then
+ settings.window_set_picker_fullscreen_width = preset.w
+ settings.window_set_picker_fullscreen_height = preset.h
+ SaveSettings()
+ end
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, string.format("Will capture: %dx%d pixels", 
+ settings.window_set_picker_fullscreen_width or 1920,
+ settings.window_set_picker_fullscreen_height or 1080))
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Custom Resolution:")
+ r.ImGui_PushItemWidth(ctx, 100)
+ local width_changed, new_width = r.ImGui_InputInt(ctx, "Width##custom", settings.window_set_picker_fullscreen_width or 1920, 0, 0)
+ if width_changed and new_width > 0 and new_width <= 15360 then
+ settings.window_set_picker_fullscreen_width = new_width
+ SaveSettings()
+ end
+ r.ImGui_SameLine(ctx)
+ local height_changed, new_height = r.ImGui_InputInt(ctx, "Height##custom", settings.window_set_picker_fullscreen_height or 1080, 0, 0)
+ if height_changed and new_height > 0 and new_height <= 8640 then
+ settings.window_set_picker_fullscreen_height = new_height
+ SaveSettings()
+ end
+ r.ImGui_PopItemWidth(ctx)
+ 
+ r.ImGui_Spacing(ctx)
+ if r.ImGui_Button(ctx, "🔍 Auto Detect Screen Resolution", 250) then
+ local w, h = GetPhysicalScreenResolution()
+ settings.window_set_picker_fullscreen_width = w
+ settings.window_set_picker_fullscreen_height = h
+ SaveSettings()
+ end
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_Text(ctx, "Screenshot Preview:")
+ local show_preview_changed, new_show_preview = r.ImGui_Checkbox(ctx, "Show screenshot on hover", settings.window_set_picker_show_screenshot_preview)
+ if show_preview_changed then
+  settings.window_set_picker_show_screenshot_preview = new_show_preview
+  SaveSettings()
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ r.ImGui_TextWrapped(ctx, "Window Sets 1-10 (Command IDs 40454-40463)")
+ r.ImGui_TextDisabled(ctx, "Left-click to load window set")
+ r.ImGui_TextDisabled(ctx, "Right-click for menu (Save or Take Screenshot)")
+ end
+end
+
 function ShowMatrixTickerSettings(ctx, main_window_width, main_window_height)
  local rv
  rv, settings.show_matrix_ticker = r.ImGui_Checkbox(ctx, "Show Matrix Ticker", settings.show_matrix_ticker ~= false)
@@ -3376,6 +3645,7 @@ local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.c
 local font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, settings.cursorpos_font_size or settings.font_size)
 local font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
 local font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, settings.battery_font_size or 14)
+local font_windowset_picker = r.ImGui_CreateFont(settings.window_set_picker_font_name or "Arial", settings.window_set_picker_font_size or 12)
 local SETTINGS_UI_FONT_NAME = 'Segoe UI'
 local SETTINGS_UI_FONT_SIZE = 13
 local settings_ui_font = r.ImGui_CreateFont(SETTINGS_UI_FONT_NAME, SETTINGS_UI_FONT_SIZE)
@@ -3394,6 +3664,7 @@ r.ImGui_Attach(ctx, font_timesel)
 r.ImGui_Attach(ctx, font_cursorpos)
 r.ImGui_Attach(ctx, font_localtime)
 r.ImGui_Attach(ctx, font_battery)
+r.ImGui_Attach(ctx, font_windowset_picker)
 r.ImGui_Attach(ctx, settings_ui_font)
 r.ImGui_Attach(ctx, settings_ui_font_small)
 local font_needs_update = false
@@ -3529,6 +3800,7 @@ function RebuildSectionFonts()
  local new_font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, settings.cursorpos_font_size or settings.font_size)
  local new_font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
  local new_font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, settings.battery_font_size or 14)
+ local new_font_windowset_picker = r.ImGui_CreateFont(settings.window_set_picker_font_name or "Arial", settings.window_set_picker_font_size or 12)
  local new_font_popup = r.ImGui_CreateFont(settings.transport_popup_font_name or settings.current_font, settings.transport_popup_font_size or settings.font_size)
  local new_font_taptempo = r.ImGui_CreateFont(settings.taptempo_font_name or settings.current_font, settings.taptempo_font_size or settings.font_size)
  
@@ -3544,6 +3816,7 @@ function RebuildSectionFonts()
  r.ImGui_Attach(ctx, new_font_cursorpos)
  r.ImGui_Attach(ctx, new_font_localtime)
  r.ImGui_Attach(ctx, new_font_battery)
+ r.ImGui_Attach(ctx, new_font_windowset_picker)
  r.ImGui_Attach(ctx, new_font_popup)
  r.ImGui_Attach(ctx, new_font_taptempo)
  
@@ -3559,6 +3832,7 @@ function RebuildSectionFonts()
  font_cursorpos = new_font_cursorpos
  font_localtime = new_font_localtime
  font_battery = new_font_battery
+ font_windowset_picker = new_font_windowset_picker
  font_popup = new_font_popup
  font_taptempo = new_font_taptempo
 end
@@ -3628,6 +3902,182 @@ function UpdateCustomImages()
  end
 end
 
+function GetPhysicalScreenResolution()
+ local main_hwnd = r.GetMainHwnd()
+ if main_hwnd and r.JS_Window_GetRect then
+ local retval, left, top, right, bottom = r.JS_Window_GetRect(main_hwnd)
+ if retval then
+ local center_x = (left + right) / 2
+ local center_y = (top + bottom) / 2
+ local ffi = package.loaded.ffi
+ if ffi then
+ pcall(function()
+ ffi.cdef[[
+ typedef struct { long left; long top; long right; long bottom; } RECT;
+ typedef struct {
+ unsigned int cbSize;
+ RECT rcMonitor;
+ RECT rcWork;
+ unsigned int dwFlags;
+ } MONITORINFO;
+ typedef void* HMONITOR;
+ typedef void* HWND;
+ typedef int BOOL;
+ HMONITOR MonitorFromWindow(HWND hwnd, unsigned int dwFlags);
+ BOOL GetMonitorInfoA(HMONITOR hMonitor, MONITORINFO* lpmi);
+ ]]
+ end)
+ local MONITOR_DEFAULTTONEAREST = 2
+ local success, hMonitor = pcall(function() 
+ return ffi.C.MonitorFromWindow(ffi.cast("void*", main_hwnd), MONITOR_DEFAULTTONEAREST)
+ end)
+ if success and hMonitor then
+ local mi = ffi.new("MONITORINFO")
+ mi.cbSize = ffi.sizeof("MONITORINFO")
+ local success2 = pcall(function()
+ return ffi.C.GetMonitorInfoA(hMonitor, mi)
+ end)
+ if success2 then
+ local mon_w = mi.rcMonitor.right - mi.rcMonitor.left
+ local mon_h = mi.rcMonitor.bottom - mi.rcMonitor.top
+ if mon_w > 0 and mon_h > 0 then
+ return mon_w, mon_h
+ end
+ end
+ end
+ end
+ end
+ end
+ if r.GetOS():match("Win") then
+ local ffi = package.loaded.ffi
+ if ffi then
+ local success = pcall(function()
+ ffi.cdef[[
+ int GetSystemMetrics(int nIndex);
+ ]]
+ end)
+ if success then
+ local SM_CXSCREEN = 0
+ local SM_CYSCREEN = 1
+ local success_w, logical_w = pcall(function() return ffi.C.GetSystemMetrics(SM_CXSCREEN) end)
+ local success_h, logical_h = pcall(function() return ffi.C.GetSystemMetrics(SM_CYSCREEN) end)
+ if success_w and success_h and logical_w > 0 and logical_h > 0 then
+ local _, dpi_scale = r.get_config_var_string("uiscale")
+ dpi_scale = tonumber(dpi_scale) or 1.0
+ return math.floor(logical_w * dpi_scale), math.floor(logical_h * dpi_scale)
+ end
+ end
+ end
+ end
+ local _, dpi_scale = r.get_config_var_string("uiscale")
+ dpi_scale = tonumber(dpi_scale) or 1.0
+ return math.floor(1920 * dpi_scale), math.floor(1080 * dpi_scale)
+end
+
+function EnsureWindowSetScreenshotFolder()
+ if not r.file_exists(windowset_screenshots.folder_path) then
+ r.RecursiveCreateDirectory(windowset_screenshots.folder_path, 0)
+ end
+end
+
+function CaptureWindowSetScreenshot(slot_number)
+ if not r.JS_Window_Find then
+ return false, "js_ReaScriptAPI extension required"
+ end
+ 
+ local capture_mode = settings.window_set_picker_screenshot_mode or 1
+ local hwnd, w, h, left, top
+ 
+ if capture_mode == 1 then
+ local arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 0x3E8)
+ hwnd = r.JS_Window_GetParent(arrange)
+ if not hwnd or hwnd == arrange then
+ hwnd = r.GetMainHwnd()
+ end
+ if not hwnd then
+ return false, "REAPER window not found"
+ end
+ local retval, left_t, top_t, right, bottom = r.JS_Window_GetClientRect(hwnd)
+ left, top = left_t, top_t
+ w, h = right - left, bottom - top
+ else
+ hwnd = nil
+ left, top = 0, 0
+ w = settings.window_set_picker_fullscreen_width or 1920
+ h = settings.window_set_picker_fullscreen_height or 1080
+ end
+ 
+ if w <= 0 or h <= 0 then
+ return false, "Invalid window dimensions"
+ end
+ 
+ local max_width = 300
+ local scale = max_width / w
+ local newW = max_width
+ local newH = math.floor(h * scale)
+ 
+ EnsureWindowSetScreenshotFolder()
+ local filename = windowset_screenshots.folder_path .. "windowset_" .. slot_number .. ".png"
+ 
+ local srcDC
+ if capture_mode == 1 then
+ srcDC = r.JS_GDI_GetClientDC(hwnd)
+ else
+ srcDC = r.JS_GDI_GetScreenDC()
+ end
+ 
+ if not srcDC then
+ return false, "Failed to get device context"
+ end
+ 
+ local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
+ local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
+ 
+ local src_x = capture_mode == 1 and 0 or left
+ local src_y = capture_mode == 1 and 0 or top
+ r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, src_x, src_y, w, h)
+ 
+ local destBmp = r.JS_LICE_CreateBitmap(true, newW, newH)
+ r.JS_LICE_ScaledBlit(destBmp, 0, 0, newW, newH, srcBmp, 0, 0, w, h, 1, "FAST")
+ 
+ local save_result = r.JS_LICE_WritePNG(filename, destBmp, false)
+ 
+ if capture_mode == 1 then
+ r.JS_GDI_ReleaseDC(hwnd, srcDC)
+ else
+ r.JS_GDI_ReleaseDC(nil, srcDC)
+ end
+ 
+ r.JS_LICE_DestroyBitmap(srcBmp)
+ r.JS_LICE_DestroyBitmap(destBmp)
+ 
+ if windowset_screenshots.textures[slot_number] then
+ windowset_screenshots.textures[slot_number] = nil
+ end
+ 
+ return true, filename, newW, newH
+end
+
+function LoadWindowSetScreenshot(slot_number)
+ if windowset_screenshots.textures[slot_number] then
+ local texture = windowset_screenshots.textures[slot_number]
+ if r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+ return texture
+ else
+ windowset_screenshots.textures[slot_number] = nil
+ end
+ end
+ local filename = windowset_screenshots.folder_path .. "windowset_" .. slot_number .. ".png"
+ if r.file_exists(filename) then
+ local texture = r.ImGui_CreateImage(filename)
+ if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+ windowset_screenshots.textures[slot_number] = texture
+ return texture
+ end
+ end
+ return nil
+end
+
 
 function SaveSettings()
  if not preset_name or preset_name == "" then
@@ -3655,6 +4105,7 @@ function LoadSettings()
  end
 end
 LoadSettings()
+EnsureWindowSetScreenshotFolder()
 UpdateCustomImages()
 if not is_new_empty_instance then
  CustomButtons.LoadLastUsedPreset()
@@ -9634,6 +10085,143 @@ end
  reaper.ImGui_PopItemWidth(ctx)
 end
 
+function ShowWindowSetPicker(main_window_width, main_window_height)
+ if not settings.show_window_set_picker then return end
+ 
+ local button_count = settings.window_set_picker_button_count or 10
+ if button_count < 2 then button_count = 2 end
+ if button_count > 10 then button_count = 10 end
+ 
+ local button_width = settings.window_set_picker_button_width or 40
+ local button_height = settings.window_set_picker_button_height or 30
+ local spacing = settings.window_set_picker_spacing or 4
+ local font_size = settings.window_set_picker_font_size or 12
+ local show_names = settings.window_set_picker_show_names or false
+ 
+ -- Initialize custom names table if needed
+ if not settings.window_set_picker_names then
+  settings.window_set_picker_names = {}
+ end
+ 
+ -- Calculate total width
+ local total_width = (button_width * button_count) + (spacing * (button_count - 1))
+ 
+ -- Set position
+ local pos_x = settings.window_set_picker_x_px and ScalePosX(settings.window_set_picker_x_px, main_window_width, settings) 
+              or (settings.window_set_picker_x * main_window_width)
+ local pos_y = settings.window_set_picker_y_px and ScalePosY(settings.window_set_picker_y_px, main_window_height, settings) 
+              or (settings.window_set_picker_y * main_window_height)
+ 
+ reaper.ImGui_SetCursorPosX(ctx, pos_x)
+ reaper.ImGui_SetCursorPosY(ctx, pos_y)
+ 
+ -- Push button styles
+ local button_color = settings.window_set_picker_button_color or 0x444444FF
+ local hover_color = settings.window_set_picker_button_hover_color or 0x666666FF
+ local active_color = settings.window_set_picker_button_active_color or 0x888888FF
+ local text_color = settings.window_set_picker_text_color or 0xFFFFFFFF
+ local rounding = settings.window_set_picker_rounding or 4
+ 
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), GetButtonColorWithTransparency(button_color))
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(hover_color))
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(active_color))
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), text_color)
+ 
+ reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameBorderSize(), 0)
+ reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), rounding)
+ 
+ local font_pushed = false
+ if font_windowset_picker then 
+  reaper.ImGui_PushFont(ctx, font_windowset_picker, font_size)
+  font_pushed = true
+ end
+ 
+ -- Draw buttons
+ for i = 1, button_count do
+  if i > 1 then
+   reaper.ImGui_SameLine(ctx, 0, spacing)
+  end
+  
+  -- Get button label - use custom name if show_names is enabled and name exists
+  local custom_name = settings.window_set_picker_names[i]
+  local button_label = tostring(i)
+  if show_names and custom_name and custom_name ~= "" then
+   button_label = custom_name
+  end
+  
+  local clicked = reaper.ImGui_Button(ctx, button_label, button_width, button_height)
+  
+  -- Draw border if enabled
+  if settings.window_set_picker_show_border then
+   local dl = r.ImGui_GetWindowDrawList(ctx)
+   local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+   local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+   local border_col = settings.window_set_picker_border_color or 0x888888FF
+   local border_thickness = settings.window_set_picker_border_size or 1
+   r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, border_col, rounding, nil, border_thickness)
+  end
+  
+  -- Handle left click - load window set
+  if clicked and not settings.edit_mode then
+   local command_id = 40454 + (i - 1)  -- 40454 to 40463
+   reaper.Main_OnCommand(command_id, 0)
+  end
+  
+  -- Handle right click - show context menu
+  if reaper.ImGui_IsItemClicked(ctx, 1) and not settings.edit_mode then
+   reaper.ImGui_OpenPopup(ctx, "WindowSetMenu" .. i)
+  end
+  
+  -- Context menu for saving window set
+  if reaper.ImGui_BeginPopup(ctx, "WindowSetMenu" .. i) then
+   local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
+   
+   local menu_label = "Save Current Window Set to Slot " .. i
+   if show_names and custom_name and custom_name ~= "" then
+    menu_label = "Save Current Window Set to '" .. custom_name .. "'"
+   end
+   
+   if reaper.ImGui_MenuItem(ctx, menu_label) then
+    local save_command_id = 40474 + (i - 1)  -- 40474 to 40483
+    reaper.Main_OnCommand(save_command_id, 0)
+   end
+   
+   reaper.ImGui_Separator(ctx)
+   
+   if reaper.ImGui_MenuItem(ctx, "Take Screenshot") then
+    local success, filename, w, h = CaptureWindowSetScreenshot(i)
+    if success then
+    end
+   end
+   
+   PopTransportPopupStyling(ctx, color_count, font_pushed, popup_font)
+   reaper.ImGui_EndPopup(ctx)
+  end
+  
+  -- Show screenshot on hover
+  if settings.window_set_picker_show_screenshot_preview and reaper.ImGui_IsItemHovered(ctx) and not settings.edit_mode then
+   local texture = LoadWindowSetScreenshot(i)
+   if texture and reaper.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+    reaper.ImGui_BeginTooltip(ctx)
+    local ok, img_w, img_h = pcall(reaper.ImGui_Image_GetSize, texture)
+    if ok and img_w > 0 and img_h > 0 then
+     local display_w = 300
+     local display_h = math.floor((img_h / img_w) * display_w)
+     reaper.ImGui_Image(ctx, texture, display_w, display_h)
+    end
+    reaper.ImGui_EndTooltip(ctx)
+   end
+  end
+ end
+ 
+ if font_pushed then reaper.ImGui_PopFont(ctx) end
+ 
+ reaper.ImGui_PopStyleVar(ctx, 2)
+ reaper.ImGui_PopStyleColor(ctx, 4)
+ 
+ StoreElementRect("window_set_picker")
+end
+
 function ShowTimeSignature(main_window_width, main_window_height)
  if not settings.show_timesig_button then return end 
  reaper.ImGui_SameLine(ctx)
@@ -10416,6 +11004,10 @@ local function CleanupImages()
  end
  end
  
+ if windowset_screenshots.textures then
+ windowset_screenshots.textures = {}
+ end
+ 
  collectgarbage("collect")
 end
 
@@ -10559,6 +11151,7 @@ function Main()
  
  ShowTempo(main_window_width, main_window_height)
  ShowTimeSignature(main_window_width, main_window_height)
+ ShowWindowSetPicker(main_window_width, main_window_height)
  PlayRate_Slider(main_window_width, main_window_height) 
  TapTempo(main_window_width, main_window_height)
  RenderVisualMetronome(main_window_width, main_window_height)
