@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.1.2
+-- @version 2.1.3
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -563,8 +563,10 @@ local function CheckFXBrowserWindow()
     local was_open = fx_browser_open
     if toggle == 1 or hwnd then
         fx_browser_open = true
+        native_fx_browser_hwnd = hwnd  -- Store window handle for focus management
     else
         fx_browser_open = false
+        native_fx_browser_hwnd = nil
     end
     
     -- Melding bij verandering
@@ -14352,27 +14354,10 @@ function Main()
             r.ImGui_PopStyleColor(ctx, 13) -- 13 StyleColors
             r.ImGui_PopStyleVar(ctx, 6)    -- 6 StyleVars
         end
-        -- Toon pauze venster
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0xFF8000FF)  -- Oranje rand
-        r.ImGui_SetNextWindowSize(ctx, 350, 80)
-        r.ImGui_SetNextWindowPos(ctx, 100, 100)
-        local visible, open = r.ImGui_Begin(ctx, "TK FX BROWSER Paused", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoCollapse())
-        if visible then
-            local window_width = r.ImGui_GetWindowWidth(ctx)
-            local text1 = "To prevent conflicts, TK FX BROWSER is temporarily paused."
-            local text2 = "It will resume after closing the FX Browser."
-            local text1_width = r.ImGui_CalcTextSize(ctx, text1)
-            local text2_width = r.ImGui_CalcTextSize(ctx, text2)
-            r.ImGui_SetCursorPosX(ctx, (window_width - text1_width) / 2)
-            r.ImGui_Text(ctx, text1)
-            r.ImGui_SetCursorPosX(ctx, (window_width - text2_width) / 2)
-            r.ImGui_Text(ctx, text2)
-        end
-        if open then
-            r.ImGui_End(ctx)
-        end
-        r.ImGui_PopStyleColor(ctx)
-        return r.defer(Main)  -- Pauzeer na ImGui setup, venster blijft bestaan
+        
+        -- Don't show any window to prevent focus stealing from native browser
+        -- Just defer and check again next cycle
+        return r.defer(Main)
     end
 
 local fx_list_height = 0
