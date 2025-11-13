@@ -241,7 +241,7 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with progression system">
-      <version name="1.0.1" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-13T12:00:00Z">
+      <version name="1.0.2" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-13T18:50:00Z">
         <changelog><![CDATA[
 TK Enhanced ChordGun features:
 + Fully resizable window with dynamic scaling
@@ -303,6 +303,7 @@ Standalone - no other ChordGun installation needed.
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%206.lua</source>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%207.lua</source>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun stop all notes from playing.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20stop%20all%20notes%20from%20playing.lua</source>
+        <source main="midi_editor" file="TK_ChordGun/TK_ChordGunMini.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGunMini.lua</source>
       </version>
     </reapack>
  </category>
