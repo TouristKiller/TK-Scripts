@@ -240,10 +240,23 @@
             </version>
         </reapack>
 
-    <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with progression system">
-      <version name="1.0.3" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-13T19:20:00Z">
+    <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
+      <version name="1.1.0" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-16T01:30:00Z">
         <changelog><![CDATA[
-TK Enhanced ChordGun features:
+1.1.0 - NEW FEATURES:
++ Scale Filter/Remap modes (Off/Filter/Remap button)
+  - Filter mode: blocks notes outside current scale
+  - Remap mode: maps white piano keys to scale notes
++ TK_Scale_Filter.jsfx for live MIDI processing (auto-installed to Effects folder)
++ Setup button: auto-installs JSFX to track's Input FX
++ Real-time chord recognition system with 13+ chord types
++ Chord display with scale-aware color coding (blue=in-scale, orange=out-of-scale)
++ Enharmonic spelling based on scale context (sharps vs flats)
++ Piano keyboard shows remap arrows in Remap mode (e.g., 'E→Eb')
++ All playing notes now show in blue (unified color scheme)
++ Cross-platform compatible (Windows, macOS, Linux)
+
+1.0.3 - EXISTING FEATURES:
 + Fully resizable window with dynamic scaling
 + 8-slot chord progression system with playback
 + Save/load progression presets
@@ -304,6 +317,7 @@ Standalone - no other ChordGun installation needed.
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%207.lua</source>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun stop all notes from playing.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20stop%20all%20notes%20from%20playing.lua</source>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGunMini.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGunMini.lua</source>
+        <source type="effect" file="TK_ChordGun/TK_Scale_Filter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_Scale_Filter.jsfx</source>
       </version>
     </reapack>
  </category>

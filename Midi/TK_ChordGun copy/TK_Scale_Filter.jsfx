@@ -1,0 +1,101 @@
+desc:TK Scale Filter (ChordGun)
+// Mode 0: Off | Mode 1: Filter (blocks notes outside scale) | Mode 2: Remap (white keys to scale)
+options:gmem=TKChordGunFilter
+
+@init
+// Allocate memory for arrays
+noteMap = 0;        // 0-127 (128 slots)
+scaleNotes = 128;   // 128-139 (12 slots)
+allowedNotes = 140; // 140-151 (12 slots) 
+whiteKeys = 152;    // 152-163 (12 slots)
+
+idx = 0;
+loop(128,
+  noteMap[idx] = idx;
+  idx += 1;
+);
+
+scaleNotes[0] = 0; scaleNotes[1] = 0; scaleNotes[2] = 0; scaleNotes[3] = 0;
+scaleNotes[4] = 0; scaleNotes[5] = 0; scaleNotes[6] = 0;
+numScale = 0;
+
+allowedNotes[0] = 0; allowedNotes[1] = 0; allowedNotes[2] = 0; allowedNotes[3] = 0;
+allowedNotes[4] = 0; allowedNotes[5] = 0; allowedNotes[6] = 0; allowedNotes[7] = 0;
+allowedNotes[8] = 0; allowedNotes[9] = 0; allowedNotes[10] = 0; allowedNotes[11] = 0;
+
+whiteKeys[0] = 1; whiteKeys[1] = 0; whiteKeys[2] = 1; whiteKeys[3] = 0;
+whiteKeys[4] = 1; whiteKeys[5] = 1; whiteKeys[6] = 0; whiteKeys[7] = 1;
+whiteKeys[8] = 0; whiteKeys[9] = 1; whiteKeys[10] = 0; whiteKeys[11] = 1;
+
+mode = 0;
+
+function refresh_state()
+local(idx, allowed)
+(
+  mode = gmem[0];
+  numScale = 0;
+  idx = 0;
+  loop(12,
+    allowed = gmem[1 + idx] > 0.5 ? 1 : 0;
+    allowedNotes[idx] = allowed;
+    allowed ? (
+      scaleNotes[numScale] = idx;
+      numScale += 1;
+    );
+    idx += 1;
+  );
+);
+
+function remap_note(inputNote)
+local(oct, noteClass, whiteCount, idx, whiteIdx, scaleIdx, octOffset)
+(
+  oct = floor(inputNote / 12);
+  noteClass = inputNote % 12;
+  whiteCount = 0;
+  idx = 0;
+  loop(noteClass, whiteKeys[idx] ? whiteCount += 1; idx += 1;);
+  whiteIdx = oct * 7 + whiteCount;
+  scaleIdx = whiteIdx % numScale;
+  octOffset = floor(whiteIdx / numScale) * 12;
+  scaleNotes[scaleIdx] + octOffset
+);
+
+@block
+status = 0; note = 0; noteClass = 0; velocity = 0;
+isNoteOn = 0; allowed = 0; pass = 0; isWhite = 0; remappedNote = 0; origNote = 0;
+refresh_state();
+
+while ( midirecv(offset, msg1, msg23) ?
+  (
+    status = msg1 & $xF0;
+    note = msg23 & $x7F;
+    velocity = (msg23 >> 8) & $x7F;
+    noteClass = note % 12;
+    isNoteOn = (status == $x90) && velocity > 0;
+    
+    // Mode 0: Off - pass everything
+    mode < 0.5 ? (
+      midisend(offset, msg1, msg23);
+    ) : 
+    // Mode 2: Remap white keys to scale
+    mode > 1.5 ? (
+      isWhite = whiteKeys[noteClass];
+      isWhite ? (
+        isNoteOn ? (
+          remappedNote = remap_note(note);
+          noteMap[note] = remappedNote;
+          midisend(offset, msg1, (velocity << 8) | remappedNote);
+        ) : (
+          origNote = noteMap[note];
+          midisend(offset, msg1, origNote);
+        );
+      );
+    ) : 
+    // Mode 1: Filter - block notes outside scale
+    (
+      allowed = allowedNotes[noteClass];
+      pass = !isNoteOn || allowed;
+      pass ? midisend(offset, msg1, msg23);
+    );
+  );
+);
