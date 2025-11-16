@@ -1,8 +1,21 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 1.1.0
+-- @version 1.2.0
 -- @changelog
 --[[
+1.2.0
++ Added Circle of Fifths visualization window
++ Interactive circle shows tonic and all scale notes
++ Harmonic distance color coding (rainbow spectrum)
++ Click any note to instantly change tonic
++ Relative minor display below each major note
++ Sharp/flat notation toggle button
++ Color legend with scale degree relationships
++ Brightness boost and thick borders for in-scale notes
++ Persistent window position across sessions
++ Real-time bidirectional sync with main window
++ Scalable UI matching parent window
+
 1.1.0
 + Added Scale Filter/Remap modes (Off/Filter/Remap button)
 + Filter mode: blocks notes outside current scale
@@ -5774,6 +5787,375 @@ function showHelpWindow()
 	end
 end
 
+-- Fifth Wheel (Circle of Fifths) Popup
+local fifthWheelWindow = nil
+local fifthWheelWindowOpen = false
+local lastSyncedTonic = nil
+local lastSyncedScale = nil
+
+function showFifthWheel()
+	if fifthWheelWindowOpen then return end
+	fifthWheelWindowOpen = true
+	
+	local scriptPath = debug.getinfo(1, "S").source:match("@?(.*)")
+	local scriptDir = scriptPath:match("(.+)[/\\]")
+	
+	-- Pass UI scale to popup via ExtState (calculate from current window size)
+	local scaleX = gfx.w / baseWidth
+	local scaleY = gfx.h / baseHeight
+	local uiScale = (scaleX + scaleY) / 2
+	reaper.SetExtState("TKChordGunFifthWheel", "uiScale", tostring(uiScale), false)
+	
+	-- Create fifth wheel script in memory and execute
+	local wheelScript = [[
+	local notes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+	local notesFlat = {"C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"}
+	local noteOrder = {1, 8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6}  -- Circle of fifths order
+	local useFlats = false  -- Toggle between sharps and flats		-- Get UI scale from ExtState (passed by parent)
+		local uiScale = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "uiScale")) or 1.0
+		
+		-- Scaling function
+		local function s(size)
+			return math.floor(size * uiScale + 0.5)
+		end
+		
+	local baseW, baseH = 400, 400
+	local windowW, windowH = s(baseW), s(baseH)
+	local centerX, centerY = windowW/2, windowH/2
+	local radius = s(140)
+	local noteRadius = s(28)
+	
+	-- Get saved window position from ExtState
+	local savedX = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "windowX")) or -1
+	local savedY = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "windowY")) or -1
+	
+	gfx.init("Circle of Fifths", windowW, windowH, 0, savedX, savedY)
+	gfx.setfont(1, "Arial", s(16), string.byte('b'))	function drawWheel()
+		-- Background
+		gfx.set(0.15, 0.15, 0.15, 1)
+		gfx.rect(0, 0, windowW, windowH, 1)
+		
+		-- Draw sharp/flat toggle button at top-left
+		local toggleText = useFlats and "b" or "#"
+		gfx.setfont(2, "Arial", s(16), string.byte('b'))
+		local toggleW = gfx.measurestr(toggleText)
+		local toggleX = s(10)
+		local toggleY = s(10)
+		local toggleH = s(24)
+		local toggleButtonX = toggleX
+		local toggleButtonY = toggleY
+		local toggleButtonW = s(24)
+		
+		-- Draw button background
+		gfx.set(0.25, 0.25, 0.25, 1)
+		gfx.rect(toggleButtonX, toggleButtonY, toggleButtonW, toggleH, 1)
+		
+		-- Draw button border
+		gfx.set(0.5, 0.5, 0.5, 1)
+		gfx.rect(toggleButtonX, toggleButtonY, toggleButtonW, toggleH, 0)
+		
+		-- Draw button text (centered in button)
+		gfx.set(1, 1, 1, 1)
+		gfx.x = toggleButtonX + (toggleButtonW - toggleW) / 2
+		gfx.y = toggleButtonY + (toggleH - s(16)) / 2
+		gfx.drawstr(toggleText)
+		
+		-- Select note array based on toggle
+		local displayNotes = useFlats and notesFlat or notes
+		
+		-- Get current scale info from extstate
+		local currentTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "tonic")) or 1
+		local scalePattern = {}
+		for i = 1, 12 do
+			scalePattern[i] = reaper.GetExtState("TKChordGunFifthWheel", "scale" .. i) == "1"
+		end
+		
+		-- Function to get harmonic distance color
+		local function getHarmonicDistanceColor(noteIndex, tonicIndex)
+			-- Find positions in circle of fifths
+			local pos1, pos2
+			for i = 1, 12 do
+				if noteOrder[i] == noteIndex then pos1 = i end
+				if noteOrder[i] == tonicIndex then pos2 = i end
+			end
+			
+			-- Calculate shortest distance around circle
+			local dist = math.min(math.abs(pos1 - pos2), 12 - math.abs(pos1 - pos2))
+			
+			if dist == 0 then
+				return {1.0, 0.84, 0.0}  -- Gold (tonic)
+			elseif dist == 1 then
+				return {0.4, 0.85, 0.4}  -- Green (dominant/subdominant - closely related)
+			elseif dist == 2 then
+				return {0.3, 0.7, 1.0}  -- Cyan (related)
+			elseif dist == 3 then
+				return {0.7, 0.5, 1.0}  -- Purple (somewhat related)
+			elseif dist == 4 then
+				return {1.0, 0.5, 0.3}  -- Orange (distantly related)
+			else
+				return {0.5, 0.3, 0.3}  -- Brown/dark red (very distant/tritone)
+			end
+		end			gfx.setfont(1, "Arial", 16, string.byte('b'))
+			
+			-- Draw connecting lines
+			gfx.set(0.5, 0.5, 0.5, 1)
+			for i = 1, 12 do
+				local angle1 = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+				local angle2 = (i % 12) * (math.pi * 2 / 12) - (math.pi / 2)
+				local x1 = centerX + math.cos(angle1) * radius
+				local y1 = centerY + math.sin(angle1) * radius
+				local x2 = centerX + math.cos(angle2) * radius
+				local y2 = centerY + math.sin(angle2) * radius
+				gfx.line(x1, y1, x2, y2, 1)
+			end
+			
+			-- Draw note circles
+			for i = 1, 12 do
+				local angle = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+				local noteIndex = noteOrder[i]
+				local x = centerX + math.cos(angle) * radius
+				local y = centerY + math.sin(angle) * radius
+				
+				local isCurrentTonic = (noteIndex == currentTonic)
+				local isInScale = scalePattern[noteIndex]
+				
+		-- Draw circle with harmonic distance coloring
+		local color
+		if isCurrentTonic then
+			color = {1.0, 0.84, 0.0}  -- Gold (tonic)
+		else
+			-- Use harmonic distance color for all non-tonic notes
+			color = getHarmonicDistanceColor(noteIndex, currentTonic)
+			-- Add brightness boost for in-scale notes to distinguish them
+			if isInScale then
+				color[1] = math.min(1.0, color[1] * 1.2)
+				color[2] = math.min(1.0, color[2] * 1.2)
+				color[3] = math.min(1.0, color[3] * 1.2)
+			end
+		end
+	gfx.set(color[1], color[2], color[3], 1)
+	gfx.circle(x, y, noteRadius, 1)
+	
+	-- Draw border
+	if isCurrentTonic then
+		-- Tonic: thick white double border
+		gfx.set(1.0, 1.0, 1.0, 1)
+		gfx.circle(x, y, noteRadius, 0)
+		gfx.circle(x, y, noteRadius-1, 0)
+	elseif isInScale then
+		-- In-scale: thick white border for emphasis
+		gfx.set(1.0, 1.0, 1.0, 1)
+		gfx.circle(x, y, noteRadius, 0)
+		gfx.circle(x, y, noteRadius-1, 0)
+		gfx.circle(x, y, noteRadius-2, 0)
+	else
+		-- Out-of-scale: normal gray border
+		gfx.set(0.5, 0.5, 0.5, 1)
+		gfx.circle(x, y, noteRadius, 0)
+	end			-- Draw note name (major) - always black for circles
+			gfx.set(0, 0, 0, 1)
+			gfx.setfont(1, "Arial", s(16), string.byte('b'))
+			local noteName = displayNotes[noteIndex]
+			local textW, textH = gfx.measurestr(noteName)
+			gfx.x = x - textW / 2
+			gfx.y = y - textH / 2 - s(6)
+			gfx.drawstr(noteName)
+			
+			-- Draw relative minor below
+			local minorNoteIndex = ((noteIndex + 8) % 12) + 1  -- 3 semitones down: C(1)→A(10), G(8)→E(5)
+			local minorName = displayNotes[minorNoteIndex] .. "m"
+			gfx.setfont(4, "Arial", s(13))
+			local minorW, minorH = gfx.measurestr(minorName)
+			gfx.x = x - minorW / 2
+			gfx.y = y - minorH / 2 + s(8)
+			gfx.set(0, 0, 0, 1)  -- Black for all circles
+			gfx.drawstr(minorName)
+		end
+	
+	-- Draw legend in center of circle
+	gfx.setfont(5, "Arial", s(13))
+	local legendY = centerY - s(50)
+	local lineHeight = s(18)
+	
+	-- Legend title
+	gfx.set(1, 1, 1, 1)
+	local titleText = "Color Legend:"
+	local titleW = gfx.measurestr(titleText)
+	gfx.x = centerX - titleW / 2
+	gfx.y = legendY
+	gfx.drawstr(titleText)
+	legendY = legendY + lineHeight + s(4)
+	
+	-- Legend items with color boxes
+	local legendItems = {
+		{{1.0, 0.84, 0.0}, "Tonic (I)"},
+		{{0.4, 0.85, 0.4}, "V/IV (±1)"},
+		{{0.3, 0.7, 1.0}, "ii/vi (±2)"},
+		{{0.7, 0.5, 1.0}, "iii/vii (±3)"},
+		{{1.0, 0.5, 0.3}, "Far (±4)"},
+		{{0.5, 0.3, 0.3}, "Tritone (±5/6)"}
+	}
+	
+	for i, item in ipairs(legendItems) do
+		local color = item[1]
+		local label = item[2]
+		
+		-- Draw color box
+		gfx.set(color[1], color[2], color[3], 1)
+		local boxSize = s(12)
+		local boxX = centerX - s(50)
+		gfx.rect(boxX, legendY, boxSize, boxSize, 1)
+		
+		-- Draw label (white text for all)
+		gfx.set(1, 1, 1, 1)
+		gfx.x = boxX + boxSize + s(6)
+		gfx.y = legendY
+		gfx.drawstr(label)
+		
+		legendY = legendY + lineHeight
+	end
+	
+	-- Draw instruction text
+		gfx.setfont(3, "Arial", s(18))
+		gfx.set(0.7, 0.7, 0.7, 1)
+		local instr = "Click a note to change tonic • ESC to close"
+		local instrW = gfx.measurestr(instr)
+		gfx.x = (windowW - instrW) / 2
+		gfx.y = windowH - s(20)
+	gfx.drawstr(instr)
+end
+		function main()
+		drawWheel()
+		gfx.update()
+		
+	local char = gfx.getchar()
+	if char == 27 or char == -1 then  -- ESC or closed
+		-- Save window position before closing
+		local dockState, posX, posY = gfx.dock(-1, 0, 0, 0, 0)
+		reaper.SetExtState("TKChordGunFifthWheel", "windowX", tostring(posX), true)
+		reaper.SetExtState("TKChordGunFifthWheel", "windowY", tostring(posY), true)
+		reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+		return
+	end		-- Handle clicks (check mouse_cap for left button)
+		if gfx.mouse_cap & 1 == 1 then
+			local mx = gfx.mouse_x
+			local my = gfx.mouse_y
+			
+			-- Only trigger once per click (when button is first pressed)
+			if not mouseWasDown then
+				-- Check toggle button click
+				local toggleButtonX = s(10)
+				local toggleButtonY = s(10)
+				local toggleButtonW = s(24)
+				local toggleButtonH = s(24)
+				
+				if mx >= toggleButtonX and mx <= toggleButtonX + toggleButtonW and
+				   my >= toggleButtonY and my <= toggleButtonY + toggleButtonH then
+					useFlats = not useFlats
+				else
+					-- Check note circle clicks
+					for i = 1, 12 do
+						local angle = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+						local noteIndex = noteOrder[i]
+						local x = centerX + math.cos(angle) * radius
+						local y = centerY + math.sin(angle) * radius
+						
+						local dist = math.sqrt((mx - x)^2 + (my - y)^2)
+						if dist < noteRadius then
+							reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", tostring(noteIndex), false)
+							break
+						end
+					end
+				end
+				mouseWasDown = true
+			end
+		else
+			mouseWasDown = false
+		end
+		
+		reaper.defer(main)
+	end
+	
+	local mouseWasDown = false
+	main()
+]]	-- Write temporary script
+	local tempScriptPath = scriptDir .. "/TK_ChordGun_FifthWheel_Temp.lua"
+	local file = io.open(tempScriptPath, "w")
+	if file then
+		file:write(wheelScript)
+		file:close()
+		
+		-- Set current scale data in extstate
+		local currentTonic = getScaleTonicNote()
+		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(currentTonic), false)
+		reaper.SetExtState("TKChordGunFifthWheel", "closed", "0", false)
+		reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", "0", false)
+		
+		for i = 1, 12 do
+			local inScale = scalePattern and scalePattern[i] or false
+			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
+		end
+		
+		-- Run the script
+		local command = reaper.AddRemoveReaScript(true, 0, tempScriptPath, true)
+		if command > 0 then
+			reaper.Main_OnCommand(command, 0)
+		end
+	end
+end
+
+function checkFifthWheelUpdates()
+	if not fifthWheelWindowOpen then return end
+	
+	-- Update popup only if main script state changed (efficient sync)
+	local currentTonic = getScaleTonicNote()
+	local scaleHash = ""
+	for i = 1, 12 do
+		scaleHash = scaleHash .. (scalePattern and scalePattern[i] and "1" or "0")
+	end
+	
+	-- Only write to ExtState if values changed
+	if currentTonic ~= lastSyncedTonic or scaleHash ~= lastSyncedScale then
+		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(currentTonic), false)
+		for i = 1, 12 do
+			local inScale = scalePattern and scalePattern[i] or false
+			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
+		end
+		lastSyncedTonic = currentTonic
+		lastSyncedScale = scaleHash
+	end
+	
+	-- Check if window was closed
+	local closed = reaper.GetExtState("TKChordGunFifthWheel", "closed")
+	if closed == "1" then
+		fifthWheelWindowOpen = false
+		reaper.SetExtState("TKChordGunFifthWheel", "closed", "0", false)
+		lastSyncedTonic = nil
+		lastSyncedScale = nil
+		return
+	end
+	
+	-- Check if user selected a new tonic
+	local selectedTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "selectedTonic"))
+	if selectedTonic and selectedTonic > 0 then
+		setScaleTonicNote(selectedTonic)
+		setSelectedScaleNote(1)
+		setChordText("")
+		resetSelectedChordTypes()
+		resetChordInversionStates()
+		updateScaleData()
+		updateScaleDegreeHeaders()
+		
+		-- Update scale data in extstate for the wheel
+		for i = 1, 12 do
+			local inScale = scalePattern and scalePattern[i] or false
+			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
+		end
+		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(selectedTonic), false)
+		reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", "0", false)
+	end
+end
+
 -- Piano Keyboard Visualizer
 PianoKeyboard = {}
 PianoKeyboard.__index = PianoKeyboard
@@ -6998,9 +7380,41 @@ function Interface:addTopFrame()
   self:addScaleLabel(xMargin, yMargin, xPadding, yPadding)
 	self:addScaleTonicNoteDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth)
 	self:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
+	self:addFifthWheelButton(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
 	self:addScaleNotesTextLabel(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
   self:addOctaveLabel(xMargin, yMargin, yPadding, octaveValueBoxWidth)
 	self:addOctaveSelectorValueBox(yMargin, xMargin, xPadding, octaveValueBoxWidth)
+end
+
+function Interface:addFifthWheelButton(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
+	local contentLeft = getTopFrameContentLeft(xMargin)
+	local spacingAfterLabel = math.max(s(2), horizontalMargin - s(8))
+	local spacingBetweenDropdowns = math.max(s(4), horizontalMargin - s(4))
+	local extraSpacing = s(12)  -- Extra ruimte voor de Circle button
+	local buttonXpos = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns + scaleTypeWidth + spacingBetweenDropdowns + extraSpacing
+	local buttonYpos = yMargin + yPadding + s(1)
+	local buttonWidth = s(50)
+	local buttonHeight = s(15)
+	
+	self:addToggleButton(
+		"Circle",
+		buttonXpos + dockerXPadding,
+		buttonYpos,
+		buttonWidth,
+		buttonHeight,
+		function() return fifthWheelWindowOpen end,
+		function()
+			if fifthWheelWindowOpen then
+				-- Close by setting extstate flag
+				reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+				fifthWheelWindowOpen = false
+			else
+				showFifthWheel()
+			end
+		end,
+		nil,
+		function() return "Toggle Circle of Fifths\n\nVisual guide to key relationships\nClick any note to change tonic" end
+	)
 end
 
 local function topButtonWidth()
@@ -7576,7 +7990,7 @@ function Interface:addScaleNotesTextLabel(xMargin, yMargin, xPadding, yPadding, 
   local spacingAfterLabel = math.max(s(2), horizontalMargin - s(8))
   local spacingBetweenDropdowns = math.max(s(4), horizontalMargin - s(4))
   local previousControlsRight = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns + scaleTypeWidth
-  local scaleNotesXpos = previousControlsRight + s(70)
+  local scaleNotesXpos = previousControlsRight + s(90)
 	local scaleNotesYpos = yMargin+yPadding+s(1)
   local availableWidth = getTopFrameContentRight(xMargin) - scaleNotesXpos - s(70)
   local scaleNotesWidth = math.max(s(200), availableWidth)
@@ -7762,6 +8176,7 @@ local function main()
 
 	handleInput()
 	updateChordRecognition()  -- Update chord recognition every frame
+	checkFifthWheelUpdates()  -- Check for fifth wheel popup interactions
 
 	if windowHasNotBeenClosed() then
 		reaper.runloop(main)

@@ -241,7 +241,7 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="1.1.0" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-16T01:30:00Z">
+      <version name="1.2.0" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-16T03:30:00Z">
         <changelog><![CDATA[
 1.1.0 - NEW FEATURES:
 + Scale Filter/Remap modes (Off/Filter/Remap button)
