@@ -1,6 +1,6 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 1.2.0
+-- @version 1.2.1
 -- @changelog
 --[[
 1.2.0
@@ -2022,7 +2022,7 @@ function insertProgressionToMIDI()
 end
 
 -- Progression Preset Functions
-local presetFolder = reaper.GetResourcePath() .. "/Scripts/TK Scripts/pandabot_ChordGun(TK MOD)/Presets/"
+local presetFolder = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun/Presets/"
 
 function ensurePresetFolderExists()
   -- Create preset folder if it doesn't exist
