@@ -275,6 +275,7 @@ Standalone - no other ChordGun installation needed.
         ]]></changelog>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun.lua</source>
         <source file="TK_ChordGun/TK_ChordGun_Help.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun_Help.lua</source>
+        <source file="TK_ChordGun/README.md">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/README.md</source>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun decrement chord inversion.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20chord%20inversion.lua</source>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun decrement chord type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20chord%20type.lua</source>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun decrement octave.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20octave.lua</source>
