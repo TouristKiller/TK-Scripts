@@ -1,6 +1,6 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.0.1
+-- @version 2.0.2
 -- @changelog
 --[[
 2.0.0
@@ -621,7 +621,41 @@ local function getActiveExternalNotes()
   -- Use our simple tracking
   local notes = {}
   for note, _ in pairs(chordInputNotes) do
-    table.insert(notes, note)
+    -- If Remap mode is active, translate white keys to their scale equivalents
+    local noteToAnalyze = note
+    if scaleFilterMode == 2 and scalePattern then  -- Remap mode
+      local noteInOctave = note % 12
+      -- Check if this is a white key
+      local whiteKeys = {0, 2, 4, 5, 7, 9, 11}  -- C, D, E, F, G, A, B
+      local isWhiteKey = false
+      local whiteKeyIndex = 0
+      for i, wk in ipairs(whiteKeys) do
+        if noteInOctave == wk then
+          isWhiteKey = true
+          whiteKeyIndex = i
+          break
+        end
+      end
+      
+      -- Map white key to scale note
+      if isWhiteKey then
+        -- Build array of scale notes from scalePattern (1-indexed in Lua)
+        local scaleNotes = {}
+        for i = 1, 12 do
+          if scalePattern[i] then
+            -- scalePattern[i] corresponds to note (i-1) in chromatic scale
+            table.insert(scaleNotes, i - 1)  -- Convert to 0-indexed MIDI note
+          end
+        end
+        
+        -- Map white key index to scale note
+        if scaleNotes[whiteKeyIndex] then
+          local octave = math.floor(note / 12)
+          noteToAnalyze = scaleNotes[whiteKeyIndex] + (octave * 12)
+        end
+      end
+    end
+    table.insert(notes, noteToAnalyze)
   end
   table.sort(notes)
   return notes
