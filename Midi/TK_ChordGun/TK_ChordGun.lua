@@ -1,8 +1,23 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 1.3.0
+-- @version 2.0.0
 -- @changelog
 --[[
+2.0.0
++ Added comprehensive scale library with 87 scales across 7 systems
++ Two-level dropdown system: Scale System → Scale Type
++ Scale systems: Diatonic (11), Pentatonic (6), Messiaen (32), Jazz (10), World Music (12), Blues & Soul (8), Rock & Metal (8)
++ Educational tooltips for all scales (description + interval patterns)
++ World Music: Arabic/Middle Eastern (Hijaz, Persian, Double Harmonic), Japanese (Hirajoshi, In Sen, Iwato), Indian Ragas (Bhairav, Kafi), Hungarian/Gypsy scales
++ Jazz: Bebop family (4 variants), Modern jazz (Altered, Lydian Dominant, Melodic Minor), Symmetrical diminished scales
++ Blues & Soul: Blues scales (Major/Minor/Classic), Mixo-Blues, Gospel scales, Soul scale, Dominant Blues
++ Rock & Metal: Harmonic Minor, Phrygian Dominant, Neapolitan (Minor/Major), Hungarian Major, Super Locrian, Lydian #2, Aeolian b5
++ Expanded Messiaen from 8 to 32 modes (all transpositions of Mode 1-7)
++ Expanded Pentatonic from 1 to 6 scales (Major, Minor, Blues, Egyptian, Japanese, Hirajoshi)
++ Circle of Fifths auto-closes when main window closes
++ ExtState persistence for both dropdown levels with backwards compatibility
++ All scale descriptions include: note count, character/mood, musical context, and usage examples
+
 1.3.0
 + Added 8 Messiaen Modes of Limited Transposition
 + Modes 1-7.1 with 5-9 notes per scale (symmetrical structures)
@@ -807,6 +822,60 @@ end
 
 --
 
+-- Scale System functions (for two-level dropdown)
+function getScaleSystemIndex()
+  local index = tonumber(reaper.GetExtState("TKChordGun", "scaleSystem"))
+  if not index or index < 1 or index > #scaleSystems then
+    return 1  -- Default to first system
+  end
+  return index
+end
+
+function setScaleSystemIndex(index)
+  reaper.SetExtState("TKChordGun", "scaleSystem", tostring(index), true)
+end
+
+function getScaleWithinSystemIndex()
+  local systemIndex = getScaleSystemIndex()
+  local index = tonumber(reaper.GetExtState("TKChordGun", "scaleWithinSystem"))
+  
+  -- Validate index is within range for current system
+  local system = scaleSystems[systemIndex]
+  if not index or index < 1 or not system or index > #system.scales then
+    return 1  -- Default to first scale in system
+  end
+  return index
+end
+
+function setScaleWithinSystemIndex(index)
+  reaper.SetExtState("TKChordGun", "scaleWithinSystem", tostring(index), true)
+end
+
+-- Convert system+scale indices to flat scale index (for backwards compatibility)
+function getScaleIndexFromSystemIndices(systemIndex, scaleIndex)
+  local flatIndex = 0
+  for i = 1, systemIndex - 1 do
+    flatIndex = flatIndex + #scaleSystems[i].scales
+  end
+  return flatIndex + scaleIndex
+end
+
+-- Convert flat scale index to system+scale indices
+function getSystemIndicesFromScaleIndex(scaleIndex)
+  local currentIndex = 0
+  for systemIdx, system in ipairs(scaleSystems) do
+    for scaleIdx, scale in ipairs(system.scales) do
+      currentIndex = currentIndex + 1
+      if currentIndex == scaleIndex then
+        return systemIdx, scaleIdx
+      end
+    end
+  end
+  return 1, 1  -- Default to first scale
+end
+
+--
+
 function getScaleNotesText()
   return getValue(scaleNotesTextKey, defaultScaleNotesTextValue)
 end
@@ -1110,29 +1179,240 @@ scaleType = getScaleType()
 
 guiShouldBeUpdated = false
 
-scales = {
-  { name = "Major", pattern = "101011010101" },
-  { name = "Natural Minor", pattern = "101101011010" },
-  { name = "Harmonic Minor", pattern = "101101011001" },
-  { name = "Melodic Minor", pattern = "101101010101" },
-  { name = "Pentatonic", pattern = "101010010100" },
-  { name = "Ionian", pattern = "101011010101" },
-  { name = "Aeolian", pattern = "101101011010" },
-  { name = "Dorian", pattern = "101101010110" },
-  { name = "Mixolydian", pattern = "101011010110" },
-  { name = "Phrygian", pattern = "110101011010" },
-  { name = "Lydian", pattern = "101010110101" },
-  { name = "Locrian", pattern = "110101101010" },
-  -- Messiaen Modes (semitone intervals converted to binary patterns)
-  { name = "Messiaen Mode 1", pattern = "101010101010", isCustom = true },  -- 2 2 2 2 2 2 -> 6 notes
-  { name = "Messiaen Mode 2.1", pattern = "110110110110", isCustom = true },  -- 1 2 1 2 1 2 1 2 -> 8 notes
-  { name = "Messiaen Mode 2.2", pattern = "101101101101", isCustom = true },  -- 2 1 2 1 2 1 2 1 -> 8 notes
-  { name = "Messiaen Mode 3.1", pattern = "101110110111", isCustom = true },  -- 2 1 1 2 1 1 2 1 1 -> 9 notes
-  { name = "Messiaen Mode 4.1", pattern = "110001110001", isCustom = true },  -- 1 1 3 1 1 1 3 1 -> 6 notes
-  { name = "Messiaen Mode 5.1", pattern = "110001000011", isCustom = true },  -- 1 4 1 1 4 1 -> 5 notes
-  { name = "Messiaen Mode 6.1", pattern = "101011010110", isCustom = true },  -- 2 2 1 1 2 2 1 1 -> 7 notes (8th overlaps octave)
-  { name = "Messiaen Mode 7.1", pattern = "111011110110", isCustom = true }  -- 1 1 1 2 1 1 1 1 2 1 -> 9 notes (10th overlaps octave)
+-- Scale Systems: Organized by category for two-level dropdown
+scaleSystems = {
+  {
+    name = "Diatonic",
+    scales = {
+      { name = "Major", pattern = "101011010101", 
+        description = "Heptatonic (7 notes) - Bright, happy sound\nMost common scale in Western music" },
+      { name = "Natural Minor", pattern = "101101011010",
+        description = "Heptatonic (7 notes) - Dark, sad sound\nRelative minor of Major scale" },
+      { name = "Harmonic Minor", pattern = "101101011001",
+        description = "Heptatonic (7 notes) - Exotic, dramatic\nRaised 7th creates leading tone" },
+      { name = "Melodic Minor", pattern = "101101010101",
+        description = "Heptatonic (7 notes) - Jazz favorite\nRaised 6th and 7th ascending" },
+      { name = "Ionian", pattern = "101011010101",
+        description = "Heptatonic (7 notes) - Same as Major\n1st mode of major scale" },
+      { name = "Aeolian", pattern = "101101011010",
+        description = "Heptatonic (7 notes) - Same as Natural Minor\n6th mode of major scale" },
+      { name = "Dorian", pattern = "101101010110",
+        description = "Heptatonic (7 notes) - Jazzy, sophisticated\n2nd mode - minor with raised 6th" },
+      { name = "Mixolydian", pattern = "101011010110",
+        description = "Heptatonic (7 notes) - Bluesy, rock\n5th mode - major with flat 7th" },
+      { name = "Phrygian", pattern = "110101011010",
+        description = "Heptatonic (7 notes) - Spanish, flamenco\n3rd mode - minor with flat 2nd" },
+      { name = "Lydian", pattern = "101010110101",
+        description = "Heptatonic (7 notes) - Dreamy, floating\n4th mode - major with sharp 4th" },
+      { name = "Locrian", pattern = "110101101010",
+        description = "Heptatonic (7 notes) - Unstable, dissonant\n7th mode - diminished quality" }
+    }
+  },
+  {
+    name = "Pentatonic",
+    scales = {
+      { name = "Major Pentatonic", pattern = "101010010100",
+        description = "Pentatonic (5 notes) - Bright, happy\nC-D-E-G-A | Universal in folk music" },
+      { name = "Minor Pentatonic", pattern = "100101010010",
+        description = "Pentatonic (5 notes) - Rock/blues basis\nC-Eb-F-G-Bb | Most common in rock" },
+      { name = "Blues Scale", pattern = "100101110010",
+        description = "Hexatonic (6 notes) - Blues/rock\nC-Eb-F-F#-G-Bb | Minor pentatonic + blue note" },
+      { name = "Egyptian/Suspended", pattern = "101001010010",
+        description = "Pentatonic (5 notes) - Mysterious, suspended\nC-D-F-G-Bb | Ancient Egyptian music" },
+      { name = "Japanese (In Sen)", pattern = "110001010010",
+        description = "Pentatonic (5 notes) - Traditional Japanese\nC-Db-F-G-Bb | Meditative, contemplative" },
+      { name = "Hirajoshi", pattern = "101100010010",
+        description = "Pentatonic (5 notes) - Japanese, serene\nC-D-Eb-G-Ab | Tranquil, peaceful" }
+    }
+  },
+  {
+    name = "Messiaen",
+    scales = {
+      -- Mode 1: Whole Tone (6 notes, 1 transposition)
+      { name = "Mode 1", pattern = "101010101010", isCustom = true, intervals = "2-2-2-2-2-2",
+        description = "Hexatonic (6 notes) - Whole Tone Scale\nDreamy, floating, ambiguous | Debussy's favorite\nSymmetrical: divides octave into 6 equal parts" },
+      
+      -- Mode 2: Octatonic / Half-Whole Diminished (8 notes, 3 transpositions)
+      { name = "Mode 2.1", pattern = "110110110110", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
+        description = "Octatonic (8 notes) - Half-Whole Diminished\nJazz/classical favorite | Rich chord possibilities\nAlternates half and whole steps (1st transposition)" },
+      { name = "Mode 2.2", pattern = "101101101101", isCustom = true, intervals = "2-1-2-1-2-1-2-1",
+        description = "Octatonic (8 notes) - Whole-Half Diminished\nAlternates whole and half steps (2nd transposition)\nUsed extensively in bebop and modern jazz" },
+      { name = "Mode 2.3", pattern = "011011011011", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
+        description = "Octatonic (8 notes) - Half-Whole Diminished\n3rd and final transposition of Mode 2\nSymmetrical: repeats every minor 3rd" },
+      
+      -- Mode 3: (9 notes, 4 transpositions)
+      { name = "Mode 3.1", pattern = "101110110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\nRepeating 2-1-1 pattern | Very colorful\n1st transposition of 4 possible" },
+      { name = "Mode 3.2", pattern = "110111011011", isCustom = true, intervals = "1-1-2-1-1-2-1-1-2",
+        description = "Nonatonic (9 notes) - Dense, chromatic\nRepeating 1-1-2 pattern | 2nd transposition\nUsed in Messiaen's 'Quartet for the End of Time'" },
+      { name = "Mode 3.3", pattern = "011101110111", isCustom = true, intervals = "1-2-1-1-2-1-1-2-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n3rd transposition | Highly symmetrical\nContains many augmented and diminished chords" },
+      { name = "Mode 3.4", pattern = "101101110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n4th and final transposition of Mode 3\nRich harmonic palette for composition" },
+      
+      -- Mode 4: (8 notes, 6 transpositions)
+      { name = "Mode 4.1", pattern = "110001110001", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\nRepeating 1-1-3-1 pattern | 1st transposition\nUsed for mysterious, otherworldly sounds" },
+      { name = "Mode 4.2", pattern = "100011100011", isCustom = true, intervals = "1-3-1-1-1-3-1-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n2nd transposition | Alternating small/large gaps\nPopular in film scores" },
+      { name = "Mode 4.3", pattern = "000111000111", isCustom = true, intervals = "3-1-1-1-3-1-1-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n3rd transposition | Creates tension and release\nContains augmented and minor triads" },
+      { name = "Mode 4.4", pattern = "001110001110", isCustom = true, intervals = "1-1-1-3-1-1-1-3",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n4th transposition | Clusters and wide leaps\nUseful for dramatic moments" },
+      { name = "Mode 4.5", pattern = "011100011100", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n5th transposition | Repeating pattern\nSymmetrical structure" },
+      { name = "Mode 4.6", pattern = "111000111000", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n6th and final transposition of Mode 4\nComplete the symmetrical cycle" },
+      
+      -- Mode 5: (6 notes, 6 transpositions)
+      { name = "Mode 5.1", pattern = "110001000011", isCustom = true, intervals = "1-4-1-1-4-1",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\nRepeating 1-4-1 pattern | 1st transposition\nOpen, spacious sound with dramatic leaps" },
+      { name = "Mode 5.2", pattern = "100010000111", isCustom = true, intervals = "4-1-1-4-1-1",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n2nd transposition | Major 3rd leaps\nUsed for ethereal, floating textures" },
+      { name = "Mode 5.3", pattern = "000100011100", isCustom = true, intervals = "1-1-4-1-1-4",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n3rd transposition | Alternating gaps\nCreates sense of space and distance" },
+      { name = "Mode 5.4", pattern = "001000111000", isCustom = true, intervals = "1-4-1-1-4-1",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n4th transposition | Pentatonic-like\nUseful for minimalist compositions" },
+      { name = "Mode 5.5", pattern = "010001110001", isCustom = true, intervals = "4-1-1-4-1-1",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n5th transposition | Symmetrical gaps\nCreates mysterious atmosphere" },
+      { name = "Mode 5.6", pattern = "100011100010", isCustom = true, intervals = "1-1-4-1-1-4",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n6th and final transposition of Mode 5\nCompletes the hexatonic cycle" },
+      
+      -- Mode 6: (8 notes, 6 transpositions)
+      { name = "Mode 6.1", pattern = "101011010110", isCustom = true, intervals = "2-2-1-1-2-2-1-1",
+        description = "Octatonic (8 notes) - Balanced, versatile\nRepeating 2-2-1-1 pattern | 1st transposition\nBlends whole tone and chromatic elements" },
+      { name = "Mode 6.2", pattern = "010110101101", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
+        description = "Octatonic (8 notes) - Balanced, versatile\n2nd transposition | Smooth motion\nUseful for melodic lines" },
+      { name = "Mode 6.3", pattern = "101101011011", isCustom = true, intervals = "1-1-2-2-1-1-2-2",
+        description = "Octatonic (8 notes) - Balanced, versatile\n3rd transposition | Paired intervals\nCreates interesting harmonic progressions" },
+      { name = "Mode 6.4", pattern = "011010110110", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
+        description = "Octatonic (8 notes) - Balanced, versatile\n4th transposition | Alternating pairs\nGood for both melody and harmony" },
+      { name = "Mode 6.5", pattern = "110101101011", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
+        description = "Octatonic (8 notes) - Balanced, versatile\n5th transposition | Symmetrical structure\nUsed in Messiaen's piano works" },
+      { name = "Mode 6.6", pattern = "101011011010", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
+        description = "Octatonic (8 notes) - Balanced, versatile\n6th and final transposition of Mode 6\nCompletes the octave division" },
+      
+      -- Mode 7: (10 notes, 6 transpositions)
+      { name = "Mode 7.1", pattern = "111011110110", isCustom = true, intervals = "1-1-1-2-1-1-1-1-2-1",
+        description = "Decatonic (10 notes) - Most chromatic\nRepeating 1-1-1-2-1 pattern | 1st transposition\nAlmost all 12 chromatic notes - highly dissonant" },
+      { name = "Mode 7.2", pattern = "110111101101", isCustom = true, intervals = "1-1-2-1-1-1-1-2-1-1",
+        description = "Decatonic (10 notes) - Most chromatic\n2nd transposition | Dense clusters\nUsed for intense, dramatic moments" },
+      { name = "Mode 7.3", pattern = "101111011011", isCustom = true, intervals = "1-2-1-1-1-1-2-1-1-1",
+        description = "Decatonic (10 notes) - Most chromatic\n3rd transposition | Maximum color\nMessiaen's most complex mode" },
+      { name = "Mode 7.4", pattern = "011110110111", isCustom = true, intervals = "2-1-1-1-1-2-1-1-1-1",
+        description = "Decatonic (10 notes) - Most chromatic\n4th transposition | Chromatic saturation\nUseful for avant-garde compositions" },
+      { name = "Mode 7.5", pattern = "111101101110", isCustom = true, intervals = "1-1-1-1-2-1-1-1-2-1",
+        description = "Decatonic (10 notes) - Most chromatic\n5th transposition | Dense harmony\nContains nearly every possible chord type" },
+      { name = "Mode 7.6", pattern = "111011011101", isCustom = true, intervals = "1-1-2-1-1-1-2-1-1-1",
+        description = "Decatonic (10 notes) - Most chromatic\n6th and final transposition of Mode 7\nCompletes Messiaen's modal system" }
+    }
+  },
+  {
+    name = "Jazz",
+    scales = {
+      { name = "Bebop Dominant", pattern = "10101101010110", isCustom = true, intervals = "2-2-1-2-2-1-1-1",
+        description = "Octatonic (8 notes) - Classic bebop sound\nMixolydian + major 7th passing tone\nPerfect for dominant 7th chord lines" },
+      { name = "Bebop Major", pattern = "10110101010110", isCustom = true, intervals = "2-2-1-2-1-1-2-1",
+        description = "Octatonic (8 notes) - Major with chromatic\nMajor scale + #5 passing tone\nSmooth bebop melodies over major chords" },
+      { name = "Bebop Minor", pattern = "10110101011010", isCustom = true, intervals = "2-1-2-2-1-1-2-1",
+        description = "Octatonic (8 notes) - Minor with chromatic\nDorian + major 3rd passing tone\nUsed extensively in bebop improvisation" },
+      { name = "Bebop Dorian", pattern = "10110101101010", isCustom = true, intervals = "2-1-2-2-2-1-1-2",
+        description = "Octatonic (8 notes) - Dorian with passing tone\nDorian + major 3rd chromatic\nMiles Davis and John Coltrane favorite" },
+      { name = "Altered Scale", pattern = "11010101010110", isCustom = true, intervals = "1-2-1-2-2-2-2",
+        description = "Heptatonic (7 notes) - Super Locrian\n7th mode of melodic minor | All altered tensions\nDominant 7 with b9, #9, #11, b13" },
+      { name = "Lydian Dominant", pattern = "10110110101010", isCustom = true, intervals = "2-2-2-1-2-1-2",
+        description = "Heptatonic (7 notes) - Acoustic/Overtone scale\n4th mode of melodic minor | #11 with b7\nBartók, Debussy, modern jazz standard" },
+      { name = "Harmonic Major", pattern = "10110101100110", isCustom = true, intervals = "2-2-1-2-1-3-1",
+        description = "Heptatonic (7 notes) - Major with b6\nMajor scale with flattened 6th\nExotic sound, used in jazz and metal" },
+      { name = "Melodic Minor", pattern = "10110101101010", isCustom = true, intervals = "2-1-2-2-2-2-1",
+        description = "Heptatonic (7 notes) - Jazz minor\nNatural minor with raised 6 and 7\nFoundation of modern jazz harmony" },
+      { name = "Whole Half Dim", pattern = "101101101101", isCustom = true, intervals = "2-1-2-1-2-1-2-1",
+        description = "Octatonic (8 notes) - Symmetrical diminished\nAlternates whole and half steps\nDiminished 7th and dominant 7b9 chords" },
+      { name = "Half Whole Dim", pattern = "110110110110", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
+        description = "Octatonic (8 notes) - Symmetrical diminished\nAlternates half and whole steps\nDiminished chords and diminished lines" }
+    }
+  },
+  {
+    name = "World Music",
+    scales = {
+      { name = "Hijaz", pattern = "11001101010", isCustom = true, intervals = "1-3-1-2-1-2-2",
+        description = "Heptatonic (7 notes) - Arabic Maqam\nDramatic augmented 2nd interval | Middle Eastern flavor\nUsed in Arabic, Turkish, Greek, and Klezmer music" },
+      { name = "Phrygian Dominant", pattern = "11001101010", isCustom = true, intervals = "1-3-1-2-1-2-2",
+        description = "Heptatonic (7 notes) - Spanish/Flamenco\nPhrygian with major 3rd | Hijaz/Freygish mode\nEssential for flamenco, metal, and film scores" },
+      { name = "Hungarian Minor", pattern = "10110011010", isCustom = true, intervals = "2-1-3-1-1-3-1",
+        description = "Heptatonic (7 notes) - Gypsy/Hungarian\nMinor with raised 4th | Dramatic augmented intervals\nLiszt, Brahms, and Eastern European folk" },
+      { name = "Double Harmonic", pattern = "11001100110", isCustom = true, intervals = "1-3-1-2-1-3-1",
+        description = "Heptatonic (7 notes) - Byzantine/Arabic\nTwo augmented 2nds | Extremely exotic\nMiddle Eastern, Indian classical, and progressive metal" },
+      { name = "Japanese Hirajoshi", pattern = "100101000101", isCustom = true, intervals = "2-1-4-1-4",
+        description = "Pentatonic (5 notes) - Traditional Japanese\nSpacious, contemplative | Ancient court music\nUsed in koto, shakuhachi, and ambient music" },
+      { name = "Japanese In Sen", pattern = "110010000110", isCustom = true, intervals = "1-4-2-1-4",
+        description = "Pentatonic (5 notes) - Japanese Shakuhachi\nMinor pentatonic variant | Melancholic\nTraditional Zen Buddhist meditation music" },
+      { name = "Japanese Iwato", pattern = "110001001001", isCustom = true, intervals = "1-4-1-4-2",
+        description = "Pentatonic (5 notes) - Traditional Japanese\nDark, mysterious | Ancient court music\nUsed for dramatic and suspenseful scenes" },
+      { name = "Bhairav (Raga)", pattern = "11001101001", isCustom = true, intervals = "1-3-1-2-1-3-2",
+        description = "Heptatonic (7 notes) - North Indian Raga\nDawn raga | Peaceful yet serious mood\nClassical Indian music, meditative and devotional" },
+      { name = "Kafi (Raga)", pattern = "10101011010", isCustom = true, intervals = "2-2-1-2-2-1-2",
+        description = "Heptatonic (7 notes) - North Indian Raga\nDorian-like | Romantic, longing emotion\nPopular in folk and light classical music" },
+      { name = "Spanish 8-Tone", pattern = "11010110110", isCustom = true, intervals = "1-2-1-1-2-1-2-2",
+        description = "Octatonic (8 notes) - Flamenco composite\nCombines Phrygian and altered tones\nModern flamenco and fusion guitar" },
+      { name = "Persian", pattern = "11001100110", isCustom = true, intervals = "1-3-1-2-1-3-1",
+        description = "Heptatonic (7 notes) - Persian/Iranian\nSimilar to Double Harmonic | Rich ornaments\nTraditional Persian classical and Sufi music" },
+      { name = "Enigmatic", pattern = "11001011001", isCustom = true, intervals = "1-3-2-2-2-1-1",
+        description = "Heptatonic (7 notes) - Verdi's scale\nMysterious, unusual intervals | Experimental\nRare scale used by Giuseppe Verdi" }
+    }
+  },
+  {
+    name = "Blues & Soul",
+    scales = {
+      { name = "Blues Scale", pattern = "100110010010", isCustom = true, intervals = "3-2-1-1-3-2",
+        description = "Hexatonic (6 notes) - Classic blues sound\nMinor pentatonic + blue note (b5)\nFoundation of blues, rock, and jazz" },
+      { name = "Blues Major", pattern = "101101010010", isCustom = true, intervals = "2-1-1-2-2-2-2",
+        description = "Heptatonic (7 notes) - Major blues flavor\nMajor pentatonic + blue notes\nCountry, blues-rock, and Southern rock" },
+      { name = "Blues Minor", pattern = "100110110010", isCustom = true, intervals = "3-2-1-1-2-3",
+        description = "Hexatonic (6 notes) - Minor blues variant\nMinor pentatonic + major 3rd\nChicago blues and blues-rock" },
+      { name = "Mixo-Blues", pattern = "10110101011010", isCustom = true, intervals = "2-2-1-2-1-1-2-1",
+        description = "Octatonic (8 notes) - Jazz-blues hybrid\nMixolydian + blue notes (#9, #11)\nJazz-blues, funk, and fusion" },
+      { name = "Gospel Minor", pattern = "100111010010", isCustom = true, intervals = "3-2-1-2-2-2",
+        description = "Hexatonic (6 notes) - Soulful, churchy\nMinor with raised 6th | Emotional\nGospel, R&B, and soul music" },
+      { name = "Gospel Major", pattern = "101010110010", isCustom = true, intervals = "2-2-2-1-1-2-2",
+        description = "Heptatonic (7 notes) - Uplifting, joyful\nMajor with chromatic passing tones\nGospel choir, worship music" },
+      { name = "Dominant Blues", pattern = "10101101010010", isCustom = true, intervals = "2-2-1-2-2-1-2-2",
+        description = "Octatonic (8 notes) - Dominant 7th blues\nMixolydian + blue note\nTexas blues, rockabilly, and swing" },
+      { name = "Soul", pattern = "10110101010010", isCustom = true, intervals = "2-1-2-2-2-2-1-2",
+        description = "Octatonic (8 notes) - Smooth R&B sound\nMajor + chromatic approach notes\nMotown, 70s soul, neo-soul" }
+    }
+  },
+  {
+    name = "Rock & Metal",
+    scales = {
+      { name = "Harmonic Minor", pattern = "10110100110", isCustom = true, intervals = "2-1-2-2-1-3-1",
+        description = "Heptatonic (7 notes) - Classical/metal favorite\nNatural minor + major 7th | Dramatic\nNeoclassical metal, Yngwie Malmsteen, classical" },
+      { name = "Phrygian Dominant", pattern = "11001101010", isCustom = true, intervals = "1-3-1-2-1-2-2",
+        description = "Heptatonic (7 notes) - Metal staple\n5th mode of Harmonic Minor | Spanish/Egyptian\nMetallica, Slayer, progressive metal" },
+      { name = "Neapolitan Minor", pattern = "11010100110", isCustom = true, intervals = "1-2-2-2-1-3-1",
+        description = "Heptatonic (7 notes) - Dark, exotic minor\nMinor with flattened 2nd | Dramatic\nSymphonic metal, film scores" },
+      { name = "Neapolitan Major", pattern = "11010110010", isCustom = true, intervals = "1-2-2-2-2-2-1",
+        description = "Heptatonic (7 notes) - Bright yet exotic\nMajor with flattened 2nd | Unusual\nProgressive rock/metal, experimental" },
+      { name = "Hungarian Major", pattern = "10011011010", isCustom = true, intervals = "3-1-2-1-2-1-2",
+        description = "Heptatonic (7 notes) - Exotic major sound\nLydian with flat 6 and 7 | Augmented 2nd\nGypsy-flavored rock, folk metal" },
+      { name = "Lydian #2", pattern = "11101101010", isCustom = true, intervals = "1-2-2-2-1-2-2",
+        description = "Heptatonic (7 notes) - Bright and angular\nLydian with raised 2nd | Modern sound\nProgressive metal, math rock" },
+      { name = "Super Locrian", pattern = "11010101010", isCustom = true, intervals = "1-2-1-2-2-2-2",
+        description = "Heptatonic (7 notes) - Altered/diminished\n7th mode of melodic minor | Dissonant\nExtreme metal, technical death metal" },
+      { name = "Aeolian b5", pattern = "10110010110", isCustom = true, intervals = "2-1-2-1-2-2-2",
+        description = "Heptatonic (7 notes) - Half-diminished sound\nNatural minor with flat 5 | Dark\nDoom metal, atmospheric metal" }
+    }
+  }
 }
+
+-- Flatten scales array for backwards compatibility
+scales = {}
+for _, system in ipairs(scaleSystems) do
+  for _, scale in ipairs(system.scales) do
+    table.insert(scales, scale)
+  end
+end
+
 local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 
 notes = { 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B' };
@@ -1276,6 +1556,34 @@ end
 
 function noteIsNotInModalMixtureScale(note)
   return not noteIsInModalMixtureScale(note)
+end
+
+function getChordIntervals(chord)
+  -- Convert chord binary pattern to interval list (in semitones)
+  local pattern = chord.pattern
+  local stepIntervals = {}  -- Intervals between consecutive notes (e.g., 4-3)
+  local cumulativeIntervals = {}  -- Intervals from root (e.g., 0-4-7)
+  local lastPosition = nil
+  
+  -- Parse binary pattern to find note positions
+  for i = 0, #pattern - 1 do
+    if pattern:sub(i + 1, i + 1) == "1" then
+      -- Add cumulative interval from root
+      table.insert(cumulativeIntervals, i)
+      
+      -- Add step interval from previous note
+      if lastPosition ~= nil then
+        table.insert(stepIntervals, i - lastPosition)
+      end
+      lastPosition = i
+    end
+  end
+  
+  -- Return both formats
+  if #stepIntervals > 0 then
+    return table.concat(stepIntervals, "-"), table.concat(cumulativeIntervals, "-")
+  end
+  return nil, nil
 end
 
 function chordIsInModalMixtureScale(rootNote, chordIndex)
@@ -5698,6 +6006,17 @@ function ChordButton:update()
 	-- Queue tooltip if enabled and hovering
 	if tooltipsEnabled and isHovering then
 		local tooltip = "Click: Preview | Shift+Click: Insert | Alt+Click: Add to slot"
+		
+		-- Add interval pattern for Messiaen modes
+		local currentScale = scales[getScaleType()]
+		if currentScale.isCustom then
+			local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
+			local stepIntervals, cumulativeIntervals = getChordIntervals(chord)
+			if stepIntervals then
+				tooltip = tooltip .. "\n" .. self.text .. " intervals: " .. stepIntervals .. " (steps) | " .. cumulativeIntervals .. " (from root)"
+			end
+		end
+		
 		queueTooltip(tooltip, gfx.mouse_x, gfx.mouse_y)
 	end
 end
@@ -6158,6 +6477,14 @@ end
 		drawWheel()
 		gfx.update()
 		
+	-- Check if parent script requested forced close
+	local forceClose = reaper.GetExtState("TKChordGunFifthWheel", "forceClose")
+	if forceClose == "1" then
+		reaper.SetExtState("TKChordGunFifthWheel", "forceClose", "0", false)
+		reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+		return
+	end
+	
 	local char = gfx.getchar()
 	if char == 27 or char == -1 then  -- ESC or closed
 		-- Save window position before closing
@@ -7389,48 +7716,18 @@ function Interface:addTopFrame()
 	local yPadding = s(5)
 	local horizontalMargin = s(8)
 	local scaleTonicNoteWidth = s(50)
-	local scaleTypeWidth = s(150)
+	local scaleSystemWidth = s(100)  -- Width for "Diatonic" dropdown
+	local scaleTypeWidth = s(130)    -- Width for "Major" dropdown (slightly narrower)
 	local octaveValueBoxWidth = s(55)
 
 	self:addFrame(xMargin+dockerXPadding, yMargin, self.width - 2 * xMargin, keySelectionFrameHeight)
   self:addScaleLabel(xMargin, yMargin, xPadding, yPadding)
 	self:addScaleTonicNoteDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth)
-	self:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
-	self:addFifthWheelButton(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
-	self:addScaleNotesTextLabel(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
+	self:addScaleSystemDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleSystemWidth)
+	self:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleSystemWidth, scaleTypeWidth)
+	self:addScaleNotesTextLabel(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleSystemWidth, scaleTypeWidth)
   self:addOctaveLabel(xMargin, yMargin, yPadding, octaveValueBoxWidth)
 	self:addOctaveSelectorValueBox(yMargin, xMargin, xPadding, octaveValueBoxWidth)
-end
-
-function Interface:addFifthWheelButton(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
-	local contentLeft = getTopFrameContentLeft(xMargin)
-	local spacingAfterLabel = math.max(sx(2), horizontalMargin - sx(8))
-	local spacingBetweenDropdowns = math.max(sx(4), horizontalMargin - sx(4))
-	local extraSpacing = sx(12)  -- Extra ruimte voor de Circle button
-	local buttonXpos = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns + scaleTypeWidth + spacingBetweenDropdowns + extraSpacing
-	local buttonYpos = yMargin + yPadding + sy(1)
-	local buttonWidth = sx(50)
-	local buttonHeight = sy(15)
-	
-	self:addToggleButton(
-		"Circle",
-		buttonXpos + dockerXPadding,
-		buttonYpos,
-		buttonWidth,
-		buttonHeight,
-		function() return fifthWheelWindowOpen end,
-		function()
-			if fifthWheelWindowOpen then
-				-- Close by setting extstate flag
-				reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
-				fifthWheelWindowOpen = false
-			else
-				showFifthWheel()
-			end
-		end,
-		nil,
-		function() return "Toggle Circle of Fifths\n\nVisual guide to key relationships\nClick any note to change tonic" end
-	)
 end
 
 local function topButtonWidth()
@@ -7577,6 +7874,28 @@ function Interface:addNoteLengthControl(xPos, yPos, options)
       setNoteLengthIndex(newIndex)
     end
   )
+end
+
+function Interface:addFifthWheelButton(xMargin, yMargin, xPadding)
+
+  local buttonWidth = topButtonWidth()
+  local buttonHeight = topButtonHeight()
+  local buttonXpos = topButtonXPos(xMargin, xPadding, 4)  -- Position after note length button (index 4)
+  local buttonYpos = topButtonYPos(yMargin)
+	
+	local getCircleState = function() return fifthWheelWindowOpen end
+	local onToggle = function()
+		if fifthWheelWindowOpen then
+			-- Close by setting extstate flag
+			reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+			fifthWheelWindowOpen = false
+		else
+			showFifthWheel()
+		end
+	end
+	local getTooltip = function() return "Toggle Circle of Fifths\n\nVisual guide to key relationships\nClick any note to change tonic" end
+	
+  self:addToggleButton("Circle", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getCircleState, onToggle, nil, getTooltip)
 end
 
 function Interface:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, headerHeight)
@@ -7975,18 +8294,63 @@ function Interface:addScaleTonicNoteDropdown(xMargin, yMargin, xPadding, yPaddin
 
 end
 
-function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
+function Interface:addScaleSystemDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleSystemWidth)
 
   local contentLeft = getTopFrameContentLeft(xMargin)
   local spacingAfterLabel = math.max(s(2), horizontalMargin - s(8))
   local spacingBetweenDropdowns = math.max(s(4), horizontalMargin - s(4))
-  local scaleTypeXpos = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns
+  local scaleSystemXpos = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns
+	local scaleSystemYpos = yMargin+yPadding+s(1)
+	local scaleSystemHeight = s(15)
+
+	local interfaceRef = self  -- Capture interface reference for closure
+	
+	local onScaleSystemSelection = function(i)
+		setScaleSystemIndex(i)
+		setScaleWithinSystemIndex(1)  -- Reset to first scale in new system
+		
+		-- Calculate flat scale index for backwards compatibility
+		local flatIndex = getScaleIndexFromSystemIndices(i, 1)
+		setScaleType(flatIndex)
+		
+		setSelectedScaleNote(1)
+		setChordText("")
+		resetSelectedChordTypes()
+		resetChordInversionStates()
+		updateScaleData()
+		updateScaleDegreeHeaders()
+		
+		-- Force full UI rebuild to update second dropdown
+		interfaceRef:restartGui()
+	end
+	
+	-- Build system names array
+	local systemNames = {}
+	for _, system in ipairs(scaleSystems) do
+		table.insert(systemNames, system.name)
+	end
+	
+	local currentSystemIndex = getScaleSystemIndex()
+	self:addDropdown(scaleSystemXpos+dockerXPadding, scaleSystemYpos, scaleSystemWidth, scaleSystemHeight, systemNames, currentSystemIndex, onScaleSystemSelection)
+end
+
+function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleSystemWidth, scaleTypeWidth)
+
+  local contentLeft = getTopFrameContentLeft(xMargin)
+  local spacingAfterLabel = math.max(s(2), horizontalMargin - s(8))
+  local spacingBetweenDropdowns = math.max(s(4), horizontalMargin - s(4))
+  local scaleTypeXpos = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns + scaleSystemWidth + spacingBetweenDropdowns
 	local scaleTypeYpos = yMargin+yPadding+s(1)
 	local scaleTypeHeight = s(15)
 
 	local onScaleTypeSelection = function(i)
+		setScaleWithinSystemIndex(i)
+		
+		-- Calculate flat scale index for backwards compatibility
+		local systemIndex = getScaleSystemIndex()
+		local flatIndex = getScaleIndexFromSystemIndices(systemIndex, i)
+		setScaleType(flatIndex)
 
-		setScaleType(i)
 		setSelectedScaleNote(1)
 		setChordText("")
 		resetSelectedChordTypes()
@@ -7995,17 +8359,67 @@ function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, ho
 		updateScaleDegreeHeaders()
 	end
 	
-	local scaleName = getScaleType()
-	self:addDropdown(scaleTypeXpos+dockerXPadding, scaleTypeYpos, scaleTypeWidth, scaleTypeHeight, scaleNames, scaleName, onScaleTypeSelection)
+	-- Build scale names array from current system
+	local systemIndex = getScaleSystemIndex()
+	local currentSystem = scaleSystems[systemIndex]
+	
+	-- Safety check
+	if not currentSystem then
+		currentSystem = scaleSystems[1]  -- Fallback to first system
+		systemIndex = 1
+		setScaleSystemIndex(1)
+	end
+	
+	local scaleNames = {}
+	for _, scale in ipairs(currentSystem.scales) do
+		table.insert(scaleNames, scale.name)
+	end
+	
+	local currentScaleIndex = getScaleWithinSystemIndex()
+	local currentScale = currentSystem.scales[currentScaleIndex]
+	
+	-- Safety check for scale
+	if not currentScale then
+		currentScaleIndex = 1
+		currentScale = currentSystem.scales[1]
+		setScaleWithinSystemIndex(1)
+	end
+	
+	local dropdown = Dropdown:new(scaleTypeXpos+dockerXPadding, scaleTypeYpos, scaleTypeWidth, scaleTypeHeight, scaleNames, currentScaleIndex, onScaleTypeSelection)
+	
+	-- Add tooltip support for scale descriptions and interval patterns
+	local originalUpdate = dropdown.update
+	dropdown.update = function(self)
+		originalUpdate(self)
+		
+		-- Show tooltip when hovering over dropdown
+		if tooltipsEnabled and mouseIsHoveringOver(self) then
+			local tooltip = currentScale.name
+			
+			-- Add description if available
+			if currentScale.description then
+				tooltip = tooltip .. "\n\n" .. currentScale.description
+			end
+			
+			-- Add interval pattern for Messiaen modes
+			if currentScale.intervals then
+				tooltip = tooltip .. "\n\nInterval pattern: " .. currentScale.intervals .. " (semitones)"
+			end
+			
+			queueTooltip(tooltip, gfx.mouse_x, gfx.mouse_y)
+		end
+	end
+	
+	table.insert(self.elements, dropdown)
 end
 
-function Interface:addScaleNotesTextLabel(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
+function Interface:addScaleNotesTextLabel(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleSystemWidth, scaleTypeWidth)
 
 	local getScaleNotesTextCallback = function() return getScaleNotesText() end
   local contentLeft = getTopFrameContentLeft(xMargin)
   local spacingAfterLabel = math.max(s(2), horizontalMargin - s(8))
   local spacingBetweenDropdowns = math.max(s(4), horizontalMargin - s(4))
-  local previousControlsRight = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns + scaleTypeWidth
+  local previousControlsRight = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns + scaleSystemWidth + spacingBetweenDropdowns + scaleTypeWidth
   local scaleNotesXpos = previousControlsRight + s(90)
 	local scaleNotesYpos = yMargin+yPadding+s(1)
   local availableWidth = getTopFrameContentRight(xMargin) - scaleNotesXpos - s(70)
@@ -8068,6 +8482,7 @@ function Interface:addBottomFrame()
   local lenButtonX = topButtonXPos(xMargin, xPadding, 3)
   local lenButtonY = topButtonYPos(yMargin)
   self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = sx(70)})
+  self:addFifthWheelButton(xMargin, yMargin, xPadding)
   self:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionControls(xMargin, yMargin, xPadding, yPadding, headerHeight)
@@ -8173,6 +8588,14 @@ local function windowHasNotBeenClosed()
 	return inputCharacter ~= -1
 end
 
+local function cleanup()
+	-- Close Circle of Fifths window if it's open
+	if fifthWheelWindowOpen then
+		reaper.SetExtState("TKChordGunFifthWheel", "forceClose", "1", false)
+		fifthWheelWindowOpen = false
+	end
+end
+
 local function main()
 
 	if gfx.w ~= interface.lastWidth or gfx.h ~= interface.lastHeight then
@@ -8196,11 +8619,14 @@ local function main()
 
 	if windowHasNotBeenClosed() then
 		reaper.runloop(main)
+	else
+		cleanup()  -- Clean up when window closes
 	end
 	
 	interface:update()
 end
 
+reaper.atexit(cleanup)  -- Also clean up on script termination
 main()
 
 

@@ -241,8 +241,37 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="1.3.0" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-17T15:45:00Z">
+      <version name="2.0.0" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-17T22:15:00Z">
         <changelog><![CDATA[
+2.0.0
++ Added comprehensive scale library with 87 scales across 7 systems
++ Two-level dropdown system: Scale System → Scale Type
++ Scale systems: Diatonic (11), Pentatonic (6), Messiaen (32), Jazz (10), World Music (12), Blues & Soul (8), Rock & Metal (8)
++ Educational tooltips for all scales (description + interval patterns)
++ World Music: Arabic/Middle Eastern (Hijaz, Persian, Double Harmonic), Japanese (Hirajoshi, In Sen, Iwato), Indian Ragas (Bhairav, Kafi), Hungarian/Gypsy scales
++ Jazz: Bebop family (4 variants), Modern jazz (Altered, Lydian Dominant, Melodic Minor), Symmetrical diminished scales
++ Blues & Soul: Blues scales (Major/Minor/Classic), Mixo-Blues, Gospel scales, Soul scale, Dominant Blues
++ Rock & Metal: Harmonic Minor, Phrygian Dominant, Neapolitan (Minor/Major), Hungarian Major, Super Locrian, Lydian #2, Aeolian b5
++ Expanded Messiaen from 8 to 32 modes (all transpositions of Mode 1-7)
++ Expanded Pentatonic from 1 to 6 scales (Major, Minor, Blues, Egyptian, Japanese, Hirajoshi)
++ Circle of Fifths auto-closes when main window closes
++ ExtState persistence for both dropdown levels with backwards compatibility
++ All scale descriptions include: note count, character/mood, musical context, and usage examples
+
+1.3.0
++ Added 8 Messiaen Modes of Limited Transposition
++ Modes 1-7.1 with 5-9 notes per scale (symmetrical structures)
++ Dynamic window width adjusts automatically (5-9 column layouts)
++ Separate X/Y scaling functions for proper aspect ratio
++ Keyboard shortcuts extended to support 9 notes (1-9, q-o, a-l, z-.)
++ Simple numeric scale degree headers (1-9) for non-tonal Messiaen modes
++ Roman numeral headers preserved for diatonic scales
++ Circle of Fifths adapts display for Messiaen modes:
+  * Diatonic scales: harmonic distance color coding
+  * Messiaen modes: simplified light blue coloring
++ Context-aware legend updates automatically
++ Real-time sync between scale types without closing Circle of Fifths
+
 1.2.2
 + Some changes to circle of fifths visualization colors and layout
 + Changed pentatonic scale to better reflect common usage:
