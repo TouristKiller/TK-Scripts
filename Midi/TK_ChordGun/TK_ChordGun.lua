@@ -1,6 +1,6 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.0.0
+-- @version 2.0.1
 -- @changelog
 --[[
 2.0.0
@@ -6190,21 +6190,29 @@ end
 
 -- Help Window Function
 function showHelpWindow()
+	-- Check if help window is already open
+	if helpWindowOpen then return end
+	
 	-- Get the directory of the current script
 	local scriptPath = debug.getinfo(1, "S").source:match("@?(.*)")
 	local scriptDir = scriptPath:match("(.+)[/\\]")
 	local helpScriptPath = scriptDir .. "/TK_ChordGun_Help.lua"
 	
-	-- Run the help script in a separate gfx context
-	reaper.Main_OnCommand(reaper.NamedCommandLookup("_RS7d3c_3032f3b65cf64a5a833f9daf9793b663"), 0) -- Script: Run script...
+	-- Signal help script to open
+	reaper.SetExtState("TKChordGunHelp", "shouldOpen", "1", false)
+	helpWindowOpen = true
 	
-	-- Alternative: directly run the script
-	local command = reaper.AddRemoveReaScript(true, 0, helpScriptPath, true)
-	if command > 0 then
-		reaper.Main_OnCommand(command, 0)
-		reaper.AddRemoveReaScript(false, 0, helpScriptPath, true)
+	-- Use ReaScript API to run in background without registration dialog
+	-- Create a temporary action that runs the help script
+	local cmdID = reaper.AddRemoveReaScript(true, 0, helpScriptPath, false)  -- false = don't add to action list
+	if cmdID and cmdID > 0 then
+		reaper.Main_OnCommand(cmdID, 0)
+		-- Don't remove immediately - let it run
 	end
 end
+
+-- Help window state tracking
+local helpWindowOpen = false
 
 -- Fifth Wheel (Circle of Fifths) Popup
 local fifthWheelWindow = nil
@@ -8594,9 +8602,23 @@ local function cleanup()
 		reaper.SetExtState("TKChordGunFifthWheel", "forceClose", "1", false)
 		fifthWheelWindowOpen = false
 	end
+	
+	-- Reset help window state
+	if helpWindowOpen then
+		helpWindowOpen = false
+		reaper.SetExtState("TKChordGunHelp", "closed", "0", false)
+	end
 end
 
 local function main()
+	-- Check if help window was closed
+	if helpWindowOpen then
+		local helpClosed = reaper.GetExtState("TKChordGunHelp", "closed")
+		if helpClosed == "1" then
+			helpWindowOpen = false
+			reaper.SetExtState("TKChordGunHelp", "closed", "0", false)
+		end
+	end
 
 	if gfx.w ~= interface.lastWidth or gfx.h ~= interface.lastHeight then
 		interface.lastWidth = gfx.w
