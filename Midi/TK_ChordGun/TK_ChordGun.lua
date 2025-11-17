@@ -1,8 +1,14 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 1.2.1
+-- @version 1.2.2
 -- @changelog
 --[[
+1.2.2
++ Some changes to circle of fifths visualization colors and layout
++ Changed pentatonic scale to better reflect common usage:
+  C Pentatonic: C, D, E, G, A
+  Buttons tonen: I, II, III, V, VI
+
 1.2.0
 + Added Circle of Fifths visualization window
 + Interactive circle shows tonic and all scale notes
@@ -1237,17 +1243,37 @@ function updateScaleDegreeHeaders()
   local sixthSymbol = '6'
   local seventhSymbol = '7'
   
-  local i = 1
+  -- Map semitone offset to scale degree (for major scale context)
+  local semitoneToScaleDegree = {
+    [0] = 1,  -- Tonic (I)
+    [1] = 2,  -- b2 or #1 - treat as ii (rare)
+    [2] = 2,  -- II (Supertonic)
+    [3] = 3,  -- b3 or #2 - treat as iii
+    [4] = 3,  -- III (Mediant)
+    [5] = 4,  -- IV (Subdominant)
+    [6] = 5,  -- b5/#4 - tritone, treat as diminished V
+    [7] = 5,  -- V (Dominant)
+    [8] = 6,  -- b6 or #5 - treat as vi
+    [9] = 6,  -- VI (Submediant)
+    [10] = 7, -- b7 or #6 - treat as vii
+    [11] = 7  -- VII (Leading tone)
+  }
+  
+  local tonicNote = getScaleTonicNote()
+  
   for i = 1, #scaleNotes do
   
     local symbol = ""
-   
     local chord = scaleChords[i][1]
     
+    -- Calculate actual scale degree (chromatic distance from tonic)
+    local noteOffset = (scaleNotes[i] - tonicNote) % 12
+    local scaleDegree = semitoneToScaleDegree[noteOffset]
+    
     if string.match(chord.code, "major") or chord.code == '7' then
-      symbol = majorSymbols[i]
+      symbol = majorSymbols[scaleDegree]
     else
-      symbol = minorSymbols[i]
+      symbol = minorSymbols[scaleDegree]
     end
     
     if (chord.code == 'aug') then
@@ -5879,21 +5905,28 @@ function showFifthWheel()
 				if noteOrder[i] == tonicIndex then pos2 = i end
 			end
 			
-			-- Calculate shortest distance around circle
-			local dist = math.min(math.abs(pos1 - pos2), 12 - math.abs(pos1 - pos2))
+			-- Calculate direction and distance
+			local diff = pos1 - pos2
+			local dist = math.min(math.abs(diff), 12 - math.abs(diff))
 			
 			if dist == 0 then
 				return {1.0, 0.84, 0.0}  -- Gold (tonic)
 			elseif dist == 1 then
-				return {0.4, 0.85, 0.4}  -- Green (dominant/subdominant - closely related)
+				-- Check if clockwise (dominant) or counterclockwise (subdominant)
+				local clockwise = (diff == 1) or (diff == -11)
+				if clockwise then
+					return {0.4, 0.85, 0.4}  -- Green (dominant V)
+				else
+					return {0.9, 0.4, 0.8}  -- Magenta (subdominant IV)
+				end
 			elseif dist == 2 then
-				return {0.3, 0.7, 1.0}  -- Cyan (related)
+				return {0.5, 0.9, 0.9}  -- Cyan (ii Supertonic)
 			elseif dist == 3 then
-				return {0.7, 0.5, 1.0}  -- Purple (somewhat related)
+				return {1.0, 0.6, 0.2}  -- Orange (vi Submediant)
 			elseif dist == 4 then
-				return {1.0, 0.5, 0.3}  -- Orange (distantly related)
+				return {0.85, 0.5, 0.35}  -- Terracotta (iii Mediant)
 			else
-				return {0.5, 0.3, 0.3}  -- Brown/dark red (very distant/tritone)
+				return {0.5, 0.3, 0.3}  -- Brown (viio Leading tone)
 			end
 		end			gfx.setfont(1, "Arial", 16, string.byte('b'))
 			
@@ -5916,38 +5949,38 @@ function showFifthWheel()
 				local x = centerX + math.cos(angle) * radius
 				local y = centerY + math.sin(angle) * radius
 				
-				local isCurrentTonic = (noteIndex == currentTonic)
-				local isInScale = scalePattern[noteIndex]
-				
-		-- Draw circle with harmonic distance coloring
-		local color
-		if isCurrentTonic then
-			color = {1.0, 0.84, 0.0}  -- Gold (tonic)
-		else
-			-- Use harmonic distance color for all non-tonic notes
-			color = getHarmonicDistanceColor(noteIndex, currentTonic)
-			-- Add brightness boost for in-scale notes to distinguish them
-			if isInScale then
-				color[1] = math.min(1.0, color[1] * 1.2)
-				color[2] = math.min(1.0, color[2] * 1.2)
-				color[3] = math.min(1.0, color[3] * 1.2)
-			end
-		end
+			local isCurrentTonic = (noteIndex == currentTonic)
+			local isInScale = scalePattern[noteIndex]
+			
+	-- Draw circle with harmonic distance coloring for in-scale notes only
+	local color
+	if isCurrentTonic then
+		color = {1.0, 0.84, 0.0}  -- Gold (tonic)
+	elseif isInScale then
+		-- Use harmonic distance color with brightness boost for in-scale notes
+		color = getHarmonicDistanceColor(noteIndex, currentTonic)
+		color[1] = math.min(1.0, color[1] * 1.2)
+		color[2] = math.min(1.0, color[2] * 1.2)
+		color[3] = math.min(1.0, color[3] * 1.2)
+	else
+		-- Out-of-scale: single neutral gray
+		color = {0.3, 0.3, 0.3}
+	end
 	gfx.set(color[1], color[2], color[3], 1)
-	gfx.circle(x, y, noteRadius, 1)
-	
-	-- Draw border
+	gfx.circle(x, y, noteRadius, 1)	-- Draw border
 	if isCurrentTonic then
 		-- Tonic: thick white double border
 		gfx.set(1.0, 1.0, 1.0, 1)
 		gfx.circle(x, y, noteRadius, 0)
 		gfx.circle(x, y, noteRadius-1, 0)
 	elseif isInScale then
-		-- In-scale: thick white border for emphasis
+		-- In-scale: thick white border for emphasis (5 layers)
 		gfx.set(1.0, 1.0, 1.0, 1)
 		gfx.circle(x, y, noteRadius, 0)
 		gfx.circle(x, y, noteRadius-1, 0)
 		gfx.circle(x, y, noteRadius-2, 0)
+		gfx.circle(x, y, noteRadius-3, 0)
+		gfx.circle(x, y, noteRadius-4, 0)
 	else
 		-- Out-of-scale: normal gray border
 		gfx.set(0.5, 0.5, 0.5, 1)
@@ -5974,7 +6007,7 @@ function showFifthWheel()
 	
 	-- Draw legend in center of circle
 	gfx.setfont(5, "Arial", s(13))
-	local legendY = centerY - s(50)
+	local legendY = centerY - s(80)
 	local lineHeight = s(18)
 	
 	-- Legend title
@@ -5988,12 +6021,13 @@ function showFifthWheel()
 	
 	-- Legend items with color boxes
 	local legendItems = {
-		{{1.0, 0.84, 0.0}, "Tonic (I)"},
-		{{0.4, 0.85, 0.4}, "V/IV (±1)"},
-		{{0.3, 0.7, 1.0}, "ii/vi (±2)"},
-		{{0.7, 0.5, 1.0}, "iii/vii (±3)"},
-		{{1.0, 0.5, 0.3}, "Far (±4)"},
-		{{0.5, 0.3, 0.3}, "Tritone (±5/6)"}
+		{{1.0, 0.84, 0.0}, "Tonic"},
+		{{0.4, 0.85, 0.4}, "+1 Fifth up"},
+		{{0.9, 0.4, 0.8}, "-1 Fifth down"},
+		{{0.5, 0.9, 0.9}, "+2 Fifths up"},
+		{{1.0, 0.6, 0.2}, "+3 Fifths up"},
+		{{0.85, 0.5, 0.35}, "+4 Fifths up"},
+		{{0.5, 0.3, 0.3}, "+5/6 Fifths (Tritone)"}
 	}
 	
 	for i, item in ipairs(legendItems) do

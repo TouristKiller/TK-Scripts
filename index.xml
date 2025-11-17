@@ -241,37 +241,50 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="1.2.1" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-16T04:30:00Z">
+      <version name="1.2.2" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-17T12:30:00Z">
         <changelog><![CDATA[
-1.1.0 - NEW FEATURES:
-+ Scale Filter/Remap modes (Off/Filter/Remap button)
-  - Filter mode: blocks notes outside current scale
-  - Remap mode: maps white piano keys to scale notes
-+ TK_Scale_Filter.jsfx for live MIDI processing (auto-installed to Effects folder)
+1.2.2
++ Some changes to circle of fifths visualization colors and layout
++ Changed pentatonic scale to better reflect common usage:
+  C Pentatonic: C, D, E, G, A
+  Buttons tonen: I, II, III, V, VI
+
+1.2.0
++ Added Circle of Fifths visualization window
++ Interactive circle shows tonic and all scale notes
++ Harmonic distance color coding (rainbow spectrum)
++ Click any note to instantly change tonic
++ Relative minor display below each major note
++ Sharp/flat notation toggle button
++ Color legend with scale degree relationships
++ Brightness boost and thick borders for in-scale notes
++ Persistent window position across sessions
++ Real-time bidirectional sync with main window
++ Scalable UI matching parent window
+
+1.1.0
++ Added Scale Filter/Remap modes (Off/Filter/Remap button)
++ Filter mode: blocks notes outside current scale
++ Remap mode: maps white piano keys to scale notes
++ Added TK_Scale_Filter.jsfx for live MIDI processing
 + Setup button: auto-installs JSFX to track's Input FX
-+ Real-time chord recognition system with 13+ chord types
-+ Chord display with scale-aware color coding (blue=in-scale, orange=out-of-scale)
-+ Enharmonic spelling based on scale context (sharps vs flats)
-+ Piano keyboard shows remap arrows in Remap mode (e.g., 'E→Eb')
++ Chord recognition system with 13+ chord types
++ Real-time chord display with scale-aware color coding
++ Enharmonic spelling based on scale context
++ Piano keyboard shows remap arrows in Remap mode
 + All playing notes now show in blue (unified color scheme)
 + Cross-platform compatible (Windows, macOS, Linux)
 
-1.0.3 - EXISTING FEATURES:
+1.0.3
 + Fully resizable window with dynamic scaling
 + 8-slot chord progression system with playback
 + Save/load progression presets
 + INSERT function to add progressions as MIDI
 + PLAY/STOP progression playback with tempo sync
-+ Configurable beats (1/2/4/8) and repeats (1-4) per slot
-+ Loop endpoint markers for progression playback
-+ Integrated scrollable help window (? button)
++ Configurable beats and repeats per slot
++ Integrated scrollable help window
 + Smart window size persistence
 + Strum mode with adjustable delay
-+ All original ChordGun features preserved
-+ Includes all helper scripts for MIDI keyboard control
-
-Install this instead of pandabot's original if you want the TK enhancements.
-Standalone - no other ChordGun installation needed.
         ]]></changelog>
         <source main="midi_editor" file="TK_ChordGun/TK_ChordGun.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun.lua</source>
         <source file="TK_ChordGun/TK_ChordGun_Help.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun_Help.lua</source>
