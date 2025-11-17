@@ -1,8 +1,22 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 1.2.2
+-- @version 1.3.0
 -- @changelog
 --[[
+1.3.0
++ Added 8 Messiaen Modes of Limited Transposition
++ Modes 1-7.1 with 5-9 notes per scale (symmetrical structures)
++ Dynamic window width adjusts automatically (5-9 column layouts)
++ Separate X/Y scaling functions for proper aspect ratio
++ Keyboard shortcuts extended to support 9 notes (1-9, q-o, a-l, z-.)
++ Simple numeric scale degree headers (1-9) for non-tonal Messiaen modes
++ Roman numeral headers preserved for diatonic scales
++ Circle of Fifths adapts display for Messiaen modes:
+  * Diatonic scales: harmonic distance color coding
+  * Messiaen modes: simplified light blue coloring
++ Context-aware legend updates automatically
++ Real-time sync between scale types without closing Circle of Fifths
+
 1.2.2
 + Some changes to circle of fifths visualization colors and layout
 + Changed pentatonic scale to better reflect common usage:
@@ -78,6 +92,18 @@ Original ChordGun: https://github.com/benjohnson2001/ChordGun
 baseWidth = 775
 baseHeight = 770
 
+-- Calculate dynamic width based on number of scale notes
+function getDynamicBaseWidth()
+  local numScaleNotes = #scaleNotes
+  if numScaleNotes <= 7 then
+    return 775  -- Default width for 7 or fewer notes
+  else
+    -- Add width for each additional column (button 104 + spacing 2*2 + margin)
+    local extraColumns = numScaleNotes - 7
+    return 775 + (extraColumns * 112)  -- ~112px per extra column (was 110)
+  end
+end
+
 local fontScale = 1.25  -- Multiplier for UI text size
 
 local function fontSize(value)
@@ -88,11 +114,32 @@ local function applyDefaultFont()
   gfx.setfont(1, "Arial", fontSize(15))
 end
 
+-- Horizontal scaling (width-based)
+function sx(value)
+	if gfx.w == 0 then
+		return value * 2.0
+	end
+	local dynamicWidth = getDynamicBaseWidth()
+	local scaleX = gfx.w / dynamicWidth
+  return math.floor((value * scaleX) + 0.5)
+end
+
+-- Vertical scaling (height-based)
+function sy(value)
+	if gfx.h == 0 then
+		return value * 2.0
+	end
+	local scaleY = gfx.h / baseHeight
+  return math.floor((value * scaleY) + 0.5)
+end
+
+-- Unified scaling (average - for backward compatibility)
 function s(value)
 	if gfx.w == 0 or gfx.h == 0 then
 		return value * 2.0
 	end
-	local scaleX = gfx.w / baseWidth
+	local dynamicWidth = getDynamicBaseWidth()
+	local scaleX = gfx.w / dynamicWidth
 	local scaleY = gfx.h / baseHeight
 	local scale = (scaleX + scaleY) / 2
   return math.floor((value * scale) + 0.5)
@@ -332,13 +379,14 @@ defaultChordTextValue = ""
 defaultSelectedScaleNote = 1
 defaultOctave = 3
 
+-- Initialize with 12 slots (max possible scale notes)
 defaultSelectedChordTypes = {}
-for i = 1, 7 do
+for i = 1, 12 do
   table.insert(defaultSelectedChordTypes, 1)
 end
 
 defaultInversionStates = {}
-for i = 1, 7 do
+for i = 1, 12 do
   table.insert(defaultInversionStates, 0)
 end
 
@@ -886,7 +934,11 @@ end
 function getChordInversionState(index)
 
   local temp = getTableValue(chordInversionStatesKey, defaultInversionStates)
-  return tonumber(temp[index])
+  local value = temp[index]
+  if value == nil then
+    return 0
+  end
+  return tonumber(value)
 end
 
 function setChordInversionState(index, arg)
@@ -900,7 +952,7 @@ end
 
 function resetSelectedChordTypes()
 
-  local numberOfSelectedChordTypes = 7
+  local numberOfSelectedChordTypes = 12
 
   for i = 1, numberOfSelectedChordTypes do
     setSelectedChordType(i, 1)
@@ -909,7 +961,7 @@ end
 
 function resetChordInversionStates()
 
-  local numberOfChordInversionStates = 7
+  local numberOfChordInversionStates = 12
 
   for i = 1, numberOfChordInversionStates do
     setChordInversionState(i, 0)
@@ -1070,7 +1122,16 @@ scales = {
   { name = "Mixolydian", pattern = "101011010110" },
   { name = "Phrygian", pattern = "110101011010" },
   { name = "Lydian", pattern = "101010110101" },
-  { name = "Locrian", pattern = "110101101010" }
+  { name = "Locrian", pattern = "110101101010" },
+  -- Messiaen Modes (semitone intervals converted to binary patterns)
+  { name = "Messiaen Mode 1", pattern = "101010101010", isCustom = true },  -- 2 2 2 2 2 2 -> 6 notes
+  { name = "Messiaen Mode 2.1", pattern = "110110110110", isCustom = true },  -- 1 2 1 2 1 2 1 2 -> 8 notes
+  { name = "Messiaen Mode 2.2", pattern = "101101101101", isCustom = true },  -- 2 1 2 1 2 1 2 1 -> 8 notes
+  { name = "Messiaen Mode 3.1", pattern = "101110110111", isCustom = true },  -- 2 1 1 2 1 1 2 1 1 -> 9 notes
+  { name = "Messiaen Mode 4.1", pattern = "110001110001", isCustom = true },  -- 1 1 3 1 1 1 3 1 -> 6 notes
+  { name = "Messiaen Mode 5.1", pattern = "110001000011", isCustom = true },  -- 1 4 1 1 4 1 -> 5 notes
+  { name = "Messiaen Mode 6.1", pattern = "101011010110", isCustom = true },  -- 2 2 1 1 2 2 1 1 -> 7 notes (8th overlaps octave)
+  { name = "Messiaen Mode 7.1", pattern = "111011110110", isCustom = true }  -- 1 1 1 2 1 1 1 1 2 1 -> 9 notes (10th overlaps octave)
 }
 local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 
@@ -1082,7 +1143,7 @@ function getScalePattern(scaleTonicNote, scale)
   local scalePatternString = scale['pattern']
   local scalePattern = {false,false,false,false,false,false,false,false,false,false,false}
 
-  for i = 0, #scalePatternString do
+  for i = 0, #scalePatternString - 1 do
     local note = getNotesIndex(scaleTonicNote+i)
     if scalePatternString:sub(i+1, i+1) == '1' then
       scalePattern[note] = true
@@ -1236,6 +1297,19 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 
 function updateScaleDegreeHeaders()
 
+  -- Check if current scale is a custom scale (Messiaen modes)
+  local currentScale = scales[getScaleType()]
+  local isCustomScale = currentScale.isCustom == true
+  
+  -- Voor custom scales (Messiaen): gebruik gewoon nummers
+  if isCustomScale then
+    for i = 1, #scaleNotes do
+      setScaleDegreeHeader(i, tostring(i))
+    end
+    return
+  end
+  
+  -- Voor standaard scales: gebruik Romeinse cijfers
   local minorSymbols = {'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii'}
   local majorSymbols = {'I', 'II', 'III', 'IV', 'V', 'VI', 'VII'}
   local diminishedSymbol = 'o'
@@ -5891,6 +5965,7 @@ function showFifthWheel()
 		
 		-- Get current scale info from extstate
 		local currentTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "tonic")) or 1
+		local isCustomScale = reaper.GetExtState("TKChordGunFifthWheel", "isCustom") == "1"
 		local scalePattern = {}
 		for i = 1, 12 do
 			scalePattern[i] = reaper.GetExtState("TKChordGunFifthWheel", "scale" .. i) == "1"
@@ -5952,19 +6027,31 @@ function showFifthWheel()
 			local isCurrentTonic = (noteIndex == currentTonic)
 			local isInScale = scalePattern[noteIndex]
 			
-	-- Draw circle with harmonic distance coloring for in-scale notes only
+	-- Draw circle with appropriate coloring
 	local color
-	if isCurrentTonic then
-		color = {1.0, 0.84, 0.0}  -- Gold (tonic)
-	elseif isInScale then
-		-- Use harmonic distance color with brightness boost for in-scale notes
-		color = getHarmonicDistanceColor(noteIndex, currentTonic)
-		color[1] = math.min(1.0, color[1] * 1.2)
-		color[2] = math.min(1.0, color[2] * 1.2)
-		color[3] = math.min(1.0, color[3] * 1.2)
+	if isCustomScale then
+		-- Custom scales (Messiaen): simple colors, no harmonic distance
+		if isCurrentTonic then
+			color = {1.0, 0.84, 0.0}  -- Gold (tonic)
+		elseif isInScale then
+			color = {0.5, 0.75, 0.9}  -- Light blue (in scale)
+		else
+			color = {0.3, 0.3, 0.3}  -- Gray (out of scale)
+		end
 	else
-		-- Out-of-scale: single neutral gray
-		color = {0.3, 0.3, 0.3}
+		-- Diatonic scales: harmonic distance coloring
+		if isCurrentTonic then
+			color = {1.0, 0.84, 0.0}  -- Gold (tonic)
+		elseif isInScale then
+			-- Use harmonic distance color with brightness boost for in-scale notes
+			color = getHarmonicDistanceColor(noteIndex, currentTonic)
+			color[1] = math.min(1.0, color[1] * 1.2)
+			color[2] = math.min(1.0, color[2] * 1.2)
+			color[3] = math.min(1.0, color[3] * 1.2)
+		else
+			-- Out-of-scale: single neutral gray
+			color = {0.3, 0.3, 0.3}
+		end
 	end
 	gfx.set(color[1], color[2], color[3], 1)
 	gfx.circle(x, y, noteRadius, 1)	-- Draw border
@@ -6019,16 +6106,25 @@ function showFifthWheel()
 	gfx.drawstr(titleText)
 	legendY = legendY + lineHeight + s(4)
 	
-	-- Legend items with color boxes
-	local legendItems = {
-		{{1.0, 0.84, 0.0}, "Tonic"},
-		{{0.4, 0.85, 0.4}, "+1 Fifth up"},
-		{{0.9, 0.4, 0.8}, "-1 Fifth down"},
-		{{0.5, 0.9, 0.9}, "+2 Fifths up"},
-		{{1.0, 0.6, 0.2}, "+3 Fifths up"},
-		{{0.85, 0.5, 0.35}, "+4 Fifths up"},
-		{{0.5, 0.3, 0.3}, "+5/6 Fifths (Tritone)"}
-	}
+	-- Legend items with color boxes (different for custom scales)
+	local legendItems
+	if isCustomScale then
+		legendItems = {
+			{{1.0, 0.84, 0.0}, "Tonic (root note)"},
+			{{0.5, 0.75, 0.9}, "In scale"},
+			{{0.3, 0.3, 0.3}, "Out of scale"}
+		}
+	else
+		legendItems = {
+			{{1.0, 0.84, 0.0}, "Tonic"},
+			{{0.4, 0.85, 0.4}, "+1 Fifth up"},
+			{{0.9, 0.4, 0.8}, "-1 Fifth down"},
+			{{0.5, 0.9, 0.9}, "+2 Fifths up"},
+			{{1.0, 0.6, 0.2}, "+3 Fifths up"},
+			{{0.85, 0.5, 0.35}, "+4 Fifths up"},
+			{{0.5, 0.3, 0.3}, "+5/6 Fifths (Tritone)"}
+		}
+	end
 	
 	for i, item in ipairs(legendItems) do
 		local color = item[1]
@@ -6121,9 +6217,13 @@ end
 		
 		-- Set current scale data in extstate
 		local currentTonic = getScaleTonicNote()
+		local currentScale = scales[getScaleType()]
+		local isCustomScale = currentScale.isCustom == true
+		
 		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(currentTonic), false)
 		reaper.SetExtState("TKChordGunFifthWheel", "closed", "0", false)
 		reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", "0", false)
+		reaper.SetExtState("TKChordGunFifthWheel", "isCustom", isCustomScale and "1" or "0", false)
 		
 		for i = 1, 12 do
 			local inScale = scalePattern and scalePattern[i] or false
@@ -6143,6 +6243,8 @@ function checkFifthWheelUpdates()
 	
 	-- Update popup only if main script state changed (efficient sync)
 	local currentTonic = getScaleTonicNote()
+	local currentScale = scales[getScaleType()]
+	local isCustomScale = currentScale.isCustom == true
 	local scaleHash = ""
 	for i = 1, 12 do
 		scaleHash = scaleHash .. (scalePattern and scalePattern[i] and "1" or "0")
@@ -6151,6 +6253,7 @@ function checkFifthWheelUpdates()
 	-- Only write to ExtState if values changed
 	if currentTonic ~= lastSyncedTonic or scaleHash ~= lastSyncedScale then
 		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(currentTonic), false)
+		reaper.SetExtState("TKChordGunFifthWheel", "isCustom", isCustomScale and "1" or "0", false)
 		for i = 1, 12 do
 			local inScale = scalePattern and scalePattern[i] or false
 			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
@@ -6180,7 +6283,11 @@ function checkFifthWheelUpdates()
 		updateScaleData()
 		updateScaleDegreeHeaders()
 		
-		-- Update scale data in extstate for the wheel
+		-- Update scale data in extstate for the wheel (including isCustom)
+		local updatedScale = scales[getScaleType()]
+		local updatedIsCustom = updatedScale.isCustom == true
+		reaper.SetExtState("TKChordGunFifthWheel", "isCustom", updatedIsCustom and "1" or "0", false)
+		
 		for i = 1, 12 do
 			local inScale = scalePattern and scalePattern[i] or false
 			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
@@ -6663,6 +6770,8 @@ inputCharacters["4"] = 52
 inputCharacters["5"] = 53
 inputCharacters["6"] = 54
 inputCharacters["7"] = 55
+inputCharacters["8"] = 56
+inputCharacters["9"] = 57
 
 inputCharacters["a"] = 97
 inputCharacters["b"] = 98
@@ -6699,6 +6808,8 @@ inputCharacters["$"] = 36
 inputCharacters["%"] = 37
 inputCharacters["^"] = 94
 inputCharacters["&"] = 38
+inputCharacters["*"] = 42
+inputCharacters["("] = 40
 
 inputCharacters["A"] = 65
 inputCharacters["B"] = 66
@@ -6778,247 +6889,84 @@ function handleInput()
 
 	--
 
-	if inputCharacter == inputCharacters["1"] then
-		previewScaleChordAction(1)
-	end
-
-	if inputCharacter == inputCharacters["2"] then
-		previewScaleChordAction(2)
-	end
-
-	if inputCharacter == inputCharacters["3"] then
-		previewScaleChordAction(3)
-	end
-
-	if inputCharacter == inputCharacters["4"] then
-		previewScaleChordAction(4)
-	end
-
-	if inputCharacter == inputCharacters["5"] then
-		previewScaleChordAction(5)
-	end
-
-	if inputCharacter == inputCharacters["6"] then
-		previewScaleChordAction(6)
-	end
-
-	if inputCharacter == inputCharacters["7"] then
-		previewScaleChordAction(7)
+	-- Dynamische number keys (1-9) voor preview chords
+	local numberKeys = {"1", "2", "3", "4", "5", "6", "7", "8", "9"}
+	for i = 1, math.min(#scaleNotes, 9) do
+		if inputCharacter == inputCharacters[numberKeys[i]] then
+			previewScaleChordAction(i)
+		end
 	end
 
 	--
 
-
-	if inputCharacter == inputCharacters["!"] then
-		scaleChordAction(1)
-	end
-
-	if inputCharacter == inputCharacters["@"] then
-		scaleChordAction(2)
-	end
-
-	if inputCharacter == inputCharacters["#"] then
-		scaleChordAction(3)
-	end
-
-	if inputCharacter == inputCharacters["$"] then
-		scaleChordAction(4)
-	end
-
-	if inputCharacter == inputCharacters["%"] then
-		scaleChordAction(5)
-	end
-
-	if inputCharacter == inputCharacters["^"] then
-		scaleChordAction(6)
-	end
-
-	if inputCharacter == inputCharacters["&"] then
-		scaleChordAction(7)
+	-- Dynamische shift+number keys (!-() voor insert chords
+	local shiftNumberKeys = {"!", "@", "#", "$", "%", "^", "&", "*", "("}
+	for i = 1, math.min(#scaleNotes, 9) do
+		if inputCharacter == inputCharacters[shiftNumberKeys[i]] then
+			scaleChordAction(i)
+		end
 	end
 
 	--
 
-
-	if inputCharacter == inputCharacters["q"] then
-		previewHigherScaleNoteAction(1)
-	end
-
-	if inputCharacter == inputCharacters["w"] then
-		previewHigherScaleNoteAction(2)
-	end
-
-	if inputCharacter == inputCharacters["e"] then
-		previewHigherScaleNoteAction(3)
-	end
-
-	if inputCharacter == inputCharacters["r"] then
-		previewHigherScaleNoteAction(4)
-	end
-
-	if inputCharacter == inputCharacters["t"] then
-		previewHigherScaleNoteAction(5)
-	end
-
-	if inputCharacter == inputCharacters["y"] then
-		previewHigherScaleNoteAction(6)
-	end
-
-	if inputCharacter == inputCharacters["u"] then
-		previewHigherScaleNoteAction(7)
+	-- Dynamische q-i keys voor preview higher scale notes
+	local qwertyKeys = {"q", "w", "e", "r", "t", "y", "u", "i", "o"}
+	for i = 1, math.min(#scaleNotes, 9) do
+		if inputCharacter == inputCharacters[qwertyKeys[i]] then
+			previewHigherScaleNoteAction(i)
+		end
 	end
 
 	--
 
-	if inputCharacter == inputCharacters["a"] then
-		previewScaleNoteAction(1)
-	end
-
-	if inputCharacter == inputCharacters["s"] then
-		previewScaleNoteAction(2)
-	end
-
-	if inputCharacter == inputCharacters["d"] then
-		previewScaleNoteAction(3)
-	end
-
-	if inputCharacter == inputCharacters["f"] then
-		previewScaleNoteAction(4)
-	end
-
-	if inputCharacter == inputCharacters["g"] then
-		previewScaleNoteAction(5)
-	end
-
-	if inputCharacter == inputCharacters["h"] then
-		previewScaleNoteAction(6)
-	end
-
-	if inputCharacter == inputCharacters["j"] then
-		previewScaleNoteAction(7)
+	-- Dynamische a-k keys voor preview scale notes
+	local asdfKeys = {"a", "s", "d", "f", "g", "h", "j", "k", "l"}
+	for i = 1, math.min(#scaleNotes, 9) do
+		if inputCharacter == inputCharacters[asdfKeys[i]] then
+			previewScaleNoteAction(i)
+		end
 	end
 
 	--
 
-	if inputCharacter == inputCharacters["z"] then
-		previewLowerScaleNoteAction(1)
-	end
-
-	if inputCharacter == inputCharacters["x"] then
-		previewLowerScaleNoteAction(2)
-	end
-
-	if inputCharacter == inputCharacters["c"] then
-		previewLowerScaleNoteAction(3)
-	end
-
-	if inputCharacter == inputCharacters["v"] then
-		previewLowerScaleNoteAction(4)
-	end
-
-	if inputCharacter == inputCharacters["b"] then
-		previewLowerScaleNoteAction(5)
-	end
-
-	if inputCharacter == inputCharacters["n"] then
-		previewLowerScaleNoteAction(6)
-	end
-
-	if inputCharacter == inputCharacters["m"] then
-		previewLowerScaleNoteAction(7)
+	-- Dynamische z-, keys voor preview lower scale notes
+	local zxcvKeys = {"z", "x", "c", "v", "b", "n", "m", ",", "."}
+	for i = 1, math.min(#scaleNotes, 9) do
+		if inputCharacter == inputCharacters[zxcvKeys[i]] then
+			previewLowerScaleNoteAction(i)
+		end
 	end
 
 
 
 	--
 
-
-	if inputCharacter == inputCharacters["Q"] then
-		higherScaleNoteAction(1)
-	end
-
-	if inputCharacter == inputCharacters["W"] then
-		higherScaleNoteAction(2)
-	end
-
-	if inputCharacter == inputCharacters["E"] then
-		higherScaleNoteAction(3)
-	end
-
-	if inputCharacter == inputCharacters["R"] then
-		higherScaleNoteAction(4)
-	end
-
-	if inputCharacter == inputCharacters["T"] then
-		higherScaleNoteAction(5)
-	end
-
-	if inputCharacter == inputCharacters["Y"] then
-		higherScaleNoteAction(6)
-	end
-
-	if inputCharacter == inputCharacters["U"] then
-		higherScaleNoteAction(7)
+	-- Dynamische Q-I keys voor insert higher scale notes
+	local QWERTYKeys = {"Q", "W", "E", "R", "T", "Y", "U", "I", "O"}
+	for i = 1, math.min(#scaleNotes, 9) do
+		if inputCharacter == inputCharacters[QWERTYKeys[i]] then
+			higherScaleNoteAction(i)
+		end
 	end
 
 	--
 
-	if inputCharacter == inputCharacters["A"] then
-		scaleNoteAction(1)
-	end
-
-	if inputCharacter == inputCharacters["S"] then
-		scaleNoteAction(2)
-	end
-
-	if inputCharacter == inputCharacters["D"] then
-		scaleNoteAction(3)
-	end
-
-	if inputCharacter == inputCharacters["F"] then
-		scaleNoteAction(4)
-	end
-
-	if inputCharacter == inputCharacters["G"] then
-		scaleNoteAction(5)
-	end
-
-	if inputCharacter == inputCharacters["H"] then
-		scaleNoteAction(6)
-	end
-
-	if inputCharacter == inputCharacters["J"] then
-		scaleNoteAction(7)
+	-- Dynamische A-K keys voor insert scale notes
+	local ASDFKeys = {"A", "S", "D", "F", "G", "H", "J", "K", "L"}
+	for i = 1, math.min(#scaleNotes, 9) do
+		if inputCharacter == inputCharacters[ASDFKeys[i]] then
+			scaleNoteAction(i)
+		end
 	end
 
 	--
 
-	if inputCharacter == inputCharacters["Z"] then
-		lowerScaleNoteAction(1)
-	end
-
-	if inputCharacter == inputCharacters["X"] then
-		lowerScaleNoteAction(2)
-	end
-
-	if inputCharacter == inputCharacters["C"] then
-		lowerScaleNoteAction(3)
-	end
-
-	if inputCharacter == inputCharacters["V"] then
-		lowerScaleNoteAction(4)
-	end
-
-	if inputCharacter == inputCharacters["B"] then
-		lowerScaleNoteAction(5)
-	end
-
-	if inputCharacter == inputCharacters["N"] then
-		lowerScaleNoteAction(6)
-	end
-
-	if inputCharacter == inputCharacters["M"] then
-		lowerScaleNoteAction(7)
+	-- Dynamische Z-< keys voor insert lower scale notes
+	local ZXCVKeys = {"Z", "X", "C", "V", "B", "N", "M", "<", ">"}
+	for i = 1, math.min(#scaleNotes, 9) do
+		if inputCharacter == inputCharacters[ZXCVKeys[i]] then
+			lowerScaleNoteAction(i)
+		end
 	end
 
 -----------------
@@ -7180,10 +7128,27 @@ function Interface:init(name)
   self.name = name
   self.x = getInterfaceXPosition()
   self.y = getInterfaceYPosition()
-  self.width = interfaceWidth
-  self.height = interfaceHeight
-  self.lastWidth = interfaceWidth
-  self.lastHeight = interfaceHeight
+  
+  -- Calculate minimum width based on scale size
+  local dynamicBaseWidth = getDynamicBaseWidth()
+  local minWidth = dynamicBaseWidth
+  local minHeight = baseHeight
+  
+  -- Use current window size if larger than minimum, otherwise use minimum
+  if interfaceWidth < minWidth then
+    self.width = minWidth
+  else
+    self.width = interfaceWidth
+  end
+  
+  if interfaceHeight < minHeight then
+    self.height = minHeight
+  else
+    self.height = interfaceHeight
+  end
+  
+  self.lastWidth = self.width
+  self.lastHeight = self.height
 
   self.elements = {}
 
@@ -7192,10 +7157,27 @@ end
 
 function Interface:restartGui()
 	self.elements = {}
-	self.width = interfaceWidth
-	self.height = interfaceHeight
-	self.lastWidth = interfaceWidth
-	self.lastHeight = interfaceHeight
+	
+	-- Calculate minimum width based on scale size
+	local dynamicBaseWidth = getDynamicBaseWidth()
+	local minWidth = dynamicBaseWidth
+	local minHeight = baseHeight
+	
+	-- Preserve user's window size if larger than minimum
+	if gfx.w < minWidth then
+		self.width = minWidth
+	else
+		self.width = gfx.w
+	end
+	
+	if gfx.h < minHeight then
+		self.height = minHeight
+	else
+		self.height = gfx.h
+	end
+	
+	self.lastWidth = self.width
+	self.lastHeight = self.height
 	self:startGui()
 end
 
@@ -7422,13 +7404,13 @@ end
 
 function Interface:addFifthWheelButton(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleTypeWidth)
 	local contentLeft = getTopFrameContentLeft(xMargin)
-	local spacingAfterLabel = math.max(s(2), horizontalMargin - s(8))
-	local spacingBetweenDropdowns = math.max(s(4), horizontalMargin - s(4))
-	local extraSpacing = s(12)  -- Extra ruimte voor de Circle button
+	local spacingAfterLabel = math.max(sx(2), horizontalMargin - sx(8))
+	local spacingBetweenDropdowns = math.max(sx(4), horizontalMargin - sx(4))
+	local extraSpacing = sx(12)  -- Extra ruimte voor de Circle button
 	local buttonXpos = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns + scaleTypeWidth + spacingBetweenDropdowns + extraSpacing
-	local buttonYpos = yMargin + yPadding + s(1)
-	local buttonWidth = s(50)
-	local buttonHeight = s(15)
+	local buttonYpos = yMargin + yPadding + sy(1)
+	local buttonWidth = sx(50)
+	local buttonHeight = sy(15)
 	
 	self:addToggleButton(
 		"Circle",
@@ -7452,19 +7434,19 @@ function Interface:addFifthWheelButton(xMargin, yMargin, xPadding, yPadding, hor
 end
 
 local function topButtonWidth()
-  return s(55)
+  return sx(55)
 end
 
 local function topButtonHeight()
-  return s(18)
+  return sy(18)
 end
 
 local function topButtonSpacing()
-  return s(8)
+  return sx(8)
 end
 
 local function topButtonYPos(yMargin)
-  return yMargin + s(6)
+  return yMargin + sy(6)
 end
 
 local function topButtonXPos(xMargin, xPadding, index)
@@ -7573,14 +7555,14 @@ function Interface:addNoteLengthControl(xPos, yPos, options)
   local showLabel = options.showLabel ~= false
   local customWidth = options.buttonWidth
 
-  local labelWidth = showLabel and s(36) or 0
-  local buttonWidth = customWidth or s(78)
-  local buttonHeight = s(18)
-  local spacing = showLabel and s(4) or 0
+  local labelWidth = showLabel and sx(36) or 0
+  local buttonWidth = customWidth or sx(78)
+  local buttonHeight = sy(18)
+  local spacing = showLabel and sx(4) or 0
 
   if showLabel then
     local labelX = xPos + dockerXPadding
-    self:addLabel(labelX, yPos + s(2), labelWidth, buttonHeight, function() return "LEN:" end)
+    self:addLabel(labelX, yPos + sy(2), labelWidth, buttonHeight, function() return "LEN:" end)
   end
 
   local buttonX = xPos + labelWidth + spacing + dockerXPadding
@@ -7600,15 +7582,15 @@ end
 function Interface:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, headerHeight)
 
 	local pianoWidth = self.width - 2 * xMargin - 2 * xPadding
-	local pianoHeight = s(70)
+	local pianoHeight = sy(70)
 	local pianoXpos = xMargin + xPadding
 	
 	-- Bereken positie onder alle chord buttons
 	-- Gebruik dezelfde logica als chord button positioning: yMargin + yPadding + headerHeight + offset voor laatste button
-	local buttonHeight = s(38)
-	local innerSpacing = s(2)
+	local buttonHeight = sy(38)
+	local innerSpacing = sx(2)
 	local numChordButtons = 13
-	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - s(3) + s(6)
+	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
 	
 	-- Gebruik huidige octaaf in plaats van hardcoded octaaf 2
 	-- getOctave() geeft het octaaf nummer (0-8)
@@ -7622,16 +7604,16 @@ end
 function Interface:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, headerHeight)
 	-- Voeg de progression slots toe als UI element
 	local slotWidth = self.width - 2 * xMargin - 2 * xPadding
-  local slotHeight = s(40)
+  local slotHeight = sy(40)
 	local slotXpos = xMargin + xPadding
 	
 	-- Positioneer onder piano keyboard
-	local buttonHeight = s(38)
-	local innerSpacing = s(2)
+	local buttonHeight = sy(38)
+	local innerSpacing = sx(2)
 	local numChordButtons = 13
-	local pianoHeight = s(70)
-	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - s(3) + s(6)
-	local slotYpos = pianoYpos + pianoHeight + s(8)
+	local pianoHeight = sy(70)
+	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
+	local slotYpos = pianoYpos + pianoHeight + sy(8)
 	
 	local slots = ProgressionSlots:new(slotXpos + dockerXPadding, slotYpos, slotWidth, slotHeight)
 	table.insert(self.elements, slots)
@@ -7639,18 +7621,18 @@ end
 
 function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, headerHeight)
 	-- Voeg PLAY, STOP, CLEAR buttons toe onder de progression slots
-	local buttonWidth = s(50)
-	local buttonHeight = s(18)
+	local buttonWidth = sx(50)
+	local buttonHeight = sy(18)
 	local buttonXpos = xMargin + xPadding
-  local buttonSpacing = s(12)
+  local buttonSpacing = sx(12)
 	
 	-- Positioneer onder progression slots
-	local buttonHeightChord = s(38)
-	local innerSpacing = s(2)
+	local buttonHeightChord = sy(38)
+	local innerSpacing = sx(2)
 	local numChordButtons = 13
-	local pianoHeight = s(70)
-  local slotHeight = s(40)
-	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeightChord) + (numChordButtons * innerSpacing) - s(3) + s(6)
+	local pianoHeight = sy(70)
+  local slotHeight = sy(40)
+	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeightChord) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
 	local slotYpos = pianoYpos + pianoHeight + s(8)
 	local buttonYpos = slotYpos + slotHeight + s(6)
 	
@@ -8070,14 +8052,14 @@ function Interface:addBottomFrame()
 
 	-- Definieer lokaal zodat ze correct schalen
 	local xMargin = s(8)
-	local yMargin = s(8) + (self.keySelectionFrameHeight or s(25)) + s(6)
-	local xPadding = s(7)
-	local yPadding = s(30)
-	local headerHeight = s(25)
-	local inversionLabelWidth = s(80)
-	local inversionValueBoxWidth = s(55)
+	local yMargin = sy(8) + (self.keySelectionFrameHeight or sy(25)) + sy(6)
+	local xPadding = sx(7)
+	local yPadding = sy(30)
+	local headerHeight = sy(25)
+	local inversionLabelWidth = sx(80)
+	local inversionValueBoxWidth = sx(55)
 
-	local chordButtonsFrameHeight = self.height - yMargin - s(6)
+	local chordButtonsFrameHeight = self.height - yMargin - sy(6)
 	self:addFrame(xMargin+dockerXPadding, yMargin, self.width - 2 * xMargin, chordButtonsFrameHeight)
   
   self:addHoldButton(xMargin, yMargin, xPadding)
@@ -8085,7 +8067,7 @@ function Interface:addBottomFrame()
   self:addStrumButton(xMargin, yMargin, xPadding)
   local lenButtonX = topButtonXPos(xMargin, xPadding, 3)
   local lenButtonY = topButtonYPos(yMargin)
-  self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = s(70)})
+  self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = sx(70)})
   self:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionControls(xMargin, yMargin, xPadding, yPadding, headerHeight)
@@ -8101,30 +8083,30 @@ function Interface:addChordTextLabel(xMargin, yMargin, xPadding, inversionLabelW
 
   local getChordTextCallback = function() return getChordText() end
   local chordTextXpos = xMargin + xPadding
-  local chordTextYpos = yMargin + s(4)
-  chordTextWidth = self.width - 4 * xMargin - inversionLabelWidth - inversionValueBoxWidth - s(6)
-  local chordTextHeight = s(24)
-  self:addLabel(chordTextXpos+dockerXPadding, chordTextYpos, chordTextWidth, chordTextHeight, getChordTextCallback, {xOffset = s(75)})
+  local chordTextYpos = yMargin + sy(4)
+  chordTextWidth = self.width - 4 * xMargin - inversionLabelWidth - inversionValueBoxWidth - sx(6)
+  local chordTextHeight = sy(24)
+  self:addLabel(chordTextXpos+dockerXPadding, chordTextYpos, chordTextWidth, chordTextHeight, getChordTextCallback, {xOffset = sx(75)})
 end
 
 function Interface:addInversionLabel(xMargin, yMargin, xPadding)
 
   local inversionLabelText = "Inversion:"
   local inversionLabelXPos = xMargin + xPadding + chordTextWidth
-  local inversionLabelYPos = yMargin + s(4)
+  local inversionLabelYPos = yMargin + sy(4)
   local stringWidth, _ = gfx.measurestr(labelText)
-  local inversionLabelTextHeight = s(24)
-  local inversionLabelWidth = s(80)
+  local inversionLabelTextHeight = sy(24)
+  local inversionLabelWidth = sx(80)
 
   self:addLabel(inversionLabelXPos+dockerXPadding, inversionLabelYPos, inversionLabelWidth, inversionLabelTextHeight, function() return inversionLabelText end)
 end
 
 function Interface:addInversionValueBox(xMargin, yMargin, xPadding, inversionLabelWidth)
 
-  local inversionValueBoxWidth = s(55)
-  local inversionValueBoxXPos = xMargin + xPadding + chordTextWidth + inversionLabelWidth + s(2)
-  local inversionValueBoxYPos = yMargin + s(9)
-  local inversionValueBoxHeight = s(15)
+  local inversionValueBoxWidth = sx(55)
+  local inversionValueBoxXPos = xMargin + xPadding + chordTextWidth + inversionLabelWidth + sx(2)
+  local inversionValueBoxYPos = yMargin + sy(9)
+  local inversionValueBoxHeight = sy(15)
   self:addChordInversionValueBox(inversionValueBoxXPos+dockerXPadding, inversionValueBoxYPos, inversionValueBoxWidth, inversionValueBoxHeight)
 end
 
@@ -8132,10 +8114,10 @@ function Interface:addHeaders(xMargin, yMargin, xPadding, yPadding, headerHeight
   
   for i = 1, #scaleNotes do
 
-    local headerWidth = s(104)
-    local innerSpacing = s(2)
+    local headerWidth = sx(104)
+    local innerSpacing = sx(2)
 
-    local headerXpos = xMargin+xPadding-s(1) + headerWidth * (i-1) + innerSpacing * i
+    local headerXpos = xMargin+xPadding-sx(1) + headerWidth * (i-1) + innerSpacing * i
     local headerYpos = yMargin+yPadding
     self:addHeader(headerXpos+dockerXPadding, headerYpos, headerWidth, headerHeight, function() return getScaleDegreeHeader(i) end)
   end
@@ -8152,12 +8134,12 @@ function Interface:addChordButtons(xMargin, yMargin, xPadding, yPadding, headerH
 
       	local text = getScaleNoteName(scaleNoteIndex) .. chord['display']
 
-      	local buttonWidth = s(104)
-      	local buttonHeight = s(38)
-				local innerSpacing = s(2)
+      	local buttonWidth = sx(104)
+      	local buttonHeight = sy(38)
+				local innerSpacing = sx(2)
       	
       	local xPos = xMargin + xPadding + buttonWidth * (scaleNoteIndex-1) + innerSpacing * scaleNoteIndex + dockerXPadding
-      	local yPos = yMargin + yPadding + headerHeight + buttonHeight * (chordTypeIndex-1) + innerSpacing * (chordTypeIndex-1) - s(3)
+      	local yPos = yMargin + yPadding + headerHeight + buttonHeight * (chordTypeIndex-1) + innerSpacing * (chordTypeIndex-1) - sy(3)
   
   			local numberOfChordsInScale = getNumberOfScaleChordsForScaleNoteIndex(scaleNoteIndex)
 
