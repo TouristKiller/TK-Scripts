@@ -1,6 +1,6 @@
 -- @description TK Media Explorer Web Controller - Bridge Script
 -- @author TK (TouristKiller)
--- @version 1.0
+-- @version 1.1
 -- @about
 --   # TK Media Explorer Web Controller
 --   
