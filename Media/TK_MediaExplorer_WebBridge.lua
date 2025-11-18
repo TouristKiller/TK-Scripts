@@ -1,6 +1,6 @@
 -- @description TK Media Explorer Web Controller - Bridge Script
 -- @author TK (TouristKiller)
--- @version 1.1
+-- @version 1.2
 -- @about
 --   # TK Media Explorer Web Controller
 --   
@@ -22,9 +22,9 @@
 --   3. Make sure Media Explorer is open in REAPER
 --
 -- @provides
---   [web] $RESOURCE/reaper_www_root/TK_MediaExplorer.html > Media/TK_MediaExplorer.html
+--   [nomain] ../../reaper_www_root/TK_MediaExplorer.html > Media/TK_MediaExplorer.html
 -- @changelog
---   Initial release
+--   Fixed HTML installation path
 
 if not reaper.JS_Window_Find then
   reaper.MB("This script requires js_ReaScriptAPI extension.\n\nInstall via:\nExtensions → ReaPack → Browse packages\nSearch for 'js_ReaScriptAPI'", "Missing Extension", 0)

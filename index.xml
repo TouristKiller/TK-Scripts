@@ -199,10 +199,10 @@
     </reapack>
     
     <reapack name="TK_MediaExplorer_WebBridge.lua" type="script" desc="TK Media Explorer Web Controller - Bridge Script">
-        <version name="1.1" author="TouristKiller" time="2025-11-18T13:00:00Z">
+        <version name="1.2" author="TouristKiller" time="2025-11-18T13:10:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MediaExplorer_WebBridge.lua</source>
-        <source type="web" file="reaper_www_root/TK_MediaExplorer.html">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MediaExplorer.html</source>
-        <changelog><![CDATA[Initial release
+        <source file="../../reaper_www_root/TK_MediaExplorer.html">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MediaExplorer.html</source>
+        <changelog><![CDATA[Fixed HTML installation path
 + Control Media Explorer from smartphone/web browser
 + Play/Stop, Random, Repeat controls
 + Navigate folders and files with arrow keys
