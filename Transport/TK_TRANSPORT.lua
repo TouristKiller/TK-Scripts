@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.5
+-- @version 1.3.6
 -- @changelog 
 --[[
 Removed widgets tab from settings menu (Widgets are obsolete)
@@ -2773,6 +2773,10 @@ function ShowCursorPositionSettings(ctx, main_window_width, main_window_height)
  if r.ImGui_RadioButton(ctx, "Time", mode == "time") then settings.cursorpos_mode = "time" end
  r.ImGui_SameLine(ctx)
  if r.ImGui_RadioButton(ctx, "Both", mode == "both") then settings.cursorpos_mode = "both" end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ rv, settings.cursorpos_hide_milliseconds = r.ImGui_Checkbox(ctx, "Hide Milliseconds", settings.cursorpos_hide_milliseconds or false)
  
  r.ImGui_Separator(ctx)
  
@@ -9128,7 +9132,12 @@ function ShowCursorPosition(main_window_width, main_window_height)
  local hours = math.floor(position / 3600)
  local minutes = math.floor((position % 3600) / 60)
  local seconds = position % 60
- local time_str = (hours > 0) and string.format("%d:%02d:%06.3f", hours, minutes, seconds) or string.format("%d:%06.3f", minutes, seconds)
+ local time_str
+ if settings.cursorpos_hide_milliseconds then
+   time_str = (hours > 0) and string.format("%d:%02d:%02d", hours, minutes, math.floor(seconds)) or string.format("%d:%02d", minutes, math.floor(seconds))
+ else
+   time_str = (hours > 0) and string.format("%d:%02d:%06.3f", hours, minutes, seconds) or string.format("%d:%06.3f", minutes, seconds)
+ end
  local mbt_str = string.format("%d.%d.%02d", math.floor(measures + measure_correction), math.floor(beatsInMeasure+1), ticks)
  local mode = settings.cursorpos_mode or "both"
  local label
