@@ -1,9 +1,9 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.0.3
+-- @version 2.0.4
 -- @changelog
 --[[
-2.0.3 
+2.0.4
 + Fixed bug where scale pattern could be nil during chord recognition, causing crashes (mini)
 
 2.0.0

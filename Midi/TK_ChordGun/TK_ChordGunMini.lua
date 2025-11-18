@@ -294,7 +294,8 @@ end
 function getScaleType()
   local value = tonumber(getValue(scaleTypeKey, defaultScaleTypeValue))
   -- Validate scale type is within bounds (fixes cross-contamination with TK_ChordGun)
-  if not value or value < 1 or value > #scales then
+  -- Only validate if scales array is already initialized
+  if scales and (not value or value < 1 or value > #scales) then
     value = defaultScaleTypeValue
     setValue(scaleTypeKey, value)  -- Reset to default
   end
