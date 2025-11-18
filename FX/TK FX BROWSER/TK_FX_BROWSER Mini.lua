@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.1.1
+-- @version 0.1.2
 -- @changelog:
 --[[     
 
@@ -5788,10 +5788,20 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 local function ShowCustomFolderMenu(folders, path_prefix)
                     path_prefix = path_prefix or ""
                     
+                    -- SORTEER DE FOLDER NAMEN ALFABETISCH
+                    local sorted_folder_names = {}
                     for folder_name, folder_content in pairs(folders) do
-                        if type(folder_name) ~= "string" or type(folder_content) ~= "table" then
-                            goto continue
+                        if type(folder_name) == "string" and type(folder_content) == "table" then
+                            table.insert(sorted_folder_names, folder_name)
                         end
+                    end
+                    table.sort(sorted_folder_names, function(a, b) 
+                        return a:lower() < b:lower() 
+                    end)
+                    
+                    -- GEBRUIK DE GESORTEERDE NAMEN
+                    for _, folder_name in ipairs(sorted_folder_names) do
+                        local folder_content = folders[folder_name]
                         
                         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
                         
@@ -5843,8 +5853,6 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                                 end
                             end
                         end
-                        
-                        ::continue::
                     end
                 end
                 
@@ -6172,10 +6180,20 @@ function ShowFXContextMenu(plugin, menu_id)
                 local function ShowCustomFolderMenu(folders, path_prefix)
                     path_prefix = path_prefix or ""
                     
+                    -- SORTEER DE FOLDER NAMEN ALFABETISCH
+                    local sorted_folder_names = {}
                     for folder_name, folder_content in pairs(folders) do
-                        if type(folder_name) ~= "string" or type(folder_content) ~= "table" then
-                            goto continue
+                        if type(folder_name) == "string" and type(folder_content) == "table" then
+                            table.insert(sorted_folder_names, folder_name)
                         end
+                    end
+                    table.sort(sorted_folder_names, function(a, b) 
+                        return a:lower() < b:lower() 
+                    end)
+                    
+                    -- GEBRUIK DE GESORTEERDE NAMEN
+                    for _, folder_name in ipairs(sorted_folder_names) do
+                        local folder_content = folders[folder_name]
                         
                         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
                         
@@ -6227,8 +6245,6 @@ function ShowFXContextMenu(plugin, menu_id)
                                 end
                             end
                         end
-                        
-                        ::continue::
                     end
                 end
                 
