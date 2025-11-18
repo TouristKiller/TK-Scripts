@@ -197,6 +197,20 @@
      ]]></changelog>
         </version>
     </reapack>
+    
+    <reapack name="TK_MediaExplorer_WebBridge.lua" type="script" desc="TK Media Explorer Web Controller - Bridge Script">
+        <version name="1.0" author="TouristKiller" time="2025-11-18T12:50:00Z">
+        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MediaExplorer_WebBridge.lua</source>
+        <source file="$RESOURCE/reaper_www_root/TK_MediaExplorer.html">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MediaExplorer.html</source>
+        <changelog><![CDATA[Initial release
++ Control Media Explorer from smartphone/web browser
++ Play/Stop, Random, Repeat controls
++ Navigate folders and files with arrow keys
++ Volume control
++ Display current file, folder path, and selected item
++ Requires js_ReaScriptAPI extension and REAPER web server enabled]]></changelog>
+        </version>
+    </reapack>
  </category>
 
   <category name="Midi">
