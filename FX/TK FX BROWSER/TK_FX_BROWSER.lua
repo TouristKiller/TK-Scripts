@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.1.4
+-- @version 2.1.5
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -14383,11 +14383,30 @@ function Main()
             r.ImGui_PopFont(ctx)
             r.ImGui_PopStyleColor(ctx, 13) -- 13 StyleColors
             r.ImGui_PopStyleVar(ctx, 6)    -- 6 StyleVars
+            pushed_main_styles = false     -- Reset flag
         end
         
-        -- Don't show any window to prevent focus stealing from native browser
-        -- Just defer and check again next cycle
-        return r.defer(Main)
+        -- Create a minimal invisible window to keep ImGui context valid
+        local pause_flags = r.ImGui_WindowFlags_NoTitleBar() | 
+                           r.ImGui_WindowFlags_NoResize() | 
+                           r.ImGui_WindowFlags_NoMove() | 
+                           r.ImGui_WindowFlags_NoScrollbar() | 
+                           r.ImGui_WindowFlags_NoScrollWithMouse() | 
+                           r.ImGui_WindowFlags_NoCollapse() | 
+                           r.ImGui_WindowFlags_NoFocusOnAppearing()
+        
+        r.ImGui_SetNextWindowPos(ctx, -1000, -1000)
+        r.ImGui_SetNextWindowSize(ctx, 1, 1)
+        local pause_visible, pause_open = r.ImGui_Begin(ctx, 'TK FX BROWSER (Paused)', true, pause_flags)
+        if pause_visible then
+            r.ImGui_Text(ctx, "") -- Empty content
+            r.ImGui_End(ctx)
+        end
+        
+        if pause_open then
+            r.defer(Main)
+        end
+        return
     end
 
 local fx_list_height = 0
