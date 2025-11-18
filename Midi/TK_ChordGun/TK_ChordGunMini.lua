@@ -1,5 +1,6 @@
 -- @noindex
 
+-- Bugfix 1811
 chords = {
   {
     name = 'major',
