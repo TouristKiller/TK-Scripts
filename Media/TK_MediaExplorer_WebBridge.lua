@@ -22,9 +22,9 @@
 --   3. Make sure Media Explorer is open in REAPER
 --
 -- @provides
---   [webinterface] TK_MediaExplorer.html
+--   [www] TK_MediaExplorer.html
 -- @changelog
---   Fixed HTML installation using correct ReaPack webinterface type
+--   Fixed HTML installation - now includes HTML file in package
 
 if not reaper.JS_Window_Find then
   reaper.MB("This script requires js_ReaScriptAPI extension.\n\nInstall via:\nExtensions → ReaPack → Browse packages\nSearch for 'js_ReaScriptAPI'", "Missing Extension", 0)
