@@ -1,6 +1,6 @@
 -- @description TK Media Explorer Web Controller - Bridge Script
 -- @author TK (TouristKiller)
--- @version 1.6
+-- @version 1.7
 -- @about
 --   # TK Media Explorer Web Controller
 --   
@@ -20,16 +20,211 @@
 --   1. Run this script (it will stay running in background)
 --   2. Open http://YOUR_IP:8080/TK_MediaExplorer.html in your browser
 --   3. Make sure Media Explorer is open in REAPER
+--   
+--   The HTML interface will be automatically installed to reaper_www_root on first run.
 --
--- @provides
---   [www] TK_MediaExplorer.html
 -- @changelog
---   Fixed HTML installation - now includes HTML file in package
+--   v1.7: HTML now embedded in script and auto-installed to reaper_www_root
 
+-- Check for required extension
 if not reaper.JS_Window_Find then
   reaper.MB("This script requires js_ReaScriptAPI extension.\n\nInstall via:\nExtensions → ReaPack → Browse packages\nSearch for 'js_ReaScriptAPI'", "Missing Extension", 0)
   return
 end
+
+-- Install HTML interface to reaper_www_root
+local function install_html_interface()
+  local resource_path = reaper.GetResourcePath()
+  local www_path = resource_path .. "/reaper_www_root"
+  local html_file = www_path .. "/TK_MediaExplorer.html"
+  
+  -- Create reaper_www_root directory if it doesn't exist
+  reaper.RecursiveCreateDirectory(www_path, 0)
+  
+  -- HTML content (embedded in script)
+  local html_content = [[<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Media Explorer Controller</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 28px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        .current-file {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 30px;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .button-row {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        button {
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            padding: 18px 25px;
+            border-radius: 50px;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            flex: 1;
+            max-width: 200px;
+            font-weight: 600;
+            color: #667eea;
+        }
+        button:active {
+            transform: scale(0.95);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 Media Explorer</h1>
+        <div class="current-file" id="currentFile">REAPER Connected</div>
+        <div class="current-file" id="currentFolder" style="font-size: 11px; min-height: 30px; margin-top: -20px;">📁 Folder</div>
+        <div class="current-file" id="selectedItem" style="font-size: 13px; min-height: 35px; margin-top: -15px; background: rgba(255, 200, 0, 0.2);">Selected</div>
+        
+        <div class="controls">
+            <div class="button-row">
+                <button onclick="sendCommand(40024)">▶️ Play/Stop</button>
+            </div>
+            
+            <div class="button-row">
+                <button onclick="sendCommand(42184)">🔀 Random</button>
+                <button onclick="sendCommand(1068)">🔁 Repeat</button>
+            </div>
+            
+            <div class="button-row">
+                <button onclick="sendArrowKey('up')">⬆️ Up List</button>
+                <button onclick="sendArrowKey('down')">⬇️ Down List</button>
+            </div>
+            
+            <div class="button-row">
+                <button onclick="sendCommand(1004)">◀️ Back</button>
+                <button onclick="sendCommand(1013)">📁 Open</button>
+            </div>
+            
+            <div class="button-row">
+                <button onclick="sendCommand(42178)">🔉 Vol -</button>
+                <button onclick="sendCommand(42177)">🔊 Vol +</button>
+            </div>
+        </div>
+        
+        <div class="status" id="status">Ready</div>
+    </div>
+
+    <script>
+        function sendCommand(commandId) {
+            const uniqueCmd = commandId + ':' + Date.now();
+            fetch(`/_/SET/EXTSTATE/TK_MediaExplorer/webcmd/${uniqueCmd}`, { method: 'GET' })
+                .then(() => {
+                    document.getElementById('status').textContent = 'Command: ' + commandId;
+                    setTimeout(() => document.getElementById('status').textContent = 'Ready', 1000);
+                })
+                .catch(e => document.getElementById('status').textContent = 'Error: ' + e.message);
+        }
+        
+        function sendArrowKey(direction) {
+            const keyCmd = 'KEY_' + direction.toUpperCase() + ':' + Date.now();
+            fetch(`/_/SET/EXTSTATE/TK_MediaExplorer/webcmd/${keyCmd}`, { method: 'GET' })
+                .then(() => {
+                    document.getElementById('status').textContent = 'Arrow: ' + direction;
+                    setTimeout(() => document.getElementById('status').textContent = 'Ready', 1000);
+                })
+                .catch(e => document.getElementById('status').textContent = 'Error: ' + e.message);
+        }
+        
+        function updateStatus() {
+            fetch('/TK_currentfile.txt', { method: 'GET', cache: 'no-cache' })
+                .then(r => r.text())
+                .then(data => {
+                    if (data && data.trim() !== '' && data.trim() !== 'Ready') {
+                        document.getElementById('currentFile').textContent = data.trim();
+                    } else {
+                        document.getElementById('currentFile').textContent = 'Media Explorer Ready';
+                    }
+                })
+                .catch(e => document.getElementById('currentFile').textContent = 'REAPER Connected');
+            
+            fetch('/TK_currentfolder.txt', { method: 'GET', cache: 'no-cache' })
+                .then(r => r.text())
+                .then(data => { if (data && data.trim() !== '') document.getElementById('currentFolder').textContent = '📁 ' + data.trim(); })
+                .catch(e => {});
+            
+            fetch('/TK_selecteditem.txt', { method: 'GET', cache: 'no-cache' })
+                .then(r => r.text())
+                .then(data => {
+                    if (data && data.trim() !== '') {
+                        document.getElementById('selectedItem').textContent = data.trim();
+                    } else {
+                        document.getElementById('selectedItem').textContent = 'Selected: ---';
+                    }
+                })
+                .catch(e => document.getElementById('selectedItem').textContent = 'Selected: ---');
+        }
+        
+        setInterval(updateStatus, 1000);
+        updateStatus();
+    </script>
+</body>
+</html>]]
+  
+  -- Write HTML file (always overwrite to ensure updates)
+  local file = io.open(html_file, "w")
+  if file then
+    file:write(html_content)
+    file:close()
+    reaper.ShowConsoleMsg("TK Media Explorer: HTML interface installed to " .. html_file .. "\n")
+    return true
+  else
+    reaper.MB("Failed to write HTML file to:\n" .. html_file .. "\n\nPlease check file permissions.", "Installation Error", 0)
+    return false
+  end
+end
+
+-- Install HTML on startup
+install_html_interface()
 
 local me_hwnd = nil
 local function get_media_explorer_hwnd()
