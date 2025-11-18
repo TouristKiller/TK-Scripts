@@ -214,7 +214,7 @@ end
 local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/ChordGunMini_src"
 
 local activeProjectIndex = 0
-local sectionName = "com.pandabot.ChordGun"
+local sectionName = "com.pandabot.ChordGunMini"  -- Unique name to avoid conflicts with TK_ChordGun
 
 local scaleTonicNoteKey = "scaleTonicNote"
 local scaleTypeKey = "scaleType"
@@ -292,7 +292,13 @@ end
 --
 
 function getScaleType()
-  return tonumber(getValue(scaleTypeKey, defaultScaleTypeValue))
+  local value = tonumber(getValue(scaleTypeKey, defaultScaleTypeValue))
+  -- Validate scale type is within bounds (fixes cross-contamination with TK_ChordGun)
+  if not value or value < 1 or value > #scales then
+    value = defaultScaleTypeValue
+    setValue(scaleTypeKey, value)  -- Reset to default
+  end
+  return value
 end
 
 function setScaleType(arg)
@@ -577,6 +583,11 @@ notes = { 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B' };
 flatNotes = { 'C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B' };
 
 function getScalePattern(scaleTonicNote, scale)
+
+  -- Defensive check: return empty pattern if scale is invalid
+  if not scale or not scale.pattern then
+    return {false,false,false,false,false,false,false,false,false,false,false}
+  end
 
   local scalePatternString = scale['pattern']
   local scalePattern = {false,false,false,false,false,false,false,false,false,false,false}
