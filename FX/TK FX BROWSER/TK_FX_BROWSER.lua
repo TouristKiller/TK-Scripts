@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.1.3
+-- @version 2.1.4
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -1439,6 +1439,17 @@ function IsInstrumentPlugin(name)
         or false
 end
 
+function GetTargetTrack()
+    -- First check if Master track is selected
+    local master_track = r.GetMasterTrack(0)
+    if master_track and r.IsTrackSelected(master_track) then
+        return master_track
+    end
+    
+    -- Otherwise try to get selected track, or fall back to first track
+    return r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0)
+end
+
 function AddFXToTrack(track, plugin_name)
     if not track or not plugin_name or plugin_name == '' then return -1 end
     local dest_index = r.TrackFX_GetCount(track)
@@ -1683,7 +1694,7 @@ function RenderMissingList(missing)
                     if activated then do_add = true end
                 end
                 if do_add then
-                    local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                    local target_track = GetTargetTrack()
                     if target_track then
                         AddFXToTrack(target_track, name)
                         LAST_USED_FX = name
@@ -5514,19 +5525,35 @@ function GetCurrentProjectFX()
 end
 
 function AddPluginToSelectedTracks(plugin_name)
+    -- Check if Master track is selected
+    local master_track = r.GetMasterTrack(0)
+    if master_track and r.IsTrackSelected(master_track) then
+        local fx_index = AddFXToTrack(master_track, plugin_name)
+        r.TrackFX_Show(master_track, fx_index, 2)
+    end
+    
+    -- Add to regular selected tracks
     local track_count = r.CountSelectedTracks(0)
     for i = 0, track_count - 1 do
         local track = r.GetSelectedTrack(0, i)
-    local fx_index = AddFXToTrack(track, plugin_name)
+        local fx_index = AddFXToTrack(track, plugin_name)
         r.TrackFX_Show(track, fx_index, 2)  
     end
 end
 
 function AddPluginToAllTracks(plugin_name)
+    -- Add to Master track if selected
+    local master_track = r.GetMasterTrack(0)
+    if master_track and r.IsTrackSelected(master_track) then
+        local fx_index = AddFXToTrack(master_track, plugin_name)
+        r.TrackFX_Show(master_track, fx_index, 2)
+    end
+    
+    -- Add to all regular tracks
     local track_count = r.CountTracks(0)
     for i = 0, track_count - 1 do
         local track = r.GetTrack(0, i)
-    local fx_index = AddFXToTrack(track, plugin_name)
+        local fx_index = AddFXToTrack(track, plugin_name)
         r.TrackFX_Show(track, fx_index, 2)  
     end
 end
@@ -9899,7 +9926,7 @@ function DrawMasonryLayout(screenshots, top_offset)
                         end
                     end
                     if should_add then
-                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                        local target_track = GetTargetTrack()
                         if target_track then
                             AddFXToTrack(target_track, fx.name)
                             LAST_USED_FX = fx.name
@@ -11161,7 +11188,7 @@ function ShowScreenshotWindow()
                                     if activated then do_add = true end
                                 end
                                 if do_add then
-                                    local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                    local target_track = GetTargetTrack()
                                     if target_track then
                                         AddFXToTrack(target_track, plugin_name)
                                         LAST_USED_FX = plugin_name
@@ -11238,7 +11265,7 @@ function ShowScreenshotWindow()
                                                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                             end
                                             if do_add then
-                                                local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                                local target_track = GetTargetTrack()
                                                 if target_track then
                                                     local fx_index = AddFXToTrack(target_track, plugin_name)
                                                     LAST_USED_FX = plugin_name
@@ -11378,7 +11405,7 @@ function ShowScreenshotWindow()
                                         if activated then do_add = true end
                                     end
                                     if do_add then
-                                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                        local target_track = GetTargetTrack()
                                         if target_track then
                                             AddFXToTrack(target_track, plugin_name)
                                             LAST_USED_FX = plugin_name
@@ -11456,7 +11483,7 @@ function ShowScreenshotWindow()
                                                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                             end
                                             if do_add then
-                                                local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                                local target_track = GetTargetTrack()
                                                 if target_track then
                                                     local fx_index = AddFXToTrack(target_track, plugin_name)
                                                     LAST_USED_FX = plugin_name
@@ -11904,7 +11931,7 @@ function ShowScreenshotWindow()
                                         if activated then do_add = true end
                                     end
                                     if do_add then
-                                        local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                        local target_track = GetTargetTrack()
                                         if target_track then
                                             AddFXToTrack(target_track, plugin_name)
                                             LAST_USED_FX = plugin_name
@@ -11991,7 +12018,7 @@ function ShowScreenshotWindow()
                                                     if folder_clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                                 end
                                                 if do_add then
-                                                    local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                                    local target_track = GetTargetTrack()
                                                     if target_track then
                                                         local fx_index = AddFXToTrack(target_track, plugin_name)
                                                         LAST_USED_FX = plugin_name
@@ -12319,8 +12346,11 @@ function ShowScreenshotWindow()
                                             else
                                                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                             end
+                                            r.ShowConsoleMsg("Screenshot click: do_add = " .. tostring(do_add) .. " for " .. plugin_name .. "\n")
                                             if do_add then
-                                                local target_track = r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0) or r.GetMasterTrack(0)
+                                                r.ShowConsoleMsg("Calling GetTargetTrack() from screenshot\n")
+                                                local target_track = GetTargetTrack()
+                                                r.ShowConsoleMsg("target_track = " .. tostring(target_track) .. "\n")
                                                 if target_track then
                                                     local fx_index = AddFXToTrack(target_track, plugin_name)
                                                     LAST_USED_FX = plugin_name
@@ -14239,7 +14269,7 @@ function HandleDragAndDrop()
                 track = select(1, r.GetTrackFromPoint(ix, iy))
             end
             if not track then
-                track = r.GetSelectedTrack(0,0) or r.GetTrack(0,0) or r.GetMasterTrack(0)
+                track = GetTargetTrack()
             end
             if track then
                 local fx_index = AddFXToTrack(track, dragging_fx_name)
