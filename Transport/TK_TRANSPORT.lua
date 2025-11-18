@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.6
+-- @version 1.3.7
 -- @changelog 
 --[[
 Removed widgets tab from settings menu (Widgets are obsolete)
@@ -272,6 +272,7 @@ local default_settings = {
  edit_grid_size_px = 16,
  edit_grid_color = 0xFFFFFF22,
  edit_snap_to_grid = true,
+ edit_snap_mode = "step", -- "step" = move by grid steps, "magnetic" = snap to nearest grid line
  -- Custom buttons UX
  show_custom_button_tooltip = true,
 
@@ -589,6 +590,14 @@ local default_settings = {
  window_set_picker_fullscreen_width = 1920,
  window_set_picker_fullscreen_height = 1080,
 
+ -- Alignment guides
+ show_alignment_guides = false,
+ alignment_guide_count = 3,
+ alignment_guide_1_y = 0.15,
+ alignment_guide_2_y = 0.50,
+ alignment_guide_3_y = 0.85,
+ alignment_guide_color = 0x00FFFF88,
+ alignment_guide_thickness = 1,
 
 }
 
@@ -800,7 +809,7 @@ function Layout.move_pixel(dx_px, dy_px, dx_frac, dy_frac, keyx, keyy, max_width
  end
  
  settings[pixel_keyx] = math.max(0, math.min(max_width, (settings[pixel_keyx] or 0) + dx_px))
- settings[pixel_keyy] = math.max(0, math.min(max_height, (settings[pixel_keyy] or 0) + dy_px))
+ settings[pixel_keyy] = math.max(-20, math.min(max_height, (settings[pixel_keyy] or 0) + dy_px))
  
  settings[keyx] = settings[pixel_keyx] / math.max(1, max_width)
  settings[keyy] = settings[pixel_keyy] / math.max(1, max_height)
@@ -857,14 +866,14 @@ local function DrawPixelXYControls(keyx, keyy, main_window_width, main_window_he
  r.ImGui_Text(ctx, "Y")
  r.ImGui_SameLine(ctx)
  r.ImGui_SetNextItemWidth(ctx, slider_w)
- rv, settings[pixel_keyy] = r.ImGui_SliderInt(ctx, "##"..keyy.."_slider", settings[pixel_keyy], 0, main_window_height, "%d px")
+ rv, settings[pixel_keyy] = r.ImGui_SliderInt(ctx, "##"..keyy.."_slider", settings[pixel_keyy], -20, main_window_height, "%d px")
  if rv then MarkTransportPresetChanged() end
  local y_slider_active = r.ImGui_IsItemActive(ctx) or r.ImGui_IsItemHovered(ctx)
  r.ImGui_SameLine(ctx)
  r.ImGui_SetNextItemWidth(ctx, input_w)
  rv, settings[pixel_keyy] = r.ImGui_InputInt(ctx, "##"..keyy.."Input", settings[pixel_keyy])
  if rv then
- settings[pixel_keyy] = math.max(0, math.min(main_window_height, settings[pixel_keyy]))
+ settings[pixel_keyy] = math.max(-20, math.min(main_window_height, settings[pixel_keyy]))
  MarkTransportPresetChanged()
  end
  local y_input_active = r.ImGui_IsItemActive(ctx) or r.ImGui_IsItemHovered(ctx)
@@ -4862,6 +4871,10 @@ function ShowSettings(main_window_width , main_window_height)
  selected_transport_component = "scaling"
  end
  
+ if r.ImGui_Selectable(ctx, "Alignment Guides", selected_transport_component == "alignment_guides") then
+ selected_transport_component = "alignment_guides"
+ end
+ 
  r.ImGui_Separator(ctx)
  
  if r.ImGui_BeginChild(ctx, "ComponentList", 0, SETTINGS_TAB_HEIGHT) then
@@ -5279,6 +5292,93 @@ function ShowSettings(main_window_width , main_window_height)
  SaveSettings()
  else
  if rvb then MarkTransportPresetChanged() end
+ end
+ elseif selected_transport_component == "alignment_guides" then
+ local rv
+ 
+ r.ImGui_Text(ctx, "Settings for: Alignment Guides")
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ rv, settings.show_alignment_guides = r.ImGui_Checkbox(ctx, "Show Alignment Guides", settings.show_alignment_guides or false)
+ if rv then MarkTransportPresetChanged() end
+ 
+ if settings.show_alignment_guides then
+ r.ImGui_Spacing(ctx)
+ r.ImGui_PushFont(ctx, settings_ui_font_small, SETTINGS_UI_FONT_SMALL_SIZE)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xA0A0A0FF)
+ r.ImGui_TextWrapped(ctx, "Alignment guides are visual helper lines to align elements horizontally. They are only visible in edit mode.")
+ r.ImGui_PopStyleColor(ctx)
+ r.ImGui_PopFont(ctx)
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ rv, settings.alignment_guide_count = r.ImGui_SliderInt(ctx, "Number of Guides", settings.alignment_guide_count or 3, 0, 10)
+ if rv then MarkTransportPresetChanged() end
+ 
+ if settings.alignment_guide_count > 0 then
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Guide Appearance:")
+ 
+ if r.ImGui_BeginTable(ctx, "AlignmentGuideAppearance", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Line Thickness")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.alignment_guide_thickness = r.ImGui_SliderInt(ctx, "##GuideThickness", settings.alignment_guide_thickness or 1, 1, 5)
+ if rv then MarkTransportPresetChanged() end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Color")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
+ rv, settings.alignment_guide_color = r.ImGui_ColorEdit4(ctx, "##GuideColor", settings.alignment_guide_color or 0x00FFFF88, color_flags)
+ if rv then MarkTransportPresetChanged() end
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Guide Positions (Y position as fraction of window height):")
+ r.ImGui_Spacing(ctx)
+ 
+ for i = 1, settings.alignment_guide_count do
+ local key = "alignment_guide_" .. i .. "_y"
+ settings[key] = settings[key] or (i * 0.2)
+ 
+ r.ImGui_PushID(ctx, "guide_" .. i)
+ r.ImGui_Text(ctx, "Guide " .. i .. ":")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ rv, settings[key] = r.ImGui_SliderDouble(ctx, "##GuideY", settings[key], 0.0, 1.0, "%.3f")
+ if rv then MarkTransportPresetChanged() end
+ 
+ r.ImGui_SameLine(ctx)
+ local guide_y_px = math.floor(settings[key] * main_window_height)
+ r.ImGui_Text(ctx, string.format("(%d px)", guide_y_px))
+ 
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Set to 0.00") then
+ settings[key] = 0.0
+ MarkTransportPresetChanged()
+ end
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Set to 0.50") then
+ settings[key] = 0.5
+ MarkTransportPresetChanged()
+ end
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Set to 1.00") then
+ settings[key] = 1.0
+ MarkTransportPresetChanged()
+ end
+ 
+ r.ImGui_PopID(ctx)
+ end
+ end
  end
  else
  ShowComponentSettings(ctx, main_window_width, main_window_height)
@@ -11184,8 +11284,26 @@ function Main()
  local dx_px = mx - (overlay_drag_last_x or mx)
  local dy_px = my - (overlay_drag_last_y or my)
  if snap then
+ local snap_mode = settings.edit_snap_mode or "step"
+ if snap_mode == "step" then
+ -- Original behavior: move by grid step size
  dx_px = math.floor((dx_px + grid_px/2) / grid_px) * grid_px
  dy_px = math.floor((dy_px + grid_px/2) / grid_px) * grid_px
+ elseif snap_mode == "magnetic" then
+ -- New behavior: snap element position to nearest grid line
+ -- Calculate current element position relative to window
+ local elem_x = sx1 - wx
+ local elem_y = sy1 - wy
+ -- Calculate new position after mouse movement
+ local new_elem_x = elem_x + dx_px
+ local new_elem_y = elem_y + dy_px
+ -- Snap to nearest grid line
+ local snapped_x = math.floor((new_elem_x + grid_px/2) / grid_px) * grid_px
+ local snapped_y = math.floor((new_elem_y + grid_px/2) / grid_px) * grid_px
+ -- Calculate delta to reach snapped position
+ dx_px = snapped_x - elem_x
+ dy_px = snapped_y - elem_y
+ end
  end
  if dx_px ~= 0 or dy_px ~= 0 then
  ondrag(dx_px, dy_px, dx_px / ww, dy_px / wh)
@@ -11236,6 +11354,32 @@ function Main()
  end
  end
  end
+ 
+ -- Draw alignment guides in edit mode
+ if settings.edit_mode and settings.show_alignment_guides and settings.alignment_guide_count and settings.alignment_guide_count > 0 then
+ local dl = r.ImGui_GetWindowDrawList(ctx)
+ local wx, wy = r.ImGui_GetWindowPos(ctx)
+ local ww, wh = r.ImGui_GetWindowSize(ctx)
+ local color = settings.alignment_guide_color or 0x00FFFF88
+ local thickness = settings.alignment_guide_thickness or 1
+ 
+ for i = 1, settings.alignment_guide_count do
+ local key = "alignment_guide_" .. i .. "_y"
+ local guide_y_frac = settings[key] or (i * 0.2)
+ local guide_y = wy + (guide_y_frac * wh)
+ 
+ r.ImGui_DrawList_AddLine(dl, wx, guide_y, wx + ww, guide_y, color, thickness)
+ 
+ -- Optionally add label at the start of the line
+ if settings.alignment_guide_show_labels ~= false then
+ local label = string.format("G%d", i)
+ local label_x = wx + 5
+ local label_y = guide_y - 10
+ r.ImGui_DrawList_AddText(dl, label_x, label_y, color, label)
+ end
+ end
+ end
+ 
  ShowSettings(main_window_width, main_window_height)
  ShowInstanceManager()
  
@@ -11259,6 +11403,27 @@ function Main()
  local changed
  changed, settings.edit_snap_to_grid = r.ImGui_MenuItem(ctx, "Snap to Grid", nil, settings.edit_snap_to_grid or false)
  if changed then SaveSettings() end
+ 
+ if settings.edit_snap_to_grid then
+ r.ImGui_Indent(ctx, 20)
+ local snap_mode = settings.edit_snap_mode or "step"
+ if r.ImGui_RadioButton(ctx, "Move by Grid Steps", snap_mode == "step") then
+ settings.edit_snap_mode = "step"
+ SaveSettings()
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, "Move elements in fixed grid-size steps")
+ end
+ if r.ImGui_RadioButton(ctx, "Snap to Grid Lines", snap_mode == "magnetic") then
+ settings.edit_snap_mode = "magnetic"
+ SaveSettings()
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, "Element snaps to nearest grid line (magnetic)")
+ end
+ r.ImGui_Unindent(ctx, 20)
+ end
+ 
  changed, settings.edit_grid_show = r.ImGui_MenuItem(ctx, "Show Grid", nil, settings.edit_grid_show or false)
  if changed then SaveSettings() end
  

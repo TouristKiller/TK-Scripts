@@ -196,13 +196,14 @@ local function round_to_grid(px, grid)
     return px
 end
 
-local function draw_grid(ctx, color, grid_px)
+local function draw_grid(ctx, color, grid_px, snap_mode)
     local dl = r.ImGui_GetWindowDrawList(ctx)
     local x0, y0 = r.ImGui_GetWindowPos(ctx)
     local w, h = r.ImGui_GetWindowSize(ctx)
     local right = x0 + w
     local bottom = y0 + h
     if grid_px < 2 then return end
+    
     local x = x0
     while x <= right do
         r.ImGui_DrawList_AddLine(dl, x, y0, x, bottom, color)
@@ -222,10 +223,11 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
     
     local edit_mode = settings and settings.edit_mode
     local snap = settings and settings.edit_snap_to_grid
+    local snap_mode = settings and settings.edit_snap_mode
     local grid_px = settings and (settings.edit_grid_size_px or 16) or 16
     local grid_color = settings and (settings.edit_grid_color or 0xFFFFFF22) or 0xFFFFFF22
     if edit_mode and settings and settings.edit_grid_show then
-        draw_grid(ctx, grid_color, grid_px)
+        draw_grid(ctx, grid_color, grid_px, snap and snap_mode or nil)
     end
     local x_offset = custom_buttons.x_offset or 0  
     local y_offset = custom_buttons.y_offset or 0  
@@ -1029,7 +1031,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                                     end
                                     
                                     b.position_px = math.max(0, math.min(clamp_w, (b.position_px or 0) + dx_ref))
-                                    b.position_y_px = math.max(0, math.min(clamp_h, (b.position_y_px or math.floor(0.15 * clamp_h)) + dy_ref))
+                                    b.position_y_px = math.max(-20, math.min(clamp_h, (b.position_y_px or math.floor(0.15 * clamp_h)) + dy_ref))
                                     
                                     b.position = b.position_px / clamp_w
                                     b.position_y = b.position_y_px / clamp_h
@@ -1044,7 +1046,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                             end
                             
                             button.position_px = math.max(0, math.min(clamp_w, (button.position_px or 0) + dx_ref))
-                            button.position_y_px = math.max(0, math.min(clamp_h, (button.position_y_px or math.floor(0.15 * clamp_h)) + dy_ref))
+                            button.position_y_px = math.max(-20, math.min(clamp_h, (button.position_y_px or math.floor(0.15 * clamp_h)) + dy_ref))
                             
                             button.position = button.position_px / clamp_w
                             button.position_y = button.position_y_px / clamp_h
