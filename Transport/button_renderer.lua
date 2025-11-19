@@ -1011,8 +1011,23 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                     local dx = mx - (ButtonRenderer.last_mx or mx)
                     local dy = my - (ButtonRenderer.last_my or my)
                     if snap then
-                        dx = round_to_grid(dx, grid_px) - round_to_grid(0, grid_px)
-                        dy = round_to_grid(dy, grid_px) - round_to_grid(0, grid_px)
+                        local snap_mode = settings and settings.edit_snap_mode or "step"
+                        if snap_mode == "step" then
+                            -- Original behavior: move by grid step size
+                            dx = round_to_grid(dx, grid_px) - round_to_grid(0, grid_px)
+                            dy = round_to_grid(dy, grid_px) - round_to_grid(0, grid_px)
+                        elseif snap_mode == "magnetic" then
+                            -- New behavior: snap element position to nearest grid line
+                            local wx, wy = r.ImGui_GetWindowPos(ctx)
+                            local elem_x = min_x - wx
+                            local elem_y = min_y - wy
+                            local new_elem_x = elem_x + dx
+                            local new_elem_y = elem_y + dy
+                            local snapped_x = math.floor((new_elem_x + grid_px/2) / grid_px) * grid_px
+                            local snapped_y = math.floor((new_elem_y + grid_px/2) / grid_px) * grid_px
+                            dx = snapped_x - elem_x
+                            dy = snapped_y - elem_y
+                        end
                     end
                     if dx ~= 0 or dy ~= 0 then
                         local dx_ref = dx / (scale_w ~= 0 and scale_w or 1)

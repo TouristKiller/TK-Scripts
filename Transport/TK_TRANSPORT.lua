@@ -1,13 +1,8 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.7
+-- @version 1.3.8
 -- @changelog 
 --[[
-Removed widgets tab from settings menu (Widgets are obsolete)
-Added window transparency setting
-Added snap to Reaper transport and TCP offsets
-Added topmost window option
-Fixed button border view (there was an issue where borders wouldn't show correctly with transparent buttons
 
   ]]--
 ---------------------------------------------------------------------------------------------
@@ -9887,6 +9882,10 @@ function ShowColorPicker(main_window_width, main_window_height)
  r.ImGui_SetCursorScreenPos(ctx, screen_x + total_width, screen_y + total_height)
  r.ImGui_Dummy(ctx, 0, 0)
  
+ -- Store the full color picker rect for edit mode overlay
+ local wx, wy = r.ImGui_GetWindowPos(ctx)
+ StoreElementRectUnion("color_picker", screen_x, screen_y, screen_x + total_width, screen_y + total_height)
+ 
  if r.ImGui_BeginPopup(ctx, "ColorPickerTargetMenu") then
  r.ImGui_Text(ctx, "Apply color to:")
  r.ImGui_Separator(ctx)
@@ -9912,8 +9911,6 @@ function ShowColorPicker(main_window_width, main_window_height)
  end
  r.ImGui_EndPopup(ctx)
  end
- 
- StoreElementRect("color_picker")
 end
 
 local function SetProjectTempoGlobal(new_tempo)
