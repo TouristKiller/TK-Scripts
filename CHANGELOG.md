@@ -2,6 +2,24 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [2.0.9] - 2025-11-20
+
+### TK_ChordGun
+#### Toegevoegd
+- **Melody Generator**: Nieuwe functie om willekeurige melodieën te genereren op basis van de akkoordprogressie.
+- **Melody Settings**: Rechtsklik-menu op de Melody knop voor instellingen:
+  - **Rhythm Density**: Slow, Normal, Fast.
+  - **Octave Range**: Low, Mid, High.
+  - **Note Selection**: Chord Tones Only of Include Scale Notes.
+- **Preset Verbeteringen**: Presets slaan nu ook de **Scale** en **Tonic** op, zodat deze correct worden hersteld bij het laden.
+
+#### Gewijzigd
+- **Export to Chord Track**:
+  - Track wordt nu onderaan het project toegevoegd (behoudt tracknummering).
+  - Track wordt automatisch **vastgepind bovenaan** (Lock to top).
+  - Track height en items worden vergrendeld (Locked).
+- **UI**: Melody knop verplaatst naar de tweede rij (naast Ratio) voor betere indeling.
+
 ## Ongeversioneerd (werk in uitvoering)
 
 ### Toegevoegd

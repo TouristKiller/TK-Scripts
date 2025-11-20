@@ -256,15 +256,28 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.0.8" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-20T13:40:00Z">
+      <version name="2.1.0" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-20T20:30:00Z">
         <changelog><![CDATA[
-2.0.6
-+ Added "Export to Chord Track" (Right-click Insert button): Creates a new track with empty items containing chord names
-+ Added "Export to Project Regions" (Right-click Insert button): Creates project regions named after chords
+2.1.0
++ Added "Chromatic" view to Circle of Fifths window (visualizes symmetry of Messiaen modes)
++ Added "Equivalent Tonic" indicators (Halo rings) in Chromatic view to show limited transpositions
++ Added Interval Pattern display to chord tooltips (shows steps and cumulative intervals for Messiaen modes)
++ Added Power Chord (C5) recognition (supports 2-note chords)
++ Added Melody Generator: Create random melodies based on chord progression (Melody button)
++ Added Melody Settings (Right-click Melody button): Rhythm Density, Octave Range, Note Selection
++ Improved Export to Chord Track: Pins track to top, locks height/items, adds to bottom of project
++ Improved Presets: Now saves/loads Scale Tonic and Scale Type with the progression
++ Added "Export to Project Regions" (Right-click Insert button)
 + Added support for running script from Main section (Arrange View) without active MIDI Editor
 + Added automatic MIDI item creation if no item is selected when inserting chords
 + Added Font Scale menu options (Small=1.0, Normal=1.25, Big=1.5, Bigger=1.75)
 + Added "Ratio" menu options (fixed ratio between width and height for non-distorted scaling)
++ Fixed Inversion logic (prevented compounding inversions)
++ Fixed MIDI Input sorting (chronological order for better chord detection)
++ Fixed Melody Generator dissonance (weighted probability for scale notes)
++ Added "Bass" feature: Add root note 1 or 2 octaves lower (Cycle button: Off, -1, -2)
++ UI improvements: Reorganized bottom row buttons, polished Chromatic View (dots), restored Fifths View Legend
++ UI improvements (Right-side button layout, dynamic Chord Display width)
 
 2.0.3 
 + Fixed bug where scale pattern could be nil during chord recognition, causing crashes (mini)

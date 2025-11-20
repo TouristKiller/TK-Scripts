@@ -1,22 +1,35 @@
--- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
+﻿-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.0.8
+-- @version 2.1.0
 -- @changelog
 --[[
-2.0.8
-+ Added "Export to Chord Track" (Right-click Insert button): Creates a new track with empty items containing chord names
-+ Added "Export to Project Regions" (Right-click Insert button): Creates project regions named after chords
+2.1.0
++ Added "Chromatic" view to Circle of Fifths window (visualizes symmetry of Messiaen modes)
++ Added "Equivalent Tonic" indicators (Halo rings) in Chromatic view to show limited transpositions
++ Added Interval Pattern display to chord tooltips (shows steps and cumulative intervals for Messiaen modes)
++ Added Power Chord (C5) recognition (supports 2-note chords)
++ Added Melody Generator: Create random melodies based on chord progression (Melody button)
++ Added Melody Settings (Right-click Melody button): Rhythm Density, Octave Range, Note Selection
++ Improved Export to Chord Track: Pins track to top, locks height/items, adds to bottom of project
++ Improved Presets: Now saves/loads Scale Tonic and Scale Type with the progression
++ Added "Export to Project Regions" (Right-click Insert button)
 + Added support for running script from Main section (Arrange View) without active MIDI Editor
 + Added automatic MIDI item creation if no item is selected when inserting chords
 + Added Font Scale menu options (Small=1.0, Normal=1.25, Big=1.5, Bigger=1.75)
 + Added "Ratio" menu options (fixed ratio between width and height for non-distorted scaling)
++ Fixed Inversion logic (prevented compounding inversions)
++ Fixed MIDI Input sorting (chronological order for better chord detection)
++ Fixed Melody Generator dissonance (weighted probability for scale notes)
++ Added "Bass" feature: Add root note 1 or 2 octaves lower (Cycle button: Off, -1, -2)
++ UI improvements: Reorganized bottom row buttons, polished Chromatic View (dots), restored Fifths View Legend
++ UI improvements (Right-side button layout, dynamic Chord Display width)
 
 2.0.3 
 + Fixed bug where scale pattern could be nil during chord recognition, causing crashes (mini)
 
 2.0.0
 + Added comprehensive scale library with 87 scales across 7 systems
-+ Two-level dropdown system: Scale System → Scale Type
++ Two-level dropdown system: Scale System â†’ Scale Type
 + Scale systems: Diatonic (11), Pentatonic (6), Messiaen (32), Jazz (10), World Music (12), Blues & Soul (8), Rock & Metal (8)
 + Educational tooltips for all scales (description + interval patterns)
 + World Music: Arabic/Middle Eastern (Hijaz, Persian, Double Harmonic), Japanese (Hirajoshi, In Sen, Iwato), Indian Ragas (Bhairav, Kafi), Hungarian/Gypsy scales
@@ -118,30 +131,30 @@ Original ChordGun: https://github.com/benjohnson2001/ChordGun
 baseWidth = 775
 baseHeight = 800
 
--- Calculate dynamic width based on number of scale notes
+
 function getDynamicBaseWidth()
   local numScaleNotes = #scaleNotes
   if numScaleNotes <= 7 then
-    return 775  -- Default width for 7 or fewer notes
+    return 775
   else
-    -- Add width for each additional column (button 104 + spacing 2*2 + margin)
+
     local extraColumns = numScaleNotes - 7
-    return 775 + (extraColumns * 112)  -- ~112px per extra column (was 110)
+    return 775 + (extraColumns * 112)
   end
 end
 
-local fontScale = tonumber(reaper.GetExtState("TK_ChordGun", "fontScale")) or 1.25  -- Multiplier for UI text size
+local fontScale = tonumber(reaper.GetExtState("TK_ChordGun", "fontScale")) or 1.25
 
 local function fontSize(value)
   return math.floor((s(value) * fontScale) + 0.5)
 end
 
 local function applyDefaultFont()
-  -- Check of de gebruiker Monospace aan heeft staan (opgeslagen in ExtState)
+
   local useMono = reaper.GetExtState("TK_ChordGun", "useMonospaceFont") == "1"
 
   if useMono then
-    -- Monospace logica (Cross-platform + Bold)
+
     local os = reaper.GetOS()
     local fontName = "Courier New"
     
@@ -152,15 +165,15 @@ local function applyDefaultFont()
     else
       fontName = "DejaVu Sans Mono"
     end
-    -- 'b' flag voor vetgedrukt (scherper op schermen)
+
     gfx.setfont(1, fontName, fontSize(14), string.byte('b')) 
   else
-    -- Standaard Arial
+
     gfx.setfont(1, "Arial", fontSize(15))
   end
 end
 
--- Horizontal scaling (width-based)
+
 function sx(value)
 	if gfx.w == 0 then
 		return value * 2.0
@@ -170,7 +183,7 @@ function sx(value)
   return math.floor((value * scaleX) + 0.5)
 end
 
--- Vertical scaling (height-based)
+
 function sy(value)
 	if gfx.h == 0 then
 		return value * 2.0
@@ -179,7 +192,7 @@ function sy(value)
   return math.floor((value * scaleY) + 0.5)
 end
 
--- Unified scaling (average - for backward compatibility)
+
 function s(value)
 	if gfx.w == 0 or gfx.h == 0 then
 		return value * 2.0
@@ -272,7 +285,7 @@ chords = {
   },
 }
 
--- Tooltip queue for rendering on top of all elements
+
 local pendingTooltips = {}
 
 function queueTooltip(text, x, y)
@@ -282,7 +295,7 @@ end
 function renderPendingTooltips()
 	if pendingTooltips.text then
 		drawTooltip(pendingTooltips.text, pendingTooltips.x, pendingTooltips.y)
-		pendingTooltips = {}  -- Clear after rendering
+		pendingTooltips = {}
 	end
 end
 
@@ -297,23 +310,23 @@ function mouseIsHoveringOver(element)
 end
 
 function drawTooltip(text, x, y)
-	-- Draw tooltip box near cursor
+
 	local padding = s(6)
 	local offsetX = s(12)
 	local offsetY = s(12)
 	
-	-- Measure text
+
   gfx.setfont(1, "Arial", fontSize(12))
 	local textWidth, textHeight = gfx.measurestr(text)
 	
 	local boxWidth = textWidth + padding * 2
 	local boxHeight = textHeight + padding * 2
 	
-	-- Position tooltip offset from cursor
+
 	local tooltipX = x + offsetX
 	local tooltipY = y + offsetY
 	
-	-- Keep tooltip on screen
+
 	if tooltipX + boxWidth > gfx.w then
 		tooltipX = x - boxWidth - offsetX
 	end
@@ -321,15 +334,15 @@ function drawTooltip(text, x, y)
 		tooltipY = y - boxHeight - offsetY
 	end
 	
-	-- Draw background
+
 	gfx.set(0.1, 0.1, 0.1, 0.95)
 	gfx.rect(tooltipX, tooltipY, boxWidth, boxHeight, 1)
 	
-	-- Draw border
-	gfx.set(1, 0.84, 0, 1)  -- Gold border
+
+	gfx.set(1, 0.84, 0, 1)
 	gfx.rect(tooltipX, tooltipY, boxWidth, boxHeight, 0)
 	
-	-- Draw text
+
 	gfx.set(1, 1, 1, 1)
 	gfx.x = tooltipX + padding
 	gfx.y = tooltipY + padding
@@ -425,7 +438,7 @@ defaultChordTextValue = ""
 defaultSelectedScaleNote = 1
 defaultOctave = 3
 
--- Initialize with 12 slots (max possible scale notes)
+
 defaultSelectedChordTypes = {}
 for i = 1, 12 do
   table.insert(defaultSelectedChordTypes, 1)
@@ -443,7 +456,7 @@ defaultNotesThatArePlaying = {}
 defaultDockState = 0
 defaultWindowShouldBeDocked = tostring(false)
 
-local defaultUiScale = 1.5  -- Used as initial window multiplier before the user resizes manually
+local defaultUiScale = 1.5
 interfaceWidth = baseWidth * defaultUiScale
 interfaceHeight = baseHeight * defaultUiScale
 
@@ -499,29 +512,37 @@ local function getValue(key, defaultValue)
   return value
 end
 
--- Strum mode variables (global scope zodat ze overal toegankelijk zijn)
-local strumEnabled = false
-local strumDelayMs = 80  -- Milliseconds between each note in strum
 
--- Tooltip mode variable
+local strumEnabled = false
+local strumDelayMs = 80
+local bassMode = 0
+
+
+local melodySettings = {
+  density = 2,
+  octave = 5,
+  useScaleNotes = false
+}
+
+
 local tooltipsEnabled = false
 
--- Live scale filter state
-local scaleFilterGmemBlock = "TKChordGunFilter"
-local scaleFilterMode = tonumber(getValue("scaleFilterMode", "0")) or 0  -- 0=off, 1=filter, 2=remap
 
--- Chord Progression variables
-local chordProgression = {}  -- Array van {scaleNoteIndex, chordTypeIndex, text, beats, repeats}
+local scaleFilterGmemBlock = "TKChordGunFilter"
+local scaleFilterMode = tonumber(getValue("scaleFilterMode", "0")) or 0
+
+
+local chordProgression = {}
 local maxProgressionSlots = 8
 local progressionPlaying = false
 local currentProgressionIndex = 0
-local currentProgressionRepeat = 0  -- Current repeat count for active slot
-local progressionBeatsPerChord = 1  -- Beats per chord (1, 2, or 4)
+local currentProgressionRepeat = 0
+local progressionBeatsPerChord = 1
 local progressionLastBeatTime = 0
-local selectedProgressionSlot = nil  -- Tracks which slot is selected for editing
-local progressionLength = 8  -- How many slots to loop (1-8)
+local selectedProgressionSlot = nil
+local progressionLength = 8
 
--- Forward declarations for MIDI helper functions so earlier code can call them
+
 local pruneInternalNoteEvents
 local registerInternalNoteEvent
 local consumeInternalNoteEvent
@@ -571,7 +592,7 @@ end
 local function updateScaleFilterState()
   if not reaper.gmem_attach or not reaper.gmem_write then return end
   if not reaper.gmem_attach(scaleFilterGmemBlock) then return end
-  reaper.gmem_write(0, scaleFilterMode)  -- Write mode: 0=off, 1=filter, 2=remap
+  reaper.gmem_write(0, scaleFilterMode)
   for i = 0, 11 do
     local noteIndex = i + 1
     local allowed = (scalePattern and scalePattern[noteIndex]) and 1 or 0
@@ -597,35 +618,49 @@ local function getScaleFilterModeText()
   end
 end
 
--- Chord Recognition Functions
+
 local recognizedChord = ""
-local chordInputNotes = {}  -- Our own simple MIDI tracking
-local lastInputIdx = nil  -- Start as nil to initialize on first call
+local chordInputNotes = {}
+local lastInputIdx = nil
 
 local function updateChordInputTracking()
-  -- Simple MIDI input tracking using MIDI_GetRecentInputEvent
+
   if not reaper.MIDI_GetRecentInputEvent then return end
   
   local currentIdx = reaper.MIDI_GetRecentInputEvent(0)
   if not currentIdx then return end
   
-  -- Initialize: skip all existing events on first call
+
   if lastInputIdx == nil then
     lastInputIdx = currentIdx
-    chordInputNotes = {}  -- Clear any old notes
+    chordInputNotes = {}
     return
   end
   
-  if currentIdx == lastInputIdx then return end  -- No new events
+  if currentIdx == lastInputIdx then return end
   
-  -- Process new events
+
+
+  local eventsToProcess = {}
   local i = 0
-  local maxIterations = 100  -- Safety limit
+  local maxIterations = 100
+  
   repeat
     local eventIdx, eventBuf = reaper.MIDI_GetRecentInputEvent(i)
     if not eventIdx then break end
     if eventIdx <= lastInputIdx then break end
     
+    table.insert(eventsToProcess, {idx = eventIdx, buf = eventBuf})
+    
+    i = i + 1
+  until i >= maxIterations
+  
+
+  table.sort(eventsToProcess, function(a, b) return a.idx < b.idx end)
+  
+
+  for _, event in ipairs(eventsToProcess) do
+    local eventBuf = event.buf
     if eventBuf and #eventBuf >= 3 then
       local msg1 = string.byte(eventBuf, 1)
       local msg2 = string.byte(eventBuf, 2)
@@ -641,23 +676,21 @@ local function updateChordInputTracking()
         chordInputNotes[msg2] = nil
       end
     end
-    
-    i = i + 1
-  until i >= maxIterations
+  end
   
   lastInputIdx = currentIdx
 end
 
 local function getActiveExternalNotes()
-  -- Use our simple tracking
+
   local notes = {}
   for note, _ in pairs(chordInputNotes) do
-    -- If Remap mode is active, translate white keys to their scale equivalents
+
     local noteToAnalyze = note
-    if scaleFilterMode == 2 and scalePattern then  -- Remap mode
+    if scaleFilterMode == 2 and scalePattern then
       local noteInOctave = note % 12
-      -- Check if this is a white key
-      local whiteKeys = {0, 2, 4, 5, 7, 9, 11}  -- C, D, E, F, G, A, B
+
+      local whiteKeys = {0, 2, 4, 5, 7, 9, 11}
       local isWhiteKey = false
       local whiteKeyIndex = 0
       for i, wk in ipairs(whiteKeys) do
@@ -668,18 +701,18 @@ local function getActiveExternalNotes()
         end
       end
       
-      -- Map white key to scale note
+
       if isWhiteKey then
-        -- Build array of scale notes from scalePattern (1-indexed in Lua)
+
         local scaleNotes = {}
         for i = 1, 12 do
           if scalePattern[i] then
-            -- scalePattern[i] corresponds to note (i-1) in chromatic scale
-            table.insert(scaleNotes, i - 1)  -- Convert to 0-indexed MIDI note
+
+            table.insert(scaleNotes, i - 1)
           end
         end
         
-        -- Map white key index to scale note
+
         if scaleNotes[whiteKeyIndex] then
           local octave = math.floor(note / 12)
           noteToAnalyze = scaleNotes[whiteKeyIndex] + (octave * 12)
@@ -693,9 +726,9 @@ local function getActiveExternalNotes()
 end
 
 local function analyzeChord(midiNotes)
-  if #midiNotes < 3 then return nil end  -- Need at least 3 notes for a chord
+  if #midiNotes < 2 then return nil end
   
-  -- Convert to note classes (0-11) and remove octave info
+
   local noteClasses = {}
   local noteClassSet = {}
   for _, note in ipairs(midiNotes) do
@@ -707,10 +740,11 @@ local function analyzeChord(midiNotes)
   end
   table.sort(noteClasses)
   
-  if #noteClasses < 3 then return nil end
+  if #noteClasses < 2 then return nil end
   
-  -- Chord patterns: {name, intervals from root}
+
   local chordPatterns = {
+    {name = "5", pattern = {0, 7}},
     {name = "maj", pattern = {0, 4, 7}},
     {name = "min", pattern = {0, 3, 7}},
     {name = "dim", pattern = {0, 3, 6}},
@@ -726,19 +760,19 @@ local function analyzeChord(midiNotes)
     {name = "min9", pattern = {0, 2, 3, 7, 10}},
   }
   
-  -- Try each note as potential root
+
   local bestMatch = nil
   local bestScore = 0
   
   for _, rootNote in ipairs(noteClasses) do
-    -- Normalize intervals relative to root
+
     local intervals = {}
     for _, note in ipairs(noteClasses) do
       table.insert(intervals, (note - rootNote + 12) % 12)
     end
     table.sort(intervals)
     
-    -- Match against patterns
+
     for _, chordDef in ipairs(chordPatterns) do
       local pattern = chordDef.pattern
       if #intervals >= #pattern then
@@ -753,11 +787,11 @@ local function analyzeChord(midiNotes)
         end
         
         local score = matches
-        -- Prefer chords where root is in scale
+
         if scalePattern and scalePattern[(rootNote % 12) + 1] then
           score = score + 0.5
         end
-        -- Prefer chords where root is the bass note (lowest MIDI note)
+
         if rootNote == (midiNotes[1] % 12) then
           score = score + 1
         end
@@ -776,38 +810,38 @@ end
 local function getChordName(chordAnalysis)
   if not chordAnalysis then return "" end
   
-  -- Get enharmonic note name (sharp vs flat) based on scale context
+
   local function getNoteName(noteClass)
     local sharpNames = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
     local flatNames = {"C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"}
     
-    -- If we have a scale pattern, prefer flats for flat keys
+
     if scalePattern then
-      -- Count sharps vs flats in scale
-      local hasFlats = scalePattern[2] or scalePattern[4] or scalePattern[9] or scalePattern[11]  -- Db, Eb, Ab, Bb
+
+      local hasFlats = scalePattern[2] or scalePattern[4] or scalePattern[9] or scalePattern[11]
       if hasFlats then
         return flatNames[noteClass + 1]
       end
     end
     
-    -- Default to sharps (or use notes array if it exists)
+
     return notes and notes[noteClass + 1] or sharpNames[noteClass + 1]
   end
   
   local rootName = getNoteName(chordAnalysis.root)
   local chordType = chordAnalysis.chord
   
-  -- Format chord name
+
   local chordName = rootName
   if chordType == "maj" then
-    -- Major is implicit, no suffix needed
+
   elseif chordType == "min" then
     chordName = chordName .. "m"
   else
     chordName = chordName .. chordType
   end
   
-  -- Add slash chord notation if bass is different
+
   if chordAnalysis.bass ~= chordAnalysis.root then
     local bassName = getNoteName(chordAnalysis.bass)
     chordName = chordName .. "/" .. bassName
@@ -817,30 +851,40 @@ local function getChordName(chordAnalysis)
 end
 
 local function updateChordRecognition()
-  updateChordInputTracking()  -- Update our MIDI tracking first
+  updateChordInputTracking()
   
   local activeNotes = getActiveExternalNotes()
   
-  -- Show debug: how many notes detected
+
   if #activeNotes == 0 then
     recognizedChord = ""
     return
   end
   
-  if #activeNotes >= 3 then
+  if #activeNotes >= 2 then
     local chordAnalysis = analyzeChord(activeNotes)
     if chordAnalysis then
       local chordName = getChordName(chordAnalysis)
       if chordName and chordName ~= "" then
         recognizedChord = chordName
       else
-        recognizedChord = "Notes: " .. #activeNotes
+
+        local noteNames = {}
+        for _, note in ipairs(activeNotes) do
+          table.insert(noteNames, notes[(note % 12) + 1])
+        end
+        recognizedChord = table.concat(noteNames, " ")
       end
     else
-      recognizedChord = "Notes: " .. #activeNotes
+
+      local noteNames = {}
+      for _, note in ipairs(activeNotes) do
+        table.insert(noteNames, notes[(note % 12) + 1])
+      end
+      recognizedChord = table.concat(noteNames, " ")
     end
   elseif #activeNotes >= 1 then
-    -- Show individual notes if less than 3
+
     local noteNames = {}
     for _, note in ipairs(activeNotes) do
       table.insert(noteNames, notes[(note % 12) + 1])
@@ -887,11 +931,11 @@ end
 
 --
 
--- Scale System functions (for two-level dropdown)
+
 function getScaleSystemIndex()
   local index = tonumber(reaper.GetExtState("TKChordGun", "scaleSystem"))
   if not index or index < 1 or index > #scaleSystems then
-    return 1  -- Default to first system
+    return 1
   end
   return index
 end
@@ -904,10 +948,10 @@ function getScaleWithinSystemIndex()
   local systemIndex = getScaleSystemIndex()
   local index = tonumber(reaper.GetExtState("TKChordGun", "scaleWithinSystem"))
   
-  -- Validate index is within range for current system
+
   local system = scaleSystems[systemIndex]
   if not index or index < 1 or not system or index > #system.scales then
-    return 1  -- Default to first scale in system
+    return 1
   end
   return index
 end
@@ -916,7 +960,7 @@ function setScaleWithinSystemIndex(index)
   reaper.SetExtState("TKChordGun", "scaleWithinSystem", tostring(index), true)
 end
 
--- Convert system+scale indices to flat scale index (for backwards compatibility)
+
 function getScaleIndexFromSystemIndices(systemIndex, scaleIndex)
   local flatIndex = 0
   for i = 1, systemIndex - 1 do
@@ -925,7 +969,7 @@ function getScaleIndexFromSystemIndices(systemIndex, scaleIndex)
   return flatIndex + scaleIndex
 end
 
--- Convert flat scale index to system+scale indices
+
 function getSystemIndicesFromScaleIndex(scaleIndex)
   local currentIndex = 0
   for systemIdx, system in ipairs(scaleSystems) do
@@ -936,7 +980,7 @@ function getSystemIndicesFromScaleIndex(scaleIndex)
       end
     end
   end
-  return 1, 1  -- Default to first scale
+  return 1, 1
 end
 
 --
@@ -1162,7 +1206,7 @@ function setInterfaceHeight(arg)
   setPersistentNumber(interfaceHeightKey, arg)
 end
 
--- Note length options for inserted MIDI
+
 local noteLengthOptions = {
   {label = "Grid", qn = nil},
   {label = "1/32", qn = 0.125},
@@ -1244,7 +1288,7 @@ scaleType = getScaleType()
 
 guiShouldBeUpdated = false
 
--- Scale Systems: Organized by category for two-level dropdown
+
 scaleSystems = {
   {
     name = "Diatonic",
@@ -1293,11 +1337,11 @@ scaleSystems = {
   {
     name = "Messiaen",
     scales = {
-      -- Mode 1: Whole Tone (6 notes, 1 transposition)
+
       { name = "Mode 1", pattern = "101010101010", isCustom = true, intervals = "2-2-2-2-2-2",
         description = "Hexatonic (6 notes) - Whole Tone Scale\nDreamy, floating, ambiguous | Debussy's favorite\nSymmetrical: divides octave into 6 equal parts" },
       
-      -- Mode 2: Octatonic / Half-Whole Diminished (8 notes, 3 transpositions)
+
       { name = "Mode 2.1", pattern = "110110110110", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
         description = "Octatonic (8 notes) - Half-Whole Diminished\nJazz/classical favorite | Rich chord possibilities\nAlternates half and whole steps (1st transposition)" },
       { name = "Mode 2.2", pattern = "101101101101", isCustom = true, intervals = "2-1-2-1-2-1-2-1",
@@ -1305,7 +1349,7 @@ scaleSystems = {
       { name = "Mode 2.3", pattern = "011011011011", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
         description = "Octatonic (8 notes) - Half-Whole Diminished\n3rd and final transposition of Mode 2\nSymmetrical: repeats every minor 3rd" },
       
-      -- Mode 3: (9 notes, 4 transpositions)
+
       { name = "Mode 3.1", pattern = "101110110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
         description = "Nonatonic (9 notes) - Dense, chromatic\nRepeating 2-1-1 pattern | Very colorful\n1st transposition of 4 possible" },
       { name = "Mode 3.2", pattern = "110111011011", isCustom = true, intervals = "1-1-2-1-1-2-1-1-2",
@@ -1315,7 +1359,7 @@ scaleSystems = {
       { name = "Mode 3.4", pattern = "101101110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
         description = "Nonatonic (9 notes) - Dense, chromatic\n4th and final transposition of Mode 3\nRich harmonic palette for composition" },
       
-      -- Mode 4: (8 notes, 6 transpositions)
+
       { name = "Mode 4.1", pattern = "110001110001", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
         description = "Octatonic (8 notes) - Exotic, Eastern flavor\nRepeating 1-1-3-1 pattern | 1st transposition\nUsed for mysterious, otherworldly sounds" },
       { name = "Mode 4.2", pattern = "100011100011", isCustom = true, intervals = "1-3-1-1-1-3-1-1",
@@ -1329,7 +1373,7 @@ scaleSystems = {
       { name = "Mode 4.6", pattern = "111000111000", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
         description = "Octatonic (8 notes) - Exotic, Eastern flavor\n6th and final transposition of Mode 4\nComplete the symmetrical cycle" },
       
-      -- Mode 5: (6 notes, 6 transpositions)
+
       { name = "Mode 5.1", pattern = "110001000011", isCustom = true, intervals = "1-4-1-1-4-1",
         description = "Hexatonic (6 notes) - Wide intervals, sparse\nRepeating 1-4-1 pattern | 1st transposition\nOpen, spacious sound with dramatic leaps" },
       { name = "Mode 5.2", pattern = "100010000111", isCustom = true, intervals = "4-1-1-4-1-1",
@@ -1343,7 +1387,7 @@ scaleSystems = {
       { name = "Mode 5.6", pattern = "100011100010", isCustom = true, intervals = "1-1-4-1-1-4",
         description = "Hexatonic (6 notes) - Wide intervals, sparse\n6th and final transposition of Mode 5\nCompletes the hexatonic cycle" },
       
-      -- Mode 6: (8 notes, 6 transpositions)
+
       { name = "Mode 6.1", pattern = "101011010110", isCustom = true, intervals = "2-2-1-1-2-2-1-1",
         description = "Octatonic (8 notes) - Balanced, versatile\nRepeating 2-2-1-1 pattern | 1st transposition\nBlends whole tone and chromatic elements" },
       { name = "Mode 6.2", pattern = "010110101101", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
@@ -1357,7 +1401,7 @@ scaleSystems = {
       { name = "Mode 6.6", pattern = "101011011010", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
         description = "Octatonic (8 notes) - Balanced, versatile\n6th and final transposition of Mode 6\nCompletes the octave division" },
       
-      -- Mode 7: (10 notes, 6 transpositions)
+
       { name = "Mode 7.1", pattern = "111011110110", isCustom = true, intervals = "1-1-1-2-1-1-1-1-2-1",
         description = "Decatonic (10 notes) - Most chromatic\nRepeating 1-1-1-2-1 pattern | 1st transposition\nAlmost all 12 chromatic notes - highly dissonant" },
       { name = "Mode 7.2", pattern = "110111101101", isCustom = true, intervals = "1-1-2-1-1-1-1-2-1-1",
@@ -1386,7 +1430,7 @@ scaleSystems = {
       { name = "Altered Scale", pattern = "11010101010110", isCustom = true, intervals = "1-2-1-2-2-2-2",
         description = "Heptatonic (7 notes) - Super Locrian\n7th mode of melodic minor | All altered tensions\nDominant 7 with b9, #9, #11, b13" },
       { name = "Lydian Dominant", pattern = "10110110101010", isCustom = true, intervals = "2-2-2-1-2-1-2",
-        description = "Heptatonic (7 notes) - Acoustic/Overtone scale\n4th mode of melodic minor | #11 with b7\nBartók, Debussy, modern jazz standard" },
+        description = "Heptatonic (7 notes) - Acoustic/Overtone scale\n4th mode of melodic minor | #11 with b7\nBartÃ³k, Debussy, modern jazz standard" },
       { name = "Harmonic Major", pattern = "10110101100110", isCustom = true, intervals = "2-2-1-2-1-3-1",
         description = "Heptatonic (7 notes) - Major with b6\nMajor scale with flattened 6th\nExotic sound, used in jazz and metal" },
       { name = "Melodic Minor", pattern = "10110101101010", isCustom = true, intervals = "2-1-2-2-2-2-1",
@@ -1470,7 +1514,7 @@ scaleSystems = {
   }
 }
 
--- Flatten scales array for backwards compatibility
+
 scales = {}
 for _, system in ipairs(scaleSystems) do
   for _, scale in ipairs(system.scales) do
@@ -1577,7 +1621,7 @@ function getScaleChordsForRootNote(rootNote)
   ]]--
 
 
-  -- here is where you color the chord buttons differently
+
   for chordIndex, chord in ipairs(chords) do
            
     if chordIsNotAlreadyIncluded(scaleChordsForRootNote, chord.code) then
@@ -1624,19 +1668,19 @@ function noteIsNotInModalMixtureScale(note)
 end
 
 function getChordIntervals(chord)
-  -- Convert chord binary pattern to interval list (in semitones)
+
   local pattern = chord.pattern
-  local stepIntervals = {}  -- Intervals between consecutive notes (e.g., 4-3)
-  local cumulativeIntervals = {}  -- Intervals from root (e.g., 0-4-7)
+  local stepIntervals = {}
+  local cumulativeIntervals = {}
   local lastPosition = nil
   
-  -- Parse binary pattern to find note positions
+
   for i = 0, #pattern - 1 do
     if pattern:sub(i + 1, i + 1) == "1" then
-      -- Add cumulative interval from root
+
       table.insert(cumulativeIntervals, i)
       
-      -- Add step interval from previous note
+
       if lastPosition ~= nil then
         table.insert(stepIntervals, i - lastPosition)
       end
@@ -1644,7 +1688,7 @@ function getChordIntervals(chord)
     end
   end
   
-  -- Return both formats
+
   if #stepIntervals > 0 then
     return table.concat(stepIntervals, "-"), table.concat(cumulativeIntervals, "-")
   end
@@ -1670,11 +1714,11 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 
 function updateScaleDegreeHeaders()
 
-  -- Check if current scale is a custom scale (Messiaen modes)
+
   local currentScale = scales[getScaleType()]
   local isCustomScale = currentScale.isCustom == true
   
-  -- Voor custom scales (Messiaen): gebruik gewoon nummers
+
   if isCustomScale then
     for i = 1, #scaleNotes do
       setScaleDegreeHeader(i, tostring(i))
@@ -1682,7 +1726,7 @@ function updateScaleDegreeHeaders()
     return
   end
   
-  -- Voor standaard scales: gebruik Romeinse cijfers
+
   local minorSymbols = {'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii'}
   local majorSymbols = {'I', 'II', 'III', 'IV', 'V', 'VI', 'VII'}
   local diminishedSymbol = 'o'
@@ -1690,20 +1734,20 @@ function updateScaleDegreeHeaders()
   local sixthSymbol = '6'
   local seventhSymbol = '7'
   
-  -- Map semitone offset to scale degree (for major scale context)
+
   local semitoneToScaleDegree = {
-    [0] = 1,  -- Tonic (I)
-    [1] = 2,  -- b2 or #1 - treat as ii (rare)
-    [2] = 2,  -- II (Supertonic)
-    [3] = 3,  -- b3 or #2 - treat as iii
-    [4] = 3,  -- III (Mediant)
-    [5] = 4,  -- IV (Subdominant)
-    [6] = 5,  -- b5/#4 - tritone, treat as diminished V
-    [7] = 5,  -- V (Dominant)
-    [8] = 6,  -- b6 or #5 - treat as vi
-    [9] = 6,  -- VI (Submediant)
-    [10] = 7, -- b7 or #6 - treat as vii
-    [11] = 7  -- VII (Leading tone)
+    [0] = 1,
+    [1] = 2,
+    [2] = 2,
+    [3] = 3,
+    [4] = 3,
+    [5] = 4,
+    [6] = 5,
+    [7] = 5,
+    [8] = 6,
+    [9] = 6,
+    [10] = 7,
+    [11] = 7
   }
   
   local tonicNote = getScaleTonicNote()
@@ -1713,7 +1757,7 @@ function updateScaleDegreeHeaders()
     local symbol = ""
     local chord = scaleChords[i][1]
     
-    -- Calculate actual scale degree (chromatic distance from tonic)
+
     local noteOffset = (scaleNotes[i] - tonicNote) % 12
     local scaleDegree = semitoneToScaleDegree[noteOffset]
     
@@ -1746,8 +1790,8 @@ end
 --[[
 
   setDrawColorToRed()
-  gfx.setfont(1, "Arial")       <-- default bitmap font does not support Unicode characters
-  local degreeSymbolCharacter = 0x00B0  <-- this is the degree symbol for augmented chords,  "°"
+  gfx.setfont(1, "Arial")       <
+  local degreeSymbolCharacter = 0x00B0  <
   gfx.drawchar(degreeSymbolCharacter)
 
 ]]--
@@ -1759,13 +1803,13 @@ function activeMidiEditor()
 end
 
 function activeTake()
-  -- 1. Probeer eerst de actieve MIDI editor
+
   local editor = reaper.MIDIEditor_GetActive()
   if editor then
     return reaper.MIDIEditor_GetTake(editor)
   end
 
-  -- 2. Als er geen editor is, kijk naar het geselecteerde item in de Arrange view
+
   local item = reaper.GetSelectedMediaItem(0, 0)
   if item then
     local take = reaper.GetActiveTake(item)
@@ -1979,17 +2023,17 @@ function getNoteLengthQN()
   local option = noteLengthOptions[getNoteLengthIndex()] or noteLengthOptions[defaultNoteLengthIndex]
   local take = activeTake()
 
-  -- When a specific length is chosen, return it as-is in quarter notes
+
   if option and option.qn then
     return option.qn
   end
 
-  -- Fall back to the MIDI editor grid when "Grid" is selected or no option exists
+
   if take then
     return reaper.MIDI_GetGrid(take)
   end
 
-  -- Final fallback for times when no take/editor is available
+
   return 0.25
 end
 
@@ -2188,7 +2232,13 @@ function applyInversion(chord)
 
   local selectedScaleNote = getSelectedScaleNote()
   local chordInversionValue = getChordInversionState(selectedScaleNote)
-  local chord_ = chord
+  
+
+  local chord_ = {}
+  for i, v in ipairs(chord) do
+    chord_[i] = v
+  end
+  
   local oct = 0  
   
   if chordInversionValue < 0 then
@@ -2225,6 +2275,16 @@ function getChordNotesArray(root, chord, octave)
   
   chordNotesArray = applyInversion(chordNotesArray)
   
+
+  if bassMode > 0 then
+
+
+    local bassNote = root + ((octave + 1 - bassMode) * 12) - 1
+    
+
+    table.insert(chordNotesArray, 1, bassNote)
+  end
+  
   return chordNotesArray
 end
 local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
@@ -2233,12 +2293,12 @@ function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 
 	local startPosition = getCursorPositionPPQ()
 	
-	-- Add strum offset if strum is enabled
+
 	if strumEnabled then
 		local ppq = reaper.MIDI_GetPPQPosFromProjQN(activeTake(), 0)
 		local quarterNote = reaper.MIDI_GetProjQNFromPPQPos(activeTake(), ppq + 1)
 		local oneBeatInPPQ = (ppq + 1) - ppq
-		local strumOffsetPPQ = (strumDelayMs / 1000.0) * (oneBeatInPPQ * 2)  -- Approximate conversion
+		local strumOffsetPPQ = (strumDelayMs / 1000.0) * (oneBeatInPPQ * 2)
 		startPosition = startPosition + ((noteIndex - 1) * strumOffsetPPQ)
 	end
 
@@ -2263,7 +2323,7 @@ function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 			muteState = selectedChord.selectedNotes[noteIndex].muteState
 		end
 		
-		-- Adjust end position for strum
+
 		if strumEnabled then
 			local ppq = reaper.MIDI_GetPPQPosFromProjQN(activeTake(), 0)
 			local oneBeatInPPQ = (ppq + 1) - ppq
@@ -2274,7 +2334,7 @@ function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 	else
 		endPosition = getMidiEndPositionPPQ()
 		
-		-- Adjust end position for strum
+
 		if strumEnabled then
 			local ppq = reaper.MIDI_GetPPQPosFromProjQN(activeTake(), 0)
 			local oneBeatInPPQ = (ppq + 1) - ppq
@@ -2298,25 +2358,25 @@ local function playScaleChord(chordNotesArray)
   stopNotesFromPlaying()
   
   if strumEnabled then
-    -- Strum mode: play notes with delay between each note
+
     local delaySeconds = strumDelayMs / 1000.0
     
     for noteIndex = 1, #chordNotesArray do
       playMidiNote(chordNotesArray[noteIndex])
       
-      -- Wait before playing next note (except after last note)
+
       if noteIndex < #chordNotesArray then
         local startTime = reaper.time_precise()
         local targetTime = startTime + delaySeconds
         
-        -- Busy wait for precise timing
+
         while reaper.time_precise() < targetTime do
-          -- Force CPU to actually wait
+
         end
       end
     end
   else
-    -- Normal mode: play all notes at once
+
     for noteIndex = 1, #chordNotesArray do
       playMidiNote(chordNotesArray[noteIndex])
     end
@@ -2325,11 +2385,11 @@ local function playScaleChord(chordNotesArray)
   setNotesThatArePlaying(chordNotesArray) 
 end
 
--- Chord Progression Functions
+
 function addChordToProgression(scaleNoteIndex, chordTypeIndex, chordText, targetSlotOverride)
   local targetSlot = targetSlotOverride
   
-  -- If no specific slot is specified, find first empty slot
+
   if not targetSlot then
     for i = 1, maxProgressionSlots do
       if not chordProgression[i] then
@@ -2344,41 +2404,41 @@ function addChordToProgression(scaleNoteIndex, chordTypeIndex, chordText, target
       scaleNoteIndex = scaleNoteIndex,
       chordTypeIndex = chordTypeIndex,
       text = chordText,
-      beats = 1,  -- How many beats this chord plays (1, 2, 4, 8)
-      repeats = 1  -- How many times this slot repeats (1-4)
+      beats = 1,
+      repeats = 1
     }
   end
 end
 
 function playChordFromSlot(slotIndex)
-  -- Play/preview the chord from a specific progression slot
+
   local slot = chordProgression[slotIndex]
   if not slot then return end
   
-  -- Stop any currently playing notes first
+
   stopAllNotesFromPlaying()
   
-  -- Get chord data
+
   local root = scaleNotes[slot.scaleNoteIndex]
   local chordData = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
   local octave = getOctave()
   local notes = getChordNotesArray(root, chordData, octave)
   
-  -- Play all notes in the chord
+
   for noteIndex, note in ipairs(notes) do
     if strumEnabled then
-      -- Apply strum delay
+
       local strumDelaySeconds = (strumDelayMs / 1000.0) * (noteIndex - 1)
       reaper.defer(function()
         playMidiNote(note)
       end)
     else
-      -- Play immediately
+
       playMidiNote(note)
     end
   end
   
-  -- Schedule note-off after 500ms preview duration
+
   reaper.defer(function()
     local function stopNotes()
       for _, note in ipairs(notes) do
@@ -2386,7 +2446,7 @@ function playChordFromSlot(slotIndex)
       end
     end
     
-    -- Wait 500ms then stop notes
+
     local startTime = reaper.time_precise()
     local function waitAndStop()
       if reaper.time_precise() - startTime >= 0.5 then
@@ -2406,14 +2466,14 @@ function clearChordProgression()
 end
 
 function removeChordFromProgression(index)
-  -- Set slot to nil instead of removing, so other slots don't shift
+
   if index > 0 and index <= maxProgressionSlots then
     chordProgression[index] = nil
   end
 end
 
 function exportProgressionToTrack()
-  -- Check for chords
+
   local hasChords = false
   for i = 1, progressionLength do
     if chordProgression[i] then hasChords = true break end
@@ -2426,12 +2486,22 @@ function exportProgressionToTrack()
 
   reaper.Undo_BeginBlock()
   
-  -- Insert new track at index 0 (top)
-  reaper.InsertTrackAtIndex(0, true)
-  local track = reaper.GetTrack(0, 0)
-  reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "Chords", true)
+
+  local numTracks = reaper.CountTracks(0)
+  reaper.InsertTrackAtIndex(numTracks, true)
+  local track = reaper.GetTrack(0, numTracks)
   
-  -- Get start position from cursor
+  reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "Chords", true)
+  reaper.SetMediaTrackInfo_Value(track, "B_HEIGHTLOCK", 1)
+  
+
+  reaper.Main_OnCommand(40297, 0)
+  reaper.SetTrackSelected(track, true)
+  
+
+  reaper.Main_OnCommand(40000, 0) 
+  
+
   local currentPos = reaper.GetCursorPosition()
   local currentQN = reaper.TimeMap2_timeToQN(0, currentPos)
   
@@ -2448,25 +2518,21 @@ function exportProgressionToTrack()
       local endSec = reaper.TimeMap2_QNToTime(0, endQN)
       local length = endSec - startSec
       
-      -- Create Empty Item
+
       local item = reaper.AddMediaItemToTrack(track)
       reaper.SetMediaItemPosition(item, startSec, false)
       reaper.SetMediaItemLength(item, length, false)
       
-      -- Set text (Notes) and enable "Stretch to fit"
-      reaper.GetSetMediaItemInfo_String(item, "P_NOTES", slot.text, true)
-      
-      -- Force item to be "Empty Item" type with text stretch enabled
-      -- We do this by manipulating the chunk slightly or just relying on P_NOTES
-      -- Ideally we set IMGRESOURCEFLAGS to 1 (stretch text) if possible via API, 
-      -- but standard notes usually display fine.
-      
-      -- Color the item (Blue-ish to match ChordGun theme)
+
+      reaper.GetSetMediaItemInfo_String(item, "P_NOTES", slot.text, true)    
+    
+
       reaper.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", reaper.ColorToNative(77, 166, 255)|0x1000000)
+      reaper.SetMediaItemInfo_Value(item, "C_LOCK", 1)
       
       currentQN = endQN
     else
-      -- Empty slot, advance by 1 beat (default gap)
+
       currentQN = currentQN + 1
     end
   end
@@ -2476,7 +2542,7 @@ function exportProgressionToTrack()
 end
 
 function exportProgressionToMarkers()
-  -- Check for chords
+
   local hasChords = false
   for i = 1, progressionLength do
     if chordProgression[i] then hasChords = true break end
@@ -2504,7 +2570,7 @@ function exportProgressionToMarkers()
       local endQN = currentQN + totalBeats
       local endSec = reaper.TimeMap2_QNToTime(0, endQN)
       
-      -- Add Region (color index 0)
+
       reaper.AddProjectMarker(0, true, startSec, endSec, slot.text, -1)
       
       currentQN = endQN
@@ -2517,17 +2583,181 @@ function exportProgressionToMarkers()
   reaper.Undo_EndBlock("Export Chords to Markers", -1)
 end
 
-function insertProgressionToMIDI()
-  -- Insert entire chord progression as MIDI at play cursor position
+function generateMelodyFromProgression()
+
+  local hasChords = false
+  for i = 1, progressionLength do
+    if chordProgression[i] then hasChords = true break end
+  end
   
-  -- Probeer take te vinden of te maken
+  if not hasChords then
+    reaper.ShowMessageBox("Progression is empty.", "Error", 0)
+    return
+  end
+
+  reaper.Undo_BeginBlock()
+  
+
+  local track = reaper.GetSelectedTrack(0, 0)
+  
+  if not track then
+    local numTracks = reaper.CountTracks(0)
+    reaper.InsertTrackAtIndex(numTracks, true)
+    track = reaper.GetTrack(0, numTracks)
+    reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "Melody", true)
+    
+
+    reaper.Main_OnCommand(40297, 0)
+    reaper.SetTrackSelected(track, true)
+    reaper.Main_OnCommand(40000, 0)
+  end
+  
+
+  local totalBeats = 0
+  for i = 1, progressionLength do
+    local slot = chordProgression[i]
+    if slot then
+      totalBeats = totalBeats + (slot.beats * slot.repeats)
+    else
+      totalBeats = totalBeats + 1
+    end
+  end
+  
+  local startPos = reaper.GetCursorPosition()
+  local startQN = reaper.TimeMap2_timeToQN(0, startPos)
+  local endQN = startQN + totalBeats
+  local endPos = reaper.TimeMap2_QNToTime(0, endQN)
+  
+
+  local item = reaper.CreateNewMIDIItemInProj(track, startPos, endPos, false)
+  local take = reaper.GetActiveTake(item)
+  
+  local currentQN = startQN
+  local lastNote = -1
+  local baseOctave = melodySettings.octave
+  
+
+  for i = 1, progressionLength do
+    local slot = chordProgression[i]
+    
+    if slot then
+      local root = scaleNotes[slot.scaleNoteIndex]
+      local chordData = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
+      
+
+      local allNotes = {}
+      
+
+      local chordNotes = getChordNotesArray(root, chordData, baseOctave)
+      local chordNotesHigh = getChordNotesArray(root, chordData, baseOctave + 1)
+      local safeNotes = {}
+      for _, n in ipairs(chordNotes) do table.insert(safeNotes, n) end
+      for _, n in ipairs(chordNotesHigh) do table.insert(safeNotes, n) end
+      
+
+      local riskyNotes = {}
+      if melodySettings.useScaleNotes then
+        for n = 1, #scaleNotes do
+
+          local normalizedNote = scaleNotes[n] % 12
+          local noteVal = normalizedNote + ((baseOctave + 1) * 12)
+          table.insert(riskyNotes, noteVal)
+          table.insert(riskyNotes, noteVal + 12)
+        end
+      end
+      
+      local slotDuration = slot.beats * slot.repeats
+      local slotEndQN = currentQN + slotDuration
+      
+
+      while currentQN < slotEndQN - 0.01 do
+
+        local r = math.random()
+        local dur = 1.0
+        
+        if melodySettings.density == 1 then
+          if r < 0.6 then dur = 1.0
+          elseif r < 0.9 then dur = 2.0
+          else dur = 0.5
+          end
+        elseif melodySettings.density == 3 then
+          if r < 0.5 then dur = 0.5
+          elseif r < 0.8 then dur = 0.25
+          else dur = 1.0
+          end
+        else
+          if r < 0.4 then dur = 0.5
+          elseif r < 0.8 then dur = 1.0
+          else dur = 2.0
+          end
+        end
+        
+
+        if currentQN + dur > slotEndQN then dur = slotEndQN - currentQN end
+        
+
+        local note
+        
+
+        local poolToUse = safeNotes
+        if melodySettings.useScaleNotes and #riskyNotes > 0 then
+
+
+           if math.random() < 0.3 then
+              poolToUse = riskyNotes
+           end
+        end
+        
+        if lastNote == -1 then
+          note = poolToUse[math.random(#poolToUse)]
+        else
+
+          local candidates = {}
+          for _, n in ipairs(poolToUse) do
+            if math.abs(n - lastNote) <= 7 then
+              table.insert(candidates, n)
+            end
+          end
+          
+          if #candidates > 0 then
+            note = candidates[math.random(#candidates)]
+          else
+            note = poolToUse[math.random(#poolToUse)]
+          end
+        end
+        
+
+        local startPPQ = reaper.MIDI_GetPPQPosFromProjQN(take, currentQN)
+        local endPPQ = reaper.MIDI_GetPPQPosFromProjQN(take, currentQN + dur)
+        local vel = math.random(85, 110)
+        
+        reaper.MIDI_InsertNote(take, false, false, startPPQ, endPPQ, 0, note, vel, true)
+        
+        lastNote = note
+        currentQN = currentQN + dur
+      end
+    else
+
+      currentQN = currentQN + 1
+    end
+  end
+  
+  reaper.MIDI_Sort(take)
+  reaper.UpdateArrange()
+  reaper.Undo_EndBlock("Generate Melody", -1)
+end
+
+function insertProgressionToMIDI()
+
+  
+
   local take = activeTake()
   
   if not take then
-    -- Als er geen take is, maak er een die lang genoeg is voor de hele progressie
+
     local track = reaper.GetSelectedTrack(0, 0)
     if track then
-      -- Bereken totale lengte
+
       local totalBeats = 0
       for i = 1, progressionLength do
         if chordProgression[i] then
@@ -2535,11 +2765,11 @@ function insertProgressionToMIDI()
           local repeats = chordProgression[i].repeats or 1
           totalBeats = totalBeats + (beats * repeats)
         else
-          totalBeats = totalBeats + 1 -- Lege slot is 1 beat
+          totalBeats = totalBeats + 1
         end
       end
       
-      if totalBeats == 0 then totalBeats = 4 end -- Fallback
+      if totalBeats == 0 then totalBeats = 4 end
       
       local startPos = reaper.GetCursorPosition()
       local startQN = reaper.TimeMap2_timeToQN(0, startPos)
@@ -2559,7 +2789,7 @@ function insertProgressionToMIDI()
     return
   end
   
-  -- Check for chords
+
   local hasChords = false
   for i = 1, progressionLength do
     if chordProgression[i] then
@@ -2573,7 +2803,7 @@ function insertProgressionToMIDI()
     return
   end
   
-  -- Get start position and calculate PPQ per beat
+
   local startPPQ = getCursorPositionPPQ()
   local startQN = reaper.MIDI_GetProjQNFromPPQPos(take, startPPQ)
   local testPPQ = reaper.MIDI_GetPPQPosFromProjQN(take, startQN + 1.0)
@@ -2588,12 +2818,12 @@ function insertProgressionToMIDI()
   
   local totalNotesInserted = 0
   
-  -- Loop through progression slots up to progressionLength
+
   for slotIndex = 1, progressionLength do
     local slot = chordProgression[slotIndex]
     
     if slot then
-      -- Get chord data
+
       local root = scaleNotes[slot.scaleNoteIndex]
       local chordData = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
       local octave = getOctave()
@@ -2602,17 +2832,17 @@ function insertProgressionToMIDI()
       local beats = slot.beats or 1
       local repeats = slot.repeats or 1
       
-      -- Insert this chord 'repeats' times
+
       for repeatIndex = 1, repeats do
-        -- Calculate note duration in PPQ
+
         local noteDurationPPQ = oneBeatInPPQ * beats
         
-        -- Insert all notes in the chord
+
         for noteIndex, note in ipairs(notes) do
           local noteStartPPQ = currentPPQ
           local noteEndPPQ = currentPPQ + noteDurationPPQ
           
-          -- Apply strum offset if enabled
+
           if strumEnabled then
             local strumOffsetPPQ = (strumDelayMs / 1000.0) * (oneBeatInPPQ * 2)
             noteStartPPQ = noteStartPPQ + ((noteIndex - 1) * strumOffsetPPQ)
@@ -2625,11 +2855,11 @@ function insertProgressionToMIDI()
           end
         end
         
-        -- Move forward by beat duration
+
         currentPPQ = currentPPQ + noteDurationPPQ
       end
     else
-      -- Empty slot - insert silence (just advance time)
+
       currentPPQ = currentPPQ + oneBeatInPPQ
     end
   end
@@ -2637,7 +2867,7 @@ function insertProgressionToMIDI()
   reaper.MIDI_Sort(take)
   reaper.Undo_EndBlock("Insert Chord Progression", -1)
   
-  -- Force MIDI editor and project update
+
   reaper.MarkProjectDirty(0)
   reaper.UpdateArrange()
   reaper.UpdateTimeline()
@@ -2646,13 +2876,18 @@ function insertProgressionToMIDI()
   if mediaItem then
     reaper.UpdateItemInProject(mediaItem)
   end
+  
+
+  if not activeMidiEditor() then
+    reaper.Main_OnCommand(40289, 0)
+  end
 end
 
--- Progression Preset Functions
+
 local presetFolder = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun/Presets/"
 
 function ensurePresetFolderExists()
-  -- Create preset folder if it doesn't exist
+
   local result = reaper.RecursiveCreateDirectory(presetFolder, 0)
   return result ~= 0
 end
@@ -2660,7 +2895,7 @@ end
 function saveProgressionPreset()
   ensurePresetFolderExists()
   
-  -- Check if progression has chords
+
   local hasChords = false
   for i = 1, maxProgressionSlots do
     if chordProgression[i] then
@@ -2674,11 +2909,11 @@ function saveProgressionPreset()
     return
   end
   
-  -- Ask for preset name
+
   local retval, presetName = reaper.GetUserInputs("Save Progression Preset", 1, "Preset Name:,extrawidth=100", "")
   if not retval or presetName == "" then return end
   
-  -- Sanitize filename
+
   presetName = presetName:gsub("[^%w%s%-_]", "")
   
   local filePath = presetFolder .. presetName .. ".txt"
@@ -2689,19 +2924,22 @@ function saveProgressionPreset()
     return
   end
   
-  -- Write progression data
-  -- Format per slot: scaleNoteIndex,chordTypeIndex,text,beats,repeats
+
+
   for i = 1, maxProgressionSlots do
     if chordProgression[i] then
       local slot = chordProgression[i]
       file:write(slot.scaleNoteIndex .. "," .. slot.chordTypeIndex .. "," .. slot.text .. "," .. slot.beats .. "," .. slot.repeats .. "\n")
     else
-      file:write("\n")  -- Empty line for empty slot
+      file:write("\n")
     end
   end
   
-  -- Write progression length on last line
+
   file:write("LENGTH:" .. progressionLength .. "\n")
+  
+
+  file:write("SCALE:" .. getScaleTonicNote() .. "," .. getScaleType() .. "\n")
   
   file:close()
   reaper.ShowMessageBox("Preset '" .. presetName .. "' saved!", "Success", 0)
@@ -2734,20 +2972,47 @@ function loadProgressionPreset(presetName)
     return
   end
   
-  -- Clear current progression
+
   chordProgression = {}
   
-  -- Read preset data
+
   local slotIndex = 1
   for line in file:lines() do
     if line:match("^LENGTH:") then
-      -- Parse progression length
+
       local length = tonumber(line:match("LENGTH:(%d+)"))
       if length then
         progressionLength = length
       end
+    elseif line:match("^SCALE:") then
+
+      local tonic, scaleTypeIdx = line:match("SCALE:(%d+),(%d+)")
+      if tonic and scaleTypeIdx then
+        local newTonic = tonumber(tonic)
+        local newType = tonumber(scaleTypeIdx)
+        
+
+        setScaleTonicNote(newTonic)
+        setScaleType(newType)
+        
+
+        local sysIdx, subIdx = getSystemIndicesFromScaleIndex(newType)
+        setScaleSystemIndex(sysIdx)
+        setScaleWithinSystemIndex(subIdx)
+        
+
+        setSelectedScaleNote(1)
+        setChordText("")
+        resetSelectedChordTypes()
+        resetChordInversionStates()
+        updateScaleData()
+        updateScaleDegreeHeaders()
+        
+
+        guiShouldBeUpdated = true
+      end
     elseif line ~= "" and slotIndex <= maxProgressionSlots then
-      -- Parse slot data: scaleNoteIndex,chordTypeIndex,text,beats,repeats
+
       local scaleNoteIndex, chordTypeIndex, text, beats, repeats = line:match("(%d+),(%d+),([^,]+),(%d+),(%d+)")
       if scaleNoteIndex then
         chordProgression[slotIndex] = {
@@ -2760,7 +3025,7 @@ function loadProgressionPreset(presetName)
       end
       slotIndex = slotIndex + 1
     else
-      -- Empty line = empty slot
+
       slotIndex = slotIndex + 1
     end
   end
@@ -2776,15 +3041,15 @@ function showLoadPresetMenu()
     return
   end
   
-  -- Build menu with load and delete options
+
   local menuStr = ""
   
-  -- Add load presets
+
   for i, preset in ipairs(presets) do
     menuStr = menuStr .. preset .. "|"
   end
   
-  -- Add separator and delete options
+
   menuStr = menuStr .. ">Delete preset|"
   for i, preset in ipairs(presets) do
     menuStr = menuStr .. preset
@@ -2796,17 +3061,17 @@ function showLoadPresetMenu()
   local result = gfx.showmenu(menuStr)
   
   if result > 0 and result <= #presets then
-    -- Load preset
+
     loadProgressionPreset(presets[result])
   elseif result > #presets then
-    -- Delete preset (submenu items start after load items)
+
     local deleteIndex = result - #presets
     if deleteIndex > 0 and deleteIndex <= #presets then
       local presetName = presets[deleteIndex]
       
-      -- Confirm deletion
+
       local confirm = reaper.ShowMessageBox("Delete preset '" .. presetName .. "'?", "Confirm Delete", 4)
-      if confirm == 6 then  -- Yes
+      if confirm == 6 then
         local filePath = presetFolder .. presetName .. ".txt"
         local success = os.remove(filePath)
         if success then
@@ -2820,7 +3085,7 @@ function showLoadPresetMenu()
 end
 
 function showDeletePresetMenu()
-  -- No longer needed - integrated into showLoadPresetMenu
+
   showLoadPresetMenu()
 end
 
@@ -2837,7 +3102,7 @@ function playProgressionChord(index)
   
   local chordNotesArray = getChordNotesArray(root, chordData, octave)
   
-  -- Play notes directly without stopping (progression handles stop/start timing)
+
   for noteIndex = 1, #chordNotesArray do
     playMidiNote(chordNotesArray[noteIndex])
   end
@@ -2863,7 +3128,7 @@ end
 function updateProgressionPlayback()
   if not progressionPlaying then return end
   
-  -- Check if progression has any chords
+
   local hasChords = false
   for i = 1, maxProgressionSlots do
     if chordProgression[i] then
@@ -2876,7 +3141,7 @@ function updateProgressionPlayback()
   local currentTime = reaper.time_precise()
   local bpm = reaper.Master_GetTempo()
   
-  -- Get beats from current slot (or use default if slot is empty)
+
   local currentSlotBeats = 1
   if chordProgression[currentProgressionIndex] then
     currentSlotBeats = chordProgression[currentProgressionIndex].beats or 1
@@ -2885,7 +3150,7 @@ function updateProgressionPlayback()
   local beatDuration = (60.0 / bpm) * currentSlotBeats
   
   if currentTime - progressionLastBeatTime >= beatDuration then
-    -- Check if we need to repeat current slot
+
     local currentSlotRepeats = 1
     if chordProgression[currentProgressionIndex] then
       currentSlotRepeats = chordProgression[currentProgressionIndex].repeats or 1
@@ -2893,12 +3158,12 @@ function updateProgressionPlayback()
     
     currentProgressionRepeat = currentProgressionRepeat + 1
     
-    -- If we haven't finished all repeats, stay on this slot
+
     if currentProgressionRepeat < currentSlotRepeats then
-      -- Update timing for next repeat
+
       progressionLastBeatTime = progressionLastBeatTime + beatDuration
       
-      -- Replay same chord (stop and restart for clean sound)
+
       local oldNotes = getNotesThatArePlaying()
       for i = 1, #oldNotes do
         stopNoteFromPlaying(oldNotes[i])
@@ -2911,7 +3176,7 @@ function updateProgressionPlayback()
         local octave = getOctave()
         local newNotes = getChordNotesArray(root, chordData, octave)
         
-        -- Play with strum if enabled
+
         if strumEnabled then
           local delaySeconds = strumDelayMs / 1000.0
           for noteIndex = 1, #newNotes do
@@ -2929,29 +3194,29 @@ function updateProgressionPlayback()
         end
         setNotesThatArePlaying(newNotes)
       end
-      return  -- Don't advance to next slot yet
+      return
     end
     
-    -- All repeats done, move to next slot
+
     currentProgressionRepeat = 0
     currentProgressionIndex = currentProgressionIndex + 1
     if currentProgressionIndex > progressionLength then
-      currentProgressionIndex = 1  -- Loop back to slot 1
+      currentProgressionIndex = 1
     end
     
-    -- Update timing BEFORE playing to keep strict tempo
+
     progressionLastBeatTime = progressionLastBeatTime + beatDuration
     
-    -- Stop old notes
+
     local oldNotes = getNotesThatArePlaying()
     for i = 1, #oldNotes do
       stopNoteFromPlaying(oldNotes[i])
     end
     
-    -- Get new chord notes from current slot
+
     local chord = chordProgression[currentProgressionIndex]
     if chord then
-      -- Slot has a chord - play it
+
       setSelectedScaleNote(chord.scaleNoteIndex)
       setSelectedChordType(chord.scaleNoteIndex, chord.chordTypeIndex)
       
@@ -2960,27 +3225,27 @@ function updateProgressionPlayback()
       local octave = getOctave()
       local newNotes = getChordNotesArray(root, chordData, octave)
       
-      -- Play new notes (met strum als enabled)
+
       if strumEnabled then
-        -- Strum mode: play notes with delay
+
         local delaySeconds = strumDelayMs / 1000.0
         
         for noteIndex = 1, #newNotes do
           playMidiNote(newNotes[noteIndex])
           
-          -- Wait before playing next note (except after last note)
+
           if noteIndex < #newNotes then
             local startTime = reaper.time_precise()
             local targetTime = startTime + delaySeconds
             
-            -- Busy wait for precise timing
+
             while reaper.time_precise() < targetTime do
-              -- Force CPU to actually wait
+
             end
           end
         end
       else
-        -- Normal mode: play all notes at once
+
         for i = 1, #newNotes do
           playMidiNote(newNotes[i])
         end
@@ -2989,7 +3254,7 @@ function updateProgressionPlayback()
       setNotesThatArePlaying(newNotes)
       updateChordText(root, chordData, newNotes)
     else
-      -- Slot is empty - silence (notes already stopped)
+
       setNotesThatArePlaying({})
     end
   end
@@ -3021,26 +3286,26 @@ function insertScaleChord(chordNotesArray, keepNotesSelected, selectedChord)
 end
 
 function ensureActiveTake()
-  -- 1. Check of er al een geldige take is (via editor of selectie)
+
   local take = activeTake()
   if take then return take end
 
-  -- 2. Zo niet, probeer een item aan te maken op de geselecteerde track
+
   local track = reaper.GetSelectedTrack(0, 0)
   if not track then
     reaper.ShowMessageBox("No track selected.\nPlease select a track to insert chords.", "Error", 0)
     return nil
   end
 
-  -- Maak een nieuw item van 1 maat (4 beats) lang
+
   local startPos = reaper.GetCursorPosition()
   local startQN = reaper.TimeMap2_timeToQN(0, startPos)
-  local endQN = startQN + 4 -- Standaard 1 maat lengte voor nieuw item
+  local endQN = startQN + 4
   local endPos = reaper.TimeMap2_QNToTime(0, endQN)
 
   local item = reaper.CreateNewMIDIItemInProj(track, startPos, endPos, false)
   if item then
-    reaper.SetMediaItemSelected(item, true) -- Selecteer het, zodat activeTake() het hierna vindt
+    reaper.SetMediaItemSelected(item, true)
     reaper.UpdateArrange()
     return reaper.GetActiveTake(item)
   end
@@ -3070,6 +3335,11 @@ function playOrInsertScaleChord(actionDescription)
       end
 
     endUndoBlock(actionDescription)
+    
+
+    if not activeMidiEditor() then
+      reaper.Main_OnCommand(40289, 0)
+    end
   end
 
   playScaleChord(chordNotesArray)
@@ -3126,6 +3396,11 @@ function playOrInsertScaleNote(octaveAdjustment, actionDescription)
 		  end
 
 		endUndoBlock(actionDescription)
+    
+
+    if not activeMidiEditor() then
+      reaper.Main_OnCommand(40289, 0)
+    end
   end
 
 	playScaleNote(noteValue)
@@ -5082,11 +5357,11 @@ function setDrawColorToHighlightedButton()
 end
 
 function setDrawColorToPressedButton()
-	setColor("FFD700")  -- Goud/geel voor ingedrukte button
+	setColor("FFD700")
 end
 
 function setDrawColorToPressedButtonText()
-	setColor("1A1A1A")  -- Donkere tekst voor contrast op geel
+	setColor("1A1A1A")
 end
 
 --
@@ -5158,15 +5433,15 @@ end
 --[[ buttons ]]--
 
 function setDrawColorToHeaderOutline()
-	setColor("2E5C8A")  -- Donkerblauw voor outline
+	setColor("2E5C8A")
 end
 
 function setDrawColorToHeaderBackground()
-	setColor("4A90D9")  -- Lichtblauw voor achtergrond
+	setColor("4A90D9")
 end
 
 function setDrawColorToHeaderText()
-	setColor("E8F4FF")  -- Bijna wit/lichtblauw voor tekst
+	setColor("E8F4FF")
 end
 
 
@@ -5227,25 +5502,25 @@ end
 function setDrawColorToBackground()
 
 	local r, g, b
-	local backgroundColor = {36, 36, 36, 1}		-- #242424
+	local backgroundColor = {36, 36, 36, 1}
 	gfx.set(table.unpack(backgroundColor))
 end
 
 function setDrawColorToNormalButton()
 
-	local backgroundColor = {45, 45, 45, 1}		-- #2D2D2D
+	local backgroundColor = {45, 45, 45, 1}
 	gfx.set(table.unpack(backgroundColor))
 end
 
 function setDrawColorToHighlightedButton()
 
-	local backgroundColor = {71, 71, 71, 1}		-- #474747
+	local backgroundColor = {71, 71, 71, 1}
 	gfx.set(table.unpack(backgroundColor))
 end
 
 function setDrawColorToSelectedButton()
 
-	local backgroundColor = {220, 220, 220, 1}	-- #DCDCDC
+	local backgroundColor = {220, 220, 220, 1}
 	gfx.set(table.unpack(backgroundColor))
 end
 ]]--
@@ -5305,7 +5580,7 @@ function Docker:drawUndockWindowContextMenu()
 end
 
 function Docker:update()
-  -- Dock/undock now handled by button in UI instead of right-click menu
+
 end
 
 HitArea = {}
@@ -5471,7 +5746,7 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 Header = {}
 Header.__index = Header
 
--- Maak radius een functie zodat het dynamisch schaalt
+
 local function getHeaderRadius()
 	return s(5)
 end
@@ -5550,7 +5825,7 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 Frame = {}
 Frame.__index = Frame
 
--- Maak radius een functie zodat het dynamisch schaalt
+
 local function getFrameRadius()
 	return s(10)
 end
@@ -5873,14 +6148,14 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 ChordButton = {}
 ChordButton.__index = ChordButton
 
--- Track which button is currently being held
+
 local currentlyHeldButton = nil
--- Hold mode - when true, notes continue playing after mouse release
+
 local holdModeEnabled = false
--- Track the last played chord info (for piano keyboard display in hold mode)
+
 local lastPlayedChord = nil
 
--- Track notes coming from external MIDI input so we can highlight them on the piano
+
 local externalMidiNotes = {}
 local lastProcessedMidiSignature = nil
 local midiQueuePrimed = false
@@ -5938,18 +6213,18 @@ isExternalDevice = function(devIdx)
   if devIdx >= 0 then
     return true
   end
-  -- Treat REAPER's virtual MIDI keyboard (typically -1) as external input
+
   return devIdx == -1
 end
 
 local function processExternalMidiInput()
   if not reaper.MIDI_GetRecentInputEvent then return end
-  -- DEBUG: Temporarily disable suppression
-  -- if reaper.time_precise and suppressExternalMidiUntil and reaper.time_precise() < suppressExternalMidiUntil then
-  --   return
-  -- end
+
+
+
+
   pruneInternalNoteEvents()
-  -- Prime queue once so we don't process historical backlog
+
   if not midiQueuePrimed then
     local retval, rawMessage, tsval, devIdx = reaper.MIDI_GetRecentInputEvent(0)
     if retval ~= 0 and rawMessage then
@@ -5981,7 +6256,7 @@ local function processExternalMidiInput()
     index = index + 1
   end
 
-  -- Process oldest first
+
   for i = #events, 1, -1 do
     local event = events[i]
     local rawMessage = event.rawMessage
@@ -5994,7 +6269,7 @@ local function processExternalMidiInput()
     local isNoteOff = (command == 0x80) or (command == 0x90 and velocity == 0)
     if isPhysicalInput and (isNoteOn or isNoteOff) then
       if consumeInternalNoteEvent(noteNumber, isNoteOn) then
-        -- Ignore events generated by ChordGun itself
+
       elseif isNoteOn then
         externalMidiNotes[noteNumber] = true
       else
@@ -6069,7 +6344,7 @@ end
 
 function ChordButton:drawButtonRectangle()
 
-		-- Check if this button is currently being pressed
+
 		if currentlyHeldButton == self then
 			setDrawColorToPressedButton()
 		elseif self:isSelectedChordTypeAndSelectedScaleNote() then
@@ -6119,7 +6394,7 @@ end
 
 function ChordButton:drawText()
 
-	-- Check if this button is currently being pressed
+
 	if currentlyHeldButton == self then
 		setDrawColorToPressedButtonText()
 	elseif self:isSelectedChordTypeAndSelectedScaleNote() then
@@ -6186,12 +6461,12 @@ function ChordButton:onShiftPress()
 end
 
 function ChordButton:onAltPress()
-	-- Add chord to progression
-	-- Use selected slot if available, otherwise find first empty slot
+
+
 	local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
 	addChordToProgression(self.scaleNoteIndex, self.chordTypeIndex, self.text, selectedProgressionSlot)
 	
-	-- Play the chord ook zodat je het hoort (net als bij normale click)
+
 	setSelectedScaleNote(self.scaleNoteIndex)
 	setSelectedChordType(self.scaleNoteIndex, self.chordTypeIndex)
 	
@@ -6213,11 +6488,11 @@ function ChordButton:update()
 	local isHovering = mouseIsHoveringOver(self)
 	local leftButtonDown = leftMouseButtonIsHeldDown()
 	
-	-- Handle mouse button press (start playing)
+
 	if mouseButtonIsNotPressedDown and isHovering and leftButtonDown then
 		mouseButtonIsNotPressedDown = false
 		currentlyHeldButton = self
-		lastPlayedChord = self  -- Remember this chord for piano display
+		lastPlayedChord = self
 		
 		setSelectedScaleNote(self.scaleNoteIndex)
 		setSelectedChordType(self.scaleNoteIndex, self.chordTypeIndex)
@@ -6231,30 +6506,30 @@ function ChordButton:update()
 		end		
 	end
 	
-	-- Handle mouse button release (stop playing)
+
 	if currentlyHeldButton == self and not leftButtonDown then
-		-- Only stop if hold mode is disabled
+
 		if not holdModeEnabled then
 			stopAllNotesFromPlaying()
-			lastPlayedChord = nil  -- Clear piano display when stopping
+			lastPlayedChord = nil
 		end
-		-- In hold mode, keep lastPlayedChord so piano stays visible
+
 		currentlyHeldButton = nil
 	end
 	
-	-- Right click to stop all notes
+
 	if mouseButtonIsNotPressedDown and buttonHasBeenRightClicked(self) then
 		mouseButtonIsNotPressedDown = false
 		stopAllNotesFromPlaying()
 		currentlyHeldButton = nil
-		lastPlayedChord = nil  -- Clear piano display
+		lastPlayedChord = nil
 	end
 	
-	-- Queue tooltip if enabled and hovering
+
 	if tooltipsEnabled and isHovering then
 		local tooltip = "Click: Preview | Shift+Click: Insert | Alt+Click: Add to slot"
 		
-		-- Add interval pattern for Messiaen modes
+
 		local currentScale = scales[getScaleType()]
 		if currentScale.isCustom then
 			local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
@@ -6268,7 +6543,7 @@ function ChordButton:update()
 	end
 end
 
--- Simple button for HOLD and KILL
+
 SimpleButton = {}
 SimpleButton.__index = SimpleButton
 
@@ -6282,26 +6557,26 @@ function SimpleButton:new(text, x, y, width, height, onClick, onRightClick, getT
 	self.width = width
 	self.height = height
 	self.onClick = onClick
-	self.onRightClick = onRightClick  -- Optional right-click handler
-	self.getTooltip = getTooltip  -- Optional tooltip function
-  self.drawBorder = drawBorder -- Optional border
+	self.onRightClick = onRightClick
+	self.getTooltip = getTooltip
+  self.drawBorder = drawBorder
 	return self
 end
 
 function SimpleButton:draw()
-	-- Draw border if enabled
+
   if self.drawBorder then
     setColor("999999")
     gfx.rect(self.x, self.y, self.width, self.height, false)
-    -- Double thickness for clarity
+
     gfx.rect(self.x+1, self.y+1, self.width-2, self.height-2, false)
   end
 	
-	-- Draw text - highlight when hovering
+
 	if mouseIsHoveringOver(self) then
-		setColor("FFD700")  -- Geel bij hover
+		setColor("FFD700")
 	else
-		setColor("CCCCCC")  -- Normaal grijs
+		setColor("CCCCCC")
 	end
 	
 	local displayText = type(self.getText) == "function" and self.getText() or self.text
@@ -6310,7 +6585,7 @@ function SimpleButton:draw()
 	gfx.y = self.y + ((self.height - stringHeight) / 2)
 	gfx.drawstr(displayText)
 	
-	-- Queue tooltip if enabled and hovering
+
 	if tooltipsEnabled and mouseIsHoveringOver(self) and self.getTooltip then
 		local tooltip = self.getTooltip()
 		if tooltip then
@@ -6323,18 +6598,18 @@ function SimpleButton:update()
 	self:draw()
 	
 	if mouseButtonIsNotPressedDown and mouseIsHoveringOver(self) then
-		-- Check for right-click first (before dock menu can intercept)
+
 		if self.onRightClick and gfx.mouse_cap == 2 then
 			mouseButtonIsNotPressedDown = false
 			self.onRightClick()
 		elseif leftMouseButtonIsHeldDown() then
 			mouseButtonIsNotPressedDown = false
-			self.onClick()
+			if self.onClick then self.onClick() end
 		end
 	end
 end
 
--- Toggle button for HOLD mode
+
 ToggleButton = {}
 ToggleButton.__index = ToggleButton
 
@@ -6348,30 +6623,30 @@ function ToggleButton:new(text, x, y, width, height, getState, onToggle, onRight
 	self.height = height
 	self.getState = getState
 	self.onToggle = onToggle
-	self.onRightClick = onRightClick  -- Optional right-click handler
-	self.getTooltip = getTooltip  -- Optional tooltip function
-  self.drawBorder = drawBorder -- Optional border
+	self.onRightClick = onRightClick
+	self.getTooltip = getTooltip
+  self.drawBorder = drawBorder
 	return self
 end
 
 function ToggleButton:draw()
-	-- Draw border if enabled
+
   if self.drawBorder then
     setColor("999999")
     gfx.rect(self.x, self.y, self.width, self.height, false)
-    -- Double thickness for clarity
+
     gfx.rect(self.x+1, self.y+1, self.width-2, self.height-2, false)
   end
 
 	local isActive = self.getState()
 	
-	-- Draw text - color changes based on state
+
 	if isActive then
-		setColor("FFD700")  -- Geel wanneer actief
+		setColor("FFD700")
 	elseif mouseIsHoveringOver(self) then
-		setColor("FFFFFF")  -- Wit bij hover
+		setColor("FFFFFF")
 	else
-		setColor("CCCCCC")  -- Normaal grijs
+		setColor("CCCCCC")
 	end
 	
 	local stringWidth, stringHeight = gfx.measurestr(self.text)
@@ -6379,7 +6654,7 @@ function ToggleButton:draw()
 	gfx.y = self.y + ((self.height - stringHeight) / 2)
 	gfx.drawstr(self.text)
 	
-	-- Queue tooltip if enabled and hovering
+
 	if tooltipsEnabled and mouseIsHoveringOver(self) and self.getTooltip then
 		local tooltip = self.getTooltip()
 		if tooltip then
@@ -6395,11 +6670,11 @@ function ToggleButton:update()
     if leftMouseButtonIsHeldDown() then
       mouseButtonIsNotPressedDown = false
       
-      -- Check for Ctrl+Click first (for settings)
+
       if self.onRightClick and ctrlModifierIsHeldDown() then
         self.onRightClick()
       else
-        -- Normal click to toggle
+
         self.onToggle()
       end
     elseif rightMouseButtonIsHeldDown() then
@@ -6411,33 +6686,42 @@ function ToggleButton:update()
 	end
 end
 
--- Cycle Button (cycles through multiple options)
+
 CycleButton = {}
 CycleButton.__index = CycleButton
 
-function CycleButton:new(x, y, width, height, options, getCurrentIndex, onCycle)
+function CycleButton:new(x, y, width, height, options, getCurrentIndex, onCycle, drawBorder)
 	local self = {}
 	setmetatable(self, CycleButton)
 	self.x = x
 	self.y = y
 	self.width = width
 	self.height = height
-	self.options = options  -- Array of strings like {"1.0x", "1.5x", "2.0x"}
-	self.getCurrentIndex = getCurrentIndex  -- Function that returns current index (1-based)
-	self.onCycle = onCycle  -- Function called when cycling, receives new index
+	self.options = options
+	self.getCurrentIndex = getCurrentIndex
+	self.onCycle = onCycle
+	self.drawBorder = drawBorder
 	return self
 end
 
 function CycleButton:draw()
-	-- No background or outline - just text
+
+	if self.drawBorder then
+		setColor("999999")
+		gfx.rect(self.x, self.y, self.width, self.height, false)
+
+		gfx.rect(self.x+1, self.y+1, self.width-2, self.height-2, false)
+	end
+
+
 	local currentIndex = self.getCurrentIndex()
 	local text = self.options[currentIndex] or "?"
 	
-	-- Draw text
+
 	if mouseIsHoveringOver(self) then
-		setColor("FFD700")  -- Geel bij hover
+		setColor("FFD700")
 	else
-		setColor("CCCCCC")  -- Normaal grijs
+		setColor("CCCCCC")
 	end
 	
 	local stringWidth, stringHeight = gfx.measurestr(text)
@@ -6457,33 +6741,33 @@ function CycleButton:update()
 	end
 end
 
--- Help Window Function
+
 function showHelpWindow()
-	-- Check if help window is already open
+
 	if helpWindowOpen then return end
 	
-	-- Get the directory of the current script
+
 	local scriptPath = debug.getinfo(1, "S").source:match("@?(.*)")
 	local scriptDir = scriptPath:match("(.+)[/\\]")
 	local helpScriptPath = scriptDir .. "/TK_ChordGun_Help.lua"
 	
-	-- Signal help script to open
+
 	reaper.SetExtState("TKChordGunHelp", "shouldOpen", "1", false)
 	helpWindowOpen = true
 	
-	-- Use ReaScript API to run in background without registration dialog
-	-- Create a temporary action that runs the help script
-	local cmdID = reaper.AddRemoveReaScript(true, 0, helpScriptPath, false)  -- false = don't add to action list
+
+
+	local cmdID = reaper.AddRemoveReaScript(true, 0, helpScriptPath, false)
 	if cmdID and cmdID > 0 then
 		reaper.Main_OnCommand(cmdID, 0)
-		-- Don't remove immediately - let it run
+
 	end
 end
 
--- Help window state tracking
+
 local helpWindowOpen = false
 
--- Fifth Wheel (Circle of Fifths) Popup
+
 local fifthWheelWindow = nil
 local fifthWheelWindowOpen = false
 local lastSyncedTonic = nil
@@ -6496,21 +6780,28 @@ function showFifthWheel()
 	local scriptPath = debug.getinfo(1, "S").source:match("@?(.*)")
 	local scriptDir = scriptPath:match("(.+)[/\\]")
 	
-	-- Pass UI scale to popup via ExtState (calculate from current window size)
+
 	local scaleX = gfx.w / baseWidth
 	local scaleY = gfx.h / baseHeight
 	local uiScale = (scaleX + scaleY) / 2
 	reaper.SetExtState("TKChordGunFifthWheel", "uiScale", tostring(uiScale), false)
 	
-	-- Create fifth wheel script in memory and execute
+
 	local wheelScript = [[
 	local notes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
 	local notesFlat = {"C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"}
-	local noteOrder = {1, 8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6}  -- Circle of fifths order
-	local useFlats = false  -- Toggle between sharps and flats		-- Get UI scale from ExtState (passed by parent)
+	
+
+	local orderFifths = {1, 8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6}
+	local orderChromatic = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	
+	local useFlats = false
+	local useChromatic = false
+	
+
 		local uiScale = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "uiScale")) or 1.0
 		
-		-- Scaling function
+
 		local function s(size)
 			return math.floor(size * uiScale + 0.5)
 		end
@@ -6521,17 +6812,20 @@ function showFifthWheel()
 	local radius = s(140)
 	local noteRadius = s(28)
 	
-	-- Get saved window position from ExtState
+
 	local savedX = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "windowX")) or -1
 	local savedY = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "windowY")) or -1
 	
-	gfx.init("Circle of Fifths", windowW, windowH, 0, savedX, savedY)
+	gfx.init("Circle of Fifths / Modes", windowW, windowH, 0, savedX, savedY)
 	gfx.setfont(1, "Arial", s(16), string.byte('b'))	function drawWheel()
-		-- Background
+
 		gfx.set(0.15, 0.15, 0.15, 1)
 		gfx.rect(0, 0, windowW, windowH, 1)
 		
-		-- Draw sharp/flat toggle button at top-left
+
+		local noteOrder = useChromatic and orderChromatic or orderFifths
+		
+
 		local toggleText = useFlats and "b" or "#"
 		gfx.setfont(2, "Arial", s(16), string.byte('b'))
 		local toggleW = gfx.measurestr(toggleText)
@@ -6542,24 +6836,39 @@ function showFifthWheel()
 		local toggleButtonY = toggleY
 		local toggleButtonW = s(24)
 		
-		-- Draw button background
+
 		gfx.set(0.25, 0.25, 0.25, 1)
 		gfx.rect(toggleButtonX, toggleButtonY, toggleButtonW, toggleH, 1)
 		
-		-- Draw button border
+
 		gfx.set(0.5, 0.5, 0.5, 1)
 		gfx.rect(toggleButtonX, toggleButtonY, toggleButtonW, toggleH, 0)
 		
-		-- Draw button text (centered in button)
+
 		gfx.set(1, 1, 1, 1)
 		gfx.x = toggleButtonX + (toggleButtonW - toggleW) / 2
 		gfx.y = toggleButtonY + (toggleH - s(16)) / 2
 		gfx.drawstr(toggleText)
 		
-		-- Select note array based on toggle
+
+		local orderText = useChromatic and "Chromatic" or "Fifths"
+		local orderW = gfx.measurestr(orderText)
+		local orderButtonW = orderW + s(20)
+		local orderButtonX = windowW - orderButtonW - s(10)
+		
+		gfx.set(0.25, 0.25, 0.25, 1)
+		gfx.rect(orderButtonX, toggleButtonY, orderButtonW, toggleH, 1)
+		gfx.set(0.5, 0.5, 0.5, 1)
+		gfx.rect(orderButtonX, toggleButtonY, orderButtonW, toggleH, 0)
+		gfx.set(1, 1, 1, 1)
+		gfx.x = orderButtonX + (orderButtonW - orderW) / 2
+		gfx.y = toggleButtonY + (toggleH - s(16)) / 2
+		gfx.drawstr(orderText)
+		
+
 		local displayNotes = useFlats and notesFlat or notes
 		
-		-- Get current scale info from extstate
+
 		local currentTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "tonic")) or 1
 		local isCustomScale = reaper.GetExtState("TKChordGunFifthWheel", "isCustom") == "1"
 		local scalePattern = {}
@@ -6567,53 +6876,99 @@ function showFifthWheel()
 			scalePattern[i] = reaper.GetExtState("TKChordGunFifthWheel", "scale" .. i) == "1"
 		end
 		
-		-- Function to get harmonic distance color
-		local function getHarmonicDistanceColor(noteIndex, tonicIndex)
-			-- Find positions in circle of fifths
-			local pos1, pos2
+
+		local symmetryPoints = {}
+		if useChromatic then
+			local activeNotes = {}
 			for i = 1, 12 do
-				if noteOrder[i] == noteIndex then pos1 = i end
-				if noteOrder[i] == tonicIndex then pos2 = i end
+				if scalePattern[i] then table.insert(activeNotes, i) end
 			end
 			
-			-- Calculate direction and distance
+			if #activeNotes > 0 then
+				for shift = 1, 11 do
+					local matches = 0
+					for _, noteIdx in ipairs(activeNotes) do
+						local shiftedIdx = ((noteIdx - 1 + shift) % 12) + 1
+						if scalePattern[shiftedIdx] then
+							matches = matches + 1
+						end
+					end
+					if matches == #activeNotes then
+
+						local symNoteIdx = ((currentTonic - 1 + shift) % 12) + 1
+						symmetryPoints[symNoteIdx] = true
+					end
+				end
+			end
+		end
+		
+
+		local function getHarmonicDistanceColor(noteIndex, tonicIndex)
+
+			local pos1, pos2
+			for i = 1, 12 do
+				if orderFifths[i] == noteIndex then pos1 = i end
+				if orderFifths[i] == tonicIndex then pos2 = i end
+			end
+			
+
 			local diff = pos1 - pos2
 			local dist = math.min(math.abs(diff), 12 - math.abs(diff))
 			
 			if dist == 0 then
-				return {1.0, 0.84, 0.0}  -- Gold (tonic)
+				return {1.0, 0.84, 0.0}
 			elseif dist == 1 then
-				-- Check if clockwise (dominant) or counterclockwise (subdominant)
+
 				local clockwise = (diff == 1) or (diff == -11)
 				if clockwise then
-					return {0.4, 0.85, 0.4}  -- Green (dominant V)
+					return {0.4, 0.85, 0.4}
 				else
-					return {0.9, 0.4, 0.8}  -- Magenta (subdominant IV)
+					return {0.9, 0.4, 0.8}
 				end
 			elseif dist == 2 then
-				return {0.5, 0.9, 0.9}  -- Cyan (ii Supertonic)
+				return {0.5, 0.9, 0.9}
 			elseif dist == 3 then
-				return {1.0, 0.6, 0.2}  -- Orange (vi Submediant)
+				return {1.0, 0.6, 0.2}
 			elseif dist == 4 then
-				return {0.85, 0.5, 0.35}  -- Terracotta (iii Mediant)
+				return {0.85, 0.5, 0.35}
 			else
-				return {0.5, 0.3, 0.3}  -- Brown (viio Leading tone)
+				return {0.5, 0.3, 0.3}
 			end
 		end			gfx.setfont(1, "Arial", 16, string.byte('b'))
 			
-			-- Draw connecting lines
-			gfx.set(0.5, 0.5, 0.5, 1)
+
+
+			gfx.set(0.5, 0.5, 0.5, 0.3)
+			
+
+			local activeIndices = {}
 			for i = 1, 12 do
-				local angle1 = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
-				local angle2 = (i % 12) * (math.pi * 2 / 12) - (math.pi / 2)
-				local x1 = centerX + math.cos(angle1) * radius
-				local y1 = centerY + math.sin(angle1) * radius
-				local x2 = centerX + math.cos(angle2) * radius
-				local y2 = centerY + math.sin(angle2) * radius
-				gfx.line(x1, y1, x2, y2, 1)
+				local noteIndex = noteOrder[i]
+				if scalePattern[noteIndex] then
+					table.insert(activeIndices, i)
+				end
 			end
 			
-			-- Draw note circles
+
+			if #activeIndices > 1 then
+				gfx.set(1, 1, 1, 0.15)
+				for i = 1, #activeIndices do
+					local idx1 = activeIndices[i]
+					local idx2 = activeIndices[(i % #activeIndices) + 1]
+					
+					local angle1 = (idx1 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+					local angle2 = (idx2 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+					
+					local x1 = centerX + math.cos(angle1) * radius
+					local y1 = centerY + math.sin(angle1) * radius
+					local x2 = centerX + math.cos(angle2) * radius
+					local y2 = centerY + math.sin(angle2) * radius
+					
+					gfx.line(x1, y1, x2, y2, 1)
+				end
+			end
+			
+
 			for i = 1, 12 do
 				local angle = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
 				local noteIndex = noteOrder[i]
@@ -6622,129 +6977,184 @@ function showFifthWheel()
 				
 			local isCurrentTonic = (noteIndex == currentTonic)
 			local isInScale = scalePattern[noteIndex]
+			local isSymmetryPoint = symmetryPoints[noteIndex]
 			
-	-- Draw circle with appropriate coloring
+
+			local currentNoteRadius = noteRadius
+			local drawText = true
+			
+			if useChromatic and not isInScale then
+				currentNoteRadius = s(5)
+				drawText = false
+			end
+			
+
 	local color
-	if isCustomScale then
-		-- Custom scales (Messiaen): simple colors, no harmonic distance
+	if isCustomScale or useChromatic then
+
 		if isCurrentTonic then
-			color = {1.0, 0.84, 0.0}  -- Gold (tonic)
+			color = {1.0, 0.84, 0.0}
 		elseif isInScale then
-			color = {0.5, 0.75, 0.9}  -- Light blue (in scale)
+			color = {0.5, 0.75, 0.9}
 		else
-			color = {0.3, 0.3, 0.3}  -- Gray (out of scale)
+			color = {0.2, 0.2, 0.2}
 		end
 	else
-		-- Diatonic scales: harmonic distance coloring
+
 		if isCurrentTonic then
-			color = {1.0, 0.84, 0.0}  -- Gold (tonic)
+			color = {1.0, 0.84, 0.0}
 		elseif isInScale then
-			-- Use harmonic distance color with brightness boost for in-scale notes
 			color = getHarmonicDistanceColor(noteIndex, currentTonic)
 			color[1] = math.min(1.0, color[1] * 1.2)
 			color[2] = math.min(1.0, color[2] * 1.2)
 			color[3] = math.min(1.0, color[3] * 1.2)
 		else
-			-- Out-of-scale: single neutral gray
-			color = {0.3, 0.3, 0.3}
+			color = {0.25, 0.25, 0.25}
 		end
 	end
 	gfx.set(color[1], color[2], color[3], 1)
-	gfx.circle(x, y, noteRadius, 1)	-- Draw border
+	gfx.circle(x, y, currentNoteRadius, 1)
 	if isCurrentTonic then
-		-- Tonic: thick white double border
 		gfx.set(1.0, 1.0, 1.0, 1)
-		gfx.circle(x, y, noteRadius, 0)
-		gfx.circle(x, y, noteRadius-1, 0)
+		gfx.circle(x, y, currentNoteRadius, 0)
+		gfx.circle(x, y, currentNoteRadius-1, 0)
 	elseif isInScale then
-		-- In-scale: thick white border for emphasis (5 layers)
 		gfx.set(1.0, 1.0, 1.0, 1)
-		gfx.circle(x, y, noteRadius, 0)
-		gfx.circle(x, y, noteRadius-1, 0)
-		gfx.circle(x, y, noteRadius-2, 0)
-		gfx.circle(x, y, noteRadius-3, 0)
-		gfx.circle(x, y, noteRadius-4, 0)
+		gfx.circle(x, y, currentNoteRadius, 0)
+		gfx.circle(x, y, currentNoteRadius-1, 0)
+		if isCustomScale or useChromatic then
+
+		else
+			gfx.circle(x, y, currentNoteRadius-2, 0)
+		end
 	else
-		-- Out-of-scale: normal gray border
-		gfx.set(0.5, 0.5, 0.5, 1)
-		gfx.circle(x, y, noteRadius, 0)
-	end			-- Draw note name (major) - always black for circles
-			gfx.set(0, 0, 0, 1)
-			gfx.setfont(1, "Arial", s(16), string.byte('b'))
-			local noteName = displayNotes[noteIndex]
-			local textW, textH = gfx.measurestr(noteName)
-			gfx.x = x - textW / 2
-			gfx.y = y - textH / 2 - s(6)
-			gfx.drawstr(noteName)
-			
-			-- Draw relative minor below
-			local minorNoteIndex = ((noteIndex + 8) % 12) + 1  -- 3 semitones down: C(1)→A(10), G(8)→E(5)
-			local minorName = displayNotes[minorNoteIndex] .. "m"
-			gfx.setfont(4, "Arial", s(13))
-			local minorW, minorH = gfx.measurestr(minorName)
-			gfx.x = x - minorW / 2
-			gfx.y = y - minorH / 2 + s(8)
-			gfx.set(0, 0, 0, 1)  -- Black for all circles
-			gfx.drawstr(minorName)
+		gfx.set(0.4, 0.4, 0.4, 1)
+		gfx.circle(x, y, currentNoteRadius, 0)
+	end
+	
+
+	if isSymmetryPoint and not isCurrentTonic then
+		gfx.set(1.0, 0.84, 0.0, 0.6)
+		gfx.circle(x, y, currentNoteRadius + s(4), 0)
+		gfx.circle(x, y, currentNoteRadius + s(5), 0)
+		gfx.circle(x, y, currentNoteRadius + s(6), 0)
+		gfx.circle(x, y, currentNoteRadius + s(7), 0)
+	end
+	
+
+			if drawText then
+				gfx.set(0, 0, 0, 1)
+				gfx.setfont(1, "Arial", s(16), string.byte('b'))
+				local noteName = displayNotes[noteIndex]
+				local textW, textH = gfx.measurestr(noteName)
+				gfx.x = x - textW / 2
+				gfx.y = y - textH / 2
+				
+
+				if not useChromatic then
+					gfx.y = y - textH / 2 - s(6)
+				end
+				
+				gfx.drawstr(noteName)
+				
+
+				if not useChromatic then
+					local minorNoteIndex = ((noteIndex + 8) % 12) + 1
+					local minorName = displayNotes[minorNoteIndex] .. "m"
+					gfx.setfont(4, "Arial", s(13))
+					local minorW, minorH = gfx.measurestr(minorName)
+					gfx.x = x - minorW / 2
+					gfx.y = y - minorH / 2 + s(8)
+					gfx.set(0, 0, 0, 1)
+					gfx.drawstr(minorName)
+				end
+			end
 		end
 	
-	-- Draw legend in center of circle
+
 	gfx.setfont(5, "Arial", s(13))
-	local legendY = centerY - s(80)
-	local lineHeight = s(18)
+	local legendY = centerY - s(20)
 	
-	-- Legend title
-	gfx.set(1, 1, 1, 1)
-	local titleText = "Color Legend:"
-	local titleW = gfx.measurestr(titleText)
-	gfx.x = centerX - titleW / 2
-	gfx.y = legendY
-	gfx.drawstr(titleText)
-	legendY = legendY + lineHeight + s(4)
-	
-	-- Legend items with color boxes (different for custom scales)
-	local legendItems
-	if isCustomScale then
-		legendItems = {
-			{{1.0, 0.84, 0.0}, "Tonic (root note)"},
-			{{0.5, 0.75, 0.9}, "In scale"},
-			{{0.3, 0.3, 0.3}, "Out of scale"}
-		}
-	else
-		legendItems = {
-			{{1.0, 0.84, 0.0}, "Tonic"},
-			{{0.4, 0.85, 0.4}, "+1 Fifth up"},
-			{{0.9, 0.4, 0.8}, "-1 Fifth down"},
-			{{0.5, 0.9, 0.9}, "+2 Fifths up"},
-			{{1.0, 0.6, 0.2}, "+3 Fifths up"},
-			{{0.85, 0.5, 0.35}, "+4 Fifths up"},
-			{{0.5, 0.3, 0.3}, "+5/6 Fifths (Tritone)"}
-		}
-	end
-	
-	for i, item in ipairs(legendItems) do
-		local color = item[1]
-		local label = item[2]
-		
-		-- Draw color box
-		gfx.set(color[1], color[2], color[3], 1)
-		local boxSize = s(12)
-		local boxX = centerX - s(50)
-		gfx.rect(boxX, legendY, boxSize, boxSize, 1)
-		
-		-- Draw label (white text for all)
+	if useChromatic then
+
 		gfx.set(1, 1, 1, 1)
-		gfx.x = boxX + boxSize + s(6)
+		local titleText = "Chromatic Order"
+		local titleW = gfx.measurestr(titleText)
+		gfx.x = centerX - titleW / 2
 		gfx.y = legendY
-		gfx.drawstr(label)
+		gfx.drawstr(titleText)
 		
-		legendY = legendY + lineHeight
+		gfx.set(0.7, 0.7, 0.7, 1)
+		local subText = "Visualizes symmetry"
+		local subW = gfx.measurestr(subText)
+		gfx.x = centerX - subW / 2
+		gfx.y = legendY + s(18)
+		gfx.drawstr(subText)
+		
+
+		gfx.set(1.0, 0.84, 0.0, 0.8)
+		local haloText = "Halo: Equivalent Tonic"
+		local haloW = gfx.measurestr(haloText)
+		gfx.x = centerX - haloW / 2
+		gfx.y = legendY + s(36)
+		gfx.drawstr(haloText)
+	else
+
+
+		gfx.set(1, 1, 1, 1)
+		local titleText = "Color Legend:"
+		local titleW = gfx.measurestr(titleText)
+		gfx.x = centerX - titleW / 2
+		gfx.y = legendY - s(60)
+		gfx.drawstr(titleText)
+		
+		local startY = legendY - s(40)
+		local lineHeight = s(18)
+		
+
+		local legendItems
+		if isCustomScale then
+			legendItems = {
+				{{1.0, 0.84, 0.0}, "Tonic (root note)"},
+				{{0.5, 0.75, 0.9}, "In scale"},
+				{{0.2, 0.2, 0.2}, "Out of scale"}
+			}
+		else
+			legendItems = {
+				{{1.0, 0.84, 0.0}, "Tonic"},
+				{{0.4, 0.85, 0.4}, "+1 Fifth up"},
+				{{0.9, 0.4, 0.8}, "-1 Fifth down"},
+				{{0.5, 0.9, 0.9}, "+2 Fifths up"},
+				{{1.0, 0.6, 0.2}, "+3 Fifths up"},
+				{{0.85, 0.5, 0.35}, "+4 Fifths up"},
+				{{0.5, 0.3, 0.3}, "+5/6 Fifths (Tritone)"}
+			}
+		end
+		
+		for i, item in ipairs(legendItems) do
+			local color = item[1]
+			local label = item[2]
+			
+
+			gfx.set(color[1], color[2], color[3], 1)
+			local boxSize = s(12)
+			local boxX = centerX - s(50)
+			gfx.rect(boxX, startY, boxSize, boxSize, 1)
+			
+
+			gfx.set(1, 1, 1, 1)
+			gfx.x = boxX + boxSize + s(6)
+			gfx.y = startY
+			gfx.drawstr(label)
+			
+			startY = startY + lineHeight
+		end
 	end
 	
-	-- Draw instruction text
+
 		gfx.setfont(3, "Arial", s(18))
 		gfx.set(0.7, 0.7, 0.7, 1)
-		local instr = "Click a note to change tonic • ESC to close"
+		local instr = "Click a note to change tonic â€¢ ESC to close"
 		local instrW = gfx.measurestr(instr)
 		gfx.x = (windowW - instrW) / 2
 		gfx.y = windowH - s(20)
@@ -6754,7 +7164,7 @@ end
 		drawWheel()
 		gfx.update()
 		
-	-- Check if parent script requested forced close
+
 	local forceClose = reaper.GetExtState("TKChordGunFifthWheel", "forceClose")
 	if forceClose == "1" then
 		reaper.SetExtState("TKChordGunFifthWheel", "forceClose", "0", false)
@@ -6763,31 +7173,42 @@ end
 	end
 	
 	local char = gfx.getchar()
-	if char == 27 or char == -1 then  -- ESC or closed
-		-- Save window position before closing
+	if char == 27 or char == -1 then
+
 		local dockState, posX, posY = gfx.dock(-1, 0, 0, 0, 0)
 		reaper.SetExtState("TKChordGunFifthWheel", "windowX", tostring(posX), true)
 		reaper.SetExtState("TKChordGunFifthWheel", "windowY", tostring(posY), true)
 		reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
 		return
-	end		-- Handle clicks (check mouse_cap for left button)
+	end
 		if gfx.mouse_cap & 1 == 1 then
 			local mx = gfx.mouse_x
 			local my = gfx.mouse_y
 			
-			-- Only trigger once per click (when button is first pressed)
+
 			if not mouseWasDown then
-				-- Check toggle button click
+
 				local toggleButtonX = s(10)
 				local toggleButtonY = s(10)
 				local toggleButtonW = s(24)
 				local toggleButtonH = s(24)
 				
+
+				local orderText = useChromatic and "Chromatic" or "Fifths"
+				gfx.setfont(2, "Arial", s(16), string.byte('b'))
+				local orderW = gfx.measurestr(orderText)
+				local orderButtonW = orderW + s(20)
+				local orderButtonX = windowW - orderButtonW - s(10)
+				
 				if mx >= toggleButtonX and mx <= toggleButtonX + toggleButtonW and
 				   my >= toggleButtonY and my <= toggleButtonY + toggleButtonH then
 					useFlats = not useFlats
+				elseif mx >= orderButtonX and mx <= orderButtonX + orderButtonW and
+				       my >= toggleButtonY and my <= toggleButtonY + toggleButtonH then
+					useChromatic = not useChromatic
 				else
-					-- Check note circle clicks
+
+					local noteOrder = useChromatic and orderChromatic or orderFifths
 					for i = 1, 12 do
 						local angle = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
 						local noteIndex = noteOrder[i]
@@ -6812,14 +7233,14 @@ end
 	
 	local mouseWasDown = false
 	main()
-]]	-- Write temporary script
+]]
 	local tempScriptPath = scriptDir .. "/TK_ChordGun_FifthWheel_Temp.lua"
 	local file = io.open(tempScriptPath, "w")
 	if file then
 		file:write(wheelScript)
 		file:close()
 		
-		-- Set current scale data in extstate
+
 		local currentTonic = getScaleTonicNote()
 		local currentScale = scales[getScaleType()]
 		local isCustomScale = currentScale.isCustom == true
@@ -6834,7 +7255,7 @@ end
 			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
 		end
 		
-		-- Run the script
+
 		local command = reaper.AddRemoveReaScript(true, 0, tempScriptPath, true)
 		if command > 0 then
 			reaper.Main_OnCommand(command, 0)
@@ -6845,7 +7266,7 @@ end
 function checkFifthWheelUpdates()
 	if not fifthWheelWindowOpen then return end
 	
-	-- Update popup only if main script state changed (efficient sync)
+
 	local currentTonic = getScaleTonicNote()
 	local currentScale = scales[getScaleType()]
 	local isCustomScale = currentScale.isCustom == true
@@ -6854,7 +7275,7 @@ function checkFifthWheelUpdates()
 		scaleHash = scaleHash .. (scalePattern and scalePattern[i] and "1" or "0")
 	end
 	
-	-- Only write to ExtState if values changed
+
 	if currentTonic ~= lastSyncedTonic or scaleHash ~= lastSyncedScale then
 		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(currentTonic), false)
 		reaper.SetExtState("TKChordGunFifthWheel", "isCustom", isCustomScale and "1" or "0", false)
@@ -6866,7 +7287,7 @@ function checkFifthWheelUpdates()
 		lastSyncedScale = scaleHash
 	end
 	
-	-- Check if window was closed
+
 	local closed = reaper.GetExtState("TKChordGunFifthWheel", "closed")
 	if closed == "1" then
 		fifthWheelWindowOpen = false
@@ -6876,7 +7297,7 @@ function checkFifthWheelUpdates()
 		return
 	end
 	
-	-- Check if user selected a new tonic
+
 	local selectedTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "selectedTonic"))
 	if selectedTonic and selectedTonic > 0 then
 		setScaleTonicNote(selectedTonic)
@@ -6887,7 +7308,7 @@ function checkFifthWheelUpdates()
 		updateScaleData()
 		updateScaleDegreeHeaders()
 		
-		-- Update scale data in extstate for the wheel (including isCustom)
+
 		local updatedScale = scales[getScaleType()]
 		local updatedIsCustom = updatedScale.isCustom == true
 		reaper.SetExtState("TKChordGunFifthWheel", "isCustom", updatedIsCustom and "1" or "0", false)
@@ -6901,7 +7322,7 @@ function checkFifthWheelUpdates()
 	end
 end
 
--- Piano Keyboard Visualizer
+
 PianoKeyboard = {}
 PianoKeyboard.__index = PianoKeyboard
 
@@ -6941,7 +7362,7 @@ function PianoKeyboard:updateDimensions()
 	self.blackKeyHeight = self.height * 0.6
 end
 
--- ProgressionSlots class
+
 ProgressionSlots = {}
 ProgressionSlots.__index = ProgressionSlots
 
@@ -6956,51 +7377,51 @@ function ProgressionSlots:new(x, y, width, height)
 end
 
 function ProgressionSlots:update()
-	local slotWidth = (self.width - s(14)) / 8  -- Verdeel breedte over 8 slots
+	local slotWidth = (self.width - s(14)) / 8
 	local slotHeight = self.height
 	
-	-- Teken elk slot
+
 	for i = 1, maxProgressionSlots do
 		local x = self.x + ((i - 1) * slotWidth) + ((i - 1) * s(2))
 		local y = self.y
 		
-		-- Check if mouse is hovering over this slot
+
 		local isHovering = gfx.mouse_x >= x and gfx.mouse_x <= x + slotWidth and
 		                   gfx.mouse_y >= y and gfx.mouse_y <= y + slotHeight
 		
-		-- Background color
+
 		local bgColor = {0.15, 0.15, 0.15}
 		if currentProgressionIndex == i and progressionPlaying then
-			bgColor = {0.2, 0.4, 0.6}  -- Blue highlight voor current playing slot
+			bgColor = {0.2, 0.4, 0.6}
 		elseif selectedProgressionSlot == i then
-			bgColor = {0.3, 0.5, 0.3}  -- Green highlight voor selected slot
+			bgColor = {0.3, 0.5, 0.3}
 		elseif isHovering then
-			bgColor = {0.2, 0.2, 0.2}  -- Lichter grijs bij hover
+			bgColor = {0.2, 0.2, 0.2}
 		end
 		
-		-- Teken rounded rectangle (simpel, zonder radius voor nu)
+
 		gfx.set(bgColor[1], bgColor[2], bgColor[3], 1)
 		gfx.rect(x, y, slotWidth, slotHeight, true)
 		
-		-- Border (dikker voor selected slot)
+
 		if selectedProgressionSlot == i then
-			gfx.set(0.5, 0.7, 0.5, 1)  -- Groene border voor selected
+			gfx.set(0.5, 0.7, 0.5, 1)
 			gfx.rect(x, y, slotWidth, slotHeight, false)
-			gfx.rect(x+1, y+1, slotWidth-2, slotHeight-2, false)  -- Dubbele border
+			gfx.rect(x+1, y+1, slotWidth-2, slotHeight-2, false)
 		else
 			gfx.set(0.3, 0.3, 0.3, 1)
 			gfx.rect(x, y, slotWidth, slotHeight, false)
 		end
 		
-		-- Loop endpoint indicator (orange right border)
+
 		if i == progressionLength then
-			gfx.set(1, 0.6, 0, 1)  -- Oranje kleur
+			gfx.set(1, 0.6, 0, 1)
 			gfx.rect(x + slotWidth - s(3), y, s(3), slotHeight, true)
 		end
 		
-		-- Tekst (chord naam)
+
     if chordProgression[i] then
-      -- Chord naam (bovenaan)
+
       gfx.set(1, 1, 1, 1)
       gfx.setfont(1, "Arial", fontSize(13))
 			local textW, textH = gfx.measurestr(chordProgression[i].text)
@@ -7008,7 +7429,7 @@ function ProgressionSlots:update()
 			gfx.y = y + s(5)
 			gfx.drawstr(chordProgression[i].text)
 			
-			-- Beats en Repeats info (onderaan, klein)
+
 			local beats = chordProgression[i].beats or 1
 			local repeats = chordProgression[i].repeats or 1
 			local infoText = beats .. "b"
@@ -7022,7 +7443,7 @@ function ProgressionSlots:update()
 			gfx.y = y + slotHeight - infoH - s(3)
 			gfx.drawstr(infoText)
     else
-      -- Lege slot - toon nummer
+
       gfx.set(0.4, 0.4, 0.4, 1)
       gfx.setfont(1, "Arial", fontSize(12))
 			local num = tostring(i)
@@ -7032,11 +7453,11 @@ function ProgressionSlots:update()
 			gfx.drawstr(num)
 		end
 		
-		-- Check for Shift+Left-click to set loop length (VOOR normal click, anders wordt slot geselecteerd)
+
 		if mouseButtonIsNotPressedDown and isHovering and gfx.mouse_cap & 1 == 1 and shiftModifierIsHeldDown() then
-			progressionLength = i  -- Set loop endpoint to clicked slot
+			progressionLength = i
 			mouseButtonIsNotPressedDown = false
-		-- Check for Ctrl+Left-click to set beats and repeats
+
 		elseif mouseButtonIsNotPressedDown and chordProgression[i] and isHovering and gfx.mouse_cap & 1 == 1 and ctrlModifierIsHeldDown() then
 			local currentBeats = chordProgression[i].beats or 1
 			local currentRepeats = chordProgression[i].repeats or 1
@@ -7050,45 +7471,45 @@ function ProgressionSlots:update()
 				beats = tonumber(beats)
 				repeats = tonumber(repeats)
 				
-				-- Validate beats (must be 1, 2, 4, or 8)
+
 				if beats and (beats == 1 or beats == 2 or beats == 4 or beats == 8) then
 					chordProgression[i].beats = beats
 				end
 				
-				-- Validate repeats (1-4)
+
 				if repeats and repeats >= 1 and repeats <= 4 then
 					chordProgression[i].repeats = math.floor(repeats)
 				end
 			end
 			mouseButtonIsNotPressedDown = false
-		-- Check for left-click on filled slot to preview/play chord (zonder modifiers)
+
 		elseif mouseButtonIsNotPressedDown and chordProgression[i] and isHovering and gfx.mouse_cap & 1 == 1 and not altModifierIsHeldDown() and not shiftModifierIsHeldDown() and not ctrlModifierIsHeldDown() then
-			-- Select the slot
+
 			selectedProgressionSlot = i
-			-- Play the chord from this slot
+
 			playChordFromSlot(i)
 			mouseButtonIsNotPressedDown = false
-		-- Check for left-click on empty slot to select for chord assignment
+
 		elseif mouseButtonIsNotPressedDown and not chordProgression[i] and isHovering and gfx.mouse_cap & 1 == 1 and not altModifierIsHeldDown() and not shiftModifierIsHeldDown() and not ctrlModifierIsHeldDown() then
 			if selectedProgressionSlot == i then
-				-- Click op dezelfde lege slot = deselect
+
 				selectedProgressionSlot = nil
 			else
-				-- Click op andere lege slot = select
+
 				selectedProgressionSlot = i
 			end
 			mouseButtonIsNotPressedDown = false
 		end
 		
-		-- Check for Right-click to clear slot
+
 		if mouseButtonIsNotPressedDown and chordProgression[i] and isHovering then
-			if gfx.mouse_cap & 2 == 2 then  -- Right click
+			if gfx.mouse_cap & 2 == 2 then
 				removeChordFromProgression(i)
 				mouseButtonIsNotPressedDown = false
 			end
 		end
 		
-		-- Queue tooltip if enabled and hovering
+
 		if tooltipsEnabled and isHovering then
 			local tooltip
 			if chordProgression[i] then
@@ -7102,13 +7523,13 @@ function ProgressionSlots:update()
 end
 
 function PianoKeyboard:getStartNote()
-	-- Bereken dynamisch de start note op basis van huidig octaaf
+
 	local currentOctave = getOctave()
-	return (currentOctave * 12) + 12  -- C van het huidige octaaf
+	return (currentOctave * 12) + 12
 end
 
 function PianoKeyboard:getNoteFromPosition(noteNumber)
-	-- Convert MIDI note to position on keyboard
+
 	local startNote = self:getStartNote()
 	local relativeNote = noteNumber - startNote
 	if relativeNote < 0 or relativeNote >= (self.numOctaves * 12) then
@@ -7118,8 +7539,8 @@ function PianoKeyboard:getNoteFromPosition(noteNumber)
 	local octave = math.floor(relativeNote / 12)
 	local noteInOctave = relativeNote % 12
 	
-	-- Map to white key position
-	local whiteKeyMap = {0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6}  -- C, C#, D, D#, E, F, F#, G, G#, A, A#, B
+
+	local whiteKeyMap = {0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6}
 	local isBlack = {false, true, false, true, false, false, true, false, true, false, true, false}
 	
 	local whiteKeyIndex = whiteKeyMap[noteInOctave + 1] + (octave * 7)
@@ -7132,10 +7553,10 @@ function PianoKeyboard:getNoteFromPosition(noteNumber)
 end
 
 function PianoKeyboard:getActiveNotes()
-	-- Get currently playing notes from the chord
+
 	local activeNotes = {}
 	
-	-- Check if there's a currently held button OR a last played chord in hold mode
+
 	local activeButton = currentlyHeldButton or lastPlayedChord
 	
 	if activeButton then
@@ -7147,7 +7568,7 @@ function PianoKeyboard:getActiveNotes()
 			local chord = scaleChords[selectedScaleNote][selectedChordType]
 			local octave = getOctave()
 			
-			-- Use the same logic as getChordNotesArray
+
 			local chordPattern = chord["pattern"]
 			for n = 0, #chordPattern-1 do
 				if chordPattern:sub(n+1, n+1) == '1' then
@@ -7156,7 +7577,7 @@ function PianoKeyboard:getActiveNotes()
 				end
 			end
 			
-			-- Apply inversion
+
 			activeNotes = applyInversion(activeNotes)
 		end
 	end
@@ -7167,39 +7588,39 @@ end
 function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActive, isCKey, octaveIndex)
 	local x = self.x + (index * self.whiteKeyWidth)
 	local y = self.y
-	local w = self.whiteKeyWidth - s(1)  -- Small gap between keys
+	local w = self.whiteKeyWidth - s(1)
 	local h = self.height
 	
-	-- Check if note is in scale
-	-- noteNumber is MIDI note (60 = middle C, etc.)
-	-- We need to convert to 1-based index for noteIsInScale
-	-- MIDI: C=0,C#=1,D=2... modulo 12
-	-- Lua index: C=1,C#=2,D=3... (1-12)
-	local noteInChromatic = noteNumber % 12  -- 0-11 (C=0, C#=1, etc.)
-	local noteForScale = noteInChromatic + 1  -- Convert to 1-12 to match getNotesIndex output
+
+
+
+
+
+	local noteInChromatic = noteNumber % 12
+	local noteForScale = noteInChromatic + 1
 	local inScale = scalePattern[noteForScale] or false
 	
-  -- Draw key
+
   if isActive or isExternalActive then
-    setColor("4DA6FF")  -- Blue for all playing notes
+    setColor("4DA6FF")
   elseif inScale then
-		setColor("F0F0F0")  -- Off-white voor noten in de scale
+		setColor("F0F0F0")
 	else
-		setColor("C0C0C0")  -- Grijs voor noten buiten de scale
+		setColor("C0C0C0")
 	end
 	gfx.rect(x, y, w, h, true)
 	
-	-- Draw outline
+
 	setColor("000000")
 	gfx.rect(x, y, w, h, false)
 	
-	-- Draw note name
+
   local noteName = notes[noteForScale]
   
-  -- Add remap mapping if in Remap mode
+
   if scaleFilterMode == 2 and (noteInChromatic == 0 or noteInChromatic == 2 or noteInChromatic == 4 or noteInChromatic == 5 or noteInChromatic == 7 or noteInChromatic == 9 or noteInChromatic == 11) then
-    -- This is a white key, calculate what it maps to
-    local whiteKeys = {0, 2, 4, 5, 7, 9, 11}  -- C D E F G A B
+
+    local whiteKeys = {0, 2, 4, 5, 7, 9, 11}
     local whiteKeyIndex = nil
     for i, wk in ipairs(whiteKeys) do
       if wk == noteInChromatic then
@@ -7209,7 +7630,7 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
     end
     
     if whiteKeyIndex and scalePattern then
-      -- Build scale notes array
+
       local scaleNotes = {}
       for i = 1, 12 do
         if scalePattern[i] then
@@ -7222,9 +7643,9 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
         local mappedNote = scaleNotes[scaleIdx]
         local mappedNoteName = notes[mappedNote + 1]
         
-        -- Only show mapping if different from original
+
         if mappedNote ~= noteInChromatic then
-          noteName = noteName .. "→" .. mappedNoteName
+          noteName = noteName .. "â†’" .. mappedNoteName
         end
       end
     end
@@ -7233,20 +7654,20 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
   gfx.setfont(1, "Arial", fontSize(14))
 	local stringWidth, stringHeight = gfx.measurestr(noteName)
 	
-  -- Use dark text for light keys, light text for active keys
+
   if isActive then
-		setColor("000000")  -- Zwart op goud
+		setColor("000000")
   elseif isExternalActive then
-    setColor("FFFFFF")  -- Wit tekst op blauw
+    setColor("FFFFFF")
 	else
-		setColor("333333")  -- Donkergrijs op wit/grijs
+		setColor("333333")
 	end
 	
 	gfx.x = x + (w - stringWidth) / 2
-	gfx.y = y + h - stringHeight - s(4)  -- Onderaan de toets
+	gfx.y = y + h - stringHeight - s(4)
   gfx.drawstr(noteName)
 
-  -- Show octave number next to C labels, tied to octave selector
+
   if isCKey then
     local octaveLabel = tostring(getOctave() + (octaveIndex or 0))
     gfx.setfont(1, "Arial", fontSize(14))
@@ -7262,7 +7683,7 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
     gfx.drawstr(octaveLabel)
   end
 	
-  -- Reset font
+
   gfx.setfont(1, "Arial", fontSize(15))
 end
 
@@ -7272,50 +7693,50 @@ function PianoKeyboard:drawBlackKey(whiteKeyIndex, noteInOctave, isActive, noteN
 	local w = self.blackKeyWidth
 	local h = self.blackKeyHeight
 	
-	-- Check if note is in scale
-	-- noteNumber is MIDI note, convert to 1-based index for scalePattern
-	local noteInChromatic = noteNumber % 12  -- 0-11 (C=0, C#=1, etc.)
-	local noteForScale = noteInChromatic + 1  -- Convert to 1-12
+
+
+	local noteInChromatic = noteNumber % 12
+	local noteForScale = noteInChromatic + 1
 	local inScale = scalePattern[noteForScale] or false
 	
-  -- Draw key
+
   if isActive or isExternalActive then
-    setColor("4DA6FF")  -- Blue for all playing notes
+    setColor("4DA6FF")
   elseif inScale then
-		setColor("1A1A1A")  -- Dark gray/black voor zwarte toetsen in scale
+		setColor("1A1A1A")
 	else
-		setColor("606060")  -- Donkerder grijs voor zwarte toetsen buiten scale
+		setColor("606060")
 	end
 	gfx.rect(x, y, w, h, true)
 	
-	-- Draw outline
+
 	setColor("000000")
 	gfx.rect(x, y, w, h, false)
 	
-	-- Draw note name
+
   local noteName = notes[noteForScale]
   gfx.setfont(1, "Arial", fontSize(12))
 	local stringWidth, stringHeight = gfx.measurestr(noteName)
 	
-  -- Use light text for dark keys
+
   if isActive then
-		setColor("000000")  -- Zwart op goud
+		setColor("000000")
   elseif isExternalActive then
-    setColor("FFFFFF")  -- Wit tekst op blauw
+    setColor("FFFFFF")
 	else
-		setColor("FFFFFF")  -- Wit op zwart/grijs
+		setColor("FFFFFF")
 	end
 	
 	gfx.x = x + (w - stringWidth) / 2
-	gfx.y = y + h - stringHeight - s(3)  -- Onderaan de toets
+	gfx.y = y + h - stringHeight - s(3)
 	gfx.drawstr(noteName)
 	
-  -- Reset font
+
   gfx.setfont(1, "Arial", fontSize(15))
 end
 
 function PianoKeyboard:draw()
-	-- Get active notes
+
 	local activeNotes = self:getActiveNotes()
 	local activeNoteSet = {}
 	for _, note in ipairs(activeNotes) do
@@ -7323,16 +7744,16 @@ function PianoKeyboard:draw()
 	end
   local externalNoteSet = externalMidiNotes or {}
 	
-	local startNote = self:getStartNote()  -- Gebruik dynamische startNote
+	local startNote = self:getStartNote()
 	
-	-- Draw white keys first
+
 	for i = 0, self.numWhiteKeys - 1 do
 		local octave = math.floor(i / 7)
 		local keyInOctave = i % 7
 		local noteNumber = startNote + (octave * 12)
 		
-		-- Map white key to MIDI note
-    local whiteKeyToNote = {0, 2, 4, 5, 7, 9, 11}  -- C, D, E, F, G, A, B
+
+    local whiteKeyToNote = {0, 2, 4, 5, 7, 9, 11}
 		noteNumber = noteNumber + whiteKeyToNote[keyInOctave + 1]
 		
     local isActive = activeNoteSet[noteNumber] or false
@@ -7341,20 +7762,20 @@ function PianoKeyboard:draw()
       self:drawWhiteKey(i, isActive, noteNumber, isExternalActive, isCKey, octave)
 	end
 	
-	-- Draw black keys on top
+
 	for i = 0, self.numWhiteKeys - 1 do
 		local octave = math.floor(i / 7)
 		local keyInOctave = i % 7
 		
 		if self.blackKeyPattern[keyInOctave + 1] == 1 then
-			local startNote = self:getStartNote()  -- Gebruik dynamische startNote
+			local startNote = self:getStartNote()
 			local noteNumber = startNote + (octave * 12)
 			local whiteKeyToNote = {0, 2, 4, 5, 7, 9, 11}
-			noteNumber = noteNumber + whiteKeyToNote[keyInOctave + 1] + 1  -- +1 for sharp
+			noteNumber = noteNumber + whiteKeyToNote[keyInOctave + 1] + 1
 			
       local isActive = activeNoteSet[noteNumber] or false
       local isExternalActive = externalNoteSet[noteNumber] or false
-      self:drawBlackKey(i, keyInOctave, isActive, noteNumber, isExternalActive)  -- Geef noteNumber door
+      self:drawBlackKey(i, keyInOctave, isActive, noteNumber, isExternalActive)
 		end
 	end
 end
@@ -7457,11 +7878,11 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 local function moveEditCursorLeftByGrid()
   local editor = activeMidiEditor()
   if editor then
-    -- Gebruik MIDI editor actie
+
 	  local commandId = 40047
 	  reaper.MIDIEditor_OnCommand(editor, commandId)
   else
-    -- Gebruik Main window actie (Move edit cursor back one grid unit)
+
     reaper.Main_OnCommand(40104, 0)
   end
 end
@@ -7469,11 +7890,11 @@ end
 local function moveEditCursorRightByGrid()
   local editor = activeMidiEditor()
   if editor then
-    -- Gebruik MIDI editor actie
+
 	  local commandId = 40048
 	  reaper.MIDIEditor_OnCommand(editor, commandId)
   else
-    -- Gebruik Main window actie (Move edit cursor forward one grid unit)
+
     reaper.Main_OnCommand(40105, 0)
   end
 end
@@ -7507,7 +7928,7 @@ function handleInput()
 
 	--
 
-	-- Dynamische number keys (1-9) voor preview chords
+
 	local numberKeys = {"1", "2", "3", "4", "5", "6", "7", "8", "9"}
 	for i = 1, math.min(#scaleNotes, 9) do
 		if inputCharacter == inputCharacters[numberKeys[i]] then
@@ -7517,7 +7938,7 @@ function handleInput()
 
 	--
 
-	-- Dynamische shift+number keys (!-() voor insert chords
+
 	local shiftNumberKeys = {"!", "@", "#", "$", "%", "^", "&", "*", "("}
 	for i = 1, math.min(#scaleNotes, 9) do
 		if inputCharacter == inputCharacters[shiftNumberKeys[i]] then
@@ -7527,7 +7948,7 @@ function handleInput()
 
 	--
 
-	-- Dynamische q-i keys voor preview higher scale notes
+
 	local qwertyKeys = {"q", "w", "e", "r", "t", "y", "u", "i", "o"}
 	for i = 1, math.min(#scaleNotes, 9) do
 		if inputCharacter == inputCharacters[qwertyKeys[i]] then
@@ -7537,7 +7958,7 @@ function handleInput()
 
 	--
 
-	-- Dynamische a-k keys voor preview scale notes
+
 	local asdfKeys = {"a", "s", "d", "f", "g", "h", "j", "k", "l"}
 	for i = 1, math.min(#scaleNotes, 9) do
 		if inputCharacter == inputCharacters[asdfKeys[i]] then
@@ -7547,7 +7968,7 @@ function handleInput()
 
 	--
 
-	-- Dynamische z-, keys voor preview lower scale notes
+
 	local zxcvKeys = {"z", "x", "c", "v", "b", "n", "m", ",", "."}
 	for i = 1, math.min(#scaleNotes, 9) do
 		if inputCharacter == inputCharacters[zxcvKeys[i]] then
@@ -7559,7 +7980,7 @@ function handleInput()
 
 	--
 
-	-- Dynamische Q-I keys voor insert higher scale notes
+
 	local QWERTYKeys = {"Q", "W", "E", "R", "T", "Y", "U", "I", "O"}
 	for i = 1, math.min(#scaleNotes, 9) do
 		if inputCharacter == inputCharacters[QWERTYKeys[i]] then
@@ -7569,7 +7990,7 @@ function handleInput()
 
 	--
 
-	-- Dynamische A-K keys voor insert scale notes
+
 	local ASDFKeys = {"A", "S", "D", "F", "G", "H", "J", "K", "L"}
 	for i = 1, math.min(#scaleNotes, 9) do
 		if inputCharacter == inputCharacters[ASDFKeys[i]] then
@@ -7579,7 +8000,7 @@ function handleInput()
 
 	--
 
-	-- Dynamische Z-< keys voor insert lower scale notes
+
 	local ZXCVKeys = {"Z", "X", "C", "V", "B", "N", "M", "<", ">"}
 	for i = 1, math.min(#scaleNotes, 9) do
 		if inputCharacter == inputCharacters[ZXCVKeys[i]] then
@@ -7747,12 +8168,12 @@ function Interface:init(name)
   self.x = getInterfaceXPosition()
   self.y = getInterfaceYPosition()
   
-  -- Calculate minimum width based on scale size
+
   local dynamicBaseWidth = getDynamicBaseWidth()
   local minWidth = dynamicBaseWidth
   local minHeight = baseHeight
   
-  -- Use current window size if larger than minimum, otherwise use minimum
+
   if interfaceWidth < minWidth then
     self.width = minWidth
   else
@@ -7776,12 +8197,12 @@ end
 function Interface:restartGui()
 	self.elements = {}
 	
-	-- Calculate minimum width based on scale size
+
 	local dynamicBaseWidth = getDynamicBaseWidth()
 	local minWidth = dynamicBaseWidth
 	local minHeight = baseHeight
 	
-	-- Preserve user's window size if larger than minimum
+
 	if gfx.w < minWidth then
 		self.width = minWidth
 	else
@@ -7831,7 +8252,7 @@ function Interface:addMainWindow()
   
 	gfx.init(self.name, self.width, self.height, dockState, self.x, self.y)
 	
-  -- Set scaled font size
+
   applyDefaultFont()
 end
 
@@ -7883,9 +8304,9 @@ function Interface:addToggleButton(text, x, y, width, height, getState, onToggle
 	table.insert(self.elements, button)
 end
 
-function Interface:addCycleButton(x, y, width, height, options, getCurrentIndex, onCycle)
+function Interface:addCycleButton(x, y, width, height, options, getCurrentIndex, onCycle, drawBorder)
 
-	local button = CycleButton:new(x, y, width, height, options, getCurrentIndex, onCycle)
+	local button = CycleButton:new(x, y, width, height, options, getCurrentIndex, onCycle, drawBorder)
 	table.insert(self.elements, button)
 end
 
@@ -7914,7 +8335,7 @@ function Interface:updateElements()
     element:update()
   end
 	
-	-- Render all tooltips on top after all elements are drawn
+
 	renderPendingTooltips()
 end
 
@@ -7924,7 +8345,7 @@ function Interface:update()
 	self:updateElements()
 	gfx.update()
 	
-	-- Update chord progression playback
+
 	updateProgressionPlayback()
 
 	if not mouseButtonIsNotPressedDown and leftMouseButtonIsNotHeldDown() then
@@ -7953,7 +8374,7 @@ function Interface:update()
 		guiShouldBeUpdated = false
 	end
 
-  -- Save dock state whenever it changes (docked or undocked)
+
   local currentDockState = gfx.dock(-1)
   if getDockState() ~= currentDockState then
     setDockState(currentDockState)
@@ -7974,17 +8395,17 @@ for key, scale in ipairs(scales) do
   table.insert(scaleNames, scale['name'])
 end
 
--- Deze variabelen worden lokaal gedefinieerd in addTopFrame om scaling issues te voorkomen
--- local xMargin = s(8)
--- local yMargin = s(8)
--- local xPadding = s(16)
--- local yPadding = s(5)
--- local scaleLabelWidth = nil
--- local horizontalMargin = s(8)
--- local scaleTonicNoteWidth = s(50)
--- local scaleTypeWidth = s(150)
--- local octaveLabelWidth = nil
--- local octaveValueBoxWidth = s(55)
+
+
+
+
+
+
+
+
+
+
+
 
 local scaleLabelWidth = nil
 local octaveLabelWidth = nil
@@ -8000,15 +8421,15 @@ end
 function Interface:addTopFrame()
 
 	local keySelectionFrameHeight = s(25)
-	self.keySelectionFrameHeight = keySelectionFrameHeight  -- Opslaan voor addBottomFrame
+	self.keySelectionFrameHeight = keySelectionFrameHeight
 	local xMargin = s(8)
 	local yMargin = s(8)
 	local xPadding = s(16)
 	local yPadding = s(5)
 	local horizontalMargin = s(8)
 	local scaleTonicNoteWidth = s(50)
-	local scaleSystemWidth = s(100)  -- Width for "Diatonic" dropdown
-	local scaleTypeWidth = s(130)    -- Width for "Major" dropdown (slightly narrower)
+	local scaleSystemWidth = s(100)
+	local scaleTypeWidth = s(130)
 	local octaveValueBoxWidth = s(55)
 
 	self:addFrame(xMargin+dockerXPadding, yMargin, self.width - 2 * xMargin, keySelectionFrameHeight)
@@ -8067,7 +8488,7 @@ function Interface:addKillButton(xMargin, yMargin, xPadding)
 	local onClick = function()
 		stopAllNotesFromPlaying()
 		currentlyHeldButton = nil
-		lastPlayedChord = nil  -- Clear piano display
+		lastPlayedChord = nil
 	end
 	local getTooltip = function() return "Click: Stop all playing notes" end
 	
@@ -8088,7 +8509,7 @@ function Interface:addStrumButton(xMargin, yMargin, xPadding)
 		strumEnabled = not strumEnabled
 	end
 	local onCtrlClick = function()
-		-- Open popup om strum delay in te stellen (Ctrl+Click)
+
 		local retval, userInput = reaper.GetUserInputs("Strum Settings", 1, "Delay (ms) [10-500]:,extrawidth=100", tostring(strumDelayMs))
 		if retval then
 			local newDelay = tonumber(userInput)
@@ -8129,7 +8550,7 @@ function Interface:addScaleFilterButton(xMargin, yMargin, xPadding, opts)
   end
 
   local getTooltip = function()
-    return "Click: Cycle filter mode (Off → Filter → Remap)\nFilter: blocks non-scale notes\nRemap: maps white keys to scale notes"
+    return "Click: Cycle filter mode (Off â†’ Filter â†’ Remap)\nFilter: blocks non-scale notes\nRemap: maps white keys to scale notes"
   end
 
   local applyDocker = opts.applyDockerPadding ~= false
@@ -8171,13 +8592,13 @@ function Interface:addFifthWheelButton(xMargin, yMargin, xPadding)
 
   local buttonWidth = topButtonWidth()
   local buttonHeight = topButtonHeight()
-  local buttonXpos = topButtonXPos(xMargin, xPadding, 4)  -- Position after note length button (index 4)
+  local buttonXpos = topButtonXPos(xMargin, xPadding, 4)
   local buttonYpos = topButtonYPos(yMargin)
 	
 	local getCircleState = function() return fifthWheelWindowOpen end
 	local onToggle = function()
 		if fifthWheelWindowOpen then
-			-- Close by setting extstate flag
+
 			reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
 			fifthWheelWindowOpen = false
 		else
@@ -8204,9 +8625,9 @@ function Interface:addFontButton(xMargin, yMargin, xPadding, rowIndex, colIndex)
   
 	local onToggle = function()
     local current = getMonoState()
-    -- Toggle de state (1 of 0)
+
     reaper.SetExtState("TK_ChordGun", "useMonospaceFont", current and "0" or "1", true)
-    -- Forceer een herstart van de GUI om het nieuwe font te laden
+
     guiShouldBeUpdated = true
 	end
   
@@ -8222,7 +8643,7 @@ function Interface:addRemapButton(xMargin, yMargin, xPadding, rowIndex, colIndex
   local buttonYpos = topButtonYPos(yMargin) + (rowIndex * (buttonHeight + sy(4)))
 
   local getRemapState = function() 
-    -- scaleFilterMode: 0=off, 1=filter, 2=remap
+
     return scaleFilterMode == 2 
   end
   
@@ -8254,7 +8675,7 @@ function Interface:addSetupButton(xMargin, yMargin, xPadding, rowIndex, colIndex
           return
       end
       
-      -- Check if TK_Scale_Filter is already on input FX chain
+
       local inputFxCount = reaper.TrackFX_GetRecCount(track)
       for i = 0, inputFxCount - 1 do
           local retval, fxName = reaper.TrackFX_GetFXName(track, i + 0x1000000, "")
@@ -8264,7 +8685,7 @@ function Interface:addSetupButton(xMargin, yMargin, xPadding, rowIndex, colIndex
           end
       end
       
-      -- Add to input FX (0x1000000 flag = input FX, -1 = at end)
+
       local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
       if fxIndex >= 0 then
           reaper.ShowMessageBox(
@@ -8297,29 +8718,29 @@ function Interface:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, header
 	local pianoHeight = sy(70)
 	local pianoXpos = xMargin + xPadding
 	
-	-- Bereken positie onder alle chord buttons
-	-- Gebruik dezelfde logica als chord button positioning: yMargin + yPadding + headerHeight + offset voor laatste button
+
+
 	local buttonHeight = sy(38)
 	local innerSpacing = sx(2)
 	local numChordButtons = 13
 	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
 	
-	-- Gebruik huidige octaaf in plaats van hardcoded octaaf 2
-	-- getOctave() geeft het octaaf nummer (0-8)
-	-- MIDI note = (octaaf * 12) + 12 voor C in dat octaaf
+
+
+
 	local currentOctave = getOctave()
-	local startNote = (currentOctave * 12) + 12  -- C van het huidige octaaf
+	local startNote = (currentOctave * 12) + 12
 	
-	self:addPiano(pianoXpos+dockerXPadding, pianoYpos, pianoWidth, pianoHeight, startNote, 2)  -- 2 octaves vanaf huidig octaaf
+	self:addPiano(pianoXpos+dockerXPadding, pianoYpos, pianoWidth, pianoHeight, startNote, 2)
 end
 
 function Interface:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, headerHeight)
-	-- Voeg de progression slots toe als UI element
+
 	local slotWidth = self.width - 2 * xMargin - 2 * xPadding
   local slotHeight = sy(40)
 	local slotXpos = xMargin + xPadding
 	
-	-- Positioneer onder piano keyboard
+
 	local buttonHeight = sy(38)
 	local innerSpacing = sx(2)
 	local numChordButtons = 13
@@ -8332,13 +8753,13 @@ function Interface:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, hea
 end
 
 function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, headerHeight)
-	-- Voeg PLAY, STOP, CLEAR buttons toe onder de progression slots
+
 	local buttonWidth = sx(75)
 	local buttonHeight = sy(24)
 	local buttonXpos = xMargin + xPadding
-  local buttonSpacing = sx(10)
+  local buttonSpacing = sx(6)
 	
-	-- Positioneer onder progression slots
+
 	local buttonHeightChord = sy(38)
 	local innerSpacing = sx(2)
 	local numChordButtons = 13
@@ -8348,7 +8769,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 	local slotYpos = pianoYpos + pianoHeight + s(8)
 	local buttonYpos = slotYpos + slotHeight + s(6)
 	
-	-- PLAY button (links)
+
   self:addSimpleButton(
     "Play",
 		buttonXpos + dockerXPadding,
@@ -8358,10 +8779,10 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		function() startProgressionPlayback() end,
 		nil,
 		function() return "Click: Start progression playback" end,
-    true -- Border
+    true
 	)
 	
-	-- STOP button
+
   self:addSimpleButton(
     "Stop",
     buttonXpos + dockerXPadding + buttonWidth + buttonSpacing,
@@ -8371,10 +8792,10 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		function() stopProgressionPlayback() end,
 		nil,
 		function() return "Click: Stop progression playback" end,
-    true -- Border
+    true
 	)
 	
-	-- CLEAR button
+
   self:addSimpleButton(
     "Clear",
     buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 2,
@@ -8384,10 +8805,10 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		function() clearChordProgression() end,
 		nil,
 		function() return "Click: Clear all slots in progression" end,
-    true -- Border
+    true
 	)
 
-	-- SAVE button
+
   self:addSimpleButton(
     "Save",
     buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 3,
@@ -8397,10 +8818,10 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		function() saveProgressionPreset() end,
 		nil,
 		function() return "Click: Save progression as preset" end,
-    true -- Border
+    true
 	)
 	
-	-- LOAD button
+
   self:addSimpleButton(
     "Load",
     buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4,
@@ -8410,13 +8831,13 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		function() showLoadPresetMenu() end,
 		nil,
 		function() return "Click: Load progression preset" end,
-    true -- Border
+    true
 	)
 	
-  -- INSERT button inline na LOAD
+
   local insertInlineX = buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 5
   
-  -- Define Right Click Menu for Insert
+
   local onInsertRightClick = function()
     local menu = "Export to Chord Track (Text Items)|Export to Project Regions"
     gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
@@ -8438,20 +8859,22 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     function() insertProgressionToMIDI() end,
     onInsertRightClick,
     function() return "Click: Insert MIDI | Right-Click: Export as Text Items or Markers" end,
-    true -- Border
+    true
 	)
 	
-	-- SETUP button (adds Scale Filter JSFX to track) - direct na INSERT
-	-- REMOVED from here, moved to second row
-	
-  -- CHORD RECOGNITION DISPLAY (custom element tussen Setup en Tooltip)
+
+
+  local totalWidth = self.width - 2 * xMargin - 2 * xPadding
+  local rightAlignX = buttonXpos + dockerXPadding + totalWidth - buttonWidth
+  local leftOfRightAlignX = rightAlignX - buttonSpacing - buttonWidth
+  
   local chordDisplayX = insertInlineX + buttonWidth + buttonSpacing
-  local chordDisplayWidth = sx(100) -- Wider for larger text
-  local chordDisplayHeight = (buttonHeight * 2) + s(6) -- Spans 2 rows (buttonHeight + spacing + buttonHeight)
+  local chordDisplayWidth = leftOfRightAlignX - chordDisplayX - buttonSpacing
+  local chordDisplayHeight = (buttonHeight * 2) + s(8)
   
   local ChordDisplay = {}
   ChordDisplay.x = chordDisplayX
-  ChordDisplay.y = buttonYpos -- Align with top row
+  ChordDisplay.y = buttonYpos
   ChordDisplay.width = chordDisplayWidth
   ChordDisplay.height = chordDisplayHeight
   
@@ -8461,18 +8884,18 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     local w = self.width
     local h = self.height
     
-    -- Always show border
+
     setColor("4A4A4A")
     gfx.rect(x, y, w, h, false)
     
     if recognizedChord and recognizedChord ~= "" then
-      -- Check if chord root is in scale
+
       local isInScale = false
       if scalePattern and #recognizedChord > 0 then
-        -- Extract root note from chord name (first character(s) before 'm' or other modifiers)
+
         local rootStr = recognizedChord:match("^([A-G][#b]?)")
         if rootStr then
-          -- Find which note class this is
+
           local noteNames = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
           local flatNames = {"C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"}
           for i, name in ipairs(noteNames) do
@@ -8484,50 +8907,60 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
         end
       end
       
-      -- Chord text: blue if in scale, orange if out of scale
+
       if isInScale then
-        setColor("4DA6FF")  -- Blue
+        setColor("4DA6FF")
       else
-        setColor("FF8C00")  -- Orange
+        setColor("FF8C00")
       end
       
-      gfx.setfont(1, "Arial", fontSize(28), string.byte('b')) -- Larger and Bold
+
+      local fontSizeVal = fontSize(28)
+      gfx.setfont(1, "Arial", fontSizeVal, string.byte('b'))
       local text = recognizedChord
       local textW, textH = gfx.measurestr(text)
+      
+
+      while textW > w - s(10) and fontSizeVal > 10 do
+          fontSizeVal = fontSizeVal - 2
+          gfx.setfont(1, "Arial", fontSizeVal, string.byte('b'))
+          textW, textH = gfx.measurestr(text)
+      end
+      
       gfx.x = x + (w - textW) / 2
       gfx.y = y + (h - textH) / 2
       gfx.drawstr(text)
       
-      -- Reset font
+
       gfx.setfont(1, "Arial", fontSize(15))
     end
   end
   
   table.insert(self.elements, ChordDisplay)
 	
-  -- TOOLTIP toggle button (rechts uitgelijnd)
-  -- REMOVED from here, moved to second row
+
+
 	
-  -- DOCK/UNDOCK button (na TOOLTIP toggle)
-  -- REMOVED from here, moved to second row
+
+
 	
-  -- HELP button (? rechts van DOCK)
-  -- REMOVED from here, moved to second row
+
+
 	
-  -- ROW 2: Remap, Setup, Mono
+
   local buttonYposRow2 = buttonYpos + buttonHeight + s(6)
   
-  -- REMAP/FILTER button (Cycles Off -> Filter -> Remap)
+
   self:addScaleFilterButton(xMargin, yMargin, xPadding, {
     x = buttonXpos + dockerXPadding,
     y = buttonYposRow2,
     width = buttonWidth,
     height = buttonHeight,
     applyDockerPadding = false,
-    drawBorder = true -- Border
+    drawBorder = true
   })
   
-  -- SETUP button
+
   local onSetupClick = function()
       local track = reaper.GetSelectedTrack(0, 0)
       if not track then reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0) return end
@@ -8540,8 +8973,71 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       if fxIndex >= 0 then reaper.ShowMessageBox("TK Scale Filter added to Input FX successfully!", "Setup Complete", 0) else reaper.ShowMessageBox("Could not add TK Scale Filter.", "Setup Failed", 0) end
   end
   self:addSimpleButton("Setup", buttonXpos + dockerXPadding + buttonWidth + buttonSpacing, buttonYposRow2, buttonWidth, buttonHeight, onSetupClick, nil, function() return "Click: Add TK Scale Filter to selected track's Input FX" end, true)
+
+
+  local bassOptions = {"Bass Off", "Bass -1", "Bass -2"}
   
-  -- MONO button (Renamed to Font)
+  self:addCycleButton(
+    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 2,
+    buttonYposRow2,
+    buttonWidth,
+    buttonHeight,
+    bassOptions,
+    function() return bassMode + 1 end,
+    function(newIndex)
+      bassMode = newIndex - 1
+    end,
+    true
+  )
+
+
+  local onMelodyRightClick = function()
+    local checkSlow = melodySettings.density == 1 and "!" or ""
+    local checkNorm = melodySettings.density == 2 and "!" or ""
+    local checkFast = melodySettings.density == 3 and "!" or ""
+    
+    local checkLow = melodySettings.octave == 4 and "!" or ""
+    local checkMid = melodySettings.octave == 5 and "!" or ""
+    local checkHigh = melodySettings.octave == 6 and "!" or ""
+    
+    local checkChord = not melodySettings.useScaleNotes and "!" or ""
+    local checkScale = melodySettings.useScaleNotes and "!" or ""
+    
+    local menu = ">Rhythm Density|" .. checkSlow .. "Slow|" .. checkNorm .. "Normal|" .. checkFast .. "Fast|<|" ..
+                 ">Octave Range|" .. checkLow .. "Low (C3-C4)|" .. checkMid .. "Mid (C4-C5)|" .. checkHigh .. "High (C5-C6)|<|" ..
+                 ">Note Selection|" .. checkChord .. "Chord Tones Only|" .. checkScale .. "Include Scale Notes"
+                 
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    
+
+
+    if selection == 1 then melodySettings.density = 1
+    elseif selection == 2 then melodySettings.density = 2
+    elseif selection == 3 then melodySettings.density = 3
+
+    elseif selection == 4 then melodySettings.octave = 4
+    elseif selection == 5 then melodySettings.octave = 5
+    elseif selection == 6 then melodySettings.octave = 6
+
+    elseif selection == 7 then melodySettings.useScaleNotes = false
+    elseif selection == 8 then melodySettings.useScaleNotes = true
+    end
+  end
+
+  self:addSimpleButton(
+    "Melody",
+    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 3,
+    buttonYposRow2,
+    buttonWidth,
+    buttonHeight,
+    function() generateMelodyFromProgression() end,
+    onMelodyRightClick,
+    function() return "Click: Generate Melody | Right-Click: Melody Settings" end,
+    true
+  )
+  
+
   local getMonoState = function() return reaper.GetExtState("TK_ChordGun", "useMonospaceFont") == "1" end
   local onMonoToggle = function()
     local current = getMonoState()
@@ -8566,26 +9062,14 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       guiShouldBeUpdated = true
     end
   end
-  self:addToggleButton("Font", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 2, buttonYposRow2, buttonWidth, buttonHeight, getMonoState, onMonoToggle, onFontRightClick, function() return "Toggle Monospace Font | Right-click: Set Font Scale" end, true)
+  self:addToggleButton("Font", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4, buttonYposRow2, buttonWidth, buttonHeight, getMonoState, onMonoToggle, onFontRightClick, function() return "Toggle Monospace Font | Right-click: Set Font Scale" end, true)
 
-  -- CIRCLE button (Moved from top row)
-  local getCircleState = function() return fifthWheelWindowOpen end
-  local onCircleToggle = function()
-    if fifthWheelWindowOpen then
-      reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
-      fifthWheelWindowOpen = false
-    else
-      showFifthWheel()
-    end
-  end
-  self:addToggleButton("Circle", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 3, buttonYposRow2, buttonWidth, buttonHeight, getCircleState, onCircleToggle, nil, function() return "Toggle Circle of Fifths" end, true)
 
-  -- RATIO button
   local getRatioState = function() return reaper.GetExtState("TK_ChordGun", "useFixedRatio") == "1" end
   local onRatioToggle = function()
     local current = getRatioState()
     reaper.SetExtState("TK_ChordGun", "useFixedRatio", current and "0" or "1", true)
-    -- Force resize to ratio if enabling
+
     if not current then
         local dynWidth = getDynamicBaseWidth()
         local targetH = math.floor(gfx.w * (baseHeight / dynWidth))
@@ -8613,7 +9097,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
         local newW = math.floor(dynWidth * scale)
         local newH = math.floor(baseHeight * scale)
         
-        -- Also enable fixed ratio when setting a specific size
+
         reaper.SetExtState("TK_ChordGun", "useFixedRatio", "1", true)
         
         gfx.init("", newW, newH)
@@ -8621,23 +9105,23 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     end
   end
 
-  self:addToggleButton("Ratio", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4, buttonYposRow2, buttonWidth, buttonHeight, getRatioState, onRatioToggle, onRatioRightClick, function() return "Toggle Fixed Aspect Ratio | Right-click: Set Window Size" end, true)
+  self:addToggleButton("Ratio", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 5, buttonYposRow2, buttonWidth, buttonHeight, getRatioState, onRatioToggle, onRatioRightClick, function() return "Toggle Fixed Aspect Ratio | Right-click: Set Window Size" end, true)
 
-  -- TOOLTIP toggle button (rechts uitgelijnd op rij 1, boven Dock/Help)
+
   local totalWidth = self.width - 2 * xMargin - 2 * xPadding
-  local helpButtonWidth = s(20)
-  local dockButtonWidth = s(50)
-  local spacingSmall = math.max(s(4), buttonSpacing - s(10))
   
-  -- Calculate positions from right to left
-  local helpButtonX = buttonXpos + dockerXPadding + totalWidth - helpButtonWidth
-  local dockButtonX = helpButtonX - spacingSmall - dockButtonWidth
-  local tooltipsButtonX = dockButtonX
+
+
+
+
+  
+  local rightAlignX = buttonXpos + dockerXPadding + totalWidth - buttonWidth
+  local leftOfRightAlignX = rightAlignX - buttonSpacing - buttonWidth
   
   self:addToggleButton(
     "Tooltip",
-    tooltipsButtonX,
-    buttonYpos, -- Row 1
+    leftOfRightAlignX,
+    buttonYpos,
     buttonWidth,
     buttonHeight,
     function() return tooltipsEnabled end,
@@ -8646,15 +9130,60 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     end,
     nil,
     function() return "Toggle tooltips (shows click/modifier actions)" end,
-    false -- No Border
+    true
+  )
+  
+
+  local onHelpRightClick = function()
+    local menu = "GitHub: TouristKiller/TK-Scripts|REAPER Forum: ChordGun Thread"
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    
+    if selection == 1 then
+      if reaper.CF_ShellExecute then
+        reaper.CF_ShellExecute("https://github.com/TouristKiller/TK-Scripts")
+      else
+        reaper.ShowMessageBox("SWS Extension required to open URLs.", "Error", 0)
+      end
+    elseif selection == 2 then
+      if reaper.CF_ShellExecute then
+        reaper.CF_ShellExecute("https://forum.cockos.com/showthread.php?t=213180")
+      else
+        reaper.ShowMessageBox("SWS Extension required to open URLs.", "Error", 0)
+      end
+    end
+  end
+
+  self:addSimpleButton(
+    "Help",
+    rightAlignX,
+    buttonYpos,
+    buttonWidth,
+    buttonHeight,
+    function() showHelpWindow() end,
+    onHelpRightClick,
+    function() return "Click: Show Help / Shortcuts | Right-Click: Links" end,
+    true
   )
 	
-  -- DOCK/UNDOCK button (rechts uitgelijnd op rij 2)
+
+  local getCircleState = function() return fifthWheelWindowOpen end
+  local onCircleToggle = function()
+    if fifthWheelWindowOpen then
+      reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+      fifthWheelWindowOpen = false
+    else
+      showFifthWheel()
+    end
+  end
+  self:addToggleButton("Circle", leftOfRightAlignX, buttonYposRow2, buttonWidth, buttonHeight, getCircleState, onCircleToggle, nil, function() return "Toggle Circle of Fifths" end, true)
+	
+
   self:addSimpleButton(
     function() return windowIsDocked() and "Undock" or "Dock" end,
-		dockButtonX,
+		rightAlignX,
 		buttonYposRow2,
-		dockButtonWidth,
+		buttonWidth,
 		buttonHeight,
 		function()
 			if windowIsDocked() then
@@ -8668,22 +9197,9 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		end,
 		nil,
     function() return windowIsDocked() and "Click: Undock window" or "Click: Dock window" end,
-    false -- No Border
+    true
 	)
 	
-  -- HELP button (? rechts van DOCK op rij 2)
-	self:addSimpleButton(
-		"?",
-		helpButtonX,
-		buttonYposRow2,
-		helpButtonWidth,
-		buttonHeight,
-		function() showHelpWindow() end,
-		nil,
-		function() return "Click: Open help window" end,
-    false -- No Border
-	)
-
 end
 
 function Interface:addScaleLabel(xMargin, yMargin, xPadding, yPadding)
@@ -8729,13 +9245,13 @@ function Interface:addScaleSystemDropdown(xMargin, yMargin, xPadding, yPadding, 
 	local scaleSystemYpos = yMargin+yPadding+s(1)
 	local scaleSystemHeight = s(15)
 
-	local interfaceRef = self  -- Capture interface reference for closure
+	local interfaceRef = self
 	
 	local onScaleSystemSelection = function(i)
 		setScaleSystemIndex(i)
-		setScaleWithinSystemIndex(1)  -- Reset to first scale in new system
+		setScaleWithinSystemIndex(1)
 		
-		-- Calculate flat scale index for backwards compatibility
+
 		local flatIndex = getScaleIndexFromSystemIndices(i, 1)
 		setScaleType(flatIndex)
 		
@@ -8746,11 +9262,11 @@ function Interface:addScaleSystemDropdown(xMargin, yMargin, xPadding, yPadding, 
 		updateScaleData()
 		updateScaleDegreeHeaders()
 		
-		-- Force full UI rebuild to update second dropdown
+
 		interfaceRef:restartGui()
 	end
 	
-	-- Build system names array
+
 	local systemNames = {}
 	for _, system in ipairs(scaleSystems) do
 		table.insert(systemNames, system.name)
@@ -8772,7 +9288,7 @@ function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, ho
 	local onScaleTypeSelection = function(i)
 		setScaleWithinSystemIndex(i)
 		
-		-- Calculate flat scale index for backwards compatibility
+
 		local systemIndex = getScaleSystemIndex()
 		local flatIndex = getScaleIndexFromSystemIndices(systemIndex, i)
 		setScaleType(flatIndex)
@@ -8785,13 +9301,13 @@ function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, ho
 		updateScaleDegreeHeaders()
 	end
 	
-	-- Build scale names array from current system
+
 	local systemIndex = getScaleSystemIndex()
 	local currentSystem = scaleSystems[systemIndex]
 	
-	-- Safety check
+
 	if not currentSystem then
-		currentSystem = scaleSystems[1]  -- Fallback to first system
+		currentSystem = scaleSystems[1]
 		systemIndex = 1
 		setScaleSystemIndex(1)
 	end
@@ -8804,7 +9320,7 @@ function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, ho
 	local currentScaleIndex = getScaleWithinSystemIndex()
 	local currentScale = currentSystem.scales[currentScaleIndex]
 	
-	-- Safety check for scale
+
 	if not currentScale then
 		currentScaleIndex = 1
 		currentScale = currentSystem.scales[1]
@@ -8813,21 +9329,21 @@ function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, ho
 	
 	local dropdown = Dropdown:new(scaleTypeXpos+dockerXPadding, scaleTypeYpos, scaleTypeWidth, scaleTypeHeight, scaleNames, currentScaleIndex, onScaleTypeSelection)
 	
-	-- Add tooltip support for scale descriptions and interval patterns
+
 	local originalUpdate = dropdown.update
 	dropdown.update = function(self)
 		originalUpdate(self)
 		
-		-- Show tooltip when hovering over dropdown
+
 		if tooltipsEnabled and mouseIsHoveringOver(self) then
 			local tooltip = currentScale.name
 			
-			-- Add description if available
+
 			if currentScale.description then
 				tooltip = tooltip .. "\n\n" .. currentScale.description
 			end
 			
-			-- Add interval pattern for Messiaen modes
+
 			if currentScale.intervals then
 				tooltip = tooltip .. "\n\nInterval pattern: " .. currentScale.intervals .. " (semitones)"
 			end
@@ -8846,7 +9362,7 @@ function Interface:addScaleNotesTextLabel(xMargin, yMargin, xPadding, yPadding, 
   local spacingAfterLabel = math.max(s(2), horizontalMargin - s(8))
   local spacingBetweenDropdowns = math.max(s(4), horizontalMargin - s(4))
   local previousControlsRight = contentLeft + scaleLabelWidth + spacingAfterLabel + scaleTonicNoteWidth + spacingBetweenDropdowns + scaleSystemWidth + spacingBetweenDropdowns + scaleTypeWidth
-  local scaleNotesXpos = previousControlsRight + s(90)
+  local scaleNotesXpos = previousControlsRight + s(20)
 	local scaleNotesYpos = yMargin+yPadding+s(1)
   local availableWidth = getTopFrameContentRight(xMargin) - scaleNotesXpos - s(70)
   local scaleNotesWidth = math.max(s(200), availableWidth)
@@ -8877,20 +9393,20 @@ function Interface:addOctaveSelectorValueBox(yMargin, xMargin, xPadding, octaveV
 end
 local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 
--- Deze variabelen worden binnen functies lokaal gedefinieerd om scaling issues te voorkomen
--- local xMargin = s(8)
--- local yMargin = s(8) + keySelectionFrameHeight + s(6)
--- local xPadding = s(7)
--- local yPadding = s(30)
--- local headerHeight = s(25)
--- local inversionLabelWidth = s(80)
--- local inversionValueBoxWidth = s(55)
+
+
+
+
+
+
+
+
 
 local chordTextWidth = nil
 
 function Interface:addBottomFrame()
 
-	-- Definieer lokaal zodat ze correct schalen
+
 	local xMargin = s(8)
 	local yMargin = sy(8) + (self.keySelectionFrameHeight or sy(25)) + sy(6)
 	local xPadding = sx(7)
@@ -8908,7 +9424,7 @@ function Interface:addBottomFrame()
   local lenButtonX = topButtonXPos(xMargin, xPadding, 3)
   local lenButtonY = topButtonYPos(yMargin)
   self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = sx(75)})
-  -- self:addFifthWheelButton(xMargin, yMargin, xPadding) -- Moved to bottom row
+
   
   self:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, headerHeight)
@@ -9016,13 +9532,13 @@ local function windowHasNotBeenClosed()
 end
 
 local function cleanup()
-	-- Close Circle of Fifths window if it's open
+
 	if fifthWheelWindowOpen then
 		reaper.SetExtState("TKChordGunFifthWheel", "forceClose", "1", false)
 		fifthWheelWindowOpen = false
 	end
 	
-	-- Reset help window state
+
 	if helpWindowOpen then
 		helpWindowOpen = false
 		reaper.SetExtState("TKChordGunHelp", "closed", "0", false)
@@ -9030,7 +9546,7 @@ local function cleanup()
 end
 
 local function main()
-	-- Check if help window was closed
+
 	if helpWindowOpen then
 		local helpClosed = reaper.GetExtState("TKChordGunHelp", "closed")
 		if helpClosed == "1" then
@@ -9040,15 +9556,15 @@ local function main()
 	end
 
 	if gfx.w ~= interface.lastWidth or gfx.h ~= interface.lastHeight then
-		-- Enforce fixed ratio if enabled
+
 		if reaper.GetExtState("TK_ChordGun", "useFixedRatio") == "1" then
 			local dynWidth = getDynamicBaseWidth()
 			local targetRatio = dynWidth / baseHeight
 			local currentRatio = gfx.w / gfx.h
 			
-			-- Allow small margin of error
+
 			if math.abs(currentRatio - targetRatio) > 0.01 then
-				-- Adjust height to match width (assuming width is master)
+
 				local newHeight = math.floor(gfx.w / targetRatio)
 				if newHeight ~= gfx.h then
 					gfx.init("", gfx.w, newHeight)
@@ -9072,33 +9588,33 @@ local function main()
 	end
 
 	handleInput()
-	updateChordRecognition()  -- Update chord recognition every frame
-	checkFifthWheelUpdates()  -- Check for fifth wheel popup interactions
+	updateChordRecognition()
+	checkFifthWheelUpdates()
 
 	if windowHasNotBeenClosed() then
 		reaper.runloop(main)
 	else
-		cleanup()  -- Clean up when window closes
+		cleanup()
 	end
 	
 	interface:update()
 end
 
-reaper.atexit(cleanup)  -- Also clean up on script termination
+reaper.atexit(cleanup)
 main()
 
 
--- If you want the ChordGun window to always be on top then do the following things:
+
 --
--- 1. install julian sader extension https://forum.cockos.com/showthread.php?t=212174
+
 --
--- 2. uncomment the following code:
+
 --
--- 		if (reaper.JS_Window_Find) then
--- 			local hwnd = reaper.JS_Window_Find("ChordGun", true)
--- 			reaper.JS_Window_SetZOrder(hwnd, "TOPMOST", hwnd)
--- 		end
+
+
+
+
 --
 --
 --
--- Note that this only works on Windows machines
+
