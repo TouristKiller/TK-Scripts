@@ -1,8 +1,16 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.0.5
+-- @version 2.0.6
 -- @changelog
 --[[
+2.0.6
++ Added "Export to Chord Track" (Right-click Insert button): Creates a new track with empty items containing chord names
++ Added "Export to Project Regions" (Right-click Insert button): Creates project regions named after chords
++ Added support for running script from Main section (Arrange View) without active MIDI Editor
++ Added automatic MIDI item creation if no item is selected when inserting chords
++ Added Font Scale menu options (Small=1.0, Normal=1.25, Big=1.5, Bigger=1.75)
++ Added "Ratio" menu options (fixed ratio between width and height for non-distorted scaling)
+
 2.0.3 
 + Fixed bug where scale pattern could be nil during chord recognition, causing crashes (mini)
 
@@ -108,7 +116,7 @@ Original ChordGun: https://github.com/benjohnson2001/ChordGun
 ]]--
 
 baseWidth = 775
-baseHeight = 770
+baseHeight = 800
 
 -- Calculate dynamic width based on number of scale notes
 function getDynamicBaseWidth()
@@ -122,14 +130,34 @@ function getDynamicBaseWidth()
   end
 end
 
-local fontScale = 1.25  -- Multiplier for UI text size
+local fontScale = tonumber(reaper.GetExtState("TK_ChordGun", "fontScale")) or 1.25  -- Multiplier for UI text size
 
 local function fontSize(value)
   return math.floor((s(value) * fontScale) + 0.5)
 end
 
 local function applyDefaultFont()
-  gfx.setfont(1, "Arial", fontSize(15))
+  -- Check of de gebruiker Monospace aan heeft staan (opgeslagen in ExtState)
+  local useMono = reaper.GetExtState("TK_ChordGun", "useMonospaceFont") == "1"
+
+  if useMono then
+    -- Monospace logica (Cross-platform + Bold)
+    local os = reaper.GetOS()
+    local fontName = "Courier New"
+    
+    if string.match(os, "Win") then
+      fontName = "Consolas"
+    elseif string.match(os, "OSX") or string.match(os, "macOS") then
+      fontName = "Menlo"
+    else
+      fontName = "DejaVu Sans Mono"
+    end
+    -- 'b' flag voor vetgedrukt (scherper op schermen)
+    gfx.setfont(1, fontName, fontSize(14), string.byte('b')) 
+  else
+    -- Standaard Arial
+    gfx.setfont(1, "Arial", fontSize(15))
+  end
 end
 
 -- Horizontal scaling (width-based)
@@ -1731,7 +1759,22 @@ function activeMidiEditor()
 end
 
 function activeTake()
-  return reaper.MIDIEditor_GetTake(activeMidiEditor())
+  -- 1. Probeer eerst de actieve MIDI editor
+  local editor = reaper.MIDIEditor_GetActive()
+  if editor then
+    return reaper.MIDIEditor_GetTake(editor)
+  end
+
+  -- 2. Als er geen editor is, kijk naar het geselecteerde item in de Arrange view
+  local item = reaper.GetSelectedMediaItem(0, 0)
+  if item then
+    local take = reaper.GetActiveTake(item)
+    if take and reaper.TakeIsMIDI(take) then
+      return take
+    end
+  end
+
+  return nil
 end
 
 function activeMediaItem()
@@ -2369,11 +2412,150 @@ function removeChordFromProgression(index)
   end
 end
 
+function exportProgressionToTrack()
+  -- Check for chords
+  local hasChords = false
+  for i = 1, progressionLength do
+    if chordProgression[i] then hasChords = true break end
+  end
+  
+  if not hasChords then
+    reaper.ShowMessageBox("Progression is empty.", "Error", 0)
+    return
+  end
+
+  reaper.Undo_BeginBlock()
+  
+  -- Insert new track at index 0 (top)
+  reaper.InsertTrackAtIndex(0, true)
+  local track = reaper.GetTrack(0, 0)
+  reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "Chords", true)
+  
+  -- Get start position from cursor
+  local currentPos = reaper.GetCursorPosition()
+  local currentQN = reaper.TimeMap2_timeToQN(0, currentPos)
+  
+  for i = 1, progressionLength do
+    local slot = chordProgression[i]
+    
+    if slot then
+      local beats = slot.beats or 1
+      local repeats = slot.repeats or 1
+      local totalBeats = beats * repeats
+      
+      local startSec = reaper.TimeMap2_QNToTime(0, currentQN)
+      local endQN = currentQN + totalBeats
+      local endSec = reaper.TimeMap2_QNToTime(0, endQN)
+      local length = endSec - startSec
+      
+      -- Create Empty Item
+      local item = reaper.AddMediaItemToTrack(track)
+      reaper.SetMediaItemPosition(item, startSec, false)
+      reaper.SetMediaItemLength(item, length, false)
+      
+      -- Set text (Notes) and enable "Stretch to fit"
+      reaper.GetSetMediaItemInfo_String(item, "P_NOTES", slot.text, true)
+      
+      -- Force item to be "Empty Item" type with text stretch enabled
+      -- We do this by manipulating the chunk slightly or just relying on P_NOTES
+      -- Ideally we set IMGRESOURCEFLAGS to 1 (stretch text) if possible via API, 
+      -- but standard notes usually display fine.
+      
+      -- Color the item (Blue-ish to match ChordGun theme)
+      reaper.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", reaper.ColorToNative(77, 166, 255)|0x1000000)
+      
+      currentQN = endQN
+    else
+      -- Empty slot, advance by 1 beat (default gap)
+      currentQN = currentQN + 1
+    end
+  end
+  
+  reaper.UpdateArrange()
+  reaper.Undo_EndBlock("Export Chords to Track", -1)
+end
+
+function exportProgressionToMarkers()
+  -- Check for chords
+  local hasChords = false
+  for i = 1, progressionLength do
+    if chordProgression[i] then hasChords = true break end
+  end
+  
+  if not hasChords then
+    reaper.ShowMessageBox("Progression is empty.", "Error", 0)
+    return
+  end
+
+  reaper.Undo_BeginBlock()
+  
+  local currentPos = reaper.GetCursorPosition()
+  local currentQN = reaper.TimeMap2_timeToQN(0, currentPos)
+  
+  for i = 1, progressionLength do
+    local slot = chordProgression[i]
+    
+    if slot then
+      local beats = slot.beats or 1
+      local repeats = slot.repeats or 1
+      local totalBeats = beats * repeats
+      
+      local startSec = reaper.TimeMap2_QNToTime(0, currentQN)
+      local endQN = currentQN + totalBeats
+      local endSec = reaper.TimeMap2_QNToTime(0, endQN)
+      
+      -- Add Region (color index 0)
+      reaper.AddProjectMarker(0, true, startSec, endSec, slot.text, -1)
+      
+      currentQN = endQN
+    else
+      currentQN = currentQN + 1
+    end
+  end
+  
+  reaper.UpdateArrange()
+  reaper.Undo_EndBlock("Export Chords to Markers", -1)
+end
+
 function insertProgressionToMIDI()
   -- Insert entire chord progression as MIDI at play cursor position
+  
+  -- Probeer take te vinden of te maken
   local take = activeTake()
+  
   if not take then
-    reaper.ShowMessageBox("No active MIDI take found. Please open a MIDI editor.", "Error", 0)
+    -- Als er geen take is, maak er een die lang genoeg is voor de hele progressie
+    local track = reaper.GetSelectedTrack(0, 0)
+    if track then
+      -- Bereken totale lengte
+      local totalBeats = 0
+      for i = 1, progressionLength do
+        if chordProgression[i] then
+          local beats = chordProgression[i].beats or 1
+          local repeats = chordProgression[i].repeats or 1
+          totalBeats = totalBeats + (beats * repeats)
+        else
+          totalBeats = totalBeats + 1 -- Lege slot is 1 beat
+        end
+      end
+      
+      if totalBeats == 0 then totalBeats = 4 end -- Fallback
+      
+      local startPos = reaper.GetCursorPosition()
+      local startQN = reaper.TimeMap2_timeToQN(0, startPos)
+      local endQN = startQN + totalBeats
+      local endPos = reaper.TimeMap2_QNToTime(0, endQN)
+      
+      local item = reaper.CreateNewMIDIItemInProj(track, startPos, endPos, false)
+      if item then
+        reaper.SetMediaItemSelected(item, true)
+        take = reaper.GetActiveTake(item)
+      end
+    end
+  end
+
+  if not take then
+    reaper.ShowMessageBox("No active MIDI take found and no track selected.", "Error", 0)
     return
   end
   
@@ -2838,6 +3020,34 @@ function insertScaleChord(chordNotesArray, keepNotesSelected, selectedChord)
   moveCursor(keepNotesSelected, selectedChord)
 end
 
+function ensureActiveTake()
+  -- 1. Check of er al een geldige take is (via editor of selectie)
+  local take = activeTake()
+  if take then return take end
+
+  -- 2. Zo niet, probeer een item aan te maken op de geselecteerde track
+  local track = reaper.GetSelectedTrack(0, 0)
+  if not track then
+    reaper.ShowMessageBox("No track selected.\nPlease select a track to insert chords.", "Error", 0)
+    return nil
+  end
+
+  -- Maak een nieuw item van 1 maat (4 beats) lang
+  local startPos = reaper.GetCursorPosition()
+  local startQN = reaper.TimeMap2_timeToQN(0, startPos)
+  local endQN = startQN + 4 -- Standaard 1 maat lengte voor nieuw item
+  local endPos = reaper.TimeMap2_QNToTime(0, endQN)
+
+  local item = reaper.CreateNewMIDIItemInProj(track, startPos, endPos, false)
+  if item then
+    reaper.SetMediaItemSelected(item, true) -- Selecteer het, zodat activeTake() het hierna vindt
+    reaper.UpdateArrange()
+    return reaper.GetActiveTake(item)
+  end
+
+  return nil
+end
+
 function playOrInsertScaleChord(actionDescription)
 
   local scaleNoteIndex = getSelectedScaleNote()
@@ -2849,7 +3059,7 @@ function playOrInsertScaleChord(actionDescription)
   
   local chordNotesArray = getChordNotesArray(root, chord, octave)
 
-  if activeTake() ~= nil and notCurrentlyRecording() then
+  if ensureActiveTake() and notCurrentlyRecording() then
 
     startUndoBlock()
 
@@ -2905,7 +3115,7 @@ function playOrInsertScaleNote(octaveAdjustment, actionDescription)
   local octave = getOctave()
   local noteValue = root + ((octave+1+octaveAdjustment) * 12) - 1
 
-  if activeTake() ~= nil and notCurrentlyRecording() then
+  if ensureActiveTake() and notCurrentlyRecording() then
 
   	startUndoBlock()
 
@@ -6062,7 +6272,7 @@ end
 SimpleButton = {}
 SimpleButton.__index = SimpleButton
 
-function SimpleButton:new(text, x, y, width, height, onClick, onRightClick, getTooltip)
+function SimpleButton:new(text, x, y, width, height, onClick, onRightClick, getTooltip, drawBorder)
 	local self = {}
 	setmetatable(self, SimpleButton)
 	self.text = text
@@ -6074,11 +6284,18 @@ function SimpleButton:new(text, x, y, width, height, onClick, onRightClick, getT
 	self.onClick = onClick
 	self.onRightClick = onRightClick  -- Optional right-click handler
 	self.getTooltip = getTooltip  -- Optional tooltip function
+  self.drawBorder = drawBorder -- Optional border
 	return self
 end
 
 function SimpleButton:draw()
-	-- No background or outline - just text
+	-- Draw border if enabled
+  if self.drawBorder then
+    setColor("999999")
+    gfx.rect(self.x, self.y, self.width, self.height, false)
+    -- Double thickness for clarity
+    gfx.rect(self.x+1, self.y+1, self.width-2, self.height-2, false)
+  end
 	
 	-- Draw text - highlight when hovering
 	if mouseIsHoveringOver(self) then
@@ -6121,7 +6338,7 @@ end
 ToggleButton = {}
 ToggleButton.__index = ToggleButton
 
-function ToggleButton:new(text, x, y, width, height, getState, onToggle, onRightClick, getTooltip)
+function ToggleButton:new(text, x, y, width, height, getState, onToggle, onRightClick, getTooltip, drawBorder)
 	local self = {}
 	setmetatable(self, ToggleButton)
 	self.text = text
@@ -6133,11 +6350,19 @@ function ToggleButton:new(text, x, y, width, height, getState, onToggle, onRight
 	self.onToggle = onToggle
 	self.onRightClick = onRightClick  -- Optional right-click handler
 	self.getTooltip = getTooltip  -- Optional tooltip function
+  self.drawBorder = drawBorder -- Optional border
 	return self
 end
 
 function ToggleButton:draw()
-	-- No background or outline - just text
+	-- Draw border if enabled
+  if self.drawBorder then
+    setColor("999999")
+    gfx.rect(self.x, self.y, self.width, self.height, false)
+    -- Double thickness for clarity
+    gfx.rect(self.x+1, self.y+1, self.width-2, self.height-2, false)
+  end
+
 	local isActive = self.getState()
 	
 	-- Draw text - color changes based on state
@@ -6166,16 +6391,23 @@ end
 function ToggleButton:update()
 	self:draw()
 	
-	if mouseButtonIsNotPressedDown and mouseIsHoveringOver(self) and leftMouseButtonIsHeldDown() then
-		mouseButtonIsNotPressedDown = false
-		
-		-- Check for Ctrl+Click first (for settings)
-		if self.onRightClick and ctrlModifierIsHeldDown() then
-			self.onRightClick()
-		else
-			-- Normal click to toggle
-			self.onToggle()
-		end
+	if mouseButtonIsNotPressedDown and mouseIsHoveringOver(self) then
+    if leftMouseButtonIsHeldDown() then
+      mouseButtonIsNotPressedDown = false
+      
+      -- Check for Ctrl+Click first (for settings)
+      if self.onRightClick and ctrlModifierIsHeldDown() then
+        self.onRightClick()
+      else
+        -- Normal click to toggle
+        self.onToggle()
+      end
+    elseif rightMouseButtonIsHeldDown() then
+      mouseButtonIsNotPressedDown = false
+      if self.onRightClick then
+        self.onRightClick()
+      end
+    end
 	end
 end
 
@@ -7223,16 +7455,28 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
 
 
 local function moveEditCursorLeftByGrid()
-	local commandId = 40047
-	reaper.MIDIEditor_OnCommand(activeMidiEditor(), commandId)
+  local editor = activeMidiEditor()
+  if editor then
+    -- Gebruik MIDI editor actie
+	  local commandId = 40047
+	  reaper.MIDIEditor_OnCommand(editor, commandId)
+  else
+    -- Gebruik Main window actie (Move edit cursor back one grid unit)
+    reaper.Main_OnCommand(40104, 0)
+  end
 end
 
 local function moveEditCursorRightByGrid()
-	local commandId = 40048
-	reaper.MIDIEditor_OnCommand(activeMidiEditor(), commandId)
-end
-
-function handleInput()
+  local editor = activeMidiEditor()
+  if editor then
+    -- Gebruik MIDI editor actie
+	  local commandId = 40048
+	  reaper.MIDIEditor_OnCommand(editor, commandId)
+  else
+    -- Gebruik Main window actie (Move edit cursor forward one grid unit)
+    reaper.Main_OnCommand(40105, 0)
+  end
+endfunction handleInput()
 
 	local operatingSystem = string.lower(reaper.GetOS())
 
@@ -7625,15 +7869,15 @@ function Interface:addDropdown(x, y, width, height, options, defaultOptionIndex,
 	table.insert(self.elements, dropdown)
 end
 
-function Interface:addSimpleButton(text, x, y, width, height, onClick, onRightClick, getTooltip)
+function Interface:addSimpleButton(text, x, y, width, height, onClick, onRightClick, getTooltip, drawBorder)
 
-	local button = SimpleButton:new(text, x, y, width, height, onClick, onRightClick, getTooltip)
+	local button = SimpleButton:new(text, x, y, width, height, onClick, onRightClick, getTooltip, drawBorder)
 	table.insert(self.elements, button)
 end
 
-function Interface:addToggleButton(text, x, y, width, height, getState, onToggle, onRightClick, getTooltip)
+function Interface:addToggleButton(text, x, y, width, height, getState, onToggle, onRightClick, getTooltip, drawBorder)
 
-	local button = ToggleButton:new(text, x, y, width, height, getState, onToggle, onRightClick, getTooltip)
+	local button = ToggleButton:new(text, x, y, width, height, getState, onToggle, onRightClick, getTooltip, drawBorder)
 	table.insert(self.elements, button)
 end
 
@@ -7776,7 +8020,7 @@ function Interface:addTopFrame()
 end
 
 local function topButtonWidth()
-  return sx(55)
+  return sx(75)
 end
 
 local function topButtonHeight()
@@ -7888,7 +8132,7 @@ function Interface:addScaleFilterButton(xMargin, yMargin, xPadding, opts)
 
   local applyDocker = opts.applyDockerPadding ~= false
   local finalX = buttonXpos + (applyDocker and dockerXPadding or 0)
-  self:addSimpleButton(getText, finalX, buttonYpos, buttonWidth, buttonHeight, onClick, nil, getTooltip)
+  self:addSimpleButton(getText, finalX, buttonYpos, buttonWidth, buttonHeight, onClick, nil, getTooltip, opts.drawBorder)
 end
 
 function Interface:addNoteLengthControl(xPos, yPos, options)
@@ -7943,6 +8187,108 @@ function Interface:addFifthWheelButton(xMargin, yMargin, xPadding)
   self:addToggleButton("Circle", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getCircleState, onToggle, nil, getTooltip)
 end
 
+function Interface:addFontButton(xMargin, yMargin, xPadding, rowIndex, colIndex)
+  rowIndex = rowIndex or 0
+  colIndex = colIndex or 5
+
+  local buttonWidth = topButtonWidth()
+  local buttonHeight = topButtonHeight()
+  local buttonXpos = topButtonXPos(xMargin, xPadding, colIndex)
+  local buttonYpos = topButtonYPos(yMargin) + (rowIndex * (buttonHeight + sy(4)))
+	
+	local getMonoState = function() 
+    return reaper.GetExtState("TK_ChordGun", "useMonospaceFont") == "1"
+  end
+  
+	local onToggle = function()
+    local current = getMonoState()
+    -- Toggle de state (1 of 0)
+    reaper.SetExtState("TK_ChordGun", "useMonospaceFont", current and "0" or "1", true)
+    -- Forceer een herstart van de GUI om het nieuwe font te laden
+    guiShouldBeUpdated = true
+	end
+  
+	local getTooltip = function() return "Toggle Monospace Font\n\nSwitch between Arial and Fixed-Width font\n(Better for alignment/tables)" end
+	
+  self:addToggleButton("Mono", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getMonoState, onToggle, nil, getTooltip)
+end
+
+function Interface:addRemapButton(xMargin, yMargin, xPadding, rowIndex, colIndex)
+  local buttonWidth = topButtonWidth()
+  local buttonHeight = topButtonHeight()
+  local buttonXpos = topButtonXPos(xMargin, xPadding, colIndex)
+  local buttonYpos = topButtonYPos(yMargin) + (rowIndex * (buttonHeight + sy(4)))
+
+  local getRemapState = function() 
+    -- scaleFilterMode: 0=off, 1=filter, 2=remap
+    return scaleFilterMode == 2 
+  end
+  
+  local onToggle = function()
+    if scaleFilterMode == 2 then
+      scaleFilterMode = 0
+    else
+      scaleFilterMode = 2
+    end
+    reaper.gmem_write(0, scaleFilterMode)
+    reaper.SetExtState("TK_ChordGun", "scaleFilterMode", tostring(scaleFilterMode), true)
+  end
+  
+  local getTooltip = function() return "Toggle Remap Mode\n\nMaps white keys to scale notes.\n(Requires TK Scale Filter JSFX)" end
+  
+  self:addToggleButton("Remap", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getRemapState, onToggle, nil, getTooltip)
+end
+
+function Interface:addSetupButton(xMargin, yMargin, xPadding, rowIndex, colIndex)
+  local buttonWidth = topButtonWidth()
+  local buttonHeight = topButtonHeight()
+  local buttonXpos = topButtonXPos(xMargin, xPadding, colIndex)
+  local buttonYpos = topButtonYPos(yMargin) + (rowIndex * (buttonHeight + sy(4)))
+
+  local onClick = function()
+      local track = reaper.GetSelectedTrack(0, 0)
+      if not track then
+          reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0)
+          return
+      end
+      
+      -- Check if TK_Scale_Filter is already on input FX chain
+      local inputFxCount = reaper.TrackFX_GetRecCount(track)
+      for i = 0, inputFxCount - 1 do
+          local retval, fxName = reaper.TrackFX_GetFXName(track, i + 0x1000000, "")
+          if fxName and fxName:match("TK Scale Filter") then
+              reaper.ShowMessageBox("TK Scale Filter is already on this track's Input FX!", "Already Setup", 0)
+              return
+          end
+      end
+      
+      -- Add to input FX (0x1000000 flag = input FX, -1 = at end)
+      local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
+      if fxIndex >= 0 then
+          reaper.ShowMessageBox(
+              "TK Scale Filter added to Input FX successfully!\n\n" ..
+              "The filter/remap modes will now work with your MIDI input.",
+              "Setup Complete",
+              0
+          )
+      else
+          reaper.ShowMessageBox(
+              "Could not add TK Scale Filter.\n\n" ..
+              "Make sure 'TK_Scale_Filter.jsfx' is in your REAPER Effects folder.",
+              "Setup Failed",
+              0
+          )
+      end
+  end
+  
+  local getTooltip = function()
+      return "Click: Add TK Scale Filter to selected track's Input FX\n\n" ..
+             "This JSFX enables the Filter and Remap modes for live MIDI input."
+  end
+  
+  self:addSimpleButton("Setup", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, onClick, nil, getTooltip)
+end
+
 function Interface:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, headerHeight)
 
 	local pianoWidth = self.width - 2 * xMargin - 2 * xPadding
@@ -7985,10 +8331,10 @@ end
 
 function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, headerHeight)
 	-- Voeg PLAY, STOP, CLEAR buttons toe onder de progression slots
-	local buttonWidth = sx(50)
-	local buttonHeight = sy(18)
+	local buttonWidth = sx(75)
+	local buttonHeight = sy(24)
 	local buttonXpos = xMargin + xPadding
-  local buttonSpacing = sx(12)
+  local buttonSpacing = sx(10)
 	
 	-- Positioneer onder progression slots
 	local buttonHeightChord = sy(38)
@@ -8009,7 +8355,8 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		buttonHeight,
 		function() startProgressionPlayback() end,
 		nil,
-		function() return "Click: Start progression playback" end
+		function() return "Click: Start progression playback" end,
+    true -- Border
 	)
 	
 	-- STOP button
@@ -8021,7 +8368,8 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		buttonHeight,
 		function() stopProgressionPlayback() end,
 		nil,
-		function() return "Click: Stop progression playback" end
+		function() return "Click: Stop progression playback" end,
+    true -- Border
 	)
 	
 	-- CLEAR button
@@ -8033,45 +8381,52 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		buttonHeight,
 		function() clearChordProgression() end,
 		nil,
-		function() return "Click: Clear all slots in progression" end
+		function() return "Click: Clear all slots in progression" end,
+    true -- Border
 	)
 
-  -- FILTER button (tussen Clear en Save)
-  local filterButtonX = buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 3
-  self:addScaleFilterButton(xMargin, yMargin, xPadding, {
-    x = filterButtonX,
-    y = buttonYpos,
-    width = buttonWidth,
-    height = buttonHeight,
-    applyDockerPadding = false
-  })
-	
 	-- SAVE button
   self:addSimpleButton(
     "Save",
-    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4,
+    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 3,
 		buttonYpos,
 		buttonWidth,
 		buttonHeight,
 		function() saveProgressionPreset() end,
 		nil,
-		function() return "Click: Save progression as preset" end
+		function() return "Click: Save progression as preset" end,
+    true -- Border
 	)
 	
 	-- LOAD button
   self:addSimpleButton(
     "Load",
-    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 5,
+    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4,
 		buttonYpos,
 		buttonWidth,
 		buttonHeight,
 		function() showLoadPresetMenu() end,
 		nil,
-		function() return "Click: Load progression preset" end
+		function() return "Click: Load progression preset" end,
+    true -- Border
 	)
 	
   -- INSERT button inline na LOAD
-  local insertInlineX = buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 6
+  local insertInlineX = buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 5
+  
+  -- Define Right Click Menu for Insert
+  local onInsertRightClick = function()
+    local menu = "Export to Chord Track (Text Items)|Export to Project Regions"
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    
+    if selection == 1 then
+      exportProgressionToTrack()
+    elseif selection == 2 then
+      exportProgressionToMarkers()
+    end
+  end
+
   self:addSimpleButton(
     "Insert",
     insertInlineX,
@@ -8079,71 +8434,22 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     buttonWidth,
     buttonHeight,
     function() insertProgressionToMIDI() end,
-    nil,
-    function() return "Click: Insert progression into MIDI editor" end
-  )
-	
-	-- SETUP button (adds Scale Filter JSFX to track) - direct na INSERT
-	local setupButtonWidth = s(50)
-	local setupButtonX = insertInlineX + buttonWidth + buttonSpacing
-	self:addSimpleButton(
-		"Setup",
-		setupButtonX,
-		buttonYpos,
-		setupButtonWidth,
-		buttonHeight,
-		function()
-			local track = reaper.GetSelectedTrack(0, 0)
-			if not track then
-				reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0)
-				return
-			end
-			
-			-- Check if TK_Scale_Filter is already on input FX chain
-			local inputFxCount = reaper.TrackFX_GetRecCount(track)
-			for i = 0, inputFxCount - 1 do
-				local retval, fxName = reaper.TrackFX_GetFXName(track, i + 0x1000000, "")
-				if fxName and fxName:match("TK Scale Filter") then
-					reaper.ShowMessageBox("TK Scale Filter is already on this track's Input FX!", "Already Setup", 0)
-					return
-				end
-			end
-			
-			-- Add to input FX (0x1000000 flag = input FX, -1 = at end)
-			local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
-			if fxIndex >= 0 then
-				reaper.ShowMessageBox(
-					"TK Scale Filter added to Input FX successfully!\n\n" ..
-					"The filter/remap modes will now work with your MIDI input.",
-					"Setup Complete",
-					0
-				)
-			else
-				reaper.ShowMessageBox(
-					"Could not add TK Scale Filter.\n\n" ..
-					"Make sure 'TK_Scale_Filter.jsfx' is in your REAPER Effects folder.",
-					"Setup Failed",
-					0
-				)
-			end
-		end,
-		nil,
-		function()
-			return "Click: Add TK Scale Filter to selected track's Input FX\n\n" ..
-			       "This JSFX enables the Filter and Remap modes for live MIDI input.\n" ..
-			       "Place it in Input FX to process MIDI before it reaches instruments."
-		end
+    onInsertRightClick,
+    function() return "Click: Insert MIDI | Right-Click: Export as Text Items or Markers" end,
+    true -- Border
 	)
 	
+	-- SETUP button (adds Scale Filter JSFX to track) - direct na INSERT
+	-- REMOVED from here, moved to second row
+	
   -- CHORD RECOGNITION DISPLAY (custom element tussen Setup en Tooltip)
-  local chordDisplayX = setupButtonX + setupButtonWidth + buttonSpacing
-  local chordDisplayWidth = s(80)
-  local chordDisplayHeight = buttonHeight
-  local chordDisplayYOffset = s(2)  -- Small offset downwards
+  local chordDisplayX = insertInlineX + buttonWidth + buttonSpacing
+  local chordDisplayWidth = sx(100) -- Wider for larger text
+  local chordDisplayHeight = (buttonHeight * 2) + s(6) -- Spans 2 rows (buttonHeight + spacing + buttonHeight)
   
   local ChordDisplay = {}
   ChordDisplay.x = chordDisplayX
-  ChordDisplay.y = buttonYpos + chordDisplayYOffset
+  ChordDisplay.y = buttonYpos -- Align with top row
   ChordDisplay.width = chordDisplayWidth
   ChordDisplay.height = chordDisplayHeight
   
@@ -8183,7 +8489,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
         setColor("FF8C00")  -- Orange
       end
       
-      gfx.setfont(1, "Arial", fontSize(18))
+      gfx.setfont(1, "Arial", fontSize(28), string.byte('b')) -- Larger and Bold
       local text = recognizedChord
       local textW, textH = gfx.measurestr(text)
       gfx.x = x + (w - textW) / 2
@@ -8198,14 +8504,138 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
   table.insert(self.elements, ChordDisplay)
 	
   -- TOOLTIP toggle button (rechts uitgelijnd)
+  -- REMOVED from here, moved to second row
+	
+  -- DOCK/UNDOCK button (na TOOLTIP toggle)
+  -- REMOVED from here, moved to second row
+	
+  -- HELP button (? rechts van DOCK)
+  -- REMOVED from here, moved to second row
+	
+  -- ROW 2: Remap, Setup, Mono
+  local buttonYposRow2 = buttonYpos + buttonHeight + s(6)
+  
+  -- REMAP/FILTER button (Cycles Off -> Filter -> Remap)
+  self:addScaleFilterButton(xMargin, yMargin, xPadding, {
+    x = buttonXpos + dockerXPadding,
+    y = buttonYposRow2,
+    width = buttonWidth,
+    height = buttonHeight,
+    applyDockerPadding = false,
+    drawBorder = true -- Border
+  })
+  
+  -- SETUP button
+  local onSetupClick = function()
+      local track = reaper.GetSelectedTrack(0, 0)
+      if not track then reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0) return end
+      local inputFxCount = reaper.TrackFX_GetRecCount(track)
+      for i = 0, inputFxCount - 1 do
+          local retval, fxName = reaper.TrackFX_GetFXName(track, i + 0x1000000, "")
+          if fxName and fxName:match("TK Scale Filter") then reaper.ShowMessageBox("TK Scale Filter is already on this track's Input FX!", "Already Setup", 0) return end
+      end
+      local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
+      if fxIndex >= 0 then reaper.ShowMessageBox("TK Scale Filter added to Input FX successfully!", "Setup Complete", 0) else reaper.ShowMessageBox("Could not add TK Scale Filter.", "Setup Failed", 0) end
+  end
+  self:addSimpleButton("Setup", buttonXpos + dockerXPadding + buttonWidth + buttonSpacing, buttonYposRow2, buttonWidth, buttonHeight, onSetupClick, nil, function() return "Click: Add TK Scale Filter to selected track's Input FX" end, true)
+  
+  -- MONO button (Renamed to Font)
+  local getMonoState = function() return reaper.GetExtState("TK_ChordGun", "useMonospaceFont") == "1" end
+  local onMonoToggle = function()
+    local current = getMonoState()
+    reaper.SetExtState("TK_ChordGun", "useMonospaceFont", current and "0" or "1", true)
+    guiShouldBeUpdated = true
+  end
+  local onFontRightClick = function()
+    local menu = "Small (1.0)|Normal (1.25)|Big (1.5)|Bigger (1.75)"
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    
+    local newScale = nil
+    if selection == 1 then newScale = 1.0
+    elseif selection == 2 then newScale = 1.25
+    elseif selection == 3 then newScale = 1.5
+    elseif selection == 4 then newScale = 1.75
+    end
+    
+    if newScale then
+      fontScale = newScale
+      reaper.SetExtState("TK_ChordGun", "fontScale", tostring(fontScale), true)
+      guiShouldBeUpdated = true
+    end
+  end
+  self:addToggleButton("Font", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 2, buttonYposRow2, buttonWidth, buttonHeight, getMonoState, onMonoToggle, onFontRightClick, function() return "Toggle Monospace Font | Right-click: Set Font Scale" end, true)
+
+  -- CIRCLE button (Moved from top row)
+  local getCircleState = function() return fifthWheelWindowOpen end
+  local onCircleToggle = function()
+    if fifthWheelWindowOpen then
+      reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+      fifthWheelWindowOpen = false
+    else
+      showFifthWheel()
+    end
+  end
+  self:addToggleButton("Circle", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 3, buttonYposRow2, buttonWidth, buttonHeight, getCircleState, onCircleToggle, nil, function() return "Toggle Circle of Fifths" end, true)
+
+  -- RATIO button
+  local getRatioState = function() return reaper.GetExtState("TK_ChordGun", "useFixedRatio") == "1" end
+  local onRatioToggle = function()
+    local current = getRatioState()
+    reaper.SetExtState("TK_ChordGun", "useFixedRatio", current and "0" or "1", true)
+    -- Force resize to ratio if enabling
+    if not current then
+        local dynWidth = getDynamicBaseWidth()
+        local targetH = math.floor(gfx.w * (baseHeight / dynWidth))
+        gfx.init("", gfx.w, targetH)
+    end
+    guiShouldBeUpdated = true
+  end
+
+  local onRatioRightClick = function()
+    local menu = "Tiny (50%)|Small (75%)|Normal (100%)|Big (125%)|Bigger (150%)|Enormous (200%)"
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    
+    local scale = nil
+    if selection == 1 then scale = 0.5
+    elseif selection == 2 then scale = 0.75
+    elseif selection == 3 then scale = 1.0
+    elseif selection == 4 then scale = 1.25
+    elseif selection == 5 then scale = 1.5
+    elseif selection == 6 then scale = 2.0
+    end
+    
+    if scale then
+        local dynWidth = getDynamicBaseWidth()
+        local newW = math.floor(dynWidth * scale)
+        local newH = math.floor(baseHeight * scale)
+        
+        -- Also enable fixed ratio when setting a specific size
+        reaper.SetExtState("TK_ChordGun", "useFixedRatio", "1", true)
+        
+        gfx.init("", newW, newH)
+        guiShouldBeUpdated = true
+    end
+  end
+
+  self:addToggleButton("Ratio", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4, buttonYposRow2, buttonWidth, buttonHeight, getRatioState, onRatioToggle, onRatioRightClick, function() return "Toggle Fixed Aspect Ratio | Right-click: Set Window Size" end, true)
+
+  -- TOOLTIP toggle button (rechts uitgelijnd op rij 1, boven Dock/Help)
   local totalWidth = self.width - 2 * xMargin - 2 * xPadding
-  local helpButtonWidth = s(20)  -- Kleine button voor ?
-  local dockButtonWidth = s(50)  -- DOCK/UNDOCK button
-  local tooltipsButtonX = buttonXpos + dockerXPadding + totalWidth - buttonWidth - dockButtonWidth - helpButtonWidth - buttonSpacing
+  local helpButtonWidth = s(20)
+  local dockButtonWidth = s(50)
+  local spacingSmall = math.max(s(4), buttonSpacing - s(10))
+  
+  -- Calculate positions from right to left
+  local helpButtonX = buttonXpos + dockerXPadding + totalWidth - helpButtonWidth
+  local dockButtonX = helpButtonX - spacingSmall - dockButtonWidth
+  local tooltipsButtonX = dockButtonX
+  
   self:addToggleButton(
-    "Tooltips",
+    "Tooltip",
     tooltipsButtonX,
-    buttonYpos,
+    buttonYpos, -- Row 1
     buttonWidth,
     buttonHeight,
     function() return tooltipsEnabled end,
@@ -8213,15 +8643,15 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       tooltipsEnabled = not tooltipsEnabled
     end,
     nil,
-    function() return "Toggle tooltips (shows click/modifier actions)" end
+    function() return "Toggle tooltips (shows click/modifier actions)" end,
+    false -- No Border
   )
 	
-  -- DOCK/UNDOCK button (na TOOLTIP toggle)
-  local dockButtonX = tooltipsButtonX + buttonWidth + buttonSpacing
+  -- DOCK/UNDOCK button (rechts uitgelijnd op rij 2)
   self:addSimpleButton(
     function() return windowIsDocked() and "Undock" or "Dock" end,
 		dockButtonX,
-		buttonYpos,
+		buttonYposRow2,
 		dockButtonWidth,
 		buttonHeight,
 		function()
@@ -8235,72 +8665,21 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 			guiShouldBeUpdated = true
 		end,
 		nil,
-    function() return windowIsDocked() and "Click: Undock window" or "Click: Dock window" end
+    function() return windowIsDocked() and "Click: Undock window" or "Click: Dock window" end,
+    false -- No Border
 	)
 	
-  -- HELP button (? rechts van DOCK)
-  local helpButtonX = dockButtonX + dockButtonWidth + math.max(s(4), buttonSpacing - s(10))
+  -- HELP button (? rechts van DOCK op rij 2)
 	self:addSimpleButton(
 		"?",
 		helpButtonX,
-		buttonYpos,
+		buttonYposRow2,
 		helpButtonWidth,
 		buttonHeight,
 		function() showHelpWindow() end,
 		nil,
-		function() return "Click: Open help window" end
-	)
-	
-	-- SETUP button (adds Scale Filter JSFX to track)
-	local setupButtonWidth = s(50)
-	local setupButtonX = helpButtonX + helpButtonWidth + buttonSpacing
-	self:addSimpleButton(
-		"Setup",
-		setupButtonX,
-		buttonYpos,
-		setupButtonWidth,
-		buttonHeight,
-		function()
-			local track = reaper.GetSelectedTrack(0, 0)
-			if not track then
-				reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0)
-				return
-			end
-			
-			-- Check if TK_Scale_Filter is already on input FX chain
-			local inputFxCount = reaper.TrackFX_GetRecCount(track)
-			for i = 0, inputFxCount - 1 do
-				local retval, fxName = reaper.TrackFX_GetFXName(track, i + 0x1000000, "")
-				if fxName and fxName:match("TK Scale Filter") then
-					reaper.ShowMessageBox("TK Scale Filter is already on this track's Input FX!", "Already Setup", 0)
-					return
-				end
-			end
-			
-			-- Add to input FX (0x1000000 flag = input FX, -1 = at end)
-			local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
-			if fxIndex >= 0 then
-				reaper.ShowMessageBox(
-					"TK Scale Filter added to Input FX successfully!\n\n" ..
-					"The filter/remap modes will now work with your MIDI input.",
-					"Setup Complete",
-					0
-				)
-			else
-				reaper.ShowMessageBox(
-					"Could not add TK Scale Filter.\n\n" ..
-					"Make sure 'TK_Scale_Filter.jsfx' is in your REAPER Effects folder.",
-					"Setup Failed",
-					0
-				)
-			end
-		end,
-		nil,
-		function()
-			return "Click: Add TK Scale Filter to selected track's Input FX\n\n" ..
-			       "This JSFX enables the Filter and Remap modes for live MIDI input.\n" ..
-			       "Place it in Input FX to process MIDI before it reaches instruments."
-		end
+		function() return "Click: Open help window" end,
+    false -- No Border
 	)
 
 end
@@ -8518,7 +8897,7 @@ function Interface:addBottomFrame()
 	local inversionLabelWidth = sx(80)
 	local inversionValueBoxWidth = sx(55)
 
-	local chordButtonsFrameHeight = self.height - yMargin - sy(6)
+	local chordButtonsFrameHeight = self.height - yMargin
 	self:addFrame(xMargin+dockerXPadding, yMargin, self.width - 2 * xMargin, chordButtonsFrameHeight)
   
   self:addHoldButton(xMargin, yMargin, xPadding)
@@ -8526,8 +8905,9 @@ function Interface:addBottomFrame()
   self:addStrumButton(xMargin, yMargin, xPadding)
   local lenButtonX = topButtonXPos(xMargin, xPadding, 3)
   local lenButtonY = topButtonYPos(yMargin)
-  self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = sx(70)})
-  self:addFifthWheelButton(xMargin, yMargin, xPadding)
+  self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = sx(75)})
+  -- self:addFifthWheelButton(xMargin, yMargin, xPadding) -- Moved to bottom row
+  
   self:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionControls(xMargin, yMargin, xPadding, yPadding, headerHeight)
@@ -8658,6 +9038,23 @@ local function main()
 	end
 
 	if gfx.w ~= interface.lastWidth or gfx.h ~= interface.lastHeight then
+		-- Enforce fixed ratio if enabled
+		if reaper.GetExtState("TK_ChordGun", "useFixedRatio") == "1" then
+			local dynWidth = getDynamicBaseWidth()
+			local targetRatio = dynWidth / baseHeight
+			local currentRatio = gfx.w / gfx.h
+			
+			-- Allow small margin of error
+			if math.abs(currentRatio - targetRatio) > 0.01 then
+				-- Adjust height to match width (assuming width is master)
+				local newHeight = math.floor(gfx.w / targetRatio)
+				if newHeight ~= gfx.h then
+					gfx.init("", gfx.w, newHeight)
+					gfx.h = newHeight
+				end
+			end
+		end
+
 		interface.lastWidth = gfx.w
 		interface.lastHeight = gfx.h
 		interface.width = gfx.w
