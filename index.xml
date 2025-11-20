@@ -256,7 +256,7 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.0.7" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-20T13:15:00Z">
+      <version name="2.0.8" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-20T13:40:00Z">
         <changelog><![CDATA[
 2.0.6
 + Added "Export to Chord Track" (Right-click Insert button): Creates a new track with empty items containing chord names
