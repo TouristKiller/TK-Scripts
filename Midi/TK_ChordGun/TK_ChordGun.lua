@@ -1,6 +1,6 @@
 ﻿-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.1.3
+-- @version 2.1.4
 -- @changelog
 --[[
 2.1.3
@@ -1360,10 +1360,6 @@ scaleSystems = {
         description = "Heptatonic (7 notes) - Bright, happy sound\nMost common scale in Western music" },
       { name = "Natural Minor", pattern = "101101011010",
         description = "Heptatonic (7 notes) - Dark, sad sound\nRelative minor of Major scale" },
-      { name = "Harmonic Minor", pattern = "101101011001",
-        description = "Heptatonic (7 notes) - Exotic, dramatic\nRaised 7th creates leading tone" },
-      { name = "Melodic Minor", pattern = "101101010101",
-        description = "Heptatonic (7 notes) - Jazz favorite\nRaised 6th and 7th ascending" },
       { name = "Ionian", pattern = "101011010101",
         description = "Heptatonic (7 notes) - Same as Major\n1st mode of major scale" },
       { name = "Aeolian", pattern = "101101011010",
@@ -1378,6 +1374,44 @@ scaleSystems = {
         description = "Heptatonic (7 notes) - Dreamy, floating\n4th mode - major with sharp 4th" },
       { name = "Locrian", pattern = "110101101010",
         description = "Heptatonic (7 notes) - Unstable, dissonant\n7th mode - diminished quality" }
+    }
+  },
+  {
+    name = "Harmonic Minor Modes",
+    scales = {
+      { name = "Harmonic Minor", pattern = "101101011001",
+        description = "Mode 1: Aeolian #7\nDark, exotic, classical/metal\n1 2 b3 4 5 b6 7" },
+      { name = "Locrian #6", pattern = "110101100101",
+        description = "Mode 2: Locrian natural 6\nDark, diminished quality\n1 b2 b3 4 b5 6 b7" },
+      { name = "Ionian #5", pattern = "101011001011",
+        description = "Mode 3: Ionian Augmented\nDreamy, unsettled major\n1 2 3 4 #5 6 7" },
+      { name = "Dorian #4", pattern = "101100110101",
+        description = "Mode 4: Dorian #11\nBluesy minor with sharp 4\n1 2 b3 #4 5 6 b7" },
+      { name = "Phrygian Dominant", pattern = "110011011010",
+        description = "Mode 5: Phrygian Major\nSpanish, Flamenco, Metal\n1 b2 3 4 5 b6 b7" },
+      { name = "Lydian #2", pattern = "100110110101",
+        description = "Mode 6: Lydian sharp 2\nBright, angular, modern\n1 #2 3 #4 5 6 7" },
+      { name = "Super Locrian bb7", pattern = "110101011001",
+        description = "Mode 7: Altered bb7 / Ultralocrian\nDiminished, very dissonant\n1 b2 b3 b4 b5 b6 bb7" }
+    }
+  },
+  {
+    name = "Melodic Minor Modes",
+    scales = {
+      { name = "Melodic Minor", pattern = "101101010101",
+        description = "Mode 1: Jazz Minor / Ionian b3\nAscending Melodic Minor\n1 2 b3 4 5 6 7" },
+      { name = "Dorian b2", pattern = "110101010101",
+        description = "Mode 2: Phrygian #6\nDark minor with natural 6\n1 b2 b3 4 5 6 b7" },
+      { name = "Lydian Augmented", pattern = "101010101101",
+        description = "Mode 3: Lydian #5\nDreamy, whole-tone feel\n1 2 3 #4 #5 6 7" },
+      { name = "Lydian Dominant", pattern = "101010110101",
+        description = "Mode 4: Lydian b7 / Overtone\nAcoustic scale, bright dominant\n1 2 3 #4 5 6 b7" },
+      { name = "Mixolydian b6", pattern = "101011011010",
+        description = "Mode 5: Hindu / Aeolian Dominant\nMelodic major/minor hybrid\n1 2 3 4 5 b6 b7" },
+      { name = "Locrian #2", pattern = "101101101010",
+        description = "Mode 6: Aeolian b5 / Half-Diminished\nDark, jazzy minor\n1 2 b3 4 b5 b6 b7" },
+      { name = "Super Locrian", pattern = "110110101010",
+        description = "Mode 7: Altered Scale\nDominant altered tensions\n1 b2 b3 b4 b5 b6 b7" }
     }
   },
   {
@@ -1490,18 +1524,8 @@ scaleSystems = {
         description = "Octatonic (8 notes) - Minor with chromatic\nDorian + major 3rd passing tone\nUsed extensively in bebop improvisation" },
       { name = "Bebop Dorian", pattern = "10110101101010", isCustom = true, intervals = "2-1-2-2-2-1-1-2",
         description = "Octatonic (8 notes) - Dorian with passing tone\nDorian + major 3rd chromatic\nMiles Davis and John Coltrane favorite" },
-      { name = "Altered Scale", pattern = "11010101010110", isCustom = true, intervals = "1-2-1-2-2-2-2",
-        description = "Heptatonic (7 notes) - Super Locrian\n7th mode of melodic minor | All altered tensions\nDominant 7 with b9, #9, #11, b13" },
-      { name = "Lydian Dominant", pattern = "10110110101010", isCustom = true, intervals = "2-2-2-1-2-1-2",
-        description = "Heptatonic (7 notes) - Acoustic/Overtone scale\n4th mode of melodic minor | #11 with b7\nBartÃ³k, Debussy, modern jazz standard" },
-      { name = "Harmonic Major", pattern = "10110101100110", isCustom = true, intervals = "2-2-1-2-1-3-1",
-        description = "Heptatonic (7 notes) - Major with b6\nMajor scale with flattened 6th\nExotic sound, used in jazz and metal" },
-      { name = "Melodic Minor", pattern = "10110101101010", isCustom = true, intervals = "2-1-2-2-2-2-1",
-        description = "Heptatonic (7 notes) - Jazz minor\nNatural minor with raised 6 and 7\nFoundation of modern jazz harmony" },
-      { name = "Whole Half Dim", pattern = "101101101101", isCustom = true, intervals = "2-1-2-1-2-1-2-1",
-        description = "Octatonic (8 notes) - Symmetrical diminished\nAlternates whole and half steps\nDiminished 7th and dominant 7b9 chords" },
-      { name = "Half Whole Dim", pattern = "110110110110", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
-        description = "Octatonic (8 notes) - Symmetrical diminished\nAlternates half and whole steps\nDiminished chords and diminished lines" }
+      { name = "Harmonic Major", pattern = "101011011001", isCustom = true, intervals = "2-2-1-2-1-3-1",
+        description = "Heptatonic (7 notes) - Major with b6\nMajor scale with flattened 6th\nExotic sound, used in jazz and metal" }
     }
   },
   {
@@ -1509,8 +1533,6 @@ scaleSystems = {
     scales = {
       { name = "Hijaz", pattern = "11001101010", isCustom = true, intervals = "1-3-1-2-1-2-2",
         description = "Heptatonic (7 notes) - Arabic Maqam\nDramatic augmented 2nd interval | Middle Eastern flavor\nUsed in Arabic, Turkish, Greek, and Klezmer music" },
-      { name = "Phrygian Dominant", pattern = "11001101010", isCustom = true, intervals = "1-3-1-2-1-2-2",
-        description = "Heptatonic (7 notes) - Spanish/Flamenco\nPhrygian with major 3rd | Hijaz/Freygish mode\nEssential for flamenco, metal, and film scores" },
       { name = "Hungarian Minor", pattern = "10110011010", isCustom = true, intervals = "2-1-3-1-1-3-1",
         description = "Heptatonic (7 notes) - Gypsy/Hungarian\nMinor with raised 4th | Dramatic augmented intervals\nLiszt, Brahms, and Eastern European folk" },
       { name = "Double Harmonic", pattern = "11001100110", isCustom = true, intervals = "1-3-1-2-1-3-1",
@@ -1557,22 +1579,12 @@ scaleSystems = {
   {
     name = "Rock & Metal",
     scales = {
-      { name = "Harmonic Minor", pattern = "10110100110", isCustom = true, intervals = "2-1-2-2-1-3-1",
-        description = "Heptatonic (7 notes) - Classical/metal favorite\nNatural minor + major 7th | Dramatic\nNeoclassical metal, Yngwie Malmsteen, classical" },
-      { name = "Phrygian Dominant", pattern = "11001101010", isCustom = true, intervals = "1-3-1-2-1-2-2",
-        description = "Heptatonic (7 notes) - Metal staple\n5th mode of Harmonic Minor | Spanish/Egyptian\nMetallica, Slayer, progressive metal" },
       { name = "Neapolitan Minor", pattern = "11010100110", isCustom = true, intervals = "1-2-2-2-1-3-1",
         description = "Heptatonic (7 notes) - Dark, exotic minor\nMinor with flattened 2nd | Dramatic\nSymphonic metal, film scores" },
       { name = "Neapolitan Major", pattern = "11010110010", isCustom = true, intervals = "1-2-2-2-2-2-1",
         description = "Heptatonic (7 notes) - Bright yet exotic\nMajor with flattened 2nd | Unusual\nProgressive rock/metal, experimental" },
       { name = "Hungarian Major", pattern = "10011011010", isCustom = true, intervals = "3-1-2-1-2-1-2",
-        description = "Heptatonic (7 notes) - Exotic major sound\nLydian with flat 6 and 7 | Augmented 2nd\nGypsy-flavored rock, folk metal" },
-      { name = "Lydian #2", pattern = "11101101010", isCustom = true, intervals = "1-2-2-2-1-2-2",
-        description = "Heptatonic (7 notes) - Bright and angular\nLydian with raised 2nd | Modern sound\nProgressive metal, math rock" },
-      { name = "Super Locrian", pattern = "11010101010", isCustom = true, intervals = "1-2-1-2-2-2-2",
-        description = "Heptatonic (7 notes) - Altered/diminished\n7th mode of melodic minor | Dissonant\nExtreme metal, technical death metal" },
-      { name = "Aeolian b5", pattern = "10110010110", isCustom = true, intervals = "2-1-2-1-2-2-2",
-        description = "Heptatonic (7 notes) - Half-diminished sound\nNatural minor with flat 5 | Dark\nDoom metal, atmospheric metal" }
+        description = "Heptatonic (7 notes) - Exotic major sound\nLydian with flat 6 and 7 | Augmented 2nd\nGypsy-flavored rock, folk metal" }
     }
   }
 }
@@ -6070,7 +6082,21 @@ function Dropdown:drawText()
 	local text = self.options[self.selectedIndex]
 
 	setDrawColorToDropdownText()
+	
+	local availableWidth = self.width - 25 -- Left padding (7) + Icon width (14) + extra padding (4)
 	local stringWidth, stringHeight = gfx.measurestr(text)
+	
+	if stringWidth > availableWidth then
+		local ellipsis = "..."
+		local ellipsisWidth = gfx.measurestr(ellipsis)
+		
+		while stringWidth + ellipsisWidth > availableWidth and #text > 0 do
+			text = string.sub(text, 1, -2)
+			stringWidth = gfx.measurestr(text)
+		end
+		text = text .. ellipsis
+	end
+
 	gfx.x = self.x + 7
 	gfx.y = self.y + ((self.height - stringHeight) / 2)
 	gfx.drawstr(text)
