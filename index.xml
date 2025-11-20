@@ -256,7 +256,7 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.0.6" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-18T20:15:00Z">
+      <version name="2.0.7" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-20T13:15:00Z">
         <changelog><![CDATA[
 2.0.6
 + Added "Export to Chord Track" (Right-click Insert button): Creates a new track with empty items containing chord names
@@ -344,48 +344,48 @@
         <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun.lua</source>
         <source file="TK_ChordGun/TK_ChordGun_Help.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun_Help.lua</source>
         <source file="TK_ChordGun/README.md">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/README.md</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun decrement chord inversion.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20chord%20inversion.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun decrement chord type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20chord%20type.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun decrement octave.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20octave.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun decrement scale tonic note.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20scale%20tonic%20note.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun decrement scale type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20scale%20type.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun double grid size.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20double%20grid%20size.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun halve grid size.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20halve%20grid%20size.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%201.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%202.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%203.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%204.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%205.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%206.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%207.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun increment chord inversion.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20chord%20inversion.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun increment chord type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20chord%20type.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun increment octave.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20octave.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun increment scale tonic note.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20scale%20tonic%20note.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun increment scale type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20scale%20type.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%201.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%202.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%203.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%204.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%205.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%206.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%207.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%201.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%202.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%203.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%204.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%205.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%206.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%207.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%201.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%202.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%203.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%204.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%205.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%206.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun scale note 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%207.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGun stop all notes from playing.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20stop%20all%20notes%20from%20playing.lua</source>
-        <source main="midi_editor" file="TK_ChordGun/TK_ChordGunMini.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGunMini.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun decrement chord inversion.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20chord%20inversion.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun decrement chord type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20chord%20type.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun decrement octave.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20octave.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun decrement scale tonic note.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20scale%20tonic%20note.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun decrement scale type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20scale%20type.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun double grid size.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20double%20grid%20size.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun halve grid size.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20halve%20grid%20size.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%201.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%202.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%203.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%204.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%205.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%206.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun higher scale note 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20higher%20scale%20note%207.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun increment chord inversion.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20chord%20inversion.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun increment chord type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20chord%20type.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun increment octave.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20octave.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun increment scale tonic note.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20scale%20tonic%20note.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun increment scale type.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20increment%20scale%20type.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%201.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%202.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%203.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%204.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%205.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%206.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun lower scale note 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20lower%20scale%20note%207.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%201.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%202.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%203.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%204.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%205.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%206.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale chord 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20chord%207.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale note 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%201.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale note 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%202.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale note 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%203.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale note 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%204.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale note 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%205.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale note 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%206.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun scale note 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20scale%20note%207.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun stop all notes from playing.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20stop%20all%20notes%20from%20playing.lua</source>
+        <source main="main midi_editor" file="TK_ChordGun/TK_ChordGunMini.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGunMini.lua</source>
         <source type="effect" file="TK_ChordGun/TK_Scale_Filter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_Scale_Filter.jsfx</source>
       </version>
     </reapack>

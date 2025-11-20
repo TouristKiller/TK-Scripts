@@ -1,9 +1,9 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.0.6
+-- @version 2.0.7
 -- @changelog
 --[[
-2.0.6
+2.0.7
 + Added "Export to Chord Track" (Right-click Insert button): Creates a new track with empty items containing chord names
 + Added "Export to Project Regions" (Right-click Insert button): Creates project regions named after chords
 + Added support for running script from Main section (Arrange View) without active MIDI Editor
