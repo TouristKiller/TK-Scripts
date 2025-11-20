@@ -1,8 +1,19 @@
 ﻿-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.1.0
+-- @version 2.1.3
 -- @changelog
 --[[
+2.1.3
++ Fixed UI layout overlap caused by new chord type (Piano keyboard now positioned correctly below 14th chord row)
++ Increased base window height to accommodate extra chord row
+
+2.1.2
++ Added "Minor-Major 7th" chord type (minMaj7) - Essential for Harmonic/Melodic Minor scales
++ Smart Initial Scaling: Window size now adapts to screen height on first run (prevents oversized window on small screens)
+
+2.1.1
++ Added JSFX check and auto-install prompt when enabling Filter/Remap modes
+
 2.1.0
 + Added "Chromatic" view to Circle of Fifths window (visualizes symmetry of Messiaen modes)
 + Added "Equivalent Tonic" indicators (Halo rings) in Chromatic view to show limited transpositions
@@ -129,7 +140,7 @@ Original ChordGun: https://github.com/benjohnson2001/ChordGun
 ]]--
 
 baseWidth = 775
-baseHeight = 800
+baseHeight = 840
 
 
 function getDynamicBaseWidth()
@@ -276,6 +287,12 @@ chords = {
     code = 'min7',
     display = 'm7',
     pattern = '10010001001'
+  },
+  {
+    name = 'minor major seventh',
+    code = 'minMaj7',
+    display = 'm(maj7)',
+    pattern = '100100010001'
   },
   {
     name = 'flat fifth',
@@ -456,7 +473,15 @@ defaultNotesThatArePlaying = {}
 defaultDockState = 0
 defaultWindowShouldBeDocked = tostring(false)
 
-local defaultUiScale = 1.5
+local _, top, _, bottom = reaper.my_getViewport(0, 0, 0, 0, 0, 0, 0, 0, true)
+local screenH = bottom - top
+local maxSafeHeight = screenH * 0.85
+local calculatedScale = maxSafeHeight / baseHeight
+
+if calculatedScale > 2.0 then calculatedScale = 2.0 end
+if calculatedScale < 0.75 then calculatedScale = 0.75 end
+
+local defaultUiScale = calculatedScale
 interfaceWidth = baseWidth * defaultUiScale
 interfaceHeight = baseHeight * defaultUiScale
 
@@ -607,7 +632,45 @@ local function setScaleFilterMode(mode)
 end
 
 local function cycleScaleFilterMode()
-  scaleFilterMode = (scaleFilterMode + 1) % 3
+  local nextMode = (scaleFilterMode + 1) % 3
+  
+  -- Check for JSFX if enabling Filter or Remap
+  if nextMode > 0 then
+    local track = reaper.GetSelectedTrack(0, 0)
+    local jsfxFound = false
+    
+    if track then
+      local inputFxCount = reaper.TrackFX_GetRecCount(track)
+      for i = 0, inputFxCount - 1 do
+        local retval, fxName = reaper.TrackFX_GetFXName(track, i + 0x1000000, "")
+        if fxName and fxName:match("TK Scale Filter") then 
+          jsfxFound = true 
+          break 
+        end
+      end
+    end
+    
+    if not jsfxFound then
+      local result = reaper.ShowMessageBox("TK Scale Filter JSFX is required for Filter/Remap modes.\n\nIt was not found on the selected track's Input FX.\n\nAdd it now?", "Setup Required", 4)
+      if result == 6 then -- Yes
+        if not track then
+           reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0)
+           return
+        end
+        local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
+        if fxIndex < 0 then
+           reaper.ShowMessageBox("Could not add TK Scale Filter.", "Setup Failed", 0)
+           return
+        end
+        -- Added successfully, proceed
+      else
+        -- User said No, cancel mode change
+        return
+      end
+    end
+  end
+
+  scaleFilterMode = nextMode
   setScaleFilterMode(scaleFilterMode)
 end
 
@@ -1822,27 +1885,51 @@ function activeTake()
 end
 
 function activeMediaItem()
-  return reaper.GetMediaItemTake_Item(activeTake())
+  local take = activeTake()
+  if take then
+    return reaper.GetMediaItemTake_Item(take)
+  end
+  return nil
 end
 
 function activeTrack()
-  return reaper.GetMediaItemTake_Track(activeTake())
+  local take = activeTake()
+  if take then
+    return reaper.GetMediaItemTake_Track(take)
+  end
+  return nil
 end
 
 function mediaItemStartPosition()
-  return reaper.GetMediaItemInfo_Value(activeMediaItem(), "D_POSITION")
+  local item = activeMediaItem()
+  if item then
+    return reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+  end
+  return 0
 end
 
 function mediaItemStartPositionPPQ()
-  return reaper.MIDI_GetPPQPosFromProjTime(activeTake(), mediaItemStartPosition())
+  local take = activeTake()
+  if take then
+    return reaper.MIDI_GetPPQPosFromProjTime(take, mediaItemStartPosition())
+  end
+  return 0
 end
 
 function mediaItemStartPositionQN()
-  return reaper.MIDI_GetProjQNFromPPQPos(activeTake(), mediaItemStartPositionPPQ())
+  local take = activeTake()
+  if take then
+    return reaper.MIDI_GetProjQNFromPPQPos(take, mediaItemStartPositionPPQ())
+  end
+  return 0
 end
 
 local function mediaItemLength()
-  return reaper.GetMediaItemInfo_Value(activeMediaItem(), "D_LENGTH")
+  local item = activeMediaItem()
+  if item then
+    return reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+  end
+  return 0
 end
 
 local function mediaItemEndPosition()
@@ -2010,12 +2097,20 @@ end
 
 --
 
-function getCursorPositionPPQ()
-  return reaper.MIDI_GetPPQPosFromProjTime(activeTake(), cursorPosition())
+function getCursorPositionPPQ(take)
+  take = take or activeTake()
+  if take then
+    return reaper.MIDI_GetPPQPosFromProjTime(take, cursorPosition())
+  end
+  return 0
 end
 
 local function getCursorPositionQN()
-  return reaper.MIDI_GetProjQNFromPPQPos(activeTake(), getCursorPositionPPQ())
+  local take = activeTake()
+  if take then
+    return reaper.MIDI_GetProjQNFromPPQPos(take, getCursorPositionPPQ(take))
+  end
+  return reaper.TimeMap2_timeToQN(0, cursorPosition())
 end
 
 function getNoteLengthQN()
@@ -2049,17 +2144,20 @@ function gridUnitLength()
 end
 
 function getMidiEndPositionPPQ()
+  local take = activeTake()
+  if not take then return 0 end
 
   local startPosition = reaper.GetCursorPosition()
-  local startPositionPPQ = reaper.MIDI_GetPPQPosFromProjTime(activeTake(), startPosition)
-  local endPositionPPQ = reaper.MIDI_GetPPQPosFromProjTime(activeTake(), startPosition+gridUnitLength())
+  local startPositionPPQ = reaper.MIDI_GetPPQPosFromProjTime(take, startPosition)
+  local endPositionPPQ = reaper.MIDI_GetPPQPosFromProjTime(take, startPosition+gridUnitLength())
   return endPositionPPQ
 end
 
 function deselectAllNotes()
-
+  local take = activeTake()
+  if not take then return end
   local selectAllNotes = false
-  reaper.MIDI_SelectAll(activeTake(), selectAllNotes)
+  reaper.MIDI_SelectAll(take, selectAllNotes)
 end
 
 function getCurrentNoteChannel(channelArg)
@@ -2085,27 +2183,28 @@ function getCurrentVelocity()
 end
 
 function getNumberOfNotes()
-
-  local _, numberOfNotes = reaper.MIDI_CountEvts(activeTake())
+  local take = activeTake()
+  if not take then return 0 end
+  local _, numberOfNotes = reaper.MIDI_CountEvts(take)
   return numberOfNotes
 end
 
 function deleteNote(noteIndex)
-
-  reaper.MIDI_DeleteNote(activeTake(), noteIndex)
+  local take = activeTake()
+  if not take then return end
+  reaper.MIDI_DeleteNote(take, noteIndex)
 end
 
 function thereAreNotesSelected()
 
-  if activeTake() == nil then
-    return false
-  end
+  local take = activeTake()
+  if not take then return false end
 
   local numberOfNotes = getNumberOfNotes()
 
   for noteIndex = 0, numberOfNotes-1 do
 
-    local _, noteIsSelected = reaper.MIDI_GetNote(activeTake(), noteIndex)
+    local _, noteIsSelected = reaper.MIDI_GetNote(take, noteIndex)
 
     if noteIsSelected then
       return true
@@ -2486,22 +2585,30 @@ function exportProgressionToTrack()
 
   reaper.Undo_BeginBlock()
   
-
+  local track = nil
   local numTracks = reaper.CountTracks(0)
-  reaper.InsertTrackAtIndex(numTracks, true)
-  local track = reaper.GetTrack(0, numTracks)
   
-  reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "Chords", true)
-  reaper.SetMediaTrackInfo_Value(track, "B_HEIGHTLOCK", 1)
+  -- Search for existing "Chords" track
+  for i = 0, numTracks - 1 do
+    local t = reaper.GetTrack(0, i)
+    local retval, name = reaper.GetSetMediaTrackInfo_String(t, "P_NAME", "", false)
+    if name == "Chords" then
+      track = t
+      break
+    end
+  end
   
+  if not track then
+    -- Create new track at top
+    reaper.InsertTrackAtIndex(0, true)
+    track = reaper.GetTrack(0, 0)
+    reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "Chords", true)
+    reaper.SetMediaTrackInfo_Value(track, "B_HEIGHTLOCK", 1)
+  end
 
-  reaper.Main_OnCommand(40297, 0)
+  reaper.Main_OnCommand(40297, 0) -- Unselect all tracks
   reaper.SetTrackSelected(track, true)
   
-
-  reaper.Main_OnCommand(40000, 0) 
-  
-
   local currentPos = reaper.GetCursorPosition()
   local currentQN = reaper.TimeMap2_timeToQN(0, currentPos)
   
@@ -2525,7 +2632,17 @@ function exportProgressionToTrack()
       
 
       reaper.GetSetMediaItemInfo_String(item, "P_NOTES", slot.text, true)    
-    
+      
+      -- Enable "Stretch to fit" for text (IMGRESOURCEFLAGS 2)
+      local retval, chunk = reaper.GetItemStateChunk(item, "", false)
+      if retval then
+        if chunk:match("IMGRESOURCEFLAGS") then
+           chunk = chunk:gsub("IMGRESOURCEFLAGS %d+", "IMGRESOURCEFLAGS 2")
+        else
+           chunk = chunk:gsub(">$", "IMGRESOURCEFLAGS 2\n>")
+        end
+        reaper.SetItemStateChunk(item, chunk, false)
+      end
 
       reaper.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", reaper.ColorToNative(77, 166, 255)|0x1000000)
       reaper.SetMediaItemInfo_Value(item, "C_LOCK", 1)
@@ -2804,7 +2921,7 @@ function insertProgressionToMIDI()
   end
   
 
-  local startPPQ = getCursorPositionPPQ()
+  local startPPQ = getCursorPositionPPQ(take)
   local startQN = reaper.MIDI_GetProjQNFromPPQPos(take, startPPQ)
   local testPPQ = reaper.MIDI_GetPPQPosFromProjQN(take, startQN + 1.0)
   local oneBeatInPPQ = testPPQ - startPPQ
@@ -8722,7 +8839,7 @@ function Interface:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, header
 
 	local buttonHeight = sy(38)
 	local innerSpacing = sx(2)
-	local numChordButtons = 13
+	local numChordButtons = #chords
 	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
 	
 
@@ -8743,7 +8860,7 @@ function Interface:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, hea
 
 	local buttonHeight = sy(38)
 	local innerSpacing = sx(2)
-	local numChordButtons = 13
+	local numChordButtons = #chords
 	local pianoHeight = sy(70)
 	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
 	local slotYpos = pianoYpos + pianoHeight + sy(8)
@@ -8762,12 +8879,12 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 
 	local buttonHeightChord = sy(38)
 	local innerSpacing = sx(2)
-	local numChordButtons = 13
+	local numChordButtons = #chords
 	local pianoHeight = sy(70)
   local slotHeight = sy(40)
 	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeightChord) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
-	local slotYpos = pianoYpos + pianoHeight + s(8)
-	local buttonYpos = slotYpos + slotHeight + s(6)
+	local slotYpos = pianoYpos + pianoHeight + sy(8)
+	local buttonYpos = slotYpos + slotHeight + sy(6)
 	
 
   self:addSimpleButton(
