@@ -1,9 +1,14 @@
 ﻿-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.1.4
+-- @version 2.1.5
 -- @changelog
 --[[
-2.1.3
+2.1.5
++ Added "Drop 2" and "Drop 3" voicings for 4-note chords (Jazz/Neo-Soul style)
++ Replaced "Bass" button with "Voicing" button (Menu: Off, Drop 2, Drop 3, Bass -1, Bass -2)
++ Added "Linear View" to Circle of Fifths window (Piano-roll style interval visualization)
+
+2.1.4
 + Fixed UI layout overlap caused by new chord type (Piano keyboard now positioned correctly below 14th chord row)
 + Increased base window height to accommodate extra chord row
 
@@ -540,7 +545,12 @@ end
 
 local strumEnabled = false
 local strumDelayMs = 80
-local bassMode = 0
+local voicingState = {
+  drop2 = false,
+  drop3 = false,
+  bass1 = false,
+  bass2 = false
+}
 
 
 local melodySettings = {
@@ -2386,15 +2396,38 @@ function getChordNotesArray(root, chord, octave)
   
   chordNotesArray = applyInversion(chordNotesArray)
   
+  -- Identify notes to drop based on the close voicing
+  local notesToDrop = {}
+  if #chordNotesArray >= 2 and voicingState.drop2 then
+    table.insert(notesToDrop, chordNotesArray[#chordNotesArray - 1])
+  end
+  if #chordNotesArray >= 3 and voicingState.drop3 then
+    table.insert(notesToDrop, chordNotesArray[#chordNotesArray - 2])
+  end
+  
+  -- Apply drops
+  for _, dropVal in ipairs(notesToDrop) do
+    for i, noteVal in ipairs(chordNotesArray) do
+      if noteVal == dropVal then
+        chordNotesArray[i] = chordNotesArray[i] - 12
+        break
+      end
+    end
+  end
+  
+  table.sort(chordNotesArray)
 
-  if bassMode > 0 then
-
-
-    local bassNote = root + ((octave + 1 - bassMode) * 12) - 1
-    
-
+  -- Apply Bass
+  if voicingState.bass1 then
+    local bassNote = root + ((octave + 1 - 1) * 12) - 1
     table.insert(chordNotesArray, 1, bassNote)
   end
+  if voicingState.bass2 then
+    local bassNote = root + ((octave + 1 - 2) * 12) - 1
+    table.insert(chordNotesArray, 1, bassNote)
+  end
+  
+  table.sort(chordNotesArray)
   
   return chordNotesArray
 end
@@ -6923,28 +6956,28 @@ function showFifthWheel()
 	local scriptPath = debug.getinfo(1, "S").source:match("@?(.*)")
 	local scriptDir = scriptPath:match("(.+)[/\\]")
 	
-
+	-- Pass UI scale to popup via ExtState (calculate from current window size)
 	local scaleX = gfx.w / baseWidth
 	local scaleY = gfx.h / baseHeight
 	local uiScale = (scaleX + scaleY) / 2
 	reaper.SetExtState("TKChordGunFifthWheel", "uiScale", tostring(uiScale), false)
 	
-
+	-- Create fifth wheel script in memory and execute
 	local wheelScript = [[
 	local notes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
 	local notesFlat = {"C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"}
 	
-
-	local orderFifths = {1, 8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6}
-	local orderChromatic = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	-- Orders
+	local orderFifths = {1, 8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6}  -- Circle of fifths
+	local orderChromatic = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} -- Chromatic (Clockwise)
 	
-	local useFlats = false
-	local useChromatic = false
+	local useFlats = false  -- Toggle between sharps and flats
+	local viewMode = 1 -- 1=Fifths, 2=Chromatic, 3=Linear
 	
-
+		-- Get UI scale from ExtState (passed by parent)
 		local uiScale = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "uiScale")) or 1.0
 		
-
+		-- Scaling function
 		local function s(size)
 			return math.floor(size * uiScale + 0.5)
 		end
@@ -6955,20 +6988,15 @@ function showFifthWheel()
 	local radius = s(140)
 	local noteRadius = s(28)
 	
-
+	-- Get saved window position from ExtState
 	local savedX = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "windowX")) or -1
 	local savedY = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "windowY")) or -1
 	
 	gfx.init("Circle of Fifths / Modes", windowW, windowH, 0, savedX, savedY)
-	gfx.setfont(1, "Arial", s(16), string.byte('b'))	function drawWheel()
+	gfx.setfont(1, "Arial", s(16), string.byte('b'))
 
-		gfx.set(0.15, 0.15, 0.15, 1)
-		gfx.rect(0, 0, windowW, windowH, 1)
-		
-
-		local noteOrder = useChromatic and orderChromatic or orderFifths
-		
-
+	local function drawButtons()
+		-- Draw sharp/flat toggle button at top-left
 		local toggleText = useFlats and "b" or "#"
 		gfx.setfont(2, "Arial", s(16), string.byte('b'))
 		local toggleW = gfx.measurestr(toggleText)
@@ -6979,23 +7007,21 @@ function showFifthWheel()
 		local toggleButtonY = toggleY
 		local toggleButtonW = s(24)
 		
-
 		gfx.set(0.25, 0.25, 0.25, 1)
 		gfx.rect(toggleButtonX, toggleButtonY, toggleButtonW, toggleH, 1)
-		
-
 		gfx.set(0.5, 0.5, 0.5, 1)
 		gfx.rect(toggleButtonX, toggleButtonY, toggleButtonW, toggleH, 0)
-		
-
 		gfx.set(1, 1, 1, 1)
 		gfx.x = toggleButtonX + (toggleButtonW - toggleW) / 2
 		gfx.y = toggleButtonY + (toggleH - s(16)) / 2
 		gfx.drawstr(toggleText)
 		
-
-		local orderText = useChromatic and "Chromatic" or "Fifths"
-		local orderW = gfx.measurestr(orderText)
+		-- Draw View Mode toggle button at top-right
+		local viewText = "Fifths"
+		if viewMode == 2 then viewText = "Chromatic" 
+		elseif viewMode == 3 then viewText = "Linear" end
+		
+		local orderW = gfx.measurestr(viewText)
 		local orderButtonW = orderW + s(20)
 		local orderButtonX = windowW - orderButtonW - s(10)
 		
@@ -7006,308 +7032,322 @@ function showFifthWheel()
 		gfx.set(1, 1, 1, 1)
 		gfx.x = orderButtonX + (orderButtonW - orderW) / 2
 		gfx.y = toggleButtonY + (toggleH - s(16)) / 2
-		gfx.drawstr(orderText)
+		gfx.drawstr(viewText)
 		
+		return toggleButtonX, toggleButtonY, toggleButtonW, toggleH, orderButtonX, orderButtonW
+	end
 
-		local displayNotes = useFlats and notesFlat or notes
+	local function drawLinearView(currentTonic, scalePattern, displayNotes)
+		local keyWidth = windowW / 14
+		local keyHeight = s(120)
+		local startY = centerY - (keyHeight / 2)
+		local startX = (windowW - (keyWidth * 12)) / 2
 		
-
-		local currentTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "tonic")) or 1
-		local isCustomScale = reaper.GetExtState("TKChordGunFifthWheel", "isCustom") == "1"
-		local scalePattern = {}
-		for i = 1, 12 do
-			scalePattern[i] = reaper.GetExtState("TKChordGunFifthWheel", "scale" .. i) == "1"
-		end
+		-- Interval names relative to root
+		local intervals = {"R", "b2", "2", "b3", "3", "4", "b5", "5", "b6", "6", "b7", "7"}
 		
-
-		local symmetryPoints = {}
-		if useChromatic then
-			local activeNotes = {}
-			for i = 1, 12 do
-				if scalePattern[i] then table.insert(activeNotes, i) end
-			end
-			
-			if #activeNotes > 0 then
-				for shift = 1, 11 do
-					local matches = 0
-					for _, noteIdx in ipairs(activeNotes) do
-						local shiftedIdx = ((noteIdx - 1 + shift) % 12) + 1
-						if scalePattern[shiftedIdx] then
-							matches = matches + 1
-						end
-					end
-					if matches == #activeNotes then
-
-						local symNoteIdx = ((currentTonic - 1 + shift) % 12) + 1
-						symmetryPoints[symNoteIdx] = true
-					end
-				end
-			end
-		end
-		
-
-		local function getHarmonicDistanceColor(noteIndex, tonicIndex)
-
-			local pos1, pos2
-			for i = 1, 12 do
-				if orderFifths[i] == noteIndex then pos1 = i end
-				if orderFifths[i] == tonicIndex then pos2 = i end
-			end
-			
-
-			local diff = pos1 - pos2
-			local dist = math.min(math.abs(diff), 12 - math.abs(diff))
-			
-			if dist == 0 then
-				return {1.0, 0.84, 0.0}
-			elseif dist == 1 then
-
-				local clockwise = (diff == 1) or (diff == -11)
-				if clockwise then
-					return {0.4, 0.85, 0.4}
-				else
-					return {0.9, 0.4, 0.8}
-				end
-			elseif dist == 2 then
-				return {0.5, 0.9, 0.9}
-			elseif dist == 3 then
-				return {1.0, 0.6, 0.2}
-			elseif dist == 4 then
-				return {0.85, 0.5, 0.35}
-			else
-				return {0.5, 0.3, 0.3}
-			end
-		end			gfx.setfont(1, "Arial", 16, string.byte('b'))
-			
-
-
-			gfx.set(0.5, 0.5, 0.5, 0.3)
-			
-
-			local activeIndices = {}
-			for i = 1, 12 do
-				local noteIndex = noteOrder[i]
-				if scalePattern[noteIndex] then
-					table.insert(activeIndices, i)
-				end
-			end
-			
-
-			if #activeIndices > 1 then
-				gfx.set(1, 1, 1, 0.15)
-				for i = 1, #activeIndices do
-					local idx1 = activeIndices[i]
-					local idx2 = activeIndices[(i % #activeIndices) + 1]
-					
-					local angle1 = (idx1 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
-					local angle2 = (idx2 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
-					
-					local x1 = centerX + math.cos(angle1) * radius
-					local y1 = centerY + math.sin(angle1) * radius
-					local x2 = centerX + math.cos(angle2) * radius
-					local y2 = centerY + math.sin(angle2) * radius
-					
-					gfx.line(x1, y1, x2, y2, 1)
-				end
-			end
-			
-
-			for i = 1, 12 do
-				local angle = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
-				local noteIndex = noteOrder[i]
-				local x = centerX + math.cos(angle) * radius
-				local y = centerY + math.sin(angle) * radius
-				
-			local isCurrentTonic = (noteIndex == currentTonic)
+		-- Draw keys
+		for i = 0, 11 do
+			local noteIndex = ((currentTonic - 1 + i) % 12) + 1
+			local x = startX + (i * keyWidth)
 			local isInScale = scalePattern[noteIndex]
-			local isSymmetryPoint = symmetryPoints[noteIndex]
 			
-
-			local currentNoteRadius = noteRadius
-			local drawText = true
-			
-			if useChromatic and not isInScale then
-				currentNoteRadius = s(5)
-				drawText = false
+			-- Key Background
+			if isInScale then
+				if i == 0 then -- Root
+					gfx.set(1.0, 0.84, 0.0, 1) -- Gold
+				else
+					gfx.set(0.4, 0.7, 1.0, 1) -- Blue
+				end
+				gfx.rect(x, startY, keyWidth - s(2), keyHeight, 1)
+			else
+				gfx.set(0.2, 0.2, 0.2, 1) -- Dark Gray
+				gfx.rect(x, startY, keyWidth - s(2), keyHeight, 1)
 			end
 			
-
-	local color
-	if isCustomScale or useChromatic then
-
-		if isCurrentTonic then
-			color = {1.0, 0.84, 0.0}
-		elseif isInScale then
-			color = {0.5, 0.75, 0.9}
-		else
-			color = {0.2, 0.2, 0.2}
-		end
-	else
-
-		if isCurrentTonic then
-			color = {1.0, 0.84, 0.0}
-		elseif isInScale then
-			color = getHarmonicDistanceColor(noteIndex, currentTonic)
-			color[1] = math.min(1.0, color[1] * 1.2)
-			color[2] = math.min(1.0, color[2] * 1.2)
-			color[3] = math.min(1.0, color[3] * 1.2)
-		else
-			color = {0.25, 0.25, 0.25}
-		end
-	end
-	gfx.set(color[1], color[2], color[3], 1)
-	gfx.circle(x, y, currentNoteRadius, 1)
-	if isCurrentTonic then
-		gfx.set(1.0, 1.0, 1.0, 1)
-		gfx.circle(x, y, currentNoteRadius, 0)
-		gfx.circle(x, y, currentNoteRadius-1, 0)
-	elseif isInScale then
-		gfx.set(1.0, 1.0, 1.0, 1)
-		gfx.circle(x, y, currentNoteRadius, 0)
-		gfx.circle(x, y, currentNoteRadius-1, 0)
-		if isCustomScale or useChromatic then
-
-		else
-			gfx.circle(x, y, currentNoteRadius-2, 0)
-		end
-	else
-		gfx.set(0.4, 0.4, 0.4, 1)
-		gfx.circle(x, y, currentNoteRadius, 0)
-	end
-	
-
-	if isSymmetryPoint and not isCurrentTonic then
-		gfx.set(1.0, 0.84, 0.0, 0.6)
-		gfx.circle(x, y, currentNoteRadius + s(4), 0)
-		gfx.circle(x, y, currentNoteRadius + s(5), 0)
-		gfx.circle(x, y, currentNoteRadius + s(6), 0)
-		gfx.circle(x, y, currentNoteRadius + s(7), 0)
-	end
-	
-
-			if drawText then
+			-- Note Name
+			gfx.setfont(1, "Arial", s(16), string.byte('b'))
+			local name = displayNotes[noteIndex]
+			local nw, nh = gfx.measurestr(name)
+			
+			if isInScale then
 				gfx.set(0, 0, 0, 1)
-				gfx.setfont(1, "Arial", s(16), string.byte('b'))
-				local noteName = displayNotes[noteIndex]
-				local textW, textH = gfx.measurestr(noteName)
-				gfx.x = x - textW / 2
-				gfx.y = y - textH / 2
-				
-
-				if not useChromatic then
-					gfx.y = y - textH / 2 - s(6)
-				end
-				
-				gfx.drawstr(noteName)
-				
-
-				if not useChromatic then
-					local minorNoteIndex = ((noteIndex + 8) % 12) + 1
-					local minorName = displayNotes[minorNoteIndex] .. "m"
-					gfx.setfont(4, "Arial", s(13))
-					local minorW, minorH = gfx.measurestr(minorName)
-					gfx.x = x - minorW / 2
-					gfx.y = y - minorH / 2 + s(8)
-					gfx.set(0, 0, 0, 1)
-					gfx.drawstr(minorName)
+			else
+				gfx.set(0.5, 0.5, 0.5, 1)
+			end
+			
+			gfx.x = x + (keyWidth - s(2) - nw)/2
+			gfx.y = startY + keyHeight - nh - s(10)
+			gfx.drawstr(name)
+			
+			-- Interval Name (Below key)
+			if isInScale then
+				gfx.setfont(5, "Arial", s(12))
+				local intName = intervals[i+1]
+				local iw, ih = gfx.measurestr(intName)
+				gfx.x = x + (keyWidth - s(2) - iw)/2
+				gfx.y = startY + keyHeight + s(5)
+				gfx.set(0.8, 0.8, 0.8, 1)
+				gfx.drawstr(intName)
+			end
+			
+			-- Click detection for this key (to change tonic)
+			if gfx.mouse_cap & 1 == 1 and not mouseWasDown then
+				if gfx.mouse_x >= x and gfx.mouse_x <= x + keyWidth - s(2) and
+				   gfx.mouse_y >= startY and gfx.mouse_y <= startY + keyHeight then
+					reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", tostring(noteIndex), false)
+					mouseWasDown = true
 				end
 			end
 		end
-	
-
-	gfx.setfont(5, "Arial", s(13))
-	local legendY = centerY - s(20)
-	
-	if useChromatic then
-
+		
+		-- Legend/Info
+		gfx.setfont(5, "Arial", s(13))
+		local legendY = startY - s(40)
 		gfx.set(1, 1, 1, 1)
-		local titleText = "Chromatic Order"
+		local titleText = "Linear Interval View"
 		local titleW = gfx.measurestr(titleText)
 		gfx.x = centerX - titleW / 2
 		gfx.y = legendY
 		gfx.drawstr(titleText)
 		
 		gfx.set(0.7, 0.7, 0.7, 1)
-		local subText = "Visualizes symmetry"
+		local subText = "Shows scale structure relative to Root"
 		local subW = gfx.measurestr(subText)
 		gfx.x = centerX - subW / 2
 		gfx.y = legendY + s(18)
 		gfx.drawstr(subText)
-		
-
-		gfx.set(1.0, 0.84, 0.0, 0.8)
-		local haloText = "Halo: Equivalent Tonic"
-		local haloW = gfx.measurestr(haloText)
-		gfx.x = centerX - haloW / 2
-		gfx.y = legendY + s(36)
-		gfx.drawstr(haloText)
-	else
-
-
-		gfx.set(1, 1, 1, 1)
-		local titleText = "Color Legend:"
-		local titleW = gfx.measurestr(titleText)
-		gfx.x = centerX - titleW / 2
-		gfx.y = legendY - s(60)
-		gfx.drawstr(titleText)
-		
-		local startY = legendY - s(40)
-		local lineHeight = s(18)
-		
-
-		local legendItems
-		if isCustomScale then
-			legendItems = {
-				{{1.0, 0.84, 0.0}, "Tonic (root note)"},
-				{{0.5, 0.75, 0.9}, "In scale"},
-				{{0.2, 0.2, 0.2}, "Out of scale"}
-			}
-		else
-			legendItems = {
-				{{1.0, 0.84, 0.0}, "Tonic"},
-				{{0.4, 0.85, 0.4}, "+1 Fifth up"},
-				{{0.9, 0.4, 0.8}, "-1 Fifth down"},
-				{{0.5, 0.9, 0.9}, "+2 Fifths up"},
-				{{1.0, 0.6, 0.2}, "+3 Fifths up"},
-				{{0.85, 0.5, 0.35}, "+4 Fifths up"},
-				{{0.5, 0.3, 0.3}, "+5/6 Fifths (Tritone)"}
-			}
-		end
-		
-		for i, item in ipairs(legendItems) do
-			local color = item[1]
-			local label = item[2]
-			
-
-			gfx.set(color[1], color[2], color[3], 1)
-			local boxSize = s(12)
-			local boxX = centerX - s(50)
-			gfx.rect(boxX, startY, boxSize, boxSize, 1)
-			
-
-			gfx.set(1, 1, 1, 1)
-			gfx.x = boxX + boxSize + s(6)
-			gfx.y = startY
-			gfx.drawstr(label)
-			
-			startY = startY + lineHeight
-		end
 	end
-	
 
+	function drawWheel()
+		-- Background
+		gfx.set(0.15, 0.15, 0.15, 1)
+		gfx.rect(0, 0, windowW, windowH, 1)
+		
+		local toggleX, toggleY, toggleW, toggleH, orderX, orderW = drawButtons()
+		
+		-- Get current scale info
+		local currentTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "tonic")) or 1
+		local isCustomScale = reaper.GetExtState("TKChordGunFifthWheel", "isCustom") == "1"
+		local scalePattern = {}
+		for i = 1, 12 do
+			scalePattern[i] = reaper.GetExtState("TKChordGunFifthWheel", "scale" .. i) == "1"
+		end
+		local displayNotes = useFlats and notesFlat or notes
+
+		if viewMode == 3 then
+			drawLinearView(currentTonic, scalePattern, displayNotes)
+		else
+			-- CIRCULAR VIEWS (Fifths / Chromatic)
+			local noteOrder = (viewMode == 2) and orderChromatic or orderFifths
+			
+			-- Symmetry calculation for Chromatic view
+			local symmetryPoints = {}
+			if viewMode == 2 then
+				local activeNotes = {}
+				for i = 1, 12 do if scalePattern[i] then table.insert(activeNotes, i) end end
+				if #activeNotes > 0 then
+					for shift = 1, 11 do
+						local matches = 0
+						for _, noteIdx in ipairs(activeNotes) do
+							local shiftedIdx = ((noteIdx - 1 + shift) % 12) + 1
+							if scalePattern[shiftedIdx] then matches = matches + 1 end
+						end
+						if matches == #activeNotes then
+							local symNoteIdx = ((currentTonic - 1 + shift) % 12) + 1
+							symmetryPoints[symNoteIdx] = true
+						end
+					end
+				end
+			end
+
+			-- Helper for colors
+			local function getHarmonicDistanceColor(noteIndex, tonicIndex)
+				local pos1, pos2
+				for i = 1, 12 do
+					if orderFifths[i] == noteIndex then pos1 = i end
+					if orderFifths[i] == tonicIndex then pos2 = i end
+				end
+				local diff = pos1 - pos2
+				local dist = math.min(math.abs(diff), 12 - math.abs(diff))
+				if dist == 0 then return {1.0, 0.84, 0.0}
+				elseif dist == 1 then return ((diff == 1) or (diff == -11)) and {0.4, 0.85, 0.4} or {0.9, 0.4, 0.8}
+				elseif dist == 2 then return {0.5, 0.9, 0.9}
+				elseif dist == 3 then return {1.0, 0.6, 0.2}
+				elseif dist == 4 then return {0.85, 0.5, 0.35}
+				else return {0.5, 0.3, 0.3} end
+			end			
+
+			-- Draw Polygon lines
+			gfx.set(0.5, 0.5, 0.5, 0.3)
+			local activeIndices = {}
+			for i = 1, 12 do
+				local noteIndex = noteOrder[i]
+				if scalePattern[noteIndex] then table.insert(activeIndices, i) end
+			end
+			if #activeIndices > 1 then
+				gfx.set(1, 1, 1, 0.15)
+				for i = 1, #activeIndices do
+					local idx1 = activeIndices[i]
+					local idx2 = activeIndices[(i % #activeIndices) + 1]
+					local angle1 = (idx1 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+					local angle2 = (idx2 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+					gfx.line(centerX + math.cos(angle1) * radius, centerY + math.sin(angle1) * radius,
+							 centerX + math.cos(angle2) * radius, centerY + math.sin(angle2) * radius, 1)
+				end
+			end
+
+			-- Draw Circles
+			for i = 1, 12 do
+				local angle = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+				local noteIndex = noteOrder[i]
+				local x = centerX + math.cos(angle) * radius
+				local y = centerY + math.sin(angle) * radius
+				
+				local isCurrentTonic = (noteIndex == currentTonic)
+				local isInScale = scalePattern[noteIndex]
+				local isSymmetryPoint = symmetryPoints[noteIndex]
+				
+				local currentNoteRadius = noteRadius
+				local drawText = true
+				if viewMode == 2 and not isInScale then -- Tiny dots for chromatic out-of-scale
+					currentNoteRadius = s(5)
+					drawText = false
+				end
+				
+				local color
+				if isCustomScale or viewMode == 2 then
+					if isCurrentTonic then color = {1.0, 0.84, 0.0}
+					elseif isInScale then color = {0.5, 0.75, 0.9}
+					else color = {0.2, 0.2, 0.2} end
+				else
+					if isCurrentTonic then color = {1.0, 0.84, 0.0}
+					elseif isInScale then 
+						color = getHarmonicDistanceColor(noteIndex, currentTonic)
+						color[1] = math.min(1.0, color[1] * 1.2)
+						color[2] = math.min(1.0, color[2] * 1.2)
+						color[3] = math.min(1.0, color[3] * 1.2)
+					else color = {0.25, 0.25, 0.25} end
+				end
+				
+				gfx.set(color[1], color[2], color[3], 1)
+				gfx.circle(x, y, currentNoteRadius, 1)
+				
+				-- Borders
+				if isCurrentTonic or isInScale then
+					gfx.set(1.0, 1.0, 1.0, 1)
+					gfx.circle(x, y, currentNoteRadius, 0)
+					gfx.circle(x, y, currentNoteRadius-1, 0)
+					if not (isCustomScale or viewMode == 2) then gfx.circle(x, y, currentNoteRadius-2, 0) end
+				else
+					gfx.set(0.4, 0.4, 0.4, 1)
+					gfx.circle(x, y, currentNoteRadius, 0)
+				end
+				
+				-- Halo
+				if isSymmetryPoint and not isCurrentTonic then
+					gfx.set(1.0, 0.84, 0.0, 0.6)
+					for r=4, 7 do gfx.circle(x, y, currentNoteRadius + s(r), 0) end
+				end
+				
+				-- Text
+				if drawText then
+					gfx.set(0, 0, 0, 1)
+					gfx.setfont(1, "Arial", s(16), string.byte('b'))
+					local noteName = displayNotes[noteIndex]
+					local textW, textH = gfx.measurestr(noteName)
+					gfx.x = x - textW / 2
+					gfx.y = y - textH / 2
+					if viewMode == 1 then gfx.y = y - textH / 2 - s(6) end
+					gfx.drawstr(noteName)
+					
+					if viewMode == 1 then -- Relative minor
+						local minorNoteIndex = ((noteIndex + 8) % 12) + 1
+						local minorName = displayNotes[minorNoteIndex] .. "m"
+						gfx.setfont(4, "Arial", s(13))
+						local minorW, minorH = gfx.measurestr(minorName)
+						gfx.x = x - minorW / 2
+						gfx.y = y - minorH / 2 + s(8)
+						gfx.set(0, 0, 0, 1)
+						gfx.drawstr(minorName)
+					end
+				end
+				
+				-- Click detection
+				if gfx.mouse_cap & 1 == 1 and not mouseWasDown then
+					local dist = math.sqrt((gfx.mouse_x - x)^2 + (gfx.mouse_y - y)^2)
+					if dist < noteRadius then
+						reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", tostring(noteIndex), false)
+						mouseWasDown = true
+					end
+				end
+			end
+			
+			-- Legend
+			gfx.setfont(5, "Arial", s(13))
+			local legendY = centerY - s(20)
+			if viewMode == 2 then -- Chromatic Legend
+				gfx.set(1, 1, 1, 1)
+				local titleText = "Chromatic Order"
+				local titleW = gfx.measurestr(titleText)
+				gfx.x = centerX - titleW / 2; gfx.y = legendY; gfx.drawstr(titleText)
+				gfx.set(0.7, 0.7, 0.7, 1)
+				local subText = "Visualizes symmetry"; local subW = gfx.measurestr(subText)
+				gfx.x = centerX - subW / 2; gfx.y = legendY + s(18); gfx.drawstr(subText)
+				gfx.set(1.0, 0.84, 0.0, 0.8)
+				local haloText = "Halo: Equivalent Tonic"; local haloW = gfx.measurestr(haloText)
+				gfx.x = centerX - haloW / 2; gfx.y = legendY + s(36); gfx.drawstr(haloText)
+			else -- Fifths Legend
+				gfx.set(1, 1, 1, 1)
+				local titleText = "Color Legend:"
+				local titleW = gfx.measurestr(titleText)
+				gfx.x = centerX - titleW / 2; gfx.y = legendY - s(60); gfx.drawstr(titleText)
+				local startY = legendY - s(40); local lineHeight = s(18)
+				local legendItems = isCustomScale and {
+					{{1.0, 0.84, 0.0}, "Tonic (root note)"}, {{0.5, 0.75, 0.9}, "In scale"}, {{0.2, 0.2, 0.2}, "Out of scale"}
+				} or {
+					{{1.0, 0.84, 0.0}, "Tonic"}, {{0.4, 0.85, 0.4}, "+1 Fifth up"}, {{0.9, 0.4, 0.8}, "-1 Fifth down"},
+					{{0.5, 0.9, 0.9}, "+2 Fifths up"}, {{1.0, 0.6, 0.2}, "+3 Fifths up"}, {{0.85, 0.5, 0.35}, "+4 Fifths up"},
+					{{0.5, 0.3, 0.3}, "+5/6 Fifths (Tritone)"}
+				}
+				for i, item in ipairs(legendItems) do
+					gfx.set(item[1][1], item[1][2], item[1][3], 1)
+					local boxSize = s(12); local boxX = centerX - s(50)
+					gfx.rect(boxX, startY, boxSize, boxSize, 1)
+					gfx.set(1, 1, 1, 1)
+					gfx.x = boxX + boxSize + s(6); gfx.y = startY
+					gfx.drawstr(item[2])
+					startY = startY + lineHeight
+				end
+			end
+		end
+
+		-- Footer
 		gfx.setfont(3, "Arial", s(18))
 		gfx.set(0.7, 0.7, 0.7, 1)
-		local instr = "Click a note to change tonic â€¢ ESC to close"
+		local instr = "Click a note to change tonic • ESC to close"
 		local instrW = gfx.measurestr(instr)
 		gfx.x = (windowW - instrW) / 2
 		gfx.y = windowH - s(20)
-	gfx.drawstr(instr)
-end
+		gfx.drawstr(instr)
+		
+		-- Handle Button Clicks
+		if gfx.mouse_cap & 1 == 1 and not mouseWasDown then
+			local mx, my = gfx.mouse_x, gfx.mouse_y
+			if mx >= toggleX and mx <= toggleX + toggleW and my >= toggleY and my <= toggleY + toggleH then
+				useFlats = not useFlats
+				mouseWasDown = true
+			elseif mx >= orderX and mx <= orderX + orderW and my >= toggleY and my <= toggleY + toggleH then
+				viewMode = (viewMode % 3) + 1 -- Cycle 1->2->3->1
+				mouseWasDown = true
+			end
+		end
+	end
 		function main()
 		drawWheel()
 		gfx.update()
 		
-
+	-- Check if parent script requested forced close
 	local forceClose = reaper.GetExtState("TKChordGunFifthWheel", "forceClose")
 	if forceClose == "1" then
 		reaper.SetExtState("TKChordGunFifthWheel", "forceClose", "0", false)
@@ -7316,58 +7356,15 @@ end
 	end
 	
 	local char = gfx.getchar()
-	if char == 27 or char == -1 then
-
+	if char == 27 or char == -1 then  -- ESC or closed
+		-- Save window position before closing
 		local dockState, posX, posY = gfx.dock(-1, 0, 0, 0, 0)
 		reaper.SetExtState("TKChordGunFifthWheel", "windowX", tostring(posX), true)
 		reaper.SetExtState("TKChordGunFifthWheel", "windowY", tostring(posY), true)
 		reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
 		return
-	end
-		if gfx.mouse_cap & 1 == 1 then
-			local mx = gfx.mouse_x
-			local my = gfx.mouse_y
-			
-
-			if not mouseWasDown then
-
-				local toggleButtonX = s(10)
-				local toggleButtonY = s(10)
-				local toggleButtonW = s(24)
-				local toggleButtonH = s(24)
-				
-
-				local orderText = useChromatic and "Chromatic" or "Fifths"
-				gfx.setfont(2, "Arial", s(16), string.byte('b'))
-				local orderW = gfx.measurestr(orderText)
-				local orderButtonW = orderW + s(20)
-				local orderButtonX = windowW - orderButtonW - s(10)
-				
-				if mx >= toggleButtonX and mx <= toggleButtonX + toggleButtonW and
-				   my >= toggleButtonY and my <= toggleButtonY + toggleButtonH then
-					useFlats = not useFlats
-				elseif mx >= orderButtonX and mx <= orderButtonX + orderButtonW and
-				       my >= toggleButtonY and my <= toggleButtonY + toggleButtonH then
-					useChromatic = not useChromatic
-				else
-
-					local noteOrder = useChromatic and orderChromatic or orderFifths
-					for i = 1, 12 do
-						local angle = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
-						local noteIndex = noteOrder[i]
-						local x = centerX + math.cos(angle) * radius
-						local y = centerY + math.sin(angle) * radius
-						
-						local dist = math.sqrt((mx - x)^2 + (my - y)^2)
-						if dist < noteRadius then
-							reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", tostring(noteIndex), false)
-							break
-						end
-					end
-				end
-				mouseWasDown = true
-			end
-		else
+	end		
+		if gfx.mouse_cap & 1 == 0 then
 			mouseWasDown = false
 		end
 		
@@ -7383,7 +7380,7 @@ end
 		file:write(wheelScript)
 		file:close()
 		
-
+		-- Initialize ExtState for the new window
 		local currentTonic = getScaleTonicNote()
 		local currentScale = scales[getScaleType()]
 		local isCustomScale = currentScale.isCustom == true
@@ -7398,7 +7395,7 @@ end
 			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
 		end
 		
-
+		-- Run the temporary script
 		local command = reaper.AddRemoveReaScript(true, 0, tempScriptPath, true)
 		if command > 0 then
 			reaper.Main_OnCommand(command, 0)
@@ -9118,18 +9115,61 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
   self:addSimpleButton("Setup", buttonXpos + dockerXPadding + buttonWidth + buttonSpacing, buttonYposRow2, buttonWidth, buttonHeight, onSetupClick, nil, function() return "Click: Add TK Scale Filter to selected track's Input FX" end, true)
 
 
-  local bassOptions = {"Bass Off", "Bass -1", "Bass -2"}
+  local getVoicingState = function() 
+    return voicingState.drop2 or voicingState.drop3 or voicingState.bass1 or voicingState.bass2 
+  end
   
-  self:addCycleButton(
+  local onVoicingToggle = function()
+    local checkDrop2 = voicingState.drop2 and "!" or ""
+    local checkDrop3 = voicingState.drop3 and "!" or ""
+    local checkBass1 = voicingState.bass1 and "!" or ""
+    local checkBass2 = voicingState.bass2 and "!" or ""
+    
+    local menu = "Clear All|" .. checkDrop2 .. "Drop 2|" .. checkDrop3 .. "Drop 3|" .. checkBass1 .. "Bass -1|" .. checkBass2 .. "Bass -2"
+    
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    
+    if selection == 1 then
+      voicingState.drop2 = false
+      voicingState.drop3 = false
+      voicingState.bass1 = false
+      voicingState.bass2 = false
+    elseif selection == 2 then
+      voicingState.drop2 = not voicingState.drop2
+      if voicingState.drop2 then voicingState.drop3 = false end
+    elseif selection == 3 then
+      voicingState.drop3 = not voicingState.drop3
+      if voicingState.drop3 then voicingState.drop2 = false end
+    elseif selection == 4 then
+      voicingState.bass1 = not voicingState.bass1
+      if voicingState.bass1 then voicingState.bass2 = false end
+    elseif selection == 5 then
+      voicingState.bass2 = not voicingState.bass2
+      if voicingState.bass2 then voicingState.bass1 = false end
+    end
+    
+    if selection > 0 then guiShouldBeUpdated = true end
+  end
+  
+  local onVoicingRightClick = function()
+    voicingState.drop2 = false
+    voicingState.drop3 = false
+    voicingState.bass1 = false
+    voicingState.bass2 = false
+    guiShouldBeUpdated = true
+  end
+
+  self:addToggleButton(
+    "Voicing",
     buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 2,
     buttonYposRow2,
     buttonWidth,
     buttonHeight,
-    bassOptions,
-    function() return bassMode + 1 end,
-    function(newIndex)
-      bassMode = newIndex - 1
-    end,
+    getVoicingState,
+    onVoicingToggle,
+    onVoicingRightClick,
+    function() return "Click: Toggle Voicings (Drop 2/3, Bass) | Right-Click: Clear All" end,
     true
   )
 

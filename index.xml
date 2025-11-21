@@ -256,7 +256,7 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.1.4" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-21T00:15:00Z">
+      <version name="2.1.5" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-21T01:15:00Z">
         <changelog><![CDATA[
 2.1.3
 + Fixed UI layout overlap caused by new chord type (Piano keyboard now positioned correctly below 14th chord row)
