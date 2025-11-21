@@ -32,7 +32,7 @@ local maxScroll = 0
 local helpContent = {
 	-- Tab 1: Getting Started
 	{
-		"CHORDGUN (TK MOD) v2.1.3",
+		"CHORDGUN (TK MOD) v2.1.6",
 		"Quick Start Guide",
 		"",
 		"=== WHAT IS CHORDGUN? ===",
@@ -970,8 +970,8 @@ local helpContent = {
 		"• Super Locrian, Lydian #2, Aeolian b5",
 		"",
 		"Messiaen Modes:",
-		"• Complete set: All 32 transpositions",
-		"• Mode 1: Whole Tone (1 transposition)",
+		"• Complete set: All 33 transpositions (Corrected in v2.1.6)",
+		"• Mode 1: Whole Tone (2 transpositions)",
 		"• Mode 2: Octatonic (3 transpositions)",
 		"• Mode 3-7: Various symmetries (4-6 each)",
 		"",

@@ -1,8 +1,18 @@
 ﻿-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.1.5
+-- @version 2.1.6
 -- @changelog
 --[[
+2.1.6
++ Fixed Messiaen Modes data (corrected note counts and patterns for Modes 1, 2, 3, and 7)
++ Improved Messiaen Mode 1 (added 2nd transposition)
++ Improved Messiaen Mode 2 (corrected transposition order)
++ Improved Messiaen Mode 3 (corrected binary patterns)
++ Improved Messiaen Mode 7 (corrected note count to 10)
++ Fixed User Reascales loading on startup
++ Improved Reascale parser (supports digits 2-9 as active notes)
++ Improved UI scaling for dropdown menus
+
 2.1.5
 + Added "Drop 2" and "Drop 3" voicings for 4-note chords (Jazz/Neo-Soul style)
 + Replaced "Bass" button with "Voicing" button (Menu: Off, Drop 2, Drop 3, Bass -1, Bass -2)
@@ -565,6 +575,80 @@ local tooltipsEnabled = false
 
 local scaleFilterGmemBlock = "TKChordGunFilter"
 local scaleFilterMode = tonumber(getValue("scaleFilterMode", "0")) or 0
+
+local function parseReascaleFile(filePath)
+  local file = io.open(filePath, "r")
+  if not file then return nil end
+  
+  local importedScales = {}
+  
+  for line in file:lines() do
+    -- Check for Header (starts with 2)
+    local headerName = line:match('^%s*2%s+"(.-)"')
+    if headerName then
+      table.insert(importedScales, {
+        name = "--- " .. headerName .. " ---",
+        pattern = "000000000000", -- Empty pattern
+        isHeader = true,
+        description = "Category: " .. headerName
+      })
+    else
+      -- Match lines with ID, Name, and Pattern (allowing digits 0-9 in pattern)
+      local name, pattern = line:match('^%s*%d+%s+"(.-)"%s+([0-9]+)')
+      
+      if name and pattern and #pattern == 12 then
+        -- Convert any non-zero digit to '1' to ensure compatibility with ChordGun logic
+        pattern = pattern:gsub("[2-9]", "1")
+        
+        table.insert(importedScales, {
+          name = name,
+          pattern = pattern,
+          isCustom = true,
+          description = "Imported from .reascale file"
+        })
+      end
+    end
+  end
+  
+  file:close()
+  return importedScales
+end
+
+local function loadUserReascales(systemTable)
+  -- Gebruik absoluut pad via ResourcePath, net als bij Presets
+  local reascaleDir = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun/Reascales"
+  
+  -- Zorg voor correcte slashes op Windows
+  if reaper.GetOS():match("Win") then
+    reascaleDir = reascaleDir:gsub("/", "\\")
+  end
+  
+  -- Maak map aan
+  reaper.RecursiveCreateDirectory(reascaleDir, 0)
+  
+  local i = 0
+  while true do
+    local file = reaper.EnumerateFiles(reascaleDir, i)
+    if not file then break end
+    
+    if file:match("%.reascale$") then
+      local fullPath = reascaleDir .. "/" .. file
+      -- Fix path separator voor parse functie
+      if reaper.GetOS():match("Win") then fullPath = reascaleDir .. "\\" .. file end
+      
+      local userScales = parseReascaleFile(fullPath)
+      
+      if userScales and #userScales > 0 then
+        local systemName = file:gsub("%.reascale$", "") .. " (User)"
+        table.insert(systemTable, {
+          name = systemName,
+          scales = userScales
+        })
+      end
+    end
+    i = i + 1
+  end
+end
 
 
 local chordProgression = {}
@@ -1445,81 +1529,83 @@ scaleSystems = {
     name = "Messiaen",
     scales = {
 
-      { name = "Mode 1", pattern = "101010101010", isCustom = true, intervals = "2-2-2-2-2-2",
-        description = "Hexatonic (6 notes) - Whole Tone Scale\nDreamy, floating, ambiguous | Debussy's favorite\nSymmetrical: divides octave into 6 equal parts" },
+      { name = "Mode 1.1", pattern = "101010101010", isCustom = true, intervals = "2-2-2-2-2-2",
+        description = "Hexatonic (6 notes) - Whole Tone Scale\n1st transposition | Dreamy, floating\nDebussy's favorite" },
+      { name = "Mode 1.2", pattern = "010101010101", isCustom = true, intervals = "2-2-2-2-2-2",
+        description = "Hexatonic (6 notes) - Whole Tone Scale\n2nd transposition | The 'other' whole tone set\nCompletes the chromatic coverage" },
       
 
       { name = "Mode 2.1", pattern = "110110110110", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
-        description = "Octatonic (8 notes) - Half-Whole Diminished\nJazz/classical favorite | Rich chord possibilities\nAlternates half and whole steps (1st transposition)" },
-      { name = "Mode 2.2", pattern = "101101101101", isCustom = true, intervals = "2-1-2-1-2-1-2-1",
-        description = "Octatonic (8 notes) - Whole-Half Diminished\nAlternates whole and half steps (2nd transposition)\nUsed extensively in bebop and modern jazz" },
-      { name = "Mode 2.3", pattern = "011011011011", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
-        description = "Octatonic (8 notes) - Half-Whole Diminished\n3rd and final transposition of Mode 2\nSymmetrical: repeats every minor 3rd" },
+        description = "Octatonic (8 notes) - Half-Whole Diminished\n1st transposition (Starts on C)\nJazz/classical favorite" },
+      { name = "Mode 2.2", pattern = "011011011011", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
+        description = "Octatonic (8 notes) - Half-Whole Diminished\n2nd transposition (Starts on C#)\nShifted up 1 semitone" },
+      { name = "Mode 2.3", pattern = "101101101101", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
+        description = "Octatonic (8 notes) - Half-Whole Diminished\n3rd transposition (Starts on D)\nShifted up 2 semitones" },
       
 
-      { name = "Mode 3.1", pattern = "101110110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
-        description = "Nonatonic (9 notes) - Dense, chromatic\nRepeating 2-1-1 pattern | Very colorful\n1st transposition of 4 possible" },
-      { name = "Mode 3.2", pattern = "110111011011", isCustom = true, intervals = "1-1-2-1-1-2-1-1-2",
-        description = "Nonatonic (9 notes) - Dense, chromatic\nRepeating 1-1-2 pattern | 2nd transposition\nUsed in Messiaen's 'Quartet for the End of Time'" },
-      { name = "Mode 3.3", pattern = "011101110111", isCustom = true, intervals = "1-2-1-1-2-1-1-2-1",
-        description = "Nonatonic (9 notes) - Dense, chromatic\n3rd transposition | Highly symmetrical\nContains many augmented and diminished chords" },
-      { name = "Mode 3.4", pattern = "101101110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
-        description = "Nonatonic (9 notes) - Dense, chromatic\n4th and final transposition of Mode 3\nRich harmonic palette for composition" },
+      { name = "Mode 3.1", pattern = "101110111011", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n1st transposition | Repeating 2-1-1 pattern\nVery colorful" },
+      { name = "Mode 3.2", pattern = "110111011101", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n2nd transposition | Shifted up 1 semitone\nUsed in 'Quartet for the End of Time'" },
+      { name = "Mode 3.3", pattern = "111011101110", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n3rd transposition | Shifted up 2 semitones\nHighly symmetrical" },
+      { name = "Mode 3.4", pattern = "011101110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n4th transposition | Shifted up 3 semitones\nRich harmonic palette" },
       
 
-      { name = "Mode 4.1", pattern = "110001110001", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+      { name = "Mode 4.1", pattern = "111001111001", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
         description = "Octatonic (8 notes) - Exotic, Eastern flavor\nRepeating 1-1-3-1 pattern | 1st transposition\nUsed for mysterious, otherworldly sounds" },
-      { name = "Mode 4.2", pattern = "100011100011", isCustom = true, intervals = "1-3-1-1-1-3-1-1",
+      { name = "Mode 4.2", pattern = "111100111100", isCustom = true, intervals = "1-3-1-1-1-3-1-1",
         description = "Octatonic (8 notes) - Exotic, Eastern flavor\n2nd transposition | Alternating small/large gaps\nPopular in film scores" },
-      { name = "Mode 4.3", pattern = "000111000111", isCustom = true, intervals = "3-1-1-1-3-1-1-1",
+      { name = "Mode 4.3", pattern = "011110011110", isCustom = true, intervals = "3-1-1-1-3-1-1-1",
         description = "Octatonic (8 notes) - Exotic, Eastern flavor\n3rd transposition | Creates tension and release\nContains augmented and minor triads" },
-      { name = "Mode 4.4", pattern = "001110001110", isCustom = true, intervals = "1-1-1-3-1-1-1-3",
+      { name = "Mode 4.4", pattern = "001111001111", isCustom = true, intervals = "1-1-1-3-1-1-1-3",
         description = "Octatonic (8 notes) - Exotic, Eastern flavor\n4th transposition | Clusters and wide leaps\nUseful for dramatic moments" },
-      { name = "Mode 4.5", pattern = "011100011100", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+      { name = "Mode 4.5", pattern = "100111100111", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
         description = "Octatonic (8 notes) - Exotic, Eastern flavor\n5th transposition | Repeating pattern\nSymmetrical structure" },
-      { name = "Mode 4.6", pattern = "111000111000", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+      { name = "Mode 4.6", pattern = "110011110011", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
         description = "Octatonic (8 notes) - Exotic, Eastern flavor\n6th and final transposition of Mode 4\nComplete the symmetrical cycle" },
       
 
-      { name = "Mode 5.1", pattern = "110001000011", isCustom = true, intervals = "1-4-1-1-4-1",
+      { name = "Mode 5.1", pattern = "110001110001", isCustom = true, intervals = "1-4-1-1-4-1",
         description = "Hexatonic (6 notes) - Wide intervals, sparse\nRepeating 1-4-1 pattern | 1st transposition\nOpen, spacious sound with dramatic leaps" },
-      { name = "Mode 5.2", pattern = "100010000111", isCustom = true, intervals = "4-1-1-4-1-1",
+      { name = "Mode 5.2", pattern = "111000111000", isCustom = true, intervals = "4-1-1-4-1-1",
         description = "Hexatonic (6 notes) - Wide intervals, sparse\n2nd transposition | Major 3rd leaps\nUsed for ethereal, floating textures" },
-      { name = "Mode 5.3", pattern = "000100011100", isCustom = true, intervals = "1-1-4-1-1-4",
+      { name = "Mode 5.3", pattern = "011100011100", isCustom = true, intervals = "1-1-4-1-1-4",
         description = "Hexatonic (6 notes) - Wide intervals, sparse\n3rd transposition | Alternating gaps\nCreates sense of space and distance" },
-      { name = "Mode 5.4", pattern = "001000111000", isCustom = true, intervals = "1-4-1-1-4-1",
+      { name = "Mode 5.4", pattern = "001110001110", isCustom = true, intervals = "1-4-1-1-4-1",
         description = "Hexatonic (6 notes) - Wide intervals, sparse\n4th transposition | Pentatonic-like\nUseful for minimalist compositions" },
-      { name = "Mode 5.5", pattern = "010001110001", isCustom = true, intervals = "4-1-1-4-1-1",
+      { name = "Mode 5.5", pattern = "000111000111", isCustom = true, intervals = "4-1-1-4-1-1",
         description = "Hexatonic (6 notes) - Wide intervals, sparse\n5th transposition | Symmetrical gaps\nCreates mysterious atmosphere" },
-      { name = "Mode 5.6", pattern = "100011100010", isCustom = true, intervals = "1-1-4-1-1-4",
+      { name = "Mode 5.6", pattern = "100011100011", isCustom = true, intervals = "1-1-4-1-1-4",
         description = "Hexatonic (6 notes) - Wide intervals, sparse\n6th and final transposition of Mode 5\nCompletes the hexatonic cycle" },
       
 
-      { name = "Mode 6.1", pattern = "101011010110", isCustom = true, intervals = "2-2-1-1-2-2-1-1",
+      { name = "Mode 6.1", pattern = "101011101011", isCustom = true, intervals = "2-2-1-1-2-2-1-1",
         description = "Octatonic (8 notes) - Balanced, versatile\nRepeating 2-2-1-1 pattern | 1st transposition\nBlends whole tone and chromatic elements" },
-      { name = "Mode 6.2", pattern = "010110101101", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
+      { name = "Mode 6.2", pattern = "110101110101", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
         description = "Octatonic (8 notes) - Balanced, versatile\n2nd transposition | Smooth motion\nUseful for melodic lines" },
-      { name = "Mode 6.3", pattern = "101101011011", isCustom = true, intervals = "1-1-2-2-1-1-2-2",
+      { name = "Mode 6.3", pattern = "111010111010", isCustom = true, intervals = "1-1-2-2-1-1-2-2",
         description = "Octatonic (8 notes) - Balanced, versatile\n3rd transposition | Paired intervals\nCreates interesting harmonic progressions" },
-      { name = "Mode 6.4", pattern = "011010110110", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
+      { name = "Mode 6.4", pattern = "011101011101", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
         description = "Octatonic (8 notes) - Balanced, versatile\n4th transposition | Alternating pairs\nGood for both melody and harmony" },
-      { name = "Mode 6.5", pattern = "110101101011", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
+      { name = "Mode 6.5", pattern = "101110101110", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
         description = "Octatonic (8 notes) - Balanced, versatile\n5th transposition | Symmetrical structure\nUsed in Messiaen's piano works" },
-      { name = "Mode 6.6", pattern = "101011011010", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
+      { name = "Mode 6.6", pattern = "010111010111", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
         description = "Octatonic (8 notes) - Balanced, versatile\n6th and final transposition of Mode 6\nCompletes the octave division" },
       
 
-      { name = "Mode 7.1", pattern = "111011110110", isCustom = true, intervals = "1-1-1-2-1-1-1-1-2-1",
+      { name = "Mode 7.1", pattern = "111101111101", isCustom = true, intervals = "1-1-1-2-1-1-1-1-2-1",
         description = "Decatonic (10 notes) - Most chromatic\nRepeating 1-1-1-2-1 pattern | 1st transposition\nAlmost all 12 chromatic notes - highly dissonant" },
-      { name = "Mode 7.2", pattern = "110111101101", isCustom = true, intervals = "1-1-2-1-1-1-1-2-1-1",
+      { name = "Mode 7.2", pattern = "111011111011", isCustom = true, intervals = "1-1-2-1-1-1-1-2-1-1",
         description = "Decatonic (10 notes) - Most chromatic\n2nd transposition | Dense clusters\nUsed for intense, dramatic moments" },
-      { name = "Mode 7.3", pattern = "101111011011", isCustom = true, intervals = "1-2-1-1-1-1-2-1-1-1",
+      { name = "Mode 7.3", pattern = "110111110111", isCustom = true, intervals = "1-2-1-1-1-1-2-1-1-1",
         description = "Decatonic (10 notes) - Most chromatic\n3rd transposition | Maximum color\nMessiaen's most complex mode" },
-      { name = "Mode 7.4", pattern = "011110110111", isCustom = true, intervals = "2-1-1-1-1-2-1-1-1-1",
+      { name = "Mode 7.4", pattern = "101111101111", isCustom = true, intervals = "2-1-1-1-1-2-1-1-1-1",
         description = "Decatonic (10 notes) - Most chromatic\n4th transposition | Chromatic saturation\nUseful for avant-garde compositions" },
-      { name = "Mode 7.5", pattern = "111101101110", isCustom = true, intervals = "1-1-1-1-2-1-1-1-2-1",
+      { name = "Mode 7.5", pattern = "111110111110", isCustom = true, intervals = "1-1-1-1-2-1-1-1-2-1",
         description = "Decatonic (10 notes) - Most chromatic\n5th transposition | Dense harmony\nContains nearly every possible chord type" },
-      { name = "Mode 7.6", pattern = "111011011101", isCustom = true, intervals = "1-1-2-1-1-1-2-1-1-1",
+      { name = "Mode 7.6", pattern = "111011110111", isCustom = true, intervals = "1-1-2-1-1-1-2-1-1-1",
         description = "Decatonic (10 notes) - Most chromatic\n6th and final transposition of Mode 7\nCompletes Messiaen's modal system" }
     }
   },
@@ -1599,6 +1685,8 @@ scaleSystems = {
   }
 }
 
+-- Load user custom scales from .reascale files
+loadUserReascales(scaleSystems)
 
 scales = {}
 for _, system in ipairs(scaleSystems) do
@@ -9456,7 +9544,61 @@ function Interface:addScaleSystemDropdown(xMargin, yMargin, xPadding, yPadding, 
 	end
 	
 	local currentSystemIndex = getScaleSystemIndex()
-	self:addDropdown(scaleSystemXpos+dockerXPadding, scaleSystemYpos, scaleSystemWidth, scaleSystemHeight, systemNames, currentSystemIndex, onScaleSystemSelection)
+	
+	local dropdown = Dropdown:new(scaleSystemXpos+dockerXPadding, scaleSystemYpos, scaleSystemWidth, scaleSystemHeight, systemNames, currentSystemIndex, onScaleSystemSelection)
+    
+    local originalUpdate = dropdown.update
+    dropdown.update = function(self)
+        originalUpdate(self)
+        
+        if mouseButtonIsNotPressedDown and mouseIsHoveringOver(self) and gfx.mouse_cap == 2 then
+            mouseButtonIsNotPressedDown = false
+            
+            local menu = "Open Reascales Folder...|Rescan Reascales"
+            
+            gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+            local selection = gfx.showmenu(menu)
+            
+            local reascaleDir = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun/Reascales"
+            if reaper.GetOS():match("Win") then reascaleDir = reascaleDir:gsub("/", "\\") end
+            
+            if selection == 1 then
+                if reaper.CF_ShellExecute then
+                    reaper.CF_ShellExecute(reascaleDir)
+                else
+                    os.execute('start "" "' .. reascaleDir .. '"')
+                end
+            elseif selection == 2 then
+                -- Remove old user systems
+                for i = #scaleSystems, 1, -1 do
+                    if scaleSystems[i].name:match("^User: ") then
+                        table.remove(scaleSystems, i)
+                    end
+                end
+                
+                -- Reload
+                loadUserReascales(scaleSystems)
+                
+                -- Rebuild flat scales table
+                scales = {}
+                for _, system in ipairs(scaleSystems) do
+                    for _, scale in ipairs(system.scales) do
+                        table.insert(scales, scale)
+                    end
+                end
+                
+                -- Reset selection and refresh
+                setScaleSystemIndex(1)
+                onScaleSystemSelection(1)
+            end
+        end
+        
+        if tooltipsEnabled and mouseIsHoveringOver(self) then
+             queueTooltip("Left-Click: Select System | Right-Click: Manage Reascales", gfx.mouse_x, gfx.mouse_y)
+        end
+    end
+    
+    table.insert(self.elements, dropdown)
 end
 
 function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, horizontalMargin, scaleTonicNoteWidth, scaleSystemWidth, scaleTypeWidth)
@@ -9497,7 +9639,11 @@ function Interface:addScaleTypeDropdown(xMargin, yMargin, xPadding, yPadding, ho
 	
 	local scaleNames = {}
 	for _, scale in ipairs(currentSystem.scales) do
-		table.insert(scaleNames, scale.name)
+		if scale.isHeader then
+			table.insert(scaleNames, "#" .. scale.name)
+		else
+			table.insert(scaleNames, scale.name)
+		end
 	end
 	
 	local currentScaleIndex = getScaleWithinSystemIndex()
@@ -9785,19 +9931,4 @@ end
 
 reaper.atexit(cleanup)
 main()
-
-
-
---
-
---
-
---
-
-
-
-
---
---
---
 
