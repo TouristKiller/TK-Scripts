@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.1.7
+-- @version 2.1.8
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -40,6 +40,9 @@ local LAST_OPENED_SENTINEL  = "__LAST_OPENED__"
 -- Ratings:
 local plugin_ratings_path   = script_path .. "plugin_ratings.json"
 local plugin_ratings        = {}
+-- Aliases:
+local plugin_aliases_path   = script_path .. "plugin_aliases.json"
+local plugin_aliases        = {}
 local DedupeByTypePriority
 
 -- Performance caches
@@ -118,7 +121,16 @@ function GetLowerName(name)
     if not name then return "" end
     local lower = plugin_lower_name[name]
     if lower then return lower end
-    lower = name:lower()
+    
+    local alias = plugin_aliases and plugin_aliases[name]
+    if alias and alias ~= "" then
+        lower = alias:lower()
+    else
+        -- Strip prefix (VST: etc) for sorting if no alias
+        local clean = name:match('^[^:]+: (.+)$') or name
+        lower = clean:lower()
+    end
+    
     plugin_lower_name[name] = lower
     return lower
 end
@@ -330,11 +342,19 @@ function RefreshCurrentScreenshotView()
 
     if term ~= "" then
         local term_l = term:lower()
+        
+        local function MatchesSearch(raw_name)
+            if raw_name:lower():find(term_l, 1, true) then return true end
+            local alias = plugin_aliases[raw_name]
+            if alias and alias:lower():find(term_l, 1, true) then return true end
+            return false
+        end
+
         if browser_panel_selected then
             current_filtered_fx = GetFxListForSubgroup(browser_panel_selected) or {}
             local filtered = {}
             for _, p in ipairs(current_filtered_fx) do
-                if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
+                if MatchesSearch(p) then filtered[#filtered+1] = p end
             end
             if config.apply_type_priority then
                 filtered = DedupeByTypePriority(filtered)
@@ -344,7 +364,7 @@ function RefreshCurrentScreenshotView()
             local base = GetPluginsForFolder(selected_folder) or {}
             local filtered = {}
             for _, p in ipairs(base) do
-                if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
+                if MatchesSearch(p) then filtered[#filtered+1] = p end
             end
             if config.apply_type_priority then
                 filtered = DedupeByTypePriority(filtered)
@@ -354,7 +374,7 @@ function RefreshCurrentScreenshotView()
            
             local matches = {}
             for _, plugin in ipairs(PLUGIN_LIST or {}) do
-                if plugin:lower():find(term_l, 1, true) then matches[#matches+1] = plugin end
+                if MatchesSearch(plugin) then matches[#matches+1] = plugin end
             end
             if config.apply_type_priority then
                 matches = DedupeByTypePriority(matches)
@@ -1365,6 +1385,9 @@ end
 
 function GetDisplayPluginName(raw_name)
     if not raw_name then return raw_name end
+    if plugin_aliases and plugin_aliases[raw_name] and plugin_aliases[raw_name] ~= "" then
+        return plugin_aliases[raw_name]
+    end
     local name = raw_name
     if config.clean_plugin_names then
         name = CleanPluginName(name)
@@ -1965,6 +1988,34 @@ function SavePluginRatings()
 end
 
 LoadPluginRatings()
+
+-------------------------------------------------------------
+-- ALIASES
+function LoadPluginAliases()
+    local file = io.open(plugin_aliases_path, "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        local ok, data = pcall(json.decode, content)
+        if ok and type(data) == "table" then
+            plugin_aliases = data
+        else
+            plugin_aliases = {}
+        end
+    else
+        plugin_aliases = {}
+    end
+end
+
+function SavePluginAliases()
+    local file = io.open(plugin_aliases_path, "w")
+    if file then
+        file:write(json.encode(plugin_aliases))
+        file:close()
+    end
+end
+
+LoadPluginAliases()
 
 function ShowPluginRatingUI(plugin_name)
     local rating = plugin_ratings[plugin_name] or 0
@@ -2618,14 +2669,31 @@ function ShowPluginManagerTab()
         filtered_plugins = {}
 
         BuildScreenshotIndex(true)
+        local term_l = search_filter:lower()
         for _, plugin in ipairs(PLUGIN_LIST) do
             local include = (not config.show_missing_screenshots_only) or (config.show_missing_screenshots_only and not HasScreenshot(plugin))
-            if include and (search_filter == '' or string.find(string.lower(plugin), string.lower(search_filter))) then
-                table.insert(filtered_plugins, {
-                    name = plugin,
-                    visible = config.plugin_visibility[plugin] ~= false,
-                    searchable = not config.excluded_plugins[plugin]
-                })
+            if include then
+                local match = false
+                if search_filter == "" then
+                    match = true
+                else
+                    if plugin:lower():find(term_l, 1, true) then
+                        match = true
+                    else
+                        local alias = plugin_aliases[plugin]
+                        if alias and alias:lower():find(term_l, 1, true) then
+                            match = true
+                        end
+                    end
+                end
+                
+                if match then
+                    table.insert(filtered_plugins, {
+                        name = plugin,
+                        visible = config.plugin_visibility[plugin] ~= false,
+                        searchable = not config.excluded_plugins[plugin]
+                    })
+                end
             end
         end
         table.sort(filtered_plugins, function(a,b) return GetLowerName(a.name) < GetLowerName(b.name) end)
@@ -2645,9 +2713,25 @@ function ShowPluginManagerTab()
         search_filter = search_filter_pending
         filtered_plugins = {}
         BuildScreenshotIndex(true)
+        local term_l = search_filter:lower()
         for _, plugin in ipairs(PLUGIN_LIST) do
             if config.show_missing_screenshots_only and HasScreenshot(plugin) then goto continue_search end
-            if search_filter == "" or string.find(string.lower(plugin), string.lower(search_filter)) then
+            
+            local match = false
+            if search_filter == "" then
+                match = true
+            else
+                if plugin:lower():find(term_l, 1, true) then
+                    match = true
+                else
+                    local alias = plugin_aliases[plugin]
+                    if alias and alias:lower():find(term_l, 1, true) then
+                        match = true
+                    end
+                end
+            end
+
+            if match then
                 table.insert(filtered_plugins, {
                     name = plugin,
                     visible = config.plugin_visibility[plugin] ~= false,
@@ -5828,6 +5912,11 @@ function ShowPluginContextMenu(plugin_name, menu_id)
         r.ImGui_Text(ctx, "Rating:")
         ShowPluginRatingUI(plugin_name)
         r.ImGui_Separator(ctx)
+        if r.ImGui_MenuItem(ctx, "Rename / Alias") then
+            renaming_plugin_name = plugin_name
+            renaming_new_name = plugin_aliases[plugin_name] or plugin_name
+            show_rename_popup = true
+        end
         if r.ImGui_MenuItem(ctx, "Make Screenshot") then
             StartSingleScreenshotCapture(plugin_name, function()
                 ClearScreenshotCache()
@@ -6693,9 +6782,7 @@ function SortPlainPluginList(list, mode)
             local ra = plugin_ratings[a] or 0
             local rb = plugin_ratings[b] or 0
             if ra == rb then
-                local na = a:match('^[^:]+: (.+)$') or a
-                local nb = b:match('^[^:]+: (.+)$') or b
-                return GetLowerName(na) < GetLowerName(nb)
+                return GetLowerName(a) < GetLowerName(b)
             else
                 return ra > rb
             end
@@ -6705,9 +6792,7 @@ function SortPlainPluginList(list, mode)
             local ta = GetPluginType(a)
             local tb = GetPluginType(b)
             if ta == tb then
-                local na = a:match('^[^:]+: (.+)$') or a
-                local nb = b:match('^[^:]+: (.+)$') or b
-                return GetLowerName(na) < GetLowerName(nb)
+                return GetLowerName(a) < GetLowerName(b)
             else
                 local order = {}
                 for i, t in ipairs(config.type_order) do order[t] = i end
@@ -6716,9 +6801,7 @@ function SortPlainPluginList(list, mode)
         end)
     else 
         table.sort(list, function(a,b) 
-            local na = a:match('^[^:]+: (.+)$') or a
-            local nb = b:match('^[^:]+: (.+)$') or b
-            return GetLowerName(na) < GetLowerName(nb)
+            return GetLowerName(a) < GetLowerName(b)
         end)
     end
 end
@@ -7696,8 +7779,23 @@ function DrawBrowserItems(tbl, main_cat_name)
     local draw_order = BuildSubgroupDrawOrder(main_cat_name or "", tbl)
     for _, i in ipairs(draw_order) do
         local filtered_fx = {}
+        local term_l = browser_search_term:lower()
         for _, fx in ipairs(tbl[i].fx) do
-            if browser_search_term == "" or fx:lower():find(browser_search_term:lower(), 1, true) then
+            local match = false
+            if browser_search_term == "" then
+                match = true
+            else
+                if fx:lower():find(term_l, 1, true) then
+                    match = true
+                else
+                    local alias = plugin_aliases[fx]
+                    if alias and alias:lower():find(term_l, 1, true) then
+                        match = true
+                    end
+                end
+            end
+            
+            if match then
                 table.insert(filtered_fx, fx)
             end
         end
@@ -8808,9 +8906,16 @@ function ShowBrowserPanel()
                     for _, j in ipairs(order) do
                         local show_folder = browser_search_term == ""
                         if not show_folder then
+                            local term_l = browser_search_term:lower()
                             for k = 1, #CAT_TEST[i].list[j].fx do
-                                if CAT_TEST[i].list[j].fx[k]:lower():find(browser_search_term:lower(), 1, true) then
+                                local fx = CAT_TEST[i].list[j].fx[k]
+                                if fx:lower():find(term_l, 1, true) then
                                     show_folder = true; break
+                                else
+                                    local alias = plugin_aliases[fx]
+                                    if alias and alias:lower():find(term_l, 1, true) then
+                                        show_folder = true; break
+                                    end
                                 end
                             end
                         end
@@ -12435,17 +12540,37 @@ function Filter_actions(filter_text)
     filter_text = Lead_Trim_ws(filter_text)
     local t = {}
     if filter_text == "" or not filter_text then return t end
+    
+    local words = {}
+    for word in filter_text:gmatch("%S+") do
+        words[#words+1] = word:lower()
+    end
+
     for i = 1, #FX_LIST_TEST do
-        if not config.excluded_plugins[FX_LIST_TEST[i]] then
-            local name = FX_LIST_TEST[i]:lower()
+        local raw_name = FX_LIST_TEST[i]
+        if not config.excluded_plugins[raw_name] then
+            local name_l = raw_name:lower()
+            local alias = plugin_aliases[raw_name]
+            local alias_l = alias and alias:lower() or nil
+            
             local found = true
-            for word in filter_text:gmatch("%S+") do
-                if not name:find(word:lower(), 1, true) then
+            for _, word in ipairs(words) do
+                local match_word = false
+                if name_l:find(word, 1, true) then
+                    match_word = true
+                elseif alias_l and alias_l:find(word, 1, true) then
+                    match_word = true
+                end
+                
+                if not match_word then
                     found = false
                     break
                 end
             end
-            if found then t[#t + 1] = { score = FX_LIST_TEST[i]:len() - filter_text:len(), name = FX_LIST_TEST[i] } end
+            
+            if found then 
+                t[#t + 1] = { score = raw_name:len() - filter_text:len(), name = raw_name } 
+            end
         end
     end
     if #t >= 2 then SortTable(t, "score", "name") end
@@ -16001,6 +16126,59 @@ if visible then
             folder_to_rename = nil
             folder_to_rename_path = ""
             new_folder_name_for_rename = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+
+    if show_rename_popup then
+        r.ImGui_OpenPopup(ctx, "Rename Plugin Alias")
+        show_rename_popup = false
+    end
+
+    if r.ImGui_BeginPopupModal(ctx, "Rename Plugin Alias", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_TopMost()) then
+        r.ImGui_Text(ctx, "Original Name: " .. (renaming_plugin_name or ""))
+        r.ImGui_Spacing(ctx)
+        
+        r.ImGui_SetNextItemWidth(ctx, 300)
+        local changed, new_val = r.ImGui_InputText(ctx, "Alias", renaming_new_name or "", 256)
+        if changed then renaming_new_name = new_val end
+        
+        r.ImGui_Spacing(ctx)
+        
+        if r.ImGui_Button(ctx, "Save", 100) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+            if renaming_plugin_name then
+                if renaming_new_name == "" or renaming_new_name == renaming_plugin_name then
+                    plugin_aliases[renaming_plugin_name] = nil
+                else
+                    plugin_aliases[renaming_plugin_name] = renaming_new_name
+                end
+                SavePluginAliases()
+                -- Clear caches to update sorting
+                plugin_lower_name = {} 
+                ClearScreenshotCache()
+                BuildScreenshotIndex(true)
+                if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+            end
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_SameLine(ctx)
+        
+        if r.ImGui_Button(ctx, "Reset", 100) then
+            plugin_aliases[renaming_plugin_name] = nil
+            SavePluginAliases()
+            plugin_lower_name = {} 
+            ClearScreenshotCache()
+            BuildScreenshotIndex(true)
+            if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+
+        r.ImGui_SameLine(ctx)
+        
+        if r.ImGui_Button(ctx, "Cancel", 100) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
             r.ImGui_CloseCurrentPopup(ctx)
         end
         
