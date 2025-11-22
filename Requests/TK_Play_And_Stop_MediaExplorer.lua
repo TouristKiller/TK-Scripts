@@ -1,6 +1,6 @@
 -- @description TK_Play_And_Stop_MediaExplorer
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.0.1
 -----------------------------------------------------------------------------
 --[[    
 This script is designed to replace the default Spacebar shortcut.
