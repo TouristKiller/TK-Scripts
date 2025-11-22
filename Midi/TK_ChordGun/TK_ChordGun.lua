@@ -1,10 +1,10 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.2.5
+-- @version 2.2.6
 -- @changelog
 --[[
 
-2.2.1 /2.2.5
+2.2.1 /2.2.6
 + Bug fixes
 
 2.2.0
@@ -5892,10 +5892,23 @@ function SimpleButton:draw()
   end
   
   local displayText = type(self.getText) == "function" and self.getText() or self.text
-  local stringWidth, stringHeight = gfx.measurestr(displayText)
-  gfx.x = self.x + ((self.width - stringWidth) / 2)
-  gfx.y = self.y + ((self.height - stringHeight) / 2)
-  gfx.drawstr(displayText)
+  
+  if displayText == "__ARROW_UP__" then
+      local cx = self.x + self.width / 2
+      local cy = self.y + self.height / 2
+      local s = math.min(self.width, self.height) / 4
+      gfx.triangle(cx, cy - s, cx - s, cy + s, cx + s, cy + s)
+  elseif displayText == "__ARROW_DOWN__" then
+      local cx = self.x + self.width / 2
+      local cy = self.y + self.height / 2
+      local s = math.min(self.width, self.height) / 4
+      gfx.triangle(cx, cy + s, cx - s, cy - s, cx + s, cy - s)
+  else
+      local stringWidth, stringHeight = gfx.measurestr(displayText)
+      gfx.x = self.x + ((self.width - stringWidth) / 2)
+      gfx.y = self.y + ((self.height - stringHeight) / 2)
+      gfx.drawstr(displayText)
+  end
   
   if tooltipsEnabled and mouseIsHoveringOver(self) and self.getTooltip then
     local tooltip = self.getTooltip()
@@ -7412,7 +7425,7 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
         
 
         if mappedNote ~= noteInChromatic then
-          noteName = noteName .. "?" .. mappedNoteName
+          noteName = noteName .. ">" .. mappedNoteName
         end
       end
     end
@@ -9072,7 +9085,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
   local totalWidth = self.width - 2 * xMargin - 2 * xPadding
   local scrollX = buttonXpos + dockerXPadding + totalWidth - scrollBtnWidth
   
-  self:addSimpleButton("?", scrollX, buttonYpos, scrollBtnWidth, buttonHeight, 
+  self:addSimpleButton("__ARROW_UP__", scrollX, buttonYpos, scrollBtnWidth, buttonHeight, 
       function() 
           if chordListScrollOffset > 0 then 
               chordListScrollOffset = chordListScrollOffset - 1
@@ -9080,7 +9093,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
           end
       end, nil, function() return "Scroll Up" end, true)
 
-  self:addSimpleButton("?", scrollX, buttonYposRow2, scrollBtnWidth, buttonHeight, 
+  self:addSimpleButton("__ARROW_DOWN__", scrollX, buttonYposRow2, scrollBtnWidth, buttonHeight, 
       function() 
           local maxRows = 0
           if scaleChords then

@@ -256,9 +256,9 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.2.5" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-22T14:15:00Z">
+      <version name="2.2.6" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-22T16:00:00Z">
         <changelog><![CDATA[
-2.2.1 /2.2.5
+2.2.1 /2.2.6
 + Bug Fixes
 
 2.2.0
