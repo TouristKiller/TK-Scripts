@@ -1,6 +1,6 @@
 -- @description TK Media Explorer Web Controller - Bridge Script
 -- @author TK (TouristKiller)
--- @version 1.7
+-- @version 1.8
 -- @about
 --   # TK Media Explorer Web Controller
 --   
@@ -128,11 +128,13 @@ local function install_html_interface()
         <div class="controls">
             <div class="button-row">
                 <button onclick="sendCommand(40024)">▶️ Play/Stop</button>
+                <button onclick="sendCommand(1009)">⏸️ Pause</button>
             </div>
             
             <div class="button-row">
                 <button onclick="sendCommand(42184)">🔀 Random</button>
                 <button onclick="sendCommand(1068)">🔁 Repeat</button>
+                <button onclick="sendCommand(42084)">⏩ Autoplay</button>
             </div>
             
             <div class="button-row">
@@ -142,7 +144,7 @@ local function install_html_interface()
             
             <div class="button-row">
                 <button onclick="sendCommand(1004)">◀️ Back</button>
-                <button onclick="sendCommand(1013)">📁 Open</button>
+                <button onclick="sendCommand('OPEN_FOLDER')">📁 Open</button>
             </div>
             
             <div class="button-row">
@@ -396,6 +398,15 @@ local function check_commands()
       else
         reaper.ShowConsoleMsg("Could not find listview control!\n")
       end
+      reaper.SetExtState("TK_MediaExplorer", "webcmd", "", false)
+    elseif cmd_str:match("^OPEN_FOLDER") then
+      execute_media_explorer_command(1013)
+      reaper.defer(function()
+        local listview = get_media_explorer_listview()
+        if listview then
+          reaper.JS_WindowMessage_Send(listview, "WM_KEYDOWN", 0x24, 0, 0, 0)
+        end
+      end)
       reaper.SetExtState("TK_MediaExplorer", "webcmd", "", false)
     else
       -- Normal command
