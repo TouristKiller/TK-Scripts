@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.8
+-- @version 1.3.9
 -- @changelog 
 --[[
 
@@ -335,6 +335,7 @@ local default_settings = {
  -- Color Picker settings
  show_color_picker = true,
  color_picker_target = 0,  -- 0=Track, 1=Item, 2=Take, 3=Marker, 4=Region
+ marker_color_use_timesel = true, -- true=Use time selection, false=Use edit cursor
  color_picker_x = 0.85,
  color_picker_y = 0.05,
  color_picker_button_size = 20,
@@ -829,8 +830,8 @@ local function DrawPixelXYControls(keyx, keyy, main_window_width, main_window_he
  settings[pixel_keyy] = math.floor(settings[keyy] * main_window_height)
  end
  
- settings[pixel_keyx] = settings[pixel_keyx] or 0
- settings[pixel_keyy] = settings[pixel_keyy] or 0
+ settings[pixel_keyx] = math.floor(settings[pixel_keyx] or 0)
+ settings[pixel_keyy] = math.floor(settings[pixel_keyy] or 0)
  
  local rv
  
@@ -4341,27 +4342,128 @@ function ApplyColorToTakes(colorNative)
 end
 
 function ApplyColorToMarkers(colorNative, is_region)
- local start_time, end_time = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
- if start_time == end_time then return false end
- 
- local retval, num_markers, num_regions = r.CountProjectMarkers(0)
- local total = num_markers + num_regions
  local applied = false
  
- for i = 0, total - 1 do
- local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
- if retval then
- if (is_region and isrgn) or (not is_region and not isrgn) then
- if pos >= start_time and pos <= end_time then
- r.SetProjectMarkerByIndex(0, i, isrgn, pos, rgnend, markrgnindexnumber, name, colorNative | 0x1000000)
- applied = true
+ -- 1. Try to get selection from Region/Marker Manager (Highest Priority)
+ local hwnd = nil
+ local title = r.JS_Localize("Region/Marker Manager", "common")
+ local arr = r.new_array({}, 1024)
+ r.JS_Window_ArrayFind(title, true, arr)
+ local adrs = arr.table()
+ for i = 1, #adrs do
+  local check_hwnd = r.JS_Window_HandleFromAddress(adrs[i])
+  -- Verify it's the manager by checking for a known child ID (1056 is the filter edit box usually, 1071 is the list)
+  if r.JS_Window_FindChildByID(check_hwnd, 1071) then
+  hwnd = check_hwnd
+  break
+  end
  end
- end
- end
+
+ if hwnd then
+  local container = r.JS_Window_FindChildByID(hwnd, 1071) -- ListView
+  if container then
+  local sel_count, sel_indexes = r.JS_ListView_ListAllSelItems(container)
+  if sel_count > 0 then
+  for id_str in sel_indexes:gmatch("[^,]+") do
+   local txt = r.JS_ListView_GetItemText(container, tonumber(id_str), 1)
+   local idx = tonumber(txt:match("(%d+)"))
+   if idx then
+   -- Find the marker/region with this index
+   local retval, num_markers, num_regions = r.CountProjectMarkers(0)
+   local total = num_markers + num_regions
+   for i = 0, total - 1 do
+    local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
+    if markrgnindexnumber == idx then
+    if (is_region and isrgn) or (not is_region and not isrgn) then
+     r.SetProjectMarkerByIndex(0, i, isrgn, pos, rgnend, markrgnindexnumber, name, colorNative | 0x1000000)
+     applied = true
+    end
+    break
+    end
+   end
+   end
+  end
+  end
+  end
  end
  
  if applied then
- r.UpdateArrange()
+  r.UpdateArrange()
+  return true
+ end
+
+ -- 2. Check Time Selection (Batch Coloring / Smart Region)
+ local start_time, end_time = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
+ if start_time ~= end_time then
+  local retval, num_markers, num_regions = r.CountProjectMarkers(0)
+  local total = num_markers + num_regions
+  
+  -- First pass: Check if we have a "Smart Region" match (Time Sel == Region)
+  -- This is prioritized if we are coloring regions.
+  if is_region then
+  for i = 0, total - 1 do
+   local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
+   if retval and isrgn then
+   if math.abs(pos - start_time) < 0.001 and math.abs(rgnend - end_time) < 0.001 then
+    r.SetProjectMarkerByIndex(0, i, isrgn, pos, rgnend, markrgnindexnumber, name, colorNative | 0x1000000)
+    applied = true
+   end
+   end
+  end
+  end
+  
+  -- If no smart region match (or we are coloring markers), color everything strictly inside the range
+  if not applied then
+  for i = 0, total - 1 do
+   local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
+   if retval then
+   if (is_region and isrgn) or (not is_region and not isrgn) then
+    -- Use < end_time to avoid including regions/markers that start exactly at the end of the selection
+    if pos >= start_time and pos < end_time then
+    r.SetProjectMarkerByIndex(0, i, isrgn, pos, rgnend, markrgnindexnumber, name, colorNative | 0x1000000)
+    applied = true
+    end
+   end
+   end
+  end
+  end
+  
+  if applied then
+  r.UpdateArrange()
+  return true
+  end
+ end
+
+ -- 3. Fallback: Apply to marker/region at edit cursor
+ local cursor_pos = r.GetCursorPosition()
+ 
+ if is_region then
+  -- For regions, check if cursor is inside a region (GetLastMarkerAndCurRegion returns current region)
+  local markeridx, regionidx = r.GetLastMarkerAndCurRegion(0, cursor_pos)
+  if regionidx >= 0 then
+  local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, regionidx)
+  if retval and isrgn then
+   r.SetProjectMarkerByIndex(0, regionidx, isrgn, pos, rgnend, markrgnindexnumber, name, colorNative | 0x1000000)
+   applied = true
+  end
+  end
+ else
+  -- For markers, check if there is a marker EXACTLY at cursor (or very close)
+  local markeridx, regionidx = r.GetLastMarkerAndCurRegion(0, cursor_pos)
+  if markeridx >= 0 then
+  local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, markeridx)
+  if retval and not isrgn then
+   -- Only color if it's close to the cursor (e.g. within 1ms)
+   if math.abs(pos - cursor_pos) < 0.001 then
+   r.SetProjectMarkerByIndex(0, markeridx, isrgn, pos, rgnend, markrgnindexnumber, name, colorNative | 0x1000000)
+   applied = true
+   end
+  end
+  end
+ end
+ 
+ if applied then
+  r.UpdateArrange()
  end
  return applied
 end
@@ -6356,12 +6458,15 @@ function Transport_Buttons(main_window_width, main_window_height)
  local gis = settings.custom_image_size or 1.0
  local function sz(use_flag, img_handle, per)
  local base = buttonSize_graphic * gis
+ local val = base
  if settings.transport_mode ~= 1 and use_flag and img_handle then
  local ok = true
  if r.ImGui_ValidatePtr then ok = r.ImGui_ValidatePtr(img_handle, 'ImGui_Image*') end
- if ok then return base * (per or 1.0) end
+ if ok then val = base * (per or 1.0) end
  end
- return base
+ -- Clamp to window height to prevent overflow
+ if val > main_window_height - 4 then val = main_window_height - 4 end
+ return val
  end
  sizes = {
  rewind = sz(settings.use_custom_rewind_image, transport_custom_images.rewind, settings.custom_rewind_image_size),
@@ -7692,15 +7797,22 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  end
  elseif style == 7 then
+ local s7_size = size * 0.8
+ local s7_adj = s7_size
+ local s7_points = {
+ x + size * 0.1 + (size - s7_size)/2, y + size * 0.1 + (size - s7_size)/2,
+ x + size * 0.1 + (size - s7_size)/2, y + s7_adj + (size - s7_size)/2,
+ x + s7_adj + (size - s7_size)/2, y + size / 2
+ }
  r.ImGui_DrawList_AddTriangleFilled(drawList,
- points[1], points[2],
- points[3], points[4],
- points[5], points[6],
+ s7_points[1], s7_points[2],
+ s7_points[3], s7_points[4],
+ s7_points[5], s7_points[6],
  color)
  local glowPoints = {
- points[1] - size * 0.08, points[2] - size * 0.08,
- points[3] - size * 0.08, points[4] + size * 0.08,
- points[5] + size * 0.08, points[6]
+ s7_points[1] - size * 0.08, s7_points[2] - size * 0.08,
+ s7_points[3] - size * 0.08, s7_points[4] + size * 0.08,
+ s7_points[5] + size * 0.08, s7_points[6]
  }
  r.ImGui_DrawList_AddTriangle(drawList,
  glowPoints[1], glowPoints[2],
@@ -8071,7 +8183,7 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  elseif style == 2 then
  r.ImGui_DrawList_AddCircleFilled(drawList,
  x + size / 2, y + size / 2,
- adjustedSize / 1.9,
+ (adjustedSize * 0.8) / 1.9,
  color)
  elseif style == 3 then
  local cx, cy = x + size / 2, y + size / 2
@@ -8122,17 +8234,18 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  color)
  end
  elseif style == 7 then
+ local s7_adj = adjustedSize * 0.85
  r.ImGui_DrawList_AddCircleFilled(drawList,
  x + size / 2, y + size / 2,
- adjustedSize / 2.5,
+ s7_adj / 2.5,
  color)
  r.ImGui_DrawList_AddCircle(drawList,
  x + size / 2, y + size / 2,
- adjustedSize / 2,
+ s7_adj / 2,
  color & 0xFFFFFF88, 32, 2.5)
  r.ImGui_DrawList_AddCircle(drawList,
  x + size / 2, y + size / 2,
- adjustedSize / 1.6,
+ s7_adj / 1.6,
  color & 0xFFFFFF44, 32, 2)
  elseif style == 8 then
  local cx, cy = x + size / 2, y + size / 2
@@ -8197,7 +8310,30 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local adjustedSize = size
  local thickness = (style == 1) and 2.5 or 2
  
- if style == 4 then
+ if style == 2 then
+ local loopSize = adjustedSize * 0.9
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ loopSize / 2.5,
+ color, 32, 2.5)
+ 
+ r.ImGui_DrawList_AddCircle(drawList,
+ x + size / 2, y + size / 2,
+ loopSize / 2,
+ color, 32, 2.5)
+ 
+ local arrowSize = loopSize / 5
+ local positions = {{-0.3, -0.3}, {0.3, 0.3}}
+ for _, pos in ipairs(positions) do
+ local ax = x + size / 2 + size * pos[1] * 0.9
+ local ay = y + size / 2 + size * pos[2] * 0.9
+ r.ImGui_DrawList_AddTriangleFilled(drawList,
+ ax, ay - arrowSize / 2,
+ ax - arrowSize / 2, ay + arrowSize / 2,
+ ax + arrowSize / 2, ay + arrowSize / 2,
+ color)
+ end
+ elseif style == 4 then
  local cx, cy = x + size / 2, y + size / 2
  local radius = size * 0.3
  
