@@ -2073,6 +2073,7 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/T
 
 
 updateScaleData()
-lowerScaleNoteAction(1)
+scaleNoteAction(10)
 reaper.defer(emptyFunctionToPreventAutomaticCreationOfUndoPoint)
+
 

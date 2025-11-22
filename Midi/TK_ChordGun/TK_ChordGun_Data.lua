@@ -1,0 +1,437 @@
+-- @noindex
+-- Data file for TK ChordGun and its helper scripts
+
+local Data = {}
+
+Data.notes = { 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B' }
+Data.flatNotes = { 'C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B' }
+
+Data.chords = {
+  {
+    name = 'major',
+    code = 'major',
+    display = '',
+    pattern = '10001001'
+  },
+  {
+    name = 'minor',
+    code = 'minor',
+    display = 'm',
+    pattern = '10010001'
+  },
+  {
+    name = 'power chord',
+    code = 'power',
+    display = '5',
+    pattern = '10000001'
+  },
+  {
+    name = 'suspended second',
+    code = 'sus2',
+    display = 'sus2',
+    pattern = '10100001'
+  },
+  {
+    name = 'suspended fourth',
+    code = 'sus4',
+    display = 'sus4',
+    pattern = '10000101'
+  },
+  {
+    name = 'diminished',
+    code = 'dim',
+    display = 'dim',
+    pattern = '1001001'
+  },  
+  {
+    name = 'augmented',
+    code = 'aug',
+    display = 'aug',
+    pattern = '100010001'
+  },
+  {
+    name = 'major sixth',
+    code = 'maj6',
+    display = '6',
+    pattern = '1000100101'
+  },
+  {
+    name = 'minor sixth',
+    code = 'min6',
+    display = 'm6',
+    pattern = '1001000101'
+  },
+  {
+    name = 'dominant seventh',
+    code = '7',
+    display = '7',
+    pattern = '10001001001'
+  },
+  {
+    name = 'major seventh',
+    code = 'maj7',
+    display = 'maj7',
+    pattern = '100010010001'
+  },
+  {
+    name = 'minor seventh',
+    code = 'min7',
+    display = 'm7',
+    pattern = '10010001001'
+  },
+  {
+    name = 'minor major seventh',
+    code = 'minMaj7',
+    display = 'm(maj7)',
+    pattern = '100100010001'
+  },
+  {
+    name = 'half-diminished seventh',
+    code = 'm7b5',
+    display = 'm7b5',
+    pattern = '10010010001'
+  },
+  {
+    name = 'diminished seventh',
+    code = 'dim7',
+    display = 'dim7',
+    pattern = '1001001001'
+  },
+  {
+    name = 'augmented major seventh',
+    code = 'augMaj7',
+    display = '+maj7',
+    pattern = '100010001001'
+  },
+  {
+    name = 'flat fifth',
+    code = 'flat5',
+    display = '5-',
+    pattern = '10000010'
+  },
+}
+
+local function parseReascaleFile(filePath)
+  local file = io.open(filePath, "r")
+  if not file then return nil end
+  
+  local importedScales = {}
+  
+  for line in file:lines() do
+    -- Check for Header (starts with 2)
+    local headerName = line:match('^%s*2%s+"(.-)"')
+    if headerName then
+      table.insert(importedScales, {
+        name = "--- " .. headerName .. " ---",
+        pattern = "000000000000", -- Empty pattern
+        isHeader = true,
+        description = "Category: " .. headerName
+      })
+    else
+      -- Match lines with ID, Name, and Pattern (allowing digits 0-9 in pattern)
+      local name, pattern = line:match('^%s*%d+%s+"(.-)"%s+([0-9]+)')
+      
+      if name and pattern and #pattern == 12 then
+        -- Convert any non-zero digit to '1' to ensure compatibility with ChordGun logic
+        pattern = pattern:gsub("[2-9]", "1")
+        
+        table.insert(importedScales, {
+          name = name,
+          pattern = pattern,
+          isCustom = true,
+          description = "Imported from .reascale file"
+        })
+      end
+    end
+  end
+  
+  file:close()
+  return importedScales
+end
+
+local function loadUserReascales(systemTable)
+  -- Gebruik absoluut pad via ResourcePath, net als bij Presets
+  local reascaleDir = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun/Reascales"
+  
+  -- Zorg voor correcte slashes op Windows
+  if reaper.GetOS():match("Win") then
+    reascaleDir = reascaleDir:gsub("/", "\\")
+  end
+  
+  -- Maak map aan
+  reaper.RecursiveCreateDirectory(reascaleDir, 0)
+  
+  local i = 0
+  while true do
+    local file = reaper.EnumerateFiles(reascaleDir, i)
+    if not file then break end
+    
+    if file:match("%.reascale$") then
+      local fullPath = reascaleDir .. "/" .. file
+      -- Fix path separator voor parse functie
+      if reaper.GetOS():match("Win") then fullPath = reascaleDir .. "\\" .. file end
+      
+      local userScales = parseReascaleFile(fullPath)
+      
+      if userScales and #userScales > 0 then
+        local systemName = file:gsub("%.reascale$", "") .. " (User)"
+        table.insert(systemTable, {
+          name = systemName,
+          scales = userScales
+        })
+      end
+    end
+    i = i + 1
+  end
+end
+
+Data.scaleSystems = {
+  {
+    name = "Diatonic",
+    scales = {
+      { name = "Major", pattern = "101011010101", 
+        description = "Heptatonic (7 notes) - Bright, happy sound\nMost common scale in Western music" },
+      { name = "Natural Minor", pattern = "101101011010",
+        description = "Heptatonic (7 notes) - Dark, sad sound\nRelative minor of Major scale" },
+      { name = "Ionian", pattern = "101011010101",
+        description = "Heptatonic (7 notes) - Same as Major\n1st mode of major scale" },
+      { name = "Aeolian", pattern = "101101011010",
+        description = "Heptatonic (7 notes) - Same as Natural Minor\n6th mode of major scale" },
+      { name = "Dorian", pattern = "101101010110",
+        description = "Heptatonic (7 notes) - Jazzy, sophisticated\n2nd mode - minor with raised 6th" },
+      { name = "Mixolydian", pattern = "101011010110",
+        description = "Heptatonic (7 notes) - Bluesy, rock\n5th mode - major with flat 7th" },
+      { name = "Phrygian", pattern = "110101011010",
+        description = "Heptatonic (7 notes) - Spanish, flamenco\n3rd mode - minor with flat 2nd" },
+      { name = "Lydian", pattern = "101010110101",
+        description = "Heptatonic (7 notes) - Dreamy, floating\n4th mode - major with sharp 4th" },
+      { name = "Locrian", pattern = "110101101010",
+        description = "Heptatonic (7 notes) - Unstable, dissonant\n7th mode - diminished quality" }
+    }
+  },
+  {
+    name = "Harmonic Minor Modes",
+    scales = {
+      { name = "Harmonic Minor", pattern = "101101011001",
+        description = "Mode 1: Aeolian #7\nDark, exotic, classical/metal\n1 2 b3 4 5 b6 7" },
+      { name = "Locrian #6", pattern = "110101100101",
+        description = "Mode 2: Locrian natural 6\nDark, diminished quality\n1 b2 b3 4 b5 6 b7" },
+      { name = "Ionian #5", pattern = "101011001011",
+        description = "Mode 3: Ionian Augmented\nDreamy, unsettled major\n1 2 3 4 #5 6 7" },
+      { name = "Dorian #4", pattern = "101100110101",
+        description = "Mode 4: Dorian #11\nBluesy minor with sharp 4\n1 2 b3 #4 5 6 b7" },
+      { name = "Phrygian Dominant", pattern = "110011011010",
+        description = "Mode 5: Phrygian Major\nSpanish, Flamenco, Metal\n1 b2 3 4 5 b6 b7" },
+      { name = "Lydian #2", pattern = "100110110101",
+        description = "Mode 6: Lydian sharp 2\nBright, angular, modern\n1 #2 3 #4 5 6 7" },
+      { name = "Super Locrian bb7", pattern = "110101011001",
+        description = "Mode 7: Altered bb7 / Ultralocrian\nDiminished, very dissonant\n1 b2 b3 b4 b5 b6 bb7" }
+    }
+  },
+  {
+    name = "Melodic Minor Modes",
+    scales = {
+      { name = "Melodic Minor", pattern = "101101010101",
+        description = "Mode 1: Jazz Minor / Ionian b3\nAscending Melodic Minor\n1 2 b3 4 5 6 7" },
+      { name = "Dorian b2", pattern = "110101010101",
+        description = "Mode 2: Phrygian #6\nDark minor with natural 6\n1 b2 b3 4 5 6 b7" },
+      { name = "Lydian Augmented", pattern = "101010101101",
+        description = "Mode 3: Lydian #5\nDreamy, whole-tone feel\n1 2 3 #4 #5 6 7" },
+      { name = "Lydian Dominant", pattern = "101010110101",
+        description = "Mode 4: Lydian b7 / Overtone\nAcoustic scale, bright dominant\n1 2 3 #4 5 6 b7" },
+      { name = "Mixolydian b6", pattern = "101011011010",
+        description = "Mode 5: Hindu / Aeolian Dominant\nMelodic major/minor hybrid\n1 2 3 4 5 b6 b7" },
+      { name = "Locrian #2", pattern = "101101101010",
+        description = "Mode 6: Aeolian b5 / Half-Diminished\nDark, jazzy minor\n1 2 b3 4 b5 b6 b7" },
+      { name = "Super Locrian", pattern = "110110101010",
+        description = "Mode 7: Altered Scale\nDominant altered tensions\n1 b2 b3 b4 b5 b6 b7" }
+    }
+  },
+  {
+    name = "Pentatonic",
+    scales = {
+      { name = "Major Pentatonic", pattern = "101010010100",
+        description = "Pentatonic (5 notes) - Bright, happy\nC-D-E-G-A | Universal in folk music" },
+      { name = "Minor Pentatonic", pattern = "100101010010",
+        description = "Pentatonic (5 notes) - Rock/blues basis\nC-Eb-F-G-Bb | Most common in rock" },
+      { name = "Blues Scale", pattern = "100101110010",
+        description = "Hexatonic (6 notes) - Blues/rock\nC-Eb-F-F#-G-Bb | Minor pentatonic + blue note" },
+      { name = "Egyptian/Suspended", pattern = "101001010010",
+        description = "Pentatonic (5 notes) - Mysterious, suspended\nC-D-F-G-Bb | Ancient Egyptian music" },
+      { name = "Japanese (In Sen)", pattern = "110001010010",
+        description = "Pentatonic (5 notes) - Traditional Japanese\nC-Db-F-G-Bb | Meditative, contemplative" },
+      { name = "Hirajoshi", pattern = "101100010010",
+        description = "Pentatonic (5 notes) - Japanese, serene\nC-D-Eb-G-Ab | Tranquil, peaceful" }
+    }
+  },
+  {
+    name = "Messiaen",
+    scales = {
+
+      { name = "Mode 1.1", pattern = "101010101010", isCustom = true, intervals = "2-2-2-2-2-2",
+        description = "Hexatonic (6 notes) - Whole Tone Scale\n1st transposition | Dreamy, floating\nDebussy's favorite" },
+      { name = "Mode 1.2", pattern = "010101010101", isCustom = true, intervals = "2-2-2-2-2-2",
+        description = "Hexatonic (6 notes) - Whole Tone Scale\n2nd transposition | The 'other' whole tone set\nCompletes the chromatic coverage" },
+      
+
+      { name = "Mode 2.1", pattern = "110110110110", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
+        description = "Octatonic (8 notes) - Half-Whole Diminished\n1st transposition (Starts on C)\nJazz/classical favorite" },
+      { name = "Mode 2.2", pattern = "011011011011", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
+        description = "Octatonic (8 notes) - Half-Whole Diminished\n2nd transposition (Starts on C#)\nShifted up 1 semitone" },
+      { name = "Mode 2.3", pattern = "101101101101", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
+        description = "Octatonic (8 notes) - Half-Whole Diminished\n3rd transposition (Starts on D)\nShifted up 2 semitones" },
+      
+
+      { name = "Mode 3.1", pattern = "101110111011", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n1st transposition | Repeating 2-1-1 pattern\nVery colorful" },
+      { name = "Mode 3.2", pattern = "110111011101", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n2nd transposition | Shifted up 1 semitone\nUsed in 'Quartet for the End of Time'" },
+      { name = "Mode 3.3", pattern = "111011101110", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n3rd transposition | Shifted up 2 semitones\nHighly symmetrical" },
+      { name = "Mode 3.4", pattern = "011101110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
+        description = "Nonatonic (9 notes) - Dense, chromatic\n4th transposition | Shifted up 3 semitones\nRich harmonic palette" },
+      
+
+      { name = "Mode 4.1", pattern = "111001111001", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\nRepeating 1-1-3-1 pattern | 1st transposition\nUsed for mysterious, otherworldly sounds" },
+      { name = "Mode 4.2", pattern = "111100111100", isCustom = true, intervals = "1-3-1-1-1-3-1-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n2nd transposition | Alternating small/large gaps\nPopular in film scores" },
+      { name = "Mode 4.3", pattern = "011110011110", isCustom = true, intervals = "3-1-1-1-3-1-1-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n3rd transposition | Creates tension and release\nContains augmented and minor triads" },
+      { name = "Mode 4.4", pattern = "001111001111", isCustom = true, intervals = "1-1-1-3-1-1-1-3",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n4th transposition | Clusters and wide leaps\nUseful for dramatic moments" },
+      { name = "Mode 4.5", pattern = "100111100111", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n5th transposition | Repeating pattern\nSymmetrical structure" },
+      { name = "Mode 4.6", pattern = "110011110011", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
+        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n6th and final transposition of Mode 4\nComplete the symmetrical cycle" },
+      
+
+      { name = "Mode 5.1", pattern = "110001110001", isCustom = true, intervals = "1-4-1-1-4-1",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\nRepeating 1-4-1 pattern | 1st transposition\nOpen, spacious sound with dramatic leaps" },
+      { name = "Mode 5.2", pattern = "111000111000", isCustom = true, intervals = "4-1-1-4-1-1",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n2nd transposition | Major 3rd leaps\nUsed for ethereal, floating textures" },
+      { name = "Mode 5.3", pattern = "011100011100", isCustom = true, intervals = "1-1-4-1-1-4",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n3rd transposition | Alternating gaps\nCreates sense of space and distance" },
+      { name = "Mode 5.4", pattern = "001110001110", isCustom = true, intervals = "1-4-1-1-4-1",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n4th transposition | Pentatonic-like\nUseful for minimalist compositions" },
+      { name = "Mode 5.5", pattern = "000111000111", isCustom = true, intervals = "4-1-1-4-1-1",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n5th transposition | Symmetrical gaps\nCreates mysterious atmosphere" },
+      { name = "Mode 5.6", pattern = "100011100011", isCustom = true, intervals = "1-1-4-1-1-4",
+        description = "Hexatonic (6 notes) - Wide intervals, sparse\n6th and final transposition of Mode 5\nCompletes the hexatonic cycle" },
+      
+
+      { name = "Mode 6.1", pattern = "101011101011", isCustom = true, intervals = "2-2-1-1-2-2-1-1",
+        description = "Octatonic (8 notes) - Balanced, versatile\nRepeating 2-2-1-1 pattern | 1st transposition\nBlends whole tone and chromatic elements" },
+      { name = "Mode 6.2", pattern = "110101110101", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
+        description = "Octatonic (8 notes) - Balanced, versatile\n2nd transposition | Smooth motion\nUseful for melodic lines" },
+      { name = "Mode 6.3", pattern = "111010111010", isCustom = true, intervals = "1-1-2-2-1-1-2-2",
+        description = "Octatonic (8 notes) - Balanced, versatile\n3rd transposition | Paired intervals\nCreates interesting harmonic progressions" },
+      { name = "Mode 6.4", pattern = "011101011101", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
+        description = "Octatonic (8 notes) - Balanced, versatile\n4th transposition | Alternating pairs\nGood for both melody and harmony" },
+      { name = "Mode 6.5", pattern = "101110101110", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
+        description = "Octatonic (8 notes) - Balanced, versatile\n5th transposition | Symmetrical structure\nUsed in Messiaen's piano works" },
+      { name = "Mode 6.6", pattern = "010111010111", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
+        description = "Octatonic (8 notes) - Balanced, versatile\n6th and final transposition of Mode 6\nCompletes the octave division" },
+      
+
+      { name = "Mode 7.1", pattern = "111101111101", isCustom = true, intervals = "1-1-1-2-1-1-1-1-2-1",
+        description = "Decatonic (10 notes) - Most chromatic\nRepeating 1-1-1-2-1 pattern | 1st transposition\nAlmost all 12 chromatic notes - highly dissonant" },
+      { name = "Mode 7.2", pattern = "111011111011", isCustom = true, intervals = "1-1-2-1-1-1-1-2-1-1",
+        description = "Decatonic (10 notes) - Most chromatic\n2nd transposition | Dense clusters\nUsed for intense, dramatic moments" },
+      { name = "Mode 7.3", pattern = "110111110111", isCustom = true, intervals = "1-2-1-1-1-1-2-1-1-1",
+        description = "Decatonic (10 notes) - Most chromatic\n3rd transposition | Maximum color\nMessiaen's most complex mode" },
+      { name = "Mode 7.4", pattern = "101111101111", isCustom = true, intervals = "2-1-1-1-1-2-1-1-1-1",
+        description = "Decatonic (10 notes) - Most chromatic\n4th transposition | Chromatic saturation\nUseful for avant-garde compositions" },
+      { name = "Mode 7.5", pattern = "111110111110", isCustom = true, intervals = "1-1-1-1-2-1-1-1-2-1",
+        description = "Decatonic (10 notes) - Most chromatic\n5th transposition | Dense harmony\nContains nearly every possible chord type" },
+      { name = "Mode 7.6", pattern = "111011110111", isCustom = true, intervals = "1-1-2-1-1-1-2-1-1-1",
+        description = "Decatonic (10 notes) - Most chromatic\n6th and final transposition of Mode 7\nCompletes Messiaen's modal system" }
+    }
+  },
+  {
+    name = "Jazz",
+    scales = {
+      { name = "Bebop Dominant", pattern = "10101101010110", isCustom = true, intervals = "2-2-1-2-2-1-1-1",
+        description = "Octatonic (8 notes) - Classic bebop sound\nMixolydian + major 7th passing tone\nPerfect for dominant 7th chord lines" },
+      { name = "Bebop Major", pattern = "10110101010110", isCustom = true, intervals = "2-2-1-2-1-1-2-1",
+        description = "Octatonic (8 notes) - Major with chromatic\nMajor scale + #5 passing tone\nSmooth bebop melodies over major chords" },
+      { name = "Bebop Minor", pattern = "10110101011010", isCustom = true, intervals = "2-1-2-2-1-1-2-1",
+        description = "Octatonic (8 notes) - Minor with chromatic\nDorian + major 3rd passing tone\nUsed extensively in bebop improvisation" },
+      { name = "Bebop Dorian", pattern = "10110101101010", isCustom = true, intervals = "2-1-2-2-2-1-1-2",
+        description = "Octatonic (8 notes) - Dorian with passing tone\nDorian + major 3rd chromatic\nMiles Davis and John Coltrane favorite" },
+      { name = "Harmonic Major", pattern = "101011011001", isCustom = true, intervals = "2-2-1-2-1-3-1",
+        description = "Heptatonic (7 notes) - Major with b6\nMajor scale with flattened 6th\nExotic sound, used in jazz and metal" }
+    }
+  },
+  {
+    name = "World Music",
+    scales = {
+      { name = "Hijaz", pattern = "11001101010", isCustom = true, intervals = "1-3-1-2-1-2-2",
+        description = "Heptatonic (7 notes) - Arabic Maqam\nDramatic augmented 2nd interval | Middle Eastern flavor\nUsed in Arabic, Turkish, Greek, and Klezmer music" },
+      { name = "Hungarian Minor", pattern = "10110011010", isCustom = true, intervals = "2-1-3-1-1-3-1",
+        description = "Heptatonic (7 notes) - Gypsy/Hungarian\nMinor with raised 4th | Dramatic augmented intervals\nLiszt, Brahms, and Eastern European folk" },
+      { name = "Double Harmonic", pattern = "11001100110", isCustom = true, intervals = "1-3-1-2-1-3-1",
+        description = "Heptatonic (7 notes) - Byzantine/Arabic\nTwo augmented 2nds | Extremely exotic\nMiddle Eastern, Indian classical, and progressive metal" },
+      { name = "Japanese Hirajoshi", pattern = "100101000101", isCustom = true, intervals = "2-1-4-1-4",
+        description = "Pentatonic (5 notes) - Traditional Japanese\nSpacious, contemplative | Ancient court music\nUsed in koto, shakuhachi, and ambient music" },
+      { name = "Japanese In Sen", pattern = "110010000110", isCustom = true, intervals = "1-4-2-1-4",
+        description = "Pentatonic (5 notes) - Japanese Shakuhachi\nMinor pentatonic variant | Melancholic\nTraditional Zen Buddhist meditation music" },
+      { name = "Japanese Iwato", pattern = "110001001001", isCustom = true, intervals = "1-4-1-4-2",
+        description = "Pentatonic (5 notes) - Traditional Japanese\nDark, mysterious | Ancient court music\nUsed for dramatic and suspenseful scenes" },
+      { name = "Bhairav (Raga)", pattern = "11001101001", isCustom = true, intervals = "1-3-1-2-1-3-2",
+        description = "Heptatonic (7 notes) - North Indian Raga\nDawn raga | Peaceful yet serious mood\nClassical Indian music, meditative and devotional" },
+      { name = "Kafi (Raga)", pattern = "10101011010", isCustom = true, intervals = "2-2-1-2-2-1-2",
+        description = "Heptatonic (7 notes) - North Indian Raga\nDorian-like | Romantic, longing emotion\nPopular in folk and light classical music" },
+      { name = "Spanish 8-Tone", pattern = "11010110110", isCustom = true, intervals = "1-2-1-1-2-1-2-2",
+        description = "Octatonic (8 notes) - Flamenco composite\nCombines Phrygian and altered tones\nModern flamenco and fusion guitar" },
+      { name = "Persian", pattern = "11001100110", isCustom = true, intervals = "1-3-1-2-1-3-1",
+        description = "Heptatonic (7 notes) - Persian/Iranian\nSimilar to Double Harmonic | Rich ornaments\nTraditional Persian classical and Sufi music" },
+      { name = "Enigmatic", pattern = "11001011001", isCustom = true, intervals = "1-3-2-2-2-1-1",
+        description = "Heptatonic (7 notes) - Verdi's scale\nMysterious, unusual intervals | Experimental\nRare scale used by Giuseppe Verdi" }
+    }
+  },
+  {
+    name = "Blues & Soul",
+    scales = {
+      { name = "Blues Scale", pattern = "100110010010", isCustom = true, intervals = "3-2-1-1-3-2",
+        description = "Hexatonic (6 notes) - Classic blues sound\nMinor pentatonic + blue note (b5)\nFoundation of blues, rock, and jazz" },
+      { name = "Blues Major", pattern = "101101010010", isCustom = true, intervals = "2-1-1-2-2-2-2",
+        description = "Heptatonic (7 notes) - Major blues flavor\nMajor pentatonic + blue notes\nCountry, blues-rock, and Southern rock" },
+      { name = "Blues Minor", pattern = "100110110010", isCustom = true, intervals = "3-2-1-1-2-3",
+        description = "Hexatonic (6 notes) - Minor blues variant\nMinor pentatonic + major 3rd\nChicago blues and blues-rock" },
+      { name = "Mixo-Blues", pattern = "10110101011010", isCustom = true, intervals = "2-2-1-2-1-1-2-1",
+        description = "Octatonic (8 notes) - Jazz-blues hybrid\nMixolydian + blue notes (#9, #11)\nJazz-blues, funk, and fusion" },
+      { name = "Gospel Minor", pattern = "100111010010", isCustom = true, intervals = "3-2-1-2-2-2",
+        description = "Hexatonic (6 notes) - Soulful, churchy\nMinor with raised 6th | Emotional\nGospel, R&B, and soul music" },
+      { name = "Gospel Major", pattern = "101010110010", isCustom = true, intervals = "2-2-2-1-1-2-2",
+        description = "Heptatonic (7 notes) - Uplifting, joyful\nMajor with chromatic passing tones\nGospel choir, worship music" },
+      { name = "Dominant Blues", pattern = "10101101010010", isCustom = true, intervals = "2-2-1-2-2-1-2-2",
+        description = "Octatonic (8 notes) - Dominant 7th blues\nMixolydian + blue note\nTexas blues, rockabilly, and swing" },
+      { name = "Soul", pattern = "10110101010010", isCustom = true, intervals = "2-1-2-2-2-2-1-2",
+        description = "Octatonic (8 notes) - Smooth R&B sound\nMajor + chromatic approach notes\nMotown, 70s soul, neo-soul" }
+    }
+  },
+  {
+    name = "Rock & Metal",
+    scales = {
+      { name = "Neapolitan Minor", pattern = "11010100110", isCustom = true, intervals = "1-2-2-2-1-3-1",
+        description = "Heptatonic (7 notes) - Dark, exotic minor\nMinor with flattened 2nd | Dramatic\nSymphonic metal, film scores" },
+      { name = "Neapolitan Major", pattern = "11010110010", isCustom = true, intervals = "1-2-2-2-2-2-1",
+        description = "Heptatonic (7 notes) - Bright yet exotic\nMajor with flattened 2nd | Unusual\nProgressive rock/metal, experimental" },
+      { name = "Hungarian Major", pattern = "10011011010", isCustom = true, intervals = "3-1-2-1-2-1-2",
+        description = "Heptatonic (7 notes) - Exotic major sound\nLydian with flat 6 and 7 | Augmented 2nd\nGypsy-flavored rock, folk metal" }
+    }
+  }
+}
+
+-- Load user custom scales from .reascale files
+loadUserReascales(Data.scaleSystems)
+
+Data.scales = {}
+for _, system in ipairs(Data.scaleSystems) do
+  for _, scale in ipairs(system.scales) do
+    table.insert(Data.scales, scale)
+  end
+end
+
+return Data

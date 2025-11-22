@@ -3,21 +3,21 @@
 -- @noindex
 
 -- Check if already running - prevent multiple instances
-local isRunning = reaper.GetExtState("TKChordGunHelp", "running")
+local isRunning = reaper.GetExtState("TK_ChordGun_Help", "running")
 if isRunning == "1" then
 	return  -- Exit silently if already open
 end
 
 -- Mark as running
-reaper.SetExtState("TKChordGunHelp", "running", "1", false)
+reaper.SetExtState("TK_ChordGun_Help", "running", "1", false)
 
 -- Cleanup on exit
 local function cleanup()
 	local dockState, posX, posY = gfx.dock(-1, 0, 0, 0, 0)
-	reaper.SetExtState("TKChordGunHelp", "windowX", tostring(posX), true)
-	reaper.SetExtState("TKChordGunHelp", "windowY", tostring(posY), true)
-	reaper.SetExtState("TKChordGunHelp", "closed", "1", false)  -- Signal main script
-	reaper.SetExtState("TKChordGunHelp", "running", "0", false)  -- Mark as not running
+	reaper.SetExtState("TK_ChordGun_Help", "windowX", tostring(posX), true)
+	reaper.SetExtState("TK_ChordGun_Help", "windowY", tostring(posY), true)
+	reaper.SetExtState("TK_ChordGun_Help", "closed", "1", false)  -- Signal main script
+	reaper.SetExtState("TK_ChordGun_Help", "running", "0", false)  -- Mark as not running
 end
 reaper.atexit(cleanup)
 
@@ -32,7 +32,7 @@ local maxScroll = 0
 local helpContent = {
 	-- Tab 1: Getting Started
 	{
-		"CHORDGUN (TK MOD) v2.1.6",
+		"CHORDGUN (TK MOD) v2.2.0",
 		"Quick Start Guide",
 		"",
 		"=== WHAT IS CHORDGUN? ===",
@@ -41,8 +41,9 @@ local helpContent = {
 		"• 88 scales from 9 music systems (Diatonic, Jazz, World, etc.)",
 		"• Scale-aware chord suggestions with Roman numeral notation",
 		"• Real-time chord recognition (including Power Chords/C5)",
-		"• Interactive Circle of Fifths with Chromatic View",
+		"• Interactive Circle of Fifths with Chromatic, Score & Guitar Views",
 		"• Melody Generator for instant musical ideas",
+		"• Arpeggiator for rhythmic chord patterns",
 		"• Chord progression builder with playback",
 		"",
 		"=== BASIC WORKFLOW ===",
@@ -61,11 +62,12 @@ local helpContent = {
 		"=== MAIN CONTROLS ===",
 		"• HOLD: Keep notes playing after mouse release",
 		"• KILL: Stop all playing notes immediately", 
-		"• STRUM: Arpeggiate notes with adjustable delay",
+		"• STRUM: Strum notes with adjustable delay",
+		"• ARP: Arpeggiate notes (Up, Down, Random, etc.)",
 		"• MELODY: Generate random melodies based on scale",
 		"• VOICING: Select Drop 2, Drop 3, or Bass -1/-2 (Menu)",
 		"• Note Length: Set inserted note duration (1/4, 1/8, etc.)",
-		"• Circle button: Open interactive Circle of Fifths",
+		"• Circle button: Open Circle of Fifths / Score / Guitar views",
 		"• DOCK/UNDOCK: Attach window to REAPER docker",
 		"• Font: Toggle monospace font / Right-click for size",
 		"• Ratio: Toggle fixed aspect ratio / Right-click for size",
@@ -637,12 +639,19 @@ local helpContent = {
 		"",
 		"• KILL button:",
 		"  Immediately stop all playing notes",
-		"  Also triggered by: 0 key, Middle mouse, Right-click chord",
+		"  Also triggered by: SPACE, Middle mouse, Right-click chord",
 		"",
 		"• STRUM button:",
-		"  - Click: Toggle strum/arpeggio mode",
+		"  - Click: Toggle strum mode",
 		"  - Ctrl+Click: Adjust strum delay (10-500ms)",
 		"  Creates guitar-like strummed effect",
+		"",
+		"• ARP button:",
+		"  - Click: Toggle Arpeggiator mode",
+		"  - Right-Click: Select Pattern (Up, Down, Up/Down, Random, Down/Up)",
+		"  - Ctrl+Click: Set Speed (Milliseconds or Grid: 1/4, 1/8, etc.)",
+		"  Plays chord notes in sequence instead of simultaneously",
+		"  Works with Preview, Shift+Click Insert, and Progression Playback",
 		"",
 		"• MELODY button:",
 		"  - Click: Generate a random melody in current scale",
@@ -767,17 +776,17 @@ local helpContent = {
 		"• Visual feedback on piano keyboard (arrows)",
 		"",
 		"=== KEYBOARD SHORTCUTS - SCALE NOTES ===",
-		"Three rows for three octaves:",
+		"Three rows for three octaves (10 keys per row):",
 		"",
 		"Preview (lowercase):",
-		"• q w e r t y u i o: Scale notes (octave +1)",
-		"• a s d f g h j k l: Scale notes (current octave)",
-		"• z x c v b n m , .: Scale notes (octave -1)",
+		"• q w e r t y u i o p: Scale notes (octave +1)",
+		"• a s d f g h j k l ;: Scale notes (current octave)",
+		"• z x c v b n m , . /: Scale notes (octave -1)",
 		"",
 		"Insert (uppercase/shift):",
-		"• Q W E R T Y U I O: Insert notes (octave +1)",
-		"• A S D F G H J K L: Insert notes (current octave)",
-		"• Z X C V B N M < >: Insert notes (octave -1)",
+		"• Q W E R T Y U I O P: Insert notes (octave +1)",
+		"• A S D F G H J K L :: Insert notes (current octave)",
+		"• Z X C V B N M < > ?: Insert notes (octave -1)",
 		"",
 		"Adaptive System:",
 		"• Works with all scale sizes (5-10 notes)",
@@ -786,17 +795,17 @@ local helpContent = {
 		"• Unused keys inactive for current scale",
 		"",
 		"=== KEYBOARD SHORTCUTS - CHORDS ===",
-		"Number row for chord buttons:",
+		"Number row for chord buttons (10 keys):",
 		"",
 		"Preview:",
-		"• 1 2 3 4 5 6 7 8 9: Preview chord I-ix",
+		"• 1 2 3 4 5 6 7 8 9 0: Preview chord I-x",
 		"",
 		"Insert:",
-		"• ! @ # $ % ^ & * (: Insert chord I-ix",
+		"• ! @ # $ % ^ & * ( ): Insert chord I-x",
 		"  (Shift + number keys)",
 		"",
 		"=== OTHER SHORTCUTS ===",
-		"• 0 / Middle Mouse: Stop all notes (same as KILL)",
+		"• SPACE / Middle Mouse: Stop all notes (same as KILL)",
 		"• ESC: Close ChordGun window",
 		"• Left/Right Arrow: Move edit cursor by grid",
 		"• Alt + ,/.: Halve/double grid size",
@@ -823,11 +832,20 @@ local helpContent = {
 		"   - Best for functional harmony and key relationships",
 		"   - Diatonic scales appear as contiguous blocks",
 		"",
-		"2. Chromatic View (New in v2.1):",
+		"2. Chromatic View:",
 		"   - Notes arranged chromatically (C-C#-D-D#...)",
 		"   - Best for visualizing scale symmetry and geometry",
 		"   - Shows 'Equivalent Tonics' with Gold Halos",
-		"   - Perfect for Messiaen modes and symmetrical scales",
+		"",
+		"3. Score View (New in v2.2):",
+		"   - Standard musical staff notation",
+		"   - Shows notes of the selected scale on treble clef",
+		"   - Great for sight-reading and theory reference",
+		"",
+		"4. Guitar View (New in v2.2):",
+		"   - Fretboard visualization (Standard Tuning EADGBE)",
+		"   - Shows scale notes across the neck",
+		"   - Helps guitarists visualize scale patterns",
 		"",
 		"Equivalent Tonics (Gold Halos):",
 		"• In Chromatic View, gold rings appear around notes",
@@ -874,6 +892,10 @@ local helpContent = {
 		"  Click to cycle UI scale for different monitor sizes",
 		"  Settings persist across sessions",
 		"",
+		"• Theme Support:",
+		"  - Automatically detects Light/Dark theme settings",
+		"  - Optimized contrast for all views (Score, Guitar, etc.)",
+		"",
 		"• DOCK/UNDOCK button:",
 		"  Toggle docker integration",
 		"  Docked mode saves screen space",
@@ -896,7 +918,7 @@ local helpContent = {
 	{
 		"ABOUT CHORDGUN (TK MOD)",
 		"",
-		"VERSION: 2.1.3",
+		"VERSION: 2.2.0",
 		"RELEASE: November 2025",
 		"",
 		"=== CREDITS ===",
@@ -908,7 +930,7 @@ local helpContent = {
 		"TK Modifications by: TouristKiller",
 		"• Scale filter/remap system with JSFX integration",
 		"• Real-time chord recognition engine",
-		"• Circle of Fifths visualization",
+		"• Circle of Fifths visualization (4 Views)",
 		"• Expanded scale library (8 → 88 scales)",
 		"• Two-level scale organization system",
 		"• Educational tooltips with music theory",
@@ -916,6 +938,35 @@ local helpContent = {
 		"• All 32 Messiaen modes with transpositions",
 		"• Enhanced UI with adaptive window sizing",
 		"• Chord progression builder improvements",
+		"• Arpeggiator and Melody Generator",
+		"",
+		"=== VERSION 2.2.0 HIGHLIGHTS ===",
+		"",
+		"New Features:",
+		"• Automatic Voice Leading (Lead):",
+		"  - Automatically chooses inversions for smooth transitions",
+		"  - Minimizes finger movement between chords",
+		"  - Toggle 'Lead' button to enable/disable",
+		"",
+		"• Expanded Keyboard Shortcuts:",
+		"  - Now supports 10 keys per row (was 9)",
+		"  - Added Spacebar to stop all notes",
+		"",
+		"• Arpeggiator (Arp):",
+		"  - Patterns: Up, Down, Up/Down, Random, Down/Up",
+		"  - Speed: Milliseconds or Grid Sync (1/4, 1/8, etc.)",
+		"  - Works with Insert and Progression playback",
+		"",
+		"• New Visual Views:",
+		"  - Score View: Staff notation for selected scale",
+		"  - Guitar View: Fretboard visualization",
+		"  - Accessible via Circle of Fifths window",
+		"",
+		"• Improvements:",
+		"  - Added missing 7th chords",
+		"  - Light Theme support",
+		"  - Improved Dark Theme visibility",
+		"  - General layout refinements",
 		"",
 		"=== VERSION 2.1.0 HIGHLIGHTS ===",
 		"",
@@ -1020,8 +1071,8 @@ local fontSize = 14
 local mouseWasDown = false
 
 -- Get saved window position
-local savedX = tonumber(reaper.GetExtState("TKChordGunHelp", "windowX")) or -1
-local savedY = tonumber(reaper.GetExtState("TKChordGunHelp", "windowY")) or -1
+local savedX = tonumber(reaper.GetExtState("TK_ChordGun_Help", "windowX")) or -1
+local savedY = tonumber(reaper.GetExtState("TK_ChordGun_Help", "windowY")) or -1
 
 -- Initialize window with saved position
 gfx.init("ChordGun Help", windowWidth, windowHeight, 0, savedX, savedY)

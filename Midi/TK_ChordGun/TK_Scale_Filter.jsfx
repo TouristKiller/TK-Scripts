@@ -1,6 +1,6 @@
 desc:TK Scale Filter (ChordGun)
 // Mode 0: Off | Mode 1: Filter (blocks notes outside scale) | Mode 2: Remap (white keys to scale)
-options:gmem=TKChordGunFilter
+options:gmem=TK_ChordGun_Filter
 
 @init
 // Allocate memory for arrays

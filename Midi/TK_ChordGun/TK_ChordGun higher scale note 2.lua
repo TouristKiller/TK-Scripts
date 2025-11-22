@@ -1,85 +1,9 @@
 -- @noindex
 
-chords = {
-  {
-    name = 'major',
-    code = 'major',
-    display = '',
-    pattern = '10001001'
-  },
-  {
-    name = 'minor',
-    code = 'minor',
-    display = 'm',
-    pattern = '10010001'
-  },
-  {
-    name = 'power chord',
-    code = 'power',
-    display = '5',
-    pattern = '10000001'
-  },
-  {
-    name = 'suspended second',
-    code = 'sus2',
-    display = 'sus2',
-    pattern = '10100001'
-  },
-  {
-    name = 'suspended fourth',
-    code = 'sus4',
-    display = 'sus4',
-    pattern = '10000101'
-  },
-  {
-    name = 'diminished',
-    code = 'dim',
-    display = 'dim',
-    pattern = '1001001'
-  },  
-  {
-    name = 'augmented',
-    code = 'aug',
-    display = 'aug',
-    pattern = '100010001'
-  },
-  {
-    name = 'major sixth',
-    code = 'maj6',
-    display = '6',
-    pattern = '1000100101'
-  },
-  {
-    name = 'minor sixth',
-    code = 'min6',
-    display = 'm6',
-    pattern = '1001000101'
-  },
-  {
-    name = 'dominant seventh',
-    code = '7',
-    display = '7',
-    pattern = '10001001001'
-  },
-  {
-    name = 'major seventh',
-    code = 'maj7',
-    display = 'maj7',
-    pattern = '100010010001'
-  },
-  {
-    name = 'minor seventh',
-    code = 'min7',
-    display = 'm7',
-    pattern = '10010001001'
-  },
-  {
-    name = 'flat fifth',
-    code = 'flat5',
-    display = '5-',
-    pattern = '10000010'
-  },
-}
+package.path = debug.getinfo(1,"S").source:match[[^@?(.*[\/])[^\/]-$]] .."?.lua;".. package.path
+local Data = require("TK_ChordGun_Data")
+
+chords = Data.chords
 
 function mouseIsHoveringOver(element)
 
@@ -171,7 +95,7 @@ function emptyFunctionToPreventAutomaticCreationOfUndoPoint()
 end
 
 
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 defaultScaleTonicNoteValue = 1
 defaultScaleTypeValue = 1
@@ -211,10 +135,10 @@ function defaultInterfaceYPosition()
   local screenHeight = getScreenHeight()
   return screenHeight/2 - interfaceHeight/2
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local activeProjectIndex = 0
-local sectionName = "com.pandabot.ChordGun"
+local sectionName = "com.touristkiller.TK_ChordGun"
 
 local scaleTonicNoteKey = "scaleTonicNote"
 local scaleTypeKey = "scaleType"
@@ -546,7 +470,7 @@ end
 function Timer:timeHasNotElapsed()
 	return not self:timeHasElapsed()
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 mouseButtonIsNotPressedDown = true
 
@@ -557,24 +481,11 @@ scaleType = getScaleType()
 
 guiShouldBeUpdated = false
 
-scales = {
-  { name = "Major", pattern = "101011010101" },
-  { name = "Natural Minor", pattern = "101101011010" },
-  { name = "Harmonic Minor", pattern = "101101011001" },
-  { name = "Melodic Minor", pattern = "101101010101" },
-  { name = "Pentatonic", pattern = "101010010100" },
-  { name = "Ionian", pattern = "101011010101" },
-  { name = "Aeolian", pattern = "101101011010" },
-  { name = "Dorian", pattern = "101101010110" },
-  { name = "Mixolydian", pattern = "101011010110" },
-  { name = "Phrygian", pattern = "110101011010" },
-  { name = "Lydian", pattern = "101010110101" },
-  { name = "Locrian", pattern = "110101101010" }
-}
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+scales = Data.scales
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
-notes = { 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B' };
-flatNotes = { 'C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B' };
+notes = Data.notes;
+flatnotes = Data.notes;
 
 function getScalePattern(scaleTonicNote, scale)
 
@@ -731,7 +642,7 @@ function chordIsInModalMixtureScale(rootNote, chordIndex)
   
   return true
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 function updateScaleDegreeHeaders()
 
@@ -1130,7 +1041,7 @@ function deleteExistingNotesInNextInsertionTimePeriod(keepNotesSelected, selecte
     end
   end
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 function playMidiNote(midiNote)
 
@@ -1175,7 +1086,7 @@ function stopNotesFromPlaying()
 
   setNotesThatArePlaying({})
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 function applyInversion(chord)
   
@@ -1222,7 +1133,7 @@ function getChordNotesArray(root, chord, octave)
   
   return chordNotesArray
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 
@@ -1260,7 +1171,7 @@ function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 
 	reaper.MIDI_InsertNote(activeTake(), keepNotesSelected, muteState, startPosition, endPosition, channel, note, velocity, noSort)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local function playScaleChord(chordNotesArray)
 
@@ -1325,7 +1236,7 @@ function playOrInsertScaleChord(actionDescription)
   playScaleChord(chordNotesArray)
   updateChordText(root, chord, chordNotesArray)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 
 local function playScaleNote(noteValue)
@@ -1380,7 +1291,7 @@ function playOrInsertScaleNote(octaveAdjustment, actionDescription)
 
 	playScaleNote(noteValue)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 SelectedNote = {}
 SelectedNote.__index = SelectedNote
@@ -1511,7 +1422,7 @@ function changeSelectedNotesToScaleNotes(noteValue)
 		insertScaleNote(noteValue, true, selectedChords[i])
 	end
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 scaleNotes = {}
 scaleChords = {}
@@ -1734,7 +1645,7 @@ function showScaleStatus()
   local scaleNotesText = getScaleNotesText()
   reaper.Help_Set(("%s %s: %s"):format(scaleTonicText, scaleTypeText, scaleNotesText), false)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local function transposeSelectedNotes(numberOfSemitones)
 
@@ -1759,7 +1670,7 @@ end
 function transposeSelectedNotesDownOneOctave()
   transposeSelectedNotes(-12)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local function decrementChordInversion()
 
@@ -2158,9 +2069,10 @@ function previewHigherScaleNoteAction(scaleNoteIndex)
 	setSelectedScaleNote(scaleNoteIndex)
 	previewScaleNote(1)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 
 updateScaleData()
 higherScaleNoteAction(2)
 reaper.defer(emptyFunctionToPreventAutomaticCreationOfUndoPoint)
+

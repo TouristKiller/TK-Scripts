@@ -2,6 +2,19 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [2.2.0] - 2025-11-22
+
+### TK_ChordGun
+#### Toegevoegd
+- **Automatic Voice Leading**: Nieuwe "Lead" knop. Berekent automatisch de beste inversie voor het volgende akkoord zodat de noten zo min mogelijk verspringen (smooth transitions).
+- **Keyboard Shortcuts**: Uitgebreid naar 10 toetsen (0, ), p, ;, /).
+- **Stop All Notes**: Spatiebalk toegevoegd als sneltoets om alle noten te stoppen.
+
+#### Gewijzigd
+- **Piano Display**: De piano toont nu correct de daadwerkelijk gespeelde noten, inclusief Voice Leading inversies en Drop/Bass voicings.
+- **UI**: Chord Text Label verplaatst naar rechts (offset 250) en blauw gekleurd voor betere leesbaarheid.
+- **Bugfix**: Opgelost probleem met "ghost notes" (dubbele noten) bij gebruik van Voice Leading.
+
 ## [2.0.9] - 2025-11-20
 
 ### TK_ChordGun

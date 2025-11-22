@@ -1,8 +1,25 @@
 ﻿-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.1.6
+-- @version 2.2.0
 -- @changelog
 --[[
+2.2.0
++ Added Automatic Voice Leading ("Lead" button) for smooth chord transitions
++ Added Arpeggiator (Arp) mode with adjustable patterns (Up, Down, Up/Down, Random)
++ Added Arp speed control (Milliseconds or Grid Sync: 1/4, 1/8, 1/16, etc.)
++ Added Score View (Staff notation) to the Circle of Fifths window
++ Added Guitar View (Fretboard) to the Circle of Fifths window
++ Extended Keyboard Shortcuts to 10 keys (0, ), p, ;, /)
++ Added Spacebar shortcut to stop all notes
++ Improved Piano Display to show actual played notes (including inversions/voicings)
++ Improved UI layout (Chord Text Label position and color)
++ Added missing 7th chords
++ Added Light Theme support
++ Improved Dark Theme visibility for new views
++ Updated Chromatic View style
++ General layout improvements
++ Fixed "ghost notes" bug in Voice Leading
+
 2.1.6
 + Fixed Messiaen Modes data (corrected note counts and patterns for Modes 1, 2, 3, and 7)
 + Improved Messiaen Mode 1 (added 2nd transposition)
@@ -154,30 +171,27 @@ Original ChordGun: https://github.com/benjohnson2001/ChordGun
 ================================================================================
 ]]--
 
-baseWidth = 775
-baseHeight = 840
+package.path = debug.getinfo(1,"S").source:match[[^@?(.*[\/])[^\/]-$]] .."?.lua;".. package.path
+local Data = require("TK_ChordGun_Data")
 
+baseWidth = 775
+baseHeight = 775
+
+local setThemeColor -- Forward declaration
 
 function getDynamicBaseWidth()
-  local numScaleNotes = #scaleNotes
-  if numScaleNotes <= 7 then
-    return 775
-  else
-
-    local extraColumns = numScaleNotes - 7
-    return 775 + (extraColumns * 112)
-  end
+  return 1090
 end
 
 local fontScale = tonumber(reaper.GetExtState("TK_ChordGun", "fontScale")) or 1.25
 
-local function fontSize(value)
+function fontSize(value)
   return math.floor((s(value) * fontScale) + 0.5)
 end
 
-local function applyDefaultFont()
+function applyDefaultFont()
 
-  local useMono = reaper.GetExtState("TK_ChordGun", "useMonospaceFont") == "1"
+  local useMono = reaper.GetExtState("TK_ChordGun", "useMonospaceFont") ~= "0"
 
   if useMono then
 
@@ -230,92 +244,7 @@ function s(value)
   return math.floor((value * scale) + 0.5)
 end
 
-chords = {
-  {
-    name = 'major',
-    code = 'major',
-    display = '',
-    pattern = '10001001'
-  },
-  {
-    name = 'minor',
-    code = 'minor',
-    display = 'm',
-    pattern = '10010001'
-  },
-  {
-    name = 'power chord',
-    code = 'power',
-    display = '5',
-    pattern = '10000001'
-  },
-  {
-    name = 'suspended second',
-    code = 'sus2',
-    display = 'sus2',
-    pattern = '10100001'
-  },
-  {
-    name = 'suspended fourth',
-    code = 'sus4',
-    display = 'sus4',
-    pattern = '10000101'
-  },
-  {
-    name = 'diminished',
-    code = 'dim',
-    display = 'dim',
-    pattern = '1001001'
-  },  
-  {
-    name = 'augmented',
-    code = 'aug',
-    display = 'aug',
-    pattern = '100010001'
-  },
-  {
-    name = 'major sixth',
-    code = 'maj6',
-    display = '6',
-    pattern = '1000100101'
-  },
-  {
-    name = 'minor sixth',
-    code = 'min6',
-    display = 'm6',
-    pattern = '1001000101'
-  },
-  {
-    name = 'dominant seventh',
-    code = '7',
-    display = '7',
-    pattern = '10001001001'
-  },
-  {
-    name = 'major seventh',
-    code = 'maj7',
-    display = 'maj7',
-    pattern = '100010010001'
-  },
-  {
-    name = 'minor seventh',
-    code = 'min7',
-    display = 'm7',
-    pattern = '10010001001'
-  },
-  {
-    name = 'minor major seventh',
-    code = 'minMaj7',
-    display = 'm(maj7)',
-    pattern = '100100010001'
-  },
-  {
-    name = 'flat fifth',
-    code = 'flat5',
-    display = '5-',
-    pattern = '10000010'
-  },
-}
+chords = Data.chords
 
 
 local pendingTooltips = {}
@@ -367,15 +296,15 @@ function drawTooltip(text, x, y)
 	end
 	
 
-	gfx.set(0.1, 0.1, 0.1, 0.95)
+	setThemeColor("tooltipBg")
 	gfx.rect(tooltipX, tooltipY, boxWidth, boxHeight, 1)
 	
 
-	gfx.set(1, 0.84, 0, 1)
+	setThemeColor("tooltipBorder")
 	gfx.rect(tooltipX, tooltipY, boxWidth, boxHeight, 0)
 	
 
-	gfx.set(1, 1, 1, 1)
+	setThemeColor("tooltipText")
 	gfx.x = tooltipX + padding
 	gfx.y = tooltipY + padding
 	gfx.drawstr(text)
@@ -461,7 +390,7 @@ function emptyFunctionToPreventAutomaticCreationOfUndoPoint()
 end
 
 
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 defaultScaleTonicNoteValue = 1
 defaultScaleTypeValue = 1
@@ -511,10 +440,10 @@ function defaultInterfaceYPosition()
   local screenHeight = getScreenHeight()
   return screenHeight/2 - interfaceHeight/2
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local activeProjectIndex = 0
-local sectionName = "com.pandabot.ChordGun"
+local sectionName = "com.touristkiller.TK_ChordGun"
 
 local scaleTonicNoteKey = "scaleTonicNote"
 local scaleTypeKey = "scaleType"
@@ -536,11 +465,11 @@ local interfaceHeightKey = "interfaceHeight"
 local noteLengthIndexKey = "noteLengthIndex"
 local scaleFilterEnabledKey = "scaleFilterEnabled"
 
-local function setValue(key, value)
+function setValue(key, value)
   reaper.SetProjExtState(activeProjectIndex, sectionName, key, value)
 end
 
-local function getValue(key, defaultValue)
+function getValue(key, defaultValue)
 
   local valueExists, value = reaper.GetProjExtState(activeProjectIndex, sectionName, key)
 
@@ -555,6 +484,25 @@ end
 
 local strumEnabled = false
 local strumDelayMs = 80
+local arpEnabled = false
+local arpMode = 1 -- 1: Up, 2: Down, 3: Up/Down, 4: Random, 5: Down/Up
+local arpSpeedMs = 200
+local arpSpeedMode = "ms" -- "ms" or "grid"
+local arpGrid = "1/8"
+
+local voiceLeadingEnabled = false
+local lastPlayedNotes = {}
+
+local function getAveragePitch(notes)
+    if not notes or #notes == 0 then return 0 end
+    local sum = 0
+    for _, note in ipairs(notes) do sum = sum + note end
+    return sum / #notes
+end
+local showOnlyScaleChords = false 
+local chordListScrollOffset = 0
+local maxVisibleRows = 12
+local isLightMode = reaper.GetExtState("TK_ChordGun", "lightMode") == "1"
 local voicingState = {
   drop2 = false,
   drop3 = false,
@@ -573,82 +521,10 @@ local melodySettings = {
 local tooltipsEnabled = false
 
 
-local scaleFilterGmemBlock = "TKChordGunFilter"
+local scaleFilterGmemBlock = "TK_ChordGun_Filter"
 local scaleFilterMode = tonumber(getValue("scaleFilterMode", "0")) or 0
 
-local function parseReascaleFile(filePath)
-  local file = io.open(filePath, "r")
-  if not file then return nil end
-  
-  local importedScales = {}
-  
-  for line in file:lines() do
-    -- Check for Header (starts with 2)
-    local headerName = line:match('^%s*2%s+"(.-)"')
-    if headerName then
-      table.insert(importedScales, {
-        name = "--- " .. headerName .. " ---",
-        pattern = "000000000000", -- Empty pattern
-        isHeader = true,
-        description = "Category: " .. headerName
-      })
-    else
-      -- Match lines with ID, Name, and Pattern (allowing digits 0-9 in pattern)
-      local name, pattern = line:match('^%s*%d+%s+"(.-)"%s+([0-9]+)')
-      
-      if name and pattern and #pattern == 12 then
-        -- Convert any non-zero digit to '1' to ensure compatibility with ChordGun logic
-        pattern = pattern:gsub("[2-9]", "1")
-        
-        table.insert(importedScales, {
-          name = name,
-          pattern = pattern,
-          isCustom = true,
-          description = "Imported from .reascale file"
-        })
-      end
-    end
-  end
-  
-  file:close()
-  return importedScales
-end
 
-local function loadUserReascales(systemTable)
-  -- Gebruik absoluut pad via ResourcePath, net als bij Presets
-  local reascaleDir = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun/Reascales"
-  
-  -- Zorg voor correcte slashes op Windows
-  if reaper.GetOS():match("Win") then
-    reascaleDir = reascaleDir:gsub("/", "\\")
-  end
-  
-  -- Maak map aan
-  reaper.RecursiveCreateDirectory(reascaleDir, 0)
-  
-  local i = 0
-  while true do
-    local file = reaper.EnumerateFiles(reascaleDir, i)
-    if not file then break end
-    
-    if file:match("%.reascale$") then
-      local fullPath = reascaleDir .. "/" .. file
-      -- Fix path separator voor parse functie
-      if reaper.GetOS():match("Win") then fullPath = reascaleDir .. "\\" .. file end
-      
-      local userScales = parseReascaleFile(fullPath)
-      
-      if userScales and #userScales > 0 then
-        local systemName = file:gsub("%.reascale$", "") .. " (User)"
-        table.insert(systemTable, {
-          name = systemName,
-          scales = userScales
-        })
-      end
-    end
-    i = i + 1
-  end
-end
 
 
 local chordProgression = {}
@@ -668,7 +544,7 @@ local consumeInternalNoteEvent
 local isExternalDevice
 local suppressExternalMidiUntil = 0
 
-local function getTableFromString(arg)
+function getTableFromString(arg)
 
   local output = {}
 
@@ -681,12 +557,12 @@ end
 
 local globalExtSection = "TK_ChordGun"
 
-local function setPersistentValue(key, value)
+function setPersistentValue(key, value)
   if not reaper.SetExtState then return end
   reaper.SetExtState(globalExtSection, key, tostring(value), true)
 end
 
-local function getPersistentValue(key)
+function getPersistentValue(key)
   if not reaper.GetExtState then return nil end
   local saved = reaper.GetExtState(globalExtSection, key)
   if saved ~= nil and saved ~= "" then
@@ -695,7 +571,7 @@ local function getPersistentValue(key)
   return nil
 end
 
-local function getPersistentNumber(key, defaultValue)
+function getPersistentNumber(key, defaultValue)
   local globalValue = getPersistentValue(key)
   if globalValue ~= nil then
     return tonumber(globalValue)
@@ -703,12 +579,12 @@ local function getPersistentNumber(key, defaultValue)
   return tonumber(getValue(key, defaultValue))
 end
 
-local function setPersistentNumber(key, value)
+function setPersistentNumber(key, value)
   setValue(key, value)
   setPersistentValue(key, value)
 end
 
-local function updateScaleFilterState()
+function updateScaleFilterState()
   if not reaper.gmem_attach or not reaper.gmem_write then return end
   if not reaper.gmem_attach(scaleFilterGmemBlock) then return end
   reaper.gmem_write(0, scaleFilterMode)
@@ -719,13 +595,13 @@ local function updateScaleFilterState()
   end
 end
 
-local function setScaleFilterMode(mode)
+function setScaleFilterMode(mode)
   scaleFilterMode = mode
   setValue("scaleFilterMode", tostring(mode))
   updateScaleFilterState()
 end
 
-local function cycleScaleFilterMode()
+function cycleScaleFilterMode()
   local nextMode = (scaleFilterMode + 1) % 3
   
   -- Check for JSFX if enabling Filter or Remap
@@ -768,7 +644,7 @@ local function cycleScaleFilterMode()
   setScaleFilterMode(scaleFilterMode)
 end
 
-local function getScaleFilterModeText()
+function getScaleFilterModeText()
   if scaleFilterMode == 0 then return "Off"
   elseif scaleFilterMode == 1 then return "Filter"
   else return "Remap"
@@ -780,7 +656,7 @@ local recognizedChord = ""
 local chordInputNotes = {}
 local lastInputIdx = nil
 
-local function updateChordInputTracking()
+function updateChordInputTracking()
 
   if not reaper.MIDI_GetRecentInputEvent then return end
   
@@ -882,7 +758,7 @@ local function getActiveExternalNotes()
   return notes
 end
 
-local function analyzeChord(midiNotes)
+function analyzeChord(midiNotes)
   if #midiNotes < 2 then return nil end
   
 
@@ -964,7 +840,7 @@ local function analyzeChord(midiNotes)
   return bestMatch
 end
 
-local function getChordName(chordAnalysis)
+function getChordName(chordAnalysis)
   if not chordAnalysis then return "" end
   
 
@@ -1007,7 +883,7 @@ local function getChordName(chordAnalysis)
   return chordName
 end
 
-local function updateChordRecognition()
+function updateChordRecognition()
   updateChordInputTracking()
   
   local activeNotes = getActiveExternalNotes()
@@ -1090,7 +966,7 @@ end
 
 
 function getScaleSystemIndex()
-  local index = tonumber(reaper.GetExtState("TKChordGun", "scaleSystem"))
+  local index = tonumber(reaper.GetExtState("TK_ChordGun", "scaleSystem"))
   if not index or index < 1 or index > #scaleSystems then
     return 1
   end
@@ -1098,12 +974,12 @@ function getScaleSystemIndex()
 end
 
 function setScaleSystemIndex(index)
-  reaper.SetExtState("TKChordGun", "scaleSystem", tostring(index), true)
+  reaper.SetExtState("TK_ChordGun", "scaleSystem", tostring(index), true)
 end
 
 function getScaleWithinSystemIndex()
   local systemIndex = getScaleSystemIndex()
-  local index = tonumber(reaper.GetExtState("TKChordGun", "scaleWithinSystem"))
+  local index = tonumber(reaper.GetExtState("TK_ChordGun", "scaleWithinSystem"))
   
 
   local system = scaleSystems[systemIndex]
@@ -1114,7 +990,7 @@ function getScaleWithinSystemIndex()
 end
 
 function setScaleWithinSystemIndex(index)
-  reaper.SetExtState("TKChordGun", "scaleWithinSystem", tostring(index), true)
+  reaper.SetExtState("TK_ChordGun", "scaleWithinSystem", tostring(index), true)
 end
 
 
@@ -1306,7 +1182,13 @@ end
 --
 
 function getNotesThatArePlaying()
-  return getTableValue(notesThatArePlayingKey, defaultNotesThatArePlaying)
+  local values = getTableValue(notesThatArePlayingKey, defaultNotesThatArePlaying)
+  local notes = {}
+  for _, v in ipairs(values) do
+    local n = tonumber(v)
+    if n then table.insert(notes, n) end
+  end
+  return notes
 end
 
 function setNotesThatArePlaying(arg)
@@ -1434,7 +1316,7 @@ end
 function Timer:timeHasNotElapsed()
 	return not self:timeHasElapsed()
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 mouseButtonIsNotPressedDown = true
 
@@ -1446,259 +1328,13 @@ scaleType = getScaleType()
 guiShouldBeUpdated = false
 
 
-scaleSystems = {
-  {
-    name = "Diatonic",
-    scales = {
-      { name = "Major", pattern = "101011010101", 
-        description = "Heptatonic (7 notes) - Bright, happy sound\nMost common scale in Western music" },
-      { name = "Natural Minor", pattern = "101101011010",
-        description = "Heptatonic (7 notes) - Dark, sad sound\nRelative minor of Major scale" },
-      { name = "Ionian", pattern = "101011010101",
-        description = "Heptatonic (7 notes) - Same as Major\n1st mode of major scale" },
-      { name = "Aeolian", pattern = "101101011010",
-        description = "Heptatonic (7 notes) - Same as Natural Minor\n6th mode of major scale" },
-      { name = "Dorian", pattern = "101101010110",
-        description = "Heptatonic (7 notes) - Jazzy, sophisticated\n2nd mode - minor with raised 6th" },
-      { name = "Mixolydian", pattern = "101011010110",
-        description = "Heptatonic (7 notes) - Bluesy, rock\n5th mode - major with flat 7th" },
-      { name = "Phrygian", pattern = "110101011010",
-        description = "Heptatonic (7 notes) - Spanish, flamenco\n3rd mode - minor with flat 2nd" },
-      { name = "Lydian", pattern = "101010110101",
-        description = "Heptatonic (7 notes) - Dreamy, floating\n4th mode - major with sharp 4th" },
-      { name = "Locrian", pattern = "110101101010",
-        description = "Heptatonic (7 notes) - Unstable, dissonant\n7th mode - diminished quality" }
-    }
-  },
-  {
-    name = "Harmonic Minor Modes",
-    scales = {
-      { name = "Harmonic Minor", pattern = "101101011001",
-        description = "Mode 1: Aeolian #7\nDark, exotic, classical/metal\n1 2 b3 4 5 b6 7" },
-      { name = "Locrian #6", pattern = "110101100101",
-        description = "Mode 2: Locrian natural 6\nDark, diminished quality\n1 b2 b3 4 b5 6 b7" },
-      { name = "Ionian #5", pattern = "101011001011",
-        description = "Mode 3: Ionian Augmented\nDreamy, unsettled major\n1 2 3 4 #5 6 7" },
-      { name = "Dorian #4", pattern = "101100110101",
-        description = "Mode 4: Dorian #11\nBluesy minor with sharp 4\n1 2 b3 #4 5 6 b7" },
-      { name = "Phrygian Dominant", pattern = "110011011010",
-        description = "Mode 5: Phrygian Major\nSpanish, Flamenco, Metal\n1 b2 3 4 5 b6 b7" },
-      { name = "Lydian #2", pattern = "100110110101",
-        description = "Mode 6: Lydian sharp 2\nBright, angular, modern\n1 #2 3 #4 5 6 7" },
-      { name = "Super Locrian bb7", pattern = "110101011001",
-        description = "Mode 7: Altered bb7 / Ultralocrian\nDiminished, very dissonant\n1 b2 b3 b4 b5 b6 bb7" }
-    }
-  },
-  {
-    name = "Melodic Minor Modes",
-    scales = {
-      { name = "Melodic Minor", pattern = "101101010101",
-        description = "Mode 1: Jazz Minor / Ionian b3\nAscending Melodic Minor\n1 2 b3 4 5 6 7" },
-      { name = "Dorian b2", pattern = "110101010101",
-        description = "Mode 2: Phrygian #6\nDark minor with natural 6\n1 b2 b3 4 5 6 b7" },
-      { name = "Lydian Augmented", pattern = "101010101101",
-        description = "Mode 3: Lydian #5\nDreamy, whole-tone feel\n1 2 3 #4 #5 6 7" },
-      { name = "Lydian Dominant", pattern = "101010110101",
-        description = "Mode 4: Lydian b7 / Overtone\nAcoustic scale, bright dominant\n1 2 3 #4 5 6 b7" },
-      { name = "Mixolydian b6", pattern = "101011011010",
-        description = "Mode 5: Hindu / Aeolian Dominant\nMelodic major/minor hybrid\n1 2 3 4 5 b6 b7" },
-      { name = "Locrian #2", pattern = "101101101010",
-        description = "Mode 6: Aeolian b5 / Half-Diminished\nDark, jazzy minor\n1 2 b3 4 b5 b6 b7" },
-      { name = "Super Locrian", pattern = "110110101010",
-        description = "Mode 7: Altered Scale\nDominant altered tensions\n1 b2 b3 b4 b5 b6 b7" }
-    }
-  },
-  {
-    name = "Pentatonic",
-    scales = {
-      { name = "Major Pentatonic", pattern = "101010010100",
-        description = "Pentatonic (5 notes) - Bright, happy\nC-D-E-G-A | Universal in folk music" },
-      { name = "Minor Pentatonic", pattern = "100101010010",
-        description = "Pentatonic (5 notes) - Rock/blues basis\nC-Eb-F-G-Bb | Most common in rock" },
-      { name = "Blues Scale", pattern = "100101110010",
-        description = "Hexatonic (6 notes) - Blues/rock\nC-Eb-F-F#-G-Bb | Minor pentatonic + blue note" },
-      { name = "Egyptian/Suspended", pattern = "101001010010",
-        description = "Pentatonic (5 notes) - Mysterious, suspended\nC-D-F-G-Bb | Ancient Egyptian music" },
-      { name = "Japanese (In Sen)", pattern = "110001010010",
-        description = "Pentatonic (5 notes) - Traditional Japanese\nC-Db-F-G-Bb | Meditative, contemplative" },
-      { name = "Hirajoshi", pattern = "101100010010",
-        description = "Pentatonic (5 notes) - Japanese, serene\nC-D-Eb-G-Ab | Tranquil, peaceful" }
-    }
-  },
-  {
-    name = "Messiaen",
-    scales = {
+scaleSystems = Data.scaleSystems
+scales = Data.scales
 
-      { name = "Mode 1.1", pattern = "101010101010", isCustom = true, intervals = "2-2-2-2-2-2",
-        description = "Hexatonic (6 notes) - Whole Tone Scale\n1st transposition | Dreamy, floating\nDebussy's favorite" },
-      { name = "Mode 1.2", pattern = "010101010101", isCustom = true, intervals = "2-2-2-2-2-2",
-        description = "Hexatonic (6 notes) - Whole Tone Scale\n2nd transposition | The 'other' whole tone set\nCompletes the chromatic coverage" },
-      
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
-      { name = "Mode 2.1", pattern = "110110110110", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
-        description = "Octatonic (8 notes) - Half-Whole Diminished\n1st transposition (Starts on C)\nJazz/classical favorite" },
-      { name = "Mode 2.2", pattern = "011011011011", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
-        description = "Octatonic (8 notes) - Half-Whole Diminished\n2nd transposition (Starts on C#)\nShifted up 1 semitone" },
-      { name = "Mode 2.3", pattern = "101101101101", isCustom = true, intervals = "1-2-1-2-1-2-1-2",
-        description = "Octatonic (8 notes) - Half-Whole Diminished\n3rd transposition (Starts on D)\nShifted up 2 semitones" },
-      
-
-      { name = "Mode 3.1", pattern = "101110111011", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
-        description = "Nonatonic (9 notes) - Dense, chromatic\n1st transposition | Repeating 2-1-1 pattern\nVery colorful" },
-      { name = "Mode 3.2", pattern = "110111011101", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
-        description = "Nonatonic (9 notes) - Dense, chromatic\n2nd transposition | Shifted up 1 semitone\nUsed in 'Quartet for the End of Time'" },
-      { name = "Mode 3.3", pattern = "111011101110", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
-        description = "Nonatonic (9 notes) - Dense, chromatic\n3rd transposition | Shifted up 2 semitones\nHighly symmetrical" },
-      { name = "Mode 3.4", pattern = "011101110111", isCustom = true, intervals = "2-1-1-2-1-1-2-1-1",
-        description = "Nonatonic (9 notes) - Dense, chromatic\n4th transposition | Shifted up 3 semitones\nRich harmonic palette" },
-      
-
-      { name = "Mode 4.1", pattern = "111001111001", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
-        description = "Octatonic (8 notes) - Exotic, Eastern flavor\nRepeating 1-1-3-1 pattern | 1st transposition\nUsed for mysterious, otherworldly sounds" },
-      { name = "Mode 4.2", pattern = "111100111100", isCustom = true, intervals = "1-3-1-1-1-3-1-1",
-        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n2nd transposition | Alternating small/large gaps\nPopular in film scores" },
-      { name = "Mode 4.3", pattern = "011110011110", isCustom = true, intervals = "3-1-1-1-3-1-1-1",
-        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n3rd transposition | Creates tension and release\nContains augmented and minor triads" },
-      { name = "Mode 4.4", pattern = "001111001111", isCustom = true, intervals = "1-1-1-3-1-1-1-3",
-        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n4th transposition | Clusters and wide leaps\nUseful for dramatic moments" },
-      { name = "Mode 4.5", pattern = "100111100111", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
-        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n5th transposition | Repeating pattern\nSymmetrical structure" },
-      { name = "Mode 4.6", pattern = "110011110011", isCustom = true, intervals = "1-1-3-1-1-1-3-1",
-        description = "Octatonic (8 notes) - Exotic, Eastern flavor\n6th and final transposition of Mode 4\nComplete the symmetrical cycle" },
-      
-
-      { name = "Mode 5.1", pattern = "110001110001", isCustom = true, intervals = "1-4-1-1-4-1",
-        description = "Hexatonic (6 notes) - Wide intervals, sparse\nRepeating 1-4-1 pattern | 1st transposition\nOpen, spacious sound with dramatic leaps" },
-      { name = "Mode 5.2", pattern = "111000111000", isCustom = true, intervals = "4-1-1-4-1-1",
-        description = "Hexatonic (6 notes) - Wide intervals, sparse\n2nd transposition | Major 3rd leaps\nUsed for ethereal, floating textures" },
-      { name = "Mode 5.3", pattern = "011100011100", isCustom = true, intervals = "1-1-4-1-1-4",
-        description = "Hexatonic (6 notes) - Wide intervals, sparse\n3rd transposition | Alternating gaps\nCreates sense of space and distance" },
-      { name = "Mode 5.4", pattern = "001110001110", isCustom = true, intervals = "1-4-1-1-4-1",
-        description = "Hexatonic (6 notes) - Wide intervals, sparse\n4th transposition | Pentatonic-like\nUseful for minimalist compositions" },
-      { name = "Mode 5.5", pattern = "000111000111", isCustom = true, intervals = "4-1-1-4-1-1",
-        description = "Hexatonic (6 notes) - Wide intervals, sparse\n5th transposition | Symmetrical gaps\nCreates mysterious atmosphere" },
-      { name = "Mode 5.6", pattern = "100011100011", isCustom = true, intervals = "1-1-4-1-1-4",
-        description = "Hexatonic (6 notes) - Wide intervals, sparse\n6th and final transposition of Mode 5\nCompletes the hexatonic cycle" },
-      
-
-      { name = "Mode 6.1", pattern = "101011101011", isCustom = true, intervals = "2-2-1-1-2-2-1-1",
-        description = "Octatonic (8 notes) - Balanced, versatile\nRepeating 2-2-1-1 pattern | 1st transposition\nBlends whole tone and chromatic elements" },
-      { name = "Mode 6.2", pattern = "110101110101", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
-        description = "Octatonic (8 notes) - Balanced, versatile\n2nd transposition | Smooth motion\nUseful for melodic lines" },
-      { name = "Mode 6.3", pattern = "111010111010", isCustom = true, intervals = "1-1-2-2-1-1-2-2",
-        description = "Octatonic (8 notes) - Balanced, versatile\n3rd transposition | Paired intervals\nCreates interesting harmonic progressions" },
-      { name = "Mode 6.4", pattern = "011101011101", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
-        description = "Octatonic (8 notes) - Balanced, versatile\n4th transposition | Alternating pairs\nGood for both melody and harmony" },
-      { name = "Mode 6.5", pattern = "101110101110", isCustom = true, intervals = "2-1-1-2-2-1-1-2",
-        description = "Octatonic (8 notes) - Balanced, versatile\n5th transposition | Symmetrical structure\nUsed in Messiaen's piano works" },
-      { name = "Mode 6.6", pattern = "010111010111", isCustom = true, intervals = "1-2-2-1-1-2-2-1",
-        description = "Octatonic (8 notes) - Balanced, versatile\n6th and final transposition of Mode 6\nCompletes the octave division" },
-      
-
-      { name = "Mode 7.1", pattern = "111101111101", isCustom = true, intervals = "1-1-1-2-1-1-1-1-2-1",
-        description = "Decatonic (10 notes) - Most chromatic\nRepeating 1-1-1-2-1 pattern | 1st transposition\nAlmost all 12 chromatic notes - highly dissonant" },
-      { name = "Mode 7.2", pattern = "111011111011", isCustom = true, intervals = "1-1-2-1-1-1-1-2-1-1",
-        description = "Decatonic (10 notes) - Most chromatic\n2nd transposition | Dense clusters\nUsed for intense, dramatic moments" },
-      { name = "Mode 7.3", pattern = "110111110111", isCustom = true, intervals = "1-2-1-1-1-1-2-1-1-1",
-        description = "Decatonic (10 notes) - Most chromatic\n3rd transposition | Maximum color\nMessiaen's most complex mode" },
-      { name = "Mode 7.4", pattern = "101111101111", isCustom = true, intervals = "2-1-1-1-1-2-1-1-1-1",
-        description = "Decatonic (10 notes) - Most chromatic\n4th transposition | Chromatic saturation\nUseful for avant-garde compositions" },
-      { name = "Mode 7.5", pattern = "111110111110", isCustom = true, intervals = "1-1-1-1-2-1-1-1-2-1",
-        description = "Decatonic (10 notes) - Most chromatic\n5th transposition | Dense harmony\nContains nearly every possible chord type" },
-      { name = "Mode 7.6", pattern = "111011110111", isCustom = true, intervals = "1-1-2-1-1-1-2-1-1-1",
-        description = "Decatonic (10 notes) - Most chromatic\n6th and final transposition of Mode 7\nCompletes Messiaen's modal system" }
-    }
-  },
-  {
-    name = "Jazz",
-    scales = {
-      { name = "Bebop Dominant", pattern = "10101101010110", isCustom = true, intervals = "2-2-1-2-2-1-1-1",
-        description = "Octatonic (8 notes) - Classic bebop sound\nMixolydian + major 7th passing tone\nPerfect for dominant 7th chord lines" },
-      { name = "Bebop Major", pattern = "10110101010110", isCustom = true, intervals = "2-2-1-2-1-1-2-1",
-        description = "Octatonic (8 notes) - Major with chromatic\nMajor scale + #5 passing tone\nSmooth bebop melodies over major chords" },
-      { name = "Bebop Minor", pattern = "10110101011010", isCustom = true, intervals = "2-1-2-2-1-1-2-1",
-        description = "Octatonic (8 notes) - Minor with chromatic\nDorian + major 3rd passing tone\nUsed extensively in bebop improvisation" },
-      { name = "Bebop Dorian", pattern = "10110101101010", isCustom = true, intervals = "2-1-2-2-2-1-1-2",
-        description = "Octatonic (8 notes) - Dorian with passing tone\nDorian + major 3rd chromatic\nMiles Davis and John Coltrane favorite" },
-      { name = "Harmonic Major", pattern = "101011011001", isCustom = true, intervals = "2-2-1-2-1-3-1",
-        description = "Heptatonic (7 notes) - Major with b6\nMajor scale with flattened 6th\nExotic sound, used in jazz and metal" }
-    }
-  },
-  {
-    name = "World Music",
-    scales = {
-      { name = "Hijaz", pattern = "11001101010", isCustom = true, intervals = "1-3-1-2-1-2-2",
-        description = "Heptatonic (7 notes) - Arabic Maqam\nDramatic augmented 2nd interval | Middle Eastern flavor\nUsed in Arabic, Turkish, Greek, and Klezmer music" },
-      { name = "Hungarian Minor", pattern = "10110011010", isCustom = true, intervals = "2-1-3-1-1-3-1",
-        description = "Heptatonic (7 notes) - Gypsy/Hungarian\nMinor with raised 4th | Dramatic augmented intervals\nLiszt, Brahms, and Eastern European folk" },
-      { name = "Double Harmonic", pattern = "11001100110", isCustom = true, intervals = "1-3-1-2-1-3-1",
-        description = "Heptatonic (7 notes) - Byzantine/Arabic\nTwo augmented 2nds | Extremely exotic\nMiddle Eastern, Indian classical, and progressive metal" },
-      { name = "Japanese Hirajoshi", pattern = "100101000101", isCustom = true, intervals = "2-1-4-1-4",
-        description = "Pentatonic (5 notes) - Traditional Japanese\nSpacious, contemplative | Ancient court music\nUsed in koto, shakuhachi, and ambient music" },
-      { name = "Japanese In Sen", pattern = "110010000110", isCustom = true, intervals = "1-4-2-1-4",
-        description = "Pentatonic (5 notes) - Japanese Shakuhachi\nMinor pentatonic variant | Melancholic\nTraditional Zen Buddhist meditation music" },
-      { name = "Japanese Iwato", pattern = "110001001001", isCustom = true, intervals = "1-4-1-4-2",
-        description = "Pentatonic (5 notes) - Traditional Japanese\nDark, mysterious | Ancient court music\nUsed for dramatic and suspenseful scenes" },
-      { name = "Bhairav (Raga)", pattern = "11001101001", isCustom = true, intervals = "1-3-1-2-1-3-2",
-        description = "Heptatonic (7 notes) - North Indian Raga\nDawn raga | Peaceful yet serious mood\nClassical Indian music, meditative and devotional" },
-      { name = "Kafi (Raga)", pattern = "10101011010", isCustom = true, intervals = "2-2-1-2-2-1-2",
-        description = "Heptatonic (7 notes) - North Indian Raga\nDorian-like | Romantic, longing emotion\nPopular in folk and light classical music" },
-      { name = "Spanish 8-Tone", pattern = "11010110110", isCustom = true, intervals = "1-2-1-1-2-1-2-2",
-        description = "Octatonic (8 notes) - Flamenco composite\nCombines Phrygian and altered tones\nModern flamenco and fusion guitar" },
-      { name = "Persian", pattern = "11001100110", isCustom = true, intervals = "1-3-1-2-1-3-1",
-        description = "Heptatonic (7 notes) - Persian/Iranian\nSimilar to Double Harmonic | Rich ornaments\nTraditional Persian classical and Sufi music" },
-      { name = "Enigmatic", pattern = "11001011001", isCustom = true, intervals = "1-3-2-2-2-1-1",
-        description = "Heptatonic (7 notes) - Verdi's scale\nMysterious, unusual intervals | Experimental\nRare scale used by Giuseppe Verdi" }
-    }
-  },
-  {
-    name = "Blues & Soul",
-    scales = {
-      { name = "Blues Scale", pattern = "100110010010", isCustom = true, intervals = "3-2-1-1-3-2",
-        description = "Hexatonic (6 notes) - Classic blues sound\nMinor pentatonic + blue note (b5)\nFoundation of blues, rock, and jazz" },
-      { name = "Blues Major", pattern = "101101010010", isCustom = true, intervals = "2-1-1-2-2-2-2",
-        description = "Heptatonic (7 notes) - Major blues flavor\nMajor pentatonic + blue notes\nCountry, blues-rock, and Southern rock" },
-      { name = "Blues Minor", pattern = "100110110010", isCustom = true, intervals = "3-2-1-1-2-3",
-        description = "Hexatonic (6 notes) - Minor blues variant\nMinor pentatonic + major 3rd\nChicago blues and blues-rock" },
-      { name = "Mixo-Blues", pattern = "10110101011010", isCustom = true, intervals = "2-2-1-2-1-1-2-1",
-        description = "Octatonic (8 notes) - Jazz-blues hybrid\nMixolydian + blue notes (#9, #11)\nJazz-blues, funk, and fusion" },
-      { name = "Gospel Minor", pattern = "100111010010", isCustom = true, intervals = "3-2-1-2-2-2",
-        description = "Hexatonic (6 notes) - Soulful, churchy\nMinor with raised 6th | Emotional\nGospel, R&B, and soul music" },
-      { name = "Gospel Major", pattern = "101010110010", isCustom = true, intervals = "2-2-2-1-1-2-2",
-        description = "Heptatonic (7 notes) - Uplifting, joyful\nMajor with chromatic passing tones\nGospel choir, worship music" },
-      { name = "Dominant Blues", pattern = "10101101010010", isCustom = true, intervals = "2-2-1-2-2-1-2-2",
-        description = "Octatonic (8 notes) - Dominant 7th blues\nMixolydian + blue note\nTexas blues, rockabilly, and swing" },
-      { name = "Soul", pattern = "10110101010010", isCustom = true, intervals = "2-1-2-2-2-2-1-2",
-        description = "Octatonic (8 notes) - Smooth R&B sound\nMajor + chromatic approach notes\nMotown, 70s soul, neo-soul" }
-    }
-  },
-  {
-    name = "Rock & Metal",
-    scales = {
-      { name = "Neapolitan Minor", pattern = "11010100110", isCustom = true, intervals = "1-2-2-2-1-3-1",
-        description = "Heptatonic (7 notes) - Dark, exotic minor\nMinor with flattened 2nd | Dramatic\nSymphonic metal, film scores" },
-      { name = "Neapolitan Major", pattern = "11010110010", isCustom = true, intervals = "1-2-2-2-2-2-1",
-        description = "Heptatonic (7 notes) - Bright yet exotic\nMajor with flattened 2nd | Unusual\nProgressive rock/metal, experimental" },
-      { name = "Hungarian Major", pattern = "10011011010", isCustom = true, intervals = "3-1-2-1-2-1-2",
-        description = "Heptatonic (7 notes) - Exotic major sound\nLydian with flat 6 and 7 | Augmented 2nd\nGypsy-flavored rock, folk metal" }
-    }
-  }
-}
-
--- Load user custom scales from .reascale files
-loadUserReascales(scaleSystems)
-
-scales = {}
-for _, system in ipairs(scaleSystems) do
-  for _, scale in ipairs(system.scales) do
-    table.insert(scales, scale)
-  end
-end
-
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
-
-notes = { 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B' };
-flatNotes = { 'C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B' };
+notes = Data.notes
+flatNotes = Data.flatNotes
 
 function getScalePattern(scaleTonicNote, scale)
 
@@ -1883,7 +1519,7 @@ function chordIsInModalMixtureScale(rootNote, chordIndex)
   
   return true
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 function updateScaleDegreeHeaders()
 
@@ -2382,7 +2018,79 @@ function deleteExistingNotesInNextInsertionTimePeriod(keepNotesSelected, selecte
     end
   end
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
+
+local function applyArpPattern(notes)
+    if not arpEnabled then return notes end
+    
+    local newNotes = {}
+    for i, v in ipairs(notes) do table.insert(newNotes, v) end
+    
+    if arpMode == 1 then -- Up
+        table.sort(newNotes)
+    elseif arpMode == 2 then -- Down
+        table.sort(newNotes, function(a,b) return a > b end)
+    elseif arpMode == 3 then -- Up/Down
+        table.sort(newNotes)
+        local count = #newNotes
+        if count > 2 then
+            local downNotes = {}
+            for i = count - 1, 2, -1 do
+                table.insert(downNotes, newNotes[i])
+            end
+            for _, v in ipairs(downNotes) do
+                table.insert(newNotes, v)
+            end
+        end
+    elseif arpMode == 4 then -- Random
+        for i = #newNotes, 2, -1 do
+            local j = math.random(i)
+            newNotes[i], newNotes[j] = newNotes[j], newNotes[i]
+        end
+    elseif arpMode == 5 then -- Down/Up
+        table.sort(newNotes, function(a,b) return a > b end)
+        local count = #newNotes
+        if count > 2 then
+            local upNotes = {}
+            for i = count - 1, 2, -1 do
+                table.insert(upNotes, newNotes[i])
+            end
+            for _, v in ipairs(upNotes) do
+                table.insert(newNotes, v)
+            end
+        end
+    end
+    
+    return newNotes
+end
+
+function getBestVoiceLeadingInversion(root, chordData, octave)
+    if not lastPlayedNotes or #lastPlayedNotes == 0 then return 0 end
+    
+    local lastAvg = getAveragePitch(lastPlayedNotes)
+    local bestInversion = 0
+    local minDiff = 10000
+    
+    -- Get base notes to determine number of possible inversions
+    local baseNotes = getChordNotesArray(root, chordData, octave, 0)
+    local numNotes = #baseNotes
+    if numNotes == 0 then return 0 end
+    
+    local maxInversions = numNotes - 1
+    
+    for inv = 0, maxInversions do
+        local candidateNotes = getChordNotesArray(root, chordData, octave, inv)
+        local avg = getAveragePitch(candidateNotes)
+        local diff = math.abs(avg - lastAvg)
+        
+        if diff < minDiff then
+            minDiff = diff
+            bestInversion = inv
+        end
+    end
+    
+    return bestInversion
+end
 
 function playMidiNote(midiNote)
 
@@ -2433,42 +2141,52 @@ function stopNotesFromPlaying()
 
   setNotesThatArePlaying({})
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
-function applyInversion(chord)
+function applyInversion(chord, inversionOverride)
   
   local chordLength = #chord
+  if chordLength == 0 then return chord end
 
   local selectedScaleNote = getSelectedScaleNote()
-  local chordInversionValue = getChordInversionState(selectedScaleNote)
+  local chordInversionValue
   
-
+  if inversionOverride then
+    chordInversionValue = inversionOverride
+  else
+    chordInversionValue = getChordInversionState(selectedScaleNote)
+  end
+  
   local chord_ = {}
-  for i, v in ipairs(chord) do
-    chord_[i] = v
+  for i, v in ipairs(chord) do chord_[i] = v end
+  
+  local fullOctaves = math.floor(chordInversionValue / chordLength)
+  local remainingInversions = chordInversionValue % chordLength
+  
+  if fullOctaves ~= 0 then
+     for i = 1, #chord_ do
+       chord_[i] = chord_[i] + (fullOctaves * 12)
+     end
   end
   
-  local oct = 0  
-  
-  if chordInversionValue < 0 then
-    oct = math.floor(chordInversionValue / chordLength)
-    chordInversionValue = chordInversionValue + (math.abs(oct) * chordLength)
-  end
-  
-  for i = 1, chordInversionValue do
-    local r = table.remove(chord_, 1)
-    r = r + 12
-    table.insert(chord_, #chord_ + 1, r )
+  if remainingInversions > 0 then
+    for i = 1, remainingInversions do
+      local r = table.remove(chord_, 1)
+      r = r + 12
+      table.insert(chord_, #chord_ + 1, r )
+    end
+  elseif remainingInversions < 0 then
+    for i = 1, math.abs(remainingInversions) do
+      local r = table.remove(chord_)
+      r = r - 12
+      table.insert(chord_, 1, r)
+    end
   end
     
-  for i = 1, #chord_ do
-    chord_[i] = chord_[i] + (oct * 12)
-  end
-
   return chord_
 end
 
-function getChordNotesArray(root, chord, octave)
+function getChordNotesArray(root, chord, octave, inversionOverride)
 
   local chordLength = 0
   local chordNotesArray = {}
@@ -2482,9 +2200,8 @@ function getChordNotesArray(root, chord, octave)
     end
   end
   
-  chordNotesArray = applyInversion(chordNotesArray)
+  chordNotesArray = applyInversion(chordNotesArray, inversionOverride)
   
-  -- Identify notes to drop based on the close voicing
   local notesToDrop = {}
   if #chordNotesArray >= 2 and voicingState.drop2 then
     table.insert(notesToDrop, chordNotesArray[#chordNotesArray - 1])
@@ -2493,7 +2210,6 @@ function getChordNotesArray(root, chord, octave)
     table.insert(notesToDrop, chordNotesArray[#chordNotesArray - 2])
   end
   
-  -- Apply drops
   for _, dropVal in ipairs(notesToDrop) do
     for i, noteVal in ipairs(chordNotesArray) do
       if noteVal == dropVal then
@@ -2503,35 +2219,83 @@ function getChordNotesArray(root, chord, octave)
     end
   end
   
-  table.sort(chordNotesArray)
-
-  -- Apply Bass
-  if voicingState.bass1 then
+  if voicingState.bass1 == true then
     local bassNote = root + ((octave + 1 - 1) * 12) - 1
     table.insert(chordNotesArray, 1, bassNote)
   end
-  if voicingState.bass2 then
+  if voicingState.bass2 == true then
     local bassNote = root + ((octave + 1 - 2) * 12) - 1
     table.insert(chordNotesArray, 1, bassNote)
   end
+  
+  local uniqueNotes = {}
+  local seen = {}
+  for _, v in ipairs(chordNotesArray) do
+    if not seen[v] then
+       table.insert(uniqueNotes, v)
+       seen[v] = true
+    end
+  end
+  chordNotesArray = uniqueNotes
   
   table.sort(chordNotesArray)
   
   return chordNotesArray
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
+
+local function getArpDelaySeconds()
+    if arpSpeedMode == "ms" then
+        return arpSpeedMs / 1000.0
+    else
+        local qn = 0.5
+        if arpGrid == "1/4" then qn = 1.0
+        elseif arpGrid == "1/8" then qn = 0.5
+        elseif arpGrid == "1/16" then qn = 0.25
+        elseif arpGrid == "1/32" then qn = 0.125
+        elseif arpGrid == "1/64" then qn = 0.0625
+        end
+        
+        local bpm = reaper.Master_GetTempo()
+        return (60.0 / bpm) * qn
+    end
+end
+
+local function getArpOffsetPPQ()
+    local take = activeTake()
+    if not take then return 0 end
+    
+    local ppqPerBeat = reaper.MIDI_GetPPQPosFromProjQN(take, 1) - reaper.MIDI_GetPPQPosFromProjQN(take, 0)
+    
+    if arpSpeedMode == "ms" then
+        local bpm = reaper.Master_GetTempo()
+        return (arpSpeedMs / 1000.0) * (bpm / 60.0) * ppqPerBeat
+    else
+        local qn = 0.5
+        if arpGrid == "1/4" then qn = 1.0
+        elseif arpGrid == "1/8" then qn = 0.5
+        elseif arpGrid == "1/16" then qn = 0.25
+        elseif arpGrid == "1/32" then qn = 0.125
+        elseif arpGrid == "1/64" then qn = 0.0625
+        end
+        
+        return qn * ppqPerBeat
+    end
+end
 
 function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 
-	local startPosition = getCursorPositionPPQ()
+  local startPosition = getCursorPositionPPQ()
 	
 
 	if strumEnabled then
 		local ppq = reaper.MIDI_GetPPQPosFromProjQN(activeTake(), 0)
-		local quarterNote = reaper.MIDI_GetProjQNFromPPQPos(activeTake(), ppq + 1)
 		local oneBeatInPPQ = (ppq + 1) - ppq
 		local strumOffsetPPQ = (strumDelayMs / 1000.0) * (oneBeatInPPQ * 2)
 		startPosition = startPosition + ((noteIndex - 1) * strumOffsetPPQ)
+	elseif arpEnabled then
+		local arpOffsetPPQ = getArpOffsetPPQ()
+		startPosition = startPosition + ((noteIndex - 1) * arpOffsetPPQ)
 	end
 
 	local endPosition = nil
@@ -2561,6 +2325,9 @@ function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 			local oneBeatInPPQ = (ppq + 1) - ppq
 			local strumOffsetPPQ = (strumDelayMs / 1000.0) * (oneBeatInPPQ * 2)
 			endPosition = endPosition + ((noteIndex - 1) * strumOffsetPPQ)
+		elseif arpEnabled then
+			local arpOffsetPPQ = getArpOffsetPPQ()
+			endPosition = endPosition + ((noteIndex - 1) * arpOffsetPPQ)
 		end
 		
 	else
@@ -2572,6 +2339,9 @@ function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 			local oneBeatInPPQ = (ppq + 1) - ppq
 			local strumOffsetPPQ = (strumDelayMs / 1000.0) * (oneBeatInPPQ * 2)
 			endPosition = endPosition + ((noteIndex - 1) * strumOffsetPPQ)
+		elseif arpEnabled then
+			local arpOffsetPPQ = getArpOffsetPPQ()
+			endPosition = endPosition + ((noteIndex - 1) * arpOffsetPPQ)
 		end
 		
 		velocity = getCurrentVelocity()
@@ -2583,7 +2353,7 @@ function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 
 	reaper.MIDI_InsertNote(activeTake(), keepNotesSelected, muteState, startPosition, endPosition, channel, note, velocity, noSort)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local function playScaleChord(chordNotesArray)
 
@@ -2592,6 +2362,24 @@ local function playScaleChord(chordNotesArray)
   if strumEnabled then
 
     local delaySeconds = strumDelayMs / 1000.0
+    
+    for noteIndex = 1, #chordNotesArray do
+      playMidiNote(chordNotesArray[noteIndex])
+      
+
+      if noteIndex < #chordNotesArray then
+        local startTime = reaper.time_precise()
+        local targetTime = startTime + delaySeconds
+        
+
+        while reaper.time_precise() < targetTime do
+
+        end
+      end
+    end
+  elseif arpEnabled then
+
+    local delaySeconds = getArpDelaySeconds()
     
     for noteIndex = 1, #chordNotesArray do
       playMidiNote(chordNotesArray[noteIndex])
@@ -2654,20 +2442,42 @@ function playChordFromSlot(slotIndex)
   local root = scaleNotes[slot.scaleNoteIndex]
   local chordData = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
   local octave = getOctave()
-  local notes = getChordNotesArray(root, chordData, octave)
+  
+  local inversionOverride = nil
+  if voiceLeadingEnabled then
+     inversionOverride = getBestVoiceLeadingInversion(root, chordData, octave)
+  end
+  
+  local notes = getChordNotesArray(root, chordData, octave, inversionOverride)
+  if voiceLeadingEnabled then lastPlayedNotes = notes end
+  
+  notes = applyArpPattern(notes)
   
 
-  for noteIndex, note in ipairs(notes) do
-    if strumEnabled then
-
-      local strumDelaySeconds = (strumDelayMs / 1000.0) * (noteIndex - 1)
-      reaper.defer(function()
-        playMidiNote(note)
-      end)
-    else
-
-      playMidiNote(note)
+  if strumEnabled then
+    local delaySeconds = strumDelayMs / 1000.0
+    for noteIndex = 1, #notes do
+        playMidiNote(notes[noteIndex])
+        if noteIndex < #notes then
+            local startTime = reaper.time_precise()
+            local targetTime = startTime + delaySeconds
+            while reaper.time_precise() < targetTime do end
+        end
     end
+  elseif arpEnabled then
+    local delaySeconds = getArpDelaySeconds()
+    for noteIndex = 1, #notes do
+        playMidiNote(notes[noteIndex])
+        if noteIndex < #notes then
+            local startTime = reaper.time_precise()
+            local targetTime = startTime + delaySeconds
+            while reaper.time_precise() < targetTime do end
+        end
+    end
+  else
+      for noteIndex, note in ipairs(notes) do
+        playMidiNote(note)
+      end
   end
   
 
@@ -3077,7 +2887,16 @@ function insertProgressionToMIDI()
       local root = scaleNotes[slot.scaleNoteIndex]
       local chordData = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
       local octave = getOctave()
-      local notes = getChordNotesArray(root, chordData, octave)
+      
+      local inversionOverride = nil
+      if voiceLeadingEnabled then
+         inversionOverride = getBestVoiceLeadingInversion(root, chordData, octave)
+      end
+      
+      local notes = getChordNotesArray(root, chordData, octave, inversionOverride)
+      if voiceLeadingEnabled then lastPlayedNotes = notes end
+      
+      notes = applyArpPattern(notes)
       
       local beats = slot.beats or 1
       local repeats = slot.repeats or 1
@@ -3097,6 +2916,10 @@ function insertProgressionToMIDI()
             local strumOffsetPPQ = (strumDelayMs / 1000.0) * (oneBeatInPPQ * 2)
             noteStartPPQ = noteStartPPQ + ((noteIndex - 1) * strumOffsetPPQ)
             noteEndPPQ = noteEndPPQ + ((noteIndex - 1) * strumOffsetPPQ)
+          elseif arpEnabled then
+            local arpOffsetPPQ = getArpOffsetPPQ()
+            noteStartPPQ = noteStartPPQ + ((noteIndex - 1) * arpOffsetPPQ)
+            noteEndPPQ = noteEndPPQ + ((noteIndex - 1) * arpOffsetPPQ)
           end
           
           local success = reaper.MIDI_InsertNote(take, false, false, noteStartPPQ, noteEndPPQ, channel, note, velocity, true)
@@ -3474,11 +3297,30 @@ function updateProgressionPlayback()
       local chordData = scaleChords[chord.scaleNoteIndex][chord.chordTypeIndex]
       local octave = getOctave()
       local newNotes = getChordNotesArray(root, chordData, octave)
+      newNotes = applyArpPattern(newNotes)
       
 
       if strumEnabled then
 
         local delaySeconds = strumDelayMs / 1000.0
+        
+        for noteIndex = 1, #newNotes do
+          playMidiNote(newNotes[noteIndex])
+          
+
+          if noteIndex < #newNotes then
+            local startTime = reaper.time_precise()
+            local targetTime = startTime + delaySeconds
+            
+
+            while reaper.time_precise() < targetTime do
+
+            end
+          end
+        end
+      elseif arpEnabled then
+
+        local delaySeconds = arpSpeedMs / 1000.0
         
         for noteIndex = 1, #newNotes do
           playMidiNote(newNotes[noteIndex])
@@ -3519,7 +3361,15 @@ function previewScaleChord()
   local chord = scaleChords[scaleNoteIndex][chordTypeIndex]
   local octave = getOctave()
 
-  local chordNotesArray = getChordNotesArray(root, chord, octave)
+  local inversionOverride = nil
+  if voiceLeadingEnabled then
+     inversionOverride = getBestVoiceLeadingInversion(root, chord, octave)
+  end
+
+  local chordNotesArray = getChordNotesArray(root, chord, octave, inversionOverride)
+  if voiceLeadingEnabled then lastPlayedNotes = chordNotesArray end
+  
+  chordNotesArray = applyArpPattern(chordNotesArray)
   playScaleChord(chordNotesArray)
   updateChordText(root, chord, chordNotesArray)
 end
@@ -3573,6 +3423,7 @@ function playOrInsertScaleChord(actionDescription)
   local octave = getOctave()
   
   local chordNotesArray = getChordNotesArray(root, chord, octave)
+  chordNotesArray = applyArpPattern(chordNotesArray)
 
   if ensureActiveTake() and notCurrentlyRecording() then
 
@@ -3595,7 +3446,7 @@ function playOrInsertScaleChord(actionDescription)
   playScaleChord(chordNotesArray)
   updateChordText(root, chord, chordNotesArray)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 
 local function playScaleNote(noteValue)
@@ -3655,7 +3506,7 @@ function playOrInsertScaleNote(octaveAdjustment, actionDescription)
 
 	playScaleNote(noteValue)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 SelectedNote = {}
 SelectedNote.__index = SelectedNote
@@ -3786,7 +3637,7 @@ function changeSelectedNotesToScaleNotes(noteValue)
 		insertScaleNote(noteValue, true, selectedChords[i])
 	end
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 scaleNotes = {}
 scaleChords = {}
@@ -4010,7 +3861,7 @@ function showScaleStatus()
   local scaleNotesText = getScaleNotesText()
   reaper.Help_Set(("%s %s: %s"):format(scaleTonicText, scaleTypeText, scaleNotesText), false)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local function transposeSelectedNotes(numberOfSemitones)
 
@@ -4035,7 +3886,7 @@ end
 function transposeSelectedNotesDownOneOctave()
   transposeSelectedNotes(-12)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local function decrementChordInversion()
 
@@ -4434,1307 +4285,460 @@ function previewHigherScaleNoteAction(scaleNoteIndex)
 	setSelectedScaleNote(scaleNoteIndex)
 	previewScaleNote(1)
 end
-function drawDropdownIcon()
 
-    local xOffset = gfx.x
-    local yOffset = gfx.y
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.36078431372549, 0.39607843137255, 0.3843137254902)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = xOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 1 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 2 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 2 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.3843137254902, 0.4156862745098, 0.40392156862745)
-    gfx.x = 2 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 2 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 2 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 2 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 3 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 3 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 3 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.35294117647059, 0.3843137254902, 0.37254901960784)
-    gfx.x = 3 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.41176470588235, 0.43921568627451, 0.42745098039216)
-    gfx.x = 3 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.67843137254902, 0.69411764705882, 0.69019607843137)
-    gfx.x = 3 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.50196078431373, 0.52549019607843, 0.51764705882353)
-    gfx.x = 3 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.36078431372549, 0.39607843137255, 0.38039215686275)
-    gfx.x = 3 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 3 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 3 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 3 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 3 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 3 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 3 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 4 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 4 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 4 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.34509803921569, 0.37647058823529, 0.36470588235294)
-    gfx.x = 4 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.43529411764706, 0.46274509803922, 0.45098039215686)
-    gfx.x = 4 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.92156862745098, 0.92549019607843, 0.92549019607843)
-    gfx.x = 4 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.85882352941176, 0.86274509803922, 0.86274509803922)
-    gfx.x = 4 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.53725490196078, 0.56078431372549, 0.55294117647059)
-    gfx.x = 4 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36470588235294, 0.4, 0.38823529411765)
-    gfx.x = 4 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36078431372549, 0.3921568627451, 0.38039215686275)
-    gfx.x = 4 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 4 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 4 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 4 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 4 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 5 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 5 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 5 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.34509803921569, 0.38039215686275, 0.36470588235294)
-    gfx.x = 5 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.43529411764706, 0.46274509803922, 0.45098039215686)
-    gfx.x = 5 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.94901960784314, 0.95294117647059, 0.95294117647059)
-    gfx.x = 5 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(1.0, 1.0, 1.0)
-    gfx.x = 5 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.90196078431373, 0.90588235294118, 0.90196078431373)
-    gfx.x = 5 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.6, 0.6156862745098, 0.61176470588235)
-    gfx.x = 5 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.3921568627451, 0.42352941176471, 0.41176470588235)
-    gfx.x = 5 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 5 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 5 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 5 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 5 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 6 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 6 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 6 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.34509803921569, 0.38039215686275, 0.36862745098039)
-    gfx.x = 6 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.43529411764706, 0.46274509803922, 0.45098039215686)
-    gfx.x = 6 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.94509803921569, 0.94509803921569, 0.94509803921569)
-    gfx.x = 6 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(1.0, 1.0, 1.0)
-    gfx.x = 6 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(1.0, 1.0, 1.0)
-    gfx.x = 6 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.87058823529412, 0.87843137254902, 0.87843137254902)
-    gfx.x = 6 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.52156862745098, 0.54509803921569, 0.53725490196078)
-    gfx.x = 6 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.38823529411765)
-    gfx.x = 6 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 6 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 6 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 6 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 7 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 7 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 7 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.34509803921569, 0.38039215686275, 0.36470588235294)
-    gfx.x = 7 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.43529411764706, 0.46274509803922, 0.45098039215686)
-    gfx.x = 7 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.94901960784314, 0.95294117647059, 0.95294117647059)
-    gfx.x = 7 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(1.0, 1.0, 1.0)
-    gfx.x = 7 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.90196078431373, 0.90588235294118, 0.90196078431373)
-    gfx.x = 7 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.6, 0.6156862745098, 0.61176470588235)
-    gfx.x = 7 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.3921568627451, 0.42352941176471, 0.41176470588235)
-    gfx.x = 7 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 7 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 7 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 7 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 7 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 8 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 8 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 8 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.34509803921569, 0.37647058823529, 0.36470588235294)
-    gfx.x = 8 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.43529411764706, 0.46274509803922, 0.45490196078431)
-    gfx.x = 8 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.92156862745098, 0.92549019607843, 0.92549019607843)
-    gfx.x = 8 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.85490196078431, 0.86274509803922, 0.85882352941176)
-    gfx.x = 8 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.53725490196078, 0.56078431372549, 0.55294117647059)
-    gfx.x = 8 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36470588235294, 0.4, 0.38823529411765)
-    gfx.x = 8 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36078431372549, 0.3921568627451, 0.38039215686275)
-    gfx.x = 8 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 8 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 8 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 8 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 8 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 9 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36862745098039, 0.39607843137255, 0.3843137254902)
-    gfx.x = 9 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.35294117647059, 0.3843137254902, 0.37254901960784)
-    gfx.x = 9 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.41176470588235, 0.43921568627451, 0.42745098039216)
-    gfx.x = 9 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.67843137254902, 0.69411764705882, 0.69019607843137)
-    gfx.x = 9 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.49803921568627, 0.52549019607843, 0.51764705882353)
-    gfx.x = 9 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 9 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 9 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 9 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 9 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 9 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 9 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 9 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 10 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 10 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 10 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 10 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 10 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.3843137254902, 0.4156862745098, 0.40392156862745)
-    gfx.x = 10 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 10 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 10 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 10 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 10 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 10 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 10 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 10 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 10 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 11 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.36078431372549, 0.3921568627451, 0.38039215686275)
-    gfx.x = 11 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.39607843137255, 0.3843137254902)
-    gfx.x = 11 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36470588235294, 0.4, 0.38823529411765)
-    gfx.x = 11 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34509803921569, 0.37647058823529, 0.36470588235294)
-    gfx.x = 11 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 12 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.36470588235294, 0.4, 0.38823529411765)
-    gfx.x = 12 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.36862745098039, 0.40392156862745, 0.3921568627451)
-    gfx.x = 12 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.34901960784314, 0.38039215686275, 0.36862745098039)
-    gfx.x = 12 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 13 + xOffset
-    gfx.y = yOffset
-    gfx.setpixel(0.36862745098039, 0.4, 0.38823529411765)
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.34901960784314, 0.38039215686275, 0.36862745098039)
-    gfx.x = 13 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.34509803921569, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.34901960784314, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.34509803921569, 0.37647058823529, 0.36470588235294)
-    gfx.x = 13 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.34901960784314, 0.38039215686275, 0.36862745098039)
-    gfx.x = 13 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.32549019607843, 0.35294117647059, 0.34117647058824)
-    gfx.x = 13 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 10 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 11 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 12 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 13 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 14 + xOffset
-    gfx.y = 14 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-end
-function drawLeftArrow()
-
-    local xOffset = gfx.x
-    local yOffset = gfx.y
-    gfx.x = 1 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 1 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 1 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.10196078431373, 0.10196078431373, 0.10196078431373)
-    gfx.x = 1 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.18823529411765, 0.1921568627451, 0.1921568627451)
-    gfx.x = 1 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.10196078431373, 0.10196078431373, 0.10196078431373)
-    gfx.x = 1 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 1 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 1 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 1 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 2 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 2 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.07843137254902, 0.07843137254902, 0.074509803921569)
-    gfx.x = 2 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.24313725490196, 0.25882352941176, 0.25882352941176)
-    gfx.x = 2 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.45490196078431, 0.48627450980392, 0.49019607843137)
-    gfx.x = 2 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.24313725490196, 0.25882352941176, 0.25882352941176)
-    gfx.x = 2 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.07843137254902, 0.07843137254902, 0.074509803921569)
-    gfx.x = 2 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 2 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 2 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 3 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.07843137254902, 0.07843137254902, 0.07843137254902)
-    gfx.x = 3 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.19607843137255, 0.2078431372549, 0.2078431372549)
-    gfx.x = 3 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.47450980392157, 0.51372549019608, 0.51372549019608)
-    gfx.x = 3 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.56078431372549, 0.61176470588235, 0.61176470588235)
-    gfx.x = 3 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.47450980392157, 0.51372549019608, 0.51372549019608)
-    gfx.x = 3 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.19607843137255, 0.2078431372549, 0.2078431372549)
-    gfx.x = 3 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.07843137254902, 0.07843137254902, 0.07843137254902)
-    gfx.x = 3 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.090196078431373, 0.090196078431373, 0.090196078431373)
-    gfx.x = 3 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 4 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.19607843137255, 0.2078431372549, 0.2078431372549)
-    gfx.x = 4 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.44313725490196, 0.47843137254902, 0.47843137254902)
-    gfx.x = 4 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.56862745098039, 0.6156862745098, 0.61176470588235)
-    gfx.x = 4 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.57647058823529, 0.62352941176471, 0.62352941176471)
-    gfx.x = 4 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.56862745098039, 0.6156862745098, 0.61176470588235)
-    gfx.x = 4 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.44313725490196, 0.47843137254902, 0.47843137254902)
-    gfx.x = 4 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.19607843137255, 0.2078431372549, 0.2078431372549)
-    gfx.x = 4 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 4 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 5 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.30196078431373, 0.32156862745098, 0.32156862745098)
-    gfx.x = 5 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.49411764705882, 0.53725490196078, 0.53725490196078)
-    gfx.x = 5 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.51764705882353, 0.56470588235294, 0.56470588235294)
-    gfx.x = 5 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.51372549019608, 0.55686274509804, 0.55686274509804)
-    gfx.x = 5 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.51764705882353, 0.56470588235294, 0.56470588235294)
-    gfx.x = 5 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.49411764705882, 0.53725490196078, 0.53725490196078)
-    gfx.x = 5 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.30196078431373, 0.32156862745098, 0.32156862745098)
-    gfx.x = 5 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.098039215686275, 0.098039215686275, 0.098039215686275)
-    gfx.x = 5 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 6 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.11764705882353, 0.12156862745098, 0.12156862745098)
-    gfx.x = 6 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.13725490196078, 0.14117647058824, 0.14117647058824)
-    gfx.x = 6 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.13333333333333, 0.13725490196078, 0.13725490196078)
-    gfx.x = 6 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.13333333333333, 0.13725490196078, 0.13725490196078)
-    gfx.x = 6 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.13333333333333, 0.13725490196078, 0.13725490196078)
-    gfx.x = 6 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.13725490196078, 0.14117647058824, 0.14117647058824)
-    gfx.x = 6 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.11764705882353, 0.12156862745098, 0.12156862745098)
-    gfx.x = 6 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 6 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 7 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.07843137254902, 0.074509803921569, 0.074509803921569)
-    gfx.x = 7 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.070588235294118, 0.066666666666667, 0.066666666666667)
-    gfx.x = 7 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.070588235294118, 0.066666666666667, 0.066666666666667)
-    gfx.x = 7 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.070588235294118, 0.070588235294118, 0.070588235294118)
-    gfx.x = 7 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.070588235294118, 0.066666666666667, 0.066666666666667)
-    gfx.x = 7 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.070588235294118, 0.066666666666667, 0.066666666666667)
-    gfx.x = 7 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.07843137254902, 0.074509803921569, 0.074509803921569)
-    gfx.x = 7 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 7 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 8 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.086274509803922, 0.090196078431373, 0.090196078431373)
-    gfx.x = 8 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.090196078431373, 0.090196078431373, 0.090196078431373)
-    gfx.x = 8 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.090196078431373, 0.090196078431373, 0.090196078431373)
-    gfx.x = 8 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.090196078431373, 0.090196078431373, 0.090196078431373)
-    gfx.x = 8 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.090196078431373, 0.090196078431373, 0.090196078431373)
-    gfx.x = 8 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.090196078431373, 0.090196078431373, 0.090196078431373)
-    gfx.x = 8 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.086274509803922, 0.090196078431373, 0.090196078431373)
-    gfx.x = 8 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 8 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-end
-function drawRightArrow()
-
-    local xOffset = gfx.x
-    local yOffset = gfx.y
-    gfx.x = 1 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.07843137254902, 0.074509803921569, 0.074509803921569)
-    gfx.x = 1 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.070588235294118, 0.066666666666667, 0.066666666666667)
-    gfx.x = 1 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.070588235294118, 0.066666666666667, 0.066666666666667)
-    gfx.x = 1 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.070588235294118, 0.070588235294118, 0.070588235294118)
-    gfx.x = 1 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.070588235294118, 0.066666666666667, 0.066666666666667)
-    gfx.x = 1 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.070588235294118, 0.066666666666667, 0.066666666666667)
-    gfx.x = 1 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.07843137254902, 0.074509803921569, 0.074509803921569)
-    gfx.x = 1 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 1 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 2 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.11764705882353, 0.12156862745098, 0.12156862745098)
-    gfx.x = 2 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.13725490196078, 0.14117647058824, 0.14117647058824)
-    gfx.x = 2 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.13333333333333, 0.13725490196078, 0.13725490196078)
-    gfx.x = 2 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.13333333333333, 0.13725490196078, 0.13725490196078)
-    gfx.x = 2 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.13333333333333, 0.13725490196078, 0.13725490196078)
-    gfx.x = 2 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.13725490196078, 0.14117647058824, 0.14117647058824)
-    gfx.x = 2 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.11764705882353, 0.12156862745098, 0.12156862745098)
-    gfx.x = 2 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 2 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 3 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.30196078431373, 0.32156862745098, 0.32156862745098)
-    gfx.x = 3 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.49411764705882, 0.53725490196078, 0.53725490196078)
-    gfx.x = 3 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.51764705882353, 0.56470588235294, 0.56470588235294)
-    gfx.x = 3 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.51372549019608, 0.55686274509804, 0.55686274509804)
-    gfx.x = 3 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.51764705882353, 0.56470588235294, 0.56470588235294)
-    gfx.x = 3 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.49411764705882, 0.53725490196078, 0.53725490196078)
-    gfx.x = 3 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.30196078431373, 0.32156862745098, 0.32156862745098)
-    gfx.x = 3 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.098039215686275, 0.098039215686275, 0.098039215686275)
-    gfx.x = 3 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 4 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.19607843137255, 0.2078431372549, 0.2078431372549)
-    gfx.x = 4 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.44313725490196, 0.47843137254902, 0.47843137254902)
-    gfx.x = 4 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.56862745098039, 0.6156862745098, 0.61176470588235)
-    gfx.x = 4 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.57647058823529, 0.62352941176471, 0.62352941176471)
-    gfx.x = 4 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.56862745098039, 0.6156862745098, 0.61176470588235)
-    gfx.x = 4 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.44313725490196, 0.47843137254902, 0.47843137254902)
-    gfx.x = 4 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.19607843137255, 0.2078431372549, 0.2078431372549)
-    gfx.x = 4 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 4 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 5 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.07843137254902, 0.07843137254902, 0.07843137254902)
-    gfx.x = 5 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.19607843137255, 0.2078431372549, 0.2078431372549)
-    gfx.x = 5 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.47450980392157, 0.51372549019608, 0.51372549019608)
-    gfx.x = 5 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.56078431372549, 0.61176470588235, 0.61176470588235)
-    gfx.x = 5 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.47450980392157, 0.51372549019608, 0.51372549019608)
-    gfx.x = 5 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.19607843137255, 0.2078431372549, 0.2078431372549)
-    gfx.x = 5 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.07843137254902, 0.07843137254902, 0.07843137254902)
-    gfx.x = 5 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.090196078431373, 0.090196078431373, 0.090196078431373)
-    gfx.x = 5 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 6 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 6 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.07843137254902, 0.07843137254902, 0.074509803921569)
-    gfx.x = 6 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.24313725490196, 0.25882352941176, 0.25882352941176)
-    gfx.x = 6 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.45490196078431, 0.48627450980392, 0.49019607843137)
-    gfx.x = 6 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.24313725490196, 0.25882352941176, 0.25882352941176)
-    gfx.x = 6 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.07843137254902, 0.07843137254902, 0.074509803921569)
-    gfx.x = 6 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 6 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 6 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 7 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 7 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 7 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.10196078431373, 0.10196078431373, 0.10196078431373)
-    gfx.x = 7 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.18823529411765, 0.1921568627451, 0.1921568627451)
-    gfx.x = 7 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.10196078431373, 0.10196078431373, 0.10196078431373)
-    gfx.x = 7 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 7 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 7 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 7 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 8 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 8 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 8 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 8 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.086274509803922, 0.082352941176471, 0.082352941176471)
-    gfx.x = 8 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 8 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 8 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 8 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.086274509803922, 0.086274509803922, 0.086274509803922)
-    gfx.x = 8 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 1 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 2 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 3 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 4 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 5 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 6 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 7 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 8 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-    gfx.x = 9 + xOffset
-    gfx.y = 9 + yOffset
-    gfx.setpixel(0.0, 0.0, 0.0)
-end
 local function hex2rgb(arg) 
 
-	local r, g, b = arg:match('(..)(..)(..)')
-	r = tonumber(r, 16)/255
-	g = tonumber(g, 16)/255
-	b = tonumber(b, 16)/255
-	return r, g, b
+  local r, g, b = arg:match('(..)(..)(..)')
+  r = tonumber(r, 16)/255
+  g = tonumber(g, 16)/255
+  b = tonumber(b, 16)/255
+  return r, g, b
+end
+
+local function hexToNative(hex)
+    local r, g, b = hex:match('(..)(..)(..)')
+    r = tonumber(r, 16)
+    g = tonumber(g, 16)
+    b = tonumber(b, 16)
+    return reaper.ColorToNative(r, g, b)
 end
 
 local function setColor(hexColor)
 
-	local r, g, b = hex2rgb(hexColor)
-	gfx.set(r, g, b, 1)
+  local r, g, b = hex2rgb(hexColor)
+  gfx.set(r, g, b, 1)
+end
+
+local themes = {
+    dark = {
+        background = "242424",
+        buttonNormal = "333333",
+        buttonHighlight = "474747",
+        buttonPressed = "FFD700",
+        buttonPressedText = "1A1A1A",
+        chordSelected = "474747",
+        chordSelectedHighlight = "717171",
+        chordSelectedScaleNote = "DCDCDC",
+        chordSelectedScaleNoteHighlight = "FFFFFF",
+        chordOutOfScale = "181818",
+        chordOutOfScaleHighlight = "474747",
+        buttonOutline = "1D1D1D",
+        textNormal = "D7D7D7",
+        textHighlight = "EEEEEE",
+        textSelected = "F1F1F1",
+        textSelectedHighlight = "FDFDFD",
+        textSelectedScaleNote = "121212",
+        textSelectedScaleNoteHighlight = "000000",
+        headerOutline = "2E5C8A",
+        headerBackground = "4A90D9",
+        headerText = "E8F4FF",
+        frameOutline = "0D0D0D",
+        frameBackground = "181818",
+        dropdownOutline = "090909",
+        dropdownBackground = "1D1D1D",
+        dropdownText = "D7D7D7",
+        valueBoxOutline = "090909",
+        valueBoxBackground = "161616",
+        valueBoxText = "9F9F9F",
+        generalText = "878787",
+        
+        -- Progression Slots
+        slotBg = "262626",
+        slotPlaying = "336699",
+        slotSelected = "4D804D",
+        slotHover = "333333",
+        slotOutlineSelected = "80B380",
+        slotOutline = "4D4D4D",
+        slotLengthMarker = "FF9900",
+        slotText = "FFFFFF",
+        slotInfoText = "B3B3B3",
+        slotEmptyText = "666666",
+        
+        -- Tooltip
+        tooltipBg = "1A1A1A",
+        tooltipBorder = "FFD700",
+        tooltipText = "FFFFFF",
+        
+        -- Header Buttons
+        headerButtonBg = "404040",
+        headerButtonBorder = "808080",
+        headerButtonText = "FFFFFF",
+        
+        -- Linear View
+        linearViewRoot = "FFD700",
+        linearViewScale = "66B3FF",
+        linearViewOutOfScale = "333333",
+        linearViewTextInScale = "000000",
+        linearViewTextOutOfScale = "808080",
+        linearViewIntervalText = "CCCCCC",
+        linearViewLegendTitle = "FFFFFF",
+        linearViewLegendSub = "B3B3B3",
+        
+        -- Wheel View
+        wheelBg = "262626",
+        wheelPolygon = "808080",
+        wheelPolygonActive = "FFFFFF",
+        wheelTonic = "FFD700",
+        wheelInScale = "80C0E6",
+        wheelOutOfScale = "333333",
+        wheelOutOfScaleFifths = "404040",
+        wheelBorderActive = "FFFFFF",
+        wheelBorderInactive = "666666",
+        wheelHalo = "FFD700",
+        wheelText = "000000",
+        wheelRelativeMinor = "000000",
+        wheelLegendTitle = "FFFFFF",
+        wheelLegendSub = "B3B3B3",
+        wheelLegendHalo = "FFD700",
+        wheelLegendText = "FFFFFF",
+        wheelFooterText = "B3B3B3",
+        
+        -- Piano
+        pianoWhite = "FFFFFF",
+        pianoWhiteActive = "FFD700",
+        pianoWhiteText = "000000",
+        pianoBlack = "000000",
+        pianoBlackActive = "FFD700",
+        pianoBlackText = "FFFFFF",
+        pianoBlackTextActive = "000000",
+        
+        -- Chord Display
+        chordDisplayBg = "1A1A1A",
+        chordDisplayText = "FFFFFF",
+        
+        -- Bottom Buttons
+        bottomButtonBg = "2D2D2D",
+        bottomButtonText = "D7D7D7",
+        
+        -- Icons
+        iconColor = "CCCCCC",
+        
+        -- Missing Keys (Dark)
+        bottomButtonBgHover = "3D3D3D",
+        topButtonTextHover = "FFD700",
+        topButtonText = "D7D7D7",
+        bottomButtonTextActive = "FFD700",
+        pianoActive = "FFD700",
+        pianoWhiteGrey = "CCCCCC",
+        pianoTextActive = "000000",
+        pianoTextExternal = "AAAAAA",
+        pianoTextNormal = "000000",
+        pianoBlackGrey = "333333",
+        chordDisplayRecognized = "FFD700",
+        chordDisplayRecognizedOutOfScale = "FF4444"
+    },
+    light = {
+        background = "E0E0E0",
+        buttonNormal = "C0C0C0",
+        buttonHighlight = "B0B0B0",
+        buttonPressed = "FFD700",
+        buttonPressedText = "000000",
+        chordSelected = "B0B0B0",
+        chordSelectedHighlight = "A0A0A0",
+        chordSelectedScaleNote = "404040",
+        chordSelectedScaleNoteHighlight = "202020",
+        chordOutOfScale = "F8F8F8",
+        chordOutOfScaleHighlight = "E5E5E5",
+        buttonOutline = "A0A0A0",
+        textNormal = "202020",
+        textHighlight = "000000",
+        textSelected = "101010",
+        textSelectedHighlight = "000000",
+        textSelectedScaleNote = "FFFFFF",
+        textSelectedScaleNoteHighlight = "FFFFFF",
+        headerOutline = "2E5C8A",
+        headerBackground = "4A90D9",
+        headerText = "E8F4FF",
+        frameOutline = "A0A0A0",
+        frameBackground = "D0D0D0",
+        dropdownOutline = "A0A0A0",
+        dropdownBackground = "F0F0F0",
+        dropdownText = "000000",
+        valueBoxOutline = "A0A0A0",
+        valueBoxBackground = "F0F0F0",
+        valueBoxText = "000000",
+        generalText = "202020",
+        
+        -- Progression Slots
+        slotBg = "E0E0E0",
+        slotPlaying = "6699CC",
+        slotSelected = "80B380",
+        slotHover = "D0D0D0",
+        slotOutlineSelected = "4D804D",
+        slotOutline = "A0A0A0",
+        slotLengthMarker = "FF9900",
+        slotText = "000000",
+        slotInfoText = "404040",
+        slotEmptyText = "808080",
+        
+        -- Tooltip
+        tooltipBg = "F0F0F0",
+        tooltipBorder = "FFD700",
+        tooltipText = "000000",
+        
+        -- Header Buttons
+        headerButtonBg = "D0D0D0",
+        headerButtonBorder = "A0A0A0",
+        headerButtonText = "000000",
+        
+        -- Linear View
+        linearViewRoot = "FFD700",
+        linearViewScale = "66B3FF",
+        linearViewOutOfScale = "E0E0E0",
+        linearViewTextInScale = "000000",
+        linearViewTextOutOfScale = "808080",
+        linearViewIntervalText = "404040",
+        linearViewLegendTitle = "000000",
+        linearViewLegendSub = "404040",
+        
+        -- Wheel View
+        wheelBg = "F0F0F0",
+        wheelPolygon = "808080",
+        wheelPolygonActive = "000000",
+        wheelTonic = "FFD700",
+        wheelInScale = "80C0E6",
+        wheelOutOfScale = "E0E0E0",
+        wheelOutOfScaleFifths = "D0D0D0",
+        wheelBorderActive = "000000",
+        wheelBorderInactive = "A0A0A0",
+        wheelHalo = "FFD700",
+        wheelText = "000000",
+        wheelRelativeMinor = "000000",
+        wheelLegendTitle = "000000",
+        wheelLegendSub = "404040",
+        wheelLegendHalo = "FFD700",
+        wheelLegendText = "000000",
+        wheelFooterText = "404040",
+        
+        -- Piano
+        pianoWhite = "FFFFFF",
+        pianoWhiteActive = "FFD700",
+        pianoWhiteText = "000000",
+        pianoBlack = "000000",
+        pianoBlackActive = "FFD700",
+        pianoBlackText = "909090",
+        pianoBlackTextActive = "000000",
+        
+        -- Chord Display
+        chordDisplayBg = "F0F0F0",
+        chordDisplayText = "000000",
+        
+        -- Bottom Buttons
+        bottomButtonBg = "B0B0B0",
+        bottomButtonText = "000000",
+        
+        -- Icons
+        iconColor = "404040",
+        
+        -- Missing Keys (Light)
+        bottomButtonBgHover = "A0A0A0",
+        topButtonTextHover = "0044AA",
+        topButtonText = "202020",
+        bottomButtonTextActive = "0044AA",
+        pianoActive = "FFD700",
+        pianoWhiteGrey = "E0E0E0",
+        pianoTextActive = "000000",
+        pianoTextExternal = "666666",
+        pianoTextNormal = "000000",
+        pianoBlackGrey = "404040",
+        chordDisplayRecognized = "FFD700",
+        chordDisplayRecognizedOutOfScale = "CC0000"
+    }
+}
+
+local function getThemeColor(key)
+    if isLightMode then return themes.light[key] else return themes.dark[key] end
+end
+
+setThemeColor = function(key)
+    setColor(getThemeColor(key))
+end
+
+function drawDropdownIcon()
+    local x = gfx.x
+    local y = gfx.y
+    
+    setThemeColor("iconColor")
+    
+    local centerX = x + 7
+    local topY = y + 8
+    local halfWidth = 5
+    local height = 5
+    
+    gfx.triangle(centerX - halfWidth, topY, centerX + halfWidth, topY, centerX, topY + height)
+end
+
+function drawLeftArrow()
+    local x = gfx.x
+    local y = gfx.y
+    
+    setThemeColor("iconColor")
+    
+    local width = 6
+    local height = 10
+    
+    -- Triangle pointing left: (right, top), (right, bottom), (left, middle)
+    gfx.triangle(x + width, y, x + width, y + height, x, y + height/2)
+end
+
+function drawRightArrow()
+    local x = gfx.x
+    local y = gfx.y
+    
+    setThemeColor("iconColor")
+    
+    local width = 6
+    local height = 10
+    
+    -- Triangle pointing right: (left, top), (left, bottom), (right, middle)
+    gfx.triangle(x, y, x, y + height, x + width, y + height/2)
 end
 
 --[[ window ]]--
 
 function setDrawColorToBackground()
-	setColor("242424")
+	setThemeColor("background")
 end
 
 --[[ buttons ]]--
 
 function setDrawColorToNormalButton()
-	setColor("2D2D2D")
+	setThemeColor("buttonNormal")
 end
 
 function setDrawColorToHighlightedButton()
-	setColor("474747")
+	setThemeColor("buttonHighlight")
 end
 
 function setDrawColorToPressedButton()
-	setColor("FFD700")
+	setThemeColor("buttonPressed")
 end
 
 function setDrawColorToPressedButtonText()
-	setColor("1A1A1A")
+	setThemeColor("buttonPressedText")
 end
 
 --
 
 function setDrawColorToSelectedChordTypeButton()
-	setColor("474747")
+	setThemeColor("chordSelected")
 end
 
 function setDrawColorToHighlightedSelectedChordTypeButton()
-	setColor("717171")
+	setThemeColor("chordSelectedHighlight")
 end
 
 --
 
 function setDrawColorToSelectedChordTypeAndScaleNoteButton()
-	setColor("DCDCDC")
+	setThemeColor("chordSelectedScaleNote")
 end
 
 function setDrawColorToHighlightedSelectedChordTypeAndScaleNoteButton()
-	setColor("FFFFFF")
+	setThemeColor("chordSelectedScaleNoteHighlight")
 end
 
 --
 
 function setDrawColorToOutOfScaleButton()
-	setColor("121212")
+	setThemeColor("chordOutOfScale")
 end
 
 function setDrawColorToHighlightedOutOfScaleButton()
-	setColor("474747")
+	setThemeColor("chordOutOfScaleHighlight")
 end
 
 --
 
 function setDrawColorToButtonOutline()
-	setColor("1D1D1D")
+	setThemeColor("buttonOutline")
 end
 
 --[[ button text ]]--
 
 function setDrawColorToNormalButtonText()
-	setColor("D7D7D7")
+	setThemeColor("textNormal")
 end
 
 function setDrawColorToHighlightedButtonText()
-	setColor("EEEEEE")
+	setThemeColor("textHighlight")
 end
 
 --
 
 function setDrawColorToSelectedChordTypeButtonText()
-	setColor("F1F1F1")
+	setThemeColor("textSelected")
 end
 
 function setDrawColorToHighlightedSelectedChordTypeButtonText()
-	setColor("FDFDFD")
+	setThemeColor("textSelectedHighlight")
 end
 
 --
 
 function setDrawColorToSelectedChordTypeAndScaleNoteButtonText()
-	setColor("121212")
+	setThemeColor("textSelectedScaleNote")
 end
 
 function setDrawColorToHighlightedSelectedChordTypeAndScaleNoteButtonText()
-	setColor("000000")
+	setThemeColor("textSelectedScaleNoteHighlight")
 end
 
 --[[ buttons ]]--
 
 function setDrawColorToHeaderOutline()
-	setColor("2E5C8A")
+	setThemeColor("headerOutline")
 end
 
 function setDrawColorToHeaderBackground()
-	setColor("4A90D9")
+	setThemeColor("headerBackground")
 end
 
 function setDrawColorToHeaderText()
-	setColor("E8F4FF")
+	setThemeColor("headerText")
 end
 
 
 --[[ frame ]]--
 function setDrawColorToFrameOutline()
-	setColor("0D0D0D")
+	setThemeColor("frameOutline")
 end
 
 function setDrawColorToFrameBackground()
-	setColor("181818")
+	setThemeColor("frameBackground")
 end
 
 
 --[[ dropdown ]]--
 function setDrawColorToDropdownOutline()
-	setColor("090909")
+	setThemeColor("dropdownOutline")
 end
 
 function setDrawColorToDropdownBackground()
-	setColor("1D1D1D")
+	setThemeColor("dropdownBackground")
 end
 
 function setDrawColorToDropdownText()
-	setColor("D7D7D7")
+	setThemeColor("dropdownText")
 end
 
 --[[ valuebox ]]--
 function setDrawColorToValueBoxOutline()
-	setColor("090909")
+	setThemeColor("valueBoxOutline")
 end
 
 function setDrawColorToValueBoxBackground()
-	setColor("161616")
+	setThemeColor("valueBoxBackground")
 end
 
 function setDrawColorToValueBoxText()
-	setColor("9F9F9F")
+	setThemeColor("valueBoxText")
 end
 
 
 --[[ text ]]--
 function setDrawColorToText()
-	setColor("878787")
+	setThemeColor("generalText")
 end
 
 
@@ -5774,7 +4778,7 @@ function setDrawColorToSelectedButton()
 	gfx.set(table.unpack(backgroundColor))
 end
 ]]--
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 Docker = {}
 Docker.__index = Docker
@@ -5847,7 +4851,7 @@ function HitArea:new(x, y, width, height)
 
   return self
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 OctaveValueBox = {}
 OctaveValueBox.__index = OctaveValueBox
@@ -5892,7 +4896,7 @@ end
 
 function OctaveValueBox:drawRightArrow()
 
-  local imageWidth = 9
+  local imageWidth = 6
   gfx.x = self.x + self.width - imageWidth - 3
   gfx.y = self.y + 2
   drawRightArrow()
@@ -5943,7 +4947,7 @@ function OctaveValueBox:update()
 
   self:drawText()
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 Label = {}
 Label.__index = Label
@@ -5960,6 +4964,7 @@ function Label:new(x, y, width, height, getTextCallback, options)
   self.getTextCallback = getTextCallback
   self.xOffset = options and options.xOffset or 0
   self.align = options and options.align or "center"
+  self.color = options and options.color
 
   return self
 end
@@ -5971,7 +4976,11 @@ end
 
 function Label:drawText(text)
 
-	setDrawColorToText()
+  if self.color then
+    setColor(self.color)
+  else
+    setDrawColorToText()
+  end
 	local stringWidth, stringHeight = gfx.measurestr(text)
   local align = self.align or "center"
   if align == "left" then
@@ -5991,7 +5000,7 @@ function Label:update()
   local text = self.getTextCallback()
   self:drawText(text)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 Header = {}
 Header.__index = Header
@@ -6070,7 +5079,7 @@ function Header:update()
     local text = self.getTextCallback()
     self:drawText(text)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 Frame = {}
 Frame.__index = Frame
@@ -6158,7 +5167,7 @@ function Frame:update()
     self:updateDimensions()
     self:drawRectangles()
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 Dropdown = {}
 Dropdown.__index = Dropdown
@@ -6274,7 +5283,7 @@ function Dropdown:update()
 			self:openMenu()
 		end
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 ChordInversionValueBox = {}
 ChordInversionValueBox.__index = ChordInversionValueBox
@@ -6319,7 +5328,7 @@ end
 
 function ChordInversionValueBox:drawRightArrow()
 
-  local imageWidth = 9
+  local imageWidth = 6
   gfx.x = self.x + self.width - imageWidth - 3
   gfx.y = self.y + 2
   drawRightArrow()
@@ -6407,7 +5416,7 @@ function ChordInversionValueBox:update()
 
   self:drawText()
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 ChordButton = {}
 ChordButton.__index = ChordButton
@@ -6830,32 +5839,34 @@ end
 function SimpleButton:draw()
 
   if self.drawBorder then
-    setColor("999999")
-    gfx.rect(self.x, self.y, self.width, self.height, false)
-
-    gfx.rect(self.x+1, self.y+1, self.width-2, self.height-2, false)
+    if mouseIsHoveringOver(self) then
+      setThemeColor("bottomButtonBgHover")
+    else
+      setThemeColor("bottomButtonBg")
+    end
+    gfx.rect(self.x, self.y, self.width, self.height, true)
+    
+    setThemeColor("bottomButtonText")
+  else
+    if mouseIsHoveringOver(self) then
+      setThemeColor("topButtonTextHover")
+    else
+      setThemeColor("topButtonText")
+    end
   end
-	
-
-	if mouseIsHoveringOver(self) then
-		setColor("FFD700")
-	else
-		setColor("CCCCCC")
-	end
-	
-	local displayText = type(self.getText) == "function" and self.getText() or self.text
-	local stringWidth, stringHeight = gfx.measurestr(displayText)
-	gfx.x = self.x + ((self.width - stringWidth) / 2)
-	gfx.y = self.y + ((self.height - stringHeight) / 2)
-	gfx.drawstr(displayText)
-	
-
-	if tooltipsEnabled and mouseIsHoveringOver(self) and self.getTooltip then
-		local tooltip = self.getTooltip()
-		if tooltip then
-			queueTooltip(tooltip, gfx.mouse_x, gfx.mouse_y)
-		end
-	end
+  
+  local displayText = type(self.getText) == "function" and self.getText() or self.text
+  local stringWidth, stringHeight = gfx.measurestr(displayText)
+  gfx.x = self.x + ((self.width - stringWidth) / 2)
+  gfx.y = self.y + ((self.height - stringHeight) / 2)
+  gfx.drawstr(displayText)
+  
+  if tooltipsEnabled and mouseIsHoveringOver(self) and self.getTooltip then
+    local tooltip = self.getTooltip()
+    if tooltip then
+      queueTooltip(tooltip, gfx.mouse_x, gfx.mouse_y)
+    end
+  end
 end
 
 function SimpleButton:update()
@@ -6896,22 +5907,31 @@ end
 function ToggleButton:draw()
 
   if self.drawBorder then
-    setColor("999999")
-    gfx.rect(self.x, self.y, self.width, self.height, false)
-
-    gfx.rect(self.x+1, self.y+1, self.width-2, self.height-2, false)
+    local isActive = self.getState()
+    
+    if mouseIsHoveringOver(self) then
+      setThemeColor("bottomButtonBgHover")
+    else
+      setThemeColor("bottomButtonBg")
+    end
+    gfx.rect(self.x, self.y, self.width, self.height, true)
+    
+    if isActive then
+      setThemeColor("bottomButtonTextActive")
+    else
+      setThemeColor("bottomButtonText")
+    end
+  else
+    local isActive = self.getState()
+    
+    if isActive then
+      setThemeColor("topButtonTextHover")
+    elseif mouseIsHoveringOver(self) then
+      setThemeColor("topButtonTextHover")
+    else
+      setThemeColor("topButtonText")
+    end
   end
-
-	local isActive = self.getState()
-	
-
-	if isActive then
-		setColor("FFD700")
-	elseif mouseIsHoveringOver(self) then
-		setColor("FFFFFF")
-	else
-		setColor("CCCCCC")
-	end
 	
 	local stringWidth, stringHeight = gfx.measurestr(self.text)
 	gfx.x = self.x + ((self.width - stringWidth) / 2)
@@ -6970,23 +5990,29 @@ end
 
 function CycleButton:draw()
 
-	if self.drawBorder then
-		setColor("999999")
-		gfx.rect(self.x, self.y, self.width, self.height, false)
-
-		gfx.rect(self.x+1, self.y+1, self.width-2, self.height-2, false)
-	end
-
+  if self.drawBorder then
+    if mouseIsHoveringOver(self) then
+      setThemeColor("bottomButtonBgHover")
+    else
+      setThemeColor("bottomButtonBg")
+    end
+    gfx.rect(self.x, self.y, self.width, self.height, true)
+    
+    if self.getCurrentIndex() > 1 then
+        setThemeColor("bottomButtonTextActive")
+    else
+        setThemeColor("bottomButtonText")
+    end
+  else
+    if mouseIsHoveringOver(self) then
+      setThemeColor("topButtonTextHover")
+    else
+      setThemeColor("topButtonText")
+    end
+  end
 
 	local currentIndex = self.getCurrentIndex()
 	local text = self.options[currentIndex] or "?"
-	
-
-	if mouseIsHoveringOver(self) then
-		setColor("FFD700")
-	else
-		setColor("CCCCCC")
-	end
 	
 	local stringWidth, stringHeight = gfx.measurestr(text)
 	gfx.x = self.x + ((self.width - stringWidth) / 2)
@@ -7016,7 +6042,7 @@ function showHelpWindow()
 	local helpScriptPath = scriptDir .. "/TK_ChordGun_Help.lua"
 	
 
-	reaper.SetExtState("TKChordGunHelp", "shouldOpen", "1", false)
+	reaper.SetExtState("TK_ChordGun_Help", "shouldOpen", "1", false)
 	helpWindowOpen = true
 	
 
@@ -7048,7 +6074,7 @@ function showFifthWheel()
 	local scaleX = gfx.w / baseWidth
 	local scaleY = gfx.h / baseHeight
 	local uiScale = (scaleX + scaleY) / 2
-	reaper.SetExtState("TKChordGunFifthWheel", "uiScale", tostring(uiScale), false)
+	reaper.SetExtState("TK_ChordGun_FifthWheel", "uiScale", tostring(uiScale), false)
 	
 	-- Create fifth wheel script in memory and execute
 	local wheelScript = [[
@@ -7060,10 +6086,277 @@ function showFifthWheel()
 	local orderChromatic = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} -- Chromatic (Clockwise)
 	
 	local useFlats = false  -- Toggle between sharps and flats
-	local viewMode = 1 -- 1=Fifths, 2=Chromatic, 3=Linear
+	local viewMode = 1 -- 1=Fifths, 2=Chromatic, 3=Linear, 4=Score, 5=Guitar
+	
+	-- Theme System
+	local isLightMode = reaper.GetExtState("TK_ChordGun", "lightMode") == "1"
+
+	local function hex2rgb(arg) 
+		local r, g, b = arg:match('(..)(..)(..)')
+		r = tonumber(r, 16)/255
+		g = tonumber(g, 16)/255
+		b = tonumber(b, 16)/255
+		return r, g, b
+	end
+
+	local function setColor(hexColor)
+		local r, g, b = hex2rgb(hexColor)
+		gfx.set(r, g, b, 1)
+	end
+
+	local themes = {
+		dark = {
+			background = "242424",
+			buttonNormal = "2D2D2D",
+			buttonHighlight = "474747",
+			buttonPressed = "FFD700",
+			buttonPressedText = "1A1A1A",
+			chordSelected = "474747",
+			chordSelectedHighlight = "717171",
+			chordSelectedScaleNote = "DCDCDC",
+			chordSelectedScaleNoteHighlight = "FFFFFF",
+			chordOutOfScale = "121212",
+			chordOutOfScaleHighlight = "474747",
+			buttonOutline = "1D1D1D",
+			textNormal = "D7D7D7",
+			textHighlight = "EEEEEE",
+			textSelected = "F1F1F1",
+			textSelectedHighlight = "FDFDFD",
+			textSelectedScaleNote = "121212",
+			textSelectedScaleNoteHighlight = "000000",
+			headerOutline = "2E5C8A",
+			headerBackground = "4A90D9",
+			headerText = "E8F4FF",
+			frameOutline = "0D0D0D",
+			frameBackground = "181818",
+			dropdownOutline = "090909",
+			dropdownBackground = "1D1D1D",
+			dropdownText = "D7D7D7",
+			valueBoxOutline = "090909",
+			valueBoxBackground = "161616",
+			valueBoxText = "9F9F9F",
+			generalText = "878787",
+			
+			-- Progression Slots
+			slotBg = "262626",
+			slotPlaying = "336699",
+			slotSelected = "4D804D",
+			slotHover = "333333",
+			slotOutlineSelected = "80B380",
+			slotOutline = "4D4D4D",
+			slotLengthMarker = "FF9900",
+			slotText = "FFFFFF",
+			slotInfoText = "B3B3B3",
+			slotEmptyText = "666666",
+			
+			-- Tooltip
+			tooltipBg = "1A1A1A",
+			tooltipBorder = "FFD700",
+			tooltipText = "FFFFFF",
+			
+			-- Header Buttons
+			headerButtonBg = "404040",
+			headerButtonBorder = "808080",
+			headerButtonText = "FFFFFF",
+			
+			-- Linear View
+			linearViewRoot = "FFD700",
+			linearViewScale = "66B3FF",
+			linearViewOutOfScale = "333333",
+			linearViewTextInScale = "000000",
+			linearViewTextOutOfScale = "808080",
+			linearViewIntervalText = "CCCCCC",
+			linearViewLegendTitle = "FFFFFF",
+			linearViewLegendSub = "B3B3B3",
+			
+			-- Wheel View
+			wheelBg = "262626",
+			wheelPolygon = "808080",
+			wheelPolygonActive = "FFFFFF",
+			wheelTonic = "FFD700",
+			wheelInScale = "80C0E6",
+			wheelOutOfScale = "333333",
+			wheelOutOfScaleFifths = "404040",
+			wheelBorderActive = "FFFFFF",
+			wheelBorderInactive = "808080",
+			wheelHalo = "FFD700",
+			wheelText = "000000",
+			wheelRelativeMinor = "000000",
+			wheelLegendTitle = "FFFFFF",
+			wheelLegendSub = "B3B3B3",
+			wheelLegendHalo = "FFD700",
+			wheelLegendText = "FFFFFF",
+			wheelFooterText = "B3B3B3",
+			
+			-- Piano
+			pianoWhite = "FFFFFF",
+			pianoWhiteActive = "FFD700",
+			pianoWhiteText = "000000",
+			pianoBlack = "000000",
+			pianoBlackActive = "FFD700",
+			pianoBlackText = "FFFFFF",
+			pianoBlackTextActive = "000000",
+			
+			-- Chord Display
+			chordDisplayBg = "1A1A1A",
+			chordDisplayText = "FFFFFF",
+			
+			-- Bottom Buttons
+			bottomButtonBg = "2D2D2D",
+			bottomButtonText = "D7D7D7",
+			
+			-- Icons
+			iconColor = "CCCCCC",
+			
+			-- Missing Keys (Dark)
+			bottomButtonBgHover = "3D3D3D",
+			topButtonTextHover = "FFFFFF",
+			topButtonText = "D7D7D7",
+			bottomButtonTextActive = "FFFFFF",
+			pianoActive = "FFD700",
+			pianoWhiteGrey = "CCCCCC",
+			pianoTextActive = "000000",
+			pianoTextExternal = "AAAAAA",
+			pianoTextNormal = "000000",
+			pianoBlackGrey = "333333",
+			chordDisplayRecognized = "FFD700",
+			chordDisplayRecognizedOutOfScale = "FF4444"
+		},
+		light = {
+			background = "E0E0E0",
+			buttonNormal = "D0D0D0",
+			buttonHighlight = "C0C0C0",
+			buttonPressed = "FFD700",
+			buttonPressedText = "000000",
+			chordSelected = "B0B0B0",
+			chordSelectedHighlight = "A0A0A0",
+			chordSelectedScaleNote = "404040",
+			chordSelectedScaleNoteHighlight = "202020",
+			chordOutOfScale = "F5F5F5",
+			chordOutOfScaleHighlight = "E5E5E5",
+			buttonOutline = "A0A0A0",
+			textNormal = "202020",
+			textHighlight = "000000",
+			textSelected = "101010",
+			textSelectedHighlight = "000000",
+			textSelectedScaleNote = "FFFFFF",
+			textSelectedScaleNoteHighlight = "FFFFFF",
+			headerOutline = "2E5C8A",
+			headerBackground = "4A90D9",
+			headerText = "E8F4FF",
+			frameOutline = "A0A0A0",
+			frameBackground = "D0D0D0",
+			dropdownOutline = "A0A0A0",
+			dropdownBackground = "F0F0F0",
+			dropdownText = "000000",
+			valueBoxOutline = "A0A0A0",
+			valueBoxBackground = "F0F0F0",
+			valueBoxText = "000000",
+			generalText = "202020",
+			
+			-- Progression Slots
+			slotBg = "E0E0E0",
+			slotPlaying = "6699CC",
+			slotSelected = "80B380",
+			slotHover = "D0D0D0",
+			slotOutlineSelected = "4D804D",
+			slotOutline = "A0A0A0",
+			slotLengthMarker = "FF9900",
+			slotText = "000000",
+			slotInfoText = "404040",
+			slotEmptyText = "808080",
+			
+			-- Tooltip
+			tooltipBg = "F0F0F0",
+			tooltipBorder = "FFD700",
+			tooltipText = "000000",
+			
+			-- Header Buttons
+			headerButtonBg = "D0D0D0",
+			headerButtonBorder = "A0A0A0",
+			headerButtonText = "000000",
+			
+			-- Linear View
+			linearViewRoot = "FFD700",
+			linearViewScale = "66B3FF",
+			linearViewOutOfScale = "E0E0E0",
+			linearViewTextInScale = "000000",
+			linearViewTextOutOfScale = "808080",
+			linearViewIntervalText = "404040",
+			linearViewLegendTitle = "000000",
+			linearViewLegendSub = "404040",
+			
+			-- Wheel View
+			wheelBg = "F0F0F0",
+			wheelPolygon = "808080",
+			wheelPolygonActive = "000000",
+			wheelTonic = "FFD700",
+			wheelInScale = "80C0E6",
+			wheelOutOfScale = "E0E0E0",
+			wheelOutOfScaleFifths = "D0D0D0",
+			wheelBorderActive = "000000",
+			wheelBorderInactive = "A0A0A0",
+			wheelHalo = "FFD700",
+			wheelText = "000000",
+			wheelRelativeMinor = "000000",
+			wheelLegendTitle = "000000",
+			wheelLegendSub = "404040",
+			wheelLegendHalo = "FFD700",
+			wheelLegendText = "000000",
+			wheelFooterText = "404040",
+			
+			-- Piano
+			pianoWhite = "FFFFFF",
+			pianoWhiteActive = "FFD700",
+			pianoWhiteText = "000000",
+			pianoBlack = "000000",
+			pianoBlackActive = "FFD700",
+			pianoBlackText = "909090",
+			pianoBlackTextActive = "000000",
+			
+			-- Chord Display
+			chordDisplayBg = "F0F0F0",
+			chordDisplayText = "000000",
+			
+			-- Bottom Buttons
+			bottomButtonBg = "D0D0D0",
+			bottomButtonText = "000000",
+			
+			-- Icons
+			iconColor = "404040",
+			
+			-- Missing Keys (Light)
+			bottomButtonBgHover = "C0C0C0",
+			topButtonTextHover = "000000",
+			topButtonText = "202020",
+			bottomButtonTextActive = "000000",
+			pianoActive = "FFD700",
+			pianoWhiteGrey = "E0E0E0",
+			pianoTextActive = "000000",
+			pianoTextExternal = "666666",
+			pianoTextNormal = "000000",
+			pianoBlackGrey = "404040",
+			chordDisplayRecognized = "FFD700",
+			chordDisplayRecognizedOutOfScale = "CC0000"
+		}
+	}
+
+	local function getThemeColor(key)
+		if isLightMode then return themes.light[key] else return themes.dark[key] end
+	end
+
+	local function getThemeColorRGB(key)
+		local hex = getThemeColor(key)
+		local r, g, b = hex2rgb(hex)
+		return {r, g, b}
+	end
+
+	local function setThemeColor(key)
+		setColor(getThemeColor(key))
+	end
 	
 		-- Get UI scale from ExtState (passed by parent)
-		local uiScale = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "uiScale")) or 1.0
+		local uiScale = tonumber(reaper.GetExtState("TK_ChordGun_FifthWheel", "uiScale")) or 1.0
 		
 		-- Scaling function
 		local function s(size)
@@ -7077,8 +6370,8 @@ function showFifthWheel()
 	local noteRadius = s(28)
 	
 	-- Get saved window position from ExtState
-	local savedX = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "windowX")) or -1
-	local savedY = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "windowY")) or -1
+	local savedX = tonumber(reaper.GetExtState("TK_ChordGun_FifthWheel", "windowX")) or -1
+	local savedY = tonumber(reaper.GetExtState("TK_ChordGun_FifthWheel", "windowY")) or -1
 	
 	gfx.init("Circle of Fifths / Modes", windowW, windowH, 0, savedX, savedY)
 	gfx.setfont(1, "Arial", s(16), string.byte('b'))
@@ -7095,11 +6388,11 @@ function showFifthWheel()
 		local toggleButtonY = toggleY
 		local toggleButtonW = s(24)
 		
-		gfx.set(0.25, 0.25, 0.25, 1)
+		setThemeColor("headerButtonBg")
 		gfx.rect(toggleButtonX, toggleButtonY, toggleButtonW, toggleH, 1)
-		gfx.set(0.5, 0.5, 0.5, 1)
+		setThemeColor("headerButtonBorder")
 		gfx.rect(toggleButtonX, toggleButtonY, toggleButtonW, toggleH, 0)
-		gfx.set(1, 1, 1, 1)
+		setThemeColor("headerButtonText")
 		gfx.x = toggleButtonX + (toggleButtonW - toggleW) / 2
 		gfx.y = toggleButtonY + (toggleH - s(16)) / 2
 		gfx.drawstr(toggleText)
@@ -7107,17 +6400,19 @@ function showFifthWheel()
 		-- Draw View Mode toggle button at top-right
 		local viewText = "Fifths"
 		if viewMode == 2 then viewText = "Chromatic" 
-		elseif viewMode == 3 then viewText = "Linear" end
+		elseif viewMode == 3 then viewText = "Linear" 
+		elseif viewMode == 4 then viewText = "Score" 
+		elseif viewMode == 5 then viewText = "Guitar" end
 		
 		local orderW = gfx.measurestr(viewText)
 		local orderButtonW = orderW + s(20)
 		local orderButtonX = windowW - orderButtonW - s(10)
 		
-		gfx.set(0.25, 0.25, 0.25, 1)
+		setThemeColor("headerButtonBg")
 		gfx.rect(orderButtonX, toggleButtonY, orderButtonW, toggleH, 1)
-		gfx.set(0.5, 0.5, 0.5, 1)
+		setThemeColor("headerButtonBorder")
 		gfx.rect(orderButtonX, toggleButtonY, orderButtonW, toggleH, 0)
-		gfx.set(1, 1, 1, 1)
+		setThemeColor("headerButtonText")
 		gfx.x = orderButtonX + (orderButtonW - orderW) / 2
 		gfx.y = toggleButtonY + (toggleH - s(16)) / 2
 		gfx.drawstr(viewText)
@@ -7143,13 +6438,13 @@ function showFifthWheel()
 			-- Key Background
 			if isInScale then
 				if i == 0 then -- Root
-					gfx.set(1.0, 0.84, 0.0, 1) -- Gold
+					setThemeColor("linearViewRoot")
 				else
-					gfx.set(0.4, 0.7, 1.0, 1) -- Blue
+					setThemeColor("linearViewScale")
 				end
 				gfx.rect(x, startY, keyWidth - s(2), keyHeight, 1)
 			else
-				gfx.set(0.2, 0.2, 0.2, 1) -- Dark Gray
+				setThemeColor("linearViewOutOfScale")
 				gfx.rect(x, startY, keyWidth - s(2), keyHeight, 1)
 			end
 			
@@ -7159,9 +6454,9 @@ function showFifthWheel()
 			local nw, nh = gfx.measurestr(name)
 			
 			if isInScale then
-				gfx.set(0, 0, 0, 1)
+				setThemeColor("linearViewTextInScale")
 			else
-				gfx.set(0.5, 0.5, 0.5, 1)
+				setThemeColor("linearViewTextOutOfScale")
 			end
 			
 			gfx.x = x + (keyWidth - s(2) - nw)/2
@@ -7175,7 +6470,7 @@ function showFifthWheel()
 				local iw, ih = gfx.measurestr(intName)
 				gfx.x = x + (keyWidth - s(2) - iw)/2
 				gfx.y = startY + keyHeight + s(5)
-				gfx.set(0.8, 0.8, 0.8, 1)
+				setThemeColor("linearViewIntervalText")
 				gfx.drawstr(intName)
 			end
 			
@@ -7183,7 +6478,7 @@ function showFifthWheel()
 			if gfx.mouse_cap & 1 == 1 and not mouseWasDown then
 				if gfx.mouse_x >= x and gfx.mouse_x <= x + keyWidth - s(2) and
 				   gfx.mouse_y >= startY and gfx.mouse_y <= startY + keyHeight then
-					reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", tostring(noteIndex), false)
+					reaper.SetExtState("TK_ChordGun_FifthWheel", "selectedTonic", tostring(noteIndex), false)
 					mouseWasDown = true
 				end
 			end
@@ -7192,14 +6487,14 @@ function showFifthWheel()
 		-- Legend/Info
 		gfx.setfont(5, "Arial", s(13))
 		local legendY = startY - s(40)
-		gfx.set(1, 1, 1, 1)
+		setThemeColor("linearViewLegendTitle")
 		local titleText = "Linear Interval View"
 		local titleW = gfx.measurestr(titleText)
 		gfx.x = centerX - titleW / 2
 		gfx.y = legendY
 		gfx.drawstr(titleText)
 		
-		gfx.set(0.7, 0.7, 0.7, 1)
+		setThemeColor("linearViewLegendSub")
 		local subText = "Shows scale structure relative to Root"
 		local subW = gfx.measurestr(subText)
 		gfx.x = centerX - subW / 2
@@ -7207,24 +6502,238 @@ function showFifthWheel()
 		gfx.drawstr(subText)
 	end
 
-	function drawWheel()
+	local function drawScoreView(currentTonic, scalePattern, useFlats)
+		local staffWidth = windowW - s(40)
+		local staffX = s(20)
+		local staffY = centerY
+		local lineSpacing = s(10)
+		
+		setThemeColor("wheelBorderInactive")
+		for i = -2, 2 do
+			local y = staffY + (i * lineSpacing)
+			gfx.line(staffX, y, staffX + staffWidth, y)
+		end
+		
+		gfx.setfont(3, "Times New Roman", s(40), string.byte('b'))
+		setThemeColor("textNormal")
+		gfx.x = staffX + s(10)
+		gfx.y = staffY - s(25)
+		gfx.drawstr("G")
+		
+		local activeNotes = {}
+		for i = 0, 11 do
+			local noteIndex = ((currentTonic - 1 + i) % 12) + 1
+			if scalePattern[noteIndex] then
+				local octave = 0
+				if noteIndex < currentTonic then octave = 1 end
+				table.insert(activeNotes, {index = noteIndex, octave = octave})
+			end
+		end
+		
+		local whiteKeyMapSharp = {0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6}
+		local whiteKeyMapFlat  = {0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6}
+		
+		local noteSpacing = (staffWidth - s(60)) / math.max(1, #activeNotes)
+		local startNoteX = staffX + s(50)
+		
+		for i, noteData in ipairs(activeNotes) do
+			local noteIdx = noteData.index
+			local octave = noteData.octave
+			local chromaticIdx = noteIdx - 1
+			
+			local stepIndex
+			local accidental = ""
+			
+			if useFlats then
+				stepIndex = whiteKeyMapFlat[noteIdx]
+				local whiteKeys = {true, false, true, false, true, true, false, true, false, true, false, true}
+				if not whiteKeys[noteIdx] then accidental = "b" end
+			else
+				stepIndex = whiteKeyMapSharp[noteIdx]
+				local isWhite = (chromaticIdx == 0 or chromaticIdx == 2 or chromaticIdx == 4 or chromaticIdx == 5 or chromaticIdx == 7 or chromaticIdx == 9 or chromaticIdx == 11)
+				if not isWhite then accidental = "#" end
+			end
+			
+			local totalStep = stepIndex + (octave * 7)
+			
+			local bottomLineY = staffY + (2 * lineSpacing)
+			local noteY = bottomLineY - ((totalStep - 2) * (lineSpacing / 2))
+			local noteX = startNoteX + ((i-1) * noteSpacing)
+			
+			if totalStep == 0 then
+				setThemeColor("wheelBorderInactive")
+				gfx.line(noteX - s(8), noteY, noteX + s(8), noteY)
+			elseif totalStep == 12 then
+				 setThemeColor("wheelBorderInactive")
+				 gfx.line(noteX - s(8), noteY, noteX + s(8), noteY)
+			end
+			
+			if i == 1 then setThemeColor("wheelTonic") else setThemeColor("wheelInScale") end
+			
+			local r = s(5)
+			gfx.circle(noteX, noteY, r, 1)
+			
+			setThemeColor("textNormal")
+			if totalStep < 6 then
+				gfx.line(noteX + r, noteY, noteX + r, noteY - s(25))
+			else
+				gfx.line(noteX - r, noteY, noteX - r, noteY + s(25))
+			end
+			
+			if accidental ~= "" then
+				gfx.setfont(1, "Arial", s(18), string.byte('b'))
+				local accW, accH = gfx.measurestr(accidental)
+				gfx.x = noteX - s(15)
+				gfx.y = noteY - accH/2
+				gfx.drawstr(accidental)
+			end
+			
+			gfx.setfont(5, "Arial", s(12))
+			local name = (useFlats and notesFlat or notes)[noteIdx]
+			local nw, nh = gfx.measurestr(name)
+			gfx.x = noteX - nw/2
+			gfx.y = staffY + (3 * lineSpacing) + s(10)
+			setThemeColor("textNormal")
+			gfx.drawstr(name)
+		end
+		
+		gfx.setfont(5, "Arial", s(13))
+		local legendY = staffY - s(60)
+		setThemeColor("wheelLegendTitle")
+		local titleText = "Score View"
+		local titleW = gfx.measurestr(titleText)
+		gfx.x = centerX - titleW / 2
+		gfx.y = legendY
+		gfx.drawstr(titleText)
+	end
+
+  local function drawGuitarView(currentTonic, scalePattern, displayNotes)
+    local fretboardX = s(40)
+    local fretboardY = s(80)
+    local fretboardW = windowW - s(60)
+    local fretboardH = s(160)
+    
+    local numStrings = 6
+    local numFrets = 12
+    
+    local stringSpacing = fretboardH / (numStrings - 1)
+    local fretSpacing = fretboardW / (numFrets + 1) 
+    
+    setThemeColor("wheelBorderInactive")
+    local markers = {3, 5, 7, 9, 12}
+    for _, fret in ipairs(markers) do
+      local x = fretboardX + (fret * fretSpacing) - (fretSpacing / 2)
+      local y = fretboardY + (fretboardH / 2)
+      local r = s(4)
+      if fret == 12 then
+        gfx.circle(x, y - s(15), r, 1)
+        gfx.circle(x, y + s(15), r, 1)
+      else
+        gfx.circle(x, y, r, 1)
+      end
+    end
+
+    setThemeColor("textNormal") 
+    for i = 0, numFrets do
+      local x = fretboardX + (i * fretSpacing)
+      if i == 0 then
+        gfx.rect(x - s(2), fretboardY, s(4), fretboardH, 1)
+      else
+        gfx.line(x, fretboardY, x, fretboardY + fretboardH)
+      end
+      
+      if i > 0 then
+        gfx.setfont(5, "Arial", s(10))
+        local num = tostring(i)
+        local nw, nh = gfx.measurestr(num)
+        gfx.x = x - (fretSpacing/2) - (nw/2)
+        gfx.y = fretboardY + fretboardH + s(5)
+        gfx.drawstr(num)
+      end
+    end
+    
+    local tuning = {64, 59, 55, 50, 45, 40}
+    
+    for i = 1, numStrings do
+      local y = fretboardY + ((i-1) * stringSpacing)
+      setThemeColor("textNormal")
+      gfx.line(fretboardX, y, fretboardX + (numFrets * fretSpacing), y)
+      
+      local openNoteVal = tuning[i]
+      local openNoteIdx = (openNoteVal % 12) + 1
+      local stringName = displayNotes[openNoteIdx]
+      gfx.setfont(5, "Arial", s(12))
+      local sw, sh = gfx.measurestr(stringName)
+      gfx.x = fretboardX - s(25)
+      gfx.y = y - sh/2
+      gfx.drawstr(stringName)
+      
+      for fret = 0, numFrets do
+        local noteVal = openNoteVal + fret
+        local noteIndex = (noteVal % 12) + 1
+        
+        if scalePattern[noteIndex] then
+          local cx = fretboardX + (fret * fretSpacing)
+          if fret > 0 then cx = cx - (fretSpacing / 2) end
+          
+          local r = s(9)
+          
+          if noteIndex == currentTonic then
+            setThemeColor("wheelTonic")
+          else
+            setThemeColor("wheelInScale")
+          end
+          
+          gfx.circle(cx, y, r, 1)
+          
+          setThemeColor("textNormal")
+          gfx.circle(cx, y, r, 0)
+          
+          local name = displayNotes[noteIndex]
+          gfx.setfont(5, "Arial", s(10), string.byte('b'))
+          local nw, nh = gfx.measurestr(name)
+          
+          if isLightMode then gfx.set(0,0,0,1) else gfx.set(0,0,0,1) end
+          
+          gfx.x = cx - nw/2
+          gfx.y = y - nh/2
+          gfx.drawstr(name)
+        end
+      end
+    end
+    
+    gfx.setfont(5, "Arial", s(13))
+    local legendY = fretboardY - s(40)
+    setThemeColor("wheelLegendTitle")
+    local titleText = "Guitar Fretboard (Standard Tuning)"
+    local titleW = gfx.measurestr(titleText)
+    gfx.x = centerX - titleW / 2
+    gfx.y = legendY
+    gfx.drawstr(titleText)
+  end
+
+  function drawWheel()
 		-- Background
-		gfx.set(0.15, 0.15, 0.15, 1)
+		setThemeColor("wheelBg")
 		gfx.rect(0, 0, windowW, windowH, 1)
 		
 		local toggleX, toggleY, toggleW, toggleH, orderX, orderW = drawButtons()
 		
 		-- Get current scale info
-		local currentTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "tonic")) or 1
-		local isCustomScale = reaper.GetExtState("TKChordGunFifthWheel", "isCustom") == "1"
+		local currentTonic = tonumber(reaper.GetExtState("TK_ChordGun_FifthWheel", "tonic")) or 1
+		local isCustomScale = reaper.GetExtState("TK_ChordGun_FifthWheel", "isCustom") == "1"
 		local scalePattern = {}
 		for i = 1, 12 do
-			scalePattern[i] = reaper.GetExtState("TKChordGunFifthWheel", "scale" .. i) == "1"
+			scalePattern[i] = reaper.GetExtState("TK_ChordGun_FifthWheel", "scale" .. i) == "1"
 		end
 		local displayNotes = useFlats and notesFlat or notes
 
 		if viewMode == 3 then
 			drawLinearView(currentTonic, scalePattern, displayNotes)
+		elseif viewMode == 4 then
+			drawScoreView(currentTonic, scalePattern, useFlats)
+		elseif viewMode == 5 then
+			drawGuitarView(currentTonic, scalePattern, displayNotes)
 		else
 			-- CIRCULAR VIEWS (Fifths / Chromatic)
 			local noteOrder = (viewMode == 2) and orderChromatic or orderFifths
@@ -7266,22 +6775,25 @@ function showFifthWheel()
 				else return {0.5, 0.3, 0.3} end
 			end			
 
-			-- Draw Polygon lines
-			gfx.set(0.5, 0.5, 0.5, 0.3)
-			local activeIndices = {}
-			for i = 1, 12 do
-				local noteIndex = noteOrder[i]
-				if scalePattern[noteIndex] then table.insert(activeIndices, i) end
-			end
-			if #activeIndices > 1 then
-				gfx.set(1, 1, 1, 0.15)
-				for i = 1, #activeIndices do
-					local idx1 = activeIndices[i]
-					local idx2 = activeIndices[(i % #activeIndices) + 1]
-					local angle1 = (idx1 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
-					local angle2 = (idx2 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
-					gfx.line(centerX + math.cos(angle1) * radius, centerY + math.sin(angle1) * radius,
-							 centerX + math.cos(angle2) * radius, centerY + math.sin(angle2) * radius, 1)
+			setThemeColor("wheelPolygon")
+			if viewMode == 2 then
+				gfx.circle(centerX, centerY, radius, 0)
+			else
+				local activeIndices = {}
+				for i = 1, 12 do
+					local noteIndex = noteOrder[i]
+					if scalePattern[noteIndex] then table.insert(activeIndices, i) end
+				end
+				if #activeIndices > 1 then
+					setThemeColor("wheelPolygonActive")
+					for i = 1, #activeIndices do
+						local idx1 = activeIndices[i]
+						local idx2 = activeIndices[(i % #activeIndices) + 1]
+						local angle1 = (idx1 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+						local angle2 = (idx2 - 1) * (math.pi * 2 / 12) - (math.pi / 2)
+						gfx.line(centerX + math.cos(angle1) * radius, centerY + math.sin(angle1) * radius,
+								 centerX + math.cos(angle2) * radius, centerY + math.sin(angle2) * radius, 1)
+					end
 				end
 			end
 
@@ -7305,17 +6817,17 @@ function showFifthWheel()
 				
 				local color
 				if isCustomScale or viewMode == 2 then
-					if isCurrentTonic then color = {1.0, 0.84, 0.0}
-					elseif isInScale then color = {0.5, 0.75, 0.9}
-					else color = {0.2, 0.2, 0.2} end
+					if isCurrentTonic then color = getThemeColorRGB("wheelTonic")
+					elseif isInScale then color = getThemeColorRGB("wheelInScale")
+					else color = getThemeColorRGB("wheelOutOfScale") end
 				else
-					if isCurrentTonic then color = {1.0, 0.84, 0.0}
+					if isCurrentTonic then color = getThemeColorRGB("wheelTonic")
 					elseif isInScale then 
 						color = getHarmonicDistanceColor(noteIndex, currentTonic)
 						color[1] = math.min(1.0, color[1] * 1.2)
 						color[2] = math.min(1.0, color[2] * 1.2)
 						color[3] = math.min(1.0, color[3] * 1.2)
-					else color = {0.25, 0.25, 0.25} end
+					else color = getThemeColorRGB("wheelOutOfScaleFifths") end
 				end
 				
 				gfx.set(color[1], color[2], color[3], 1)
@@ -7323,24 +6835,24 @@ function showFifthWheel()
 				
 				-- Borders
 				if isCurrentTonic or isInScale then
-					gfx.set(1.0, 1.0, 1.0, 1)
+					setThemeColor("wheelBorderActive")
 					gfx.circle(x, y, currentNoteRadius, 0)
 					gfx.circle(x, y, currentNoteRadius-1, 0)
 					if not (isCustomScale or viewMode == 2) then gfx.circle(x, y, currentNoteRadius-2, 0) end
 				else
-					gfx.set(0.4, 0.4, 0.4, 1)
+					setThemeColor("wheelBorderInactive")
 					gfx.circle(x, y, currentNoteRadius, 0)
 				end
 				
 				-- Halo
 				if isSymmetryPoint and not isCurrentTonic then
-					gfx.set(1.0, 0.84, 0.0, 0.6)
+					setThemeColor("wheelHalo")
 					for r=4, 7 do gfx.circle(x, y, currentNoteRadius + s(r), 0) end
 				end
 				
 				-- Text
 				if drawText then
-					gfx.set(0, 0, 0, 1)
+					setThemeColor("wheelText")
 					gfx.setfont(1, "Arial", s(16), string.byte('b'))
 					local noteName = displayNotes[noteIndex]
 					local textW, textH = gfx.measurestr(noteName)
@@ -7356,7 +6868,7 @@ function showFifthWheel()
 						local minorW, minorH = gfx.measurestr(minorName)
 						gfx.x = x - minorW / 2
 						gfx.y = y - minorH / 2 + s(8)
-						gfx.set(0, 0, 0, 1)
+						setThemeColor("wheelRelativeMinor")
 						gfx.drawstr(minorName)
 					end
 				end
@@ -7365,7 +6877,7 @@ function showFifthWheel()
 				if gfx.mouse_cap & 1 == 1 and not mouseWasDown then
 					local dist = math.sqrt((gfx.mouse_x - x)^2 + (gfx.mouse_y - y)^2)
 					if dist < noteRadius then
-						reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", tostring(noteIndex), false)
+						reaper.SetExtState("TK_ChordGun_FifthWheel", "selectedTonic", tostring(noteIndex), false)
 						mouseWasDown = true
 					end
 				end
@@ -7375,18 +6887,18 @@ function showFifthWheel()
 			gfx.setfont(5, "Arial", s(13))
 			local legendY = centerY - s(20)
 			if viewMode == 2 then -- Chromatic Legend
-				gfx.set(1, 1, 1, 1)
+				setThemeColor("wheelLegendTitle")
 				local titleText = "Chromatic Order"
 				local titleW = gfx.measurestr(titleText)
 				gfx.x = centerX - titleW / 2; gfx.y = legendY; gfx.drawstr(titleText)
-				gfx.set(0.7, 0.7, 0.7, 1)
+				setThemeColor("wheelLegendSub")
 				local subText = "Visualizes symmetry"; local subW = gfx.measurestr(subText)
 				gfx.x = centerX - subW / 2; gfx.y = legendY + s(18); gfx.drawstr(subText)
-				gfx.set(1.0, 0.84, 0.0, 0.8)
+				setThemeColor("wheelLegendHalo")
 				local haloText = "Halo: Equivalent Tonic"; local haloW = gfx.measurestr(haloText)
 				gfx.x = centerX - haloW / 2; gfx.y = legendY + s(36); gfx.drawstr(haloText)
 			else -- Fifths Legend
-				gfx.set(1, 1, 1, 1)
+				setThemeColor("wheelLegendTitle")
 				local titleText = "Color Legend:"
 				local titleW = gfx.measurestr(titleText)
 				gfx.x = centerX - titleW / 2; gfx.y = legendY - s(60); gfx.drawstr(titleText)
@@ -7402,7 +6914,7 @@ function showFifthWheel()
 					gfx.set(item[1][1], item[1][2], item[1][3], 1)
 					local boxSize = s(12); local boxX = centerX - s(50)
 					gfx.rect(boxX, startY, boxSize, boxSize, 1)
-					gfx.set(1, 1, 1, 1)
+					setThemeColor("wheelLegendText")
 					gfx.x = boxX + boxSize + s(6); gfx.y = startY
 					gfx.drawstr(item[2])
 					startY = startY + lineHeight
@@ -7412,7 +6924,7 @@ function showFifthWheel()
 
 		-- Footer
 		gfx.setfont(3, "Arial", s(18))
-		gfx.set(0.7, 0.7, 0.7, 1)
+		setThemeColor("wheelFooterText")
 		local instr = "Click a note to change tonic • ESC to close"
 		local instrW = gfx.measurestr(instr)
 		gfx.x = (windowW - instrW) / 2
@@ -7426,7 +6938,7 @@ function showFifthWheel()
 				useFlats = not useFlats
 				mouseWasDown = true
 			elseif mx >= orderX and mx <= orderX + orderW and my >= toggleY and my <= toggleY + toggleH then
-				viewMode = (viewMode % 3) + 1 -- Cycle 1->2->3->1
+				viewMode = (viewMode % 5) + 1 -- Cycle 1->2->3->4->5->1
 				mouseWasDown = true
 			end
 		end
@@ -7436,10 +6948,10 @@ function showFifthWheel()
 		gfx.update()
 		
 	-- Check if parent script requested forced close
-	local forceClose = reaper.GetExtState("TKChordGunFifthWheel", "forceClose")
+	local forceClose = reaper.GetExtState("TK_ChordGun_FifthWheel", "forceClose")
 	if forceClose == "1" then
-		reaper.SetExtState("TKChordGunFifthWheel", "forceClose", "0", false)
-		reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "forceClose", "0", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "closed", "1", false)
 		return
 	end
 	
@@ -7447,9 +6959,9 @@ function showFifthWheel()
 	if char == 27 or char == -1 then  -- ESC or closed
 		-- Save window position before closing
 		local dockState, posX, posY = gfx.dock(-1, 0, 0, 0, 0)
-		reaper.SetExtState("TKChordGunFifthWheel", "windowX", tostring(posX), true)
-		reaper.SetExtState("TKChordGunFifthWheel", "windowY", tostring(posY), true)
-		reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "windowX", tostring(posX), true)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "windowY", tostring(posY), true)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "closed", "1", false)
 		return
 	end		
 		if gfx.mouse_cap & 1 == 0 then
@@ -7473,14 +6985,14 @@ function showFifthWheel()
 		local currentScale = scales[getScaleType()]
 		local isCustomScale = currentScale.isCustom == true
 		
-		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(currentTonic), false)
-		reaper.SetExtState("TKChordGunFifthWheel", "closed", "0", false)
-		reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", "0", false)
-		reaper.SetExtState("TKChordGunFifthWheel", "isCustom", isCustomScale and "1" or "0", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "tonic", tostring(currentTonic), false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "closed", "0", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "selectedTonic", "0", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "isCustom", isCustomScale and "1" or "0", false)
 		
 		for i = 1, 12 do
 			local inScale = scalePattern and scalePattern[i] or false
-			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
+			reaper.SetExtState("TK_ChordGun_FifthWheel", "scale" .. i, inScale and "1" or "0", false)
 		end
 		
 		-- Run the temporary script
@@ -7505,28 +7017,28 @@ function checkFifthWheelUpdates()
 	
 
 	if currentTonic ~= lastSyncedTonic or scaleHash ~= lastSyncedScale then
-		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(currentTonic), false)
-		reaper.SetExtState("TKChordGunFifthWheel", "isCustom", isCustomScale and "1" or "0", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "tonic", tostring(currentTonic), false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "isCustom", isCustomScale and "1" or "0", false)
 		for i = 1, 12 do
 			local inScale = scalePattern and scalePattern[i] or false
-			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
+			reaper.SetExtState("TK_ChordGun_FifthWheel", "scale" .. i, inScale and "1" or "0", false)
 		end
 		lastSyncedTonic = currentTonic
 		lastSyncedScale = scaleHash
 	end
 	
 
-	local closed = reaper.GetExtState("TKChordGunFifthWheel", "closed")
+	local closed = reaper.GetExtState("TK_ChordGun_FifthWheel", "closed")
 	if closed == "1" then
 		fifthWheelWindowOpen = false
-		reaper.SetExtState("TKChordGunFifthWheel", "closed", "0", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "closed", "0", false)
 		lastSyncedTonic = nil
 		lastSyncedScale = nil
 		return
 	end
 	
 
-	local selectedTonic = tonumber(reaper.GetExtState("TKChordGunFifthWheel", "selectedTonic"))
+	local selectedTonic = tonumber(reaper.GetExtState("TK_ChordGun_FifthWheel", "selectedTonic"))
 	if selectedTonic and selectedTonic > 0 then
 		setScaleTonicNote(selectedTonic)
 		setSelectedScaleNote(1)
@@ -7539,14 +7051,14 @@ function checkFifthWheelUpdates()
 
 		local updatedScale = scales[getScaleType()]
 		local updatedIsCustom = updatedScale.isCustom == true
-		reaper.SetExtState("TKChordGunFifthWheel", "isCustom", updatedIsCustom and "1" or "0", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "isCustom", updatedIsCustom and "1" or "0", false)
 		
 		for i = 1, 12 do
 			local inScale = scalePattern and scalePattern[i] or false
-			reaper.SetExtState("TKChordGunFifthWheel", "scale" .. i, inScale and "1" or "0", false)
+			reaper.SetExtState("TK_ChordGun_FifthWheel", "scale" .. i, inScale and "1" or "0", false)
 		end
-		reaper.SetExtState("TKChordGunFifthWheel", "tonic", tostring(selectedTonic), false)
-		reaper.SetExtState("TKChordGunFifthWheel", "selectedTonic", "0", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "tonic", tostring(selectedTonic), false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "selectedTonic", "0", false)
 	end
 end
 
@@ -7618,39 +7130,38 @@ function ProgressionSlots:update()
 		                   gfx.mouse_y >= y and gfx.mouse_y <= y + slotHeight
 		
 
-		local bgColor = {0.15, 0.15, 0.15}
 		if currentProgressionIndex == i and progressionPlaying then
-			bgColor = {0.2, 0.4, 0.6}
+			setThemeColor("slotPlaying")
 		elseif selectedProgressionSlot == i then
-			bgColor = {0.3, 0.5, 0.3}
+			setThemeColor("slotSelected")
 		elseif isHovering then
-			bgColor = {0.2, 0.2, 0.2}
+			setThemeColor("slotHover")
+		else
+			setThemeColor("slotBg")
 		end
 		
-
-		gfx.set(bgColor[1], bgColor[2], bgColor[3], 1)
 		gfx.rect(x, y, slotWidth, slotHeight, true)
 		
 
 		if selectedProgressionSlot == i then
-			gfx.set(0.5, 0.7, 0.5, 1)
+			setThemeColor("slotOutlineSelected")
 			gfx.rect(x, y, slotWidth, slotHeight, false)
 			gfx.rect(x+1, y+1, slotWidth-2, slotHeight-2, false)
 		else
-			gfx.set(0.3, 0.3, 0.3, 1)
+			setThemeColor("slotOutline")
 			gfx.rect(x, y, slotWidth, slotHeight, false)
 		end
 		
 
 		if i == progressionLength then
-			gfx.set(1, 0.6, 0, 1)
+			setThemeColor("slotLengthMarker")
 			gfx.rect(x + slotWidth - s(3), y, s(3), slotHeight, true)
 		end
 		
 
     if chordProgression[i] then
 
-      gfx.set(1, 1, 1, 1)
+      setThemeColor("slotText")
       gfx.setfont(1, "Arial", fontSize(13))
 			local textW, textH = gfx.measurestr(chordProgression[i].text)
 			gfx.x = x + (slotWidth - textW) / 2
@@ -7664,7 +7175,7 @@ function ProgressionSlots:update()
 			if repeats > 1 then
 				infoText = infoText .. " x" .. repeats
 			end
-      gfx.set(0.7, 0.7, 0.7, 1)
+      setThemeColor("slotInfoText")
       gfx.setfont(1, "Arial", fontSize(10))
 			local infoW, infoH = gfx.measurestr(infoText)
 			gfx.x = x + (slotWidth - infoW) / 2
@@ -7672,7 +7183,7 @@ function ProgressionSlots:update()
 			gfx.drawstr(infoText)
     else
 
-      gfx.set(0.4, 0.4, 0.4, 1)
+      setThemeColor("slotEmptyText")
       gfx.setfont(1, "Arial", fontSize(12))
 			local num = tostring(i)
 			local textW, textH = gfx.measurestr(num)
@@ -7753,7 +7264,7 @@ end
 function PianoKeyboard:getStartNote()
 
 	local currentOctave = getOctave()
-	return (currentOctave * 12) + 12
+	return (currentOctave * 12)
 end
 
 function PianoKeyboard:getNoteFromPosition(noteNumber)
@@ -7792,21 +7303,18 @@ function PianoKeyboard:getActiveNotes()
 		local selectedChordType = getSelectedChordType(selectedScaleNote)
 		
 		if selectedScaleNote and selectedChordType then
-			local root = scaleNotes[selectedScaleNote]
-			local chord = scaleChords[selectedScaleNote][selectedChordType]
-			local octave = getOctave()
-			
-
-			local chordPattern = chord["pattern"]
-			for n = 0, #chordPattern-1 do
-				if chordPattern:sub(n+1, n+1) == '1' then
-					local noteValue = root + n + ((octave+1) * 12) - 1
-					table.insert(activeNotes, noteValue)
+			if scaleChords[selectedScaleNote] and scaleChords[selectedScaleNote][selectedChordType] then
+				local root = scaleNotes[selectedScaleNote]
+				local chord = scaleChords[selectedScaleNote][selectedChordType]
+				local octave = getOctave()
+				
+				local inversionOverride = nil
+				if voiceLeadingEnabled then
+					inversionOverride = getBestVoiceLeadingInversion(root, chord, octave)
 				end
-			end
-			
 
-			activeNotes = applyInversion(activeNotes)
+				activeNotes = getChordNotesArray(root, chord, octave, inversionOverride)
+			end
 		end
 	end
 	
@@ -7819,22 +7327,17 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
 	local w = self.whiteKeyWidth - s(1)
 	local h = self.height
 	
-
-
-
-
-
 	local noteInChromatic = noteNumber % 12
 	local noteForScale = noteInChromatic + 1
 	local inScale = scalePattern[noteForScale] or false
 	
 
   if isActive or isExternalActive then
-    setColor("4DA6FF")
+    setThemeColor("pianoActive")
   elseif inScale then
-		setColor("F0F0F0")
+		setThemeColor("pianoWhite")
 	else
-		setColor("C0C0C0")
+		setThemeColor("pianoWhiteGrey")
 	end
 	gfx.rect(x, y, w, h, true)
 	
@@ -7873,7 +7376,7 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
         
 
         if mappedNote ~= noteInChromatic then
-          noteName = noteName .. "â†’" .. mappedNoteName
+          noteName = noteName .. "→" .. mappedNoteName
         end
       end
     end
@@ -7884,11 +7387,11 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
 	
 
   if isActive then
-		setColor("000000")
+		setThemeColor("pianoTextActive")
   elseif isExternalActive then
-    setColor("FFFFFF")
+    setThemeColor("pianoTextExternal")
 	else
-		setColor("333333")
+		setThemeColor("pianoTextNormal")
 	end
 	
 	gfx.x = x + (w - stringWidth) / 2
@@ -7897,14 +7400,14 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
 
 
   if isCKey then
-    local octaveLabel = tostring(getOctave() + (octaveIndex or 0))
+    local octaveLabel = tostring(math.floor(noteNumber / 12) - 1)
     gfx.setfont(1, "Arial", fontSize(14))
     if isActive then
-      setColor("000000")
+      setThemeColor("pianoTextActive")
     elseif isExternalActive then
-      setColor("FFFFFF")
+      setThemeColor("pianoTextExternal")
     else
-      setColor("555555")
+      setThemeColor("pianoTextNormal")
     end
     gfx.x = x + (w - stringWidth) / 2 + stringWidth + s(4)
     gfx.y = y + h - stringHeight - s(4)
@@ -7921,19 +7424,17 @@ function PianoKeyboard:drawBlackKey(whiteKeyIndex, noteInOctave, isActive, noteN
 	local w = self.blackKeyWidth
 	local h = self.blackKeyHeight
 	
-
-
 	local noteInChromatic = noteNumber % 12
 	local noteForScale = noteInChromatic + 1
 	local inScale = scalePattern[noteForScale] or false
 	
 
   if isActive or isExternalActive then
-    setColor("4DA6FF")
+    setThemeColor("pianoActive")
   elseif inScale then
-		setColor("1A1A1A")
+		setThemeColor("pianoBlack")
 	else
-		setColor("606060")
+		setThemeColor("pianoBlackGrey")
 	end
 	gfx.rect(x, y, w, h, true)
 	
@@ -7948,11 +7449,11 @@ function PianoKeyboard:drawBlackKey(whiteKeyIndex, noteInOctave, isActive, noteN
 	
 
   if isActive then
-		setColor("000000")
+		setThemeColor("pianoTextActive")
   elseif isExternalActive then
-    setColor("FFFFFF")
+    setThemeColor("pianoTextExternal")
 	else
-		setColor("FFFFFF")
+		setThemeColor("pianoBlackText")
 	end
 	
 	gfx.x = x + (w - stringWidth) / 2
@@ -8095,12 +7596,18 @@ inputCharacters[","] = 44
 inputCharacters["."] = 46
 inputCharacters["<"] = 60
 inputCharacters[">"] = 62
+inputCharacters[")"] = 41
+inputCharacters[";"] = 59
+inputCharacters["/"] = 47
+inputCharacters[":"] = 58
+inputCharacters["?"] = 63
 
+inputCharacters["SPACE"] = 32
 inputCharacters["ESC"] = 27
 
 inputCharacters["LEFTARROW"] = 1818584692
 inputCharacters["RIGHTARROW"] = 1919379572
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 
 local function moveEditCursorLeftByGrid()
@@ -8127,7 +7634,7 @@ local function moveEditCursorRightByGrid()
   end
 end
 
-function handleInput()
+function handleInput(interface)
 
 	local operatingSystem = string.lower(reaper.GetOS())
 
@@ -8150,15 +7657,50 @@ function handleInput()
 		return gfx.mouse_cap & 64 == 64
 	end
 
-	if inputCharacter == inputCharacters["0"] or middleMouseButtonIsHeldDown() then
+	if inputCharacter == inputCharacters["SPACE"] or middleMouseButtonIsHeldDown() then
 		stopAllNotesFromPlaying()
+	end
+
+	if gfx.mouse_wheel ~= 0 then
+		local keySelectionFrameHeight = interface.keySelectionFrameHeight or s(25)
+		local yMargin = sy(8) + keySelectionFrameHeight + sy(6)
+		local yPadding = sy(30)
+		local headerHeight = sy(25)
+		
+		local chordAreaTop = yMargin + yPadding + headerHeight
+		local buttonHeight = sy(38)
+		local innerSpacing = sx(2)
+		local chordAreaBottom = chordAreaTop + (maxVisibleRows * (buttonHeight + innerSpacing))
+
+		if gfx.mouse_y >= chordAreaTop and gfx.mouse_y <= chordAreaBottom then
+			local maxRows = 0
+			if scaleChords then
+				for _, chords in ipairs(scaleChords) do
+					if #chords > maxRows then maxRows = #chords end
+				end
+			end
+
+			if gfx.mouse_wheel > 0 then
+				if chordListScrollOffset > 0 then 
+					chordListScrollOffset = chordListScrollOffset - 1
+					guiShouldBeUpdated = true 
+				end
+			elseif gfx.mouse_wheel < 0 then
+				if chordListScrollOffset < maxRows - maxVisibleRows then
+					chordListScrollOffset = chordListScrollOffset + 1
+					guiShouldBeUpdated = true 
+				end
+			end
+			
+			gfx.mouse_wheel = 0
+		end
 	end
 
 	--
 
 
-	local numberKeys = {"1", "2", "3", "4", "5", "6", "7", "8", "9"}
-	for i = 1, math.min(#scaleNotes, 9) do
+	local numberKeys = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"}
+	for i = 1, math.min(#scaleNotes, 10) do
 		if inputCharacter == inputCharacters[numberKeys[i]] then
 			previewScaleChordAction(i)
 		end
@@ -8167,8 +7709,8 @@ function handleInput()
 	--
 
 
-	local shiftNumberKeys = {"!", "@", "#", "$", "%", "^", "&", "*", "("}
-	for i = 1, math.min(#scaleNotes, 9) do
+	local shiftNumberKeys = {"!", "@", "#", "$", "%", "^", "&", "*", "(", ")"}
+	for i = 1, math.min(#scaleNotes, 10) do
 		if inputCharacter == inputCharacters[shiftNumberKeys[i]] then
 			scaleChordAction(i)
 		end
@@ -8177,8 +7719,8 @@ function handleInput()
 	--
 
 
-	local qwertyKeys = {"q", "w", "e", "r", "t", "y", "u", "i", "o"}
-	for i = 1, math.min(#scaleNotes, 9) do
+	local qwertyKeys = {"q", "w", "e", "r", "t", "y", "u", "i", "o", "p"}
+	for i = 1, math.min(#scaleNotes, 10) do
 		if inputCharacter == inputCharacters[qwertyKeys[i]] then
 			previewHigherScaleNoteAction(i)
 		end
@@ -8187,8 +7729,8 @@ function handleInput()
 	--
 
 
-	local asdfKeys = {"a", "s", "d", "f", "g", "h", "j", "k", "l"}
-	for i = 1, math.min(#scaleNotes, 9) do
+	local asdfKeys = {"a", "s", "d", "f", "g", "h", "j", "k", "l", ";"}
+	for i = 1, math.min(#scaleNotes, 10) do
 		if inputCharacter == inputCharacters[asdfKeys[i]] then
 			previewScaleNoteAction(i)
 		end
@@ -8197,8 +7739,8 @@ function handleInput()
 	--
 
 
-	local zxcvKeys = {"z", "x", "c", "v", "b", "n", "m", ",", "."}
-	for i = 1, math.min(#scaleNotes, 9) do
+	local zxcvKeys = {"z", "x", "c", "v", "b", "n", "m", ",", ".", "/"}
+	for i = 1, math.min(#scaleNotes, 10) do
 		if inputCharacter == inputCharacters[zxcvKeys[i]] then
 			previewLowerScaleNoteAction(i)
 		end
@@ -8209,8 +7751,8 @@ function handleInput()
 	--
 
 
-	local QWERTYKeys = {"Q", "W", "E", "R", "T", "Y", "U", "I", "O"}
-	for i = 1, math.min(#scaleNotes, 9) do
+	local QWERTYKeys = {"Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"}
+	for i = 1, math.min(#scaleNotes, 10) do
 		if inputCharacter == inputCharacters[QWERTYKeys[i]] then
 			higherScaleNoteAction(i)
 		end
@@ -8219,8 +7761,8 @@ function handleInput()
 	--
 
 
-	local ASDFKeys = {"A", "S", "D", "F", "G", "H", "J", "K", "L"}
-	for i = 1, math.min(#scaleNotes, 9) do
+	local ASDFKeys = {"A", "S", "D", "F", "G", "H", "J", "K", "L", ":"}
+	for i = 1, math.min(#scaleNotes, 10) do
 		if inputCharacter == inputCharacters[ASDFKeys[i]] then
 			scaleNoteAction(i)
 		end
@@ -8229,8 +7771,8 @@ function handleInput()
 	--
 
 
-	local ZXCVKeys = {"Z", "X", "C", "V", "B", "N", "M", "<", ">"}
-	for i = 1, math.min(#scaleNotes, 9) do
+	local ZXCVKeys = {"Z", "X", "C", "V", "B", "N", "M", "<", ">", "?"}
+	for i = 1, math.min(#scaleNotes, 10) do
 		if inputCharacter == inputCharacters[ZXCVKeys[i]] then
 			lowerScaleNoteAction(i)
 		end
@@ -8379,7 +7921,7 @@ function handleInput()
 		end
 	end
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 Interface = {}
 Interface.__index = Interface
@@ -8470,7 +8012,7 @@ end
 
 function Interface:addMainWindow()
 
-	gfx.clear = reaper.ColorToNative(36, 36, 36)
+	gfx.clear = hexToNative(getThemeColor("background"))
 
 	local dockState = 0
 
@@ -8614,7 +8156,7 @@ function Interface:update()
 
 end
 
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 local windowWidth = 775
 
@@ -8656,8 +8198,8 @@ function Interface:addTopFrame()
 	local yPadding = s(5)
 	local horizontalMargin = s(8)
 	local scaleTonicNoteWidth = s(50)
-	local scaleSystemWidth = s(100)
-	local scaleTypeWidth = s(130)
+	local scaleSystemWidth = s(150)
+	local scaleTypeWidth = s(150)
 	local octaveValueBoxWidth = s(55)
 
 	self:addFrame(xMargin+dockerXPadding, yMargin, self.width - 2 * xMargin, keySelectionFrameHeight)
@@ -8735,6 +8277,7 @@ function Interface:addStrumButton(xMargin, yMargin, xPadding)
 	end
 	local onToggle = function()
 		strumEnabled = not strumEnabled
+    if strumEnabled then arpEnabled = false end
 	end
 	local onCtrlClick = function()
 
@@ -8751,6 +8294,84 @@ function Interface:addStrumButton(xMargin, yMargin, xPadding)
 	local getTooltip = function() return "Click: Toggle strum mode | Ctrl+Click: Set strum delay" end
 	
   self:addToggleButton("Strum", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getStrumState, onToggle, onCtrlClick, getTooltip)
+end
+
+function Interface:addArpButton(xMargin, yMargin, xPadding)
+
+  local buttonWidth = topButtonWidth()
+  local buttonHeight = topButtonHeight()
+  local buttonXpos = topButtonXPos(xMargin, xPadding, 3)
+  local buttonYpos = topButtonYPos(yMargin)
+	
+	local getArpState = function() 
+		return arpEnabled 
+	end
+	local onToggle = function()
+		arpEnabled = not arpEnabled
+    if arpEnabled then strumEnabled = false end
+	end
+	local onRightClick = function()
+    if ctrlModifierIsHeldDown() then
+      local menu = "#Arp Speed|"
+      menu = menu .. (arpSpeedMode == "grid" and arpGrid == "1/4" and "!" or "") .. "1/4|"
+      menu = menu .. (arpSpeedMode == "grid" and arpGrid == "1/8" and "!" or "") .. "1/8|"
+      menu = menu .. (arpSpeedMode == "grid" and arpGrid == "1/16" and "!" or "") .. "1/16|"
+      menu = menu .. (arpSpeedMode == "grid" and arpGrid == "1/32" and "!" or "") .. "1/32|"
+      menu = menu .. (arpSpeedMode == "grid" and arpGrid == "1/64" and "!" or "") .. "1/64|"
+      menu = menu .. (arpSpeedMode == "ms" and "!" or "") .. "Custom (" .. arpSpeedMs .. "ms)..."
+      
+      gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+      local selection = gfx.showmenu(menu)
+      if selection > 1 then
+        if selection == 2 then arpSpeedMode = "grid"; arpGrid = "1/4"
+        elseif selection == 3 then arpSpeedMode = "grid"; arpGrid = "1/8"
+        elseif selection == 4 then arpSpeedMode = "grid"; arpGrid = "1/16"
+        elseif selection == 5 then arpSpeedMode = "grid"; arpGrid = "1/32"
+        elseif selection == 6 then arpSpeedMode = "grid"; arpGrid = "1/64"
+        elseif selection == 7 then
+          local retval, userInput = reaper.GetUserInputs("Arp Speed", 1, "Speed (ms):,extrawidth=100", tostring(arpSpeedMs))
+          if retval then
+            local newSpeed = tonumber(userInput)
+            if newSpeed and newSpeed >= 10 and newSpeed <= 2000 then
+              arpSpeedMs = newSpeed
+              arpSpeedMode = "ms"
+            end
+          end
+        end
+      end
+    else
+      local menu = "#Arp Mode|"
+      menu = menu .. (arpMode == 1 and "!" or "") .. "Up|"
+      menu = menu .. (arpMode == 2 and "!" or "") .. "Down|"
+      menu = menu .. (arpMode == 3 and "!" or "") .. "Up/Down|"
+      menu = menu .. (arpMode == 5 and "!" or "") .. "Down/Up|"
+      menu = menu .. (arpMode == 4 and "!" or "") .. "Random"
+      
+      gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+      local selection = gfx.showmenu(menu)
+      if selection > 1 then arpMode = selection - 1 end
+    end
+	end
+	local getTooltip = function() return "Click: Toggle Arp | R-Click: Mode | Ctrl+Click: Speed" end
+	
+  self:addToggleButton("Arp", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getArpState, onToggle, onRightClick, getTooltip)
+end
+
+function Interface:addVoiceLeadingButton(xMargin, yMargin, xPadding)
+
+  local buttonWidth = topButtonWidth()
+  local buttonHeight = topButtonHeight()
+  local buttonXpos = topButtonXPos(xMargin, xPadding, 4)
+  local buttonYpos = topButtonYPos(yMargin)
+  
+  local getState = function() return voiceLeadingEnabled end
+  local onToggle = function()
+    voiceLeadingEnabled = not voiceLeadingEnabled
+    if not voiceLeadingEnabled then lastPlayedNotes = {} end
+  end
+  local getTooltip = function() return "Auto Voice Leading: Automatically chooses inversions for smooth transitions" end
+  
+  self:addToggleButton("Lead", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getState, onToggle, nil, getTooltip)
 end
 
 function Interface:addScaleFilterButton(xMargin, yMargin, xPadding, opts)
@@ -8827,7 +8448,7 @@ function Interface:addFifthWheelButton(xMargin, yMargin, xPadding)
 	local onToggle = function()
 		if fifthWheelWindowOpen then
 
-			reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
+			reaper.SetExtState("TK_ChordGun_FifthWheel", "closed", "1", false)
 			fifthWheelWindowOpen = false
 		else
 			showFifthWheel()
@@ -8848,7 +8469,7 @@ function Interface:addFontButton(xMargin, yMargin, xPadding, rowIndex, colIndex)
   local buttonYpos = topButtonYPos(yMargin) + (rowIndex * (buttonHeight + sy(4)))
 	
 	local getMonoState = function() 
-    return reaper.GetExtState("TK_ChordGun", "useMonospaceFont") == "1"
+    return reaper.GetExtState("TK_ChordGun", "useMonospaceFont") ~= "0"
   end
   
 	local onToggle = function()
@@ -8950,28 +8571,28 @@ function Interface:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, header
 
 	local buttonHeight = sy(38)
 	local innerSpacing = sx(2)
-	local numChordButtons = #chords
+	local numChordButtons = maxVisibleRows
 	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
 	
 
 
 
 	local currentOctave = getOctave()
-	local startNote = (currentOctave * 12) + 12
+	local startNote = (currentOctave - 1) * 12
 	
-	self:addPiano(pianoXpos+dockerXPadding, pianoYpos, pianoWidth, pianoHeight, startNote, 2)
+	self:addPiano(pianoXpos+dockerXPadding, pianoYpos, pianoWidth, pianoHeight, startNote, 3)
 end
 
 function Interface:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, headerHeight)
 
 	local slotWidth = self.width - 2 * xMargin - 2 * xPadding
-  local slotHeight = sy(40)
+  local slotHeight = sy(50)
 	local slotXpos = xMargin + xPadding
 	
 
 	local buttonHeight = sy(38)
 	local innerSpacing = sx(2)
-	local numChordButtons = #chords
+	local numChordButtons = maxVisibleRows
 	local pianoHeight = sy(70)
 	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeight) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
 	local slotYpos = pianoYpos + pianoHeight + sy(8)
@@ -8982,17 +8603,17 @@ end
 
 function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, headerHeight)
 
-	local buttonWidth = sx(75)
-	local buttonHeight = sy(24)
+	local buttonWidth = sx(80)
+	local buttonHeight = sy(28)
 	local buttonXpos = xMargin + xPadding
-  local buttonSpacing = sx(6)
+  local buttonSpacing = sx(2)
 	
 
 	local buttonHeightChord = sy(38)
 	local innerSpacing = sx(2)
-	local numChordButtons = #chords
+	local numChordButtons = maxVisibleRows
 	local pianoHeight = sy(70)
-  local slotHeight = sy(40)
+  local slotHeight = sy(50)
 	local pianoYpos = yMargin + yPadding + headerHeight + (numChordButtons * buttonHeightChord) + (numChordButtons * innerSpacing) - sy(3) + sy(6)
 	local slotYpos = pianoYpos + pianoHeight + sy(8)
 	local buttonYpos = slotYpos + slotHeight + sy(6)
@@ -9093,12 +8714,17 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 
 
   local totalWidth = self.width - 2 * xMargin - 2 * xPadding
-  local rightAlignX = buttonXpos + dockerXPadding + totalWidth - buttonWidth
-  local leftOfRightAlignX = rightAlignX - buttonSpacing - buttonWidth
+  local scrollBtnWidth = sx(20)
+  
+  -- Calculate position of the leftmost button in the right-side group (Tooltip/Font)
+  -- Right side structure: [Tooltip/Font] [Help/Ratio] [Dock/Circle] [Scroll]
+  local col3X = buttonXpos + dockerXPadding + totalWidth - buttonWidth - scrollBtnWidth - buttonSpacing
+  local col2X = col3X - buttonSpacing - buttonWidth
+  local col1X = col2X - buttonSpacing - buttonWidth
   
   local chordDisplayX = insertInlineX + buttonWidth + buttonSpacing
-  local chordDisplayWidth = leftOfRightAlignX - chordDisplayX - buttonSpacing
-  local chordDisplayHeight = (buttonHeight * 2) + s(8)
+  local chordDisplayWidth = col1X - buttonSpacing - chordDisplayX
+  local chordDisplayHeight = (buttonHeight * 2) + s(1)
   
   local ChordDisplay = {}
   ChordDisplay.x = chordDisplayX
@@ -9113,7 +8739,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     local h = self.height
     
 
-    setColor("4A4A4A")
+    setThemeColor("chordDisplayBg")
     gfx.rect(x, y, w, h, false)
     
     if recognizedChord and recognizedChord ~= "" then
@@ -9137,9 +8763,9 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       
 
       if isInScale then
-        setColor("4DA6FF")
+        setThemeColor("chordDisplayRecognized")
       else
-        setColor("FF8C00")
+        setThemeColor("chordDisplayRecognizedOutOfScale")
       end
       
 
@@ -9176,7 +8802,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 
 	
 
-  local buttonYposRow2 = buttonYpos + buttonHeight + s(6)
+  local buttonYposRow2 = buttonYpos + buttonHeight + s(1)
   
 
   self:addScaleFilterButton(xMargin, yMargin, xPadding, {
@@ -9203,61 +8829,81 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
   self:addSimpleButton("Setup", buttonXpos + dockerXPadding + buttonWidth + buttonSpacing, buttonYposRow2, buttonWidth, buttonHeight, onSetupClick, nil, function() return "Click: Add TK Scale Filter to selected track's Input FX" end, true)
 
 
-  local getVoicingState = function() 
-    return voicingState.drop2 or voicingState.drop3 or voicingState.bass1 or voicingState.bass2 
-  end
-  
-  local onVoicingToggle = function()
-    local checkDrop2 = voicingState.drop2 and "!" or ""
-    local checkDrop3 = voicingState.drop3 and "!" or ""
-    local checkBass1 = voicingState.bass1 and "!" or ""
-    local checkBass2 = voicingState.bass2 and "!" or ""
-    
-    local menu = "Clear All|" .. checkDrop2 .. "Drop 2|" .. checkDrop3 .. "Drop 3|" .. checkBass1 .. "Bass -1|" .. checkBass2 .. "Bass -2"
-    
-    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
-    local selection = gfx.showmenu(menu)
-    
-    if selection == 1 then
-      voicingState.drop2 = false
-      voicingState.drop3 = false
+  local getBassState = function() return voicingState.bass1 or voicingState.bass2 end
+  local onBassToggle = function()
+    if voicingState.bass1 or voicingState.bass2 then
       voicingState.bass1 = false
       voicingState.bass2 = false
-    elseif selection == 2 then
-      voicingState.drop2 = not voicingState.drop2
-      if voicingState.drop2 then voicingState.drop3 = false end
-    elseif selection == 3 then
-      voicingState.drop3 = not voicingState.drop3
-      if voicingState.drop3 then voicingState.drop2 = false end
-    elseif selection == 4 then
-      voicingState.bass1 = not voicingState.bass1
-      if voicingState.bass1 then voicingState.bass2 = false end
-    elseif selection == 5 then
-      voicingState.bass2 = not voicingState.bass2
-      if voicingState.bass2 then voicingState.bass1 = false end
+    else
+      voicingState.bass1 = true
     end
-    
-    if selection > 0 then guiShouldBeUpdated = true end
-  end
-  
-  local onVoicingRightClick = function()
-    voicingState.drop2 = false
-    voicingState.drop3 = false
-    voicingState.bass1 = false
-    voicingState.bass2 = false
     guiShouldBeUpdated = true
+  end
+  local onBassRightClick = function()
+    local checkBass1 = voicingState.bass1 and "!" or ""
+    local checkBass2 = voicingState.bass2 and "!" or ""
+    local menu = checkBass1 .. "Bass -1|" .. checkBass2 .. "Bass -2"
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    if selection == 1 then
+      voicingState.bass1 = true
+      voicingState.bass2 = false
+    elseif selection == 2 then
+      voicingState.bass2 = true
+      voicingState.bass1 = false
+    end
+    if selection > 0 then guiShouldBeUpdated = true end
   end
 
   self:addToggleButton(
-    "Voicing",
+    "Bass",
     buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 2,
     buttonYposRow2,
     buttonWidth,
     buttonHeight,
-    getVoicingState,
-    onVoicingToggle,
-    onVoicingRightClick,
-    function() return "Click: Toggle Voicings (Drop 2/3, Bass) | Right-Click: Clear All" end,
+    getBassState,
+    onBassToggle,
+    onBassRightClick,
+    function() return "Click: Toggle Bass Voicing | Right-Click: Select Bass Mode" end,
+    true
+  )
+
+  local getDropState = function() return voicingState.drop2 or voicingState.drop3 end
+  local onDropToggle = function()
+    if voicingState.drop2 or voicingState.drop3 then
+      voicingState.drop2 = false
+      voicingState.drop3 = false
+    else
+      voicingState.drop2 = true
+    end
+    guiShouldBeUpdated = true
+  end
+  local onDropRightClick = function()
+    local checkDrop2 = voicingState.drop2 and "!" or ""
+    local checkDrop3 = voicingState.drop3 and "!" or ""
+    local menu = checkDrop2 .. "Drop 2|" .. checkDrop3 .. "Drop 3"
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    if selection == 1 then
+      voicingState.drop2 = true
+      voicingState.drop3 = false
+    elseif selection == 2 then
+      voicingState.drop3 = true
+      voicingState.drop2 = false
+    end
+    if selection > 0 then guiShouldBeUpdated = true end
+  end
+
+  self:addToggleButton(
+    "Drop",
+    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 3,
+    buttonYposRow2,
+    buttonWidth,
+    buttonHeight,
+    getDropState,
+    onDropToggle,
+    onDropRightClick,
+    function() return "Click: Toggle Drop Voicing | Right-Click: Select Drop Mode" end,
     true
   )
 
@@ -9298,7 +8944,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 
   self:addSimpleButton(
     "Melody",
-    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 3,
+    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4,
     buttonYposRow2,
     buttonWidth,
     buttonHeight,
@@ -9307,9 +8953,19 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     function() return "Click: Generate Melody | Right-Click: Melody Settings" end,
     true
   )
+
+  local getThemeState = function() return isLightMode end
+  local onThemeToggle = function()
+    isLightMode = not isLightMode
+    reaper.SetExtState("TK_ChordGun", "lightMode", isLightMode and "1" or "0", true)
+    gfx.clear = hexToNative(getThemeColor("background"))
+    guiShouldBeUpdated = true
+  end
+  
+  self:addToggleButton("Theme", col3X, buttonYposRow2, buttonWidth, buttonHeight, getThemeState, onThemeToggle, nil, function() return "Toggle Dark/Light Mode" end, true)
   
 
-  local getMonoState = function() return reaper.GetExtState("TK_ChordGun", "useMonospaceFont") == "1" end
+  local getMonoState = function() return reaper.GetExtState("TK_ChordGun", "useMonospaceFont") ~= "0" end
   local onMonoToggle = function()
     local current = getMonoState()
     reaper.SetExtState("TK_ChordGun", "useMonospaceFont", current and "0" or "1", true)
@@ -9333,10 +8989,10 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       guiShouldBeUpdated = true
     end
   end
-  self:addToggleButton("Font", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4, buttonYposRow2, buttonWidth, buttonHeight, getMonoState, onMonoToggle, onFontRightClick, function() return "Toggle Monospace Font | Right-click: Set Font Scale" end, true)
 
 
-  local getRatioState = function() return reaper.GetExtState("TK_ChordGun", "useFixedRatio") == "1" end
+
+  local getRatioState = function() return reaper.GetExtState("TK_ChordGun", "useFixedRatio") ~= "0" end
   local onRatioToggle = function()
     local current = getRatioState()
     reaper.SetExtState("TK_ChordGun", "useFixedRatio", current and "0" or "1", true)
@@ -9376,22 +9032,54 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     end
   end
 
-  self:addToggleButton("Ratio", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 5, buttonYposRow2, buttonWidth, buttonHeight, getRatioState, onRatioToggle, onRatioRightClick, function() return "Toggle Fixed Aspect Ratio | Right-click: Set Window Size" end, true)
-
-
+  local scrollBtnWidth = sx(20)
   local totalWidth = self.width - 2 * xMargin - 2 * xPadding
+  local scrollX = buttonXpos + dockerXPadding + totalWidth - scrollBtnWidth
   
+  self:addSimpleButton("▲", scrollX, buttonYpos, scrollBtnWidth, buttonHeight, 
+      function() 
+          if chordListScrollOffset > 0 then 
+              chordListScrollOffset = chordListScrollOffset - 1
+              guiShouldBeUpdated = true 
+          end
+      end, nil, function() return "Scroll Up" end, true)
+
+  self:addSimpleButton("▼", scrollX, buttonYposRow2, scrollBtnWidth, buttonHeight, 
+      function() 
+          local maxRows = 0
+          if scaleChords then
+              for _, chords in ipairs(scaleChords) do
+                  if #chords > maxRows then maxRows = #chords end
+              end
+          end
+          
+          if chordListScrollOffset < maxRows - maxVisibleRows then
+              chordListScrollOffset = chordListScrollOffset + 1
+              guiShouldBeUpdated = true 
+          end
+      end, nil, function() return "Scroll Down" end, true)
 
 
-
-
-  
-  local rightAlignX = buttonXpos + dockerXPadding + totalWidth - buttonWidth
+  local rightAlignX = buttonXpos + dockerXPadding + totalWidth - buttonWidth - scrollBtnWidth - buttonSpacing
   local leftOfRightAlignX = rightAlignX - buttonSpacing - buttonWidth
   
+  -- Row 1: Tooltip, Help, Dock, Up Arrow (Up Arrow is already placed at scrollX)
+  -- Wait, user said:
+  -- Rij 1: Tooltip, help, dock, pijltje naar boven
+  -- Rij 2: Font, Ratio, Circle, pijltje naar onder
+  -- Currently I have 2 columns of buttons to the left of the arrows?
+  -- "Tooltip", "Help", "Dock" -> That's 3 buttons.
+  -- "Font", "Ratio", "Circle" -> That's 3 buttons.
+  -- So I need 3 columns of buttons to the left of the arrows.
+  
+  local col3X = rightAlignX -- Closest to arrows
+  local col2X = leftOfRightAlignX -- Middle
+  local col1X = col2X - buttonSpacing - buttonWidth -- Furthest left
+  
+  -- Row 1 (Top)
   self:addToggleButton(
     "Tooltip",
-    leftOfRightAlignX,
+    col1X,
     buttonYpos,
     buttonWidth,
     buttonHeight,
@@ -9403,7 +9091,6 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     function() return "Toggle tooltips (shows click/modifier actions)" end,
     true
   )
-  
 
   local onHelpRightClick = function()
     local menu = "GitHub: TouristKiller/TK-Scripts|REAPER Forum: ChordGun Thread"
@@ -9427,7 +9114,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 
   self:addSimpleButton(
     "Help",
-    rightAlignX,
+    col2X,
     buttonYpos,
     buttonWidth,
     buttonHeight,
@@ -9436,24 +9123,11 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     function() return "Click: Show Help / Shortcuts | Right-Click: Links" end,
     true
   )
-	
-
-  local getCircleState = function() return fifthWheelWindowOpen end
-  local onCircleToggle = function()
-    if fifthWheelWindowOpen then
-      reaper.SetExtState("TKChordGunFifthWheel", "closed", "1", false)
-      fifthWheelWindowOpen = false
-    else
-      showFifthWheel()
-    end
-  end
-  self:addToggleButton("Circle", leftOfRightAlignX, buttonYposRow2, buttonWidth, buttonHeight, getCircleState, onCircleToggle, nil, function() return "Toggle Circle of Fifths" end, true)
-	
-
+  
   self:addSimpleButton(
     function() return windowIsDocked() and "Undock" or "Dock" end,
-		rightAlignX,
-		buttonYposRow2,
+		col3X,
+		buttonYpos,
 		buttonWidth,
 		buttonHeight,
 		function()
@@ -9470,6 +9144,28 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     function() return windowIsDocked() and "Click: Undock window" or "Click: Dock window" end,
     true
 	)
+
+  -- Row 2 (Bottom)
+  -- Font, Ratio, Circle
+  
+  -- Font Button (Moved from earlier in the code)
+  self:addToggleButton("Font", col1X, buttonYposRow2, buttonWidth, buttonHeight, getMonoState, onMonoToggle, onFontRightClick, function() return "Toggle Monospace Font | Right-click: Set Font Scale" end, true)
+
+  -- Ratio Button (Moved from earlier in the code)
+  self:addToggleButton("Ratio", col2X, buttonYposRow2, buttonWidth, buttonHeight, getRatioState, onRatioToggle, onRatioRightClick, function() return "Toggle Fixed Aspect Ratio | Right-click: Set Window Size" end, true)
+
+  -- Circle Button
+  local getCircleState = function() return fifthWheelWindowOpen end
+  local onCircleToggle = function()
+    if fifthWheelWindowOpen then
+      reaper.SetExtState("TK_ChordGun_FifthWheel", "closed", "1", false)
+      fifthWheelWindowOpen = false
+    else
+      showFifthWheel()
+    end
+  end
+  self:addToggleButton("Circle", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 5, buttonYposRow2, buttonWidth, buttonHeight, getCircleState, onCircleToggle, nil, function() return "Toggle Circle of Fifths" end, true)
+
 	
 end
 
@@ -9702,13 +9398,13 @@ end
 function Interface:addOctaveLabel(xMargin, yMargin, yPadding, octaveValueBoxWidth)
 
 	local labelText = "Octave:"
-	octaveLabelWidth = gfx.measurestr(labelText) * (gfx.w / baseWidth)
+	local octaveLabelWidth = sx(80)
 	local labelYpos = yMargin+yPadding+s(1)
 	local labelHeight = s(15)
   local contentRight = getTopFrameContentRight(xMargin)
-  local spacing = s(6)
+  local spacing = s(13)
   local labelXpos = contentRight - octaveValueBoxWidth - spacing - octaveLabelWidth
-	self:addLabel(labelXpos+dockerXPadding, labelYpos, octaveLabelWidth, labelHeight, function() return labelText end)
+	self:addLabel(labelXpos+dockerXPadding, labelYpos, octaveLabelWidth, labelHeight, function() return labelText end, {align = "right"})
 end
 
 function Interface:addOctaveSelectorValueBox(yMargin, xMargin, xPadding, octaveValueBoxWidth)
@@ -9720,7 +9416,7 @@ function Interface:addOctaveSelectorValueBox(yMargin, xMargin, xPadding, octaveV
 	local valueBoxHeight = s(15)
 	self:addOctaveValueBox(valueBoxXPos+dockerXPadding, valueBoxYPos, octaveValueBoxWidth, valueBoxHeight)
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 
 
@@ -9742,7 +9438,7 @@ function Interface:addBottomFrame()
 	local yPadding = sy(30)
 	local headerHeight = sy(25)
 	local inversionLabelWidth = sx(80)
-	local inversionValueBoxWidth = sx(55)
+	local inversionValueBoxWidth = s(55)
 
 	local chordButtonsFrameHeight = self.height - yMargin
 	self:addFrame(xMargin+dockerXPadding, yMargin, self.width - 2 * xMargin, chordButtonsFrameHeight)
@@ -9750,17 +9446,35 @@ function Interface:addBottomFrame()
   self:addHoldButton(xMargin, yMargin, xPadding)
   self:addKillButton(xMargin, yMargin, xPadding)
   self:addStrumButton(xMargin, yMargin, xPadding)
-  local lenButtonX = topButtonXPos(xMargin, xPadding, 3)
+  self:addArpButton(xMargin, yMargin, xPadding)
+  self:addVoiceLeadingButton(xMargin, yMargin, xPadding)
+
+  local getScaleOnlyState = function() return showOnlyScaleChords end
+  local onScaleOnlyToggle = function() 
+      showOnlyScaleChords = not showOnlyScaleChords
+      chordListScrollOffset = 0 
+      guiShouldBeUpdated = true 
+  end
+  
+  local extraSpacing = sx(15)
+  local inScaleButtonX = topButtonXPos(xMargin, xPadding, 5) + extraSpacing
+  local inScaleButtonY = topButtonYPos(yMargin)
+  local buttonWidth = topButtonWidth()
+  local buttonHeight = topButtonHeight()
+  
+  self:addToggleButton("In Scale", inScaleButtonX+dockerXPadding, inScaleButtonY, buttonWidth, buttonHeight, getScaleOnlyState, onScaleOnlyToggle, nil, function() return "Filter: Show only chords that fit the scale" end, false)
+
+  local lenButtonX = topButtonXPos(xMargin, xPadding, 6) + extraSpacing + sx(15)
   local lenButtonY = topButtonYPos(yMargin)
-  self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = sx(75)})
+  self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = topButtonWidth()})
 
   
   self:addPianoKeyboard(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionSlots(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addProgressionControls(xMargin, yMargin, xPadding, yPadding, headerHeight)
   self:addChordTextLabel(xMargin, yMargin, xPadding, inversionLabelWidth, inversionValueBoxWidth)
-  self:addInversionLabel(xMargin, yMargin, xPadding)
-  self:addInversionValueBox(xMargin, yMargin, xPadding, inversionLabelWidth)
+  self:addInversionLabel(xMargin, yMargin, xPadding, inversionLabelWidth, inversionValueBoxWidth)
+  self:addInversionValueBox(xMargin, yMargin, xPadding, inversionValueBoxWidth)
   
   self:addHeaders(xMargin, yMargin, xPadding, yPadding, headerHeight)
 	self:addChordButtons(xMargin, yMargin, xPadding, yPadding, headerHeight)
@@ -9771,27 +9485,38 @@ function Interface:addChordTextLabel(xMargin, yMargin, xPadding, inversionLabelW
   local getChordTextCallback = function() return getChordText() end
   local chordTextXpos = xMargin + xPadding
   local chordTextYpos = yMargin + sy(4)
-  chordTextWidth = self.width - 4 * xMargin - inversionLabelWidth - inversionValueBoxWidth - sx(6)
+  
+  local contentRight = getTopFrameContentRight(xMargin)
+  local spacing = s(6)
+  local inversionLabelRightX = contentRight - inversionValueBoxWidth - spacing
+  local inversionLabelLeftX = inversionLabelRightX - inversionLabelWidth
+  
+  chordTextWidth = inversionLabelLeftX - chordTextXpos - sx(6)
   local chordTextHeight = sy(24)
-  self:addLabel(chordTextXpos+dockerXPadding, chordTextYpos, chordTextWidth, chordTextHeight, getChordTextCallback, {xOffset = sx(75)})
+  self:addLabel(chordTextXpos+dockerXPadding, chordTextYpos, chordTextWidth, chordTextHeight, getChordTextCallback, {xOffset = sx(250), color = "3399FF"})
 end
 
-function Interface:addInversionLabel(xMargin, yMargin, xPadding)
+function Interface:addInversionLabel(xMargin, yMargin, xPadding, inversionLabelWidth, inversionValueBoxWidth)
 
   local inversionLabelText = "Inversion:"
-  local inversionLabelXPos = xMargin + xPadding + chordTextWidth
+  
+  local contentRight = getTopFrameContentRight(xMargin)
+  local spacing = s(13)
+  local inversionLabelRightX = contentRight - inversionValueBoxWidth - spacing
+  local inversionLabelXPos = inversionLabelRightX - inversionLabelWidth
+  
   local inversionLabelYPos = yMargin + sy(4)
-  local stringWidth, _ = gfx.measurestr(labelText)
   local inversionLabelTextHeight = sy(24)
-  local inversionLabelWidth = sx(80)
 
-  self:addLabel(inversionLabelXPos+dockerXPadding, inversionLabelYPos, inversionLabelWidth, inversionLabelTextHeight, function() return inversionLabelText end)
+  self:addLabel(inversionLabelXPos+dockerXPadding, inversionLabelYPos, inversionLabelWidth, inversionLabelTextHeight, function() return inversionLabelText end, {align = "right"})
 end
 
-function Interface:addInversionValueBox(xMargin, yMargin, xPadding, inversionLabelWidth)
+function Interface:addInversionValueBox(xMargin, yMargin, xPadding, inversionValueBoxWidth)
 
-  local inversionValueBoxWidth = sx(55)
-  local inversionValueBoxXPos = xMargin + xPadding + chordTextWidth + inversionLabelWidth + sx(2)
+  local contentRight = getTopFrameContentRight(xMargin)
+  local pickerLeftShift = s(8)
+  local inversionValueBoxXPos = contentRight - inversionValueBoxWidth - pickerLeftShift
+  
   local inversionValueBoxYPos = yMargin + sy(9)
   local inversionValueBoxHeight = sy(15)
   self:addChordInversionValueBox(inversionValueBoxXPos+dockerXPadding, inversionValueBoxYPos, inversionValueBoxWidth, inversionValueBoxHeight)
@@ -9799,51 +9524,106 @@ end
 
 function Interface:addHeaders(xMargin, yMargin, xPadding, yPadding, headerHeight)
   
-  for i = 1, #scaleNotes do
+  local minColumns = 10
+  local numColumns = math.max(minColumns, #scaleNotes)
+
+  for i = 1, numColumns do
 
     local headerWidth = sx(104)
     local innerSpacing = sx(2)
 
     local headerXpos = xMargin+xPadding-sx(1) + headerWidth * (i-1) + innerSpacing * i
     local headerYpos = yMargin+yPadding
-    self:addHeader(headerXpos+dockerXPadding, headerYpos, headerWidth, headerHeight, function() return getScaleDegreeHeader(i) end)
+    
+    local textFunc = function() 
+        if i <= #scaleNotes then
+            return getScaleDegreeHeader(i) 
+        else
+            return "" 
+        end
+    end
+    
+    self:addHeader(headerXpos+dockerXPadding, headerYpos, headerWidth, headerHeight, textFunc)
   end
 end
 
 function Interface:addChordButtons(xMargin, yMargin, xPadding, yPadding, headerHeight)
 
-  local scaleNoteIndex = 1
-  for note = getScaleTonicNote(), getScaleTonicNote() + 11 do
-
-    if noteIsInScale(note) then
-
-      for chordTypeIndex, chord in ipairs(scaleChords[scaleNoteIndex]) do
-
-      	local text = getScaleNoteName(scaleNoteIndex) .. chord['display']
-
-      	local buttonWidth = sx(104)
-      	local buttonHeight = sy(38)
-				local innerSpacing = sx(2)
-      	
-      	local xPos = xMargin + xPadding + buttonWidth * (scaleNoteIndex-1) + innerSpacing * scaleNoteIndex + dockerXPadding
-      	local yPos = yMargin + yPadding + headerHeight + buttonHeight * (chordTypeIndex-1) + innerSpacing * (chordTypeIndex-1) - sy(3)
+  local numColumns = 10
   
-  			local numberOfChordsInScale = getNumberOfScaleChordsForScaleNoteIndex(scaleNoteIndex)
+  local scaleNoteIndex = 1
+  local currentNote = getScaleTonicNote()
 
-       	if chordTypeIndex > numberOfChordsInScale then
-          local chordIsInScale = false
-      		self:addChordButton(text, xPos, yPos, buttonWidth, buttonHeight, scaleNoteIndex, chordTypeIndex, chordIsInScale)
-      	else
-          local chordIsInScale = true
-      		self:addChordButton(text, xPos, yPos, buttonWidth, buttonHeight, scaleNoteIndex, chordTypeIndex, chordIsInScale)
-      	end     	
-      end
-      
-      scaleNoteIndex = scaleNoteIndex + 1
+  for colIndex = 1, numColumns do
+
+    if colIndex <= #scaleNotes then
+        
+        while not noteIsInScale(currentNote) do
+            currentNote = currentNote + 1
+        end
+
+        for chordTypeIndex, chord in ipairs(scaleChords[scaleNoteIndex]) do
+
+            local numberOfChordsInScale = getNumberOfScaleChordsForScaleNoteIndex(scaleNoteIndex)
+            local chordIsInScale = chordTypeIndex <= numberOfChordsInScale
+
+            if showOnlyScaleChords and not chordIsInScale then
+                goto continue
+            end
+
+            local visualRowIndex = chordTypeIndex - chordListScrollOffset
+            
+            if visualRowIndex < 1 then 
+                goto continue 
+            end
+
+            if visualRowIndex > maxVisibleRows then
+                goto continue
+            end
+
+            local text = getScaleNoteName(scaleNoteIndex) .. chord['display']
+
+            local buttonWidth = sx(104)
+            local buttonHeight = sy(38)
+            local innerSpacing = sx(2)
+            
+            local xPos = xMargin + xPadding + buttonWidth * (colIndex-1) + innerSpacing * colIndex + dockerXPadding
+            local yPos = yMargin + yPadding + headerHeight + buttonHeight * (visualRowIndex-1) + innerSpacing * (visualRowIndex-1) - sy(3)
+    
+            if yPos + buttonHeight < self.height - sy(10) then
+                self:addChordButton(text, xPos, yPos, buttonWidth, buttonHeight, scaleNoteIndex, chordTypeIndex, chordIsInScale)   	
+            end
+
+            ::continue::
+        end
+        
+        scaleNoteIndex = scaleNoteIndex + 1
+        currentNote = currentNote + 1
+    else
+        -- Draw empty placeholder buttons for grid consistency
+        for row = 1, maxVisibleRows do
+            local buttonWidth = sx(104)
+            local buttonHeight = sy(38)
+            local innerSpacing = sx(2)
+            
+            local xPos = xMargin + xPadding + buttonWidth * (colIndex-1) + innerSpacing * colIndex + dockerXPadding
+            local yPos = yMargin + yPadding + headerHeight + buttonHeight * (row-1) + innerSpacing * (row-1) - sy(3)
+            
+            -- Add a disabled/empty button visual
+            -- We use a dummy button that does nothing
+            self:addSimpleButton("", xPos, yPos, buttonWidth, buttonHeight, function() end, nil, nil, true)
+            
+            -- Hack: Override the draw function of the last added element to make it look "empty"
+            local btn = self.elements[#self.elements]
+            btn.draw = function(self)
+                setThemeColor("chordOutOfScale")
+                gfx.rect(self.x, self.y, self.width, self.height, 1)
+            end
+        end
     end
   end
 end
-local workingDirectory = reaper.GetResourcePath() .. "/Scripts/ChordGun/src"
+local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 
 --clearConsoleWindow()
@@ -9853,7 +9633,7 @@ interfaceHeight = getInterfaceHeight()
 
 updateScaleData()
 
-local interface = Interface:init("CHORDGUN (TK MOD)")
+local interface = Interface:init("TK ChordGun (Mod of ChordGun by Pandabot)")
 interface:startGui()
 
 local function windowHasNotBeenClosed()
@@ -9863,30 +9643,30 @@ end
 local function cleanup()
 
 	if fifthWheelWindowOpen then
-		reaper.SetExtState("TKChordGunFifthWheel", "forceClose", "1", false)
+		reaper.SetExtState("TK_ChordGun_FifthWheel", "forceClose", "1", false)
 		fifthWheelWindowOpen = false
 	end
 	
 
 	if helpWindowOpen then
 		helpWindowOpen = false
-		reaper.SetExtState("TKChordGunHelp", "closed", "0", false)
+		reaper.SetExtState("TK_ChordGun_Help", "closed", "0", false)
 	end
 end
 
 local function main()
 
 	if helpWindowOpen then
-		local helpClosed = reaper.GetExtState("TKChordGunHelp", "closed")
+		local helpClosed = reaper.GetExtState("TK_ChordGun_Help", "closed")
 		if helpClosed == "1" then
 			helpWindowOpen = false
-			reaper.SetExtState("TKChordGunHelp", "closed", "0", false)
+			reaper.SetExtState("TK_ChordGun_Help", "closed", "0", false)
 		end
 	end
 
 	if gfx.w ~= interface.lastWidth or gfx.h ~= interface.lastHeight then
 
-		if reaper.GetExtState("TK_ChordGun", "useFixedRatio") == "1" then
+		if reaper.GetExtState("TK_ChordGun", "useFixedRatio") ~= "0" then
 			local dynWidth = getDynamicBaseWidth()
 			local targetRatio = dynWidth / baseHeight
 			local currentRatio = gfx.w / gfx.h
@@ -9916,7 +9696,7 @@ local function main()
 		interface:addBottomFrame()
 	end
 
-	handleInput()
+	handleInput(interface)
 	updateChordRecognition()
 	checkFifthWheelUpdates()
 
