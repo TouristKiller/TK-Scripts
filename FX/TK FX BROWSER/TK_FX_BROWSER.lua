@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.1.6
+-- @version 2.1.7
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -2013,7 +2013,7 @@ function SortPluginsByRating(plugins)
         local ra = plugin_ratings[a] or 0
         local rb = plugin_ratings[b] or 0
         if ra == rb then
-            return a:lower() < b:lower()
+            return GetLowerName(a) < GetLowerName(b)
         else
             return ra > rb
         end
@@ -2026,7 +2026,7 @@ function SortPluginTableByRating(tbl)
         local ra = plugin_ratings[a.name] or 0
         local rb = plugin_ratings[b.name] or 0
         if ra == rb then
-            return a.name:lower() < b.name:lower()
+            return GetLowerName(a.name) < GetLowerName(b.name)
         else
             return ra > rb
         end
@@ -2591,7 +2591,7 @@ function InitializeFilteredPlugins()
         ::continue::
     end
 
-    table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
+    table.sort(filtered_plugins, function(a, b) return GetLowerName(a.name) < GetLowerName(b.name) end)
 end
 
 if config.show_missing_screenshots_only then
@@ -2628,7 +2628,7 @@ function ShowPluginManagerTab()
                 })
             end
         end
-        table.sort(filtered_plugins, function(a,b) return a.name:lower() < b.name:lower() end)
+        table.sort(filtered_plugins, function(a,b) return GetLowerName(a.name) < GetLowerName(b.name) end)
     end
     r.ImGui_SameLine(ctx)
     r.ImGui_PushItemWidth(ctx, 120)
@@ -2656,7 +2656,7 @@ function ShowPluginManagerTab()
             end
             ::continue_search::
         end
-        table.sort(filtered_plugins, function(a, b) return a.name:lower() < b.name:lower() end)
+        table.sort(filtered_plugins, function(a, b) return GetLowerName(a.name) < GetLowerName(b.name) end)
     end
     
     r.ImGui_Text(ctx, string.format(" | Total plugins: %d", #PLUGIN_LIST))
@@ -6667,14 +6667,14 @@ function SortScreenshotResults()
         local mode = (config and config.sort_mode) or screenshot_sort_mode or "alphabet"
         if mode == "alphabet" then
             table.sort(screenshot_search_results, function(a, b)
-                return a.name:lower() < b.name:lower()
+                return GetLowerName(a.name) < GetLowerName(b.name)
             end)
         elseif mode == "rating" then
             table.sort(screenshot_search_results, function(a, b)
                 local ra = plugin_ratings[a.name] or 0
                 local rb = plugin_ratings[b.name] or 0
                 if ra == rb then
-                    return a.name:lower() < b.name:lower()
+                    return GetLowerName(a.name) < GetLowerName(b.name)
                 else
                     return ra > rb
                 end
@@ -6695,7 +6695,7 @@ function SortPlainPluginList(list, mode)
             if ra == rb then
                 local na = a:match('^[^:]+: (.+)$') or a
                 local nb = b:match('^[^:]+: (.+)$') or b
-                return na:lower() < nb:lower()
+                return GetLowerName(na) < GetLowerName(nb)
             else
                 return ra > rb
             end
@@ -6707,7 +6707,7 @@ function SortPlainPluginList(list, mode)
             if ta == tb then
                 local na = a:match('^[^:]+: (.+)$') or a
                 local nb = b:match('^[^:]+: (.+)$') or b
-                return na:lower() < nb:lower()
+                return GetLowerName(na) < GetLowerName(nb)
             else
                 local order = {}
                 for i, t in ipairs(config.type_order) do order[t] = i end
@@ -6718,7 +6718,7 @@ function SortPlainPluginList(list, mode)
         table.sort(list, function(a,b) 
             local na = a:match('^[^:]+: (.+)$') or a
             local nb = b:match('^[^:]+: (.+)$') or b
-            return na:lower() < nb:lower() 
+            return GetLowerName(na) < GetLowerName(nb)
         end)
     end
 end
