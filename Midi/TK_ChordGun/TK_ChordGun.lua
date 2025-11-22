@@ -1,10 +1,10 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.2.3
+-- @version 2.2.5
 -- @changelog
 --[[
 
-2.2.1 /2.2.3
+2.2.1 /2.2.5
 + Bug fixes
 
 2.2.0
