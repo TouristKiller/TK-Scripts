@@ -485,7 +485,7 @@ scales = Data.scales
 local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
 notes = Data.notes;
-flatnotes = Data.notes;
+flatNotes = Data.flatNotes;
 
 function getScalePattern(scaleTonicNote, scale)
 
@@ -2075,5 +2075,6 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/T
 updateScaleData()
 higherScaleNoteAction(10)
 reaper.defer(emptyFunctionToPreventAutomaticCreationOfUndoPoint)
+
 
 

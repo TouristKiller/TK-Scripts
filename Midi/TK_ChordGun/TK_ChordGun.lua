@@ -1,8 +1,12 @@
 ﻿-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.2.0
+-- @version 2.2.1
 -- @changelog
 --[[
+
+2.2.1
++ Bug fix
+
 2.2.0
 + Added Automatic Voice Leading ("Lead" button) for smooth chord transitions
 + Added Arpeggiator (Arp) mode with adjustable patterns (Up, Down, Up/Down, Random)
