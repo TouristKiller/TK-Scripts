@@ -646,6 +646,14 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/T
 
 function updateScaleDegreeHeaders()
 
+  local currentScale = scales[getScaleType()]
+  if (currentScale and currentScale.isCustom) or #scaleNotes > 7 then
+    for i = 1, #scaleNotes do
+      setScaleDegreeHeader(i, tostring(i))
+    end
+    return
+  end
+
   local minorSymbols = {'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii'}
   local majorSymbols = {'I', 'II', 'III', 'IV', 'V', 'VI', 'VII'}
   local diminishedSymbol = 'o'
@@ -1960,8 +1968,12 @@ end
 function scaleChordAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	setSelectedScaleNote(scaleNoteIndex)
 
@@ -1975,8 +1987,12 @@ end
 function previewScaleChordAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	setSelectedScaleNote(scaleNoteIndex)
 	previewScaleChord()
@@ -1987,8 +2003,12 @@ end
 function scaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	setSelectedScaleNote(scaleNoteIndex)
 	local actionDescription = "scale note " .. scaleNoteIndex
@@ -2000,8 +2020,12 @@ end
 function lowerScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
   if getOctave() <= getOctaveMin() then
     return
@@ -2017,8 +2041,12 @@ end
 function higherScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
   if getOctave() >= getOctaveMax() then
     return
@@ -2035,8 +2063,12 @@ end
 function previewScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	setSelectedScaleNote(scaleNoteIndex)
 	previewScaleNote(0)
@@ -2045,8 +2077,12 @@ end
 function previewLowerScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	if getOctave() <= getOctaveMin() then
 		return
@@ -2059,8 +2095,12 @@ end
 function previewHigherScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	if getOctave() >= getOctaveMax() then
 		return
@@ -2074,5 +2114,7 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/T
 
 halveGridSize()
 reaper.defer(emptyFunctionToPreventAutomaticCreationOfUndoPoint)
+
+
 
 

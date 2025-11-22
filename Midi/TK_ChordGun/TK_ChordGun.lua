@@ -1,11 +1,11 @@
-﻿-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
+-- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.2.2
+-- @version 2.2.3
 -- @changelog
 --[[
 
-2.2.2
-+ Bug fix
+2.2.1 /2.2.3
++ Bug fixes
 
 2.2.0
 + Added Automatic Voice Leading ("Lead" button) for smooth chord transitions
@@ -76,7 +76,7 @@
 
 2.0.0
 + Added comprehensive scale library with 87 scales across 7 systems
-+ Two-level dropdown system: Scale System â†’ Scale Type
++ Two-level dropdown system: Scale System → Scale Type
 + Scale systems: Diatonic (11), Pentatonic (6), Messiaen (32), Jazz (10), World Music (12), Blues & Soul (8), Rock & Metal (8)
 + Educational tooltips for all scales (description + interval patterns)
 + World Music: Arabic/Middle Eastern (Hijaz, Persian, Double Harmonic), Japanese (Hirajoshi, In Sen, Iwato), Indian Ragas (Bhairav, Kafi), Hungarian/Gypsy scales
@@ -4180,8 +4180,12 @@ end
 function scaleChordAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	setSelectedScaleNote(scaleNoteIndex)
 
@@ -4195,8 +4199,12 @@ end
 function previewScaleChordAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	setSelectedScaleNote(scaleNoteIndex)
 	previewScaleChord()
@@ -4207,8 +4215,12 @@ end
 function scaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	setSelectedScaleNote(scaleNoteIndex)
 	local actionDescription = "scale note " .. scaleNoteIndex
@@ -4220,8 +4232,12 @@ end
 function lowerScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
   if getOctave() <= getOctaveMin() then
     return
@@ -4237,8 +4253,12 @@ end
 function higherScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
   if getOctave() >= getOctaveMax() then
     return
@@ -4255,8 +4275,12 @@ end
 function previewScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	setSelectedScaleNote(scaleNoteIndex)
 	previewScaleNote(0)
@@ -4265,8 +4289,12 @@ end
 function previewLowerScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	if getOctave() <= getOctaveMin() then
 		return
@@ -4279,8 +4307,12 @@ end
 function previewHigherScaleNoteAction(scaleNoteIndex)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
-		return
-	end
+return
+end
+
+if scaleNoteIndex > #scaleNotes then
+return
+end
 
 	if getOctave() >= getOctaveMax() then
 		return
@@ -6929,7 +6961,7 @@ function showFifthWheel()
 		-- Footer
 		gfx.setfont(3, "Arial", s(18))
 		setThemeColor("wheelFooterText")
-		local instr = "Click a note to change tonic • ESC to close"
+		local instr = "Click a note to change tonic � ESC to close"
 		local instrW = gfx.measurestr(instr)
 		gfx.x = (windowW - instrW) / 2
 		gfx.y = windowH - s(20)
@@ -7380,7 +7412,7 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
         
 
         if mappedNote ~= noteInChromatic then
-          noteName = noteName .. "→" .. mappedNoteName
+          noteName = noteName .. "?" .. mappedNoteName
         end
       end
     end
@@ -8403,7 +8435,7 @@ function Interface:addScaleFilterButton(xMargin, yMargin, xPadding, opts)
   end
 
   local getTooltip = function()
-    return "Click: Cycle filter mode (Off â†’ Filter â†’ Remap)\nFilter: blocks non-scale notes\nRemap: maps white keys to scale notes"
+    return "Click: Cycle filter mode (Off → Filter → Remap)\nFilter: blocks non-scale notes\nRemap: maps white keys to scale notes"
   end
 
   local applyDocker = opts.applyDockerPadding ~= false
@@ -9040,7 +9072,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
   local totalWidth = self.width - 2 * xMargin - 2 * xPadding
   local scrollX = buttonXpos + dockerXPadding + totalWidth - scrollBtnWidth
   
-  self:addSimpleButton("▲", scrollX, buttonYpos, scrollBtnWidth, buttonHeight, 
+  self:addSimpleButton("?", scrollX, buttonYpos, scrollBtnWidth, buttonHeight, 
       function() 
           if chordListScrollOffset > 0 then 
               chordListScrollOffset = chordListScrollOffset - 1
@@ -9048,7 +9080,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
           end
       end, nil, function() return "Scroll Up" end, true)
 
-  self:addSimpleButton("▼", scrollX, buttonYposRow2, scrollBtnWidth, buttonHeight, 
+  self:addSimpleButton("?", scrollX, buttonYposRow2, scrollBtnWidth, buttonHeight, 
       function() 
           local maxRows = 0
           if scaleChords then
@@ -9715,4 +9747,5 @@ end
 
 reaper.atexit(cleanup)
 main()
+
 

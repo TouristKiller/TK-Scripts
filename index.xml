@@ -256,8 +256,11 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.2.2" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-22T13:45:00Z">
+      <version name="2.2.3" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-22T14:00:00Z">
         <changelog><![CDATA[
+2.2.1 /2.2.3
++ Bug Fixes
+
 2.2.0
 + Major Refactor: Centralized data management in TK_ChordGun_Data.lua
 + Added support for 8, 9, and 10 note scales (Extended Messiaen Modes)
