@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.2.0
+-- @version 2.2.1
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -35,6 +35,17 @@ local DrawMeterModule       = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars             = dofile(script_path .. "TKFXBVariables.lua")
 local window_flags          = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
 
+-- OPTIMALISATIE: Localize Globals (Micro-optimization voor loops)
+local m_floor = math.floor
+local m_max   = math.max
+local m_min   = math.min
+local m_ceil  = math.ceil
+local s_lower = string.lower
+local s_find  = string.find
+local t_insert = table.insert
+local t_sort  = table.sort
+local r_GetExtState = r.GetExtState -- Cache de Reaper functie lookup
+
 local LAST_OPENED_SENTINEL  = "__LAST_OPENED__"
 
 -- Ratings:
@@ -60,6 +71,9 @@ local plugin_type_cache     = {}
 local type_priority_cache   = nil
 
 
+-- OPTIMALISATIE: Cache Command ID voor Notes
+local cached_notes_command_id = nil
+
 local function LaunchTKNotes()
     local notes_path = script_path .. "TK_NOTES.lua"
     if not r.file_exists(notes_path) then
@@ -67,21 +81,25 @@ local function LaunchTKNotes()
         return
     end
 
-    local command_id = r.AddRemoveReaScript(true, 0, notes_path, false)
-    if not command_id or command_id == 0 or command_id == "" then
-        command_id = r.AddRemoveReaScript(true, 0, notes_path, true)
+    -- Gebruik cached ID indien beschikbaar
+    if not cached_notes_command_id or cached_notes_command_id == 0 then
+        local command_id = r.AddRemoveReaScript(true, 0, notes_path, false)
+        if not command_id or command_id == 0 or command_id == "" then
+            command_id = r.AddRemoveReaScript(true, 0, notes_path, true)
+        end
+
+        if type(command_id) == "string" then
+            command_id = r.NamedCommandLookup(command_id)
+        end
+        cached_notes_command_id = command_id
     end
 
-    if type(command_id) == "string" then
-        command_id = r.NamedCommandLookup(command_id)
-    end
-
-    if not command_id or command_id == 0 then
+    if not cached_notes_command_id or cached_notes_command_id == 0 then
         r.ShowMessageBox("Unable to register TK_NOTES.lua as an action.", "TK Notes Error", 0)
         return
     end
 
-    r.Main_OnCommand(command_id, 0)
+    r.Main_OnCommand(cached_notes_command_id, 0)
 end
 
 
@@ -131,10 +149,10 @@ function BuildPluginCache()
         local alias = plugin_aliases[name]
         
         -- 1. Bereken lowercase naam voor zoeken
-        local lower_name = name:lower()
+        local lower_name = s_lower(name)
         
         -- 2. Bereken lowercase alias (indien aanwezig)
-        local lower_alias = alias and alias:lower() or nil
+        local lower_alias = alias and s_lower(alias) or nil
         
         -- 3. Bereken sorteernaam (zonder VST: prefix)
         local sort_name
@@ -142,7 +160,7 @@ function BuildPluginCache()
             sort_name = lower_alias
         else
             local clean = name:match('^[^:]+: (.+)$') or name
-            sort_name = clean:lower()
+            sort_name = s_lower(clean)
         end
         
         global_search_cache[name] = {
@@ -167,11 +185,11 @@ function GetLowerName(name)
     
     local alias = plugin_aliases and plugin_aliases[name]
     if alias and alias ~= "" then
-        lower = alias:lower()
+        lower = s_lower(alias)
     else
         -- Strip prefix (VST: etc) for sorting if no alias
         local clean = name:match('^[^:]+: (.+)$') or name
-        lower = clean:lower()
+        lower = s_lower(clean)
     end
     
     plugin_lower_name[name] = lower
@@ -295,6 +313,10 @@ end
 local SearchActions
 local CreateSmartMarker
 
+local last_action_search_term = nil
+local last_show_categories = nil
+local last_show_only_active = nil
+
 function RenderActionsSection()
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
     local button_h = r.ImGui_GetFrameHeight(ctx)
@@ -318,39 +340,63 @@ function RenderActionsSection()
     local list_h = window_h - cur_y - footer
     local action_child_open = r.ImGui_BeginChild(ctx, "ActionList", 0, list_h)
     if action_child_open then
-        if show_categories then
-            local filtered = SearchActions(action_search_term or "")
-            for category, actions in pairs(filtered) do
-                if #actions > 0 then
-                    if r.ImGui_TreeNode(ctx, string.format("%s (%d)", category, #actions)) then
-                        for _, action in ipairs(actions) do
-                            if action.state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF) end
-                            local prefix = action.state == 1 and "[ON] " or ""
-                            if r.ImGui_Selectable(ctx, prefix .. action.name) then
-                                r.Main_OnCommand(action.id, 0)
-                            elseif r.ImGui_IsItemClicked(ctx, 1) then
-                                CreateSmartMarker(action.id)
-                            end
-                            if action.state == 1 then r.ImGui_PopStyleColor(ctx) end
-                        end
-                        r.ImGui_TreePop(ctx)
+        if cached_actions_list == nil or 
+           action_search_term ~= last_action_search_term or 
+           show_categories ~= last_show_categories or 
+           show_only_active ~= last_show_only_active then
+           
+            cached_actions_list = {}
+            if show_categories then
+                local filtered = SearchActions(action_search_term or "")
+                for category, actions in pairs(filtered) do
+                    if #actions > 0 then
+                        table.insert(cached_actions_list, {type="category", name=category, actions=actions})
+                    end
+                end
+                table.sort(cached_actions_list, function(a,b) return a.name < b.name end)
+            else
+                for _, action in ipairs(allActions) do
+                    local state = r.GetToggleCommandState(action.id)
+                    local matches = (not action_search_term or action_search_term == "") or action.name:lower():find((action_search_term or ""):lower(), 1, true)
+                    if matches and (not show_only_active or state == 1) then
+                        table.insert(cached_actions_list, {type="action", action=action})
                     end
                 end
             end
-        else
-            for _, action in ipairs(allActions) do
-                local state = r.GetToggleCommandState(action.id)
-                local matches = (not action_search_term or action_search_term == "") or action.name:lower():find((action_search_term or ""):lower(), 1, true)
-                if matches and (not show_only_active or state == 1) then
-                    if state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF) end
-                    local prefix = state == 1 and "[ON] " or ""
-                    if r.ImGui_Selectable(ctx, prefix .. action.name) then
-                        r.Main_OnCommand(action.id, 0)
-                    elseif r.ImGui_IsItemClicked(ctx, 1) then
-                        CreateSmartMarker(action.id)
+            
+            last_action_search_term = action_search_term
+            last_show_categories = show_categories
+            last_show_only_active = show_only_active
+        end
+
+        if show_categories then
+            for _, cat in ipairs(cached_actions_list) do
+                if r.ImGui_TreeNode(ctx, string.format("%s (%d)", cat.name, #cat.actions)) then
+                    for _, action in ipairs(cat.actions) do
+                        if action.state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF) end
+                        local prefix = action.state == 1 and "[ON] " or ""
+                        if r.ImGui_Selectable(ctx, prefix .. action.name) then
+                            r.Main_OnCommand(action.id, 0)
+                        elseif r.ImGui_IsItemClicked(ctx, 1) then
+                            CreateSmartMarker(action.id)
+                        end
+                        if action.state == 1 then r.ImGui_PopStyleColor(ctx) end
                     end
-                    if state == 1 then r.ImGui_PopStyleColor(ctx) end
+                    r.ImGui_TreePop(ctx)
                 end
+            end
+        else
+            for _, item in ipairs(cached_actions_list) do
+                local action = item.action
+                local state = r.GetToggleCommandState(action.id)
+                if state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF) end
+                local prefix = state == 1 and "[ON] " or ""
+                if r.ImGui_Selectable(ctx, prefix .. action.name) then
+                    r.Main_OnCommand(action.id, 0)
+                elseif r.ImGui_IsItemClicked(ctx, 1) then
+                    CreateSmartMarker(action.id)
+                end
+                if state == 1 then r.ImGui_PopStyleColor(ctx) end
             end
         end
     end
@@ -660,15 +706,6 @@ local function CheckFXBrowserWindow()
     elseif not fx_browser_open and was_open then
         needs_screenshot_refresh = true  -- Forceer refresh van screenshots na hervat
     end
-    
-    -- Bestandswatching voor reaper-fx.ini
-    local fx_file = r.GetResourcePath() .. "/reaper-fx.ini"
-    local current_time = r.file_exists(fx_file) and r.GetFileTime(fx_file) or 0
-    if current_time ~= last_fx_file_time and last_fx_file_time ~= 0 then
-        fx_browser_open = true
-        -- Popup wordt getoond in pauze branch
-    end
-    last_fx_file_time = current_time
 end
 
 function get_safe_name(name)
@@ -888,6 +925,8 @@ local cache_cleanup_counter = 0
 function MaybeClearCaches()
     cache_cleanup_counter = cache_cleanup_counter + 1
     
+    --[[ 
+    -- DISABLED: Periodic cache clearing causes stutters.
     if cache_cleanup_counter > 1000 or 
        (normalized_name_cache and #normalized_name_cache > 5000) or
        (plugin_type_cache and #plugin_type_cache > 5000) then
@@ -897,6 +936,7 @@ function MaybeClearCaches()
         strip_x86_cache = {}
         cache_cleanup_counter = 0
     end
+    ]]
 end
 
 function SaveConfig()
@@ -4280,11 +4320,16 @@ function LoadSearchTexture(file, plugin_name)
     if type(file) ~= 'string' then return nil end
     local unique_key = plugin_name or file
     local current_time = r.time_precise()
+
+    -- Check missing file cache
+    if missing_file_cache and missing_file_cache[file] then return nil end
+
     if search_texture_cache[unique_key] then
         texture_last_used[unique_key] = current_time
         return search_texture_cache[unique_key]
     end
     if not r.file_exists(file) then
+        if missing_file_cache then missing_file_cache[file] = true end
         tex_log("File does not exist: " .. file .. " for plugin: " .. (plugin_name or "unknown"))
         return nil
     end
@@ -4309,11 +4354,11 @@ end
         -- Keep only newest 250 entries
         local sorted_queue = {}
         for k, v in pairs(texture_load_queue) do
-            table.insert(sorted_queue, {key = k, time = v.queued_at or 0})
+            t_insert(sorted_queue, {key = k, time = v.queued_at or 0})
         end
-        table.sort(sorted_queue, function(a,b) return a.time > b.time end) -- Newest first
+        t_sort(sorted_queue, function(a,b) return a.time > b.time end) -- Newest first
         texture_load_queue = {}
-        for i = 1, math.min(250, #sorted_queue) do
+        for i = 1, m_min(250, #sorted_queue) do
             local entry = sorted_queue[i]
             texture_load_queue[entry.key] = {queued_at = entry.time}
         end
@@ -4324,7 +4369,7 @@ end
     local cap = (loaded_items_count or ITEMS_PER_BATCH or 30) + VISIBLE_BUFFER
 
     if selected_folder and type(current_filtered_fx) == 'table' and #current_filtered_fx > 0 then
-        for i = 1, math.min(cap, #current_filtered_fx) do
+        for i = 1, m_min(cap, #current_filtered_fx) do
             local name = current_filtered_fx[i]
             if type(name) == 'string' then keep_set[name] = true end
         end
@@ -4341,7 +4386,7 @@ end
         end
     elseif (not selected_folder) and type(current_filtered_fx) == 'table' and #current_filtered_fx > 0 then
         
-        for i = 1, math.min(cap, #current_filtered_fx) do
+        for i = 1, m_min(cap, #current_filtered_fx) do
             local name = current_filtered_fx[i]
             if type(name) == 'string' then keep_set[name] = true end
         end
@@ -4361,9 +4406,9 @@ end
     local is_all_plugins_context = (not selected_folder and (browser_panel_selected == "ALL PLUGINS" or browser_panel_selected == nil))
     local visible_targets = loaded_items_count or ITEMS_PER_BATCH or 30
     if is_all_plugins_context and visible_targets > 60 then
-        config.max_textures_per_frame = math.max(2, math.floor(original_max_per_frame * 0.5))
-        config.max_cached_search_textures = math.max(40, math.floor(original_cache_max * 0.7))
-        config.min_cached_textures = math.min(config.min_cached_textures, math.floor(config.max_cached_search_textures * 0.4))
+        config.max_textures_per_frame = m_max(2, m_floor(original_max_per_frame * 0.5))
+        config.max_cached_search_textures = m_max(40, m_floor(original_cache_max * 0.7))
+        config.min_cached_textures = m_min(config.min_cached_textures, m_floor(config.max_cached_search_textures * 0.4))
     end
 
     local textures_loaded = 0
@@ -4371,15 +4416,21 @@ end
     for unique_key, info in pairs(texture_load_queue) do
         if textures_loaded >= config.max_textures_per_frame then break end
         local file = info.file
-        if not search_texture_cache[unique_key] and r.file_exists(file) then
-            local texture = r.ImGui_CreateImage(file)
-            if texture then
-                search_texture_cache[unique_key] = texture
-                texture_last_used[unique_key] = current_time
-                textures_loaded = textures_loaded + 1
-                tex_log("Texture loaded (deferred): " .. file .. " for plugin: " .. (info.plugin or "unknown"))
+        
+        -- OPTIMALISATIE: Extra check op missing cache voor het geval hij er later in is gekomen
+        if not search_texture_cache[unique_key] and not missing_file_cache[file] then
+            if r.file_exists(file) then
+                local texture = r.ImGui_CreateImage(file)
+                if texture then
+                    search_texture_cache[unique_key] = texture
+                    texture_last_used[unique_key] = current_time
+                    textures_loaded = textures_loaded + 1
+                    tex_log("Texture loaded (deferred): " .. file .. " for plugin: " .. (info.plugin or "unknown"))
+                else
+                    tex_log("Error loading texture: " .. file)
+                end
             else
-                tex_log("Error loading texture: " .. file)
+                missing_file_cache[file] = true -- Markeer als missing
             end
         end
         texture_load_queue[unique_key] = nil
@@ -4391,7 +4442,7 @@ end
         local textures_to_remove = {}
         for key, last_used in pairs(texture_last_used) do
             if current_time - last_used > config.texture_reload_delay and cache_size > config.min_cached_textures then
-                table.insert(textures_to_remove, key)
+                t_insert(textures_to_remove, key)
                 cache_size = cache_size - 1
             end
         end
@@ -6881,11 +6932,11 @@ function SortScreenshotResults()
 
         local mode = (config and config.sort_mode) or screenshot_sort_mode or "alphabet"
         if mode == "alphabet" then
-            table.sort(screenshot_search_results, function(a, b)
+            t_sort(screenshot_search_results, function(a, b)
                 return GetLowerName(a.name) < GetLowerName(b.name)
             end)
         elseif mode == "rating" then
-            table.sort(screenshot_search_results, function(a, b)
+            t_sort(screenshot_search_results, function(a, b)
                 local ra = plugin_ratings[a.name] or 0
                 local rb = plugin_ratings[b.name] or 0
                 if ra == rb then
@@ -6904,7 +6955,7 @@ function SortPlainPluginList(list, mode)
     if not list or #list == 0 then return end
     local effective_mode = mode or screenshot_sort_mode or "alphabet"
     if effective_mode == "rating" then
-        table.sort(list, function(a,b)
+        t_sort(list, function(a,b)
             local ra = plugin_ratings[a] or 0
             local rb = plugin_ratings[b] or 0
             if ra == rb then
@@ -6918,7 +6969,7 @@ function SortPlainPluginList(list, mode)
         local type_order_map = {}
         for i, t in ipairs(config.type_order) do type_order_map[t] = i end
 
-        table.sort(list, function(a,b)
+        t_sort(list, function(a,b)
             local ta = GetPluginType(a)
             local tb = GetPluginType(b)
             if ta == tb then
@@ -7881,7 +7932,7 @@ function DrawBrowserItems(tbl, main_cat_name)
     end
     local function PinSubgroup(cat, name)
         local lst = EnsurePinnedList(cat)
-        if not IsSubgroupPinned(cat, name) then table.insert(lst, name); SavePinned() end
+        if not IsSubgroupPinned(cat, name) then t_insert(lst, name); SavePinned() end
     end
     local function UnpinSubgroup(cat, name)
         local lst = EnsurePinnedList(cat)
@@ -7894,13 +7945,13 @@ function DrawBrowserItems(tbl, main_cat_name)
         local pinned = EnsurePinnedList(cat)
         for _, name in ipairs(pinned) do
             local idx = index_by_name[name]
-            if idx then table.insert(order, idx) end
+            if idx then t_insert(order, idx) end
         end
         local pinned_set = {}
         for _, name in ipairs(pinned) do pinned_set[name] = true end
         for i = 1, #items do
             local nm = items[i].name
-            if not pinned_set[nm] then table.insert(order, i) end
+            if not pinned_set[nm] then t_insert(order, i) end
         end
         return order
     end
@@ -7912,7 +7963,7 @@ function DrawBrowserItems(tbl, main_cat_name)
 
     for _, i in ipairs(draw_order) do
         local subgroup = tbl[i]
-        local term_l = browser_search_term:lower()
+        local term_l = s_lower(browser_search_term)
         
         if subgroup.cached_term ~= term_l then
             subgroup.cached_term = term_l
@@ -7933,12 +7984,12 @@ function DrawBrowserItems(tbl, main_cat_name)
                         end
                     else
                         -- Fallback
-                        if fx:lower():find(term_l, 1, true) then match = true end
+                        if s_lower(fx):find(term_l, 1, true) then match = true end
                     end
                 end
                 
                 if match then
-                    table.insert(subgroup.cached_filtered_fx, fx)
+                    t_insert(subgroup.cached_filtered_fx, fx)
                 end
             end
         end
@@ -8190,7 +8241,7 @@ end
 function ItemMatchesSearch(item_name, search_term)
     search_term = search_term or ""
     if search_term == "" then return true end
-    return item_name:lower():find(search_term:lower(), 1, true)
+    return s_find(s_lower(item_name), s_lower(search_term), 1, true)
 end
 
 -- CUSTOM FOLDERS (NESTED)
@@ -10267,7 +10318,7 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
   
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 14, 14)
     if r.ImGui_Button(ctx, "+##AddScriptLauncher", 20, 20) then
-        show_add_script_popup = true
+        show_launcher_add_popup = true
         new_script_name = ""
         new_script_cmd = ""
         new_script_thumb = ""
@@ -14468,6 +14519,9 @@ function loadUserScripts()
     return scripts
 end
 
+local userScripts = loadUserScripts()
+local last_cleanup_time = r.time_precise()
+
 function saveUserScript(name, command_id)
     local file = io.open(getScriptsIniPath(), "a")
     if file then
@@ -14627,7 +14681,7 @@ function Main()
             return r.defer(Main)
         end
     end
-        userScripts = loadUserScripts()
+        
         local prev_track = TRACK
         local selected_track = r.GetSelectedTrack(0, 0)
         local master_track = r.GetMasterTrack(0)
@@ -14654,8 +14708,10 @@ function Main()
             ClearScreenshotCache()
             needs_screenshot_refresh = false
         end
-        if r.time_precise() % 300 < 1 then
+        local now = r.time_precise()
+        if now - last_cleanup_time > 300 then
             ClearScreenshotCache(true)
+            last_cleanup_time = now
         end
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             pushed_main_styles = true
@@ -14735,10 +14791,7 @@ EnsureWindowVisible()
 local general_visibility = CheckVisibilityState()
 local should_show_main_window = ShouldShowMainWindow()
 
--- If whole script is hidden (TOGGLE_VISIBILITY), show hidden window
 if not general_visibility then
-    -- Window is hidden but script keeps running
-    -- Clean up any pushed styles before creating hidden window
     if pushed_main_styles then
         r.ImGui_PopFont(ctx)
         r.ImGui_PopStyleColor(ctx, 13) -- 13 StyleColors
@@ -16378,6 +16431,7 @@ if visible then
     HandleDragAndDrop()
     
     if open then        
+        collectgarbage("step", 200)
         r.defer(Main)
     end
     

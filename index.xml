@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.2.0" author="TouristKiller" time="2025-11-23T17:35:00Z">
+    <version name="2.2.1" author="TouristKiller" time="2025-11-23T22:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -41,7 +41,6 @@
     <source main="main" file="TK_NOTES.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES.lua</source>
     <source main="main" file="TK_FX_BROWSER Mini.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER%20Mini.lua</source>
                 <changelog><![CDATA[           
-+ Added TK FX BROWSER Mini.lua
 ]]></changelog>
     </version>
     </reapack>
