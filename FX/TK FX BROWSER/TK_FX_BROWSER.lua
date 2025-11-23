@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.1.8
+-- @version 2.2.0
 -- @changelog:
 --[[     
 + Added TK FX BROWSER Mini.lua
@@ -43,6 +43,9 @@ local plugin_ratings        = {}
 -- Aliases:
 local plugin_aliases_path   = script_path .. "plugin_aliases.json"
 local plugin_aliases        = {}
+-- NIEUW: Master Cache voor performance (voorkomt miljoenen string.lower calls)
+local global_search_cache   = {} 
+
 local DedupeByTypePriority
 
 -- Performance caches
@@ -51,6 +54,8 @@ local pinned_set            = {}
 local pinned_norm_set       = {}
 local plugin_lower_name     = {}
 local normalized_name_cache = {}
+local clean_name_cache      = {} -- NEW
+local strip_x86_cache       = {} -- NEW
 local plugin_type_cache     = {}
 local type_priority_cache   = nil
 
@@ -116,9 +121,47 @@ local categories = {
     ["View and Zoom"] = {}
 }
 
+-- NIEUWE FUNCTIE: Bouw de cache één keer op voor extreme snelheid
+function BuildPluginCache()
+    global_search_cache = {}
+    if not FX_LIST_TEST then return end
+    
+    for i = 1, #FX_LIST_TEST do
+        local name = FX_LIST_TEST[i]
+        local alias = plugin_aliases[name]
+        
+        -- 1. Bereken lowercase naam voor zoeken
+        local lower_name = name:lower()
+        
+        -- 2. Bereken lowercase alias (indien aanwezig)
+        local lower_alias = alias and alias:lower() or nil
+        
+        -- 3. Bereken sorteernaam (zonder VST: prefix)
+        local sort_name
+        if alias and alias ~= "" then
+            sort_name = lower_alias
+        else
+            local clean = name:match('^[^:]+: (.+)$') or name
+            sort_name = clean:lower()
+        end
+        
+        global_search_cache[name] = {
+            lower_name = lower_name,
+            lower_alias = lower_alias,
+            sort_key = sort_name,
+            display_len = (alias and alias ~= "") and alias:len() or name:len()
+        }
+    end
+end
 
 function GetLowerName(name)
     if not name then return "" end
+    -- Check de snelle cache eerst (O(1) lookup)
+    if global_search_cache[name] then
+        return global_search_cache[name].sort_key
+    end
+    
+    -- Fallback (zou niet moeten gebeuren als cache gebouwd is)
     local lower = plugin_lower_name[name]
     if lower then return lower end
     
@@ -185,8 +228,12 @@ local function ShouldShowMainWindow()
     return not config.hide_main_window
 end
 
+local last_running_state = nil
 local function SetRunningState(running)
-    r.SetExtState("TK_FX_BROWSER", "running", running and "true" or "false", true)
+    if last_running_state ~= running then
+        r.SetExtState("TK_FX_BROWSER", "running", running and "true" or "false", true)
+        last_running_state = running
+    end
 end
 
 local did_initial_refresh = false
@@ -576,10 +623,27 @@ if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
 end
 local PLUGIN_LIST = GetFXTbl()
 
+-- INITIALISEER DE CACHE HIER
+BuildPluginCache()
+
+local last_window_check_time = 0
+local cached_hwnd = nil
+
 local function CheckFXBrowserWindow()
     -- Venster detectie via command state (40271 = FX Browser toggle) of JS
     local toggle = r.GetToggleCommandState(40271)
-    local hwnd = r.JS_Window_Find and r.JS_Window_Find("FX Browser", true) or nil
+    local now = r.time_precise()
+    local hwnd = cached_hwnd
+    
+    -- Only search for window via JS API every 2.5 seconds or if toggle is on and we don't have hwnd
+    if (toggle == 1 and not cached_hwnd) or (now - last_window_check_time > 2.5) then
+        if r.JS_Window_Find then
+             hwnd = r.JS_Window_Find("FX Browser", true)
+             cached_hwnd = hwnd
+        end
+        last_window_check_time = now
+    end
+
     local was_open = fx_browser_open
     if toggle == 1 or hwnd then
         fx_browser_open = true
@@ -587,6 +651,7 @@ local function CheckFXBrowserWindow()
     else
         fx_browser_open = false
         native_fx_browser_hwnd = nil
+        cached_hwnd = nil
     end
     
     -- Melding bij verandering
@@ -804,9 +869,14 @@ end
 local config = SetDefaultConfig()    
 _G.config = config 
 local window_alpha_int = math.floor(config.window_alpha * 100)  
+local display_name_cache = {}
+
 function ClearPerformanceCaches()
     normalized_name_cache = {}
     plugin_type_cache = {}
+    display_name_cache = {}
+    clean_name_cache = {}
+    strip_x86_cache = {}
     type_priority_cache = nil
     if config then
         config._current_version = (config._current_version or 0) + 1
@@ -823,6 +893,8 @@ function MaybeClearCaches()
        (plugin_type_cache and #plugin_type_cache > 5000) then
         normalized_name_cache = {}
         plugin_type_cache = {}
+        clean_name_cache = {}
+        strip_x86_cache = {}
         cache_cleanup_counter = 0
     end
 end
@@ -1345,6 +1417,10 @@ end
 
 function CleanPluginName(name)
     if not name or name == '' then return name end
+    
+    local cached = clean_name_cache[name]
+    if cached then return cached end
+
     local original = name
    
     name = name:gsub('^VST3i?:%s*','')
@@ -1361,7 +1437,9 @@ function CleanPluginName(name)
                :gsub('%s*%(%d+in%s*%d+out%)$','')
    
     name = name:gsub('%s+$','')
-    return name ~= '' and name or original
+    local result = name ~= '' and name or original
+    clean_name_cache[original] = result
+    return result
 end
 
 function RemoveManufacturerSuffix(name)
@@ -1385,7 +1463,12 @@ end
 
 function GetDisplayPluginName(raw_name)
     if not raw_name then return raw_name end
+    
+    local cached = display_name_cache[raw_name]
+    if cached then return cached end
+
     if plugin_aliases and plugin_aliases[raw_name] and plugin_aliases[raw_name] ~= "" then
+        display_name_cache[raw_name] = plugin_aliases[raw_name]
         return plugin_aliases[raw_name]
     end
     local name = raw_name
@@ -1395,17 +1478,25 @@ function GetDisplayPluginName(raw_name)
     if config.remove_manufacturer_names then
         name = RemoveManufacturerSuffix(name)
     end
+    
+    display_name_cache[raw_name] = name
     return name
 end
 
 function StripX86Markers(name)
     if not name then return '' end
     
+    local cached = strip_x86_cache[name]
+    if cached then return cached end
+
+    local original = name
     name = name
         :gsub('%s*[%(%[]x86[^%]%)]*[%]%)]','')    
         :gsub('[%s%-]+x86[%s%-]*bridged',' ')      
         :gsub('[%s%-]x86[%s%-]',' ')               
         :gsub('x86%s*:%s*','')                     
+    
+    strip_x86_cache[original] = name
     return name
 end
 
@@ -1593,7 +1684,7 @@ function BuildScreenshotIndex(force)
         local base = fname:match('(.+)%.png$') or fname:match('(.+)%.jpg$') or fname:match('(.+)%.jpeg$')
         if base then
             local norm = NormalizePluginNameForMatch(base)
-            screenshot_index_norm[norm] = true
+            screenshot_index_norm[norm] = fname
         end
         i = i + 1
     end
@@ -1648,10 +1739,20 @@ function UnpinPlugin(name)
     end
 end
 
+local screenshot_exists_cache = {}
+
 function HasScreenshot(plugin_name)
+    if screenshot_exists_cache[plugin_name] ~= nil then
+        return screenshot_exists_cache[plugin_name]
+    end
+
     BuildScreenshotIndex()
     local norm = NormalizePluginNameForMatch(plugin_name)
-    if screenshot_index_norm[norm] then return true end
+    if screenshot_index_norm[norm] then 
+        local full_path = screenshot_path .. screenshot_index_norm[norm]
+        screenshot_exists_cache[plugin_name] = full_path
+        return full_path 
+    end
     
     local stripped_x86 = StripX86Markers(plugin_name)
     local variants = {
@@ -1667,9 +1768,16 @@ function HasScreenshot(plugin_name)
         if base and base ~= '' then
             local png = screenshot_path .. base .. '.png'
             local jpg = screenshot_path .. base .. '.jpg'
-            if r.file_exists(png) or r.file_exists(jpg) then return true end
+            if r.file_exists(png) then 
+                screenshot_exists_cache[plugin_name] = png
+                return png 
+            elseif r.file_exists(jpg) then
+                screenshot_exists_cache[plugin_name] = jpg
+                return jpg
+            end
         end
     end
+    screenshot_exists_cache[plugin_name] = false
     return false
 end
 
@@ -1724,9 +1832,20 @@ function RenderMissingList(missing)
                         if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                     end
                 end
-                ShowPluginContextMenu(name, "missing_ctx_" .. i)
+                
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "SharedMissingContextMenu")
+                    missing_context_plugin = name
+                end
         end
         r.ImGui_PopStyleVar(ctx)
+
+        if r.ImGui_BeginPopup(ctx, "SharedMissingContextMenu") then
+            if missing_context_plugin then
+                ShowPluginContextMenuContent(missing_context_plugin)
+            end
+            r.ImGui_EndPopup(ctx)
+        end
     end
 end
 
@@ -2461,6 +2580,10 @@ end
 function ClearScreenshotCache(periodic_cleanup)
     local current_time = r.time_precise()
     
+    if not periodic_cleanup then
+        screenshot_exists_cache = {}
+    end
+
     if periodic_cleanup then
         local to_remove = {}
         for key, last_used in pairs(texture_last_used) do
@@ -4145,6 +4268,7 @@ function tex_log(msg)
 end
 
 function LoadTexture(file)
+    if type(file) ~= 'string' then return nil end
     local texture = r.ImGui_CreateImage(file)
     if texture == nil then
         tex_log("Failed to load texture: " .. file)
@@ -4153,8 +4277,8 @@ function LoadTexture(file)
 end
     
 function LoadSearchTexture(file, plugin_name)
-    local relative_path = file:gsub(screenshot_path, "")
-    local unique_key = relative_path .. "_" .. (plugin_name or "unknown")
+    if type(file) ~= 'string' then return nil end
+    local unique_key = plugin_name or file
     local current_time = r.time_precise()
     if search_texture_cache[unique_key] then
         texture_last_used[unique_key] = current_time
@@ -5057,11 +5181,10 @@ function ProcessSelectedMissing()
 end
 
 function LoadPluginScreenshot(plugin_name)
-    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-    local screenshot_file = screenshot_path .. safe_name .. ".png"
+    local path = HasScreenshot(plugin_name)
    
-    if r.file_exists(screenshot_file) then
-        screenshot_texture = LoadTexture(screenshot_file)
+    if path then
+        screenshot_texture = LoadTexture(path)
         if screenshot_texture then
             screenshot_width, screenshot_height = r.ImGui_Image_GetSize(screenshot_texture)
         end
@@ -5896,6 +6019,351 @@ function CreateSmartMarker(action_id)
 end 
 
 
+function ShowPluginContextMenuContent(plugin_name)
+    -- Rating UI bovenaan
+    r.ImGui_Text(ctx, "Rating:")
+    ShowPluginRatingUI(plugin_name)
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Rename / Alias") then
+        renaming_plugin_name = plugin_name
+        renaming_new_name = plugin_aliases[plugin_name] or plugin_name
+        show_rename_popup = true
+    end
+    if r.ImGui_MenuItem(ctx, "Make Screenshot") then
+        StartSingleScreenshotCapture(plugin_name, function()
+            ClearScreenshotCache()
+            BuildScreenshotIndex(true)
+            folder_changed = true
+        end, true)
+    end
+    
+    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+        if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
+            AddPluginToSelectedTracks(plugin_name)
+        end
+        if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
+            AddPluginToAllTracks(plugin_name)
+        end
+    end
+    
+    local is_favorite = not not favorite_set[plugin_name]
+    if is_favorite then
+        if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+            RemoveFromFavorites(plugin_name)
+            GetPluginsForFolder(selected_folder)
+            ClearScreenshotCache()
+        end
+    else
+        if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+            AddToFavorites(plugin_name)
+            GetPluginsForFolder(selected_folder)
+            ClearScreenshotCache()
+        end
+    end
+
+    -- Pin/unpin plugin
+    local is_pinned = IsPluginPinned(plugin_name)
+    if is_pinned then
+        if r.ImGui_MenuItem(ctx, "Unpin Plugin") then
+            UnpinPlugin(plugin_name)
+        end
+    else
+        if r.ImGui_MenuItem(ctx, "Pin Plugin") then
+            PinPlugin(plugin_name)
+        end
+    end
+
+    -- ADD TO CUSTOM FOLDER SECTIE
+    if next(config.custom_folders) then
+        r.ImGui_Separator(ctx)
+        if r.ImGui_BeginMenu(ctx, "Add to Custom Folder") then
+            local function ShowCustomFolderMenu(folders, path_prefix)
+                path_prefix = path_prefix or ""
+                
+                -- SORTEER DE FOLDER NAMEN ALFABETISCH
+                local sorted_folder_names = {}
+                for folder_name, _ in pairs(folders) do
+                    if folder_name ~= "__folder_marker__" then
+                        table.insert(sorted_folder_names, folder_name)
+                    end
+                end
+                table.sort(sorted_folder_names, function(a, b) 
+                    return a:lower() < b:lower() 
+                end)
+                
+                -- GEBRUIK DE GESORTEERDE NAMEN
+                for _, folder_name in ipairs(sorted_folder_names) do
+                    local folder_content = folders[folder_name]
+                    
+                    local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+                    
+                    local has_subfolders = false
+                    if type(folder_content) == "table" then
+                        for k, v in pairs(folder_content) do
+                            if k ~= "__folder_marker__" and type(v) == "table" then
+                                has_subfolders = true
+                                break
+                            end
+                        end
+                    end
+                    
+                    if has_subfolders then
+                        -- Has subfolders - show as submenu (cannot add plugins here)
+                        if r.ImGui_BeginMenu(ctx, folder_name) then
+                            ShowCustomFolderMenu(folder_content, full_path)
+                            r.ImGui_EndMenu(ctx)
+                        end
+                    else
+                        -- No subfolders - direct plugin folder
+                        local plugin_count = 0
+                        if type(folder_content) == "table" then
+                            for k, v in pairs(folder_content) do
+                                if k ~= "__folder_marker__" and type(v) == "string" then
+                                    plugin_count = plugin_count + 1
+                                end
+                            end
+                        end
+                        
+                        if r.ImGui_MenuItem(ctx, folder_name .. " (" .. plugin_count .. ")") then
+                            -- Check if plugin already exists
+                            local already_exists = false
+                            if type(folder_content) == "table" then
+                                for k, v in pairs(folder_content) do
+                                    if type(v) == "string" and v == plugin_name then
+                                        already_exists = true
+                                        break
+                                    end
+                                end
+                            end
+                            
+                            if not already_exists then
+                                -- Navigate to the correct location in config.custom_folders using path
+                                local target = config.custom_folders
+                                if path_prefix ~= "" then
+                                    for folder in path_prefix:gmatch("[^/]+") do
+                                        target = target[folder]
+                                        if not target then break end
+                                    end
+                                end
+                                
+                                if target and target[folder_name] then
+                                    local target_folder = target[folder_name]
+                                    -- Add plugin to existing folder content
+                                    if IsPluginArray(target_folder) then
+                                        -- Simple plugin array - just insert
+                                        table.insert(target_folder, plugin_name)
+                                    else
+                                        -- Has __folder_marker__ - add as next numeric index
+                                        local max_index = 0
+                                        for k, v in pairs(target_folder) do
+                                            if type(k) == "number" and k > max_index then
+                                                max_index = k
+                                            end
+                                        end
+                                        target_folder[max_index + 1] = plugin_name
+                                    end
+                                    SaveCustomFolders()
+                                    r.ShowMessageBox("Plugin added to " .. folder_name, "Success", 0)
+                                else
+                                    r.ShowMessageBox("Error: Could not find folder", "Error", 0)
+                                end
+                            else
+                                r.ShowMessageBox("Plugin already exists in " .. folder_name, "Info", 0)
+                            end
+                        end
+                    end
+                end
+            end
+            
+            ShowCustomFolderMenu(config.custom_folders)
+            
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Create New Folder...") then
+                show_create_folder_popup = true
+                new_folder_for_plugin = plugin_name
+            end
+            
+            r.ImGui_EndMenu(ctx)
+        end
+    end
+    
+    -- REMOVE FROM CUSTOM FOLDER SECTIE
+    if next(config.custom_folders) then
+        -- Check if plugin exists in any custom folder
+        local function FindPluginInFolders(folders, plugin, path_prefix, results)
+            path_prefix = path_prefix or ""
+            results = results or {}
+            
+            for folder_name, folder_content in pairs(folders) do
+                if folder_name ~= "__folder_marker__" and type(folder_content) == "table" then
+                    local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+                    
+                    -- Check if this folder contains the plugin
+                    local contains_plugin = false
+                    for k, v in pairs(folder_content) do
+                        if type(v) == "string" and v == plugin then
+                            contains_plugin = true
+                            table.insert(results, {path = full_path, key = k})
+                            break
+                        end
+                    end
+                    
+                    -- Recurse into subfolders
+                    if not contains_plugin then
+                        FindPluginInFolders(folder_content, plugin, full_path, results)
+                    end
+                end
+            end
+            
+            return results
+        end
+        
+        local found_in = FindPluginInFolders(config.custom_folders, plugin_name)
+        
+        if #found_in > 0 then
+            if r.ImGui_BeginMenu(ctx, "Remove from Custom Folder") then
+                for _, location in ipairs(found_in) do
+                    if r.ImGui_MenuItem(ctx, location.path) then
+                        -- Navigate to folder and remove plugin
+                        local target = config.custom_folders
+                        for folder in location.path:gmatch("[^/]+") do
+                            target = target[folder]
+                            if not target then break end
+                        end
+                        
+                        if target then
+                            target[location.key] = nil
+                            SaveCustomFolders()
+                            
+                            -- Refresh if we're viewing this folder
+                            if selected_folder and IsCustomFolder(selected_folder) then
+                                local plugins = GetCustomFolderPlugins(selected_folder, config.custom_folders)
+                                screenshot_search_results = {}
+                                for _, p in ipairs(plugins) do
+                                    table.insert(screenshot_search_results, {name = p})
+                                end
+                                ClearScreenshotCache()
+                            end
+                            
+                            r.ShowMessageBox("Plugin removed from " .. location.path, "Success", 0)
+                        end
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+        end
+    end
+    
+    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+        if r.ImGui_MenuItem(ctx, "Add to new track as send") then
+            local track_idx = r.CountTracks(0)
+            r.InsertTrackAtIndex(track_idx, true)
+            local new_track = r.GetTrack(0, track_idx)
+            
+            if config.create_sends_folder then
+                local folder_idx = -1
+                for k = 0, track_idx - 1 do
+                    local track = r.GetTrack(0, k)
+                    local _, name = r.GetTrackName(track)
+                    if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+                        folder_idx = k
+                        break
+                    end
+                end
+                
+                if folder_idx == -1 then
+                    r.InsertTrackAtIndex(track_idx, true)
+                    local folder_track = r.GetTrack(0, track_idx)
+                    r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
+                    r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                    folder_idx = track_idx
+                    track_idx = track_idx + 1
+                    new_track = r.GetTrack(0, track_idx)
+                else
+                    local last_track_in_folder
+                    for k = folder_idx + 1, track_idx - 1 do
+                        local track = r.GetTrack(0, k)
+                        if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
+                            last_track_in_folder = track
+                        end
+                    end
+                    if last_track_in_folder then
+                        r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
+                    end
+                end
+                
+                r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
+            end
+            
+            AddFXToTrack(new_track, plugin_name)
+            r.CreateTrackSend(TRACK, new_track)
+            r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name .. " Send", true)
+        end
+    end
+
+    if r.ImGui_MenuItem(ctx, "Add with Multi-Output Setup") then
+        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+            AddFXToTrack(TRACK, plugin_name)
+            
+            local num_outputs = tonumber(plugin_name:match("%((%d+)%s+out%)")) or 0
+            local num_receives = math.floor(num_outputs / 2) - 1
+            
+            r.SetMediaTrackInfo_Value(TRACK, "I_NCHAN", num_outputs)
+            
+            for k = 1, num_receives do
+                local track_idx = r.CountTracks(0)
+                r.InsertTrackAtIndex(track_idx, true)
+                local new_track = r.GetTrack(0, track_idx)
+                
+                r.CreateTrackSend(TRACK, new_track)
+                local send_idx = r.GetTrackNumSends(TRACK, 0) - 1
+                
+                r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_SRCCHAN", k*2)
+                r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_DSTCHAN", 0)
+                r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_SENDMODE", 3)
+                r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_MIDIFLAGS", 0)
+                
+                local output_num = (k * 2) + 1
+                r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name .. " Out " .. output_num .. "-" .. (output_num + 1), true)
+            end
+        end
+    end
+
+    if IsInstrumentPlugin(plugin_name) then
+        if r.ImGui_BeginMenu(ctx, "Add as virtual instrument to new track") then
+            -- All MIDI inputs option
+            if r.ImGui_MenuItem(ctx, "All MIDI inputs") then
+                CreateInstrumentTrack(plugin_name, 6112)
+            end
+            
+            -- Individual MIDI inputs
+            local num_midi_inputs = r.GetNumMIDIInputs()
+            for i = 0, num_midi_inputs - 1 do
+                local retval, name = r.GetMIDIInputName(i, "")
+                if retval and name ~= "" then
+                    if r.ImGui_MenuItem(ctx, name) then
+                        CreateInstrumentTrack(plugin_name, 6113 + i)
+                    end
+                end
+            end
+            
+            r.ImGui_EndMenu(ctx)
+        end
+    end
+
+    if config.hidden_names[plugin_name] then
+        if r.ImGui_MenuItem(ctx, "Show Name") then
+            config.hidden_names[plugin_name] = nil
+            SaveConfig()
+        end
+    else
+        if r.ImGui_MenuItem(ctx, "Hide Name") then
+            config.hidden_names[plugin_name] = true
+            SaveConfig()
+        end
+    end
+end
+
 local old_ShowPluginContextMenu = ShowPluginContextMenu
 function ShowPluginContextMenu(plugin_name, menu_id)
     if type(plugin_name) == "table" then
@@ -5908,349 +6376,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
     end
 
     if r.ImGui_BeginPopup(ctx, "PluginContextMenu_" .. menu_id) then
-        -- Rating UI bovenaan
-        r.ImGui_Text(ctx, "Rating:")
-        ShowPluginRatingUI(plugin_name)
-        r.ImGui_Separator(ctx)
-        if r.ImGui_MenuItem(ctx, "Rename / Alias") then
-            renaming_plugin_name = plugin_name
-            renaming_new_name = plugin_aliases[plugin_name] or plugin_name
-            show_rename_popup = true
-        end
-        if r.ImGui_MenuItem(ctx, "Make Screenshot") then
-            StartSingleScreenshotCapture(plugin_name, function()
-                ClearScreenshotCache()
-                BuildScreenshotIndex(true)
-                folder_changed = true
-            end, true)
-        end
-        
-        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-            if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
-                AddPluginToSelectedTracks(plugin_name)
-            end
-            if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
-                AddPluginToAllTracks(plugin_name)
-            end
-        end
-        
-    local is_favorite = not not favorite_set[plugin_name]
-        if is_favorite then
-            if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                RemoveFromFavorites(plugin_name)
-                GetPluginsForFolder(selected_folder)
-                ClearScreenshotCache()
-            end
-        else
-            if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                AddToFavorites(plugin_name)
-                GetPluginsForFolder(selected_folder)
-                ClearScreenshotCache()
-            end
-        end
-
-        -- Pin/unpin plugin
-        local is_pinned = IsPluginPinned(plugin_name)
-        if is_pinned then
-            if r.ImGui_MenuItem(ctx, "Unpin Plugin") then
-                UnpinPlugin(plugin_name)
-            end
-        else
-            if r.ImGui_MenuItem(ctx, "Pin Plugin") then
-                PinPlugin(plugin_name)
-            end
-        end
-
-        -- ADD TO CUSTOM FOLDER SECTIE
-        if next(config.custom_folders) then
-            r.ImGui_Separator(ctx)
-            if r.ImGui_BeginMenu(ctx, "Add to Custom Folder") then
-                local function ShowCustomFolderMenu(folders, path_prefix)
-                    path_prefix = path_prefix or ""
-                    
-                    -- SORTEER DE FOLDER NAMEN ALFABETISCH
-                    local sorted_folder_names = {}
-                    for folder_name, _ in pairs(folders) do
-                        if folder_name ~= "__folder_marker__" then
-                            table.insert(sorted_folder_names, folder_name)
-                        end
-                    end
-                    table.sort(sorted_folder_names, function(a, b) 
-                        return a:lower() < b:lower() 
-                    end)
-                    
-                    -- GEBRUIK DE GESORTEERDE NAMEN
-                    for _, folder_name in ipairs(sorted_folder_names) do
-                        local folder_content = folders[folder_name]
-                        
-                        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
-                        
-                        local has_subfolders = false
-                        if type(folder_content) == "table" then
-                            for k, v in pairs(folder_content) do
-                                if k ~= "__folder_marker__" and type(v) == "table" then
-                                    has_subfolders = true
-                                    break
-                                end
-                            end
-                        end
-                        
-                        if has_subfolders then
-                            -- Has subfolders - show as submenu (cannot add plugins here)
-                            if r.ImGui_BeginMenu(ctx, folder_name) then
-                                ShowCustomFolderMenu(folder_content, full_path)
-                                r.ImGui_EndMenu(ctx)
-                            end
-                        else
-                            -- No subfolders - direct plugin folder
-                            local plugin_count = 0
-                            if type(folder_content) == "table" then
-                                for k, v in pairs(folder_content) do
-                                    if k ~= "__folder_marker__" and type(v) == "string" then
-                                        plugin_count = plugin_count + 1
-                                    end
-                                end
-                            end
-                            
-                            if r.ImGui_MenuItem(ctx, folder_name .. " (" .. plugin_count .. ")") then
-                                -- Check if plugin already exists
-                                local already_exists = false
-                                if type(folder_content) == "table" then
-                                    for k, v in pairs(folder_content) do
-                                        if type(v) == "string" and v == plugin_name then
-                                            already_exists = true
-                                            break
-                                        end
-                                    end
-                                end
-                                
-                                if not already_exists then
-                                    -- Navigate to the correct location in config.custom_folders using path
-                                    local target = config.custom_folders
-                                    if path_prefix ~= "" then
-                                        for folder in path_prefix:gmatch("[^/]+") do
-                                            target = target[folder]
-                                            if not target then break end
-                                        end
-                                    end
-                                    
-                                    if target and target[folder_name] then
-                                        local target_folder = target[folder_name]
-                                        -- Add plugin to existing folder content
-                                        if IsPluginArray(target_folder) then
-                                            -- Simple plugin array - just insert
-                                            table.insert(target_folder, plugin_name)
-                                        else
-                                            -- Has __folder_marker__ - add as next numeric index
-                                            local max_index = 0
-                                            for k, v in pairs(target_folder) do
-                                                if type(k) == "number" and k > max_index then
-                                                    max_index = k
-                                                end
-                                            end
-                                            target_folder[max_index + 1] = plugin_name
-                                        end
-                                        SaveCustomFolders()
-                                        r.ShowMessageBox("Plugin added to " .. folder_name, "Success", 0)
-                                    else
-                                        r.ShowMessageBox("Error: Could not find folder", "Error", 0)
-                                    end
-                                else
-                                    r.ShowMessageBox("Plugin already exists in " .. folder_name, "Info", 0)
-                                end
-                            end
-                        end
-                    end
-                end
-                
-                ShowCustomFolderMenu(config.custom_folders)
-                
-                r.ImGui_Separator(ctx)
-                if r.ImGui_MenuItem(ctx, "Create New Folder...") then
-                    show_create_folder_popup = true
-                    new_folder_for_plugin = plugin_name
-                end
-                
-                r.ImGui_EndMenu(ctx)
-            end
-        end
-        
-        -- REMOVE FROM CUSTOM FOLDER SECTIE
-        if next(config.custom_folders) then
-            -- Check if plugin exists in any custom folder
-            local function FindPluginInFolders(folders, plugin, path_prefix, results)
-                path_prefix = path_prefix or ""
-                results = results or {}
-                
-                for folder_name, folder_content in pairs(folders) do
-                    if folder_name ~= "__folder_marker__" and type(folder_content) == "table" then
-                        local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
-                        
-                        -- Check if this folder contains the plugin
-                        local contains_plugin = false
-                        for k, v in pairs(folder_content) do
-                            if type(v) == "string" and v == plugin then
-                                contains_plugin = true
-                                table.insert(results, {path = full_path, key = k})
-                                break
-                            end
-                        end
-                        
-                        -- Recurse into subfolders
-                        if not contains_plugin then
-                            FindPluginInFolders(folder_content, plugin, full_path, results)
-                        end
-                    end
-                end
-                
-                return results
-            end
-            
-            local found_in = FindPluginInFolders(config.custom_folders, plugin_name)
-            
-            if #found_in > 0 then
-                if r.ImGui_BeginMenu(ctx, "Remove from Custom Folder") then
-                    for _, location in ipairs(found_in) do
-                        if r.ImGui_MenuItem(ctx, location.path) then
-                            -- Navigate to folder and remove plugin
-                            local target = config.custom_folders
-                            for folder in location.path:gmatch("[^/]+") do
-                                target = target[folder]
-                                if not target then break end
-                            end
-                            
-                            if target then
-                                target[location.key] = nil
-                                SaveCustomFolders()
-                                
-                                -- Refresh if we're viewing this folder
-                                if selected_folder and IsCustomFolder(selected_folder) then
-                                    local plugins = GetCustomFolderPlugins(selected_folder, config.custom_folders)
-                                    screenshot_search_results = {}
-                                    for _, p in ipairs(plugins) do
-                                        table.insert(screenshot_search_results, {name = p})
-                                    end
-                                    ClearScreenshotCache()
-                                end
-                                
-                                r.ShowMessageBox("Plugin removed from " .. location.path, "Success", 0)
-                            end
-                        end
-                    end
-                    r.ImGui_EndMenu(ctx)
-                end
-            end
-        end
-        
-        if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-            if r.ImGui_MenuItem(ctx, "Add to new track as send") then
-                local track_idx = r.CountTracks(0)
-                r.InsertTrackAtIndex(track_idx, true)
-                local new_track = r.GetTrack(0, track_idx)
-                
-                if config.create_sends_folder then
-                    local folder_idx = -1
-                    for k = 0, track_idx - 1 do
-                        local track = r.GetTrack(0, k)
-                        local _, name = r.GetTrackName(track)
-                        if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                            folder_idx = k
-                            break
-                        end
-                    end
-                    
-                    if folder_idx == -1 then
-                        r.InsertTrackAtIndex(track_idx, true)
-                        local folder_track = r.GetTrack(0, track_idx)
-                        r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
-                        r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
-                        folder_idx = track_idx
-                        track_idx = track_idx + 1
-                        new_track = r.GetTrack(0, track_idx)
-                    else
-                        local last_track_in_folder
-                        for k = folder_idx + 1, track_idx - 1 do
-                            local track = r.GetTrack(0, k)
-                            if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
-                                last_track_in_folder = track
-                            end
-                        end
-                        if last_track_in_folder then
-                            r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
-                        end
-                    end
-                    
-                    r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
-                end
-                
-                AddFXToTrack(new_track, plugin_name)
-                r.CreateTrackSend(TRACK, new_track)
-                r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name .. " Send", true)
-            end
-        end
-
-        if r.ImGui_MenuItem(ctx, "Add with Multi-Output Setup") then
-            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                AddFXToTrack(TRACK, plugin_name)
-                
-                local num_outputs = tonumber(plugin_name:match("%((%d+)%s+out%)")) or 0
-                local num_receives = math.floor(num_outputs / 2) - 1
-                
-                r.SetMediaTrackInfo_Value(TRACK, "I_NCHAN", num_outputs)
-                
-                for k = 1, num_receives do
-                    local track_idx = r.CountTracks(0)
-                    r.InsertTrackAtIndex(track_idx, true)
-                    local new_track = r.GetTrack(0, track_idx)
-                    
-                    r.CreateTrackSend(TRACK, new_track)
-                    local send_idx = r.GetTrackNumSends(TRACK, 0) - 1
-                    
-                    r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_SRCCHAN", k*2)
-                    r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_DSTCHAN", 0)
-                    r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_SENDMODE", 3)
-                    r.SetTrackSendInfo_Value(TRACK, 0, send_idx, "I_MIDIFLAGS", 0)
-                    
-                    local output_num = (k * 2) + 1
-                    r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name .. " Out " .. output_num .. "-" .. (output_num + 1), true)
-                end
-            end
-        end
-
-        if IsInstrumentPlugin(plugin_name) then
-            if r.ImGui_BeginMenu(ctx, "Add as virtual instrument to new track") then
-                -- All MIDI inputs option
-                if r.ImGui_MenuItem(ctx, "All MIDI inputs") then
-                    CreateInstrumentTrack(plugin_name, 6112)
-                end
-                
-                -- Individual MIDI inputs
-                local num_midi_inputs = r.GetNumMIDIInputs()
-                for i = 0, num_midi_inputs - 1 do
-                    local retval, name = r.GetMIDIInputName(i, "")
-                    if retval and name ~= "" then
-                        if r.ImGui_MenuItem(ctx, name) then
-                            CreateInstrumentTrack(plugin_name, 6113 + i)
-                        end
-                    end
-                end
-                
-                r.ImGui_EndMenu(ctx)
-            end
-        end
-
-        if config.hidden_names[plugin_name] then
-            if r.ImGui_MenuItem(ctx, "Show Name") then
-                config.hidden_names[plugin_name] = nil
-                SaveConfig()
-            end
-        else
-            if r.ImGui_MenuItem(ctx, "Hide Name") then
-                config.hidden_names[plugin_name] = true
-                SaveConfig()
-            end
-        end
-        
+        ShowPluginContextMenuContent(plugin_name)
         r.ImGui_EndPopup(ctx)
     end
 end
@@ -6788,15 +6914,18 @@ function SortPlainPluginList(list, mode)
             end
         end)
     elseif effective_mode == "type" then
+        -- FIX: Maak de order-tabel ÉÉN keer aan VOOR de sortering
+        local type_order_map = {}
+        for i, t in ipairs(config.type_order) do type_order_map[t] = i end
+
         table.sort(list, function(a,b)
             local ta = GetPluginType(a)
             local tb = GetPluginType(b)
             if ta == tb then
                 return GetLowerName(a) < GetLowerName(b)
             else
-                local order = {}
-                for i, t in ipairs(config.type_order) do order[t] = i end
-                return (order[ta] or 8) < (order[tb] or 8)
+                -- Gebruik de vooraf berekende map
+                return (type_order_map[ta] or 99) < (type_order_map[tb] or 99)
             end
         end)
     else 
@@ -7777,74 +7906,43 @@ function DrawBrowserItems(tbl, main_cat_name)
     end
 
     local draw_order = BuildSubgroupDrawOrder(main_cat_name or "", tbl)
+    
+    -- Check of cache bestaat (veiligheid)
+    if not global_search_cache or next(global_search_cache) == nil then BuildPluginCache() end
+
     for _, i in ipairs(draw_order) do
-        local filtered_fx = {}
+        local subgroup = tbl[i]
         local term_l = browser_search_term:lower()
-        for _, fx in ipairs(tbl[i].fx) do
-            local match = false
-            if browser_search_term == "" then
-                match = true
-            else
-                if fx:lower():find(term_l, 1, true) then
+        
+        if subgroup.cached_term ~= term_l then
+            subgroup.cached_term = term_l
+            subgroup.cached_filtered_fx = {}
+            
+            for _, fx in ipairs(subgroup.fx) do
+                local match = false
+                if browser_search_term == "" then
                     match = true
                 else
-                    local alias = plugin_aliases[fx]
-                    if alias and alias:lower():find(term_l, 1, true) then
-                        match = true
+                    -- GEOPTIMALISEERD: Gebruik cache
+                    local data = global_search_cache[fx]
+                    if data then
+                        if data.lower_name:find(term_l, 1, true) then
+                            match = true
+                        elseif data.lower_alias and data.lower_alias:find(term_l, 1, true) then
+                            match = true
+                        end
+                    else
+                        -- Fallback
+                        if fx:lower():find(term_l, 1, true) then match = true end
                     end
                 end
-            end
-            
-            if match then
-                table.insert(filtered_fx, fx)
-            end
-        end
-
-    filtered_fx = DedupeByTypePriority(filtered_fx)
-
-    -- Apply subgroup ordering: pinned first, then favorites (optional), then others
-    do
-        local pinned = {}
-        local favorites = {}
-        local others = {}
-        for _, fx in ipairs(filtered_fx) do
-            if IsPluginPinned and IsPluginPinned(fx) then
-                pinned[#pinned+1] = fx
-            elseif favorite_set and favorite_set[fx] then
-                favorites[#favorites+1] = fx
-            else
-                others[#others+1] = fx
+                
+                if match then
+                    table.insert(subgroup.cached_filtered_fx, fx)
+                end
             end
         end
-        -- Sort each bucket by current sort mode (alphabet or rating)
-        SortPlainPluginList(pinned, (config and config.sort_mode) or sort_mode or "alphabet")
-        if config and config.show_favorites_on_top then
-            SortPlainPluginList(favorites, (config and config.sort_mode) or sort_mode or "alphabet")
-        end
-        SortPlainPluginList(others, (config and config.sort_mode) or sort_mode or "alphabet")
-
-        local reordered = {}
-        
-        -- Add pinned plugins first if show_pinned_on_top is enabled
-        if config and config.show_pinned_on_top then
-            for _, fx in ipairs(pinned) do reordered[#reordered+1] = fx end
-        end
-        
-        if config and config.show_favorites_on_top then
-            for _, fx in ipairs(favorites) do reordered[#reordered+1] = fx end
-        else
-            -- If not showing favorites on top, merge favorites into others
-            for _, fx in ipairs(favorites) do others[#others+1] = fx end
-        end
-        
-        -- Add pinned plugins to others if show_pinned_on_top is disabled
-        if not (config and config.show_pinned_on_top) then
-            for _, fx in ipairs(pinned) do others[#others+1] = fx end
-        end
-        
-        for _, fx in ipairs(others) do reordered[#reordered+1] = fx end
-        filtered_fx = reordered
-    end
+        local filtered_fx = subgroup.cached_filtered_fx
 
         if #filtered_fx > 0 then
             r.ImGui_PushID(ctx, i)
@@ -7863,6 +7961,43 @@ function DrawBrowserItems(tbl, main_cat_name)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
             if r.ImGui_Selectable(ctx, header_text .. "##browseritem_" .. i, is_selected) then
+                -- Sort only when clicked
+                filtered_fx = DedupeByTypePriority(filtered_fx)
+                do
+                    local pinned = {}
+                    local favorites = {}
+                    local others = {}
+                    for _, fx in ipairs(filtered_fx) do
+                        if IsPluginPinned and IsPluginPinned(fx) then
+                            pinned[#pinned+1] = fx
+                        elseif favorite_set and favorite_set[fx] then
+                            favorites[#favorites+1] = fx
+                        else
+                            others[#others+1] = fx
+                        end
+                    end
+                    SortPlainPluginList(pinned, (config and config.sort_mode) or sort_mode or "alphabet")
+                    if config and config.show_favorites_on_top then
+                        SortPlainPluginList(favorites, (config and config.sort_mode) or sort_mode or "alphabet")
+                    end
+                    SortPlainPluginList(others, (config and config.sort_mode) or sort_mode or "alphabet")
+
+                    local reordered = {}
+                    if config and config.show_pinned_on_top then
+                        for _, fx in ipairs(pinned) do reordered[#reordered+1] = fx end
+                    end
+                    if config and config.show_favorites_on_top then
+                        for _, fx in ipairs(favorites) do reordered[#reordered+1] = fx end
+                    else
+                        for _, fx in ipairs(favorites) do others[#others+1] = fx end
+                    end
+                    if not (config and config.show_pinned_on_top) then
+                        for _, fx in ipairs(pinned) do others[#others+1] = fx end
+                    end
+                    for _, fx in ipairs(others) do reordered[#reordered+1] = fx end
+                    filtered_fx = reordered
+                end
+
                 SelectBrowserPanelItem(tbl[i].name)
                 UpdateLastViewedFolder(tbl[i].name)
                 loaded_items_count = ITEMS_PER_BATCH
@@ -8083,13 +8218,21 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             table.insert(sorted_folder_names, folder_name)
         end
     end
+
+    -- OPTIMIZATION: Pre-calculate pinned status and lower names to avoid string ops in sort loop
+    local pinned_status = {}
+    local lower_names = {}
+    for _, name in ipairs(sorted_folder_names) do
+        local full = (path_prefix == "" and name or (path_prefix .. "/" .. name))
+        pinned_status[name] = IsCustomPinned(full)
+        lower_names[name] = name:lower()
+    end
+
     table.sort(sorted_folder_names, function(a, b)
-        local pa = (path_prefix == "" and a or (path_prefix .. "/" .. a))
-        local pb = (path_prefix == "" and b or (path_prefix .. "/" .. b))
-        local ia = IsCustomPinned(pa)
-        local ib = IsCustomPinned(pb)
+        local ia = pinned_status[a]
+        local ib = pinned_status[b]
         if ia ~= ib then return ia end -- pinned eerst
-        return a:lower() < b:lower()
+        return lower_names[a] < lower_names[b]
     end)
     
     -- GEBRUIK DE GESORTEERDE NAMEN
@@ -9314,10 +9457,12 @@ function ShowBrowserPanel()
                     if new_height ~= BROWSER_FOOTER_HEIGHT then
                         config.browser_footer_height = new_height
                         BROWSER_FOOTER_HEIGHT = new_height
-                        SaveConfig()
                     end
                     footer_last_mouse_y = my
                 end
+            end
+            if r.ImGui_IsItemDeactivated(ctx) then
+                SaveConfig()
             end
             r.ImGui_Dummy(ctx, 0, 2)
         end
@@ -9840,6 +9985,9 @@ function ShowBrowserPanel()
         config.browser_panel_width = config.browser_panel_width + r.ImGui_GetMouseDragDelta(ctx)
         r.ImGui_ResetMouseDragDelta(ctx)
         config.browser_panel_width = math.max(130, math.min(config.browser_panel_width, max_width))
+        -- SaveConfig() -- REMOVED: Don't save every frame while dragging
+    end
+    if r.ImGui_IsItemDeactivated(ctx) then -- ADDED: Only save when released
         SaveConfig()
     end
     r.ImGui_PopStyleColor(ctx, 3)
@@ -9938,6 +10086,9 @@ function DrawHorizontalSeparatorBar(thickness, color)
     r.ImGui_Dummy(ctx, 0, t + ((config and config.compact_screenshots) and 4 or 8))
 end
 
+local masonry_context_plugin = nil
+local missing_context_plugin = nil
+
 function DrawMasonryLayout(screenshots, top_offset)
     top_offset = top_offset or 0  -- Default to 0 if not provided
     
@@ -10001,10 +10152,9 @@ function DrawMasonryLayout(screenshots, top_offset)
     r.ImGui_SetCursorPos(ctx, pos_x, pos_y)
     local item_tlx, item_tly = r.ImGui_GetCursorScreenPos(ctx)
 
-        local safe_name = fx.name:gsub("[^%w%s-]", "_")
-        local screenshot_file = screenshot_path .. safe_name .. ".png"
-        if r.file_exists(screenshot_file) then
-            local texture = LoadSearchTexture(screenshot_file, fx.name)
+        local screenshot_path_found = HasScreenshot(fx.name)
+        if screenshot_path_found then
+            local texture = LoadSearchTexture(screenshot_path_found, fx.name)
             if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                 local width, height = r.ImGui_Image_GetSize(texture)
                 if width and height then
@@ -10059,7 +10209,10 @@ function DrawMasonryLayout(screenshots, top_offset)
                             fx_index = fx.fx_index
                         }, "masonry_track_" .. i)
                     else
-                        ShowPluginContextMenu(fx.name, "masonry_" .. i)
+                        if r.ImGui_IsItemClicked(ctx, 1) then
+                            r.ImGui_OpenPopup(ctx, "SharedMasonryContextMenu")
+                            masonry_context_plugin = fx.name
+                        end
                     end
 
                     local text_height = 0
@@ -10088,6 +10241,13 @@ function DrawMasonryLayout(screenshots, top_offset)
         if column_heights[i] > max_height then max_height = column_heights[i] end
     end
     r.ImGui_SetCursorPosY(ctx, max_height + (config.compact_screenshots and 4 or 16))
+
+    if r.ImGui_BeginPopup(ctx, "SharedMasonryContextMenu") then
+        if masonry_context_plugin then
+            ShowPluginContextMenuContent(masonry_context_plugin)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
 end
 
 function RenderScriptsLauncherSection(popped_view_stylevars)
@@ -10173,7 +10333,7 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
             r.ImGui_SetCursorPos(ctx, x, y)
             local id = "script_cell_" .. i
             local cell_clicked = false
-            if sc.thumb and sc.thumb ~= "" and r.file_exists(sc.thumb) then
+            if sc.thumb and type(sc.thumb) == 'string' and sc.thumb ~= "" and r.file_exists(sc.thumb) then
                 local tex = LoadSearchTexture(sc.thumb, sc.thumb)
                 if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
                     if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
@@ -12464,11 +12624,8 @@ function ShowScreenshotWindow()
                                             else
                                                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
                                             end
-                                            r.ShowConsoleMsg("Screenshot click: do_add = " .. tostring(do_add) .. " for " .. plugin_name .. "\n")
                                             if do_add then
-                                                r.ShowConsoleMsg("Calling GetTargetTrack() from screenshot\n")
                                                 local target_track = GetTargetTrack()
-                                                r.ShowConsoleMsg("target_track = " .. tostring(target_track) .. "\n")
                                                 if target_track then
                                                     local fx_index = AddFXToTrack(target_track, plugin_name)
                                                     LAST_USED_FX = plugin_name
@@ -12546,12 +12703,25 @@ function Filter_actions(filter_text)
         words[#words+1] = word:lower()
     end
 
+    -- Check cache
+    if not global_search_cache or next(global_search_cache) == nil then BuildPluginCache() end
+
     for i = 1, #FX_LIST_TEST do
         local raw_name = FX_LIST_TEST[i]
         if not config.excluded_plugins[raw_name] then
-            local name_l = raw_name:lower()
-            local alias = plugin_aliases[raw_name]
-            local alias_l = alias and alias:lower() or nil
+            
+            -- GEOPTIMALISEERD: Gebruik cache
+            local data = global_search_cache[raw_name]
+            local name_l, alias_l
+            
+            if data then
+                name_l = data.lower_name
+                alias_l = data.lower_alias
+            else
+                name_l = raw_name:lower()
+                local alias = plugin_aliases[raw_name]
+                alias_l = alias and alias:lower() or nil
+            end
             
             local found = true
             for _, word in ipairs(words) do
@@ -12569,7 +12739,8 @@ function Filter_actions(filter_text)
             end
             
             if found then 
-                t[#t + 1] = { score = raw_name:len() - filter_text:len(), name = raw_name } 
+                local len = data and data.display_len or raw_name:len()
+                t[#t + 1] = { score = len - filter_text:len(), name = raw_name } 
             end
         end
     end
@@ -16157,6 +16328,7 @@ if visible then
                 SavePluginAliases()
                 -- Clear caches to update sorting
                 plugin_lower_name = {} 
+                BuildPluginCache() -- UPDATE CACHE
                 ClearScreenshotCache()
                 BuildScreenshotIndex(true)
                 if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
@@ -16170,6 +16342,7 @@ if visible then
             plugin_aliases[renaming_plugin_name] = nil
             SavePluginAliases()
             plugin_lower_name = {} 
+            BuildPluginCache() -- UPDATE CACHE
             ClearScreenshotCache()
             BuildScreenshotIndex(true)
             if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
@@ -16215,4 +16388,18 @@ if initial_visibility == "" then
 end
 
 InitializeImGuiContext()
+
+-- [PROFILER] Start de profiler (vereist cfillion_Lua Profiler via ReaPack)
+-- local profiler_path = reaper.GetResourcePath() .. "/Scripts/ReaTeam Scripts/Development/cfillion_Lua profiler.lua"
+-- if reaper.file_exists(profiler_path) then
+--     local profiler = dofile(profiler_path)
+--     reaper.defer = profiler.defer
+--     reaper.runloop = profiler.runloop
+--     profiler.attachToWorld() -- Koppel aan alle globale functies
+--     profiler.run()           -- Open het profiler venster
+-- else
+--     reaper.ShowMessageBox("Profiler niet gevonden op pad:\n" .. profiler_path, "Profiler Error", 0)
+-- end
+-- [PROFILER] Einde
+
 Main()

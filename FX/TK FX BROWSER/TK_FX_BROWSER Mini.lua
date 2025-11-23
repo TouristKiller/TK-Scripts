@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.1.4
+-- @version 0.1.5
 -- @changelog:
 --[[     
 
@@ -42,6 +42,8 @@ local plugin_ratings        = {}
 
 local plugin_aliases_path   = script_path .. "plugin_aliases.json"
 local plugin_aliases        = {}
+-- NIEUW: Master Cache voor performance (voorkomt miljoenen string.lower calls)
+local global_search_cache   = {} 
 
 local function LoadAliases()
     local f = io.open(plugin_aliases_path, "r")
@@ -75,6 +77,8 @@ local pinned_set            = {}
 local pinned_norm_set       = {}
 local plugin_lower_name     = {}
 local normalized_name_cache = {}
+local clean_name_cache      = {} -- NEW
+local strip_x86_cache       = {} -- NEW
 local plugin_type_cache     = {}
 local type_priority_cache   = nil
 
@@ -141,18 +145,58 @@ local categories = {
 }
 
 
+-- NIEUWE FUNCTIE: Bouw de cache één keer op voor extreme snelheid
+function BuildPluginCache()
+    global_search_cache = {}
+    if not FX_LIST_TEST then return end
+    
+    for i = 1, #FX_LIST_TEST do
+        local name = FX_LIST_TEST[i]
+        local alias = plugin_aliases[name]
+        
+        -- 1. Bereken lowercase naam voor zoeken
+        local lower_name = name:lower()
+        
+        -- 2. Bereken lowercase alias (indien aanwezig)
+        local lower_alias = alias and alias:lower() or nil
+        
+        -- 3. Bereken sorteernaam (zonder VST: prefix)
+        local sort_name
+        if alias and alias ~= "" then
+            sort_name = lower_alias
+        else
+            local clean = name:match('^[^:]+: (.+)$') or name
+            sort_name = clean:lower()
+        end
+        
+        global_search_cache[name] = {
+            lower_name = lower_name,
+            lower_alias = lower_alias,
+            sort_key = sort_name,
+            display_len = (alias and alias ~= "") and alias:len() or name:len()
+        }
+    end
+end
+
 function GetLowerName(name)
     if not name then return "" end
-    -- Check for alias first
-    local alias = plugin_aliases[name]
-    if alias then
-        -- Optimization: we could cache alias lower in a separate table.
-        return alias:lower()
+    -- Check de snelle cache eerst (O(1) lookup)
+    if global_search_cache[name] then
+        return global_search_cache[name].sort_key
     end
     
+    -- Fallback (zou niet moeten gebeuren als cache gebouwd is)
     local lower = plugin_lower_name[name]
     if lower then return lower end
-    lower = name:lower()
+    
+    local alias = plugin_aliases and plugin_aliases[name]
+    if alias and alias ~= "" then
+        lower = alias:lower()
+    else
+        local clean = name:match('^[^:]+: (.+)$') or name
+        lower = clean:lower()
+    end
+    
     plugin_lower_name[name] = lower
     return lower
 end
@@ -594,6 +638,9 @@ if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
 end
 local PLUGIN_LIST = GetFXTbl()
 
+-- INITIALISEER DE CACHE HIER
+BuildPluginCache()
+
 function get_safe_name(name)
     return (name or ""):gsub("[^%w%s-]", "_")
 end
@@ -796,6 +843,8 @@ local window_alpha_int = math.floor(config.window_alpha * 100)
 function ClearPerformanceCaches()
     normalized_name_cache = {}
     plugin_type_cache = {}
+    clean_name_cache = {}
+    strip_x86_cache = {}
     type_priority_cache = nil
     if config then
         config._current_version = (config._current_version or 0) + 1
@@ -812,6 +861,8 @@ function MaybeClearCaches()
        (plugin_type_cache and #plugin_type_cache > 5000) then
         normalized_name_cache = {}
         plugin_type_cache = {}
+        clean_name_cache = {}
+        strip_x86_cache = {}
         cache_cleanup_counter = 0
     end
 end
@@ -1343,6 +1394,10 @@ end
 
 function CleanPluginName(name)
     if not name or name == '' then return name end
+    
+    local cached = clean_name_cache[name]
+    if cached then return cached end
+
     local original = name
    
     name = name:gsub('^VST3i?:%s*','')
@@ -1359,7 +1414,9 @@ function CleanPluginName(name)
                :gsub('%s*%(%d+in%s*%d+out%)$','')
    
     name = name:gsub('%s+$','')
-    return name ~= '' and name or original
+    local result = name ~= '' and name or original
+    clean_name_cache[original] = result
+    return result
 end
 
 function RemoveManufacturerSuffix(name)
@@ -1401,11 +1458,17 @@ end
 function StripX86Markers(name)
     if not name then return '' end
     
+    local cached = strip_x86_cache[name]
+    if cached then return cached end
+
+    local original = name
     name = name
         :gsub('%s*[%(%[]x86[^%]%)]*[%]%)]','')    
         :gsub('[%s%-]+x86[%s%-]*bridged',' ')      
         :gsub('[%s%-]x86[%s%-]',' ')               
         :gsub('x86%s*:%s*','')                     
+    
+    strip_x86_cache[original] = name
     return name
 end
 
@@ -1648,10 +1711,19 @@ function UnpinPlugin(name)
     end
 end
 
+local screenshot_exists_cache = {}
+
 function HasScreenshot(plugin_name)
+    if screenshot_exists_cache[plugin_name] ~= nil then
+        return screenshot_exists_cache[plugin_name]
+    end
+
     BuildScreenshotIndex()
     local norm = NormalizePluginNameForMatch(plugin_name)
-    if screenshot_index_norm[norm] then return true end
+    if screenshot_index_norm[norm] then 
+        screenshot_exists_cache[plugin_name] = true
+        return true 
+    end
     
     local stripped_x86 = StripX86Markers(plugin_name)
     local variants = {
@@ -1667,9 +1739,13 @@ function HasScreenshot(plugin_name)
         if base and base ~= '' then
             local png = screenshot_path .. base .. '.png'
             local jpg = screenshot_path .. base .. '.jpg'
-            if r.file_exists(png) or r.file_exists(jpg) then return true end
+            if r.file_exists(png) or r.file_exists(jpg) then 
+                screenshot_exists_cache[plugin_name] = true
+                return true 
+            end
         end
     end
+    screenshot_exists_cache[plugin_name] = false
     return false
 end
 
@@ -2430,6 +2506,10 @@ end
 function ClearScreenshotCache(periodic_cleanup)
     local current_time = r.time_precise()
     
+    if not periodic_cleanup then
+        screenshot_exists_cache = {}
+    end
+
     if periodic_cleanup then
         local to_remove = {}
         for key, last_used in pairs(texture_last_used) do
@@ -4051,6 +4131,7 @@ function tex_log(msg)
 end
 
 function LoadTexture(file)
+    if type(file) ~= 'string' then return nil end
     local texture = r.ImGui_CreateImage(file)
     if texture == nil then
         tex_log("Failed to load texture: " .. file)
@@ -4059,6 +4140,7 @@ function LoadTexture(file)
 end
     
 function LoadSearchTexture(file, plugin_name)
+    if type(file) ~= 'string' then return nil end
     local relative_path = file:gsub(screenshot_path, "")
     local unique_key = relative_path .. "_" .. (plugin_name or "unknown")
     local current_time = r.time_precise()
@@ -6643,38 +6725,29 @@ function SortPlainPluginList(list, mode)
             local ra = plugin_ratings[a] or 0
             local rb = plugin_ratings[b] or 0
             if ra == rb then
-                local alias_a = plugin_aliases[a]
-                local alias_b = plugin_aliases[b]
-                local na = alias_a and alias_a:lower() or (a:match('^[^:]+: (.+)$') or a):lower()
-                local nb = alias_b and alias_b:lower() or (b:match('^[^:]+: (.+)$') or b):lower()
-                return na < nb
+                return GetLowerName(a) < GetLowerName(b)
             else
                 return ra > rb
             end
         end)
     elseif effective_mode == "type" then
+        -- FIX: Maak de order-tabel ÉÉN keer aan VOOR de sortering
+        local type_order_map = {}
+        for i, t in ipairs(config.type_order) do type_order_map[t] = i end
+
         table.sort(list, function(a,b)
             local ta = GetPluginType(a)
             local tb = GetPluginType(b)
             if ta == tb then
-                local alias_a = plugin_aliases[a]
-                local alias_b = plugin_aliases[b]
-                local na = alias_a and alias_a:lower() or (a:match('^[^:]+: (.+)$') or a):lower()
-                local nb = alias_b and alias_b:lower() or (b:match('^[^:]+: (.+)$') or b):lower()
-                return na < nb
+                return GetLowerName(a) < GetLowerName(b)
             else
-                local order = {}
-                for i, t in ipairs(config.type_order) do order[t] = i end
-                return (order[ta] or 8) < (order[tb] or 8)
+                -- Gebruik de vooraf berekende map
+                return (type_order_map[ta] or 99) < (type_order_map[tb] or 99)
             end
         end)
     else 
         table.sort(list, function(a,b) 
-            local alias_a = plugin_aliases[a]
-            local alias_b = plugin_aliases[b]
-            local na = alias_a and alias_a:lower() or (a:match('^[^:]+: (.+)$') or a):lower()
-            local nb = alias_b and alias_b:lower() or (b:match('^[^:]+: (.+)$') or b):lower()
-            return na < nb
+            return GetLowerName(a) < GetLowerName(b)
         end)
     end
 end
@@ -7647,21 +7720,30 @@ function DrawBrowserItems(tbl, main_cat_name)
     end
 
     local draw_order = BuildSubgroupDrawOrder(main_cat_name or "", tbl)
+    
+    -- Check of cache bestaat (veiligheid)
+    if not global_search_cache or next(global_search_cache) == nil then BuildPluginCache() end
+
     for _, i in ipairs(draw_order) do
         local filtered_fx = {}
         local term_l = browser_search_term:lower()
+        
         for _, fx in ipairs(tbl[i].fx) do
             local match = false
             if browser_search_term == "" then
                 match = true
             else
-                if fx:lower():find(term_l, 1, true) then
-                    match = true
-                else
-                    local alias = plugin_aliases[fx]
-                    if alias and alias:lower():find(term_l, 1, true) then
+                -- GEOPTIMALISEERD: Gebruik cache
+                local data = global_search_cache[fx]
+                if data then
+                    if data.lower_name:find(term_l, 1, true) then
+                        match = true
+                    elseif data.lower_alias and data.lower_alias:find(term_l, 1, true) then
                         match = true
                     end
+                else
+                    -- Fallback
+                    if fx:lower():find(term_l, 1, true) then match = true end
                 end
             end
             
@@ -7956,13 +8038,21 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             table.insert(sorted_folder_names, folder_name)
         end
     end
+
+    -- OPTIMIZATION: Pre-calculate pinned status and lower names to avoid string ops in sort loop
+    local pinned_status = {}
+    local lower_names = {}
+    for _, name in ipairs(sorted_folder_names) do
+        local full = (path_prefix == "" and name or (path_prefix .. "/" .. name))
+        pinned_status[name] = IsCustomPinned(full)
+        lower_names[name] = name:lower()
+    end
+
     table.sort(sorted_folder_names, function(a, b)
-        local pa = (path_prefix == "" and a or (path_prefix .. "/" .. a))
-        local pb = (path_prefix == "" and b or (path_prefix .. "/" .. b))
-        local ia = IsCustomPinned(pa)
-        local ib = IsCustomPinned(pb)
+        local ia = pinned_status[a]
+        local ib = pinned_status[b]
         if ia ~= ib then return ia end -- pinned eerst
-        return a:lower() < b:lower()
+        return lower_names[a] < lower_names[b]
     end)
     
     -- GEBRUIK DE GESORTEERDE NAMEN
@@ -9180,10 +9270,12 @@ function ShowBrowserPanel()
                     if new_height ~= BROWSER_FOOTER_HEIGHT then
                         config.browser_footer_height = new_height
                         BROWSER_FOOTER_HEIGHT = new_height
-                        SaveConfig()
                     end
                     footer_last_mouse_y = my
                 end
+            end
+            if r.ImGui_IsItemDeactivated(ctx) then
+                SaveConfig()
             end
             r.ImGui_Dummy(ctx, 0, 2)
         end
@@ -9736,6 +9828,8 @@ function ShowBrowserPanel()
         config.browser_panel_width = config.browser_panel_width + r.ImGui_GetMouseDragDelta(ctx)
         r.ImGui_ResetMouseDragDelta(ctx)
         config.browser_panel_width = math.max(130, math.min(config.browser_panel_width, max_width))
+    end
+    if r.ImGui_IsItemDeactivated(ctx) then
         SaveConfig()
     end
     r.ImGui_PopStyleColor(ctx, 3)
@@ -10069,7 +10163,7 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
             r.ImGui_SetCursorPos(ctx, x, y)
             local id = "script_cell_" .. i
             local cell_clicked = false
-            if sc.thumb and sc.thumb ~= "" and r.file_exists(sc.thumb) then
+            if type(sc.thumb) == 'string' and sc.thumb ~= "" and r.file_exists(sc.thumb) then
                 local tex = LoadSearchTexture(sc.thumb, sc.thumb)
                 if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
                     if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
@@ -12772,12 +12866,25 @@ function Filter_actions(filter_text)
         words[#words+1] = word:lower()
     end
 
+    -- Check cache
+    if not global_search_cache or next(global_search_cache) == nil then BuildPluginCache() end
+
     for i = 1, #FX_LIST_TEST do
         local raw_name = FX_LIST_TEST[i]
         if not config.excluded_plugins[raw_name] then
-            local name_l = raw_name:lower()
-            local alias = plugin_aliases[raw_name]
-            local alias_l = alias and alias:lower() or nil
+            
+            -- GEOPTIMALISEERD: Gebruik cache
+            local data = global_search_cache[raw_name]
+            local name_l, alias_l
+            
+            if data then
+                name_l = data.lower_name
+                alias_l = data.lower_alias
+            else
+                name_l = raw_name:lower()
+                local alias = plugin_aliases[raw_name]
+                alias_l = alias and alias:lower() or nil
+            end
             
             local found = true
             for _, word in ipairs(words) do
@@ -12795,7 +12902,8 @@ function Filter_actions(filter_text)
             end
             
             if found then 
-                t[#t + 1] = { score = raw_name:len() - filter_text:len(), name = raw_name } 
+                local len = data and data.display_len or raw_name:len()
+                t[#t + 1] = { score = len - filter_text:len(), name = raw_name } 
             end
         end
     end
@@ -14652,8 +14760,14 @@ end
 local fx_browser_open = false
 local last_fx_file_time = 0
 local needs_screenshot_refresh = false
+local last_window_check_time = 0
+local WINDOW_CHECK_INTERVAL = 2.5 -- Check every 2.5 seconds
 
 local function CheckFXBrowserWindow()
+    local now = r.time_precise()
+    if now - last_window_check_time < WINDOW_CHECK_INTERVAL then return end
+    last_window_check_time = now
+
     -- Venster detectie via command state (40271 = FX Browser toggle) of JS
     local toggle = r.GetToggleCommandState(40271)
     local hwnd = r.JS_Window_Find and r.JS_Window_Find("FX Browser", true) or nil
@@ -14893,6 +15007,7 @@ if not should_show_main_window then
             SaveAliases()
             -- Invalidate caches
             plugin_lower_name = {}
+            BuildPluginCache() -- UPDATE CACHE
             ClearScreenshotCache()
             BuildScreenshotIndex(true)
             rename_plugin_open = false
@@ -14901,6 +15016,21 @@ if not should_show_main_window then
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "Reset", 120) then
             rename_plugin_new_name = rename_plugin_target
+            -- Reset logic should probably also clear the alias if it was set, but here it just resets the input field?
+            -- Wait, the original code just reset the input field: rename_plugin_new_name = rename_plugin_target
+            -- But if the user wants to actually reset the alias to default, they should probably clear it and save.
+            -- The Main script has a Reset button that clears the alias.
+            -- Let's check the Main script logic again.
+            -- Main script: plugin_aliases[renaming_plugin_name] = nil; SavePluginAliases(); ...
+            -- Mini script: rename_plugin_new_name = rename_plugin_target
+            -- The Mini script "Reset" button seems to only reset the text input to the original name, not clear the alias immediately.
+            -- However, if I want to match the Main script behavior or at least ensure cache is consistent if they save...
+            -- Actually, the user asked to apply the changes. The changes in Main script included updating the cache on Reset.
+            -- But in Mini script, the Reset button logic is different (it just resets the input field).
+            -- I should probably leave the Reset button logic as is for now unless I want to change its behavior to match Main.
+            -- But wait, if I change the alias via Save, I update the cache.
+            -- If I don't change the alias (just reset input), I don't need to update cache.
+            -- So I only need to update the Save block.
         end
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "Cancel", 120) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
@@ -14939,4 +15069,18 @@ if initial_visibility == "" then
 end
 
 InitializeImGuiContext()
+
+-- [PROFILER] Start de profiler (vereist cfillion_Lua Profiler via ReaPack)
+-- local profiler_path = reaper.GetResourcePath() .. "/Scripts/ReaTeam Scripts/Development/cfillion_Lua profiler.lua"
+-- if reaper.file_exists(profiler_path) then
+--     local profiler = dofile(profiler_path)
+--     reaper.defer = profiler.defer
+--     reaper.runloop = profiler.runloop
+--     profiler.attachToWorld() -- Koppel aan alle globale functies
+--     profiler.run()           -- Open het profiler venster
+-- else
+--     reaper.ShowMessageBox("Profiler niet gevonden op pad:\n" .. profiler_path, "Profiler Error", 0)
+-- end
+-- [PROFILER] Einde
+
 Main()
