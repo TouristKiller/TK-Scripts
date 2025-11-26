@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.1.6
+-- @version 0.1.7
 -- @changelog:
 --[[     
 
@@ -14852,6 +14852,8 @@ local function CheckFXBrowserWindow()
 end
 
 function Main()
+    local frame_start = r.time_precise()
+    
     SetRunningState(true)
     MaybeClearCaches()
     
@@ -14944,8 +14946,9 @@ function Main()
             InitializeImGuiContext()
         end
 
-    CheckFXBrowserWindow()
-    if fx_browser_open then
+    -- DISABLED: Native FX Browser detection (caused 200ms+ freezes every 2.5s via JS_Window_Find)
+    -- CheckFXBrowserWindow()
+    if false and fx_browser_open then
         -- Pop styles om fout te voorkomen
         if pushed_main_styles then
             r.ImGui_PopFont(ctx)
@@ -15102,6 +15105,13 @@ if not should_show_main_window then
     
     -- Handle drag & drop completion when main window is hidden
     HandleDragAndDrop()
+    
+    -- Frame time profiling
+    local frame_time = r.time_precise() - frame_start
+    if frame_time > 0.1 then  -- Meer dan 100ms = freeze
+        local msg = string.format("⚠️ SLOW FRAME: %.3fs (%.0fms)", frame_time, frame_time * 1000)
+        DebugLog(msg)  -- Naar internal debug window
+    end
     
     if pushed_main_styles then
         r.ImGui_PopFont(ctx)

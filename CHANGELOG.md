@@ -2,6 +2,18 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [2.2.7] - 2025-11-24
+
+### TK_ChordGun
+#### Toegevoegd
+- **Surprise Me (Randomize)**: Nieuwe dobbelsteen-knop in het akkoord-weergave vak. Vult lege slots in de progressie met willekeurige akkoorden (gewogen op basis van pop-muziek theorie: I, IV, V, vi komen vaker voor).
+- **Randomize Settings**: Rechtsklik-menu op de dobbelsteen:
+  - **Progression Length**: Kies tussen 4 of 8 slots.
+  - **Always Start on Tonic**: Optie om de progressie altijd met de grondtoon (I) te laten beginnen.
+  - **Clear Progression**: Snel de hele progressie wissen.
+- **Sync Play**: Nieuwe "Sync" knop (naast Scale Type). Synchroniseert de ChordGun Tonic met de MIDI Editor Key Snap.
+- **Transport Sync**: Play/Stop knoppen zijn nu gesynchroniseerd met het project transport (start/stop playback van Reaper).
+
 ## [2.2.0] - 2025-11-22
 
 ### TK_ChordGun
