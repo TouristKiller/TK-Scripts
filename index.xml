@@ -255,9 +255,9 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.2.7" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-26T22:45:00Z">
+      <version name="2.2.9" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-27T00:05:00Z">
         <changelog><![CDATA[
-2.2.7
+2.2.9
 + Added MIDI Trigger Mode: Trigger chords via MIDI keyboard (C1-B1 range)
 + Added Channel 16 Bypass: Prevents script-generated chords from being distorted by Remap Mode
 + Added Extended Trigger Mapping: Black keys (C#1-A#1) now trigger scale degrees 8-12 (for Messiaen/10-note scales)
