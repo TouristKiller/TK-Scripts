@@ -2,6 +2,7 @@ desc:TK Scale Filter & Remap
 options:gmem=TK_ChordGun_Filter
 
 slider1:0<0,1,1{Off,On}>Trigger Mode Active (Monitor)
+slider2:0<0,127,1>Last Note Received (Monitor)
 
 @init
 // Mode 0: Off
@@ -19,6 +20,11 @@ while (midirecv(offset, msg1, msg2, msg3)) (
     channel = msg1 & 0x0F;
     note = msg2;
     velocity = msg3;
+    
+    // Update monitor slider for Note On messages
+    (status == 0x90 && velocity > 0) ? (
+        slider2 = note;
+    );
     
     is_note_on = (status == 0x90 && velocity > 0);
     is_note_off = (status == 0x80 || (status == 0x90 && velocity == 0));
@@ -97,5 +103,4 @@ while (midirecv(offset, msg1, msg2, msg3)) (
     block_note == 0 ? (
         midisend(offset, msg1, msg2, msg3);
     );
-);
 );

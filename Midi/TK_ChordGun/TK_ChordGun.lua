@@ -1,10 +1,10 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.2.7
+-- @version 2.2.8
 -- @changelog
 --[[
 
-2.2.7
+2.2.8
 + Added MIDI Trigger Mode: Trigger chords via MIDI keyboard (C1-B1 range)
 + Added Channel 16 Bypass: Prevents script-generated chords from being distorted by Remap Mode
 + Added Extended Trigger Mapping: Black keys (C#1-A#1) now trigger scale degrees 8-12 (for Messiaen/10-note scales)
