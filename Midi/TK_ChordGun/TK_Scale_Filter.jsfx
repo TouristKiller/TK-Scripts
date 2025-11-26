@@ -1,101 +1,101 @@
-desc:TK Scale Filter (ChordGun)
-// Mode 0: Off | Mode 1: Filter (blocks notes outside scale) | Mode 2: Remap (white keys to scale)
+desc:TK Scale Filter & Remap
 options:gmem=TK_ChordGun_Filter
 
+slider1:0<0,1,1{Off,On}>Trigger Mode Active (Monitor)
+
 @init
-// Allocate memory for arrays
-noteMap = 0;        // 0-127 (128 slots)
-scaleNotes = 128;   // 128-139 (12 slots)
-allowedNotes = 140; // 140-151 (12 slots) 
-whiteKeys = 152;    // 152-163 (12 slots)
-
-idx = 0;
-loop(128,
-  noteMap[idx] = idx;
-  idx += 1;
-);
-
-scaleNotes[0] = 0; scaleNotes[1] = 0; scaleNotes[2] = 0; scaleNotes[3] = 0;
-scaleNotes[4] = 0; scaleNotes[5] = 0; scaleNotes[6] = 0;
-numScale = 0;
-
-allowedNotes[0] = 0; allowedNotes[1] = 0; allowedNotes[2] = 0; allowedNotes[3] = 0;
-allowedNotes[4] = 0; allowedNotes[5] = 0; allowedNotes[6] = 0; allowedNotes[7] = 0;
-allowedNotes[8] = 0; allowedNotes[9] = 0; allowedNotes[10] = 0; allowedNotes[11] = 0;
-
-whiteKeys[0] = 1; whiteKeys[1] = 0; whiteKeys[2] = 1; whiteKeys[3] = 0;
-whiteKeys[4] = 1; whiteKeys[5] = 1; whiteKeys[6] = 0; whiteKeys[7] = 1;
-whiteKeys[8] = 0; whiteKeys[9] = 1; whiteKeys[10] = 0; whiteKeys[11] = 1;
-
-mode = 0;
-
-function refresh_state()
-local(idx, allowed)
-(
-  mode = gmem[0];
-  numScale = 0;
-  idx = 0;
-  loop(12,
-    allowed = gmem[1 + idx] > 0.5 ? 1 : 0;
-    allowedNotes[idx] = allowed;
-    allowed ? (
-      scaleNotes[numScale] = idx;
-      numScale += 1;
-    );
-    idx += 1;
-  );
-);
-
-function remap_note(inputNote)
-local(oct, noteClass, whiteCount, idx, whiteIdx, scaleIdx, octOffset)
-(
-  oct = floor(inputNote / 12);
-  noteClass = inputNote % 12;
-  whiteCount = 0;
-  idx = 0;
-  loop(noteClass, whiteKeys[idx] ? whiteCount += 1; idx += 1;);
-  whiteIdx = oct * 7 + whiteCount;
-  scaleIdx = whiteIdx % numScale;
-  octOffset = floor(whiteIdx / numScale) * 12;
-  scaleNotes[scaleIdx] + octOffset
-);
+// Mode 0: Off
+// Mode 1: Filter (Block notes outside scale)
+// Mode 2: Remap (Map white keys to scale notes)
+// TriggerMode: If 1, block notes 24-35 (C1-B1) used for ChordGun triggers
 
 @block
-status = 0; note = 0; noteClass = 0; velocity = 0;
-isNoteOn = 0; allowed = 0; pass = 0; isWhite = 0; remappedNote = 0; origNote = 0;
-refresh_state();
+mode = gmem[0];
+triggerMode = gmem[20]; // Read trigger state from Lua
+slider1 = triggerMode;  // Visual feedback
 
-while ( midirecv(offset, msg1, msg23) ?
-  (
-    status = msg1 & $xF0;
-    note = msg23 & $x7F;
-    velocity = (msg23 >> 8) & $x7F;
-    noteClass = note % 12;
-    isNoteOn = (status == $x90) && velocity > 0;
+while (midirecv(offset, msg1, msg2, msg3)) (
+    status = msg1 & 0xF0;
+    channel = msg1 & 0x0F;
+    note = msg2;
+    velocity = msg3;
     
-    // Mode 0: Off - pass everything
-    mode < 0.5 ? (
-      midisend(offset, msg1, msg23);
-    ) : 
-    // Mode 2: Remap white keys to scale
-    mode > 1.5 ? (
-      isWhite = whiteKeys[noteClass];
-      isWhite ? (
-        isNoteOn ? (
-          remappedNote = remap_note(note);
-          noteMap[note] = remappedNote;
-          midisend(offset, msg1, (velocity << 8) | remappedNote);
-        ) : (
-          origNote = noteMap[note];
-          midisend(offset, msg1, origNote);
-        );
-      );
-    ) : 
-    // Mode 1: Filter - block notes outside scale
-    (
-      allowed = allowedNotes[noteClass];
-      pass = !isNoteOn || allowed;
-      pass ? midisend(offset, msg1, msg23);
+    is_note_on = (status == 0x90 && velocity > 0);
+    is_note_off = (status == 0x80 || (status == 0x90 && velocity == 0));
+    
+    block_note = 0;
+    bypass_processing = 0;
+
+    channel == 15 ? (
+        msg1 = status | 0; 
+        bypass_processing = 1;
     );
-  );
+
+    triggerMode && !bypass_processing ? (
+        (is_note_on || is_note_off) && note >= 24 && note <= 35 ? (
+            block_note = 1;
+        );
+    );
+
+    block_note == 0 && !bypass_processing && (is_note_on || is_note_off) ? (
+        mode == 1 ? ( // Filter Mode
+            note_idx = (note % 12) + 1;
+            allowed = gmem[note_idx];
+            allowed == 0 ? block_note = 1;
+        ) : mode == 2 ? ( // Remap Mode
+            // Check if white key
+            note_in_octave = note % 12;
+            is_white = (note_in_octave == 0 || note_in_octave == 2 || note_in_octave == 4 || note_in_octave == 5 || note_in_octave == 7 || note_in_octave == 9 || note_in_octave == 11);
+            
+            is_white ? (
+                // Map white key index (0-6) to scale note
+                white_key_idx = -1;
+                note_in_octave == 0 ? white_key_idx = 0 :
+                note_in_octave == 2 ? white_key_idx = 1 :
+                note_in_octave == 4 ? white_key_idx = 2 :
+                note_in_octave == 5 ? white_key_idx = 3 :
+                note_in_octave == 7 ? white_key_idx = 4 :
+                note_in_octave == 9 ? white_key_idx = 5 :
+                note_in_octave == 11 ? white_key_idx = 6;
+                
+                // Count scale notes
+                scale_notes_count = 0;
+                i = 1;
+                loop(12,
+                    gmem[i] ? scale_notes_count += 1;
+                    i += 1;
+                );
+                
+                scale_notes_count > 0 ? (
+                    target_scale_idx = white_key_idx % scale_notes_count;
+                    
+                    // Find the note value for this scale index
+                    found_note = -1;
+                    current_idx = 0;
+                    i = 1;
+                    loop(12,
+                        gmem[i] ? (
+                            current_idx == target_scale_idx ? found_note = i - 1;
+                            current_idx += 1;
+                        );
+                        i += 1;
+                    );
+                    
+                    found_note != -1 ? (
+                        octave = floor(note / 12);
+                        new_note = found_note + (octave * 12);
+                        msg2 = new_note; // Modify the note
+                    );
+                );
+            ) : (
+                // Block black keys in remap mode
+                block_note = 1;
+            );
+        );
+    );
+    
+    block_note == 0 ? (
+        midisend(offset, msg1, msg2, msg3);
+    );
+);
 );

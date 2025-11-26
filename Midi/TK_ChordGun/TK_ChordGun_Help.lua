@@ -4,12 +4,14 @@
 
 -- Check if already running - prevent multiple instances
 local isRunning = reaper.GetExtState("TK_ChordGun_Help", "running")
-if isRunning == "1" then
-	return  -- Exit silently if already open
+local lastHeartbeat = tonumber(reaper.GetExtState("TK_ChordGun_Help", "heartbeat")) or 0
+if isRunning == "1" and (reaper.time_precise() - lastHeartbeat) < 1.5 then
+	return  -- Exit silently if already open AND alive
 end
 
 -- Mark as running
 reaper.SetExtState("TK_ChordGun_Help", "running", "1", false)
+reaper.SetExtState("TK_ChordGun_Help", "heartbeat", tostring(reaper.time_precise()), false)
 
 -- Cleanup on exit
 local function cleanup()
@@ -32,8 +34,26 @@ local maxScroll = 0
 local helpContent = {
 	-- Tab 1: Getting Started
 	{
-		"CHORDGUN (TK MOD) v2.2.5",
+		"CHORDGUN (TK MOD) v2.2.7",
 		"Quick Start Guide",
+		"",
+		"=== NEW IN v2.2.7 ===",
+		"• MIDI Trigger Mode: Trigger chords via MIDI keyboard (C1-B1)",
+		"• Remap Mode: Map white keys to scale notes (requires JSFX)",
+		"• Extended Triggers: Black keys (C#1-A#1) trigger scale degrees 8-12",
+		"• Surprise Me: Dice button to randomize progression (weighted)",
+		"• Randomize Settings: Right-click Dice for Length/Tonic/Clear",
+		"• Sync Play: Right-click Play button to sync with Reaper transport",
+		"• Sync Button: One-click sync with MIDI Editor Key Snap",
+		"• Smart Track Selection: Uses Selected Track first",
+		"• Time Selection: New length option to fill time selection",
+		"• Longer Note Lengths: Added 2, 4, and 8 bars options",
+		"• Note Length Dropdown: Easier selection of note lengths",
+		"• Per-slot Inversion/Octave: Alt+Click saves current Octave/Inversion to slot",
+		"• Hold Slot: Click and hold progression slots to play (like main chords)",
+		"• Smart Insert: Intelligent item reuse/creation logic",
+		"• Melody Generator: Uses active track (no longer forces sticky)",
+		"• Fifth Wheel: Window size scaling is now saved",
 		"",
 		"=== WHAT IS CHORDGUN? ===",
 		"ChordGun is an intelligent chord generator and scale reference tool.",
@@ -69,7 +89,7 @@ local helpContent = {
 		"• ARP: Arpeggiate notes (Up, Down, Random, etc.)",
 		"• MELODY: Generate random melodies based on scale",
 		"• VOICING: Select Drop 2, Drop 3, or Bass -1/-2 (Menu)",
-		"• Note Length: Set inserted note duration (1/4, 1/8, etc.)",
+		"• Note Length: Set duration (Selection, 1/4, 1/8, etc.)",
 		"• Circle button: Open Circle of Fifths / Score / Guitar views",
 		"• DOCK/UNDOCK: Attach window to REAPER docker",
 		"• Font: Toggle monospace font / Right-click for size",
@@ -709,6 +729,7 @@ local helpContent = {
 		"• PLAY: Start progression playback from slot 1",
 		"  Loops continuously if endpoint is set",
 		"  Plays once through if no endpoint",
+		"  Right-Click: Toggle Sync Play (Syncs with Reaper Transport)",
 		"",
 		"• STOP: Stop progression playback",
 		"  Notes stop immediately",
@@ -749,10 +770,61 @@ local helpContent = {
 		"",
 	},
 	
-	-- Tab 5: Advanced
+	-- Tab 6: Advanced
 	{
 		"ADVANCED FEATURES",
 		"Keyboard Shortcuts & Technical Details",
+		"",
+		"=== MIDI TRIGGER MODE ===",
+		"Trigger ChordGun chords using your MIDI keyboard.",
+		"",
+		"• Activation:",
+		"  - Click the 'Monitor' button (Speaker icon) to enable.",
+		"  - Requires a MIDI input device enabled in REAPER.",
+		"",
+		"• Mapping (Octave C1 - B1):",
+		"  - White Keys (C1-B1): Trigger Scale Degrees 1-7 (I, ii, iii, etc.)",
+		"  - Black Keys (C#1-A#1): Trigger Scale Degrees 8-12 (for extended scales)",
+		"  - This allows playing full 10-note scales (like Messiaen) within one octave.",
+		"",
+		"=== REMAP MODE (WHITE KEYS) ===",
+		"Map the white keys of your keyboard to always play the correct scale notes.",
+		"",
+		"• Modes (Cycle via 'Filter' button):",
+		"  1. Off: Normal MIDI behavior.",
+		"  2. Filter: Blocks notes that are not in the selected scale.",
+		"  3. Remap: Maps white keys (C, D, E...) to Scale Degrees (1, 2, 3...).",
+		"     - Play C-Major on your keyboard -> Hear the selected scale.",
+		"     - Great for jamming without hitting wrong notes.",
+		"",
+		"• Requirements:",
+		"  - Requires 'TK_Scale_Filter.jsfx' on the track input FX.",
+		"  - The script will prompt to install/add this automatically.",
+		"",
+		"• Channel 16 Bypass:",
+		"  - When Remap is active, ChordGun previews chords on MIDI Channel 16.",
+		"  - This bypasses the Remap logic so the preview sounds correct.",
+		"  - This happens automatically; no user setup required.",
+		"",
+		"=== ARPEGGIATOR (ARP) ===",
+		"Turn chords into rhythmic patterns.",
+		"",
+		"• Controls:",
+		"  - ARP Button: Toggle On/Off.",
+		"  - Pattern Menu: Up, Down, Up/Down, Random, Down/Up.",
+		"  - Speed Menu: Sync (1/4, 1/8) or Time (ms).",
+		"",
+		"• Usage:",
+		"  - Works with both 'Insert' (Shift+Click) and 'Play' (Click).",
+		"  - Great for creating instant basslines or ostinatos.",
+		"",
+		"=== AUTOMATIC VOICE LEADING ===",
+		"Smoothly connect chords by minimizing finger movement.",
+		"",
+		"• LEAD Button:",
+		"  - When ON, the script automatically chooses the best inversion",
+		"    for the NEXT chord based on the PREVIOUS chord.",
+		"  - Example: C (Root) -> F (2nd Inv) instead of jumping up.",
 		"",
 		"=== MELODY GENERATOR ===",
 		"Generate random melodies based on current scale/chord:",
@@ -777,13 +849,6 @@ local helpContent = {
 		"   - Creates REAPER Regions for each chord",
 		"   - Regions named after chords",
 		"   - Useful for navigating song structure",
-		"",
-		"=== SCALE FILTER / REMAP ===",
-		"Filter button (Off -> Filter -> Remap):",
-		"• Filter Mode: Blocks incoming MIDI notes outside scale",
-		"• Remap Mode: Maps white keys to scale notes",
-		"• Setup button: Installs required JSFX to track",
-		"• Visual feedback on piano keyboard (arrows)",
 		"",
 		"=== KEYBOARD SHORTCUTS - SCALE NOTES ===",
 		"Three rows for three octaves (10 keys per row):",
@@ -928,11 +993,11 @@ local helpContent = {
 		"",
 	},
 	
-	-- Tab 6: About
+	-- Tab 7: About
 	{
 		"ABOUT CHORDGUN (TK MOD)",
 		"",
-		"VERSION: 2.2.5",
+		"VERSION: 2.2.7",
 		"RELEASE: November 2025",
 		"",
 		"=== CREDITS ===",
@@ -953,6 +1018,22 @@ local helpContent = {
 		"• Enhanced UI with adaptive window sizing",
 		"• Chord progression builder improvements",
 		"• Arpeggiator and Melody Generator",
+		"",
+		"=== VERSION 2.2.7 HIGHLIGHTS ===",
+		"",
+		"New Features:",
+		"• Surprise Me (Randomize):",
+		"  - Dice button to fill empty slots with random chords",
+		"  - Weighted logic favors common pop progressions (I, IV, V, vi)",
+		"  - Right-click menu for Length (4/8) and Tonic Start options",
+		"",
+		"• Sync Play:",
+		"  - Play/Stop buttons now sync with Reaper transport",
+		"  - New 'Sync' button to match Tonic with MIDI Editor Key Snap",
+		"",
+		"• Improvements:",
+		"  - Added 'Clear Progression' to Dice menu",
+		"  - Fixed timing issues with synced playback",
 		"",
 		"=== VERSION 2.2.5 HIGHLIGHTS ===",
 		"",
@@ -1085,15 +1166,19 @@ local helpContent = {
 
 local helpLines = helpContent[activeTab]
 
-local windowWidth = 800
-local windowHeight = 650
-local lineHeight = 18
-local fontSize = 14
+local baseWindowWidth = 800
+local baseWindowHeight = 650
+local lineHeight = 24
+local fontSize = 18
 local mouseWasDown = false
 
 -- Get saved window position
 local savedX = tonumber(reaper.GetExtState("TK_ChordGun_Help", "windowX")) or -1
 local savedY = tonumber(reaper.GetExtState("TK_ChordGun_Help", "windowY")) or -1
+local uiScale = tonumber(reaper.GetExtState("TK_ChordGun_Help", "uiScale")) or 1.0
+
+local windowWidth = math.floor(baseWindowWidth * uiScale)
+local windowHeight = math.floor(baseWindowHeight * uiScale)
 
 -- Initialize window with saved position
 gfx.init("ChordGun Help", windowWidth, windowHeight, 0, savedX, savedY)
@@ -1165,7 +1250,7 @@ function main()
 	if newWidth ~= windowWidth or newHeight ~= windowHeight then
 		windowWidth = newWidth
 		windowHeight = newHeight
-		fontSize = math.max(10, math.floor(windowHeight / 45))
+		fontSize = math.max(14, math.floor(windowHeight / 32))
 		gfx.setfont(1, "Arial", fontSize)
 		lineHeight = math.floor(fontSize * 1.3)
 	end
@@ -1191,9 +1276,6 @@ function main()
 	gfx.set(0.15, 0.15, 0.15, 1)
 	gfx.rect(0, 0, windowWidth, windowHeight, 1)
 	
-	-- Draw tabs
-	drawTabs()
-	
 	-- Draw help text (below tabs)
 	gfx.set(0.9, 0.9, 0.9, 1)
 	gfx.setfont(1, "Arial", fontSize)
@@ -1208,6 +1290,9 @@ function main()
 		end
 		yPos = yPos + lineHeight
 	end
+	
+	-- Draw tabs (on top of text)
+	drawTabs()
 	
 	-- Draw scrollbar if needed
 	if maxScroll > 0 then
@@ -1234,6 +1319,7 @@ function main()
 		return
 	end
 	
+	reaper.SetExtState("TK_ChordGun_Help", "heartbeat", tostring(reaper.time_precise()), false)
 	reaper.defer(main)
 end
 

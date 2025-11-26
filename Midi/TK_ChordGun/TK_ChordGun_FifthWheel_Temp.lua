@@ -1,14 +1,12 @@
 	local notes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
 	local notesFlat = {"C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"}
 	
-	-- Orders
-	local orderFifths = {1, 8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6}  -- Circle of fifths
-	local orderChromatic = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} -- Chromatic (Clockwise)
+	local orderFifths = {1, 8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6}
+	local orderChromatic = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 	
-	local useFlats = false  -- Toggle between sharps and flats
-	local viewMode = 1 -- 1=Fifths, 2=Chromatic, 3=Linear, 4=Score, 5=Guitar
+	local useFlats = false
+	local viewMode = 1
 	
-	-- Theme System
 	local isLightMode = reaper.GetExtState("TK_ChordGun", "lightMode") == "1"
 
 	local function hex2rgb(arg) 
@@ -22,6 +20,12 @@
 	local function setColor(hexColor)
 		local r, g, b = hex2rgb(hexColor)
 		gfx.set(r, g, b, 1)
+	end
+
+	local function getContrastColor(hexColor)
+		local r, g, b = hex2rgb(hexColor)
+		local luminance = (0.299 * r + 0.587 * g + 0.114 * b)
+		return luminance > 0.5 and "FFFFFF" or "000000"
 	end
 
 	local themes = {
@@ -275,16 +279,15 @@
 		setColor(getThemeColor(key))
 	end
 	
-		-- Get UI scale from ExtState (passed by parent)
-		local uiScale = tonumber(reaper.GetExtState("TK_ChordGun_FifthWheel", "uiScale")) or 1.0
-		
-		-- Scaling function
-		local function s(size)
-			return math.floor(size * uiScale + 0.5)
-		end
+	local uiScale = tonumber(reaper.GetExtState("TK_ChordGun_FifthWheel", "uiScale")) or 1.0
+	
+	local function s(size)
+		return math.floor(size * uiScale + 0.5)
+	end
 		
 	local baseW, baseH = 400, 400
 	local windowW, windowH = s(baseW), s(baseH)
+	local lastW, lastH = windowW, windowH
 	local centerX, centerY = windowW/2, windowH/2
 	local radius = s(140)
 	local noteRadius = s(28)
@@ -297,7 +300,6 @@
 	gfx.setfont(1, "Arial", s(16), string.byte('b'))
 
 	local function drawButtons()
-		-- Draw sharp/flat toggle button at top-left
 		local toggleText = useFlats and "b" or "#"
 		gfx.setfont(2, "Arial", s(16), string.byte('b'))
 		local toggleW = gfx.measurestr(toggleText)
@@ -317,7 +319,6 @@
 		gfx.y = toggleButtonY + (toggleH - s(16)) / 2
 		gfx.drawstr(toggleText)
 		
-		-- Draw View Mode toggle button at top-right
 		local viewText = "Fifths"
 		if viewMode == 2 then viewText = "Chromatic" 
 		elseif viewMode == 3 then viewText = "Linear" 
@@ -346,18 +347,15 @@
 		local startY = centerY - (keyHeight / 2)
 		local startX = (windowW - (keyWidth * 12)) / 2
 		
-		-- Interval names relative to root
 		local intervals = {"R", "b2", "2", "b3", "3", "4", "b5", "5", "b6", "6", "b7", "7"}
 		
-		-- Draw keys
 		for i = 0, 11 do
 			local noteIndex = ((currentTonic - 1 + i) % 12) + 1
 			local x = startX + (i * keyWidth)
 			local isInScale = scalePattern[noteIndex]
 			
-			-- Key Background
 			if isInScale then
-				if i == 0 then -- Root
+				if i == 0 then
 					setThemeColor("linearViewRoot")
 				else
 					setThemeColor("linearViewScale")
@@ -368,7 +366,6 @@
 				gfx.rect(x, startY, keyWidth - s(2), keyHeight, 1)
 			end
 			
-			-- Note Name
 			gfx.setfont(1, "Arial", s(16), string.byte('b'))
 			local name = displayNotes[noteIndex]
 			local nw, nh = gfx.measurestr(name)
@@ -383,7 +380,6 @@
 			gfx.y = startY + keyHeight - nh - s(10)
 			gfx.drawstr(name)
 			
-			-- Interval Name (Below key)
 			if isInScale then
 				gfx.setfont(5, "Arial", s(12))
 				local intName = intervals[i+1]
@@ -394,7 +390,6 @@
 				gfx.drawstr(intName)
 			end
 			
-			-- Click detection for this key (to change tonic)
 			if gfx.mouse_cap & 1 == 1 and not mouseWasDown then
 				if gfx.mouse_x >= x and gfx.mouse_x <= x + keyWidth - s(2) and
 				   gfx.mouse_y >= startY and gfx.mouse_y <= startY + keyHeight then
@@ -404,7 +399,6 @@
 			end
 		end
 		
-		-- Legend/Info
 		gfx.setfont(5, "Arial", s(13))
 		local legendY = startY - s(40)
 		setThemeColor("linearViewLegendTitle")
@@ -633,13 +627,26 @@
   end
 
   function drawWheel()
-		-- Background
+		local w, h = gfx.w, gfx.h
+		if w ~= lastW or h ~= lastH then
+			if w ~= lastW then h = w else w = h end
+			local dock, x, y = gfx.dock(-1, 0, 0, 0, 0)
+			gfx.init("", w, h, dock, x, y)
+			lastW, lastH = w, h
+		end
+		
+		windowW, windowH = gfx.w, gfx.h
+		uiScale = windowW / baseW
+		
+		centerX, centerY = windowW/2, windowH/2
+		radius = s(140)
+		noteRadius = s(28)
+
 		setThemeColor("wheelBg")
 		gfx.rect(0, 0, windowW, windowH, 1)
 		
 		local toggleX, toggleY, toggleW, toggleH, orderX, orderW = drawButtons()
 		
-		-- Get current scale info
 		local currentTonic = tonumber(reaper.GetExtState("TK_ChordGun_FifthWheel", "tonic")) or 1
 		local isCustomScale = reaper.GetExtState("TK_ChordGun_FifthWheel", "isCustom") == "1"
 		local scalePattern = {}
@@ -655,10 +662,8 @@
 		elseif viewMode == 5 then
 			drawGuitarView(currentTonic, scalePattern, displayNotes)
 		else
-			-- CIRCULAR VIEWS (Fifths / Chromatic)
 			local noteOrder = (viewMode == 2) and orderChromatic or orderFifths
 			
-			-- Symmetry calculation for Chromatic view
 			local symmetryPoints = {}
 			if viewMode == 2 then
 				local activeNotes = {}
@@ -678,7 +683,6 @@
 				end
 			end
 
-			-- Helper for colors
 			local function getHarmonicDistanceColor(noteIndex, tonicIndex)
 				local pos1, pos2
 				for i = 1, 12 do
@@ -717,7 +721,6 @@
 				end
 			end
 
-			-- Draw Circles
 			for i = 1, 12 do
 				local angle = (i - 1) * (math.pi * 2 / 12) - (math.pi / 2)
 				local noteIndex = noteOrder[i]
@@ -730,7 +733,7 @@
 				
 				local currentNoteRadius = noteRadius
 				local drawText = true
-				if viewMode == 2 and not isInScale then -- Tiny dots for chromatic out-of-scale
+				if viewMode == 2 and not isInScale then
 					currentNoteRadius = s(5)
 					drawText = false
 				end
@@ -753,7 +756,6 @@
 				gfx.set(color[1], color[2], color[3], 1)
 				gfx.circle(x, y, currentNoteRadius, 1)
 				
-				-- Borders
 				if isCurrentTonic or isInScale then
 					setThemeColor("wheelBorderActive")
 					gfx.circle(x, y, currentNoteRadius, 0)
@@ -764,15 +766,17 @@
 					gfx.circle(x, y, currentNoteRadius, 0)
 				end
 				
-				-- Halo
 				if isSymmetryPoint and not isCurrentTonic then
 					setThemeColor("wheelHalo")
 					for r=4, 7 do gfx.circle(x, y, currentNoteRadius + s(r), 0) end
 				end
 				
-				-- Text
 				if drawText then
-					setThemeColor("wheelText")
+					if not isLightMode and not isInScale then
+						gfx.set(1, 1, 1, 1)
+					else
+						setThemeColor("wheelText")
+					end
 					gfx.setfont(1, "Arial", s(16), string.byte('b'))
 					local noteName = displayNotes[noteIndex]
 					local textW, textH = gfx.measurestr(noteName)
@@ -781,19 +785,30 @@
 					if viewMode == 1 then gfx.y = y - textH / 2 - s(6) end
 					gfx.drawstr(noteName)
 					
-					if viewMode == 1 then -- Relative minor
+					if viewMode == 1 then
 						local minorNoteIndex = ((noteIndex + 8) % 12) + 1
 						local minorName = displayNotes[minorNoteIndex] .. "m"
 						gfx.setfont(4, "Arial", s(13))
 						local minorW, minorH = gfx.measurestr(minorName)
 						gfx.x = x - minorW / 2
 						gfx.y = y - minorH / 2 + s(8)
-						setThemeColor("wheelRelativeMinor")
+						
+						local hexColor = isLightMode and themes.light.wheelRelativeMinor or themes.dark.wheelRelativeMinor
+						if not isLightMode and not isInScale then
+							hexColor = "808080"
+						end
+						
+						local contrastColor = getContrastColor(hexColor)
+						if contrastColor == "000000" then
+							gfx.set(0, 0, 0, 1)
+						else
+							gfx.set(1, 1, 1, 1)
+						end
+						
 						gfx.drawstr(minorName)
 					end
 				end
 				
-				-- Click detection
 				if gfx.mouse_cap & 1 == 1 and not mouseWasDown then
 					local dist = math.sqrt((gfx.mouse_x - x)^2 + (gfx.mouse_y - y)^2)
 					if dist < noteRadius then
@@ -803,10 +818,9 @@
 				end
 			end
 			
-			-- Legend
 			gfx.setfont(5, "Arial", s(13))
 			local legendY = centerY - s(20)
-			if viewMode == 2 then -- Chromatic Legend
+			if viewMode == 2 then
 				setThemeColor("wheelLegendTitle")
 				local titleText = "Chromatic Order"
 				local titleW = gfx.measurestr(titleText)
@@ -817,7 +831,7 @@
 				setThemeColor("wheelLegendHalo")
 				local haloText = "Halo: Equivalent Tonic"; local haloW = gfx.measurestr(haloText)
 				gfx.x = centerX - haloW / 2; gfx.y = legendY + s(36); gfx.drawstr(haloText)
-			else -- Fifths Legend
+			else
 				setThemeColor("wheelLegendTitle")
 				local titleText = "Color Legend:"
 				local titleW = gfx.measurestr(titleText)
@@ -842,23 +856,21 @@
 			end
 		end
 
-		-- Footer
 		gfx.setfont(3, "Arial", s(18))
 		setThemeColor("wheelFooterText")
-		local instr = "Click a note to change tonic • ESC to close"
+		local instr = "Click a note to change tonic - ESC to close"
 		local instrW = gfx.measurestr(instr)
 		gfx.x = (windowW - instrW) / 2
 		gfx.y = windowH - s(20)
 		gfx.drawstr(instr)
 		
-		-- Handle Button Clicks
 		if gfx.mouse_cap & 1 == 1 and not mouseWasDown then
 			local mx, my = gfx.mouse_x, gfx.mouse_y
 			if mx >= toggleX and mx <= toggleX + toggleW and my >= toggleY and my <= toggleY + toggleH then
 				useFlats = not useFlats
 				mouseWasDown = true
 			elseif mx >= orderX and mx <= orderX + orderW and my >= toggleY and my <= toggleY + toggleH then
-				viewMode = (viewMode % 5) + 1 -- Cycle 1->2->3->4->5->1
+				viewMode = (viewMode % 5) + 1
 				mouseWasDown = true
 			end
 		end
@@ -867,7 +879,6 @@
 		drawWheel()
 		gfx.update()
 		
-	-- Check if parent script requested forced close
 	local forceClose = reaper.GetExtState("TK_ChordGun_FifthWheel", "forceClose")
 	if forceClose == "1" then
 		reaper.SetExtState("TK_ChordGun_FifthWheel", "forceClose", "0", false)
@@ -876,8 +887,7 @@
 	end
 	
 	local char = gfx.getchar()
-	if char == 27 or char == -1 then  -- ESC or closed
-		-- Save window position before closing
+	if char == 27 or char == -1 then
 		local dockState, posX, posY = gfx.dock(-1, 0, 0, 0, 0)
 		reaper.SetExtState("TK_ChordGun_FifthWheel", "windowX", tostring(posX), true)
 		reaper.SetExtState("TK_ChordGun_FifthWheel", "windowY", tostring(posY), true)

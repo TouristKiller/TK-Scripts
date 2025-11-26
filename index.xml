@@ -255,8 +255,31 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.2.6" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-22T16:00:00Z">
+      <version name="2.2.7" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-26T22:45:00Z">
         <changelog><![CDATA[
+2.2.7
++ Added MIDI Trigger Mode: Trigger chords via MIDI keyboard (C1-B1 range)
++ Added Channel 16 Bypass: Prevents script-generated chords from being distorted by Remap Mode
++ Added Extended Trigger Mapping: Black keys (C#1-A#1) now trigger scale degrees 8-12 (for Messiaen/10-note scales)
++ Added "Surprise Me" (Randomize) Dice button to fill empty slots with random chords (weighted I, IV, V, vi)
++ Added Randomize Settings (Right-click Dice): Progression Length (4/8), Always Start on Tonic, Clear Progression
++ Added Sync button to sync ChordGun scale with MIDI Editor key snap
++ Added Fifth Wheel scaling (window size now saves/restores)
++ Fixed issue with Fifth Wheel window not closing properly
++ Added "Selection" length option. Time selection is now ONLY used when this option is active.
++ Improved Workflow: Smart item selection/creation. Keeps items selected for continuous insertion, but allows creating new items by clicking outside existing ones.
++ Improved Track Selection: Prioritizes Selected Track, then Last Touched Track.
++ Improved Melody Generator: Uses active track or asks to create new one (no longer sticky)
++ Fixed crash when playing a progression with empty slots (e.g. empty slot 1). Empty slots are now skipped/silent.
++ Added Sync Play: Right-click Play button to toggle. Syncs script playback with Reaper transport (Play/Stop).
++ Improved Playback Timing: Sync Play now prioritizes audio over UI updates for tighter timing.
++ Added longer note lengths (2 bars, 4 bars, 8 bars)
++ Changed Note Length selector to a Dropdown menu for easier selection
++ Renamed "Selection" to "Time Selection" for clarity
++ Added Per-slot Inversion/Octave storage: Alt+Click now saves the current Octave and Inversion to the progression slot.
++ Added Hold Slot behavior: Clicking a progression slot now plays the chord as long as the mouse is held down (unless playback is running).
+
+
 2.2.1 /2.2.6
 + Bug Fixes
 
