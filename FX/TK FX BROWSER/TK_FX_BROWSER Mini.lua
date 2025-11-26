@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.1.7
+-- @version 0.1.8
 -- @changelog:
 --[[     
 
@@ -682,7 +682,9 @@ local FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = ReadFXFile()
 if not FX_LIST_TEST or not CAT_TEST or not FX_DEV_LIST_FILE then
     FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
 end
-local PLUGIN_LIST = GetFXTbl()
+-- Use cached list instead of GetFXTbl() to avoid calling EnumInstalledFX()
+-- which conflicts with REAPER's native plugin scan
+local PLUGIN_LIST = FX_LIST_TEST
 
 -- INITIALISEER DE CACHE HIER
 BuildPluginCache()
