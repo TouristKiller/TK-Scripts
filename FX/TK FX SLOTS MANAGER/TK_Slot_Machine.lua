@@ -1,8 +1,7 @@
--- @version 0.3.5
+-- @version 0.3.6
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
-A Lot of changes... hahahaha!
 
 == THNX TO MASTER SEXAN FOR HIS FX PARSER ==
 
@@ -12,7 +11,7 @@ A Lot of changes... hahahaha!
 
 local r = reaper
 local SCRIPT_NAME = 'TK Slot Machine'
-local SCRIPT_VERSION = '0.3.4'
+local SCRIPT_VERSION = '0.3.6'
 
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator = package.config:sub(1, 1)
@@ -5186,15 +5185,17 @@ local function draw()
 
     r.ImGui_Separator(ctx)
     
-  local current_track = get_selected_track()
+    -- Define track variables before navigation section (always needed for footer)
+    local current_track = get_selected_track()
     local current_number = current_track and get_track_number(current_track) or 0
     local total_tracks = r.CountTracks(0)
-  local nav_width = (state.lastSourceBlockWidth and state.lastSourceBlockWidth > 120) and math.min(state.lastSourceBlockWidth, 600) or 280
-    local available_width = r.ImGui_GetContentRegionAvail(ctx)
-    local start_pos = math.max(0, (available_width - nav_width) * 0.5)
-    r.ImGui_SetCursorPosX(ctx, start_pos)
     
-  if (state.showTrackNavButtons ~= false) then
+    -- Navigation buttons section with safety checks
+    if (state.showTrackNavButtons ~= false) and ctx and is_context_valid(ctx) then
+      local nav_width = (state.lastSourceBlockWidth and state.lastSourceBlockWidth > 120) and math.min(state.lastSourceBlockWidth, 600) or 280
+      local available_width = r.ImGui_GetContentRegionAvail(ctx) or 0
+      local start_pos = math.max(0, (available_width - nav_width) * 0.5)
+      r.ImGui_SetCursorPosX(ctx, start_pos)
   if r.ImGui_Button(ctx, '⟪', 25, 0) then
       local success, msg = navigate_to_first_track()
       if success then state.pendingMessage = msg else state.pendingError = msg end
