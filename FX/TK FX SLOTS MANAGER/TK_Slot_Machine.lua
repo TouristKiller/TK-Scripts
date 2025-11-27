@@ -1,4 +1,4 @@
--- @version 0.3.6
+-- @version 0.3.7
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -11,7 +11,7 @@
 
 local r = reaper
 local SCRIPT_NAME = 'TK Slot Machine'
-local SCRIPT_VERSION = '0.3.6'
+local SCRIPT_VERSION = '0.3.7'
 
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator = package.config:sub(1, 1)
@@ -5218,10 +5218,10 @@ local function draw()
   local trackPickerWidth = nav_width - usedButtonsW
   if trackPickerWidth < 60 then trackPickerWidth = 60 end
   r.ImGui_SetNextItemWidth(ctx, trackPickerWidth)
-  local changed, new_input = r.ImGui_InputText(ctx, '##track_nav_input', state.trackNavInput)
+    local changed, new_input = r.ImGui_InputText(ctx, '##track_nav_input', state.trackNavInput)
     if changed then state.trackNavInput = new_input end
     if state.tooltips and r.ImGui_IsItemHovered(ctx) and r.ImGui_SetTooltip then
-      r.ImGui_SetTooltip(ctx, 'Enter track number (1-' .. total_tracks .. ')')
+      r.ImGui_SetTooltip(ctx, 'Enter track number (1-' .. tostring(total_tracks) .. ')')
     end
     
     r.ImGui_SameLine(ctx)
@@ -5270,7 +5270,7 @@ local function draw()
       local hasMsg = (msg ~= '')
       local hasErr = (err ~= '')
       if hasErr then
-        r.ImGui_Text(ctx, 'Error: ' .. err)
+        r.ImGui_Text(ctx, 'Error: ' .. tostring(err))
       elseif hasMsg then
         r.ImGui_Text(ctx, msg)
       else
