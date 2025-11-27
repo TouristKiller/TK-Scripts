@@ -1,9 +1,12 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.1.8
+-- @version 0.1.9
 -- @changelog:
 --[[     
-
+    + Added "Always Search All" option in settings
+    + Added "X" button to clear search field
+    + Increased width of "All" button
+    + Refactored search logic
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -883,6 +886,7 @@ function SetDefaultConfig()
         use_custom_template_dir = false,
         custom_template_dir = "",
         show_debug_window = false,
+        always_search_all = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -6777,6 +6781,66 @@ function SortScreenshotResults()
     end
 end
 
+function SearchAllPlugins()
+    screenshot_search_results = {}
+    local MAX_RESULTS = 250
+    local term = (browser_search_term or ""):lower()
+    local matches = {}
+    
+    for _, plugin in ipairs(PLUGIN_LIST) do
+        if plugin:lower():find(term, 1, true) then
+            matches[#matches+1] = plugin
+        end
+    end
+    
+    if config.apply_type_priority then
+        matches = DedupeByTypePriority(matches)
+    end
+    
+    local total = #matches
+    local limit = math.min(total, MAX_RESULTS)
+    for i = 1, limit do
+        screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+    end
+    
+    SortScreenshotResults()
+    
+    if total > MAX_RESULTS then
+        search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
+    else
+        search_warning_message = nil
+    end
+    
+    new_search_performed = true
+    selected_folder = nil
+    browser_panel_selected = nil
+    last_selected_folder_before_global = nil
+    RequestClearScreenshotCache()
+end
+
+function ClearSearch()
+    browser_search_term = ""
+    if config.always_search_all then
+        SearchAllPlugins()
+    else
+        screenshot_search_results = {}
+        search_warning_message = nil
+        if current_filtered_fx and #current_filtered_fx > 0 then
+            for _, plugin in ipairs(current_filtered_fx) do
+                table.insert(screenshot_search_results, {name = plugin})
+            end
+        elseif selected_folder then
+            local filtered_plugins = GetPluginsForFolder(selected_folder)
+            for _, plugin in ipairs(filtered_plugins) do
+                table.insert(screenshot_search_results, {name = plugin})
+            end
+        end
+        SortScreenshotResults()
+        RequestClearScreenshotCache()
+        new_search_performed = true
+    end
+end
+
 function SortPlainPluginList(list, mode)
     local default_type_order = {"VST3", "VST", "CLAP", "JS", "AU", "LV2", "OTHER"}
     if not config.type_order then config.type_order = default_type_order end
@@ -6837,12 +6901,21 @@ function ShowScreenshotControls()
         
         show_screenshot_search = config.show_screenshot_search ~= false
         if show_screenshot_search then
-            local button_space = 50  -- ruimte voor 2 knoppen + spacing
+            local button_space = 50
+            if browser_search_term ~= "" then button_space = 75 end
             local search_width = r.ImGui_GetContentRegionAvail(ctx) - button_space
             
             r.ImGui_PushItemWidth(ctx, search_width)
             local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
             r.ImGui_PopItemWidth(ctx)
+            
+            if browser_search_term ~= "" then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "X", 20, 20) then
+                    ClearSearch()
+                end
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear search") end
+            end
             
             r.ImGui_SameLine(ctx)
             screenshot_sort_mode = screenshot_sort_mode or "alphabet"
@@ -6880,33 +6953,8 @@ function ShowScreenshotControls()
             
             r.ImGui_SameLine(ctx)
             if browser_search_term == "" then r.ImGui_BeginDisabled(ctx) end
-            if r.ImGui_Button(ctx, "All", 20, 20) then
-                screenshot_search_results = {}
-                local MAX_RESULTS = 200
-                local term = browser_search_term:lower()
-                local matches = {}
-                for _, plugin in ipairs(PLUGIN_LIST) do
-                    if plugin:lower():find(term, 1, true) then
-                        table.insert(matches, plugin)
-                    end
-                end
-                if config.apply_type_priority then
-                    matches = DedupeByTypePriority(matches)
-                end
-                local total = #matches
-                local limit = math.min(total, MAX_RESULTS)
-                for i = 1, limit do
-                    table.insert(screenshot_search_results, { name = matches[i] })
-                end
-                SortScreenshotResults()
-                if total > MAX_RESULTS then
-                    search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
-                end
-                new_search_performed = true
-                selected_folder = nil
-                browser_panel_selected = nil
-                last_selected_folder_before_global = nil
-                RequestClearScreenshotCache()
+            if r.ImGui_Button(ctx, "All", 30, 20) then
+                SearchAllPlugins()
             end
             if browser_search_term == "" then r.ImGui_EndDisabled(ctx) end
             if r.ImGui_IsItemHovered(ctx) then
@@ -6916,7 +6964,10 @@ function ShowScreenshotControls()
             if changed then
                 browser_search_term = new_search
                 if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
-                if browser_search_term == "" then
+                
+                if config.always_search_all then
+                    SearchAllPlugins()
+                elseif browser_search_term == "" then
                     screenshot_search_results = {}
                     search_warning_message = nil
                     if current_filtered_fx and #current_filtered_fx > 0 then
@@ -7024,6 +7075,13 @@ function ShowScreenshotControls()
             r.ImGui_PushItemWidth(ctx, 70)
             local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
             r.ImGui_PopItemWidth(ctx)
+            if browser_search_term ~= "" then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "X", 20, 20) then
+                    ClearSearch()
+                end
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear search") end
+            end
             r.ImGui_SameLine(ctx)
 
             screenshot_sort_mode = screenshot_sort_mode or "alphabet"
@@ -7063,34 +7121,8 @@ function ShowScreenshotControls()
             if browser_search_term == "" then
                 r.ImGui_BeginDisabled(ctx)
             end
-            if r.ImGui_Button(ctx, "All", 20, 20) then
-                screenshot_search_results = {}
-                local MAX_RESULTS = 200
-                local term = browser_search_term:lower()
-                local matches = {}
-                for _, plugin in ipairs(PLUGIN_LIST) do
-                    if plugin:lower():find(term, 1, true) then
-                        table.insert(matches, plugin)
-                    end
-                end
-                if config.apply_type_priority then
-                    matches = DedupeByTypePriority(matches)
-                end
-                local total = #matches
-                local limit = math.min(total, MAX_RESULTS)
-                for i = 1, limit do
-                    table.insert(screenshot_search_results, { name = matches[i] })
-                end
-
-                SortScreenshotResults()
-                if total > MAX_RESULTS then
-                    search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
-                end
-                new_search_performed = true
-                selected_folder = nil
-                browser_panel_selected = nil
-                last_selected_folder_before_global = nil
-                RequestClearScreenshotCache()
+            if r.ImGui_Button(ctx, "All", 30, 20) then
+                SearchAllPlugins()
             end
             if browser_search_term == "" then
                 r.ImGui_EndDisabled(ctx)
@@ -7102,7 +7134,10 @@ function ShowScreenshotControls()
             if changed then
                 browser_search_term = new_search
                 if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
-                if browser_search_term == "" then
+                
+                if config.always_search_all then
+                    SearchAllPlugins()
+                elseif browser_search_term == "" then
                     screenshot_search_results = {}
                     search_warning_message = nil
                     if current_filtered_fx and #current_filtered_fx > 0 then
@@ -7265,6 +7300,10 @@ function ShowScreenshotControls()
 
         -- SEARCH & DROPDOWNS
         if r.ImGui_BeginMenu(ctx, "Search & Folders") then
+            if r.ImGui_MenuItem(ctx, "Always Search All", "", config.always_search_all) then
+                config.always_search_all = not config.always_search_all
+                SaveConfig()
+            end
             if r.ImGui_MenuItem(ctx, (config.show_screenshot_search and "Hide" or "Show") .. " Search Bar") then
                 config.show_screenshot_search = not config.show_screenshot_search; SaveConfig()
             end
@@ -8437,8 +8476,18 @@ function ShowBrowserPanel()
         r.ImGui_PushItemWidth(ctx, 70)
         local changed_browser_search, new_browser_search = r.ImGui_InputTextWithHint(ctx, "##BrowserSearch", "Search...", browser_search_term)
         r.ImGui_PopItemWidth(ctx)
+        if browser_search_term ~= "" then
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "X", 20, 20) then
+                ClearSearch()
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear search") end
+        end
         if changed_browser_search then
             browser_search_term = new_browser_search
+            if config.always_search_all then
+                SearchAllPlugins()
+            end
         end
         r.ImGui_SameLine(ctx)
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
@@ -8472,33 +8521,8 @@ function ShowBrowserPanel()
         end
         r.ImGui_SameLine(ctx)
         if browser_search_term == "" then r.ImGui_BeginDisabled(ctx) end
-        if r.ImGui_Button(ctx, "All", 20, 20) then
-            local MAX_RESULTS = 250
-            local too_many_results = false
-            local term_l = browser_search_term:lower()
-            local matches = {}
-            for _, plugin in ipairs(PLUGIN_LIST) do
-                if plugin:lower():find(term_l, 1, true) then
-                    matches[#matches+1] = plugin
-                end
-            end
-            if config.apply_type_priority then
-                matches = DedupeByTypePriority(matches)
-            end
-            screenshot_search_results = {}
-            for i = 1, math.min(MAX_RESULTS, #matches) do
-                screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
-            end
-            too_many_results = (#matches > MAX_RESULTS)
-            SortScreenshotResults()
-            if too_many_results then
-                search_warning_message = "First " .. MAX_RESULTS .. " results. Refine your search for more results."
-            end
-            new_search_performed = true
-            selected_folder = nil
-            browser_panel_selected = nil
-            last_selected_folder_before_global = nil
-            RequestClearScreenshotCache()
+        if r.ImGui_Button(ctx, "All", 30, 20) then
+            SearchAllPlugins()
         end
         if browser_search_term == "" then r.ImGui_EndDisabled(ctx) end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)") end
@@ -10299,32 +10323,8 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
             end
             r.ImGui_SameLine(ctx)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xAA2222FF)
-            if r.ImGui_Button(ctx, "All", 20, 20) then
-                screenshot_search_results = {}
-                local MAX_RESULTS = 200
-                local term = browser_search_term:lower()
-                local matches = {}
-                for _, plugin in ipairs(PLUGIN_LIST) do
-                    if plugin:lower():find(term, 1, true) then
-                        table.insert(matches, plugin)
-                    end
-                end
-                if config.apply_type_priority then
-                    matches = DedupeByTypePriority(matches)
-                end
-                local total = #matches
-                local limit = math.min(total, MAX_RESULTS)
-                for i = 1, limit do
-                    table.insert(screenshot_search_results, { name = matches[i] })
-                end
-
-                SortScreenshotResults()
-                ClearScreenshotCache()
-                if total > MAX_RESULTS then
-                    search_warning_message = "Showing first " .. MAX_RESULTS .. " results. Please refine your search for more specific results."
-                end
-
-                new_search_performed = true
+            if r.ImGui_Button(ctx, "All", 30, 20) then
+                SearchAllPlugins()
             end
             r.ImGui_PopStyleColor(ctx)
         end 
