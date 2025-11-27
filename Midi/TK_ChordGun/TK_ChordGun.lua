@@ -1,8 +1,14 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.1
+-- @version 2.3.2
 -- @changelog
 --[[
+
+2.3.2
++ Fixed Window Size/Position not being remembered for some users (Now saves globally instead of per-project)
++ Fixed Window Size resetting to default if resized smaller than initial minimum
++ Fixed MIDI Trigger Legato behavior (Now correctly falls back to held notes on release)
++ Fixed MIDI Trigger stopping melody notes (Now only stops script-generated notes)
 
 2.3.1
 + Added "Harmonic Compass" (Smart Suggestions): Highlights logical next chords based on functional harmony
@@ -1329,35 +1335,35 @@ end
 --
 
 function getDockState()
-  return tonumber(getValue(ConfigKeys.dockState, defaultDockState))
+  return getPersistentNumber(ConfigKeys.dockState, defaultDockState)
 end
 
 function setDockState(arg)
-  setValue(ConfigKeys.dockState, arg)
+  setPersistentNumber(ConfigKeys.dockState, arg)
 end
 
 function windowShouldBeDocked()
-  return getValue(ConfigKeys.windowShouldBeDocked, defaultWindowShouldBeDocked) == tostring(true)
+  return getPersistentValue(ConfigKeys.windowShouldBeDocked) == tostring(true)
 end
 
 function setWindowShouldBeDocked(arg)
-  setValue(ConfigKeys.windowShouldBeDocked, tostring(arg))
+  setPersistentValue(ConfigKeys.windowShouldBeDocked, tostring(arg))
 end
 
 function getInterfaceXPosition()
-  return tonumber(getValue(ConfigKeys.interfaceXPosition, defaultInterfaceXPosition()))
+  return getPersistentNumber(ConfigKeys.interfaceXPosition, defaultInterfaceXPosition())
 end
 
 function setInterfaceXPosition(arg)
-  setValue(ConfigKeys.interfaceXPosition, arg)
+  setPersistentNumber(ConfigKeys.interfaceXPosition, arg)
 end
 
 function getInterfaceYPosition()
-  return tonumber(getValue(ConfigKeys.interfaceYPosition, defaultInterfaceYPosition()))
+  return getPersistentNumber(ConfigKeys.interfaceYPosition, defaultInterfaceYPosition())
 end
 
 function setInterfaceYPosition(arg)
-  setValue(ConfigKeys.interfaceYPosition, arg)
+  setPersistentNumber(ConfigKeys.interfaceYPosition, arg)
 end
 
 function getInterfaceWidth()
@@ -8595,16 +8601,16 @@ function Interface:init(name)
   local minHeight = baseHeight
   
 
-  if interfaceWidth < minWidth then
-    self.width = minWidth
-  else
+  if interfaceWidth > 50 then
     self.width = interfaceWidth
+  else
+    self.width = minWidth
   end
   
-  if interfaceHeight < minHeight then
-    self.height = minHeight
-  else
+  if interfaceHeight > 50 then
     self.height = interfaceHeight
+  else
+    self.height = minHeight
   end
   
   self.lastWidth = self.width
@@ -8624,17 +8630,8 @@ function Interface:restartGui()
 	local minHeight = baseHeight
 	
 
-	if gfx.w < minWidth then
-		self.width = minWidth
-	else
-		self.width = gfx.w
-	end
-	
-	if gfx.h < minHeight then
-		self.height = minHeight
-	else
-		self.height = gfx.h
-	end
+	self.width = gfx.w
+	self.height = gfx.h
 	
 	self.lastWidth = self.width
 	self.lastHeight = self.height
@@ -10922,6 +10919,16 @@ local function windowHasNotBeenClosed()
 end
 
 local function cleanup()
+
+    if gfx.w and gfx.h then
+        setInterfaceWidth(gfx.w)
+        setInterfaceHeight(gfx.h)
+        
+        local dockState, xpos, ypos = gfx.dock(-1, 0, 0, 0, 0)
+        setInterfaceXPosition(xpos)
+        setInterfaceYPosition(ypos)
+        setDockState(dockState)
+    end
 
 	if fifthWheelWindowOpen then
 		reaper.SetExtState("TK_ChordGun_FifthWheel", "forceClose", "1", false)
