@@ -1,4 +1,4 @@
--- @version 0.3.7
+-- @version 0.3.8
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -628,9 +628,9 @@ local function get_track_number(tr)
 end
 
 local function go_to_track(track_number)
-  local total_tracks = r.CountTracks(0)
+  local total_tracks = tonumber(r.CountTracks(0)) or 0
   if track_number < 1 or track_number > total_tracks then
-    return false, 'Track number out of range (1-' .. total_tracks .. ')'
+    return false, 'Track number out of range (1-' .. tostring(total_tracks) .. ')'
   end
   local track = r.GetTrack(0, track_number - 1)
   if track then
@@ -656,7 +656,7 @@ local function navigate_to_next_track()
   local current_track = get_selected_track()
   if not current_track then return false, 'No track selected' end
   local current_number = get_track_number(current_track)
-  local total_tracks = r.CountTracks(0)
+  local total_tracks = tonumber(r.CountTracks(0)) or 0
   if not current_number or current_number >= total_tracks then
     return false, 'Already at last track'
   end
@@ -664,13 +664,13 @@ local function navigate_to_next_track()
 end
 
 local function navigate_to_first_track()
-  local total_tracks = r.CountTracks(0)
+  local total_tracks = tonumber(r.CountTracks(0)) or 0
   if total_tracks == 0 then return false, 'No tracks in project' end
   return go_to_track(1)
 end
 
 local function navigate_to_last_track()
-  local total_tracks = r.CountTracks(0)
+  local total_tracks = tonumber(r.CountTracks(0)) or 0
   if total_tracks == 0 then return false, 'No tracks in project' end
   return go_to_track(total_tracks)
 end
@@ -4625,6 +4625,7 @@ local function draw()
       P(r.ImGui_Col_Button,        0.65, 0.15, 0.15, 1.0)
       P(r.ImGui_Col_ButtonHovered, 0.80, 0.20, 0.20, 1.0)
       P(r.ImGui_Col_ButtonActive,  0.55, 0.10, 0.10, 1.0)
+  
   if r.ImGui_SmallButton(ctx, 'Close') then open = false end
       if pushed > 0 and r.ImGui_PopStyleColor then r.ImGui_PopStyleColor(ctx, pushed) end
 
@@ -4633,7 +4634,10 @@ local function draw()
       styleStackDepth.vars = math.max(0, styleStackDepth.vars - 1)  
     end
 
-  local FOOTER_H = 60
+  local STATUS_H = 60
+  local NAV_H = (state.showTrackNavButtons ~= false) and 34 or 0
+  local TOTAL_BOTTOM_H = STATUS_H + NAV_H
+
   local tr = get_selected_track()
   local frameHeight_header = r.ImGui_GetFrameHeight(ctx)
   local togglesH = 0
@@ -5165,7 +5169,7 @@ local function draw()
     draw_source_controls_inline()
   end
 
-  if r.ImGui_BeginChild(ctx, 'content_child', -1, -FOOTER_H) then
+  if r.ImGui_BeginChild(ctx, 'content_child', -1, -TOTAL_BOTTOM_H) then
     if not tr then
       r.ImGui_Text(ctx, 'No track selected. Select a track in REAPER to view its FX.')
     else
@@ -5188,7 +5192,7 @@ local function draw()
     -- Define track variables before navigation section (always needed for footer)
     local current_track = get_selected_track()
     local current_number = current_track and get_track_number(current_track) or 0
-    local total_tracks = r.CountTracks(0)
+    local total_tracks = tonumber(r.CountTracks(0)) or 0
     
     -- Navigation buttons section with safety checks
     if (state.showTrackNavButtons ~= false) and ctx and is_context_valid(ctx) then
@@ -5263,7 +5267,7 @@ local function draw()
   end 
   
 
-    local footer_open = r.ImGui_BeginChild(ctx, 'footer_child', -1, FOOTER_H)
+    local footer_open = r.ImGui_BeginChild(ctx, 'footer_child', -1, STATUS_H)
     if footer_open then
       local msg = state.pendingMessage or ''
       local err = state.pendingError or ''
@@ -5272,7 +5276,7 @@ local function draw()
       if hasErr then
         r.ImGui_Text(ctx, 'Error: ' .. tostring(err))
       elseif hasMsg then
-        r.ImGui_Text(ctx, msg)
+        r.ImGui_Text(ctx, tostring(msg))
       else
         r.ImGui_TextDisabled(ctx, 'Ready')
       end
