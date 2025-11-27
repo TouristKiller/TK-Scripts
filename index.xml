@@ -214,45 +214,37 @@
  </category>
 
   <category name="Midi">
-    <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI">
-    <version name="0.3.1" author="TouristKiller" time="2025-01-31T00:55:00Z">
+    <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI - With Chord Engine">
+    <version name="0.4.0" author="TouristKiller" time="2025-11-27T21:50:00Z">
       <changelog><![CDATA[           
---[[
+0.4.0
++   NEW: Chord Generator Engine!
+    -   Generate voicings dynamically based on formulas and tuning.
+    -   Smart Scoring System prioritizing "standard" and "playable" voicings.
+    -   "Campfire Chord" logic: Bonus for open strings and open position (frets 0-3).
+    -   Smart Finger Logic: Prevents impossible finger crossings and stretches.
+    -   Complexity Mode (Settings): Choose between "Simple" (Beginner/Easy) and "Rich" (Advanced/Full) voicings.
++   UI Improvements:
+    -   Added +/- buttons for quick chord variation navigation.
+    -   Wider dropdowns for better readability.
+    -   Best Match highlighting (Green + *) in variation list.
+    -   Settings menu updated with Complexity Mode selector.
++   General:
+    -   Improved sorting: Best matches first, then by fret position.
+
 0.3.0
 + Lefty view
 + Mirror view
 + Optical string thickness
-
-0.2.9
-+   Leftclick on existing fret position will remove it (Chord mode)
-+   Rightclick on existing fret position will remove only 1 instance 
-    of the position and not all (Sequence mode)
-
-0.2.8
-+   Added Lock GUI window button
-
-0.2.6       
-+   Persitant settings (Chord, Sequence, Horizontal, XL mode)
-+   Removerd Move GUI Window only via logo (this was not practical and gave problems with multi monitor setups)
-+   Added highlight for Fret Circels
-+   New whay of showing barre chords
-+   Bigger click area to select fret positions
-+   Small UI Improvements
    ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
+    <source file="TK_GTR2MIDI_ChordEngine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI_ChordEngine.lua</source>
     <source file="ChordVoicings.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings.txt</source>
     <source file="ChordVoicings_DoReMi.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/ChordVoicings_DoReMi.txt</source>
     </version>
     </reapack>
 
-        <reapack name="TK_GTR2MIDI(EXPERIMENTAL).lua" type="script" desc="TK GTR2MIDI (EXPERIMENTAL)">
-            <version name="0.0.4" author="TouristKiller" time="2025-09-13T16:35:00Z">
-                <changelog><![CDATA[
-+ Experimental: cross-string sequences (s:f), per-string MIDI channel option, UI theming & settings polish
-                ]]></changelog>
-                <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI(EXPERIMENTAL).lua</source>
-            </version>
-        </reapack>
+
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
       <version name="2.3.1" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-27T15:35:00Z">

@@ -1,8 +1,23 @@
 -- @description TK GTR2MIDI
 -- @author TouristKiller
--- @version 0.3.1
+-- @version 0.4.0
 -- @changelog
 --[[ 
+0.4.0
++   NEW: Chord Generator Engine!
+    -   Generate voicings dynamically based on formulas and tuning.
+    -   Smart Scoring System prioritizing "standard" and "playable" voicings.
+    -   "Campfire Chord" logic: Bonus for open strings and open position (frets 0-3).
+    -   Smart Finger Logic: Prevents impossible finger crossings and stretches.
+    -   Complexity Mode (Settings): Choose between "Simple" (Beginner/Easy) and "Rich" (Advanced/Full) voicings.
++   UI Improvements:
+    -   Added +/- buttons for quick chord variation navigation.
+    -   Wider dropdowns for better readability.
+    -   Best Match highlighting (Green + *) in variation list.
+    -   Settings menu updated with Complexity Mode selector.
++   General:
+    -   Improved sorting: Best matches first, then by fret position.
+
 0.3.0
 + Lefty view
 + Mirror view
@@ -52,8 +67,16 @@ ImGui.SetConfigVar(ctx, ImGui.ConfigVar_WindowsMoveFromTitleBarOnly, 1)
 local is_pinned                 = false
 local is_nomove                 = false
 local is_xl_mode                = false
+local show_settings_window      = false
+local settings_next_pos         = nil
+local per_string_channels       = (r.GetExtState("TK_GTR2MIDI","per_string_channels") ~= "false")
 local separator                 = package.config:sub(1,1)
 local script_path               = debug.getinfo(1,'S').source:match("@(.*)" .. separator)
+
+-- Load Chord Engine
+package.path = package.path .. ";" .. script_path .. separator .. "?.lua"
+package.loaded["TK_GTR2MIDI_ChordEngine"] = nil -- Force reload to ensure updates are applied
+local ChordEngine = require("TK_GTR2MIDI_ChordEngine")
 
 -- Input state
 local input_sequence            = ""
@@ -74,8 +97,19 @@ if selected_voicing_file == "" then
     selected_voicing_file       = "ChordVoicings.txt"
 end
 
+-- Generator State
+local use_chord_generator       = (r.GetExtState("TK_GTR2MIDI", "use_chord_generator") == "true")
+local gen_root_note             = 0 -- C
+local gen_chord_type_idx        = 1 -- Major
+local gen_complexity            = "Simple" -- "Simple" or "Rich"
+local gen_voicings              = {}
+local gen_selected_idx          = 1
+local gen_max_results           = tonumber(r.GetExtState("TK_GTR2MIDI", "gen_max_results")) or 50
+local note_names_sharp          = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+
 -- UI state
 local show_custom_tuning_window = false
+local custom_tuning_initialized = false
 local chord_fingers             = {}
 local chord_board_horizontal    = false
 local insert_in_existing        = false
@@ -83,8 +117,55 @@ local show_sequence             = false
 local show_chord                = true
 local status_message            = ""
 local status_color              = 0xFFFFFFFF
+local status_timer              = 0
 local is_left_handed            = false
 local is_mirror_mode            = false
+local last_window_width_normal  = nil
+local last_window_width_xl      = nil
+local pending_instant_resize    = false
+
+-- Theme settings (persisted)
+local function read_num(key, default)
+    local s = r.GetExtState("TK_GTR2MIDI", key)
+    local v = tonumber(s)
+    return v ~= nil and v or default
+end
+
+local ui_window_alpha           = read_num("ui_window_alpha", 1.0)
+local ui_window_bg_gray         = read_num("ui_window_bg_gray", 0.00)   -- 0=zwart, 1=wit
+local ui_button_gray            = read_num("ui_button_gray",    26/255) -- ~0.10
+local ui_dropdown_gray          = read_num("ui_dropdown_gray",  0.20)
+local ui_input_gray             = read_num("ui_input_gray",     26/255)
+local ui_text_gray              = read_num("ui_text_gray",      0.90)
+local ui_window_rounding        = read_num("ui_window_rounding",12.0)
+local ui_button_rounding        = read_num("ui_button_rounding", 6.0)
+
+local function clamp01(x)
+    if x < 0 then return 0 elseif x > 1 then return 1 else return x end
+end
+
+local function shade(gray, delta)
+    return clamp01(gray + delta)
+end
+
+local function gray_color(gray)
+    local g = math.floor(clamp01(gray) * 255 + 0.5)
+    return (g << 24) | (g << 16) | (g << 8) | 0xFF
+end
+
+local function GetThemeColors()
+    return {
+        window_bg       = gray_color(ui_window_bg_gray),
+        button          = gray_color(ui_button_gray),
+        button_hovered  = gray_color(shade(ui_button_gray, 0.12)),
+        button_active   = gray_color(shade(ui_button_gray, 0.20)),
+        frame_bg        = gray_color(ui_input_gray),
+        frame_bg_hovered= gray_color(shade(ui_input_gray, 0.12)),
+        frame_bg_active = gray_color(shade(ui_input_gray, 0.20)),
+        popup_bg        = gray_color(ui_dropdown_gray),
+        text            = gray_color(ui_text_gray),
+    }
+end
 
 -- Transpose configuration
 local transpose_modes           = {
@@ -120,6 +201,57 @@ show_chord                      = r.GetExtState("TK_GTR2MIDI", "show_chord") == 
 chord_board_horizontal          = r.GetExtState("TK_GTR2MIDI", "chord_board_horizontal") == "true"
 local is_xl_mode                = r.GetExtState("TK_GTR2MIDI", "is_xl_mode") == "true"
 local font                      = is_xl_mode and font_large or font_small
+is_left_handed                  = r.GetExtState("TK_GTR2MIDI", "is_left_handed") == "true"
+is_mirror_mode                  = r.GetExtState("TK_GTR2MIDI", "is_mirror_mode") == "true"
+local num_strings               = tonumber(r.GetExtState("TK_GTR2MIDI", "num_strings")) or 6
+
+local function setNumStrings(n)
+    n = tonumber(n) or 6
+    if n < 1 then n = 1 elseif n > 16 then n = 16 end
+    num_strings = n
+    r.SetExtState("TK_GTR2MIDI","num_strings", tostring(n), true)
+
+    local cur = base_notes or {}
+    local new = {}
+    if #cur >= n then
+        for i=1,n do new[i] = cur[i] end
+    else
+        for i=1,#cur do new[i] = cur[i] end
+        local fill = cur[#cur] or 40
+        for i=#cur+1,n do new[i] = fill end
+    end
+    base_notes = new
+
+    local cn = {}
+    if custom_notes and #custom_notes > 0 then
+        for i=1,math.min(#custom_notes, n) do cn[i] = custom_notes[i] end
+        local fill = cn[#cn] or (base_notes[#base_notes] or 40)
+        for i=#cn+1,n do cn[i] = fill end
+    else
+        for i=1,n do cn[i] = base_notes[i] or 40 end
+    end
+    custom_notes = cn
+
+    string_thicknesses = {}
+    for i=1,n do
+        local t = (i-1)/math.max(1,(n-1))
+        string_thicknesses[i] = 3.0 - 2.2*t
+    end
+
+    local frets = {}
+    for f in (input_chord or ""):gmatch("%S+") do table.insert(frets, f) end
+    if #frets < n then
+        for i=#frets+1,n do frets[i] = "X" end
+    elseif #frets > n then
+        while #frets > n do table.remove(frets) end
+    end
+    input_chord = (#frets>0) and table.concat(frets, " ") or input_chord
+
+    if selected_string > n then selected_string = n end
+    if selected_string < 1 then selected_string = 1 end
+end
+
+setNumStrings(num_strings)
 ------------------------------------------------------------------------
 local function GetCurrentTimeSig()
     local timepos = r.GetCursorPosition()
@@ -180,12 +312,30 @@ function GetNoteName(midi_note)
 end
 
 function DetermineChordName(chord_shape)
+    -- 1. Check Library (Text File)
     local frets_table = {}
     for fret in chord_shape:gmatch("%S+") do
         table.insert(frets_table, fret)
     end
     local voicing = table.concat(frets_table, " ")
-    return voicings[voicing] or "(?)"
+    
+    if voicings[voicing] then
+        return voicings[voicing]
+    end
+
+    -- 2. Check Generator (Engine)
+    if use_chord_generator and gen_voicings and #gen_voicings > 0 then
+        -- Check if the current shape matches one of the generated variations
+        for _, v in ipairs(gen_voicings) do
+            if v.grip == chord_shape then
+                local root = note_names_sharp[gen_root_note + 1]
+                local type_obj = ChordEngine.Formulas[gen_chord_type_idx]
+                return root .. " " .. type_obj.name
+            end
+        end
+    end
+
+    return "(?)"
 end
 
 local function normalizeChordName(chord)
@@ -205,12 +355,12 @@ end
 
 function GetMidiNote(string_num, fret)
     if fret == "X" then return nil end
-    local base_note = base_notes[7-string_num]
+    local base_note = base_notes[(num_strings + 1) - string_num]
     return base_note + tonumber(fret)
 end
 
 function FindFretForNote(string_num, target_note)
-    local base_note = base_notes[7-string_num]
+    local base_note = base_notes[(num_strings + 1) - string_num]
     local fret = target_note - base_note
     if fret >= 0 and fret <= 24 then
         return tostring(fret)
@@ -248,21 +398,30 @@ end
 
 function TransposeSequence(interval, direction)
     local new_seq = {}
-    local base_note = base_notes[selected_string]
-    
-    for note in input_sequence:gmatch("([^-]+)") do
-        if note ~= "0" then
-            local current_note = base_note + tonumber(note)
+    for tok in (input_sequence or ""):gmatch("([^-]+)") do
+        local s, f = tok:match("^(%d+)%s*:%s*(%-?%d+)$")
+        if s then
+            s = tonumber(s); f = tonumber(f)
+            local base_note = base_notes[s]
+            local current_note = base_note + f
             local target_note = current_note + (interval * direction)
             local new_fret = target_note - base_note
             if new_fret >= 0 and new_fret <= 24 then
-                table.insert(new_seq, tostring(new_fret))
+                table.insert(new_seq, tostring(s) .. ":" .. tostring(new_fret))
             end
         else
-            table.insert(new_seq, "0")
+            local f2 = tonumber(tok)
+            if f2 ~= nil then
+                local base_note = base_notes[selected_string]
+                local current_note = base_note + f2
+                local target_note = current_note + (interval * direction)
+                local new_fret = target_note - base_note
+                if new_fret >= 0 and new_fret <= 24 then
+                    table.insert(new_seq, tostring(new_fret))
+                end
+            end
         end
     end
-    
     return table.concat(new_seq, "-")
 end
 
@@ -318,87 +477,134 @@ end
 
 function ShowCustomTuningWindow()
     ImGui.PushFont(ctx, font)
-    ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowRounding, 12.0)
-    ImGui.PushStyleVar(ctx, ImGui.StyleVar_FrameRounding, 6.0)
-    ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg, 0x000000FF)
-    ImGui.PushStyleColor(ctx, ImGui.Col_Button, 0x1A1A1AFF)
-    ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered, 0x333333FF)
-    ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive, 0x404040FF)
-    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBg, 0x1A1A1AFF)
-    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgHovered, 0x333333FF)
-    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgActive, 0x404040FF)
+    local C = GetThemeColors()
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_Alpha, clamp01(ui_window_alpha))
+    ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg, C.window_bg)
+    ImGui.PushStyleColor(ctx, ImGui.Col_Button, C.button)
+    ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered, C.button_hovered)
+    ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive, C.button_active)
+    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBg, C.frame_bg)
+    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgHovered, C.frame_bg_hovered)
+    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgActive, C.frame_bg_active)
+    ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.text)
+    ImGui.PushStyleColor(ctx, ImGui.Col_PopupBg, C.popup_bg)
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowRounding, ui_window_rounding)
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_FrameRounding, ui_button_rounding)
 
-    local visible, opened = ImGui.Begin(ctx, "Custom Tuning Editor", true, window_flags)
+    local flags = ImGui.WindowFlags_AlwaysAutoResize | ImGui.WindowFlags_NoScrollbar
+    if not custom_tuning_initialized then
+        -- Prefill from current selection; resize to current string count
+        local src = tunings[selected_tuning] or base_notes or {}
+        custom_notes = {}
+        for i=1, math.min(#src, num_strings) do custom_notes[i] = src[i] end
+        local fill = custom_notes[#custom_notes] or src[#src] or 40
+        for i=#custom_notes+1, num_strings do custom_notes[i] = fill end
+        custom_tuning_name = selected_tuning
+        custom_tuning_initialized = true
+    end
+
+    local visible, open = ImGui.Begin(ctx, "Custom Tuning Editor", true, flags)
     if visible then
-        local changed, new_name = ImGui.InputText(ctx, "Tuning Name", selected_tuning)
-        if changed then
-            custom_tuning_name = new_name
-        end
-        
-        if tunings[selected_tuning] then
-            custom_notes = {table.unpack(tunings[selected_tuning])}
-        end
-        
-        ImGui.Text(ctx, "String tunings:")
-        for i=1,6 do
-            ImGui.PushItemWidth(ctx, 60)
-            local current_note = GetNoteName(custom_notes[i])
-            if ImGui.BeginCombo(ctx, "String " .. i, current_note) then
-                for note = 40,64 do
-                    local note_name = GetNoteName(note)
-                    if ImGui.Selectable(ctx, note_name, note == custom_notes[i]) then
-                        custom_notes[i] = note
-                        tunings[selected_tuning][i] = note  
-                    end
-                end
-                ImGui.EndCombo(ctx)
+        ImGui.Text(ctx, "Name:")
+        ImGui.SameLine(ctx)
+        ImGui.PushItemWidth(ctx, 220)
+        local _, name_val = ImGui.InputTextWithHint(ctx, "##ct_name", "My Tuning", custom_tuning_name or "")
+        custom_tuning_name = name_val
+        ImGui.PopItemWidth(ctx)
+
+        ImGui.Separator(ctx)
+        ImGui.Text(ctx, "Strings (low ➜ high):")
+
+        -- Per-string editors
+        local col_min_x, _ = ImGui.GetWindowContentRegionMin(ctx)
+        local col_max_x, _ = ImGui.GetWindowContentRegionMax(ctx)
+        local cell_w = (col_max_x - col_min_x - 6) / 2
+        for i=1, num_strings do
+            local idx = i
+            local label = string.format("String %d", idx)
+            ImGui.Text(ctx, label)
+            ImGui.SameLine(ctx)
+            ImGui.PushItemWidth(ctx, 70)
+            local val = tonumber(custom_notes[idx]) or 40
+            local changed, new_val = ImGui.InputInt(ctx, "##ct_note_"..idx, val, 1, 12)
+            if changed then
+                if new_val < 0 then new_val = 0 end
+                if new_val > 127 then new_val = 127 end
+                custom_notes[idx] = new_val
             end
+            ImGui.PopItemWidth(ctx)
+            ImGui.SameLine(ctx)
+            ImGui.Text(ctx, GetNoteName(custom_notes[idx]))
         end
 
-        if ImGui.Button(ctx, "Save Tuning") and custom_tuning_name ~= "" then
-            custom_tunings[custom_tuning_name] = {table.unpack(custom_notes)}
-            tunings[custom_tuning_name] = {table.unpack(custom_notes)}
+        ImGui.Separator(ctx)
+        if ImGui.Button(ctx, "Save", 80, 0) then
+            local name = (custom_tuning_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if name == "" then name = os.date("Custom %Y-%m-%d %H:%M:%S") end
+            local arr = {}
+            for i=1, num_strings do arr[i] = tonumber(custom_notes[i]) or 40 end
+            tunings[name] = {table.unpack(arr)}
+            custom_tunings[name] = {table.unpack(arr)}
             SaveCustomTunings(custom_tunings)
-        
-            local voicing_filename = "ChordVoicings_" .. custom_tuning_name .. ".txt"
-            local file = io.open(script_path .. separator .. voicing_filename, "w")
-            if file then
-                file:write("# Chord voicings for " .. custom_tuning_name .. " tuning\n")
-                file:write("# Format: FRET_POSITIONS | CHORD_NAME | FINGER_POSITIONS\n")
-                file:write("# Example: 0 2 2 1 0 0 | Em | 0 2 3 1 0 0\n")
-                file:close()
-            end
+            selected_tuning = name
+            base_notes = {table.unpack(arr)}
             
+            if use_chord_generator then
+                 local tuning_notes = {}
+                 for k=1, num_strings do tuning_notes[k] = base_notes[(num_strings + 1) - k] end
+                 gen_voicings = ChordEngine.Solve(gen_root_note, gen_chord_type_idx, tuning_notes, 4, gen_max_results, gen_complexity)
+                 gen_selected_idx = 1
+                 if #gen_voicings > 0 then 
+                    input_chord = gen_voicings[1].grip 
+                    -- Parse fingers string into table
+                    local f_str = gen_voicings[1].fingers
+                    local f_arr = {}
+                    for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                    chord_fingers[input_chord] = f_arr
+                 else 
+                    input_chord = "" 
+                 end
+            end
+
+            local voicing_filename = "ChordVoicings_" .. name .. ".txt"
+            local path = script_path .. separator .. voicing_filename
+            local f = io.open(path, "r")
+            if not f then
+                local nf = io.open(path, "w")
+                if nf then
+                    nf:write("# Chord voicings for " .. name .. " tuning\n")
+                    nf:write("# Format: FRET_POSITIONS | CHORD_NAME | FINGER_POSITIONS\n")
+                    nf:write("# Example: 0 2 2 1 0 0 | Em | 0 2 3 1 0 0\n")
+                    nf:close()
+                end
+            else
+                f:close()
+            end
             show_custom_tuning_window = false
+            custom_tuning_initialized = false
         end
-        
         ImGui.SameLine(ctx)
-        ImGui.SameLine(ctx)
-        if ImGui.Button(ctx, "Delete Tuning") then
+        if ImGui.Button(ctx, "Delete", 80, 0) then
             if selected_tuning ~= "Standard (EADGBE)" and 
                selected_tuning ~= "Drop D (DADGBE)" and
                selected_tuning ~= "Open G (DGDGBD)" and
                selected_tuning ~= "Open D (DADF#AD)" and
                selected_tuning ~= "DADGAD" then
                 DeleteCustomTuning(selected_tuning)
-                show_custom_tuning_window = false
             end
-        end
-
-        ImGui.SameLine(ctx)
-        if ImGui.Button(ctx, "Cancel") then
             show_custom_tuning_window = false
+            custom_tuning_initialized = false
         end
-
-        ImGui.End(ctx)
+        ImGui.SameLine(ctx)
+        if ImGui.Button(ctx, "Cancel", 80, 0) then
+            show_custom_tuning_window = false
+            custom_tuning_initialized = false
+        end
     end
-    ImGui.PopStyleColor(ctx, 7)
-    ImGui.PopStyleVar(ctx, 2)
+    ImGui.End(ctx)
+    ImGui.PopStyleVar(ctx, 3)
+    ImGui.PopStyleColor(ctx, 9)
     ImGui.PopFont(ctx)
-    
-    if not opened then
-        show_custom_tuning_window = false
-    end
 end
 
 function CreateMIDIItem(insert_type)
@@ -408,13 +614,21 @@ function CreateMIDIItem(insert_type)
     local existing_item, existing_take = GetSelectedMIDIItem()
     local cursor_pos = r.GetCursorPosition()
     local ppq = 960
-    local timesig_num, timesig_denom = r.TimeMap_GetTimeSigAtTime(0, cursor_pos)
-    local beats = (timesig_num * 4) / timesig_denom
-    local duration_factor = (4 / tonumber(selected_duration)) / 4
-    local note_length = ppq * beats * duration_factor
+    local dur_val = tonumber(selected_duration) or 4
+    -- Length of a single note in quarter-notes (QN). E.g. 4 -> 1.0 QN, 8 -> 0.5 QN
+    local qn_per_note = 4 / dur_val
+    local note_length = ppq * qn_per_note  -- PPQ length per note
     
     if existing_item and insert_in_existing then
-        local item_end = cursor_pos + (beats * duration_factor) / 2
+        -- Move cursor by the musical length using tempo map
+        local cursor_qn = r.TimeMap2_timeToQN(0, cursor_pos)
+        local qn_total = qn_per_note
+        if insert_type == "sequence" then
+            local note_count = 0
+            for _ in input_sequence:gmatch("([^-]+)") do note_count = note_count + 1 end
+            qn_total = qn_per_note * note_count
+        end
+        local item_end = r.TimeMap2_QNToTime(0, cursor_qn + qn_total)
         r.SetEditCurPos(item_end, true, true)
         return existing_item, existing_take, note_length
     end
@@ -424,17 +638,20 @@ function CreateMIDIItem(insert_type)
         note_count = note_count + 1 
     end
     
-    local item_length
+    local cursor_qn = r.TimeMap2_timeToQN(0, cursor_pos)
+    local qn_total
     if insert_type == "sequence" then
-        item_length = ((beats * duration_factor) * note_count) / 2
+        qn_total = qn_per_note * note_count
     else
-        item_length = (beats * duration_factor) / 2
+        qn_total = qn_per_note
     end
-    
-    local item = r.CreateNewMIDIItemInProj(track, cursor_pos, cursor_pos + item_length)
+    local item_end = r.TimeMap2_QNToTime(0, cursor_qn + qn_total)
+
+    local item = r.CreateNewMIDIItemInProj(track, cursor_pos, item_end, false)
+    if not item then return end
     local take = r.GetActiveTake(item)
-    r.SetEditCurPos(cursor_pos + item_length, true, true)
-    
+    r.SetEditCurPos(item_end, true, true)
+
     return item, take, note_length
 end
 
@@ -486,27 +703,41 @@ end
 
 function DrawFingerLegend(ctx, startX, startY)
     local draw_list = ImGui.GetWindowDrawList(ctx)
-    local spacing = 25
-    local circle_size = is_xl_mode and 10 or 8
+    local spacing = is_xl_mode and 34 or 25
+    local circle_size = is_xl_mode and 10 or 8 -- circles already sized ok
     local labels = {
         "- Index finger",
         "- Middle finger", 
         "- Ring finger",
         "- Pinky"
     }
-    ImGui.DrawList_AddText(draw_list, startX, startY-30, 0xFFFFFFFF, "Finger positions:")
+
+    local line_h = ImGui.GetTextLineHeight(ctx)
+    local header_gap = is_xl_mode and (line_h + 16) or (line_h + 12)
+    local base_offset = is_xl_mode and 10 or 8
+    local baseY = startY + base_offset
+        do
+            local C = GetThemeColors()
+            ImGui.DrawList_AddText(draw_list, startX, baseY - header_gap, C.text, "Finger positions:")
+        end
     
     for i, label in ipairs(labels) do
-        local y = startY + (i-1) * spacing
+        local y = baseY + (i-1) * spacing
         local circle_x = startX + circle_size
         local circle_y = y
         ImGui.DrawList_AddCircleFilled(draw_list, circle_x, circle_y, circle_size, finger_colors[i])
         ImGui.DrawList_AddCircle(draw_list, circle_x, circle_y, circle_size, 0xFFFFFFFF)
-        local text_width = ImGui.CalcTextSize(ctx, tostring(i))
-        local text_x = circle_x - (text_width/2)
-        local text_y = circle_y - (ImGui.GetTextLineHeight(ctx)/2)
-        ImGui.DrawList_AddText(draw_list, text_x, text_y, 0x000000FF, tostring(i))
-        ImGui.DrawList_AddText(draw_list, startX + (circle_size * 2) + 10, y - 6, 0xFFFFFFFF, label)
+        local num_w = ImGui.CalcTextSize(ctx, tostring(i))
+        local num_x = circle_x - (num_w/2)
+        local num_y = circle_y - (line_h/2)
+    ImGui.DrawList_AddText(draw_list, num_x, num_y, 0x000000FF, tostring(i))
+
+        local label_x = startX + (circle_size * 2) + (is_xl_mode and 12 or 10)
+        local label_y = y - (line_h/2)
+        do
+            local C = GetThemeColors()
+            ImGui.DrawList_AddText(draw_list, label_x, label_y, C.text, label)
+        end
     end
 end
 
@@ -514,8 +745,8 @@ function InsertChord(take, frets, note_length, start_ppq)
     local ppq_pos = start_ppq or 0
     for string_num, fret in ipairs(frets) do
         if fret ~= "X" then
-            local note = base_notes[7-string_num] + tonumber(fret)
-            local midi_channel = string_num-1
+            local note = base_notes[(num_strings + 1) - string_num] + tonumber(fret)
+            local midi_channel = per_string_channels and (string_num-1) or 0
             r.MIDI_InsertNote(take, false, false, ppq_pos, ppq_pos + note_length, midi_channel, note, 100, false)
         end
     end
@@ -532,24 +763,36 @@ function InsertChord(take, frets, note_length, start_ppq)
 end
 
 function InsertSequence(take, notes, note_length, start_ppq)
-    local base_note = base_notes[selected_string]
     local position = start_ppq or 0
-    local note_count = 0 
     r.GetSetMediaItemTakeInfo_String(take, "P_NAME", notes, true)
-    for _ in notes:gmatch("([^-]+)") do 
-        note_count = note_count + 1 
-    end
-    local item = r.GetMediaItemTake_Item(take)
-    for note in notes:gmatch("([^-]+)") do
-        local midi_note = base_note + tonumber(note)
-        r.MIDI_InsertNote(take, false, false, position, position + note_length, 0, midi_note, 100, false)
-        position = position + note_length
+    for tok in (notes or ""):gmatch("([^-]+)") do
+        local s, f = tok:match("^(%d+)%s*:%s*(%-?%d+)$")
+        if s then
+            s = tonumber(s); f = tonumber(f)
+            if s and f and s >= 1 and s <= num_strings and f >= 0 and f <= 24 then
+                local base = base_notes[s]
+                local midi_note = base + f
+                local midi_channel = per_string_channels and (s - 1) or 0
+                r.MIDI_InsertNote(take, false, false, position, position + note_length, midi_channel, midi_note, 100, false)
+                position = position + note_length
+            end
+        else
+            local f2 = tonumber(tok)
+            if f2 and f2 >= 0 and f2 <= 24 then
+                local base = base_notes[selected_string]
+                local midi_note = base + f2
+                local midi_channel = per_string_channels and (selected_string - 1) or 0
+                r.MIDI_InsertNote(take, false, false, position, position + note_length, midi_channel, midi_note, 100, false)
+                position = position + note_length
+            end
+        end
     end
     r.MIDI_Sort(take)
 end
 
 function HandleChordSelection(string_num, fret, rightClick)
-    local frets={"X","X","X","X","X","X"}
+    local frets={}
+    for i=1,num_strings do frets[i] = "X" end
     local i=1
     for existing_fret in input_chord:gmatch("%S+") do
         frets[i]=existing_fret
@@ -588,9 +831,9 @@ function GetFretForString(chord, string_num, is_left_handed)
     end
     
     if is_left_handed then
-        return frets[7-string_num]  -- Omgekeerde volgorde voor linkshandig
+    return frets[(num_strings + 1) - string_num]  
     else
-        return frets[string_num]    -- Normale volgorde voor rechtshandig
+        return frets[string_num]    
     end
 end
 
@@ -598,15 +841,15 @@ end
 function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
     local mouseX,mouseY=ImGui.GetMousePos(ctx)
     local winX,winY=ImGui.GetWindowPos(ctx)
-    local num_strings=6
     local num_frets=12
     local string_spacing, fret_spacing
     
+    local spacing_den = math.max(1, num_strings-1)
     if isChord and chord_board_horizontal then
-        string_spacing = height/(num_strings-1)
+        string_spacing = height/spacing_den
         fret_spacing = width/num_frets
     else
-        string_spacing = isChord and width/(num_strings-1) or height/(num_strings-1)
+        string_spacing = isChord and width/spacing_den or height/spacing_den
         fret_spacing = isChord and height/num_frets or width/num_frets
     end
     
@@ -618,12 +861,12 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
 
     if isChord then
         if chord_board_horizontal then
-            for string_num=0,num_strings-1 do
+        for string_num=0,num_strings-1 do
                 local actual_string
                 if is_left_handed then
                     actual_string = string_num
                 else
-                    actual_string = 5 - string_num
+            actual_string = (num_strings - 1) - string_num
                 end
                 
                 local circle_y=string_num*string_spacing
@@ -637,7 +880,8 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                 
                 local distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
                 if distance<=hit_radius then
-                    local frets={"X","X","X","X","X","X"}
+                    local frets={}
+                    for i=1,num_strings do frets[i] = "X" end
                     local i=1
                     for existing_fret in input_chord:gmatch("%S+") do
                         frets[i]=existing_fret
@@ -681,13 +925,14 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
             end
         else
             for string_num=0,num_strings-1 do
-                local actual_string = is_left_handed and (5 - string_num) or string_num
+                local actual_string = is_left_handed and ((num_strings - 1) - string_num) or string_num
                 local circle_x=string_num*string_spacing
                 
                 local circle_y=0
                 local distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
                 if distance<=hit_radius then
-                    local frets={"X","X","X","X","X","X"}
+                    local frets={}
+                    for i=1,num_strings do frets[i] = "X" end
                     local i=1
                     for existing_fret in input_chord:gmatch("%S+") do
                         frets[i]=existing_fret
@@ -725,22 +970,31 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
             
             local distance=math.sqrt((mouseX-circle_x)^2+(mouseY-circle_y)^2)
             if distance<=hit_radius then
+                local s = actual_string + 1
                 if rightClick then
-                    local notes={}
-                    for note in input_sequence:gmatch("([^-]+)") do
-                        if tonumber(note) ~= 0 then
-                            table.insert(notes,note)
+                    local out, removed = {}, false
+                    for tok in (input_sequence or ""):gmatch("([^-]+)") do
+                        local ts, tf = tok:match("^(%d+)%s*:%s*(%-?%d+)$")
+                        if ts then
+                            if not removed and tonumber(ts)==s and tonumber(tf)==0 then
+                                removed = true
+                            else
+                                table.insert(out, tok)
+                            end
+                        else
+                            if not removed and tonumber(tok)==0 and s==selected_string then
+                                removed = true
+                            else
+                                table.insert(out, tok)
+                            end
                         end
                     end
-                    input_sequence=table.concat(notes,"-")
+                    input_sequence = table.concat(out, "-")
                 else
-                    if input_sequence=="" then
-                        input_sequence="0"
-                    else
-                        input_sequence=input_sequence.."-0"
-                    end
+                    local token = tostring(s) .. ":0"
+                    if input_sequence=="" then input_sequence=token else input_sequence=input_sequence.."-"..token end
                 end
-                selected_string=actual_string+1
+                selected_string=s
                 return true
             end
             
@@ -754,68 +1008,73 @@ function HandleFretboardClick(ctx,startX,startY,width,height,isChord,rightClick)
                 
                 distance=math.sqrt((mouseX-fret_position)^2+(mouseY-circle_y)^2)
                 if distance<=hit_radius then
+                    local s = actual_string + 1
+                    local f = is_mirror_mode and (math.floor((width - mouseX) / fret_spacing) + 1) or fret
                     if rightClick then
-                        local notes = {}
-                        local removed_one = false
-                        for note in input_sequence:gmatch("([^-]+)") do
-                            if tonumber(note) == fret and not removed_one then
-                                removed_one = true
+                        local out, removed = {}, false
+                        for tok in (input_sequence or ""):gmatch("([^-]+)") do
+                            local ts, tf = tok:match("^(%d+)%s*:%s*(%-?%d+)$")
+                            if ts then
+                                if not removed and tonumber(ts)==s and tonumber(tf)==f then
+                                    removed = true
+                                else
+                                    table.insert(out, tok)
+                                end
                             else
-                                table.insert(notes, note)
+                                if not removed and tonumber(tok)==f and s==selected_string then
+                                    removed = true
+                                else
+                                    table.insert(out, tok)
+                                end
                             end
                         end
-                        input_sequence = table.concat(notes, "-")
+                        input_sequence = table.concat(out, "-")
                     else
-                        local mirror_fret = is_mirror_mode and math.floor((width - mouseX) / fret_spacing) + 1 or fret
-                        if mirror_fret >= 1 and mirror_fret <= num_frets then
-                            if input_sequence == "" then
-                                input_sequence = tostring(mirror_fret)
-                            else
-                                input_sequence = input_sequence.."-"..tostring(mirror_fret)
-                            end
-                        end
+                        local token = tostring(s) .. ":" .. tostring(f)
+                        if input_sequence=="" then input_sequence=token else input_sequence=input_sequence.."-"..token end
                     end
-                    selected_string=actual_string+1
+                    selected_string=s
                     return true
                 end
             end
         end
-        
     end
     return false
 end
 
 
 
-function DrawFretMarkers(draw_list, startX, startY, spacing, orientation)
+function DrawFretMarkers(draw_list, startX, startY, spacing, orientation, fret_len, strings_dim, is_mirror)
     local fret_markers = {3,5,7,9,12}
     local marker_radius = is_xl_mode and 5 or 4
-    local marker_color = 0xFFFF0033  
-    
-    local marker_pos
+    local marker_color = 0xFFFFFFFF
+    local double_off = (is_xl_mode and 7 or 6)
+
     if orientation == "vertical" then
-        marker_pos = startX + (spacing * 2.4)  
-    else
-        marker_pos = startY + (spacing * 2.4) 
-    end
-    
-    for _, fret in ipairs(fret_markers) do
-        local pos
-        if orientation == "vertical" then
-            pos = startY + (fret*spacing) - (spacing/2)
+        local center_x = startX + (strings_dim / 2)
+        for _, fret in ipairs(fret_markers) do
+            local y = startY + (fret * spacing) - (spacing / 2)
             if fret == 12 then
-                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos-6, marker_radius, marker_color)
-                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos+6, marker_radius, marker_color)
+                ImGui.DrawList_AddCircleFilled(draw_list, center_x - double_off, y, marker_radius, marker_color)
+                ImGui.DrawList_AddCircleFilled(draw_list, center_x + double_off, y, marker_radius, marker_color)
             else
-                ImGui.DrawList_AddCircleFilled(draw_list, marker_pos, pos, marker_radius, marker_color)
+                ImGui.DrawList_AddCircleFilled(draw_list, center_x, y, marker_radius, marker_color)
             end
-        else
-            pos = startX + (fret*spacing) - (spacing/2)
-            if fret == 12 then
-                ImGui.DrawList_AddCircleFilled(draw_list, pos-6, marker_pos, marker_radius, marker_color)
-                ImGui.DrawList_AddCircleFilled(draw_list, pos+6, marker_pos, marker_radius, marker_color)
+        end
+    else
+        local center_y = startY + (strings_dim / 2)
+        for _, fret in ipairs(fret_markers) do
+            local x
+            if is_mirror then
+                x = startX + fret_len - (fret * spacing) + (spacing / 2)
             else
-                ImGui.DrawList_AddCircleFilled(draw_list, pos, marker_pos, marker_radius, marker_color)
+                x = startX + (fret * spacing) - (spacing / 2)
+            end
+            if fret == 12 then
+                ImGui.DrawList_AddCircleFilled(draw_list, x, center_y - double_off, marker_radius, marker_color)
+                ImGui.DrawList_AddCircleFilled(draw_list, x, center_y + double_off, marker_radius, marker_color)
+            else
+                ImGui.DrawList_AddCircleFilled(draw_list, x, center_y, marker_radius, marker_color)
             end
         end
     end
@@ -832,14 +1091,36 @@ function DrawFretboard(ctx,startX,startY,width,height)
     
     startX = win_x + startX
     startY = win_y + startY
-    local num_strings = 6
     local num_frets = 12
-    local string_spacing = height/(num_strings-1)
+    local string_spacing = height/math.max(1, num_strings-1)
     local fret_spacing = width/num_frets
+
+    do
+        local pad_x = is_xl_mode and 8 or 6
+        local pad_y = is_xl_mode and 10 or 8
+        local bg_col = 0x4A2F1EFF   -- warm brown
+        local brd_col = 0x2E1E14FF  -- darker border
+        ImGui.DrawList_AddRectFilled(
+            draw_list,
+            startX - pad_x,
+            startY - pad_y,
+            startX + width + pad_x,
+            startY + height + pad_y,
+            bg_col
+        )
+        ImGui.DrawList_AddRect(
+            draw_list,
+            startX - pad_x,
+            startY - pad_y,
+            startX + width + pad_x,
+            startY + height + pad_y,
+            brd_col,
+            6.0
+        )
+    end
     
-    DrawFretMarkers(draw_list, startX, startY, fret_spacing, "horizontal")
+    DrawFretMarkers(draw_list, startX, startY, fret_spacing, "horizontal", width, height, is_mirror_mode)
  
-    -- Teken snaren met dikte
     for i=0,num_strings-1 do
         local string_thickness = string_thicknesses[i+1]
         local y
@@ -848,13 +1129,15 @@ function DrawFretboard(ctx,startX,startY,width,height)
         else
             y = startY + ((num_strings - 1 - i) * string_spacing)
         end
-        ImGui.DrawList_AddLine(draw_list,startX,y,startX+width,y,0xFFFFFFFF,string_thickness)
+        ImGui.DrawList_AddLine(draw_list,startX,y,startX+width,y,0xF0F0F0FF,string_thickness)
         local note_name = GetNoteName(base_notes[i+1])
-        ImGui.DrawList_AddText(draw_list,startX-25,y-6,0xFFFFFFFF,note_name)
+        do
+            local C = GetThemeColors()
+            ImGui.DrawList_AddText(draw_list,startX-25,y-6,C.text,note_name)
+        end
     end
 
     
-    -- Teken frets en nummers
     for i=0,num_frets do
         local x
         if is_mirror_mode then
@@ -864,9 +1147,12 @@ function DrawFretboard(ctx,startX,startY,width,height)
         end
         
         if i == 0 then
+            ImGui.DrawList_AddRectFilled(draw_list, x - 1.5, startY, x + 1.5, startY + height, 0xE6E6E6FF)
             ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,4.0)
-            ImGui.DrawList_AddText(draw_list,x-3,startY+height+10,0xFFFFFFFF,"0")
+            do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list,x-3,startY+height+10,C.text,"0") end
         else
+            local prev_x = is_mirror_mode and (x + fret_spacing) or (x - fret_spacing)
+            ImGui.DrawList_AddRectFilled(draw_list, prev_x, startY, x, startY+height, 0x00000020)
             ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,1.0)
             local text_x
             if is_mirror_mode then
@@ -874,7 +1160,7 @@ function DrawFretboard(ctx,startX,startY,width,height)
             else
                 text_x = x - (fret_spacing/2) - 3
             end
-            ImGui.DrawList_AddText(draw_list,text_x,startY+height+10,0xFFFFFFFF,tostring(i))
+            do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list,text_x,startY+height+10,C.text,tostring(i)) end
         end
     end
     
@@ -908,12 +1194,17 @@ function DrawFretboard(ctx,startX,startY,width,height)
         HandleFretboardClick(ctx,startX-win_x,startY-win_y,width,height,false,true)
     end
 
-    -- Teken geselecteerde noten
-    local notes = input_sequence:gmatch("([^-]+)")
-    local string_idx = selected_string-1
-    for fret in notes do
-        local fret_num = tonumber(fret)
-        if fret_num then
+    for tok in (input_sequence or ""):gmatch("([^-]+)") do
+        local s, f = tok:match("^(%d+)%s*:%s*(%-?%d+)$")
+        local use_s, fret_num
+        if s then
+            use_s = tonumber(s)
+            fret_num = tonumber(f)
+        else
+            use_s = selected_string
+            fret_num = tonumber(tok)
+        end
+        if use_s and fret_num then
             local note_x
             if is_mirror_mode then
                 if fret_num == 0 then
@@ -928,11 +1219,12 @@ function DrawFretboard(ctx,startX,startY,width,height)
                     note_x = startX + (fret_num*fret_spacing) - (fret_spacing/2)
                 end
             end
+            local idx = use_s - 1
             local note_y
             if is_left_handed then
-                note_y = startY + (string_idx*string_spacing)
+                note_y = startY + (idx*string_spacing)
             else
-                note_y = startY + ((num_strings - 1 - string_idx)*string_spacing)
+                note_y = startY + ((num_strings - 1 - idx)*string_spacing)
             end
             ImGui.DrawList_AddCircleFilled(draw_list, note_x, note_y, circle_radius + 1, 0xFF0000FF)
         end
@@ -988,24 +1280,74 @@ function DrawChordboard(ctx,startX,startY,width,height)
         startX = win_x + startX + 15
     end
     startY = win_y+startY
-    local num_strings = 6
     local num_frets = 12
 
     if chord_board_horizontal then
         local temp = width
         width = height * 2.5
         height = temp
-        string_spacing = height/(num_strings-1)
+        string_spacing = height/math.max(1, num_strings-1)
         fret_spacing = width/num_frets
+
+        do
+            local pad_x = is_xl_mode and 8 or 6
+            local pad_y = is_xl_mode and 10 or 8
+            local bg_col = 0x4A2F1EFF   -- warm brown
+            local brd_col = 0x2E1E14FF  -- darker border
+            ImGui.DrawList_AddRectFilled(
+                draw_list,
+                startX - pad_x,
+                startY - pad_y,
+                startX + width + pad_x,
+                startY + height + pad_y,
+                bg_col
+            )
+            ImGui.DrawList_AddRect(
+                draw_list,
+                startX - pad_x,
+                startY - pad_y,
+                startX + width + pad_x,
+                startY + height + pad_y,
+                brd_col,
+                6.0
+            )
+        end
     else
-        string_spacing = width/(num_strings-1)
+        string_spacing = width/math.max(1, num_strings-1)
         height = height * 2.5
         fret_spacing = height/num_frets
+
+        do
+            local pad_x = is_xl_mode and 8 or 6
+            local pad_y = is_xl_mode and 10 or 8
+            local bg_col = 0x4A2F1EFF   -- warm brown
+            local brd_col = 0x2E1E14FF  -- darker border
+            ImGui.DrawList_AddRectFilled(
+                draw_list,
+                startX - pad_x,
+                startY - pad_y,
+                startX + width + pad_x,
+                startY + height + pad_y,
+                bg_col
+            )
+            ImGui.DrawList_AddRect(
+                draw_list,
+                startX - pad_x,
+                startY - pad_y,
+                startX + width + pad_x,
+                startY + height + pad_y,
+                brd_col,
+                6.0
+            )
+        end
     end
     
-    DrawFretMarkers(draw_list, startX, startY, fret_spacing, chord_board_horizontal and "horizontal" or "vertical")
+    if chord_board_horizontal then
+        DrawFretMarkers(draw_list, startX, startY, fret_spacing, "horizontal", width, height, is_mirror_mode)
+    else
+        DrawFretMarkers(draw_list, startX, startY, fret_spacing, "vertical", height, width, false)
+    end
 
-    -- Draw strings
     for i=0,num_strings-1 do
         local string_thickness = string_thicknesses[i+1]
         
@@ -1016,9 +1358,9 @@ function DrawChordboard(ctx,startX,startY,width,height)
             else
                 y = startY + ((num_strings - 1 - i) * string_spacing)
             end
-            ImGui.DrawList_AddLine(draw_list, startX, y, startX+width, y, 0xFFFFFFFF, string_thickness)
+            ImGui.DrawList_AddLine(draw_list, startX, y, startX+width, y, 0xF0F0F0FF, string_thickness)
             local note_name = GetNoteName(base_notes[num_strings-i])
-            ImGui.DrawList_AddText(draw_list, startX-25, y-6, 0xFFFFFFFF, note_name)
+            do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list, startX-25, y-6, C.text, note_name) end
         else  
             local x
             if is_left_handed then
@@ -1028,13 +1370,12 @@ function DrawChordboard(ctx,startX,startY,width,height)
             end
             
             local text_y_offset = is_xl_mode and -30 or -20
-            ImGui.DrawList_AddLine(draw_list, x, startY, x, startY+height, 0xFFFFFFFF, string_thickness)
+            ImGui.DrawList_AddLine(draw_list, x, startY, x, startY+height, 0xF0F0F0FF, string_thickness)
             local note_name = GetNoteName(base_notes[num_strings-i])
-            ImGui.DrawList_AddText(draw_list, x-5, startY + text_y_offset, 0xFFFFFFFF, note_name)
+            do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list, x-5, startY + text_y_offset, C.text, note_name) end
         end
     end
 
-    -- Draw frets and numbers
     for i=0,num_frets do
         if chord_board_horizontal then
             local x
@@ -1046,9 +1387,21 @@ function DrawChordboard(ctx,startX,startY,width,height)
             local fret_number_y_offset = is_xl_mode and 12 or 10
             
             if i == 0 then
+                local nut_thick = math.max(3.5, (is_xl_mode and 3.5 or 3.0))
+                ImGui.DrawList_AddRectFilled(draw_list, x - 1.5, startY, x + 1.5, startY + height, 0xE6E6E6FF)
                 ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,4.0)
-                ImGui.DrawList_AddText(draw_list,x-3,startY+height+fret_number_y_offset,0xFFFFFFFF,"0")
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list,x-3,startY+height+fret_number_y_offset,C.text,"0") end
             else
+                local prev_x
+                if is_mirror_mode then
+                    prev_x = x + fret_spacing
+                else
+                    prev_x = x - fret_spacing
+                end
+                local shade_col = 0x00000020
+                if prev_x and ((is_mirror_mode and prev_x >= x) or (not is_mirror_mode and prev_x <= x)) then
+                    ImGui.DrawList_AddRectFilled(draw_list, prev_x, startY, x, startY+height, shade_col)
+                end
                 ImGui.DrawList_AddLine(draw_list,x,startY,x,startY+height,0xFFFFFFFF,1.0)
                 local text_x
                 if is_mirror_mode then
@@ -1056,21 +1409,23 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 else
                     text_x = x - (fret_spacing/2) - 3
                 end
-                ImGui.DrawList_AddText(draw_list,text_x,startY+height+fret_number_y_offset,0xFFFFFFFF,tostring(i))
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list,text_x,startY+height+fret_number_y_offset,C.text,tostring(i)) end
             end
         else
             local y = startY+(i*fret_spacing)
             if i == 0 then
+                ImGui.DrawList_AddRectFilled(draw_list, startX, y - 1.5, startX + width, y + 1.5, 0xE6E6E6FF)
                 ImGui.DrawList_AddLine(draw_list,startX,y,startX+width,y,0xFFFFFFFF,4.0)
-                ImGui.DrawList_AddText(draw_list,startX-20,y-8,0xFFFFFFFF,"0")
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list,startX-20,y-8,C.text,"0") end
             else
+                local prev_y = y - fret_spacing
+                ImGui.DrawList_AddRectFilled(draw_list, startX, prev_y, startX + width, y, 0x00000020)
                 ImGui.DrawList_AddLine(draw_list,startX,y,startX+width,y,0xFFFFFFFF,1.0)
-                ImGui.DrawList_AddText(draw_list,startX-20,y-8,0xFFFFFFFF,tostring(i))
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list,startX-20,y-8,C.text,tostring(i)) end
             end
         end
     end
 
-    -- Draw empty circles
     local circle_radius = is_xl_mode and 9 or 6
     for string_num=0,num_strings-1 do
         for fret=0,num_frets do
@@ -1136,7 +1491,6 @@ function DrawChordboard(ctx,startX,startY,width,height)
     local fingers = chord_fingers[chord_shape]
     local finger_idx = 1
 
-    -- Draw barre chords and finger positions
     for string_num = 1, num_strings do
         local display_string_num = is_left_handed and (num_strings - string_num + 1) or string_num
 
@@ -1238,11 +1592,11 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 if is_left_handed then
                     y = startY + ((string_num-1) * string_spacing)
                 else
-                    y = startY + ((6-string_num) * string_spacing)
+                    y = startY + (((num_strings) - string_num) * string_spacing)
                 end
                 x = startX
                 if is_mirror_mode then
-                    x = startX + width  -- Verplaatst de 0 en X markers naar de rechterkant
+                    x = startX + width  
                 end
             else
                 if is_left_handed then
@@ -1299,14 +1653,16 @@ function DrawChordboard(ctx,startX,startY,width,height)
 
     if chord_board_horizontal then
         local bottom_y = startY + height + 60
-        DrawFingerLegend(ctx, startX, bottom_y)
+        local content_min_x, _ = ImGui.GetWindowContentRegionMin(ctx)
+        local left_abs_x = win_x + content_min_x
+    DrawFingerLegend(ctx, left_abs_x + 5, bottom_y)
         
         if chord_name and chord_name ~= "(?)" or status_message ~= "" then
             local info_x = startX + 185
             local info_y = bottom_y    
             local box_padding = 10
             local box_width = 120
-            local box_height = 50
+            local box_height = 60
             local is_barre = IsBarre(chord_shape)
             local chord_type = is_barre and "Barre Chord: " or "Chord: "
             
@@ -1325,47 +1681,55 @@ function DrawChordboard(ctx,startX,startY,width,height)
                 0x333333FF)
             
             if status_message ~= "" then
-                ImGui.DrawList_AddText(draw_list, info_x, info_y, status_color, status_message)
-                status_message = ""
+                local line_height = 15
+                local current_y = info_y
+                for line in status_message:gmatch("[^\r\n]+") do
+                    ImGui.DrawList_AddText(draw_list, info_x, current_y, status_color, line)
+                    current_y = current_y + line_height
+                end
             else
-                ImGui.DrawList_AddText(draw_list, info_x, info_y, 0xFFFFFFFF, chord_type)
-                ImGui.DrawList_AddText(draw_list, info_x, info_y, 0xFFFFFFFF, chord_type)
-                ImGui.DrawList_AddText(draw_list, info_x, info_y + 20, 0xFFFFFFFF, chord_name)
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list, info_x, info_y, C.text, chord_type) end
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list, info_x, info_y, C.text, chord_type) end
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list, info_x, info_y + 20, C.text, chord_name) end
             end
         end
     else
-        DrawFingerLegend(ctx, startX + width + 50, startY + 30)
-        
+        local bottom_y = startY + height + 60
+        DrawFingerLegend(ctx, startX + 5, bottom_y)
+
         if chord_name and chord_name ~= "(?)" or status_message ~= "" then
-            local legend_height = 25 * 4
-            local chord_info_y = startY + 20 + legend_height + 20
-            local info_x = startX + width + 50
+            local info_x = startX + (is_xl_mode and 235 or 215)
+            local info_y = bottom_y
             local box_padding = 10
-            local box_width = 120
-            local box_height = 50
+            local box_width = is_xl_mode and 140 or 130
+            local box_height = is_xl_mode and 60 or 55
             local is_barre = IsBarre(chord_shape)
             local chord_type = is_barre and "Barre Chord: " or "Chord: "
-            
+
             ImGui.DrawList_AddRectFilled(draw_list,
                 info_x - box_padding,
-                chord_info_y - box_padding,
+                info_y - box_padding,
                 info_x + box_width,
-                chord_info_y + box_height,
+                info_y + box_height,
                 0x1A1A1AFF)
-            
+
             ImGui.DrawList_AddRect(draw_list,
                 info_x - box_padding,
-                chord_info_y - box_padding,
+                info_y - box_padding,
                 info_x + box_width,
-                chord_info_y + box_height,
+                info_y + box_height,
                 0x333333FF)
-            
+
             if status_message ~= "" then
-                ImGui.DrawList_AddText(draw_list, info_x, chord_info_y, status_color, status_message)
-                status_message = ""
+                local line_height = 15
+                local current_y = info_y
+                for line in status_message:gmatch("[^\r\n]+") do
+                    ImGui.DrawList_AddText(draw_list, info_x, current_y, status_color, line)
+                    current_y = current_y + line_height
+                end
             else
-                ImGui.DrawList_AddText(draw_list, info_x, chord_info_y, 0xFFFFFFFF, chord_type)
-                ImGui.DrawList_AddText(draw_list, info_x, chord_info_y + 20, 0xFFFFFFFF, chord_name)
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list, info_x, info_y, C.text, chord_type) end
+                do local C = GetThemeColors(); ImGui.DrawList_AddText(draw_list, info_x, info_y + 20, C.text, chord_name) end
             end
         end
     end
@@ -1375,13 +1739,7 @@ end
 
 ------------------------------------------------------------------------
 function MainLoop()
-    local min_width = is_xl_mode and 510 or 420  
-    if show_sequence then
-        min_width = math.max(min_width, is_xl_mode and 510 or 420)
-    end
-    if show_chord then
-        min_width = math.max(min_width, is_xl_mode and 510 or 420)
-    end
+    local min_width = is_xl_mode and 455 or 340  
 
     local window_flags = 
     ImGui.WindowFlags_NoTitleBar |
@@ -1396,9 +1754,17 @@ function MainLoop()
         window_flags = window_flags | ImGui.WindowFlags_NoMove
     end
 
-    ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowRounding, 12.0)
-    ImGui.SetNextWindowSizeConstraints(ctx, min_width, 0, min_width, 2000)
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_WindowRounding, ui_window_rounding)
+    if pending_instant_resize then
+        ImGui.SetNextWindowSizeConstraints(ctx, min_width, 0, min_width, 2000)
+    else
+        ImGui.SetNextWindowSizeConstraints(ctx, min_width, 0, min_width + 1000, 2000)
+    end
+    local _Cwin = GetThemeColors()
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_Alpha, clamp01(ui_window_alpha))
+    ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg, _Cwin.window_bg)
     local visible, open = ImGui.Begin(ctx, 'Guitar MIDI Input', true, window_flags)
+    pending_instant_resize = false
 
     if GTR2MIDI_esc_key() then
         open = false
@@ -1406,24 +1772,35 @@ function MainLoop()
 
     if visible then
         
-        ImGui.PushFont(ctx, font)
-        ImGui.PushStyleColor(ctx, ImGui.Col_WindowBg, 0x000000FF)
-        ImGui.PushStyleColor(ctx, ImGui.Col_Button, 0x1A1A1AFF)
-        ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered, 0x333333FF)
-        ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive, 0x404040FF)
-        ImGui.PushStyleColor(ctx, ImGui.Col_FrameBg, 0x1A1A1AFF)
-        ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgHovered, 0x333333FF)
-        ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgActive, 0x404040FF)
+    ImGui.PushFont(ctx, font)
+    local C = GetThemeColors()
+    ImGui.PushStyleColor(ctx, ImGui.Col_Button, C.button)
+    ImGui.PushStyleColor(ctx, ImGui.Col_ButtonHovered, C.button_hovered)
+    ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive, C.button_active)
+    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBg, C.frame_bg)
+    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgHovered, C.frame_bg_hovered)
+    ImGui.PushStyleColor(ctx, ImGui.Col_FrameBgActive, C.frame_bg_active)
+    ImGui.PushStyleColor(ctx, ImGui.Col_Text, C.text)
+    ImGui.PushStyleColor(ctx, ImGui.Col_PopupBg, C.popup_bg)
         
-        ImGui.PushStyleVar(ctx, ImGui.StyleVar_FrameRounding, 6.0)
+    ImGui.PushStyleVar(ctx, ImGui.StyleVar_FrameRounding, ui_button_rounding)
         
-        -- Header controls
         local window_width = ImGui.GetWindowWidth(ctx)
+        -- VERWIJDERD: Automatische breedte detectie die het venster liet groeien maar niet krimpen
+        -- if is_xl_mode then
+        --     if (not last_window_width_xl) or window_width > last_window_width_xl then
+        --         last_window_width_xl = window_width
+        --     end
+        -- else
+        --     if (not last_window_width_normal) or window_width > last_window_width_normal then
+        --         last_window_width_normal = window_width
+        --     end
+        -- end
  
-        ImGui.PushStyleColor(ctx, ImGui.Col_Text, 0xFF0000FF)
+    ImGui.PushStyleColor(ctx, ImGui.Col_Text, 0xFF0000FF)
         ImGui.SetCursorPosY(ctx, 8)
         ImGui.Text(ctx, "TK")
-        ImGui.PopStyleColor(ctx)
+    ImGui.PopStyleColor(ctx)
         ImGui.SameLine(ctx)
         ImGui.Text(ctx, "GTR2MIDI")
         ImGui.SameLine(ctx)
@@ -1431,7 +1808,6 @@ function MainLoop()
         
        
       
-        -- NoMove button (geel)
         ImGui.SameLine(ctx)
         ImGui.SetCursorPosY(ctx, 7)
         ImGui.SetCursorPosX(ctx, window_width - 57)
@@ -1443,7 +1819,6 @@ function MainLoop()
         end
         ImGui.PopStyleColor(ctx, 3)
 
-        -- Pin button
         ImGui.SameLine(ctx)
         ImGui.SetCursorPosY(ctx, 7)
         ImGui.SetCursorPosX(ctx, window_width - 40)
@@ -1455,7 +1830,6 @@ function MainLoop()
         end
         ImGui.PopStyleColor(ctx, 3)
 
-        -- Close button
         ImGui.SameLine(ctx)
         ImGui.SetCursorPosY(ctx, 7)
         ImGui.SetCursorPosX(ctx, window_width - 23)
@@ -1489,44 +1863,77 @@ function MainLoop()
             end
         end
         
-        ImGui.SameLine(ctx)
-        if show_chord then
-            local changed, new_horizontal = ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
-            if changed then
-                chord_board_horizontal = new_horizontal
-                r.SetExtState("TK_GTR2MIDI", "chord_board_horizontal", tostring(new_horizontal), true)
+    ImGui.SameLine(ctx)
+    local parts = {}
+        if chord_board_horizontal then table.insert(parts, "Horizontal") end
+        if is_left_handed then table.insert(parts, "Left") end
+        if is_mirror_mode then table.insert(parts, "Mirror") end
+        if is_xl_mode then table.insert(parts, "XL") end
+        local preview = (#parts > 0) and table.concat(parts, " | ") or "Default"
+    local content_min_x, _ = ImGui.GetWindowContentRegionMin(ctx)
+    local content_max_x, _ = ImGui.GetWindowContentRegionMax(ctx)
+    local view_combo_width = is_xl_mode and 180 or 140
+    local gear_width = is_xl_mode and 26 or 22
+    local gap = is_xl_mode and 6 or 4
+    ImGui.SetCursorPosX(ctx, content_max_x - view_combo_width - gear_width - gap)
+    ImGui.PushItemWidth(ctx, view_combo_width)
+    if ImGui.BeginCombo(ctx, "##view", preview) then
+            if show_chord then
+                local changed, new_horizontal = ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
+                if changed then
+                    chord_board_horizontal = new_horizontal
+                    r.SetExtState("TK_GTR2MIDI", "chord_board_horizontal", tostring(new_horizontal), true)
+                end
+            else
+                ImGui.PushStyleVar(ctx, ImGui.StyleVar_Alpha, 0.5)
+                ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
+                ImGui.PopStyleVar(ctx)
             end
-        else
-            ImGui.PushStyleVar(ctx, ImGui.StyleVar_Alpha, 0.5)
-            ImGui.Checkbox(ctx, "Horizontal", chord_board_horizontal)
-            ImGui.PopStyleVar(ctx)
-        end
-        ImGui.SameLine(ctx)
-        local left_changed, new_left_handed = ImGui.Checkbox(ctx, "Left Hand", is_left_handed)
-        if left_changed then
-            is_left_handed = new_left_handed
-            r.SetExtState("TK_GTR2MIDI", "is_left_handed", tostring(new_left_handed), true)
-        end
-        ImGui.SameLine(ctx)
-        local mirror_changed, new_mirror_mode = ImGui.Checkbox(ctx, "Mirror", is_mirror_mode)
-        if mirror_changed then
-            is_mirror_mode = new_mirror_mode
-            r.SetExtState("TK_GTR2MIDI", "is_mirror_mode", tostring(new_mirror_mode), true)
+
+            local left_changed, new_left_handed = ImGui.Checkbox(ctx, "Left Handed", is_left_handed)
+            if left_changed then
+                is_left_handed = new_left_handed
+                r.SetExtState("TK_GTR2MIDI", "is_left_handed", tostring(new_left_handed), true)
+            end
+
+            local mirror_changed, new_mirror_mode = ImGui.Checkbox(ctx, "Mirror", is_mirror_mode)
+            if mirror_changed then
+                is_mirror_mode = new_mirror_mode
+                r.SetExtState("TK_GTR2MIDI", "is_mirror_mode", tostring(new_mirror_mode), true)
+            end
+
+            local xl_changed, new_xl_mode = ImGui.Checkbox(ctx, "XL", is_xl_mode)
+            if xl_changed then
+                is_xl_mode = new_xl_mode
+                r.SetExtState("TK_GTR2MIDI", "is_xl_mode", tostring(is_xl_mode), true)
+                font = is_xl_mode and font_large or font_small
+                pending_instant_resize = true
+            end
+            ImGui.EndCombo(ctx)
+        
+        ImGui.PopItemWidth(ctx)
         end
 
-        ImGui.SameLine(ctx)
-        local xl_changed, new_xl_mode = ImGui.Checkbox(ctx, "XL", is_xl_mode)
-        if xl_changed then
-            is_xl_mode = new_xl_mode
-            r.SetExtState("TK_GTR2MIDI", "is_xl_mode", tostring(is_xl_mode), true)
-            font = is_xl_mode and font_large or font_small
+    ImGui.SameLine(ctx)
+    ImGui.SetCursorPosX(ctx, content_max_x - gear_width)
+    if ImGui.Button(ctx, is_xl_mode and "⚙" or "⚙", gear_width, 0) then
+        if show_settings_window then
+            show_settings_window = false
+        else
+            show_settings_window = true
+            local mx, my = ImGui.GetMousePos(ctx)
+            settings_next_pos = { x = mx, y = my + (is_xl_mode and 8 or 6) }
         end
+    end
+
+    local needed_px = is_xl_mode and 140 or 120
+    local avail_px = ImGui.GetWindowWidth(ctx) - ImGui.GetCursorPosX(ctx) - needed_px
 
         ImGui.Separator(ctx)
         local Scaling_XL = 1.3
         local base_button_width = 30
         local base_combo_width = 58
-        local base_tuning_width = 160
+        local base_tuning_width = 210 -- Increased from 190
         local base_transpose_button = 18
 
         -- Scale values based on XL mode
@@ -1536,60 +1943,57 @@ function MainLoop()
         local transpose_button_size = is_xl_mode and (base_transpose_button * Scaling_XL) or base_transpose_button
 
         if show_sequence or show_chord then
-            ImGui.Text(ctx, "Duration:")
-            ImGui.SameLine(ctx)
-            local active_color = 0xFF0000FF
-            
-            -- Duration buttons
-            if selected_duration == "1" then
-                ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/1", button_width) then selected_duration = "1" end
-                ImGui.PopStyleColor(ctx)
-            else
-                if ImGui.Button(ctx, "1/1", button_width) then selected_duration = "1" end
-            end
-            
-            ImGui.SameLine(ctx)
-            if selected_duration == "2" then
-                ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/2", button_width) then selected_duration = "2" end
-                ImGui.PopStyleColor(ctx)
-            else
-                if ImGui.Button(ctx, "1/2", button_width) then selected_duration = "2" end
-            end
-            
-            ImGui.SameLine(ctx)
-            if selected_duration == "4" then
-                ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/4", button_width) then selected_duration = "4" end
-                ImGui.PopStyleColor(ctx)
-            else
-                if ImGui.Button(ctx, "1/4", button_width) then selected_duration = "4" end
-            end
-            
-            ImGui.SameLine(ctx)
-            if selected_duration == "8" then
-                ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/8", button_width) then selected_duration = "8" end
-                ImGui.PopStyleColor(ctx)
-            else
-                if ImGui.Button(ctx, "1/8", button_width) then selected_duration = "8" end
-            end
-            
-            ImGui.SameLine(ctx)
-            if selected_duration == "16" then
-                ImGui.PushStyleColor(ctx, ImGui.Col_Button, active_color)
-                if ImGui.Button(ctx, "1/16", button_width) then selected_duration = "16" end
-                ImGui.PopStyleColor(ctx)
-            else
-                if ImGui.Button(ctx, "1/16", button_width) then selected_duration = "16" end
-            end
+            local content_min_x, _ = ImGui.GetWindowContentRegionMin(ctx)
+            local content_max_x, _ = ImGui.GetWindowContentRegionMax(ctx)
+            local inner_w = content_max_x - content_min_x
+            local gap = 6
+            local col_w = (inner_w - (2 * gap)) / 3
+            local col1_x = content_min_x
+            local col2_x = content_min_x + col_w + gap
+            local col3_x = content_min_x + (2 * (col_w + gap))
+            local row_y = ImGui.GetCursorPosY(ctx)
 
-            -- Transpose controls
-            ImGui.SameLine(ctx)
-            ImGui.Text(ctx, "Trans:")
-            ImGui.SameLine(ctx)
-            ImGui.PushItemWidth(ctx, combo_width)
+            -- Column 1: Duration
+            local label1 = "Duration:"
+            ImGui.SetCursorPos(ctx, col1_x, row_y)
+            ImGui.Text(ctx, label1)
+            local label1_w = ImGui.CalcTextSize(ctx, label1)
+            local label_gap = 6
+            ImGui.SetCursorPos(ctx, col1_x + label1_w + label_gap, row_y)
+            ImGui.PushItemWidth(ctx, col_w - (label1_w + label_gap))
+            local preview_duration = (selected_duration == "1" and "1/1")
+                or (selected_duration == "2" and "1/2")
+                or (selected_duration == "4" and "1/4")
+                or (selected_duration == "8" and "1/8")
+                or (selected_duration == "16" and "1/16")
+                or "1/4"
+            if ImGui.BeginCombo(ctx, "##duration", preview_duration) then
+                local dur_opts = {
+                    {label = "1/1", val = "1"},
+                    {label = "1/2", val = "2"},
+                    {label = "1/4", val = "4"},
+                    {label = "1/8", val = "8"},
+                    {label = "1/16", val = "16"}
+                }
+                for _, opt in ipairs(dur_opts) do
+                    local selected = (selected_duration == opt.val)
+                    if ImGui.Selectable(ctx, opt.label, selected) then
+                        selected_duration = opt.val
+                    end
+                end
+                ImGui.EndCombo(ctx)
+            end
+            ImGui.PopItemWidth(ctx)
+
+            -- Column 2: Transpose (combo + +/- buttons)
+            local label2 = "Trans:"
+            ImGui.SetCursorPos(ctx, col2_x, row_y)
+            ImGui.Text(ctx, label2)
+            local label2_w = ImGui.CalcTextSize(ctx, label2)
+            local trans_combo_w = col_w - (label2_w + label_gap) - ((transpose_button_size * 2) + (gap * 2))
+            if trans_combo_w < 40 then trans_combo_w = 40 end
+            ImGui.SetCursorPos(ctx, col2_x + label2_w + label_gap, row_y)
+            ImGui.PushItemWidth(ctx, trans_combo_w)
             if ImGui.BeginCombo(ctx, "##transpose", selected_transpose_mode) then
                 for mode, _ in pairs(transpose_modes) do
                     if ImGui.Selectable(ctx, mode, selected_transpose_mode == mode) then
@@ -1598,22 +2002,41 @@ function MainLoop()
                 end
                 ImGui.EndCombo(ctx)
             end
-            
-            ImGui.SameLine(ctx)
+            ImGui.PopItemWidth(ctx)
+            local btn1_x = col2_x + label2_w + label_gap + trans_combo_w + gap
+            local btn_y = row_y
+            ImGui.SetCursorPos(ctx, btn1_x, btn_y)
             if ImGui.Button(ctx, "-", transpose_button_size, transpose_button_size) then
                 quick_chord_input = ""
                 local steps = transpose_modes[selected_transpose_mode]
                 input_sequence = TransposeSequence(steps, -1)
                 input_chord = TransposeChord(steps, -1)
             end
-            
-            ImGui.SameLine(ctx)
+            local btn2_x = btn1_x + transpose_button_size + gap
+            ImGui.SetCursorPos(ctx, btn2_x, btn_y)
             if ImGui.Button(ctx, "+", transpose_button_size, transpose_button_size) then
                 quick_chord_input = ""
                 local steps = transpose_modes[selected_transpose_mode]
                 input_sequence = TransposeSequence(steps, 1)
                 input_chord = TransposeChord(steps, 1)
             end
+
+            -- Column 3: Strings
+            local label3 = "Strings:"
+            ImGui.SetCursorPos(ctx, col3_x, row_y)
+            ImGui.Text(ctx, label3)
+            local label3_w = ImGui.CalcTextSize(ctx, label3)
+            ImGui.SetCursorPos(ctx, col3_x + label3_w + label_gap, row_y)
+            ImGui.PushItemWidth(ctx, col_w - (label3_w + label_gap))
+            local n_changed, new_n = ImGui.InputInt(ctx, "##num_strings", num_strings, 1, 2)
+            if n_changed then
+                setNumStrings(new_n)
+                status_message = ""
+            end
+            ImGui.PopItemWidth(ctx)
+
+            local row_advance = math.max(ImGui.GetTextLineHeight(ctx), ImGui.GetFrameHeight(ctx)) + 6
+            ImGui.SetCursorPosY(ctx, row_y + row_advance)
 
             ImGui.Text(ctx, "Tuning:  ")
             ImGui.SameLine(ctx)
@@ -1622,7 +2045,21 @@ function MainLoop()
                 for tuning_name, _ in pairs(tunings) do
                     if ImGui.Selectable(ctx, tuning_name, selected_tuning == tuning_name) then
                         selected_tuning = tuning_name
-                        base_notes = tunings[tuning_name]
+                        local src = tunings[tuning_name] or {}
+                        local arr = {}
+                        for i=1, math.min(#src, num_strings) do arr[i] = src[i] end
+                        local fill = arr[#arr] or src[#src] or base_notes[#base_notes] or 40
+                        for i=#arr+1, num_strings do arr[i] = fill end
+                        base_notes = arr
+                        tunings[tuning_name] = {table.unpack(arr)}
+                        
+                        if use_chord_generator then
+                             local tuning_notes = {}
+                             for k=1, num_strings do tuning_notes[k] = base_notes[(num_strings + 1) - k] end
+                             gen_voicings = ChordEngine.Solve(gen_root_note, gen_chord_type_idx, tuning_notes, 4, gen_max_results, gen_complexity)
+                             gen_selected_idx = 1
+                             if #gen_voicings > 0 then input_chord = gen_voicings[1] else input_chord = "" end
+                        end
                     end
                 end
                 ImGui.EndCombo(ctx)
@@ -1633,25 +2070,177 @@ function MainLoop()
                 show_custom_tuning_window = true
             end
             
-            ImGui.Text(ctx, "Voicing: ")
+            ImGui.Text(ctx, "Source:  ")
             ImGui.SameLine(ctx)
-            ImGui.PushItemWidth(ctx, tuning_width)
-            if ImGui.BeginCombo(ctx, "##voicings", selected_voicing_file) then
-                local voicing_files = GetAvailableVoicingFiles()
-                for _, filename in ipairs(voicing_files) do
-                    if ImGui.Selectable(ctx, filename, selected_voicing_file == filename) then
-                        selected_voicing_file = filename
-                        voicings = {}
-                        chord_fingers = {}
-                        LoadVoicings()
-                        r.SetExtState("TK_GTR2MIDI", "selected_voicing_file", selected_voicing_file, true)
+            if ImGui.Button(ctx, use_chord_generator and "Generator (Engine)" or "Text File (Library)", tuning_width) then
+                use_chord_generator = not use_chord_generator
+                r.SetExtState("TK_GTR2MIDI", "use_chord_generator", tostring(use_chord_generator), true)
+                -- Reset/Init generator if switching to it
+                if use_chord_generator and #gen_voicings == 0 then
+                     local tuning_notes = {}
+                     for i=1, num_strings do tuning_notes[i] = base_notes[(num_strings + 1) - i] end
+                     gen_voicings = ChordEngine.Solve(gen_root_note, gen_chord_type_idx, tuning_notes, 4, gen_max_results, gen_complexity)
+                     if #gen_voicings > 0 then 
+                        input_chord = gen_voicings[1].grip 
+                        -- Parse fingers string into table
+                        local f_str = gen_voicings[1].fingers
+                        local f_arr = {}
+                        for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                        chord_fingers[input_chord] = f_arr
+                     end
+                end
+            end
+
+            if not use_chord_generator then
+                ImGui.Text(ctx, "Voicing: ")
+                ImGui.SameLine(ctx)
+                ImGui.PushItemWidth(ctx, tuning_width)
+                if ImGui.BeginCombo(ctx, "##voicings", selected_voicing_file) then
+                    local voicing_files = GetAvailableVoicingFiles()
+                    for _, filename in ipairs(voicing_files) do
+                        if ImGui.Selectable(ctx, filename, selected_voicing_file == filename) then
+                            selected_voicing_file = filename
+                            voicings = {}
+                            chord_fingers = {}
+                            LoadVoicings()
+                            r.SetExtState("TK_GTR2MIDI", "selected_voicing_file", selected_voicing_file, true)
+                        end
+                    end
+                    ImGui.EndCombo(ctx)
+                end
+                ImGui.PopItemWidth(ctx)
+            else
+                ImGui.Text(ctx, "Chord:   ")
+                ImGui.SameLine(ctx)
+                
+                -- Root
+                local root_w = is_xl_mode and 60 or 45
+                ImGui.PushItemWidth(ctx, root_w)
+                if ImGui.BeginCombo(ctx, "##gen_root", note_names_sharp[gen_root_note + 1]) then
+                    for i, name in ipairs(note_names_sharp) do
+                        if ImGui.Selectable(ctx, name, gen_root_note == (i-1)) then
+                            gen_root_note = i - 1
+                            local tuning_notes = {}
+                            for k=1, num_strings do tuning_notes[k] = base_notes[(num_strings + 1) - k] end
+                            gen_voicings = ChordEngine.Solve(gen_root_note, gen_chord_type_idx, tuning_notes, 4, gen_max_results, gen_complexity)
+                            gen_selected_idx = 1
+                            if #gen_voicings > 0 then 
+                                input_chord = gen_voicings[1].grip 
+                                -- Parse fingers string into table
+                                local f_str = gen_voicings[1].fingers
+                                local f_arr = {}
+                                for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                                chord_fingers[input_chord] = f_arr
+                            else 
+                                input_chord = "" 
+                            end
+                        end
+                    end
+                    ImGui.EndCombo(ctx)
+                end
+                ImGui.PopItemWidth(ctx)
+                
+                ImGui.SameLine(ctx)
+                
+                -- Type
+                local type_w = is_xl_mode and 80 or 60
+                ImGui.PushItemWidth(ctx, type_w)
+                local current_type = ChordEngine.Formulas[gen_chord_type_idx]
+                if ImGui.BeginCombo(ctx, "##gen_type", current_type.short) then
+                    for i, formula in ipairs(ChordEngine.Formulas) do
+                        if ImGui.Selectable(ctx, formula.short, gen_chord_type_idx == i) then
+                            gen_chord_type_idx = i
+                            local tuning_notes = {}
+                            for k=1, num_strings do tuning_notes[k] = base_notes[(num_strings + 1) - k] end
+                            gen_voicings = ChordEngine.Solve(gen_root_note, gen_chord_type_idx, tuning_notes, 4, gen_max_results, gen_complexity)
+                            gen_selected_idx = 1
+                            if #gen_voicings > 0 then 
+                                input_chord = gen_voicings[1].grip 
+                                -- Parse fingers string into table
+                                local f_str = gen_voicings[1].fingers
+                                local f_arr = {}
+                                for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                                chord_fingers[input_chord] = f_arr
+                            else 
+                                input_chord = "" 
+                            end
+                        end
+                    end
+                    ImGui.EndCombo(ctx)
+                end
+                ImGui.PopItemWidth(ctx)
+                
+                ImGui.SameLine(ctx)
+                
+                -- Variation
+                local btn_w = is_xl_mode and 24 or 20
+                local spacing = 4
+                local var_w = tuning_width - root_w - type_w - (is_xl_mode and 16 or 8) - (btn_w * 2) - (spacing * 2)
+                
+                ImGui.PushItemWidth(ctx, var_w)
+                local preview_var = (#gen_voicings > 0) and string.format("%d / %d", gen_selected_idx, #gen_voicings) or "None"
+                if ImGui.BeginCombo(ctx, "##gen_var", preview_var) then
+                    for i, voicing_obj in ipairs(gen_voicings) do
+                        local label = string.format("Var %d: %s", i, voicing_obj.grip)
+                        
+                        -- Highlight the first result (Best Match)
+                        if i == 1 then
+                            label = label .. " *"
+                            ImGui.PushStyleColor(ctx, ImGui.Col_Text, 0x66FF66FF) -- Light Green
+                        end
+
+                        if ImGui.Selectable(ctx, label, gen_selected_idx == i) then
+                            gen_selected_idx = i
+                            input_chord = voicing_obj.grip
+                            -- Parse fingers string into table
+                            local f_str = voicing_obj.fingers
+                            local f_arr = {}
+                            for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                            chord_fingers[input_chord] = f_arr
+                        end
+
+                        if i == 1 then
+                            ImGui.PopStyleColor(ctx)
+                        end
+                    end
+                    ImGui.EndCombo(ctx)
+                end
+                ImGui.PopItemWidth(ctx)
+
+                ImGui.SameLine(ctx)
+                if ImGui.Button(ctx, "-##prev_var", btn_w, 0) then
+                    if #gen_voicings > 0 then
+                        gen_selected_idx = gen_selected_idx - 1
+                        if gen_selected_idx < 1 then gen_selected_idx = #gen_voicings end
+                        
+                        local voicing_obj = gen_voicings[gen_selected_idx]
+                        input_chord = voicing_obj.grip
+                        local f_str = voicing_obj.fingers
+                        local f_arr = {}
+                        for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                        chord_fingers[input_chord] = f_arr
                     end
                 end
-                ImGui.EndCombo(ctx)
+                
+                ImGui.SameLine(ctx)
+                if ImGui.Button(ctx, "+##next_var", btn_w, 0) then
+                    if #gen_voicings > 0 then
+                        gen_selected_idx = gen_selected_idx + 1
+                        if gen_selected_idx > #gen_voicings then gen_selected_idx = 1 end
+                        
+                        local voicing_obj = gen_voicings[gen_selected_idx]
+                        input_chord = voicing_obj.grip
+                        local f_str = voicing_obj.fingers
+                        local f_arr = {}
+                        for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                        chord_fingers[input_chord] = f_arr
+                    end
+                end
             end
 
             ImGui.SameLine(ctx)
-            _, insert_in_existing = ImGui.Checkbox(ctx, "Insert in selected MIDI item", insert_in_existing)
+            ImGui.SetCursorPosX(ctx, ImGui.GetCursorPosX(ctx) + 2)
+            _, insert_in_existing = ImGui.Checkbox(ctx, "Insert in selected item", insert_in_existing)
             ImGui.Spacing(ctx)
             ImGui.Separator(ctx)
             ImGui.Spacing(ctx)
@@ -1661,7 +2250,7 @@ function MainLoop()
             ImGui.Text(ctx, "Sequence:")
             ImGui.SameLine(ctx)
             ImGui.PushItemWidth(ctx, 163) 
-            local _, new_sequence = ImGui.InputTextWithHint(ctx, "##sequence", "1-2-6-9-0-3", input_sequence)
+            local _, new_sequence = ImGui.InputTextWithHint(ctx, "##sequence", "1:0-2:2-3:4", input_sequence)
             input_sequence = new_sequence
             ImGui.SameLine(ctx)
             if ImGui.Button(ctx, "X##clearseq") then
@@ -1674,7 +2263,7 @@ function MainLoop()
             ImGui.PushStyleColor(ctx, ImGui.Col_ButtonActive, 0x0077AAFF)
             if ImGui.Button(ctx, "Insert Sequence") then
                 local cursor_pos = r.GetCursorPosition()
-                local item, take, note_length = CreateMIDIItem("sequence") 
+                    local item, take, note_length = CreateMIDIItem("sequence") 
                 
                 if take then
                     if insert_in_existing then
@@ -1692,53 +2281,161 @@ function MainLoop()
                         for _ in input_sequence:gmatch("([^-]+)") do 
                             note_count = note_count + 1 
                         end
-                        r.SetEditCurPos(cursor_pos + (note_length * note_count)/960/2, true, true)
+                        local new_pos = r.MIDI_GetProjTimeFromPPQPos(take, (note_length * note_count))
+                        r.SetEditCurPos(new_pos, true, true)
                     end
                 end
             end 
             ImGui.PopStyleColor(ctx, 3)
-            local board_width = is_xl_mode and 450 or 300
-            local board_height = is_xl_mode and 180 or 120
-            DrawFretboard(ctx, 30, ImGui.GetCursorPosY(ctx)+10, board_width, board_height)
-            ImGui.Dummy(ctx, 0, is_xl_mode and 210 or 150)
-            --ImGui.Separator(ctx)
+            -- ImGui.SameLine(ctx) -- Removed to put help text on new line
+            ImGui.Text(ctx, "(s:f e.g., 1:0-2:2-3:4; legacy 0-3-5 also works)")
+            local desired_spacing = is_xl_mode and 28 or 20
+            local board_height = math.max(desired_spacing * (num_strings - 1), is_xl_mode and 120 or 100)
+
+            local content_min_x, _ = ImGui.GetWindowContentRegionMin(ctx)
+            local content_max_x, _ = ImGui.GetWindowContentRegionMax(ctx)
+            local content_width = (content_max_x - content_min_x)
+            local left_margin = 30
+            local right_margin = 10
+            local start_x_in_window = content_min_x + left_margin
+            local board_width = math.max(50, content_width - (left_margin + right_margin))
+
+            DrawFretboard(ctx, start_x_in_window, ImGui.GetCursorPosY(ctx)+10, board_width, board_height)
+            ImGui.Dummy(ctx, 0, board_height + (is_xl_mode and 30 or 20))
+            ImGui.Dummy(ctx, 0, is_xl_mode and 5 or 10)
         end
         if show_chord then    
             ImGui.Spacing(ctx)
             ImGui.Text(ctx, "Chord:")
             ImGui.SameLine(ctx)
             ImGui.PushItemWidth(ctx, 87)  
-            local _, new_input = ImGui.InputTextWithHint(ctx, "##chord", "X 3 2 0 1 0", input_chord)
-            input_chord = FilterChordInput(new_input)
+            local changed, new_input = ImGui.InputTextWithHint(ctx, "##chord", "X 3 2 0 1 0", input_chord)
+            if changed then
+                input_chord = FilterChordInput(new_input)
+                status_message = ""
+            end
             ImGui.SameLine(ctx)
             if ImGui.Button(ctx, "X##clearchord") then
                 input_chord = ""
+                status_message = ""
             end
             
             ImGui.SameLine(ctx)
             ImGui.Text(ctx, "Find:")
             ImGui.SameLine(ctx)
             ImGui.PushItemWidth(ctx, 50) 
-            _, quick_chord_input = ImGui.InputTextWithHint(ctx, "##quickchord", "AMaj7", quick_chord_input or "")
-            if quick_chord_input and quick_chord_input ~= "" then
-                local found = false
-                local normalized_input = normalizeChordName(quick_chord_input)
-                for voicing, chord in pairs(voicings) do
-                    if normalizeChordName(chord) == normalized_input then
-                        input_chord = voicing
-                        found = true
-                        break
+            local q_changed, new_q = ImGui.InputTextWithHint(ctx, "##quickchord", "AMaj7", quick_chord_input or "")
+            if q_changed then
+                quick_chord_input = new_q
+                status_message = ""
+                
+                if quick_chord_input and quick_chord_input ~= "" then
+                    if use_chord_generator then
+                        -- ENGINE SEARCH LOGIC
+                        local root_str, type_str = quick_chord_input:match("^([A-G][#b]?)(.*)$")
+                        if root_str then
+                            -- 1. Parse Root Note
+                            local note_map = {
+                                ["C"]=0, ["C#"]=1, ["Db"]=1, ["D"]=2, ["D#"]=3, ["Eb"]=3, ["E"]=4, 
+                                ["F"]=5, ["F#"]=6, ["Gb"]=6, ["G"]=7, ["G#"]=8, ["Ab"]=8, ["A"]=9, ["A#"]=10, ["Bb"]=10, ["B"]=11
+                            }
+                            local root_idx = note_map[root_str]
+                            
+                            -- 2. Parse Chord Type
+                            local target_type = type_str:gsub("%s+", "") -- remove spaces
+                            if target_type == "" then target_type = "Maj" end
+                            
+                            local type_idx = nil
+                            
+                            -- 1. Try EXACT match first (Case Sensitive)
+                            for i, formula in ipairs(ChordEngine.Formulas) do
+                                if formula.short == target_type then
+                                    type_idx = i
+                                    break
+                                end
+                            end
+
+                            -- 2. If no exact match, try specific overrides or case-insensitive fallback
+                            if not type_idx then
+                                if target_type == "m" then type_idx = 2 -- Minor
+                                elseif target_type == "M" then type_idx = 1 -- Major
+                                elseif target_type == "7" then type_idx = 4 -- Dom 7
+                                else
+                                    -- Case-insensitive fallback
+                                    for i, formula in ipairs(ChordEngine.Formulas) do
+                                        if formula.short:lower() == target_type:lower() or formula.name:lower() == target_type:lower() then
+                                            type_idx = i
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                            
+                            -- Common aliases fallback
+                            if not type_idx then
+                                    local t_lower = target_type:lower()
+                                    if t_lower == "min" or t_lower == "-" then type_idx = 2 end -- Minor
+                                    if t_lower == "maj" then type_idx = 1 end -- Major
+                                end
+
+                            if root_idx and type_idx then
+                                -- Update UI State
+                                gen_root_note = root_idx
+                                gen_chord_type_idx = type_idx
+                                
+                                -- Trigger Engine Solve
+                                local tuning_notes = {}
+                                for k=1, num_strings do tuning_notes[k] = base_notes[(num_strings + 1) - k] end
+                                gen_voicings = ChordEngine.Solve(gen_root_note, gen_chord_type_idx, tuning_notes, 4, gen_max_results, gen_complexity)
+                                gen_selected_idx = 1
+                                
+                                if #gen_voicings > 0 then 
+                                    input_chord = gen_voicings[1].grip 
+                                    local f_str = gen_voicings[1].fingers
+                                    local f_arr = {}
+                                    for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                                    chord_fingers[input_chord] = f_arr
+                                else 
+                                    input_chord = "" 
+                                    status_message = "No voicings found"
+                                    status_color = 0xFF0000FF
+                                    status_timer = r.time_precise() + 3.0
+                                end
+                            else
+                                status_message = "Unknown type"
+                                status_color = 0xFF0000FF
+                                status_timer = r.time_precise() + 3.0
+                            end
+                        else
+                             status_message = "Invalid root"
+                             status_color = 0xFF0000FF
+                             status_timer = r.time_precise() + 3.0
+                        end
+                    else
+                        -- LIBRARY SEARCH LOGIC (Existing)
+                        local found = false
+                        local normalized_input = normalizeChordName(quick_chord_input)
+                        for voicing, chord in pairs(voicings) do
+                            if normalizeChordName(chord) == normalized_input then
+                                input_chord = voicing
+                                found = true
+                                status_message = ""
+                                break
+                            end
+                        end
+                        if not found then
+                            status_message = "Chord not found"
+                            status_color = 0xFF0000FF
+                            status_timer = r.time_precise() + 3.0
+                        end
                     end
-                end
-                if not found then
-                    status_message = "Chord not found"
-                    status_color = 0xFF0000FF  
                 end
             end
             
             ImGui.SameLine(ctx)
             if ImGui.Button(ctx, "X##clearquick") then
                 quick_chord_input = ""
+                status_message = ""
             end
             
             ImGui.SameLine(ctx)
@@ -1751,7 +2448,7 @@ function MainLoop()
                 for fret in input_chord:gmatch("%S+") do
                     table.insert(frets, fret)
                 end
-                if #frets == 6 then
+                if #frets == num_strings then
                     local cursor_pos = r.GetCursorPosition()
                     local item, take, note_length = CreateMIDIItem("chord") 
                     if take then
@@ -1762,36 +2459,179 @@ function MainLoop()
                             r.SetEditCurPos(new_pos, true, true)
                         else
                             InsertChord(take, frets, note_length, 0)
-                            r.SetEditCurPos(cursor_pos + note_length/960/2, true, true)
+                            local new_pos = r.MIDI_GetProjTimeFromPPQPos(take, note_length)
+                            r.SetEditCurPos(new_pos, true, true)
                         end
                     end
                 else
-                    ImGui.TextColored(ctx, 0xFF0000FF, "Input must contain exactly 6 positions")
+                    status_message = string.format("Error: Chord has\n%d positions, but\nsettings are %d strings.", #frets, num_strings)
+                    status_color = 0xFF0000FF
+                    status_timer = r.time_precise() + 3.0
                 end
             end
             ImGui.PopStyleColor(ctx, 3)
-            local board_size = is_xl_mode and 180 or 120
-            local y_offset = (is_xl_mode and not chord_board_horizontal) and 30 or 20
-            DrawChordboard(ctx, 10, ImGui.GetCursorPosY(ctx) + y_offset, board_size, board_size)
-            local dummy_height
-            if chord_board_horizontal then
-                dummy_height = is_xl_mode and 385 or 325
-            else
-                dummy_height = is_xl_mode and 485 or 325  
+            
+            if status_message ~= "" and r.time_precise() >= status_timer then
+                status_message = ""
             end
-            ImGui.Dummy(ctx, 0, dummy_height)
-        end
 
-        ImGui.PopStyleVar(ctx, 2)
-        ImGui.PopStyleColor(ctx, 7)
-        ImGui.PopFont(ctx)
+            local base_size = is_xl_mode and 180 or 120
+            local desired_spacing = is_xl_mode and 28 or 20
+            local strings_dim = math.max(desired_spacing * (num_strings - 1), is_xl_mode and 120 or 100)
+            local y_offset = (is_xl_mode and not chord_board_horizontal) and 30 or 20
+
+            local content_min_x, _ = ImGui.GetWindowContentRegionMin(ctx)
+            local content_max_x, _ = ImGui.GetWindowContentRegionMax(ctx)
+            local content_width = (content_max_x - content_min_x)
+            local left_margin = 10
+            local right_margin = 10
+            local internal_offset = chord_board_horizontal and 20 or 15
+            local avail_width = math.max(50, content_width - (left_margin + right_margin + internal_offset))
+            local start_x_in_window = content_min_x + left_margin
+
+            if chord_board_horizontal then
+                base_size = math.max(40, avail_width / 2.5)
+                DrawChordboard(ctx, start_x_in_window, ImGui.GetCursorPosY(ctx) + y_offset, strings_dim, base_size)
+                ImGui.Dummy(ctx, 0, strings_dim + (is_xl_mode and 220 or 200))
+            else
+                local base_for_n   = strings_dim                                    -- desired span for current N
+                local base_for_16  = math.max((is_xl_mode and 28 or 20) * 15, is_xl_mode and 120 or 100) -- desired span if N=16
+                local ramp_start   = 12
+                local progress     = 0
+                if num_strings >= ramp_start then
+                    progress = math.min(1, (num_strings - ramp_start) / (16 - ramp_start))
+                end
+                local extra        = math.max(0, avail_width - base_for_16)
+                local target_width = base_for_n + (extra * progress)
+                local v_width      = math.min(avail_width, target_width)
+                DrawChordboard(ctx, start_x_in_window, ImGui.GetCursorPosY(ctx) + y_offset, v_width, base_size)
+                local board_vertical_height = base_size * 2.5
+                ImGui.Dummy(ctx, 0, board_vertical_height + (is_xl_mode and 225 or 185))
+            end
+        end
 
         if show_custom_tuning_window then
             ShowCustomTuningWindow()
         end
+
+        if show_settings_window then
+            ImGui.PushFont(ctx, font)
+            if settings_next_pos then
+                ImGui.SetNextWindowPos(ctx, settings_next_pos.x, settings_next_pos.y, ImGui.Cond_Always)
+                settings_next_pos = nil
+            end
+
+            local flags = ImGui.WindowFlags_AlwaysAutoResize | ImGui.WindowFlags_NoScrollbar | ImGui.WindowFlags_NoTitleBar
+            local s_visible, s_open = ImGui.Begin(ctx, "Settings", true, flags)
+            if s_visible then
+                ImGui.Text(ctx, "Settings")
+                ImGui.Separator(ctx)
+
+                ImGui.Text(ctx, "Kleuren (grijstinten 0=zwart .. 1=wit)")
+                ImGui.PushItemWidth(ctx, 260)
+                local changed
+                changed, ui_window_alpha = ImGui.SliderDouble(ctx, "Transparantie", ui_window_alpha, 0.2, 1.0, "%.2f")
+                if changed then r.SetExtState("TK_GTR2MIDI","ui_window_alpha", tostring(ui_window_alpha), true) end
+                changed, ui_window_bg_gray = ImGui.SliderDouble(ctx, "Window achtergrond", ui_window_bg_gray, 0.0, 1.0, "%.2f")
+                if changed then r.SetExtState("TK_GTR2MIDI","ui_window_bg_gray", tostring(ui_window_bg_gray), true) end
+                changed, ui_button_gray = ImGui.SliderDouble(ctx, "Knop kleur", ui_button_gray, 0.0, 1.0, "%.2f")
+                if changed then r.SetExtState("TK_GTR2MIDI","ui_button_gray", tostring(ui_button_gray), true) end
+                changed, ui_dropdown_gray = ImGui.SliderDouble(ctx, "Dropdown kleur", ui_dropdown_gray, 0.0, 1.0, "%.2f")
+                if changed then r.SetExtState("TK_GTR2MIDI","ui_dropdown_gray", tostring(ui_dropdown_gray), true) end
+                changed, ui_input_gray = ImGui.SliderDouble(ctx, "Invoerveld kleur", ui_input_gray, 0.0, 1.0, "%.2f")
+                if changed then r.SetExtState("TK_GTR2MIDI","ui_input_gray", tostring(ui_input_gray), true) end
+                changed, ui_text_gray = ImGui.SliderDouble(ctx, "Tekst kleur", ui_text_gray, 0.0, 1.0, "%.2f")
+                if changed then r.SetExtState("TK_GTR2MIDI","ui_text_gray", tostring(ui_text_gray), true) end
+                ImGui.PopItemWidth(ctx)
+
+                ImGui.Separator(ctx)
+                ImGui.Text(ctx, "Ronding")
+                ImGui.PushItemWidth(ctx, 260)
+                changed, ui_window_rounding = ImGui.SliderDouble(ctx, "Venster ronding", ui_window_rounding, 0.0, 20.0, "%.1f")
+                if changed then r.SetExtState("TK_GTR2MIDI","ui_window_rounding", tostring(ui_window_rounding), true) end
+                changed, ui_button_rounding = ImGui.SliderDouble(ctx, "Knop ronding", ui_button_rounding, 0.0, 20.0, "%.1f")
+                if changed then r.SetExtState("TK_GTR2MIDI","ui_button_rounding", tostring(ui_button_rounding), true) end
+                ImGui.PopItemWidth(ctx)
+
+                ImGui.Text(ctx, "MIDI Channel Mode")
+                ImGui.PushItemWidth(ctx, 260)
+                local mode = per_string_channels and "Per string (channels 1..N)" or "Single channel (channel 1)"
+                if ImGui.BeginCombo(ctx, "##chan_mode", mode) then
+                    if ImGui.Selectable(ctx, "Per string (channels 1..N)", per_string_channels) then
+                        per_string_channels = true
+                        r.SetExtState("TK_GTR2MIDI","per_string_channels", tostring(per_string_channels), true)
+                    end
+                    if ImGui.Selectable(ctx, "Single channel (channel 1)", not per_string_channels) then
+                        per_string_channels = false
+                        r.SetExtState("TK_GTR2MIDI","per_string_channels", tostring(per_string_channels), true)
+                    end
+                    ImGui.EndCombo(ctx)
+                end
+                ImGui.PopItemWidth(ctx)
+
+                ImGui.Separator(ctx)
+                ImGui.Text(ctx, "Generator Settings")
+                ImGui.PushItemWidth(ctx, 260)
+                local g_changed, new_max = ImGui.SliderInt(ctx, "Max Variations", gen_max_results, 10, 100)
+                if g_changed then
+                    gen_max_results = new_max
+                    r.SetExtState("TK_GTR2MIDI", "gen_max_results", tostring(gen_max_results), true)
+                end
+                
+                if ImGui.BeginCombo(ctx, "Complexity Mode", gen_complexity) then
+                    if ImGui.Selectable(ctx, "Simple (Beginner)", gen_complexity == "Simple") then
+                        gen_complexity = "Simple"
+                        if use_chord_generator then
+                             local tuning_notes = {}
+                             for k=1, num_strings do tuning_notes[k] = base_notes[(num_strings + 1) - k] end
+                             gen_voicings = ChordEngine.Solve(gen_root_note, gen_chord_type_idx, tuning_notes, 4, gen_max_results, gen_complexity)
+                             gen_selected_idx = 1
+                             if #gen_voicings > 0 then 
+                                input_chord = gen_voicings[1].grip 
+                                local f_str = gen_voicings[1].fingers
+                                local f_arr = {}
+                                for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                                chord_fingers[input_chord] = f_arr
+                             end
+                        end
+                    end
+                    if ImGui.Selectable(ctx, "Rich (Advanced)", gen_complexity == "Rich") then
+                        gen_complexity = "Rich"
+                        if use_chord_generator then
+                             local tuning_notes = {}
+                             for k=1, num_strings do tuning_notes[k] = base_notes[(num_strings + 1) - k] end
+                             gen_voicings = ChordEngine.Solve(gen_root_note, gen_chord_type_idx, tuning_notes, 4, gen_max_results, gen_complexity)
+                             gen_selected_idx = 1
+                             if #gen_voicings > 0 then 
+                                input_chord = gen_voicings[1].grip 
+                                local f_str = gen_voicings[1].fingers
+                                local f_arr = {}
+                                for f in f_str:gmatch("%S+") do table.insert(f_arr, tonumber(f)) end
+                                chord_fingers[input_chord] = f_arr
+                             end
+                        end
+                    end
+                    ImGui.EndCombo(ctx)
+                end
+                ImGui.PopItemWidth(ctx)
+
+                ImGui.Separator(ctx)
+                if ImGui.Button(ctx, "Close", 80, 0) then
+                    show_settings_window = false
+                end
+            end
+            ImGui.End(ctx)
+            ImGui.PopFont(ctx)
+        end
         
-        ImGui.End(ctx)
+        ImGui.PopStyleVar(ctx, 1)
+        ImGui.PopStyleColor(ctx, 8)
+        ImGui.PopFont(ctx)
     end
+    ImGui.End(ctx)
+    -- Pop pre-Begin pushes (Alpha + WindowBg + WindowRounding)
+    ImGui.PopStyleColor(ctx, 1)
+    ImGui.PopStyleVar(ctx, 2)
     if open then r.defer(MainLoop) end
 end
 
