@@ -97,6 +97,21 @@ Data.chords = {
     display = 'dim7',
     pattern = '1001001001'
   },
+  -- Extended Chords (Added in v2.3.1)
+  {name="add9",   code="add9",   pattern="101010010000", display="add9"},
+  {name="6/9",    code="6/9",    pattern="101010000100", display="6/9"},
+  {name="maj9",   code="maj9",   pattern="101010010001", display="maj9"},
+  {name="min9",   code="min9",   pattern="100100010010", display="m9"},
+  {name="9",      code="9",      pattern="100010010010", display="9"},
+  {name="7b9",    code="7b9",    pattern="110010010010", display="7b9"},
+  {name="7#9",    code="7#9",    pattern="100110010010", display="7#9"},
+  {name="11",     code="11",     pattern="100011010010", display="11"},
+  {name="min11",  code="min11",  pattern="100101010010", display="m11"},
+  {name="maj#11", code="maj#11", pattern="100010110001", display="maj#11"},
+  {name="13",     code="13",     pattern="100010010110", display="13"},
+  {name="maj13",  code="maj13",  pattern="100010010101", display="maj13"},
+  {name="min13",  code="min13",  pattern="100100010110", display="m13"},
+  {name="sus4b9", code="sus4b9", pattern="110001010000", display="sus4b9"},
   {
     name = 'augmented major seventh',
     code = 'augMaj7',

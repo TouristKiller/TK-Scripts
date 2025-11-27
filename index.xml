@@ -255,8 +255,27 @@
         </reapack>
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.2.9" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-27T00:05:00Z">
+      <version name="2.3.1" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-27T15:35:00Z">
         <changelog><![CDATA[
+2.3.1
++ Added "Harmonic Compass" (Smart Suggestions): Highlights logical next chords based on functional harmony
++ Added "Use Selected Chord Types" option to Randomize (Surprise Me) feature (Right-click Dice)
++ Added Extended Chord Vocabulary (9th, 11th, 13th, 6/9, etc.)
++ Added "Filter" Dropdown to control chord visibility (Basic, Standard, Jazz)
++ Added "All" modes to Filter Dropdown (Std All, Jazz All) to show non-scale chords
++ Replaced "In Scale" toggle with the new Filter Dropdown
+
+2.3.0
++ Added Right-Click Context Menu on Chord Buttons
++ Added "Generate Leading Chords" feature (Right-click > Add ii-V-I)
++ Added "Tritone Substitution" feature (Right-click > Add ii-bII-I)
++ Added "Insert to MIDI" option for generated leading chords (Direct insertion)
++ Added "Add to Progression" option for generated leading chords (Append to slots)
++ Fixed JSFX Scale Filter syntax error and added Monitor slider
++ Fixed "Hold" button behavior (now correctly latches notes)
++ Fixed JSFX button color in Light Theme (now Blue when active)
++ Fixed crash when inserting generated chords without a selected MIDI item (Auto-creates item)
+
 2.2.9
 + Added MIDI Trigger Mode: Trigger chords via MIDI keyboard (C1-B1 range)
 + Added Channel 16 Bypass: Prevents script-generated chords from being distorted by Remap Mode

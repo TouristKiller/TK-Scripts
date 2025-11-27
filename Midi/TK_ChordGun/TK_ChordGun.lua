@@ -1,8 +1,27 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.2.9
+-- @version 2.3.1
 -- @changelog
 --[[
+
+2.3.1
++ Added "Harmonic Compass" (Smart Suggestions): Highlights logical next chords based on functional harmony
++ Added "Use Selected Chord Types" option to Randomize (Surprise Me) feature (Right-click Dice)
++ Added Extended Chord Vocabulary (9th, 11th, 13th, 6/9, etc.)
++ Added "Filter" Dropdown to control chord visibility (Basic, Standard, Jazz)
++ Added "All" modes to Filter Dropdown (Std All, Jazz All) to show non-scale chords
++ Replaced "In Scale" toggle with the new Filter Dropdown
+
+2.3.0
++ Added Right-Click Context Menu on Chord Buttons
++ Added "Generate Leading Chords" feature (Right-click > Add ii-V-I)
++ Added "Tritone Substitution" feature (Right-click > Add ii-bII-I)
++ Added "Insert to MIDI" option for generated leading chords (Direct insertion)
++ Added "Add to Progression" option for generated leading chords (Append to slots)
++ Fixed JSFX Scale Filter syntax error and added Monitor slider
++ Fixed "Hold" button behavior (now correctly latches notes)
++ Fixed JSFX button color in Light Theme (now Blue when active)
++ Fixed crash when inserting generated chords without a selected MIDI item (Auto-creates item)
 
 2.2.9
 + Added MIDI Trigger Mode: Trigger chords via MIDI keyboard (C1-B1 range)
@@ -275,6 +294,17 @@ end
 
 chords = Data.chords
 
+-- NEW: Vocabulary / Visibility Logic
+local chordVisibilityMode = tonumber(reaper.GetExtState("TK_ChordGun", "vocabMode")) or 2 -- 1=Basic, 2=Std, 3=Jazz
+
+-- REMOVED: Manual injection of extended chords (now in Data file)
+
+local function getChordVisibilityLimit()
+  if chordVisibilityMode == 1 then return 7 end -- Basic (Triads)
+  if chordVisibilityMode == 2 then return 15 end -- Standard (7ths)
+  return 999 -- Extended
+end
+
 
 local pendingTooltips = {}
 
@@ -530,7 +560,7 @@ local function getAveragePitch(notes)
     for _, note in ipairs(notes) do sum = sum + note end
     return sum / #notes
 end
-local showOnlyScaleChords = false 
+local showOnlyScaleChords = reaper.GetExtState("TK_ChordGun", "showOnlyScaleChords") == "1"
 local chordListScrollOffset = 0
 local maxVisibleRows = 12
 local isLightMode = reaper.GetExtState("TK_ChordGun", "lightMode") == "1"
@@ -571,7 +601,65 @@ local progressionLastBeatTime = 0
 local selectedProgressionSlot = nil
 local progressionLength = 8
 local randomizeStartWithTonic = false
+local randomizeUseSelectedChords = false
+local showHarmonicCompass = true
 
+local lastPlayedScaleDegree = 1
+local suggestionRules = {
+  -- From I
+  [1] = {
+    {degree=4, type="safe"},   -- IV
+    {degree=5, type="safe"},   -- V
+    {degree=6, type="safe"},   -- vi
+    {degree=2, type="spicy"},  -- ii
+    {degree=3, type="spicy"}   -- iii
+  },
+  -- From ii
+  [2] = {
+    {degree=5, type="strong"}, -- V (Circle of Fifths)
+    {degree=4, type="safe"},   -- IV
+    {degree=6, type="spicy"}   -- vi
+  },
+  -- From iii
+  [3] = {
+    {degree=6, type="strong"}, -- vi (Circle of Fifths)
+    {degree=4, type="safe"}    -- IV
+  },
+  -- From IV
+  [4] = {
+    {degree=1, type="strong"}, -- I (Plagal)
+    {degree=5, type="safe"},   -- V
+    {degree=2, type="safe"}    -- ii
+  },
+  -- From V
+  [5] = {
+    {degree=1, type="strong"}, -- I (Perfect)
+    {degree=6, type="spicy"},  -- vi (Deceptive)
+    {degree=4, type="safe"}    -- IV
+  },
+  -- From vi
+  [6] = {
+    {degree=2, type="strong"}, -- ii (Circle of Fifths)
+    {degree=4, type="safe"},   -- IV
+    {degree=5, type="safe"},   -- V
+    {degree=3, type="spicy"}   -- iii
+  },
+  -- From vii
+  [7] = {
+    {degree=1, type="strong"}, -- I (Resolution)
+    {degree=3, type="safe"}    -- iii
+  }
+}
+
+function getSuggestionType(scaleNoteIndex)
+  if not lastPlayedScaleDegree then return nil end
+  local suggestions = suggestionRules[lastPlayedScaleDegree]
+  if not suggestions then return nil end
+  for _, item in ipairs(suggestions) do
+    if item.degree == scaleNoteIndex then return item.type end
+  end
+  return nil
+end
 
 local pruneInternalNoteEvents
 local registerInternalNoteEvent
@@ -1454,12 +1542,16 @@ function getScaleChordsForRootNote(rootNote)
   
   local chordCount = 0
   local scaleChordsForRootNote = {}
+  local limit = getChordVisibilityLimit()
   
   for chordIndex, chord in ipairs(chords) do
   
-    if chordIsInScale(rootNote, chordIndex) then
-      chordCount = chordCount + 1
-      scaleChordsForRootNote[chordCount] = chord   
+    -- Filter by visibility mode
+    if chordIndex <= limit or (chordVisibilityMode == 3) then
+        if chordIsInScale(rootNote, chordIndex) then
+          chordCount = chordCount + 1
+          scaleChordsForRootNote[chordCount] = chord   
+        end
     end
   end
     
@@ -1480,9 +1572,12 @@ function getScaleChordsForRootNote(rootNote)
 
   for chordIndex, chord in ipairs(chords) do
            
-    if chordIsNotAlreadyIncluded(scaleChordsForRootNote, chord.code) then
-      chordCount = chordCount + 1
-      scaleChordsForRootNote[chordCount] = chord
+    -- Filter by visibility mode
+    if chordIndex <= limit or (chordVisibilityMode == 3) then
+        if chordIsNotAlreadyIncluded(scaleChordsForRootNote, chord.code) then
+          chordCount = chordCount + 1
+          scaleChordsForRootNote[chordCount] = chord
+        end
     end
   end
   
@@ -3339,6 +3434,9 @@ function randomizeProgression()
       if scaleNotes[selectedDegree] then
         -- Add chord (default chord type index 1)
         local chordTypeIndex = 1
+        if randomizeUseSelectedChords then
+            chordTypeIndex = getSelectedChordType(selectedDegree)
+        end
         local chordData = scaleChords[selectedDegree][chordTypeIndex]
         if chordData then
            local text = getScaleNoteName(selectedDegree) .. chordData['display']
@@ -3360,6 +3458,7 @@ function playProgressionChord(index)
   local chord = chordProgression[index]
   if not chord then return end
   
+  lastPlayedScaleDegree = chord.scaleNoteIndex
   setSelectedScaleNote(chord.scaleNoteIndex)
   setSelectedChordType(chord.scaleNoteIndex, chord.chordTypeIndex)
   
@@ -3552,6 +3651,7 @@ end
 function previewScaleChord()
 
   local scaleNoteIndex = getSelectedScaleNote()
+  lastPlayedScaleDegree = scaleNoteIndex
   local chordTypeIndex = getSelectedChordType(scaleNoteIndex)
 
   local root = scaleNotes[scaleNoteIndex]
@@ -4625,6 +4725,9 @@ local themes = {
         chordSelectedScaleNoteHighlight = "FFFFFF",
         chordOutOfScale = "181818",
         chordOutOfScaleHighlight = "474747",
+        chordSuggestionStrong = "00FF00", -- Green
+        chordSuggestionSafe = "00BFFF",   -- Deep Sky Blue
+        chordSuggestionSpicy = "FF8C00",  -- Dark Orange
         buttonOutline = "1D1D1D",
         textNormal = "D7D7D7",
         textHighlight = "EEEEEE",
@@ -4745,6 +4848,9 @@ local themes = {
         chordSelectedScaleNoteHighlight = "202020",
         chordOutOfScale = "F8F8F8",
         chordOutOfScaleHighlight = "E5E5E5",
+        chordSuggestionStrong = "00AA00", -- Green
+        chordSuggestionSafe = "0099CC",   -- Blue
+        chordSuggestionSpicy = "FF8800",  -- Orange
         buttonOutline = "A0A0A0",
         textNormal = "202020",
         textHighlight = "000000",
@@ -5736,6 +5842,8 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/T
 ChordButton = {}
 ChordButton.__index = ChordButton
 
+-- Generate Diatonic ii-V-I (or similar) for a given scale degree
+
 
 local currentlyHeldButton = nil
 
@@ -5973,8 +6081,22 @@ end
 
 function ChordButton:drawButtonOutline()
 
+    local suggestionType = getSuggestionType(self.scaleNoteIndex)
+    if showHarmonicCompass and suggestionType and self.chordIsInScale and #scaleNotes == 7 then
+        if suggestionType == "strong" then
+            setThemeColor("chordSuggestionStrong")
+        elseif suggestionType == "safe" then
+            setThemeColor("chordSuggestionSafe")
+        elseif suggestionType == "spicy" then
+            setThemeColor("chordSuggestionSpicy")
+        end
+        
+        gfx.rect(self.x-1, self.y-1, self.width+1, self.height+1, false)
+        gfx.rect(self.x-2, self.y-2, self.width+3, self.height+3, false)
+    else
 		setDrawColorToButtonOutline()
 		gfx.rect(self.x-1, self.y-1, self.width+1, self.height+1, false)
+    end
 end
 
 function ChordButton:drawRectangles()
@@ -6070,6 +6192,133 @@ function ChordButton:onAltPress()
 	updateChordText(root, chord, notes)
 end
 
+function generateLeadingChords(targetScaleIndex, type, insertDirectly)
+  local targetRoot = scaleNotes[targetScaleIndex]
+  
+  if type == 1 then
+      local iiRoot = (targetRoot + 2) % 12
+      local vRoot = (targetRoot + 7) % 12
+      
+      local iiScaleIndex = nil
+      local vScaleIndex = nil
+      
+      for i, note in ipairs(scaleNotes) do
+        if note % 12 == iiRoot then iiScaleIndex = i end
+        if note % 12 == vRoot then vScaleIndex = i end
+      end
+      
+      if iiScaleIndex and vScaleIndex then
+         local iiChordIdx = 1
+         for idx, chord in ipairs(scaleChords[iiScaleIndex]) do
+            if chord.code == "min7" or chord.code == "m7" or chord.code == "min7b5" then iiChordIdx = idx break end
+         end
+         
+         local vChordIdx = 1
+         for idx, chord in ipairs(scaleChords[vScaleIndex]) do
+            if chord.code == "7" or chord.code == "dom7" then vChordIdx = idx break end
+         end
+         
+         local targetChordIdx = getSelectedChordType(targetScaleIndex)
+         
+         if insertDirectly then
+            if not ensureActiveTake() then return end
+            startUndoBlock()
+            
+            local iiRootNote = scaleNotes[iiScaleIndex]
+            local iiChordData = scaleChords[iiScaleIndex][iiChordIdx]
+            local iiNotes = getChordNotesArray(iiRootNote, iiChordData, getOctave())
+            insertScaleChord(iiNotes, false)
+            
+            local vRootNote = scaleNotes[vScaleIndex]
+            local vChordData = scaleChords[vScaleIndex][vChordIdx]
+            local vNotes = getChordNotesArray(vRootNote, vChordData, getOctave())
+            insertScaleChord(vNotes, false)
+            
+            local tRootNote = scaleNotes[targetScaleIndex]
+            local tChordData = scaleChords[targetScaleIndex][targetChordIdx]
+            local tNotes = getChordNotesArray(tRootNote, tChordData, getOctave())
+            insertScaleChord(tNotes, false)
+            
+            endUndoBlock("Insert ii-V-I")
+         else
+            local iiText = getScaleNoteName(iiScaleIndex) .. scaleChords[iiScaleIndex][iiChordIdx]['display']
+            addChordToProgression(iiScaleIndex, iiChordIdx, iiText, nil, getOctave(), 0)
+            
+            local vText = getScaleNoteName(vScaleIndex) .. scaleChords[vScaleIndex][vChordIdx]['display']
+            addChordToProgression(vScaleIndex, vChordIdx, vText, nil, getOctave(), 0)
+            
+            local tText = getScaleNoteName(targetScaleIndex) .. scaleChords[targetScaleIndex][targetChordIdx]['display']
+            addChordToProgression(targetScaleIndex, targetChordIdx, tText, nil, getOctave(), 0)
+            
+            guiShouldBeUpdated = true
+         end
+         return true
+      else
+         reaper.ShowMessageBox("Cannot generate Diatonic ii-V: Required roots (ii or V) not found in current scale.", "Theory Limit", 0)
+         return false
+      end
+
+  elseif type == 2 then
+      if not insertDirectly then
+          reaper.ShowMessageBox("Tritone Substitutions often contain notes outside the scale.\n\nThey can only be inserted directly into MIDI, not saved to progression slots.", "Feature Limit", 0)
+          return false
+      end
+
+      if not ensureActiveTake() then return end
+      startUndoBlock()
+
+      local iiRoot = (targetRoot + 2) % 12
+      local iiNotes = {}
+      local baseOctave = getOctave() + 1
+      local r = iiRoot + (baseOctave * 12)
+      iiNotes = {r, r+3, r+7, r+10}
+      insertScaleChord(iiNotes, false)
+
+      local subRoot = (targetRoot + 1) % 12
+      r = subRoot + (baseOctave * 12)
+      local subNotes = {r, r+4, r+7, r+10}
+      insertScaleChord(subNotes, false)
+
+      local targetChordIdx = getSelectedChordType(targetScaleIndex)
+      local tRootNote = scaleNotes[targetScaleIndex]
+      local tChordData = scaleChords[targetScaleIndex][targetChordIdx]
+      local tNotes = getChordNotesArray(tRootNote, tChordData, getOctave())
+      insertScaleChord(tNotes, false)
+
+      endUndoBlock("Insert Tritone Sub (ii-bII-I)")
+      return true
+  end
+end
+
+function ChordButton:onRightClick()
+    local checkCompass = showHarmonicCompass and "!" or ""
+    local menu = "Add to Progression (Alt+Click)|Insert to MIDI (Shift+Click)|Preview (Click)|"
+    menu = menu .. "|>Generate Leading Chords|"
+    menu = menu .. "Add Diatonic ii-V-I to Progression|"
+    menu = menu .. "Insert Diatonic ii-V-I to MIDI|"
+    menu = menu .. "Insert Tritone Sub (ii-bII-I) to MIDI|<|"
+    menu = menu .. checkCompass .. "Show Harmonic Compass (Suggestions)"
+    
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    
+    if selection == 1 then
+        self:onAltPress()
+    elseif selection == 2 then
+        self:onShiftPress()
+    elseif selection == 3 then
+        self:onPress()
+    elseif selection == 4 then
+        generateLeadingChords(self.scaleNoteIndex, 1, false)
+    elseif selection == 5 then
+        generateLeadingChords(self.scaleNoteIndex, 1, true)
+    elseif selection == 6 then
+        generateLeadingChords(self.scaleNoteIndex, 2, true)
+    elseif selection == 7 then
+        showHarmonicCompass = not showHarmonicCompass
+    end
+end
+
 function ChordButton:update()
 
 	self:updateDimensions()
@@ -6111,15 +6360,27 @@ function ChordButton:update()
 
 	if mouseButtonIsNotPressedDown and buttonHasBeenRightClicked(self) then
 		mouseButtonIsNotPressedDown = false
-		stopAllNotesFromPlaying()
-		currentlyHeldButton = nil
-		lastPlayedChord = nil
+        self:onRightClick()
 	end
 	
 
 	if tooltipsEnabled and isHovering then
 		local tooltip = "Click: Preview | Shift+Click: Insert | Alt+Click: Add to slot"
 		
+        if showHarmonicCompass and self.chordIsInScale and #scaleNotes == 7 then
+            local suggestionType = getSuggestionType(self.scaleNoteIndex)
+            if suggestionType then
+                local suggestionText = ""
+                if suggestionType == "strong" then
+                    suggestionText = "Strong Resolution (Green)"
+                elseif suggestionType == "safe" then
+                    suggestionText = "Safe Step (Blue)"
+                elseif suggestionType == "spicy" then
+                    suggestionText = "Spicy/Deceptive (Orange)"
+                end
+                tooltip = tooltip .. "\nSuggestion: " .. suggestionText
+            end
+        end
 
 		local currentScale = scales[getScaleType()]
 		if currentScale.isCustom then
@@ -8530,11 +8791,27 @@ function handleMidiTriggers()
       end
     else
       if midiTriggerState[note] then
-          if activeTriggerNote == note then
-              stopAllNotesFromPlaying()
-              activeTriggerNote = nil
-          end
           midiTriggerState[note] = false
+          if activeTriggerNote == note then
+              local fallbackNote = nil
+              local fallbackIndex = nil
+              
+              for tNote, tIndex in pairs(triggerMap) do
+                  if midiTriggerState[tNote] then
+                      fallbackNote = tNote
+                      fallbackIndex = tIndex
+                      break
+                  end
+              end
+              
+              if fallbackNote and fallbackIndex <= #scaleNotes then
+                  previewScaleChordAction(fallbackIndex)
+                  activeTriggerNote = fallbackNote
+              else
+                  stopNotesFromPlaying()
+                  activeTriggerNote = nil
+              end
+          end
       end
     end
   end
@@ -8824,7 +9101,7 @@ local function topButtonHeight()
 end
 
 local function topButtonSpacing()
-  return sx(8)
+  return sx(1)
 end
 
 local function topButtonYPos(yMargin)
@@ -9459,9 +9736,11 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       local check4 = progressionLength == 4 and "!" or ""
       local check8 = progressionLength == 8 and "!" or ""
       local checkTonic = randomizeStartWithTonic and "!" or ""
+      local checkSelected = randomizeUseSelectedChords and "!" or ""
       
       local menu = ">Progression Length|" .. check4 .. "4 Slots|" .. check8 .. "8 Slots|<|" ..
                    checkTonic .. "Always Start on Tonic|" ..
+                   checkSelected .. "Use Selected Chord Types|" ..
                    "Clear Progression"
       
       gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
@@ -9476,6 +9755,8 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       elseif selection == 3 then 
           randomizeStartWithTonic = not randomizeStartWithTonic
       elseif selection == 4 then
+          randomizeUseSelectedChords = not randomizeUseSelectedChords
+      elseif selection == 5 then
           clearChordProgression()
       end
   end
@@ -10424,22 +10705,47 @@ function Interface:addBottomFrame()
   self:addArpButton(xMargin, yMargin, xPadding)
   self:addVoiceLeadingButton(xMargin, yMargin, xPadding)
 
-  local getScaleOnlyState = function() return showOnlyScaleChords end
-  local onScaleOnlyToggle = function() 
-      showOnlyScaleChords = not showOnlyScaleChords
-      chordListScrollOffset = 0 
-      guiShouldBeUpdated = true 
-  end
-  
+  -- REPLACED "In Scale" Toggle with "Filter" Dropdown
   local extraSpacing = sx(15)
   local inScaleButtonX = topButtonXPos(xMargin, xPadding, 5) + extraSpacing
   local inScaleButtonY = topButtonYPos(yMargin)
-  local buttonWidth = topButtonWidth()
+  local buttonWidth = sx(120) -- Wider to fit "Jazz (All)"
   local buttonHeight = topButtonHeight()
   
-  self:addToggleButton("In Scale", inScaleButtonX+dockerXPadding, inScaleButtonY, buttonWidth, buttonHeight, getScaleOnlyState, onScaleOnlyToggle, nil, function() return "Filter: Show only chords that fit the scale" end, false)
+  local filterOptions = {"Basic", "Standard", "Jazz", "Std (All)", "Jazz (All)"}
+  
+  -- Determine current index based on state
+  local currentIndex = 2 -- Default Standard
+  if chordVisibilityMode == 1 then currentIndex = 1
+  elseif chordVisibilityMode == 2 then
+      if showOnlyScaleChords then currentIndex = 2 else currentIndex = 4 end
+  elseif chordVisibilityMode == 3 then
+      if showOnlyScaleChords then currentIndex = 3 else currentIndex = 5 end
+  end
+  
+  local onFilterSelect = function(index)
+      if index == 1 then
+          chordVisibilityMode = 1; showOnlyScaleChords = true
+      elseif index == 2 then
+          chordVisibilityMode = 2; showOnlyScaleChords = true
+      elseif index == 3 then
+          chordVisibilityMode = 3; showOnlyScaleChords = true
+      elseif index == 4 then
+          chordVisibilityMode = 2; showOnlyScaleChords = false
+      elseif index == 5 then
+          chordVisibilityMode = 3; showOnlyScaleChords = false
+      end
+      
+      reaper.SetExtState("TK_ChordGun", "vocabMode", tostring(chordVisibilityMode), true)
+      reaper.SetExtState("TK_ChordGun", "showOnlyScaleChords", showOnlyScaleChords and "1" or "0", true)
+      chordListScrollOffset = 0
+      updateScaleChords() -- Refresh lists
+      guiShouldBeUpdated = true
+  end
+  
+  self:addDropdown(inScaleButtonX+dockerXPadding, inScaleButtonY, buttonWidth, buttonHeight, filterOptions, currentIndex, onFilterSelect)
 
-  local lenButtonX = topButtonXPos(xMargin, xPadding, 6) + extraSpacing + sx(15)
+  local lenButtonX = topButtonXPos(xMargin, xPadding, 6) + extraSpacing + sx(15) + (buttonWidth - topButtonWidth())
   local lenButtonY = topButtonYPos(yMargin)
   self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = topButtonWidth()})
 
