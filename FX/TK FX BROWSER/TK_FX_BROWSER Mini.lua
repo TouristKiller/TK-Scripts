@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.1.9
+-- @version 0.2.0
 -- @changelog:
 --[[     
     + Added "Always Search All" option in settings
@@ -6889,6 +6889,10 @@ function ShowScreenshotControls()
     
     if layout == "vertical" or auto_vertical then
         -- VERTICAL LAYOUT
+        -- If dropdown is hidden, add spacing to avoid overlap with settings button
+        if config.screenshot_view_type == 3 then
+            r.ImGui_Dummy(ctx, 0, 22)
+        end
         r.ImGui_PushItemWidth(ctx, -1)
         ShowFolderDropdown()
         r.ImGui_PopItemWidth(ctx)

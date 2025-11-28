@@ -45,6 +45,13 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
   - Track height en items worden vergrendeld (Locked).
 - **UI**: Melody knop verplaatst naar de tweede rij (naast Ratio) voor betere indeling.
 
+## [2.1.0] - 2025-11-28
+
+### TK_SMART
+#### Toegevoegd
+- **Zoom Controls**: "+" knop om in te zoomen op een specifieke regio, en "-" knop om uit te zoomen naar het hele project.
+- **Auto-Color Rules**: Nieuwe "Rules" tab om regels in te stellen (bijv. "Vocal" = Blauw). Inclusief "Auto-Apply on Rename" optie.
+
 ## Ongeversioneerd (werk in uitvoering)
 
 ### Toegevoegd
