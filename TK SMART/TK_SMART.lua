@@ -1,9 +1,11 @@
 -- @description TK Script Template for ReaScript with TK GUI
 -- @author TouristKiller
--- @version 2.0.2
+-- @version 2.1.0
 -- @changelog
 --[[
-+ Added DDP button again
++ Added Zoom In (+) and Zoom Out (-) buttons to Regions table
++ Added Auto-Color Rules tab with Auto-Apply on Rename option
++ Added Duplicate Region Content (D) button - left-click: ripple, right-click: no ripple
 ]]--
 ----------------------------------------------------------------------------
 local r = reaper
@@ -149,6 +151,28 @@ local item_names = {}
 
 local show_weblink_browser = false
 local show_minimap = true
+
+-- Auto Color Variables
+local auto_color_rules = {} 
+local auto_apply_rules = false
+
+local function save_color_rules()
+    local str = json.encode(auto_color_rules)
+    r.SetExtState(SCRIPT_NAME, "auto_color_rules", str, true)
+    r.SetExtState(SCRIPT_NAME, "auto_apply_rules", tostring(auto_apply_rules), true)
+end
+
+local function load_color_rules()
+    local str = r.GetExtState(SCRIPT_NAME, "auto_color_rules")
+    if str and str ~= "" then
+        local success, result = pcall(json.decode, str)
+        if success then auto_color_rules = result end
+    end
+    local apply_state = r.GetExtState(SCRIPT_NAME, "auto_apply_rules")
+    auto_apply_rules = (apply_state == "true")
+end
+
+load_color_rules()
 
 -- Play variables
 local currently_playing_region = nil
@@ -1120,6 +1144,38 @@ local function handle_marker_playback()
     end
 end
 
+local function apply_color_rules_to_project()
+    local items = get_markers_and_regions()
+    local change_count = 0
+    
+    r.Undo_BeginBlock()
+    for _, item in ipairs(items) do
+        for _, rule in ipairs(auto_color_rules) do
+            if rule.enabled and rule.text ~= "" then
+                if string.find(string.lower(item.name), string.lower(rule.text), 1, true) then
+                    if item.color ~= rule.color then
+                        item.color = rule.color
+                        if item.isRegion then
+                            r.SetProjectMarker3(0, item.index, true, item.pos, item.rgnend, item.name, rule.color)
+                        else
+                            r.SetProjectMarker3(0, item.index, false, item.pos, 0, item.name, rule.color)
+                        end
+                        change_count = change_count + 1
+                    end
+                    break
+                end
+            end
+        end
+    end
+    
+    if change_count > 0 then
+        r.UpdateTimeline()
+        r.Undo_EndBlock("Apply Auto-Color Rules", -1)
+    else
+        r.Undo_EndBlock("Apply Auto-Color Rules", -1)
+    end
+end
+
 local function update_item_name(item, new_name)
     item.name = new_name
 
@@ -1131,6 +1187,10 @@ local function update_item_name(item, new_name)
     local key = item.index .. (item.isRegion and "R" or "M")
     item_names[key] = new_name
     save_visibility_to_project()
+
+    if auto_apply_rules then
+        apply_color_rules_to_project()
+    end
 end
 
 local function get_next_available_index(is_region)
@@ -1331,6 +1391,35 @@ local function play_region(region)
     end
 end
 
+local function duplicate_region_content(region, ripple)
+    if not region or not region.isRegion then return end
+    
+    local cursor_pos = r.GetCursorPosition()
+    local region_length = region.rgnend - region.pos
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local orig_start, orig_end = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    
+    r.GetSet_LoopTimeRange(true, false, region.pos, region.rgnend, false)
+    r.SetEditCurPos(cursor_pos, false, false)
+    
+    r.Main_OnCommand(40397, 0)
+    
+    if not ripple then
+        r.GetSet_LoopTimeRange(true, false, cursor_pos + region_length, cursor_pos + region_length + region_length, false)
+        r.Main_OnCommand(40201, 0)
+    end
+    
+    r.GetSet_LoopTimeRange(true, false, orig_start, orig_end, false)
+    
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+    r.UpdateTimeline()
+    r.Undo_EndBlock("Duplicate Region Content", -1)
+end
+
 local function handle_region_playback()
     if currently_playing_region then
         local play_state = r.GetPlayState()
@@ -1349,7 +1438,7 @@ end
 
 local function draw_region_table(ctx, items)
     local table_flags = ImGui.TableFlags_Borders
-    if ImGui.BeginTable(ctx, "RegionsTable", 10, table_flags) then
+    if ImGui.BeginTable(ctx, "RegionsTable", 12, table_flags) then
         local col_flags_fixed = ImGui.TableColumnFlags_WidthFixed
         local col_flags_stretch = ImGui.TableColumnFlags_WidthStretch
         
@@ -1360,6 +1449,8 @@ local function draw_region_table(ctx, items)
         ImGui.TableSetupColumn(ctx, "Start", col_flags_fixed, 75 * settings.scale_factor)
         ImGui.TableSetupColumn(ctx, "End", col_flags_fixed, 75 * settings.scale_factor)
         ImGui.TableSetupColumn(ctx, "Color", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Zoom", col_flags_fixed, 60 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Dup", col_flags_fixed, 30 * settings.scale_factor)
         ImGui.TableSetupColumn(ctx, "Convert", col_flags_fixed, 55 * settings.scale_factor)
         ImGui.TableSetupColumn(ctx, "Del", col_flags_fixed, 15 * settings.scale_factor)
         ImGui.TableSetupColumn(ctx, "Sel", col_flags_fixed, 15 * settings.scale_factor)
@@ -1443,16 +1534,37 @@ local function draw_region_table(ctx, items)
                 edit_color(item, i)
 
                 ImGui.TableSetColumnIndex(ctx, 7)
+                if ImGui.Button(ctx, "+##z_in" .. i) then
+                    r.GetSet_LoopTimeRange(true, false, item.pos, item.rgnend, false)
+                    r.Main_OnCommand(40031, 0) -- View: Zoom time selection
+                end
+                ShowTooltip("Zoom to Region")
+                ImGui.SameLine(ctx)
+                if ImGui.Button(ctx, "-##z_out" .. i) then
+                    r.Main_OnCommand(40295, 0) -- View: Zoom to project
+                end
+                ShowTooltip("Zoom to Project")
+
+                ImGui.TableSetColumnIndex(ctx, 8)
+                if ImGui.Button(ctx, "D##dup" .. i) then
+                    duplicate_region_content(item, true)
+                end
+                ShowTooltip("Duplicate (ripple). Right-click for no ripple.")
+                if ImGui.IsItemClicked(ctx, 1) then
+                    duplicate_region_content(item, false)
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 9)
                 if ImGui.Button(ctx, "To Marker##" .. i) then
                     toggle_marker_region(item, items)
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 8)
+                ImGui.TableSetColumnIndex(ctx, 10)
                 if ImGui.Button(ctx, "X##" .. i) then
                     delete_item(item)
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 9)
+                ImGui.TableSetColumnIndex(ctx, 11)
                 if ImGui.Button(ctx, ">##nav" .. i) then
                     r.SetEditCurPos(item.pos, true, false)
                     r.GetSet_LoopTimeRange(true, false, item.pos, item.rgnend, false)
@@ -1574,6 +1686,93 @@ local function run_script(script_name)
         dofile(script_path)
     else
         r.ShowMessageBox("Script not found: " .. script_name, "Error", 0)
+    end
+end
+
+local function draw_color_rules_tab(ctx)
+    local available_height = calculate_available_height(ctx)
+    if ImGui.BeginChild(ctx, "RulesChild", 0, available_height) then
+        
+        if ImGui.Button(ctx, "Add New Rule") then
+            table.insert(auto_color_rules, {
+                text = "New Rule", 
+                color = 0xFFFFFFFF,
+                enabled = true
+            })
+            save_color_rules()
+        end
+        
+        ImGui.SameLine(ctx)
+        if ImGui.Button(ctx, "APPLY NOW") then
+            apply_color_rules_to_project()
+        end
+        
+        ImGui.SameLine(ctx)
+        local changed, new_val = ImGui.Checkbox(ctx, "Auto-Apply on Rename", auto_apply_rules)
+        if changed then
+            auto_apply_rules = new_val
+            save_color_rules()
+        end
+        ShowTooltip("Automatically color items when you rename them in this script")
+
+        ImGui.Separator(ctx)
+
+        local table_flags = ImGui.TableFlags_Borders | ImGui.TableFlags_RowBg
+        if ImGui.BeginTable(ctx, "RulesTable", 4, table_flags) then
+            ImGui.TableSetupColumn(ctx, "On", ImGui.TableColumnFlags_WidthFixed, 30 * settings.scale_factor)
+            ImGui.TableSetupColumn(ctx, "If Name Contains...", ImGui.TableColumnFlags_WidthStretch)
+            ImGui.TableSetupColumn(ctx, "Color", ImGui.TableColumnFlags_WidthFixed, 50 * settings.scale_factor)
+            ImGui.TableSetupColumn(ctx, "Del", ImGui.TableColumnFlags_WidthFixed, 30 * settings.scale_factor)
+            ImGui.TableHeadersRow(ctx)
+
+            local to_remove = nil
+
+            for i, rule in ipairs(auto_color_rules) do
+                ImGui.PushID(ctx, i)
+                ImGui.TableNextRow(ctx)
+                
+                ImGui.TableSetColumnIndex(ctx, 0)
+                local en_changed, new_en = ImGui.Checkbox(ctx, "##en", rule.enabled)
+                if en_changed then 
+                    rule.enabled = new_en 
+                    save_color_rules()
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 1)
+                ImGui.SetNextItemWidth(ctx, -1)
+                local txt_changed, new_txt = ImGui.InputText(ctx, "##txt", rule.text)
+                if txt_changed then 
+                    rule.text = new_txt 
+                    save_color_rules()
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 2)
+                local r_val, g_val, b_val = r.ColorFromNative(rule.color)
+                local col_packed = ImGui.ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
+                local retval, new_col_packed = ImGui.ColorEdit3(ctx, "##clr" .. i, col_packed, ImGui.ColorEditFlags_NoInputs)
+                if retval then
+                    local r_new, g_new, b_new = ImGui.ColorConvertU32ToDouble4(new_col_packed)
+                    local new_native = r.ColorToNative(math.floor(r_new*255), math.floor(g_new*255), math.floor(b_new*255))
+                    rule.color = new_native | 0x1000000
+                    save_color_rules()
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 3)
+                if ImGui.Button(ctx, "X") then
+                    to_remove = i
+                end
+
+                ImGui.PopID(ctx)
+            end
+            ImGui.EndTable(ctx)
+
+            if to_remove then
+                table.remove(auto_color_rules, to_remove)
+                save_color_rules()
+            end
+        end
+        
+        ImGui.EndChild(ctx)
     end
 end
 
@@ -2262,7 +2461,7 @@ function frame()
         end
         ImGui.SameLine(ctx)
 
-        if ImGui.Button(ctx, "Renumber M", button_width) then
+        if ImGui.Button(ctx, "Re# Marker", button_width) then
             r.Undo_BeginBlock()
             renumber_items(false) 
             r.Undo_EndBlock("Renumber Markers", -1)
@@ -2270,7 +2469,7 @@ function frame()
         end
         ImGui.SameLine(ctx)
 
-        if ImGui.Button(ctx, "Renumber R", button_width) then
+        if ImGui.Button(ctx, "Re# Region", button_width) then
             r.Undo_BeginBlock()
             renumber_items(true)
             r.Undo_EndBlock("Renumber Regions", -1)
@@ -2328,6 +2527,11 @@ function frame()
                 ImGui.EndTabItem(ctx)
             end
             
+            if ImGui.BeginTabItem(ctx, "Rules") then
+                draw_color_rules_tab(ctx)
+                ImGui.EndTabItem(ctx)
+            end
+
             if ImGui.BeginTabItem(ctx, "Actions") then
                 if ImGui.BeginChild(ctx, "ActionsChild", 0, available_height) then
                     draw_actions_tab(ctx)
