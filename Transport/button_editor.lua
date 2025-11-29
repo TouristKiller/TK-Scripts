@@ -63,6 +63,9 @@ local style_settings_window = {
 -- Auto align spacing setting
 local auto_align_spacing = 3  -- default 3px
 
+-- New button placement spacing (shared with custom_buttons.lua)
+local new_button_spacing = 5  -- default 5px
+
 -- Load auto align spacing from ExtState
 local function LoadAutoAlignSpacing()
     local value = r.GetExtState("TK_TRANSPORT_BUTTON_EDITOR", "auto_align_spacing")
@@ -77,6 +80,27 @@ end
 -- Save auto align spacing to ExtState
 local function SaveAutoAlignSpacing()
     r.SetExtState("TK_TRANSPORT_BUTTON_EDITOR", "auto_align_spacing", tostring(auto_align_spacing), true)
+end
+
+-- Load new button spacing from ExtState
+local function LoadNewButtonSpacing()
+    local value = r.GetExtState("TK_TRANSPORT_BUTTON_EDITOR", "new_button_spacing")
+    if value and value ~= "" then
+        local num = tonumber(value)
+        if num and num >= 0 and num <= 50 then
+            new_button_spacing = num
+        end
+    end
+end
+
+-- Save new button spacing to ExtState
+local function SaveNewButtonSpacing()
+    r.SetExtState("TK_TRANSPORT_BUTTON_EDITOR", "new_button_spacing", tostring(new_button_spacing), true)
+end
+
+-- Getter for new button spacing (used by custom_buttons.lua)
+function ButtonEditor.GetNewButtonSpacing()
+    return new_button_spacing
 end
 
 -- Load style copy settings from ExtState
@@ -102,6 +126,7 @@ end
 -- Load settings on module initialization
 LoadStyleCopySettings()
 LoadAutoAlignSpacing()
+LoadNewButtonSpacing()
 
 local function to_int(value, default)
     value = tonumber(value)
@@ -1332,6 +1357,92 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 end
             end
             if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        end
+        
+        -- "Copy style from button" dropdown for quick style copying
+        if has_sel and #custom_buttons.buttons > 1 then
+            r.ImGui_Text(ctx, "Copy style from:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 200)
+            if r.ImGui_BeginCombo(ctx, "##copy_style_from_button", "Select button...") then
+                for i, btn in ipairs(custom_buttons.buttons) do
+                    if i ~= custom_buttons.current_edit then
+                        local display_name = btn.name or ("Button " .. i)
+                        if btn.group and btn.group ~= "" then
+                            display_name = display_name .. " [" .. btn.group .. "]"
+                        end
+                        if r.ImGui_Selectable(ctx, display_name .. "##copy_from_" .. i) then
+                            -- Copy style from selected button
+                            CopyButtonStyle(btn)
+                            -- Immediately paste to current button
+                            if PasteButtonStyle(custom_buttons.buttons[custom_buttons.current_edit]) then
+                                custom_buttons.SaveCurrentButtons()
+                                has_unsaved_changes = true
+                            end
+                        end
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Quickly copy style from another button to this button")
+            end
+        end
+        
+        -- "Copy position from button" dropdown - places button to the right of selected button
+        if has_sel and #custom_buttons.buttons > 1 then
+            r.ImGui_Text(ctx, "Place next to:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 200)
+            if r.ImGui_BeginCombo(ctx, "##copy_position_from_button", "Select button...") then
+                for i, btn in ipairs(custom_buttons.buttons) do
+                    if i ~= custom_buttons.current_edit then
+                        local display_name = btn.name or ("Button " .. i)
+                        if btn.group and btn.group ~= "" then
+                            display_name = display_name .. " [" .. btn.group .. "]"
+                        end
+                        -- Show position info
+                        local pos_info = string.format(" (x:%d, y:%d)", btn.position_px or 0, btn.position_y_px or 0)
+                        if r.ImGui_Selectable(ctx, display_name .. pos_info .. "##pos_from_" .. i) then
+                            -- Place current button to the right of selected button
+                            local current_button = custom_buttons.buttons[custom_buttons.current_edit]
+                            local source_x = btn.position_px or 0
+                            local source_width = btn.width or 60
+                            current_button.position_px = source_x + source_width + new_button_spacing
+                            current_button.position_y_px = btn.position_y_px
+                            current_button.position_y = btn.position_y
+                            -- Update fractional position
+                            if canvas_width and canvas_width > 0 then
+                                current_button.position = current_button.position_px / canvas_width
+                            end
+                            if canvas_height and canvas_height > 0 then
+                                current_button.position_y = (current_button.position_y_px or 0) / canvas_height
+                            end
+                            custom_buttons.SaveCurrentButtons()
+                            has_unsaved_changes = true
+                            changed = true
+                        end
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Place this button to the right of the selected button\nwith " .. new_button_spacing .. "px spacing")
+            end
+            
+            -- Spacing slider on the same line
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Spacing:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 80)
+            local rv_spacing
+            rv_spacing, new_button_spacing = r.ImGui_SliderInt(ctx, "##new_button_spacing", new_button_spacing, 0, 50, "%d px")
+            if rv_spacing then
+                SaveNewButtonSpacing()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Spacing between buttons when using 'Place next to'\nor when creating new buttons")
+            end
         end
         
         r.ImGui_Spacing(ctx)

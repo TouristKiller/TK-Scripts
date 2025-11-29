@@ -5516,7 +5516,42 @@ function ShowSettings(main_window_width , main_window_height)
  end
  end
  if r.ImGui_IsItemHovered(ctx) then
- r.ImGui_SetTooltip(ctx, "Create new button")
+ r.ImGui_SetTooltip(ctx, "Create new button\nRight-click for options")
+ end
+ if r.ImGui_BeginPopupContextItem(ctx, "new_button_context_small") then
+ if r.ImGui_MenuItem(ctx, "New Button (default)") then
+ if CustomButtons and CustomButtons.CreateNewButton then
+ local new_button = CustomButtons.CreateNewButton()
+ table.insert(CustomButtons.buttons, new_button)
+ selected_button_component = "button_" .. #CustomButtons.buttons
+ CustomButtons.SaveCurrentButtons()
+ end
+ end
+ if r.ImGui_MenuItem(ctx, "Copy style from last button") then
+ if CustomButtons and CustomButtons.CreateNewButton then
+ local new_button = CustomButtons.CreateNewButton({copy_style = true})
+ table.insert(CustomButtons.buttons, new_button)
+ selected_button_component = "button_" .. #CustomButtons.buttons
+ CustomButtons.SaveCurrentButtons()
+ end
+ end
+ if r.ImGui_MenuItem(ctx, "Place next to last button") then
+ if CustomButtons and CustomButtons.CreateNewButton then
+ local new_button = CustomButtons.CreateNewButton({place_next_to = true})
+ table.insert(CustomButtons.buttons, new_button)
+ selected_button_component = "button_" .. #CustomButtons.buttons
+ CustomButtons.SaveCurrentButtons()
+ end
+ end
+ if r.ImGui_MenuItem(ctx, "Copy style + Place next to last") then
+ if CustomButtons and CustomButtons.CreateNewButton then
+ local new_button = CustomButtons.CreateNewButton({copy_style = true, place_next_to = true})
+ table.insert(CustomButtons.buttons, new_button)
+ selected_button_component = "button_" .. #CustomButtons.buttons
+ CustomButtons.SaveCurrentButtons()
+ end
+ end
+ r.ImGui_EndPopup(ctx)
  end
  
  r.ImGui_SameLine(ctx)
@@ -5807,6 +5842,44 @@ function ShowSettings(main_window_width , main_window_height)
  selected_button_component = "button_" .. #CustomButtons.buttons
  CustomButtons.SaveCurrentButtons()
  end
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, "Right-click for options")
+ end
+ if r.ImGui_BeginPopupContextItem(ctx, "new_button_context_main") then
+ if r.ImGui_MenuItem(ctx, "New Button (default)") then
+ if CustomButtons and CustomButtons.CreateNewButton then
+ local new_button = CustomButtons.CreateNewButton()
+ table.insert(CustomButtons.buttons, new_button)
+ selected_button_component = "button_" .. #CustomButtons.buttons
+ CustomButtons.SaveCurrentButtons()
+ end
+ end
+ if r.ImGui_MenuItem(ctx, "Copy style from last button") then
+ if CustomButtons and CustomButtons.CreateNewButton then
+ local new_button = CustomButtons.CreateNewButton({copy_style = true})
+ table.insert(CustomButtons.buttons, new_button)
+ selected_button_component = "button_" .. #CustomButtons.buttons
+ CustomButtons.SaveCurrentButtons()
+ end
+ end
+ if r.ImGui_MenuItem(ctx, "Place next to last button") then
+ if CustomButtons and CustomButtons.CreateNewButton then
+ local new_button = CustomButtons.CreateNewButton({place_next_to = true})
+ table.insert(CustomButtons.buttons, new_button)
+ selected_button_component = "button_" .. #CustomButtons.buttons
+ CustomButtons.SaveCurrentButtons()
+ end
+ end
+ if r.ImGui_MenuItem(ctx, "Copy style + Place next to last") then
+ if CustomButtons and CustomButtons.CreateNewButton then
+ local new_button = CustomButtons.CreateNewButton({copy_style = true, place_next_to = true})
+ table.insert(CustomButtons.buttons, new_button)
+ selected_button_component = "button_" .. #CustomButtons.buttons
+ CustomButtons.SaveCurrentButtons()
+ end
+ end
+ r.ImGui_EndPopup(ctx)
  end
  
  if r.ImGui_Button(ctx, "📁 New Group", -1, 0) then

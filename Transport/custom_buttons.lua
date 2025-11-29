@@ -19,26 +19,28 @@ local CustomButtons = {
     remember_toggle_states = false  -- Per-preset setting for toggle state memory
 }
 
-function CustomButtons.CreateNewButton()
-    return {
+function CustomButtons.CreateNewButton(options)
+    options = options or {}
+    
+    local new_button = {
         name = "New Button",
         position = 0.5,
         position_y = 0.15,
+        position_px = nil,
+        position_y_px = nil,
         width = 60,
         visible = true,
-    group = "", 
-    show_border = true, 
+        group = "", 
+        show_border = true, 
         color = 0x333333FF,
         hover_color = 0x444444FF,
         active_color = 0x555555FF,
         text_color = 0xFFFFFFFF,
-        -- Toggle state visualization
         show_toggle_state = false,
-        toggle_on_color = 0x00FF00FF,  -- Green when toggle is ON
-        toggle_off_color = nil,  -- nil means use default color
-        -- Group visibility control
+        toggle_on_color = 0x00FF00FF,
+        toggle_off_color = nil,
         is_group_visibility_toggle = false,
-        target_group = nil,  -- Name of the group to control
+        target_group = nil,
         left_click = {
             command = nil,
             name = "No Action"
@@ -47,6 +49,46 @@ function CustomButtons.CreateNewButton()
             items = {}
         }
     }
+    
+    if #CustomButtons.buttons > 0 then
+        local last_button = CustomButtons.buttons[#CustomButtons.buttons]
+        
+        if options.copy_style then
+            new_button.width = last_button.width or 60
+            new_button.show_border = last_button.show_border
+            new_button.color = last_button.color or 0x333333FF
+            new_button.hover_color = last_button.hover_color or 0x444444FF
+            new_button.active_color = last_button.active_color or 0x555555FF
+            new_button.text_color = last_button.text_color or 0xFFFFFFFF
+            new_button.rounding = last_button.rounding
+            new_button.border_thickness = last_button.border_thickness
+            new_button.border_color = last_button.border_color
+            new_button.font_size = last_button.font_size
+            new_button.font_name = last_button.font_name
+            new_button.use_icon = last_button.use_icon
+            new_button.icon_name = last_button.icon_name
+            new_button.show_text_with_icon = last_button.show_text_with_icon
+        end
+        
+        if options.place_next_to then
+            local spacing = 5
+            local spacing_str = r.GetExtState("TK_TRANSPORT_BUTTON_EDITOR", "new_button_spacing")
+            if spacing_str and spacing_str ~= "" then
+                local num = tonumber(spacing_str)
+                if num and num >= 0 and num <= 50 then
+                    spacing = num
+                end
+            end
+            
+            local last_x = last_button.position_px or 0
+            local last_width = last_button.width or 60
+            new_button.position_px = last_x + last_width + spacing
+            new_button.position_y_px = last_button.position_y_px
+            new_button.position_y = last_button.position_y or 0.15
+        end
+    end
+    
+    return new_button
 end
 
 function CustomButtons.PrepareForSave()
