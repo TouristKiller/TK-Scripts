@@ -1,4 +1,4 @@
--- @version 0.3.8
+-- @version 0.3.9
 -- @author: TouristKiller (with assistance from Robert ;o) )
 -- @changelog:
 --[[     
@@ -11,7 +11,7 @@
 
 local r = reaper
 local SCRIPT_NAME = 'TK Slot Machine'
-local SCRIPT_VERSION = '0.3.7'
+local SCRIPT_VERSION = '0.3.9'
 
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local os_separator = package.config:sub(1, 1)
@@ -4689,7 +4689,7 @@ local function draw()
       local fxCount = r.TrackFX_GetCount(tr)
       if fxCount > 0 then
         local rowLineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
-        local rows = math.max(1, math.min(8, tonumber(state.fxSlotsVisibleRows) or 4))
+        local rows = math.max(1, math.min(20, tonumber(state.fxSlotsVisibleRows) or 4))
         local tableH = math.floor((rowLineH + 4) * rows + 6)
         trackSectionH = headerH + tableH + 12
       end
@@ -4907,7 +4907,7 @@ local function draw()
           if fxCount <= 0 then
             r.ImGui_Text(ctx, '(No FX on this track)')
           else
-            state.fxSlotsVisibleRows = math.max(1, math.min(8, tonumber(state.fxSlotsVisibleRows) or 4))
+            state.fxSlotsVisibleRows = math.max(1, math.min(20, tonumber(state.fxSlotsVisibleRows) or 4))
             local rowLineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
             local flags = r.ImGui_TableFlags_SizingFixedFit() | r.ImGui_TableFlags_RowBg()
             if r.ImGui_BeginTable(ctx, 'fx_table_single', 3, flags) then
@@ -5128,13 +5128,13 @@ local function draw()
       if hovered and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeNS then
         pcall(function() r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS()) end)
       end
-      if state.tooltips and hovered and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Drag to change FX slots height (1-8 rows)') end
+      if state.tooltips and hovered and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, 'Drag to change FX slots height (1-20 rows)') end
       if active and r.ImGui_IsMouseDragging and r.ImGui_IsMouseDragging(ctx,0) then
         local rowLineH = (r.ImGui_GetTextLineHeightWithSpacing and r.ImGui_GetTextLineHeightWithSpacing(ctx)) or (r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx)) or 18
         local dragDy = select(2, r.ImGui_GetMouseDragDelta(ctx,0)) or 0
         local deltaRows = math.floor(dragDy / (rowLineH * 0.9))
         if deltaRows ~= 0 then
-          state.fxSlotsVisibleRows = math.max(1, math.min(8, state.fxSlotsVisibleRows + deltaRows))
+          state.fxSlotsVisibleRows = math.max(1, math.min(20, state.fxSlotsVisibleRows + deltaRows))
           r.ImGui_ResetMouseDragDelta(ctx,0)
           save_user_settings()
         end
