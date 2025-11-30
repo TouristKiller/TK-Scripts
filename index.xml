@@ -118,7 +118,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.4.1" author="TouristKiller" time="2026-11-30T16:30:00Z">
+        <version name="1.4.2" author="TouristKiller" time="2026-11-30T16:3500Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
