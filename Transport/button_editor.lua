@@ -2428,8 +2428,8 @@ function ButtonEditor.LoadIconForPreview(button)
         end
         
         if r.file_exists(icon_path) then
-            local img = r.ImGui_CreateImage(icon_path)
-            if r.ImGui_ValidatePtr(img, 'ImGui_Image*') then
+            local ok, img = pcall(r.ImGui_CreateImage, icon_path)
+            if ok and r.ImGui_ValidatePtr(img, 'ImGui_Image*') then
                 ButtonRenderer.image_cache[button.icon_name] = img
                 return img, "loaded"
             else

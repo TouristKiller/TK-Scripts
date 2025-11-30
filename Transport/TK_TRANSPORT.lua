@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.3.9
+-- @version 1.4.1
 -- @changelog 
 --[[
 
@@ -3849,7 +3849,12 @@ end
 function UpdateCustomImages()
  if settings.use_custom_play_image and settings.custom_play_image_path ~= "" then
  if r.file_exists(settings.custom_play_image_path) then
- transport_custom_images.play = r.ImGui_CreateImage(settings.custom_play_image_path)
+ local ok, img = pcall(r.ImGui_CreateImage, settings.custom_play_image_path)
+ if ok then
+ transport_custom_images.play = img
+ else
+ transport_custom_images.play = nil
+ end
  else
  settings.custom_play_image_path = ""
  transport_custom_images.play = nil
@@ -3858,7 +3863,12 @@ function UpdateCustomImages()
  
  if settings.use_custom_stop_image and settings.custom_stop_image_path ~= "" then
  if r.file_exists(settings.custom_stop_image_path) then
- transport_custom_images.stop = r.ImGui_CreateImage(settings.custom_stop_image_path)
+ local ok, img = pcall(r.ImGui_CreateImage, settings.custom_stop_image_path)
+ if ok then
+ transport_custom_images.stop = img
+ else
+ transport_custom_images.stop = nil
+ end
  else
  settings.custom_stop_image_path = ""
  transport_custom_images.stop = nil
@@ -3867,7 +3877,12 @@ function UpdateCustomImages()
  
  if settings.use_custom_pause_image and settings.custom_pause_image_path ~= "" then
  if r.file_exists(settings.custom_pause_image_path) then
- transport_custom_images.pause = r.ImGui_CreateImage(settings.custom_pause_image_path)
+ local ok, img = pcall(r.ImGui_CreateImage, settings.custom_pause_image_path)
+ if ok then
+ transport_custom_images.pause = img
+ else
+ transport_custom_images.pause = nil
+ end
  else
  settings.custom_pause_image_path = ""
  transport_custom_images.pause = nil
@@ -3876,7 +3891,12 @@ function UpdateCustomImages()
  
  if settings.use_custom_record_image and settings.custom_record_image_path ~= "" then
  if r.file_exists(settings.custom_record_image_path) then
- transport_custom_images.record = r.ImGui_CreateImage(settings.custom_record_image_path)
+ local ok, img = pcall(r.ImGui_CreateImage, settings.custom_record_image_path)
+ if ok then
+ transport_custom_images.record = img
+ else
+ transport_custom_images.record = nil
+ end
  else
  settings.custom_record_image_path = ""
  transport_custom_images.record = nil
@@ -3885,7 +3905,12 @@ function UpdateCustomImages()
  
  if settings.use_custom_loop_image and settings.custom_loop_image_path ~= "" then
  if r.file_exists(settings.custom_loop_image_path) then
- transport_custom_images.loop = r.ImGui_CreateImage(settings.custom_loop_image_path)
+ local ok, img = pcall(r.ImGui_CreateImage, settings.custom_loop_image_path)
+ if ok then
+ transport_custom_images.loop = img
+ else
+ transport_custom_images.loop = nil
+ end
  else
  settings.custom_loop_image_path = ""
  transport_custom_images.loop = nil
@@ -3894,7 +3919,12 @@ function UpdateCustomImages()
  
  if settings.use_custom_rewind_image and settings.custom_rewind_image_path ~= "" then
  if r.file_exists(settings.custom_rewind_image_path) then
- transport_custom_images.rewind = r.ImGui_CreateImage(settings.custom_rewind_image_path)
+ local ok, img = pcall(r.ImGui_CreateImage, settings.custom_rewind_image_path)
+ if ok then
+ transport_custom_images.rewind = img
+ else
+ transport_custom_images.rewind = nil
+ end
  else
  settings.custom_rewind_image_path = ""
  transport_custom_images.rewind = nil
@@ -3903,7 +3933,12 @@ function UpdateCustomImages()
  
  if settings.use_custom_forward_image and settings.custom_forward_image_path ~= "" then
  if r.file_exists(settings.custom_forward_image_path) then
- transport_custom_images.forward = r.ImGui_CreateImage(settings.custom_forward_image_path)
+ local ok, img = pcall(r.ImGui_CreateImage, settings.custom_forward_image_path)
+ if ok then
+ transport_custom_images.forward = img
+ else
+ transport_custom_images.forward = nil
+ end
  else
  settings.custom_forward_image_path = ""
  transport_custom_images.forward = nil
@@ -4070,8 +4105,8 @@ function LoadWindowSetScreenshot(slot_number)
  end
  local filename = windowset_screenshots.folder_path .. "windowset_" .. slot_number .. ".png"
  if r.file_exists(filename) then
- local texture = r.ImGui_CreateImage(filename)
- if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+ local ok, texture = pcall(r.ImGui_CreateImage, filename)
+ if ok and texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
  windowset_screenshots.textures[slot_number] = texture
  return texture
  end

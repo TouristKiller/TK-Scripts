@@ -387,7 +387,13 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
             if button.use_image and button.image_path then
                 if not r.ImGui_ValidatePtr(ButtonRenderer.image_cache[button.image_path], 'ImGui_Image*') then
                     if r.file_exists(button.image_path) then
-                        ButtonRenderer.image_cache[button.image_path] = r.ImGui_CreateImage(button.image_path)
+                        local ok, img = pcall(r.ImGui_CreateImage, button.image_path)
+                        if ok and r.ImGui_ValidatePtr(img, 'ImGui_Image*') then
+                            ButtonRenderer.image_cache[button.image_path] = img
+                        else
+                            button.use_image = false
+                            button.image_path = nil
+                        end
                     else
                         button.use_image = false
                         button.image_path = nil
@@ -704,7 +710,13 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         icon_path = resource_path .. "/Data/toolbar_icons/" .. button.icon_name
                     end
                     if r.file_exists(icon_path) then
-                        ButtonRenderer.image_cache[button.icon_name] = r.ImGui_CreateImage(icon_path)
+                        local ok, img = pcall(r.ImGui_CreateImage, icon_path)
+                        if ok and r.ImGui_ValidatePtr(img, 'ImGui_Image*') then
+                            ButtonRenderer.image_cache[button.icon_name] = img
+                        else
+                            button.use_icon = false
+                            button.icon_name = nil
+                        end
                     else
                         button.use_icon = false
                         button.icon_name = nil

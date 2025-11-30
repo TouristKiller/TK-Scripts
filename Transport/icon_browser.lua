@@ -45,7 +45,11 @@ function IconBrowser.LoadIcons()
         while true do
             local file = r.EnumerateFiles(IconBrowser.custom_image_folder, idx)
             if not file then break end
-            if file:match("%.png$") or file:match("%.jpg$") or file:match("%.jpeg$") or file:match("%.bmp$") then
+            
+            local ext = file:match("^.+(%..+)$")
+            if ext then ext = ext:lower() end
+            
+            if file:sub(1,1) ~= "." and (ext == ".png" or ext == ".jpg" or ext == ".jpeg") then
                 local icon = {
                     name = file,
                     path = IconBrowser.custom_image_folder .. "/" .. file
@@ -70,7 +74,11 @@ function IconBrowser.LoadIcons()
         while true do
             local file = r.EnumerateFiles(resource_path, idx)
             if not file then break end
-            if file:match("%.png$") then
+            
+            local ext = file:match("^.+(%..+)$")
+            if ext then ext = ext:lower() end
+            
+            if file:sub(1,1) ~= "." and (ext == ".png" or ext == ".jpg" or ext == ".jpeg") then
                 local icon = {
                     name = file,
                     path = resource_path .. "/" .. file
