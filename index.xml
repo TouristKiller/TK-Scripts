@@ -474,8 +474,12 @@
     </reapack>
 
     <reapack name="TK_Find Similar MIDI Items.lua" type="script" desc="TK Find Similar MIDI Items - Find matching MIDI patterns">
-      <version name="1.3" author="TouristKiller" time="2025-11-30T02:25:00Z">
+      <version name="1.4" author="TouristKiller" time="2025-11-30T03:40:00Z">
         <changelog><![CDATA[
+1.4
++ Fixed segment matching - extra notes in matched section now reduce similarity score
++ More accurate matching: compares only notes within the reference time range
+
 1.3
 + Added Time Selection mode - use time selection within item as search pattern
 + Added Segment Match mode - find reference pattern inside larger items

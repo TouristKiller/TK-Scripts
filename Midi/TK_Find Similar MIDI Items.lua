@@ -1,6 +1,6 @@
 -- @description TK Find Similar MIDI Items
 -- @author TouristKiller
--- @version 1.3
+-- @version 1.4
 -- @changelog:
 --[[     
     + Initial release
@@ -14,6 +14,7 @@
     + v1.2: Added segment matching - find partial matches within larger items
     + v1.2: Search modes: Full Item / Segment (find reference pattern in larger items)
     + v1.3: Added Time Selection mode - use time selection within item as search pattern
+    + v1.4: Fixed segment matching - extra notes in matched section now reduce similarity score
 ]]--
 
 local r = reaper
@@ -253,7 +254,7 @@ local function MatchNotesWithOffset(ref_notes, compare_notes, offset)
     return exact_matches, good_matches, partial_matches, match_count, avg_overlap
 end
 
-local function CalculateSimilarityWithOffset(notes1, notes2, offset, segment_mode)
+local function CalculateSimilarityWithOffset(notes1, notes2, offset)
     if not notes1 or not notes2 or #notes1 == 0 or #notes2 == 0 then
         return 0, {}
     end
@@ -278,18 +279,13 @@ local function CalculateSimilarityWithOffset(notes1, notes2, offset, segment_mod
     local good_score = good * 0.8
     local partial_score = partial * 0.4
     local total_score = exact_score + good_score + partial_score
-    local similarity
-    if segment_mode then
-        similarity = (#notes1 > 0) and (total_score / #notes1 * 100) or 0
-    else
-        local max_notes = math.max(#notes1, #notes2)
-        similarity = (total_score / max_notes) * 100
-    end
+    local max_notes = math.max(#notes1, #notes2)
+    local similarity = (total_score / max_notes) * 100
     similarity = math.max(0, math.min(100, similarity))
     return similarity, stats
 end
 
-local function FindBestOffset(notes1, notes2, segment_mode)
+local function FindBestOffset(notes1, notes2)
     if not notes1 or not notes2 or #notes1 == 0 or #notes2 == 0 then
         return 0, 0, {}
     end
@@ -315,7 +311,7 @@ local function FindBestOffset(notes1, notes2, segment_mode)
         end
     end
     for _, offset in ipairs(offsets_to_try) do
-        local similarity, stats = CalculateSimilarityWithOffset(notes1, notes2, offset, segment_mode)
+        local similarity, stats = CalculateSimilarityWithOffset(notes1, notes2, offset)
         if similarity > best_similarity then
             best_similarity = similarity
             best_offset = offset
@@ -333,6 +329,59 @@ local function FindSegmentMatch(ref_notes, compare_notes)
     if #ref_notes > #compare_notes then
         return 0, 0, 0, {}
     end
+    local ref_length = 0
+    for _, note in ipairs(ref_notes) do
+        local note_end = note.start_rel + note.duration
+        if note_end > ref_length then ref_length = note_end end
+    end
+    local function CountNotesInRange(notes, start_pos, end_pos)
+        local count = 0
+        for _, note in ipairs(notes) do
+            local note_start = note.start_rel
+            local note_end = note.start_rel + note.duration
+            if note_start < end_pos and note_end > start_pos then
+                count = count + 1
+            end
+        end
+        return count
+    end
+    local function CalculateSegmentSimilarity(ref_notes, compare_notes, offset, ref_length)
+        local exact, good, partial, matched, avg_overlap = MatchNotesWithOffset(ref_notes, compare_notes, offset)
+        local segment_start = -offset
+        local segment_end = segment_start + ref_length + 0.1
+        local notes_in_segment = CountNotesInRange(compare_notes, segment_start, segment_end)
+        local extra_in_segment = math.max(0, notes_in_segment - matched)
+        local missing = #ref_notes - matched
+        local stats = {
+            exact_matches = exact,
+            good_matches = good,
+            partial_matches = partial,
+            pitch_only = 0,
+            extra_notes = extra_in_segment,
+            missing_notes = missing,
+            total_ref = #ref_notes,
+            total_compared = notes_in_segment,
+            avg_overlap = avg_overlap,
+            offset = offset,
+            matched_notes = matched,
+            segment_start = segment_start,
+            notes_in_segment = notes_in_segment
+        }
+        local exact_score = exact * 1.0
+        local good_score = good * 0.8
+        local partial_score = partial * 0.4
+        local total_score = exact_score + good_score + partial_score
+        local ref_match_ratio = (#ref_notes > 0) and (total_score / #ref_notes) or 0
+        local total_notes_in_comparison = #ref_notes + extra_in_segment
+        local similarity
+        if total_notes_in_comparison > 0 then
+            similarity = (total_score / total_notes_in_comparison) * 100
+        else
+            similarity = 0
+        end
+        similarity = math.max(0, math.min(100, similarity))
+        return similarity, stats
+    end
     local best_similarity = 0
     local best_offset = 0
     local best_segment_start = 0
@@ -341,7 +390,7 @@ local function FindSegmentMatch(ref_notes, compare_notes)
         local ref_first = ref_notes[1]
         if c_note.pitch == ref_first.pitch then
             local offset = ref_first.start_rel - c_note.start_rel
-            local similarity, stats = CalculateSimilarityWithOffset(ref_notes, compare_notes, offset, true)
+            local similarity, stats = CalculateSegmentSimilarity(ref_notes, compare_notes, offset, ref_length)
             if similarity > best_similarity then
                 best_similarity = similarity
                 best_offset = offset
@@ -361,7 +410,7 @@ local function FindSegmentMatch(ref_notes, compare_notes)
                         found = true
                     end
                     if not found then
-                        local similarity, stats = CalculateSimilarityWithOffset(ref_notes, compare_notes, offset, true)
+                        local similarity, stats = CalculateSegmentSimilarity(ref_notes, compare_notes, offset, ref_length)
                         if similarity > best_similarity then
                             best_similarity = similarity
                             best_offset = offset
@@ -381,7 +430,7 @@ end
 
 local function CalculateSimilarity(notes1, notes2, length1, length2)
     if search_mode == 0 then
-        return FindBestOffset(notes1, notes2, false)
+        return FindBestOffset(notes1, notes2)
     else
         local sim, offset, seg_start, stats = FindSegmentMatch(notes1, notes2)
         return sim, offset, stats
