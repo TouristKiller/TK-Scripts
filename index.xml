@@ -472,6 +472,23 @@
         <source type="effect" file="TK_ChordGun/TK_Scale_Filter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_Scale_Filter.jsfx</source>
       </version>
     </reapack>
+
+    <reapack name="TK_Find Similar MIDI Items.lua" type="script" desc="TK Find Similar MIDI Items - Find matching MIDI patterns">
+      <version name="1.3" author="TouristKiller" time="2025-11-30T02:25:00Z">
+        <changelog><![CDATA[
+1.3
++ Added Time Selection mode - use time selection within item as search pattern
++ Added Segment Match mode - find reference pattern inside larger items
++ Added Offset Detection - finds matches even if notes are shifted in time
++ Added "Zoom + Select Phrase" button to highlight matched sections
++ Added auto-restore of original colors when starting new search
++ Added color coding by similarity (95%+ Green, 85%+ Cyan, 75%+ Yellow, <75% Orange)
++ Added detailed statistics display (Note/Pitch/Velocity/Position overlap)
++ Dark theme GUI with Consolas font
+        ]]></changelog>
+        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_Find%20Similar%20MIDI%20Items.lua</source>
+      </version>
+    </reapack>
  </category>
 
 <category name="Track">
