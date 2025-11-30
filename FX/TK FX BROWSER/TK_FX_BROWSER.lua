@@ -1,12 +1,15 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.2.5
+-- @version 2.2.6
 -- @changelog:
 --[[     
-    + Added "Always Search All" option in settings
-    + Added "X" button to clear search field
-    + Increased width of "All" button
-    + Refactored search logic
+    + Added "Add to Selected Items" option in plugin context menus
+    + Added context menus for Container and Video Processor with item support
+    + Added Track/Item toggle button in main window FX panel
+    + Added Paste Plugin option to FX context menus (Track and Item)
+    + Added right-click Paste Plugin on "No FX on Track/Item" text
+    + Removed TRACK/ITEM toggle button from top buttons (replaced with context menu)
+    + Cross-paste support: copy from track, paste to item and vice versa
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -521,6 +524,9 @@ if not BuildScreenshotIndex then function BuildScreenshotIndex() end end
 dragging_fx_name = dragging_fx_name or nil
 potential_drag_fx_name = potential_drag_fx_name or nil
 drag_start_x, drag_start_y = drag_start_x or 0, drag_start_y or 0
+
+-- Main window FX view mode (false = track, true = item)
+MAIN_WINDOW_SHOW_ITEM_FX = MAIN_WINDOW_SHOW_ITEM_FX or false
 
 -- Window state variables
 was_hidden = was_hidden or false
@@ -4288,12 +4294,21 @@ end
 
 function AddFXToItem(fx_name)
     local item = r.GetSelectedMediaItem(0, 0)
-    if item then
-        local take = r.GetActiveTake(item)
-        if take then
-            r.TakeFX_AddByName(take, fx_name, 1)
+    if not item then return -1 end
+    local take = r.GetActiveTake(item)
+    if not take then return -1 end
+    
+    local dest_index = r.TakeFX_GetCount(take)
+    local fx_index = r.TakeFX_AddByName(take, fx_name, -1000 - dest_index)
+    
+    if fx_index and fx_index >= 0 then
+        -- Show floating window if configured
+        if config and config.open_floating_after_adding then
+            r.TakeFX_Show(take, fx_index, 3) -- 3 = open floating
         end
+        return fx_index, take
     end
+    return -1
 end
 
 function CreateFXChain()
@@ -6102,6 +6117,28 @@ function ShowPluginContextMenuContent(plugin_name)
         end
     end
     
+    -- Add to Selected Items option
+    local item_count = r.CountSelectedMediaItems(0)
+    if item_count > 0 then
+        if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+            for i = 0, item_count - 1 do
+                local item = r.GetSelectedMediaItem(0, i)
+                if item then
+                    local take = r.GetActiveTake(item)
+                    if take then
+                        local dest_index = r.TakeFX_GetCount(take)
+                        local fx_index = r.TakeFX_AddByName(take, plugin_name, -1000 - dest_index)
+                        if fx_index and fx_index >= 0 and config.open_floating_after_adding then
+                            r.TakeFX_Show(take, fx_index, 3)
+                        end
+                    end
+                end
+            end
+            LAST_USED_FX = plugin_name
+            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+        end
+    end
+    
     local is_favorite = not not favorite_set[plugin_name]
     if is_favorite then
         if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
@@ -6802,18 +6839,15 @@ function ShowFolderDropdown()
     end
 end
 
-function ShowCustomFolderDropdown()
+function ShowCustomFolderDropdown(is_vertical_layout)
     if next(config.custom_folders) then
-        -- Check layout mode - don't use SameLine in vertical mode
-        local layout = config.screenshot_controls_layout or "horizontal"
-        local available_width = r.ImGui_GetContentRegionAvail(ctx)
-        local is_vertical = (layout == "vertical" or (layout == "auto" and available_width < 300))
-        
-        if not is_vertical then
+        -- Use the passed parameter to determine layout (avoids re-measuring width)
+        if not is_vertical_layout then
             r.ImGui_SameLine(ctx)
             r.ImGui_PushItemWidth(ctx, 110)
         else
-            r.ImGui_PushItemWidth(ctx, -1)  -- Full width in vertical mode
+            -- Reserve 25px on the right for settings button
+            r.ImGui_PushItemWidth(ctx, -25)
         end
         r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
         
@@ -7062,24 +7096,26 @@ function ShowScreenshotControls()
     
     if layout == "vertical" or auto_vertical then
         -- VERTICAL LAYOUT
+        -- Reserve space on the right for settings button (25px)
+        local right_margin = 25
+        
         -- If dropdown is hidden, add spacing to avoid overlap with settings button
         if config.screenshot_view_type == 3 then
             r.ImGui_Dummy(ctx, 0, 22)
         end
-        r.ImGui_PushItemWidth(ctx, -1)
+        r.ImGui_PushItemWidth(ctx, -right_margin)
         ShowFolderDropdown()
         r.ImGui_PopItemWidth(ctx)
         
         if not config.hide_custom_dropdown then
-            r.ImGui_PushItemWidth(ctx, -1)
-            ShowCustomFolderDropdown()
-            r.ImGui_PopItemWidth(ctx)
+            ShowCustomFolderDropdown(true)  -- Pass true for vertical layout
         end
         
         show_screenshot_search = config.show_screenshot_search ~= false
         if show_screenshot_search then
-            local button_space = 50
-            if browser_search_term ~= "" then button_space = 75 end
+            -- Buttons: Sort(20) + spacing(4) + All(30) = 54, plus right_margin to align with dropdown
+            local button_space = 58 + right_margin
+            if browser_search_term ~= "" then button_space = 83 + right_margin end  -- +25 for X button
             local search_width = r.ImGui_GetContentRegionAvail(ctx) - button_space
             
             r.ImGui_PushItemWidth(ctx, search_width)
@@ -7244,7 +7280,7 @@ function ShowScreenshotControls()
         r.ImGui_SameLine(ctx)
         ShowFolderDropdown()
         if not config.hide_custom_dropdown then
-            ShowCustomFolderDropdown()
+            ShowCustomFolderDropdown(false)  -- Pass false for horizontal layout
         end
         show_screenshot_search = config.show_screenshot_search ~= false
         if show_screenshot_search then
@@ -7692,26 +7728,16 @@ function DrawFxChains(tbl, path, show_hover_preview)
                 if r.ImGui_MenuItem(ctx, "Add to selected track(s)") then
                     local fx_chains_path = ResolveFxChainsRoot()
                     local chain_file_path = table.concat({ path, os_separator, item, extension })
-                    if ADD_FX_TO_ITEM then
-                        local selected_item = r.GetSelectedMediaItem(0, 0)
-                        if selected_item then
-                            local take = r.GetActiveTake(selected_item)
-                            if take then
-                                r.TakeFX_AddByName(take, chain_file_path, 1)
+                    local selected_track_count = r.CountSelectedTracks(0)
+                    if selected_track_count > 0 then
+                        for i = 0, selected_track_count - 1 do
+                            local track = r.GetSelectedTrack(0, i)
+                            if track and r.ValidatePtr(track, "MediaTrack*") then
+                                AddFXToTrack(track, chain_file_path)
                             end
                         end
-                    else
-                        local selected_track_count = r.CountSelectedTracks(0)
-                        if selected_track_count > 0 then
-                            for i = 0, selected_track_count - 1 do
-                                local track = r.GetSelectedTrack(0, i)
-                                if track and r.ValidatePtr(track, "MediaTrack*") then
-                                    AddFXToTrack(track, chain_file_path)
-                                end
-                            end
-                            if config.close_after_adding_fx then
-                                SHOULD_CLOSE_SCRIPT = true
-                            end
+                        if config.close_after_adding_fx then
+                            SHOULD_CLOSE_SCRIPT = true
                         end
                     end
                 end
@@ -7797,26 +7823,16 @@ function DrawFxChains(tbl, path, show_hover_preview)
                         if r.ImGui_MenuItem(ctx, "Add to selected track(s)") then
                             local fx_chains_path = ResolveFxChainsRoot()
                             local chain_file_path = table.concat({ path, os_separator, item[j], extension })
-                            if ADD_FX_TO_ITEM then
-                                local selected_item = r.GetSelectedMediaItem(0, 0)
-                                if selected_item then
-                                    local take = r.GetActiveTake(selected_item)
-                                    if take then
-                                        r.TakeFX_AddByName(take, chain_file_path, 1)
+                            local selected_track_count = r.CountSelectedTracks(0)
+                            if selected_track_count > 0 then
+                                for k = 0, selected_track_count - 1 do
+                                    local track = r.GetSelectedTrack(0, k)
+                                    if track and r.ValidatePtr(track, "MediaTrack*") then
+                                        AddFXToTrack(track, chain_file_path)
                                     end
                                 end
-                            else
-                                local selected_track_count = r.CountSelectedTracks(0)
-                                if selected_track_count > 0 then
-                                    for k = 0, selected_track_count - 1 do
-                                        local track = r.GetSelectedTrack(0, k)
-                                        if track and r.ValidatePtr(track, "MediaTrack*") then
-                                            AddFXToTrack(track, chain_file_path)
-                                        end
-                                    end
-                                    if config.close_after_adding_fx then
-                                        SHOULD_CLOSE_SCRIPT = true
-                                    end
+                                if config.close_after_adding_fx then
+                                    SHOULD_CLOSE_SCRIPT = true
                                 end
                             end
                         end
@@ -9325,12 +9341,56 @@ function ShowBrowserPanel()
                 LAST_USED_FX = "Container"
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "ContainerContextMenu1")
+            end
+            if r.ImGui_BeginPopup(ctx, "ContainerContextMenu1") then
+                local item_count = r.CountSelectedMediaItems(0)
+                if item_count > 0 then
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                        for i = 0, item_count - 1 do
+                            local item = r.GetSelectedMediaItem(0, i)
+                            if item then
+                                local take = r.GetActiveTake(item)
+                                if take then
+                                    r.TakeFX_AddByName(take, "Container", -1)
+                                end
+                            end
+                        end
+                        LAST_USED_FX = "Container"
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
         end
         if config.show_video_processor then
             if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
                 AddFXToTrack(TRACK, "Video processor")
                 LAST_USED_FX = "Video processor"
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "VideoProcessorContextMenu1")
+            end
+            if r.ImGui_BeginPopup(ctx, "VideoProcessorContextMenu1") then
+                local item_count = r.CountSelectedMediaItems(0)
+                if item_count > 0 then
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                        for i = 0, item_count - 1 do
+                            local item = r.GetSelectedMediaItem(0, i)
+                            if item then
+                                local take = r.GetActiveTake(item)
+                                if take then
+                                    r.TakeFX_AddByName(take, "Video processor", -1)
+                                end
+                            end
+                        end
+                        LAST_USED_FX = "Video processor"
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
             end
         end
         if config.show_projects then
@@ -13334,16 +13394,12 @@ function DrawItems(tbl, main_cat_name)
                     for _, plugin in ipairs(plugin_group) do
                         local list_display = GetDisplayPluginName(plugin.name)
                         if r.ImGui_Selectable(ctx, list_display .. "  " .. GetStarsString(plugin.name) .. "##plugin_list_" .. i .. "_" .. plugin.index) then
-                            if ADD_FX_TO_ITEM then
-                                AddFXToItem(plugin.name)
-                            else
-                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    local fx_index = AddFXToTrack(TRACK, plugin.name)
-                                    
-                                    -- OPEN FLOATING ALS OPTIE ENABLED IS
-                                    if config.open_floating_after_adding and fx_index >= 0 then
-                                        r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
-                                    end
+                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                local fx_index = AddFXToTrack(TRACK, plugin.name)
+                                
+                                -- OPEN FLOATING ALS OPTIE ENABLED IS
+                                if config.open_floating_after_adding and fx_index >= 0 then
+                                    r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
                                 end
                             end
                             LAST_USED_FX = plugin.name
@@ -13415,14 +13471,10 @@ function DrawItems(tbl, main_cat_name)
 
                     for _, e in ipairs(pinned_entries) do
                         if r.ImGui_Selectable(ctx, e.display .. "  " .. GetStarsString(e.original) .. "##plugin_list_" .. i .. "_" .. e.index) then
-                            if ADD_FX_TO_ITEM then
-                                AddFXToItem(e.original)
-                            else
-                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    local fx_index = AddFXToTrack(TRACK, e.original)
-                                    if config.open_floating_after_adding and fx_index >= 0 then
-                                        r.TrackFX_Show(TRACK, fx_index, 3)
-                                    end
+                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                local fx_index = AddFXToTrack(TRACK, e.original)
+                                if config.open_floating_after_adding and fx_index >= 0 then
+                                    r.TrackFX_Show(TRACK, fx_index, 3)
                                 end
                             end
                             LAST_USED_FX = e.original
@@ -13445,14 +13497,10 @@ function DrawItems(tbl, main_cat_name)
                     end
                     for _, e in ipairs(other_entries) do
                         if r.ImGui_Selectable(ctx, e.display .. "  " .. GetStarsString(e.original) .. "##plugin_list_" .. i .. "_" .. e.index) then
-                            if ADD_FX_TO_ITEM then
-                                AddFXToItem(e.original)
-                            else
-                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                    local fx_index = AddFXToTrack(TRACK, e.original)
-                                    if config.open_floating_after_adding and fx_index >= 0 then
-                                        r.TrackFX_Show(TRACK, fx_index, 3)
-                                    end
+                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                local fx_index = AddFXToTrack(TRACK, e.original)
+                                if config.open_floating_after_adding and fx_index >= 0 then
+                                    r.TrackFX_Show(TRACK, fx_index, 3)
                                 end
                             end
                             LAST_USED_FX = e.original
@@ -13518,18 +13566,18 @@ function DrawFavorites()
         else
             local fav_display_global = GetDisplayPluginName(fav)
             if r.ImGui_Selectable(ctx, fav_display_global .. "  " .. GetStarsString(fav) .. "##favorites_" .. i) then
-            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                local fx_index = AddFXToTrack(TRACK, fav)
-                
-                -- OPEN FLOATING ALS OPTIE ENABLED IS
-                if config.open_floating_after_adding and fx_index >= 0 then
-                    r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                    local fx_index = AddFXToTrack(TRACK, fav)
+                    
+                    -- OPEN FLOATING ALS OPTIE ENABLED IS
+                    if config.open_floating_after_adding and fx_index >= 0 then
+                        r.TrackFX_Show(TRACK, fx_index, 3) -- 3 = open floating
+                    end
                 end
-            end
-            LAST_USED_FX = fav
-            if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
-                SHOULD_CLOSE_SCRIPT = true
-            end
+                LAST_USED_FX = fav
+                if config.close_after_adding_fx and not IS_COPYING_TO_ALL_TRACKS then
+                    SHOULD_CLOSE_SCRIPT = true
+                end
             end
    
             if r.ImGui_IsItemHovered(ctx) then
@@ -13777,6 +13825,233 @@ function DrawBottomButtons()
         r.ImGui_SetTooltip(ctx, "Arm selected Track")
     end
     
+    end
+end
+
+-- Content-only version of ShowTrackFX for main window toggle
+function ShowTrackFXContent()
+    if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then
+        r.ImGui_Text(ctx, "No track selected")
+        return
+    end
+    local fx_count = r.TrackFX_GetCount(TRACK)
+    if fx_count > 0 then
+        local track_bypassed = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
+        for i = 0, fx_count - 1 do
+            local retval, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
+            local is_open = r.TrackFX_GetFloatingWindow(TRACK, i)
+            local is_enabled = r.TrackFX_GetEnabled(TRACK, i)                
+            local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"                
+            r.ImGui_PushID(ctx, "track_content_" .. i)
+            r.ImGui_BeginGroup(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
+            if r.ImGui_Button(ctx, "##updown", 14, 14) then
+                if i > 0 then
+                    r.TrackFX_CopyToTrack(TRACK, i, TRACK, i - 1, true)
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) and config.show_tooltips then
+                r.ImGui_SetTooltip(ctx, "Left click up / Right click down")
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) and i < fx_count - 1 then
+                r.TrackFX_CopyToTrack(TRACK, i, TRACK, i + 1, true)
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+            r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)               
+            if not is_enabled or track_bypassed then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+            end               
+            if r.ImGui_Button(ctx, display_name, 0, 14) then
+                if is_open then
+                    r.TrackFX_Show(TRACK, i, 2)
+                else
+                    r.TrackFX_Show(TRACK, i, 3)
+                end
+            end               
+            if not is_enabled or track_bypassed then
+                r.ImGui_PopStyleColor(ctx)
+            end                
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_BeginPopupContextItem(ctx) then
+                if r.ImGui_MenuItem(ctx, "Delete") then
+                    r.TrackFX_Delete(TRACK, i)
+                end
+                if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
+                    IS_COPYING_TO_ALL_TRACKS = true
+                    local track_count = r.CountTracks(0)
+                    for j = 0, track_count - 1 do
+                        local target_track = r.GetTrack(0, j)
+                        if target_track ~= TRACK then
+                            r.TrackFX_CopyToTrack(TRACK, i, target_track, r.TrackFX_GetCount(target_track), false)
+                        end
+                    end
+                    IS_COPYING_TO_ALL_TRACKS = false
+                end
+                if r.ImGui_MenuItem(ctx, "Copy Plugin") then
+                    copied_plugin = {track = TRACK, index = i}
+                end
+                if copied_plugin and r.ImGui_MenuItem(ctx, "Paste Plugin") then
+                    if copied_plugin.track then
+                        local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
+                        r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, i + 1, false)
+                    elseif copied_plugin.take then
+                        local _, orig_name = r.TakeFX_GetFXName(copied_plugin.take, copied_plugin.index, "")
+                        AddFXToTrack(TRACK, orig_name)
+                    end
+                end                    
+                if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
+                    r.TrackFX_SetEnabled(TRACK, i, not is_enabled)
+                end
+                if favorite_set[fx_name] then
+                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
+                        RemoveFromFavorites(fx_name)
+                    end
+                else
+                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
+                        AddToFavorites(fx_name)
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end               
+            r.ImGui_EndGroup(ctx)
+            r.ImGui_PopID(ctx)
+        end
+    else
+        r.ImGui_Text(ctx, "No FX on Track")
+        if r.ImGui_IsItemClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "NoTrackFXContextMenu")
+        end
+        if r.ImGui_BeginPopup(ctx, "NoTrackFXContextMenu") then
+            if copied_plugin then
+                if r.ImGui_MenuItem(ctx, "Paste Plugin") then
+                    if copied_plugin.track then
+                        r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, 0, false)
+                    elseif copied_plugin.take then
+                        local _, orig_name = r.TakeFX_GetFXName(copied_plugin.take, copied_plugin.index, "")
+                        AddFXToTrack(TRACK, orig_name)
+                    end
+                end
+            else
+                r.ImGui_Text(ctx, "No plugin copied")
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+    end
+end
+
+-- Content-only version of ShowItemFX for main window toggle
+function ShowItemFXContent()
+    local item = r.GetSelectedMediaItem(0, 0)
+    if not item then
+        r.ImGui_Text(ctx, "No item selected")
+        return
+    end
+    local take = r.GetActiveTake(item)
+    if not take then
+        r.ImGui_Text(ctx, "No active take")
+        return
+    end
+    
+    local fx_count = r.TakeFX_GetCount(take)
+    if fx_count > 0 then
+        for i = 0, fx_count - 1 do
+            local retval, fx_name = r.TakeFX_GetFXName(take, i, "")
+            local is_open = r.TakeFX_GetFloatingWindow(take, i)
+            local is_enabled = r.TakeFX_GetEnabled(take, i)
+            local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"
+
+            r.ImGui_PushID(ctx, "item_content_" .. i)
+            r.ImGui_BeginGroup(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
+            if r.ImGui_Button(ctx, "##updown", 13, 13) then
+                if i > 0 then
+                    r.TakeFX_CopyToTake(take, i, take, i - 1, true)
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) and config.show_tooltips then
+                r.ImGui_SetTooltip(ctx, "Left click up / Right click down")
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) and i < fx_count - 1 then
+                r.TakeFX_CopyToTake(take, i, take, i + 1, true)
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+            r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)
+
+            if not is_enabled then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+            end
+
+            if r.ImGui_Button(ctx, display_name, 0, 13) then
+                if is_open then
+                    r.TakeFX_Show(take, i, 2)
+                else
+                    r.TakeFX_Show(take, i, 3)
+                end
+            end
+
+            if not is_enabled then
+                r.ImGui_PopStyleColor(ctx)
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+
+            if r.ImGui_BeginPopupContextItem(ctx) then
+                if r.ImGui_MenuItem(ctx, "Delete") then
+                    r.TakeFX_Delete(take, i)
+                end
+                if r.ImGui_MenuItem(ctx, "Copy Plugin") then
+                    copied_plugin = {take = take, index = i}
+                end
+                if copied_plugin and r.ImGui_MenuItem(ctx, "Paste Plugin") then
+                    if copied_plugin.take then
+                        r.TakeFX_CopyToTake(copied_plugin.take, copied_plugin.index, take, i + 1, false)
+                    elseif copied_plugin.track then
+                        local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
+                        local dest_index = r.TakeFX_GetCount(take)
+                        r.TakeFX_AddByName(take, orig_name, -1000 - dest_index)
+                    end
+                end
+                if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
+                    r.TakeFX_SetEnabled(take, i, not is_enabled)
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+
+            r.ImGui_EndGroup(ctx)
+            r.ImGui_PopID(ctx)
+        end
+    else
+        r.ImGui_Text(ctx, "No FX on Item")
+        if r.ImGui_IsItemClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "NoItemFXContextMenu")
+        end
+        if r.ImGui_BeginPopup(ctx, "NoItemFXContextMenu") then
+            if copied_plugin then
+                if r.ImGui_MenuItem(ctx, "Paste Plugin") then
+                    if copied_plugin.take then
+                        r.TakeFX_CopyToTake(copied_plugin.take, copied_plugin.index, take, 0, false)
+                    elseif copied_plugin.track then
+                        local _, orig_name = r.TrackFX_GetFXName(copied_plugin.track, copied_plugin.index, "")
+                        r.TakeFX_AddByName(take, orig_name, -1)
+                    end
+                end
+            else
+                r.ImGui_Text(ctx, "No plugin copied")
+            end
+            r.ImGui_EndPopup(ctx)
+        end
     end
 end
 
@@ -14156,15 +14431,11 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                         if type(plugin_name) == "string" then
                             local custom_display = GetDisplayPluginName(plugin_name)
                             if r.ImGui_Selectable(ctx, custom_display .. "  " .. GetStarsString(plugin_name) .. "##custom_" .. full_path .. "_" .. plugin_idx) then
-                                if ADD_FX_TO_ITEM then
-                                    AddFXToItem(plugin_name)
-                                else
-                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                        local fx_index = AddFXToTrack(TRACK, plugin_name)
-                                        
-                                        if config.open_floating_after_adding and fx_index >= 0 then
-                                            r.TrackFX_Show(TRACK, fx_index, 3)
-                                        end
+                                if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                    local fx_index = AddFXToTrack(TRACK, plugin_name)
+                                    
+                                    if config.open_floating_after_adding and fx_index >= 0 then
+                                        r.TrackFX_Show(TRACK, fx_index, 3)
                                     end
                                 end
                                 LAST_USED_FX = plugin_name
@@ -14341,6 +14612,28 @@ end
                     SHOULD_CLOSE_SCRIPT = true
                 end
             end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "ContainerContextMenu2")
+            end
+            if r.ImGui_BeginPopup(ctx, "ContainerContextMenu2") then
+                local item_count = r.CountSelectedMediaItems(0)
+                if item_count > 0 then
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                        for i = 0, item_count - 1 do
+                            local item = r.GetSelectedMediaItem(0, i)
+                            if item then
+                                local take = r.GetActiveTake(item)
+                                if take then
+                                    r.TakeFX_AddByName(take, "Container", -1)
+                                end
+                            end
+                        end
+                        LAST_USED_FX = "Container"
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
         end
         if config.show_video_processor then
             if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
@@ -14349,6 +14642,28 @@ end
                 if config.close_after_adding_fx then
                     SHOULD_CLOSE_SCRIPT = true
                 end
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "VideoProcessorContextMenu2")
+            end
+            if r.ImGui_BeginPopup(ctx, "VideoProcessorContextMenu2") then
+                local item_count = r.CountSelectedMediaItems(0)
+                if item_count > 0 then
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                        for i = 0, item_count - 1 do
+                            local item = r.GetSelectedMediaItem(0, i)
+                            if item then
+                                local take = r.GetActiveTake(item)
+                                if take then
+                                    r.TakeFX_AddByName(take, "Video processor", -1)
+                                end
+                            end
+                        end
+                        LAST_USED_FX = "Video processor"
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
             end
         end
         if config.show_projects then
@@ -14431,23 +14746,35 @@ end
     local available_height = window_h_now - current_y - bottom_section_height - 5
     if available_height < 50 then available_height = 50 end
 
-    if ADD_FX_TO_ITEM then
-        local popup2_open = r.ImGui_BeginChild(ctx, "MainItemFXPanel", -1, available_height)
-        if popup2_open then
-            ShowItemFX()
-            r.ImGui_EndChild(ctx)
+    local popupp3_open = r.ImGui_BeginChild(ctx, "MainTrackFXPanel", -1, available_height)
+    if popupp3_open then
+        -- Toggle button for Track/Item view
+        r.ImGui_Dummy(ctx, 0, 5)
+        local toggle_label = MAIN_WINDOW_SHOW_ITEM_FX and "I" or "T"
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), MAIN_WINDOW_SHOW_ITEM_FX and 0x4080FFFF or 0x40FF80FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), MAIN_WINDOW_SHOW_ITEM_FX and 0x5090FFFF or 0x50FF90FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), MAIN_WINDOW_SHOW_ITEM_FX and 0x3070EEFF or 0x30EE70FF)
+        if r.ImGui_Button(ctx, toggle_label, 18, 18) then
+            MAIN_WINDOW_SHOW_ITEM_FX = not MAIN_WINDOW_SHOW_ITEM_FX
         end
-    else
-        local popupp3_open = r.ImGui_BeginChild(ctx, "MainTrackFXPanel", -1, available_height)
-        if popupp3_open then
-            ShowTrackFX()
-            r.ImGui_EndChild(ctx)
+        r.ImGui_PopStyleColor(ctx, 3)
+        if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, MAIN_WINDOW_SHOW_ITEM_FX and "Showing Item FX - Click for Track FX" or "Showing Track FX - Click for Item FX")
         end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, MAIN_WINDOW_SHOW_ITEM_FX and "FX on Item:" or "FX on Track:")
+        
+        if MAIN_WINDOW_SHOW_ITEM_FX then
+            ShowItemFXContent()
+        else
+            ShowTrackFXContent()
+        end
+        r.ImGui_EndChild(ctx)
     end
-        if not r.ImGui_IsAnyItemHovered(ctx) then
-            current_hovered_plugin = nil
-        end
+    if not r.ImGui_IsAnyItemHovered(ctx) then
+        current_hovered_plugin = nil
     end
+end
 
 function get_sws_colors()
     local colors = {}
@@ -15956,7 +16283,7 @@ if visible then
             end
             if not config.hideTopButtons then
                 local button_spacing = 3
-                local button_width = (track_info_width - (2 * button_spacing)) / 3           
+                local button_width = (track_info_width - button_spacing) / 2           
                 if r.ImGui_Button(ctx, SHOW_PREVIEW and "ON" or "OFF", button_width, 20) then
                     SHOW_PREVIEW = not SHOW_PREVIEW
                     if SHOW_PREVIEW and current_hovered_plugin then
@@ -15965,13 +16292,6 @@ if visible then
                 end
                 if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_SetTooltip(ctx, "Show or hide Plugin Preview in item list")
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, ADD_FX_TO_ITEM and "ITEM" or "TRACK", button_width, 20) then
-                    ADD_FX_TO_ITEM = not ADD_FX_TO_ITEM
-                end
-                if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Switch between Track or Item")
                 end
                 r.ImGui_SameLine(ctx)
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), 0xFF0000FF)

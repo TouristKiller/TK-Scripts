@@ -1,12 +1,12 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.2.0
+-- @version 0.2.1
 -- @changelog:
 --[[     
-    + Added "Always Search All" option in settings
-    + Added "X" button to clear search field
-    + Increased width of "All" button
-    + Refactored search logic
+    + Added "Add to Selected Items" option in plugin context menus
+    + Added context menus for Container and Video Processor with item support
+    + Improved AddFXToItem function with proper indexing and floating window support
+    + Cross-paste support: copy from track, paste to item and vice versa
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -4161,12 +4161,21 @@ end
 
 function AddFXToItem(fx_name)
     local item = r.GetSelectedMediaItem(0, 0)
-    if item then
-        local take = r.GetActiveTake(item)
-        if take then
-            r.TakeFX_AddByName(take, fx_name, 1)
+    if not item then return -1 end
+    local take = r.GetActiveTake(item)
+    if not take then return -1 end
+    
+    local dest_index = r.TakeFX_GetCount(take)
+    local fx_index = r.TakeFX_AddByName(take, fx_name, -1000 - dest_index)
+    
+    if fx_index and fx_index >= 0 then
+        -- Show floating window if configured
+        if config and config.open_floating_after_adding then
+            r.TakeFX_Show(take, fx_index, 3) -- 3 = open floating
         end
+        return fx_index, take
     end
+    return -1
 end
 
 function CreateFXChain()
@@ -5983,6 +5992,28 @@ function ShowPluginContextMenu(plugin_name, menu_id)
             end
         end
         
+        -- Add to Selected Items option
+        local item_count = r.CountSelectedMediaItems(0)
+        if item_count > 0 then
+            if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                for i = 0, item_count - 1 do
+                    local item = r.GetSelectedMediaItem(0, i)
+                    if item then
+                        local take = r.GetActiveTake(item)
+                        if take then
+                            local dest_index = r.TakeFX_GetCount(take)
+                            local fx_index = r.TakeFX_AddByName(take, plugin_name, -1000 - dest_index)
+                            if fx_index and fx_index >= 0 and config.open_floating_after_adding then
+                                r.TakeFX_Show(take, fx_index, 3)
+                            end
+                        end
+                    end
+                end
+                LAST_USED_FX = plugin_name
+                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+            end
+        end
+        
     local is_favorite = not not favorite_set[plugin_name]
         if is_favorite then
             if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
@@ -6639,18 +6670,15 @@ function ShowFolderDropdown()
     end
 end
 
-function ShowCustomFolderDropdown()
+function ShowCustomFolderDropdown(is_vertical_layout)
     if next(config.custom_folders) then
-        -- Check layout mode - don't use SameLine in vertical mode
-        local layout = config.screenshot_controls_layout or "horizontal"
-        local available_width = r.ImGui_GetContentRegionAvail(ctx)
-        local is_vertical = (layout == "vertical" or (layout == "auto" and available_width < 300))
-        
-        if not is_vertical then
+        -- Use the passed parameter to determine layout (avoids re-measuring width)
+        if not is_vertical_layout then
             r.ImGui_SameLine(ctx)
             r.ImGui_PushItemWidth(ctx, 110)
         else
-            r.ImGui_PushItemWidth(ctx, -1)  -- Full width in vertical mode
+            -- Reserve 25px on the right for settings button
+            r.ImGui_PushItemWidth(ctx, -25)
         end
         r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
         
@@ -6889,24 +6917,26 @@ function ShowScreenshotControls()
     
     if layout == "vertical" or auto_vertical then
         -- VERTICAL LAYOUT
+        -- Reserve space on the right for settings button (25px)
+        local right_margin = 25
+        
         -- If dropdown is hidden, add spacing to avoid overlap with settings button
         if config.screenshot_view_type == 3 then
             r.ImGui_Dummy(ctx, 0, 22)
         end
-        r.ImGui_PushItemWidth(ctx, -1)
+        r.ImGui_PushItemWidth(ctx, -right_margin)
         ShowFolderDropdown()
         r.ImGui_PopItemWidth(ctx)
         
         if not config.hide_custom_dropdown then
-            r.ImGui_PushItemWidth(ctx, -1)
-            ShowCustomFolderDropdown()
-            r.ImGui_PopItemWidth(ctx)
+            ShowCustomFolderDropdown(true)  -- Pass true for vertical layout
         end
         
         show_screenshot_search = config.show_screenshot_search ~= false
         if show_screenshot_search then
-            local button_space = 50
-            if browser_search_term ~= "" then button_space = 75 end
+            -- Buttons: Sort(20) + spacing(4) + All(30) = 54, plus right_margin to align with dropdown
+            local button_space = 58 + right_margin
+            if browser_search_term ~= "" then button_space = 83 + right_margin end  -- +25 for X button
             local search_width = r.ImGui_GetContentRegionAvail(ctx) - button_space
             
             r.ImGui_PushItemWidth(ctx, search_width)
@@ -7071,7 +7101,7 @@ function ShowScreenshotControls()
         r.ImGui_SameLine(ctx)
         ShowFolderDropdown()
         if not config.hide_custom_dropdown then
-            ShowCustomFolderDropdown()
+            ShowCustomFolderDropdown(false)  -- Pass false for horizontal layout
         end
         show_screenshot_search = config.show_screenshot_search ~= false
         if show_screenshot_search then
@@ -9148,12 +9178,56 @@ function ShowBrowserPanel()
                 LAST_USED_FX = "Container"
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "ContainerContextMenu1")
+            end
+            if r.ImGui_BeginPopup(ctx, "ContainerContextMenu1") then
+                local item_count = r.CountSelectedMediaItems(0)
+                if item_count > 0 then
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                        for i = 0, item_count - 1 do
+                            local item = r.GetSelectedMediaItem(0, i)
+                            if item then
+                                local take = r.GetActiveTake(item)
+                                if take then
+                                    r.TakeFX_AddByName(take, "Container", -1)
+                                end
+                            end
+                        end
+                        LAST_USED_FX = "Container"
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
         end
         if config.show_video_processor then
             if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
                 AddFXToTrack(TRACK, "Video processor")
                 LAST_USED_FX = "Video processor"
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "VideoProcessorContextMenu1")
+            end
+            if r.ImGui_BeginPopup(ctx, "VideoProcessorContextMenu1") then
+                local item_count = r.CountSelectedMediaItems(0)
+                if item_count > 0 then
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                        for i = 0, item_count - 1 do
+                            local item = r.GetSelectedMediaItem(0, i)
+                            if item then
+                                local take = r.GetActiveTake(item)
+                                if take then
+                                    r.TakeFX_AddByName(take, "Video processor", -1)
+                                end
+                            end
+                        end
+                        LAST_USED_FX = "Video processor"
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
             end
         end
         if config.show_projects then
@@ -14514,6 +14588,28 @@ end
                     SHOULD_CLOSE_SCRIPT = true
                 end
             end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "ContainerContextMenu2")
+            end
+            if r.ImGui_BeginPopup(ctx, "ContainerContextMenu2") then
+                local item_count = r.CountSelectedMediaItems(0)
+                if item_count > 0 then
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                        for i = 0, item_count - 1 do
+                            local item = r.GetSelectedMediaItem(0, i)
+                            if item then
+                                local take = r.GetActiveTake(item)
+                                if take then
+                                    r.TakeFX_AddByName(take, "Container", -1)
+                                end
+                            end
+                        end
+                        LAST_USED_FX = "Container"
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
         end
         if config.show_video_processor then
             if r.ImGui_Selectable(ctx, "VIDEO PROCESSOR") then
@@ -14522,6 +14618,28 @@ end
                 if config.close_after_adding_fx then
                     SHOULD_CLOSE_SCRIPT = true
                 end
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "VideoProcessorContextMenu2")
+            end
+            if r.ImGui_BeginPopup(ctx, "VideoProcessorContextMenu2") then
+                local item_count = r.CountSelectedMediaItems(0)
+                if item_count > 0 then
+                    if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                        for i = 0, item_count - 1 do
+                            local item = r.GetSelectedMediaItem(0, i)
+                            if item then
+                                local take = r.GetActiveTake(item)
+                                if take then
+                                    r.TakeFX_AddByName(take, "Video processor", -1)
+                                end
+                            end
+                        end
+                        LAST_USED_FX = "Video processor"
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
             end
         end
         if config.show_projects then
