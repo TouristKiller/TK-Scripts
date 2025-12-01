@@ -1,15 +1,12 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.2.6
+-- @version 2.2.7
 -- @changelog:
 --[[     
-    + Added "Add to Selected Items" option in plugin context menus
-    + Added context menus for Container and Video Processor with item support
-    + Added Track/Item toggle button in main window FX panel
-    + Added Paste Plugin option to FX context menus (Track and Item)
-    + Added right-click Paste Plugin on "No FX on Track/Item" text
-    + Removed TRACK/ITEM toggle button from top buttons (replaced with context menu)
-    + Cross-paste support: copy from track, paste to item and vice versa
+    + Real-time refresh for "Current Track FX" and "Current Project FX"
+    + Fixed indentation and spacing in folder tree
+    + Added depth-based custom colors for folders
+    + Added safety mechanism for screenshots to prevent refresh loops
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -873,6 +870,18 @@ function SetDefaultConfig()
         font_size = 11,  -- Default font size
         custom_folder_use_default_font = true,
         custom_folder_font_size = 11,
+        -- NEW SETTINGS FOR CUSTOM FOLDERS
+        custom_folder_force_uppercase = true,
+        custom_folder_indent = 10,
+        custom_folder_text_gray = 200,
+        custom_folder_text_color = r.ImGui_ColorConvertDouble4ToU32(200/255, 200/255, 200/255, 1),
+        custom_folder_level_colors = {
+            r.ImGui_ColorConvertDouble4ToU32(0.9, 0.9, 0.9, 1), -- Level 1 (Root)
+            r.ImGui_ColorConvertDouble4ToU32(0.8, 0.8, 0.8, 1), -- Level 2
+            r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1), -- Level 3
+            r.ImGui_ColorConvertDouble4ToU32(0.6, 0.6, 0.6, 1), -- Level 4
+            r.ImGui_ColorConvertDouble4ToU32(0.5, 0.5, 0.5, 1), -- Level 5+
+        },
         
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
         show_project_info = show_project_info or true,
@@ -1623,6 +1632,15 @@ function AddFXToTrack(track, plugin_name)
         r.TrackFX_CopyToTrack(track, fx_index, track, 0, true)
         fx_index = 0
     end
+
+    if fx_index and fx_index >= 0 then
+        if config.selected_folder == "Current Track FX" or config.selected_folder == "Current Project FX" then
+            if not IS_CAPTURING_SCREENSHOT then
+                RefreshCurrentScreenshotView()
+            end
+        end
+    end
+
     return fx_index or -1
 end
 
@@ -3369,6 +3387,73 @@ function ShowConfigWindow()
                 r.ImGui_PopItemWidth(ctx)
             end
 
+            -- NEW SECTION FOR CUSTOM FOLDERS APPEARANCE
+            r.ImGui_Dummy(ctx, 0, 10)
+            NewSection("CUSTOM FOLDERS APPEARANCE:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local changed_upper, new_upper = r.ImGui_Checkbox(ctx, "Force Uppercase", config.custom_folder_force_uppercase)
+            if changed_upper then config.custom_folder_force_uppercase = new_upper; SaveConfig() end
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Indentation")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_indent, new_indent = r.ImGui_SliderInt(ctx, "##Indent", config.custom_folder_indent, 0, 50)
+            if changed_indent then config.custom_folder_indent = new_indent; SaveConfig() end
+            r.ImGui_PopItemWidth(ctx)
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Folder Colors")
+            
+            -- Ensure level colors table exists
+            config.custom_folder_level_colors = config.custom_folder_level_colors or {
+                r.ImGui_ColorConvertDouble4ToU32(0.9, 0.9, 0.9, 1),
+                r.ImGui_ColorConvertDouble4ToU32(0.8, 0.8, 0.8, 1),
+                r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1),
+                r.ImGui_ColorConvertDouble4ToU32(0.6, 0.6, 0.6, 1),
+                r.ImGui_ColorConvertDouble4ToU32(0.5, 0.5, 0.5, 1)
+            }
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
+            
+            -- Level 1
+            local col1 = config.custom_folder_level_colors[1] or config.custom_folder_text_color
+            local changed1, new_col1 = r.ImGui_ColorEdit4(ctx, "##L1Col", col1, flags)
+            if changed1 then config.custom_folder_level_colors[1] = new_col1; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Root Folder Color") end
+            
+            r.ImGui_SameLine(ctx)
+            -- Level 2
+            local col2 = config.custom_folder_level_colors[2] or config.custom_folder_text_color
+            local changed2, new_col2 = r.ImGui_ColorEdit4(ctx, "##L2Col", col2, flags)
+            if changed2 then config.custom_folder_level_colors[2] = new_col2; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 2 Folder Color") end
+
+            r.ImGui_SameLine(ctx)
+            -- Level 3
+            local col3 = config.custom_folder_level_colors[3] or config.custom_folder_text_color
+            local changed3, new_col3 = r.ImGui_ColorEdit4(ctx, "##L3Col", col3, flags)
+            if changed3 then config.custom_folder_level_colors[3] = new_col3; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 3 Folder Color") end
+
+            r.ImGui_SameLine(ctx)
+            -- Level 4
+            local col4 = config.custom_folder_level_colors[4] or config.custom_folder_text_color
+            local changed4, new_col4 = r.ImGui_ColorEdit4(ctx, "##L4Col", col4, flags)
+            if changed4 then config.custom_folder_level_colors[4] = new_col4; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 4 Folder Color") end
+
+            r.ImGui_SameLine(ctx)
+            -- Level 5+
+            local col5 = config.custom_folder_level_colors[5] or config.custom_folder_text_color
+            local changed5, new_col5 = r.ImGui_ColorEdit4(ctx, "##L5Col", col5, flags)
+            if changed5 then config.custom_folder_level_colors[5] = new_col5; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 5+ Folder Color") end
+
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
             r.ImGui_Separator(ctx)
             local button_width = (window_width - 20) / 3
@@ -4756,6 +4841,12 @@ function GetNextPlugin(current_plugin)
 end
 
 function MakeScreenshot(plugin_name, callback, is_individual)
+    local original_callback = callback
+    callback = function()
+        IS_CAPTURING_SCREENSHOT = false
+        if original_callback then original_callback() end
+    end
+
     if not plugin_name then
         log_to_file("Error: Attempted to make screenshot with nil plugin name")
         if callback then callback() end
@@ -4772,8 +4863,11 @@ function MakeScreenshot(plugin_name, callback, is_individual)
         return false
     end
 
+    IS_CAPTURING_SCREENSHOT = true
+
     local success = pcall(function()
         if not IsPluginVisible(plugin_name) then
+            IS_CAPTURING_SCREENSHOT = false
             if callback then callback() end
             return
         end
@@ -4781,6 +4875,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
         if not is_individual then
             if config.screenshot_size_option ~= 1 and ScreenshotExists(plugin_name, config.screenshot_size_option) then
                 log_to_file("Screenshot already exists: " .. plugin_name)
+                IS_CAPTURING_SCREENSHOT = false
                 if callback then callback() end
                 return
             end
@@ -4819,6 +4914,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
 
         if type(plugin_name) ~= "string" then
             r.ShowMessageBox("Invalid plugin name", "Error", 0)
+            IS_CAPTURING_SCREENSHOT = false
             return
         end
 
@@ -6502,6 +6598,9 @@ function RemoveFXFromAllTracksByName(fx_name, include_master)
         end
     end
     r.Undo_EndBlock("Remove '" .. fx_name .. "' from all tracks", -1)
+    if config.selected_folder == "Current Track FX" or config.selected_folder == "Current Project FX" then
+        RefreshCurrentScreenshotView()
+    end
 end
 
 function ShowFXContextMenu(plugin, menu_id)
@@ -6552,6 +6651,9 @@ function ShowFXContextMenu(plugin, menu_id)
 
         if r.ImGui_MenuItem(ctx, "Delete") then
             r.TrackFX_Delete(track, fx_index)
+            if config.selected_folder == "Current Track FX" or config.selected_folder == "Current Project FX" then
+                RefreshCurrentScreenshotView()
+            end
         end
 
         -- Remove this plugin from all tracks (and master if the clicked instance is on master)
@@ -8307,6 +8409,22 @@ end
 -- CUSTOM FOLDERS (NESTED)
 function DisplayCustomFoldersInBrowser(folders, path_prefix)
     path_prefix = path_prefix or ""
+    
+    -- Set custom indentation spacing for the tree hierarchy
+    local indent_px = config.custom_folder_indent or 20
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_IndentSpacing(), indent_px)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
+
+    -- Calculate depth for color selection
+    local depth = 1
+    if path_prefix ~= "" then
+        local _, count = path_prefix:gsub("/", "")
+        depth = count + 2
+    end
+    local level_colors = config.custom_folder_level_colors or {}
+    local color_idx = math.min(depth, #level_colors)
+    local text_col = level_colors[color_idx] or config.custom_folder_text_color or r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
+
     local function IsCustomPinned(full_path)
         if not config.pinned_custom_subfolders then return false end
         for _, p in ipairs(config.pinned_custom_subfolders) do if p == full_path then return true end end
@@ -8314,7 +8432,10 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
     end
     local function PinCustom(full_path)
         config.pinned_custom_subfolders = config.pinned_custom_subfolders or {}
-        if not IsCustomPinned(full_path) then table.insert(config.pinned_custom_subfolders, full_path); SavePinned() end
+        if not IsCustomPinned(full_path) then 
+            table.insert(config.pinned_custom_subfolders, full_path)
+            SavePinned()
+        end
     end
     local function UnpinCustom(full_path)
         if not config.pinned_custom_subfolders then return end
@@ -8357,9 +8478,6 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
         -- Check if folder has subfolder structure (tree node display for container folders)
         if IsSubfolderStructure(folder_content) then
             -- TreeNode for folders WITH subfolders (container folders)
-            -- Compensate for TreeNode automatic indentation using Unindent BEFORE TreeNode
-            local unindent_amount = path_prefix == "" and 1 or 10  -- Root less, nested more compensation
-            r.ImGui_Unindent(ctx, unindent_amount)
             
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemInnerSpacing(), 0, 0)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)  -- Smaller padding for less vertical space
@@ -8376,7 +8494,8 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-            local display_label = ((IsCustomPinned(full_path) and "\xF0\x9F\x93\x8C ") or "") .. folder_name:upper()
+            local folder_label_text = config.custom_folder_force_uppercase and folder_name:upper() or folder_name
+            local display_label = ((IsCustomPinned(full_path) and "\xF0\x9F\x93\x8C ") or "") .. folder_label_text
             if auto_expand_paths and auto_expand_paths[full_path] then
                 r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_Once())
             end
@@ -8388,7 +8507,6 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             local spacing = r.ImGui_GetTreeNodeToLabelSpacing(ctx)
             local text_x = item_min_x + spacing  -- Use normal spacing for more distance from arrow
             local text_y = item_min_y + (line_h - text_h) * 0.5 + 3
-            local text_col = r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
             -- Draw folder label using the custom-folder font (or global font)
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
             -- Save original screen cursor and use absolute positioning for the text
@@ -8396,7 +8514,9 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             local font_to_use = CustomFolderFont or NormalFont
             r.ImGui_PushFont(ctx, font_to_use, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
             r.ImGui_SetCursorScreenPos(ctx, text_x, text_y)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_col)
             r.ImGui_Text(ctx, display_label)
+            r.ImGui_PopStyleColor(ctx)
             r.ImGui_PopFont(ctx)
             -- Restore cursor screen pos
             r.ImGui_SetCursorScreenPos(ctx, orig_sx, orig_sy)
@@ -8479,21 +8599,15 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleVar(ctx)
             
-            -- Restore indent that we removed before TreeNode
-            local unindent_amount = path_prefix == "" and 1 or 10
-            r.ImGui_Indent(ctx, unindent_amount)
             
             r.ImGui_SetCursorPosX(ctx, original_cursor_x)
-            -- Add spacing after TreeNode: more for root level (to separate from next section), less for nested
-            local spacing_after = path_prefix == "" and 2 or -2
+            -- Consistent spacing: 2px for root, 0px for nested
+            local spacing_after = path_prefix == "" and 2 or 0
             r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + spacing_after)
         else
             -- Selectable for folders WITHOUT subfolders (plugin folders)
-            -- Apply same indent compensation as TreeNodes when nested
-            if path_prefix ~= "" then
-                r.ImGui_Unindent(ctx, 10)  -- Move nested selectables left to align with other items
-            end
-            
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
+
             -- Apply consistent hover color for root level selectables
             if path_prefix == "" then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x3F3F3F3F)
@@ -8503,20 +8617,22 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             
             local is_selected = (selected_folder == full_path)
             local is_pinned = IsCustomPinned(full_path)
+            local folder_label_text = config.custom_folder_force_uppercase and folder_name:upper() or folder_name
             if is_selected then
                 local dl = r.ImGui_GetWindowDrawList(ctx)
                 local x,y = r.ImGui_GetCursorScreenPos(ctx)
-                local text_w = r.ImGui_CalcTextSize(ctx, folder_name:upper())
+                local text_w = r.ImGui_CalcTextSize(ctx, folder_label_text)
                 local avail_w = r.ImGui_GetContentRegionAvail(ctx)
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-            local label = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_name:upper()
+            local label = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_label_text
             
             -- Apply custom folder font
             local font_to_use = CustomFolderFont or NormalFont
             r.ImGui_PushFont(ctx, font_to_use, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
             
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_col)
             if r.ImGui_Selectable(ctx, label, is_selected) then
                 browser_panel_selected = nil
                 selected_folder = full_path
@@ -8542,6 +8658,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 end
                 ClearScreenshotCache()
             end
+            r.ImGui_PopStyleColor(ctx)
             
             r.ImGui_PopFont(ctx)
 
@@ -8618,23 +8735,24 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 r.ImGui_EndPopup(ctx)
             end
             
-            -- Restore indent for nested selectables
-            if path_prefix ~= "" then
-                r.ImGui_Indent(ctx, 10)
-            end
             
             -- Pop style colors for root level selectables
             if path_prefix == "" then
                 r.ImGui_PopStyleColor(ctx, 3)
             end
             
+            r.ImGui_PopStyleVar(ctx)
+
             -- Reset cursor position and add vertical spacing
             r.ImGui_SetCursorPosX(ctx, original_cursor_x)
-            -- Smaller spacing for root folders (no TreeNode), normal spacing for nested
-            local spacing = path_prefix == "" and -1 or 2
+            -- Consistent spacing: 2px for root, 0px for nested
+            local spacing = path_prefix == "" and 2 or 0
             r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + spacing)
         end
     end
+    
+    r.ImGui_PopStyleVar(ctx) -- Pop ItemSpacing
+    r.ImGui_PopStyleVar(ctx) -- Pop IndentSpacing
 end
 
 footer_resize_active = footer_resize_active or false
@@ -14979,6 +15097,8 @@ function HandleDragAndDrop()
     end
 end
 
+local last_fx_count = -1
+
 -----------------------------------------------------------------------------------------
 function Main()
     local frame_start = r.time_precise()
@@ -15032,6 +15152,21 @@ function Main()
                 filtered_plugins = GetCurrentTrackFX()
                 current_filtered_fx = GetPluginsForFolder("Current Track FX")
                 ClearScreenshotCache()
+            end
+            if TRACK then
+                last_fx_count = r.TrackFX_GetCount(TRACK)
+            else
+                last_fx_count = -1
+            end
+        end
+
+        if selected_folder == "Current Track FX" and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+            local current_fx_count = r.TrackFX_GetCount(TRACK)
+            if current_fx_count ~= last_fx_count then
+                filtered_plugins = GetCurrentTrackFX()
+                current_filtered_fx = GetPluginsForFolder("Current Track FX")
+                ClearScreenshotCache()
+                last_fx_count = current_fx_count
             end
         end
         
