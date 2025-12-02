@@ -8,12 +8,13 @@ slider2:0<0,127,1>Last Note Received (Monitor)
 // Mode 0: Off
 // Mode 1: Filter (Block notes outside scale)
 // Mode 2: Remap (Map white keys to scale notes)
-// TriggerMode: If 1, block notes 24-35 (C1-B1) used for ChordGun triggers
+// gmem[20]: Trigger mode enabled
+// gmem[32-159]: Per-note block flags (1=block, 0=pass)
 
 @block
 mode = gmem[0];
-triggerMode = gmem[20]; // Read trigger state from Lua
-slider1 = triggerMode;  // Visual feedback
+triggerMode = gmem[20];
+slider1 = triggerMode;
 
 while (midirecv(offset, msg1, msg2, msg3)) (
     status = msg1 & 0xF0;
@@ -21,7 +22,6 @@ while (midirecv(offset, msg1, msg2, msg3)) (
     note = msg2;
     velocity = msg3;
     
-    // Update monitor slider for Note On messages
     (status == 0x90 && velocity > 0) ? (
         slider2 = note;
     );
@@ -37,24 +37,20 @@ while (midirecv(offset, msg1, msg2, msg3)) (
         bypass_processing = 1;
     );
 
-    triggerMode && !bypass_processing ? (
-        (is_note_on || is_note_off) && note >= 24 && note <= 35 ? (
-            block_note = 1;
-        );
+    triggerMode && !bypass_processing && (is_note_on || is_note_off) ? (
+        gmem[32 + note] ? block_note = 1;
     );
 
     block_note == 0 && !bypass_processing && (is_note_on || is_note_off) ? (
-        mode == 1 ? ( // Filter Mode
+        mode == 1 ? (
             note_idx = (note % 12) + 1;
             allowed = gmem[note_idx];
             allowed == 0 ? block_note = 1;
-        ) : mode == 2 ? ( // Remap Mode
-            // Check if white key
+        ) : mode == 2 ? (
             note_in_octave = note % 12;
             is_white = (note_in_octave == 0 || note_in_octave == 2 || note_in_octave == 4 || note_in_octave == 5 || note_in_octave == 7 || note_in_octave == 9 || note_in_octave == 11);
             
             is_white ? (
-                // Map white key index (0-6) to scale note
                 white_key_idx = -1;
                 note_in_octave == 0 ? white_key_idx = 0 :
                 note_in_octave == 2 ? white_key_idx = 1 :
@@ -64,7 +60,6 @@ while (midirecv(offset, msg1, msg2, msg3)) (
                 note_in_octave == 9 ? white_key_idx = 5 :
                 note_in_octave == 11 ? white_key_idx = 6;
                 
-                // Count scale notes
                 scale_notes_count = 0;
                 i = 1;
                 loop(12,
@@ -75,7 +70,6 @@ while (midirecv(offset, msg1, msg2, msg3)) (
                 scale_notes_count > 0 ? (
                     target_scale_idx = white_key_idx % scale_notes_count;
                     
-                    // Find the note value for this scale index
                     found_note = -1;
                     current_idx = 0;
                     i = 1;
@@ -90,11 +84,10 @@ while (midirecv(offset, msg1, msg2, msg3)) (
                     found_note != -1 ? (
                         octave = floor(note / 12);
                         new_note = found_note + (octave * 12);
-                        msg2 = new_note; // Modify the note
+                        msg2 = new_note;
                     );
                 );
             ) : (
-                // Block black keys in remap mode
                 block_note = 1;
             );
         );

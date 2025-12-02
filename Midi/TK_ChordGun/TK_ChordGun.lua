@@ -1,8 +1,20 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.2
+-- @version 2.3.3
 -- @changelog
 --[[
+
+2.3.3
++ Custom MIDI Trigger Mapping: Assign any MIDI note to any chord button (Right-click chord)
++ Column Mode: Trigger entire scale degree columns with single MIDI notes (Right-click trigger button > Mode)
++ Built-in Preset: "White Keys (C2-B2)" for quick Column Mode setup
++ Preset System: Save/Load your custom trigger mappings to ChordMaps folder
++ Visual Indicators: Yellow squares show mapped triggers (top-left for chords, top-right for columns)
++ Harmonic Compass Redesign: Colored squares in bottom-right corner (replaces border highlight)
++ Persistent Settings: Harmonic Compass state now saved between sessions
++ Trigger notes are automatically filtered from chord recognition
++ Preset Display: Current trigger preset name shown in chord display area
++ 6 Color Themes: Dark, Light, Color, Neon, Ocean, Mono (click Theme button to cycle)
 
 2.3.2
 + Fixed Window Size/Position not being remembered for some users (Now saves globally instead of per-project)
@@ -529,7 +541,11 @@ local ConfigKeys = {
   interfaceWidth = "interfaceWidth",
   interfaceHeight = "interfaceHeight",
   noteLengthIndex = "noteLengthIndex",
-  scaleFilterEnabled = "scaleFilterEnabled"
+  scaleFilterEnabled = "scaleFilterEnabled",
+  midiTriggerMappings = "midiTriggerMappings",
+  midiTriggerColumnMappings = "midiTriggerColumnMappings",
+  midiTriggerMode = "midiTriggerMode",
+  showHarmonicCompass = "showHarmonicCompass"
 }
 
 function setValue(key, value)
@@ -546,6 +562,35 @@ function getValue(key, defaultValue)
   end
 
   return value
+end
+
+local globalExtSection = "TK_ChordGun"
+
+function setPersistentValue(key, value)
+  if not reaper.SetExtState then return end
+  reaper.SetExtState(globalExtSection, key, tostring(value), true)
+end
+
+function getPersistentValue(key)
+  if not reaper.GetExtState then return nil end
+  local saved = reaper.GetExtState(globalExtSection, key)
+  if saved ~= nil and saved ~= "" then
+    return saved
+  end
+  return nil
+end
+
+function getPersistentNumber(key, defaultValue)
+  local globalValue = getPersistentValue(key)
+  if globalValue ~= nil then
+    return tonumber(globalValue)
+  end
+  return tonumber(getValue(key, defaultValue))
+end
+
+function setPersistentNumber(key, value)
+  setValue(key, value)
+  setPersistentValue(key, value)
 end
 
 
@@ -570,6 +615,7 @@ local showOnlyScaleChords = reaper.GetExtState("TK_ChordGun", "showOnlyScaleChor
 local chordListScrollOffset = 0
 local maxVisibleRows = 12
 local isLightMode = reaper.GetExtState("TK_ChordGun", "lightMode") == "1"
+local themeMode = tonumber(reaper.GetExtState("TK_ChordGun", "themeMode")) or (isLightMode and 2 or 1)
 local voicingState = {
   drop2 = false,
   drop3 = false,
@@ -591,8 +637,13 @@ local tooltipsEnabled = false
 local scaleFilterGmemBlock = "TK_ChordGun_Filter"
 local scaleFilterMode = tonumber(getValue("scaleFilterMode", "0")) or 0
 local midiTriggerEnabled = false
+local midiTriggerMappings = {}
+local midiTriggerColumnMappings = {}
+local midiTriggerMode = 1
+local midiTriggerLearnTarget = nil
 local midiTriggerState = {}
 local activeTriggerNote = nil
+local currentTriggerPreset = nil
 
 
 
@@ -608,7 +659,7 @@ local selectedProgressionSlot = nil
 local progressionLength = 8
 local randomizeStartWithTonic = false
 local randomizeUseSelectedChords = false
-local showHarmonicCompass = true
+local showHarmonicCompass = (getPersistentValue(ConfigKeys.showHarmonicCompass) or "true") == "true"
 
 local lastPlayedScaleDegree = 1
 local suggestionRules = {
@@ -684,35 +735,6 @@ function getTableFromString(arg)
   return output
 end
 
-local globalExtSection = "TK_ChordGun"
-
-function setPersistentValue(key, value)
-  if not reaper.SetExtState then return end
-  reaper.SetExtState(globalExtSection, key, tostring(value), true)
-end
-
-function getPersistentValue(key)
-  if not reaper.GetExtState then return nil end
-  local saved = reaper.GetExtState(globalExtSection, key)
-  if saved ~= nil and saved ~= "" then
-    return saved
-  end
-  return nil
-end
-
-function getPersistentNumber(key, defaultValue)
-  local globalValue = getPersistentValue(key)
-  if globalValue ~= nil then
-    return tonumber(globalValue)
-  end
-  return tonumber(getValue(key, defaultValue))
-end
-
-function setPersistentNumber(key, value)
-  setValue(key, value)
-  setPersistentValue(key, value)
-end
-
 function updateScaleFilterState()
   if not reaper.gmem_attach or not reaper.gmem_write then return end
   if not reaper.gmem_attach(scaleFilterGmemBlock) then return end
@@ -722,8 +744,230 @@ function updateScaleFilterState()
     local allowed = (scalePattern and scalePattern[noteIndex]) and 1 or 0
     reaper.gmem_write(1 + i, allowed)
   end
-  -- Write Trigger Mode state to index 20
   reaper.gmem_write(20, midiTriggerEnabled and 1 or 0)
+  for i = 0, 127 do
+    local shouldBlock = false
+    if midiTriggerEnabled then
+      if midiTriggerMode == 1 and midiTriggerMappings[i] then
+        shouldBlock = true
+      elseif midiTriggerMode == 2 and midiTriggerColumnMappings[i] then
+        shouldBlock = true
+      end
+    end
+    reaper.gmem_write(32 + i, shouldBlock and 1 or 0)
+  end
+end
+
+function loadMidiTriggerMappings()
+  local json = getPersistentValue(ConfigKeys.midiTriggerMappings) or "{}"
+  midiTriggerMappings = {}
+  for noteStr, s, c in json:gmatch('"(%d+)":%s*{%s*"s":%s*(%d+)%s*,%s*"c":%s*(%d+)%s*}') do
+    local note = tonumber(noteStr)
+    midiTriggerMappings[note] = {scaleNoteIndex = tonumber(s), chordTypeIndex = tonumber(c)}
+  end
+  
+  local jsonCol = getPersistentValue(ConfigKeys.midiTriggerColumnMappings) or "{}"
+  midiTriggerColumnMappings = {}
+  for noteStr, col in jsonCol:gmatch('"(%d+)":%s*(%d+)') do
+    local note = tonumber(noteStr)
+    midiTriggerColumnMappings[note] = tonumber(col)
+  end
+  
+  midiTriggerMode = tonumber(getPersistentValue(ConfigKeys.midiTriggerMode)) or 1
+end
+
+function saveMidiTriggerMappings()
+  local parts = {}
+  for note, data in pairs(midiTriggerMappings) do
+    table.insert(parts, string.format('"%d":{"s":%d,"c":%d}', note, data.scaleNoteIndex, data.chordTypeIndex))
+  end
+  local json = "{" .. table.concat(parts, ",") .. "}"
+  setPersistentValue(ConfigKeys.midiTriggerMappings, json)
+  
+  local colParts = {}
+  for note, col in pairs(midiTriggerColumnMappings) do
+    table.insert(colParts, string.format('"%d":%d', note, col))
+  end
+  local jsonCol = "{" .. table.concat(colParts, ",") .. "}"
+  setPersistentValue(ConfigKeys.midiTriggerColumnMappings, jsonCol)
+  
+  setPersistentValue(ConfigKeys.midiTriggerMode, tostring(midiTriggerMode))
+end
+
+function setMidiTriggerMapping(midiNote, scaleNoteIndex, chordTypeIndex)
+  for existingNote, data in pairs(midiTriggerMappings) do
+    if data.scaleNoteIndex == scaleNoteIndex and data.chordTypeIndex == chordTypeIndex then
+      midiTriggerMappings[existingNote] = nil
+    end
+  end
+  midiTriggerMappings[midiNote] = {scaleNoteIndex = scaleNoteIndex, chordTypeIndex = chordTypeIndex}
+  saveMidiTriggerMappings()
+  updateScaleFilterState()
+end
+
+function clearMidiTriggerMapping(scaleNoteIndex, chordTypeIndex)
+  for note, data in pairs(midiTriggerMappings) do
+    if data.scaleNoteIndex == scaleNoteIndex and data.chordTypeIndex == chordTypeIndex then
+      midiTriggerMappings[note] = nil
+    end
+  end
+  saveMidiTriggerMappings()
+  updateScaleFilterState()
+end
+
+function getMidiTriggerNoteForChord(scaleNoteIndex, chordTypeIndex)
+  for note, data in pairs(midiTriggerMappings) do
+    if data.scaleNoteIndex == scaleNoteIndex and data.chordTypeIndex == chordTypeIndex then
+      return note
+    end
+  end
+  return nil
+end
+
+function setMidiTriggerColumnMapping(midiNote, columnIndex)
+  for existingNote, col in pairs(midiTriggerColumnMappings) do
+    if col == columnIndex then
+      midiTriggerColumnMappings[existingNote] = nil
+    end
+  end
+  midiTriggerColumnMappings[midiNote] = columnIndex
+  saveMidiTriggerMappings()
+  updateScaleFilterState()
+end
+
+function clearMidiTriggerColumnMapping(columnIndex)
+  for note, col in pairs(midiTriggerColumnMappings) do
+    if col == columnIndex then
+      midiTriggerColumnMappings[note] = nil
+    end
+  end
+  saveMidiTriggerMappings()
+  updateScaleFilterState()
+end
+
+function getMidiTriggerNoteForColumn(columnIndex)
+  for note, col in pairs(midiTriggerColumnMappings) do
+    if col == columnIndex then
+      return note
+    end
+  end
+  return nil
+end
+
+function getMidiNoteName(midiNote)
+  local noteNames = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+  local octave = math.floor(midiNote / 12) - 1
+  local noteName = noteNames[(midiNote % 12) + 1]
+  return noteName .. octave
+end
+
+function getChordMapsFolder()
+  local scriptPath = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun/ChordMaps"
+  reaper.RecursiveCreateDirectory(scriptPath, 0)
+  return scriptPath
+end
+
+function saveChordMapPreset(name)
+  local folder = getChordMapsFolder()
+  local filepath = folder .. "/" .. name .. ".txt"
+  local file = io.open(filepath, "w")
+  if file then
+    file:write("[MODE]\n")
+    file:write(tostring(midiTriggerMode) .. "\n")
+    file:write("[CHORDS]\n")
+    for note, data in pairs(midiTriggerMappings) do
+      file:write(string.format("%d,%d,%d\n", note, data.scaleNoteIndex, data.chordTypeIndex))
+    end
+    file:write("[COLUMNS]\n")
+    for note, col in pairs(midiTriggerColumnMappings) do
+      file:write(string.format("%d,%d\n", note, col))
+    end
+    file:close()
+    return true
+  end
+  return false
+end
+
+function loadChordMapPreset(name)
+  local folder = getChordMapsFolder()
+  local filepath = folder .. "/" .. name .. ".txt"
+  local file = io.open(filepath, "r")
+  if file then
+    midiTriggerMappings = {}
+    midiTriggerColumnMappings = {}
+    local section = ""
+    for line in file:lines() do
+      if line == "[MODE]" then
+        section = "mode"
+      elseif line == "[CHORDS]" then
+        section = "chords"
+      elseif line == "[COLUMNS]" then
+        section = "columns"
+      elseif section == "mode" then
+        midiTriggerMode = tonumber(line) or 1
+      elseif section == "chords" then
+        local note, s, c = line:match("(%d+),(%d+),(%d+)")
+        if note and s and c then
+          midiTriggerMappings[tonumber(note)] = {scaleNoteIndex = tonumber(s), chordTypeIndex = tonumber(c)}
+        end
+      elseif section == "columns" then
+        local note, col = line:match("(%d+),(%d+)")
+        if note and col then
+          midiTriggerColumnMappings[tonumber(note)] = tonumber(col)
+        end
+      else
+        local note, s, c = line:match("(%d+),(%d+),(%d+)")
+        if note and s and c then
+          midiTriggerMappings[tonumber(note)] = {scaleNoteIndex = tonumber(s), chordTypeIndex = tonumber(c)}
+        end
+      end
+    end
+    file:close()
+    saveMidiTriggerMappings()
+    updateScaleFilterState()
+    currentTriggerPreset = name
+    return true
+  end
+  return false
+end
+
+function deleteChordMapPreset(name)
+  local folder = getChordMapsFolder()
+  local filepath = folder .. "/" .. name .. ".txt"
+  os.remove(filepath)
+end
+
+function loadBuiltInPreset_WhiteKeys7()
+  midiTriggerColumnMappings = {}
+  midiTriggerMappings = {}
+  midiTriggerColumnMappings[36] = 1  -- C2 -> kolom 1
+  midiTriggerColumnMappings[38] = 2  -- D2 -> kolom 2
+  midiTriggerColumnMappings[40] = 3  -- E2 -> kolom 3
+  midiTriggerColumnMappings[41] = 4  -- F2 -> kolom 4
+  midiTriggerColumnMappings[43] = 5  -- G2 -> kolom 5
+  midiTriggerColumnMappings[45] = 6  -- A2 -> kolom 6
+  midiTriggerColumnMappings[47] = 7  -- B2 -> kolom 7
+  midiTriggerMode = 2
+  midiTriggerEnabled = true
+  saveMidiTriggerMappings()
+  updateScaleFilterState()
+  currentTriggerPreset = "White Keys (C2-B2)"
+end
+
+function getChordMapPresets()
+  local folder = getChordMapsFolder()
+  local presets = {}
+  local i = 0
+  repeat
+    local file = reaper.EnumerateFiles(folder, i)
+    if file and file:match("%.txt$") then
+      local presetName = (file:gsub("%.txt$", ""))
+      table.insert(presets, presetName)
+    end
+    i = i + 1
+  until not file
+  table.sort(presets)
+  return presets
 end
 
 function setScaleFilterMode(mode)
@@ -850,9 +1094,12 @@ local function getActiveExternalNotes()
   local notes = {}
   for note, _ in pairs(chordInputNotes) do
 
-    -- Skip trigger notes if Trigger Mode is enabled
-    if midiTriggerEnabled and note >= 24 and note <= 35 then
+    if midiTriggerEnabled then
+      if midiTriggerMode == 1 and midiTriggerMappings[note] then
         goto continue
+      elseif midiTriggerMode == 2 and midiTriggerColumnMappings[note] then
+        goto continue
+      end
     end
 
     local noteToAnalyze = note
@@ -2296,7 +2543,7 @@ function getBestVoiceLeadingInversion(root, chordData, octave)
     return bestInversion
 end
 
-function playMidiNote(midiNote)
+function playMidiNote(midiNote, velocityOverride)
 
   local virtualKeyboardMode = 0
   local channel = getCurrentNoteChannel()
@@ -2306,7 +2553,7 @@ function playMidiNote(midiNote)
   end
 
   local noteOnCommand = 0x90 + channel
-  local velocity = getCurrentVelocity()
+  local velocity = velocityOverride or getCurrentVelocity()
 
   reaper.StuffMIDIMessage(virtualKeyboardMode, noteOnCommand, midiNote, velocity)
   registerInternalNoteEvent(midiNote, true)
@@ -2574,7 +2821,7 @@ function insertMidiNote(note, keepNotesSelected, selectedChord, noteIndex)
 end
 local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
-local function playScaleChord(chordNotesArray)
+local function playScaleChord(chordNotesArray, velocity)
 
   stopNotesFromPlaying()
   
@@ -2583,7 +2830,7 @@ local function playScaleChord(chordNotesArray)
     local delaySeconds = strumDelayMs / 1000.0
     
     for noteIndex = 1, #chordNotesArray do
-      playMidiNote(chordNotesArray[noteIndex])
+      playMidiNote(chordNotesArray[noteIndex], velocity)
       
 
       if noteIndex < #chordNotesArray then
@@ -2601,7 +2848,7 @@ local function playScaleChord(chordNotesArray)
     local delaySeconds = getArpDelaySeconds()
     
     for noteIndex = 1, #chordNotesArray do
-      playMidiNote(chordNotesArray[noteIndex])
+      playMidiNote(chordNotesArray[noteIndex], velocity)
       
 
       if noteIndex < #chordNotesArray then
@@ -2617,7 +2864,7 @@ local function playScaleChord(chordNotesArray)
   else
 
     for noteIndex = 1, #chordNotesArray do
-      playMidiNote(chordNotesArray[noteIndex])
+      playMidiNote(chordNotesArray[noteIndex], velocity)
     end
   end
 
@@ -3654,7 +3901,7 @@ function updateProgressionPlayback()
   end
 end
 
-function previewScaleChord()
+function previewScaleChord(velocity)
 
   local scaleNoteIndex = getSelectedScaleNote()
   lastPlayedScaleDegree = scaleNoteIndex
@@ -3665,6 +3912,7 @@ function previewScaleChord()
   local octave = getOctave()
 
   local inversionOverride = nil
+
   if voiceLeadingEnabled then
      inversionOverride = getBestVoiceLeadingInversion(root, chord, octave)
   end
@@ -3673,7 +3921,8 @@ function previewScaleChord()
   if voiceLeadingEnabled then lastPlayedNotes = chordNotesArray end
   
   chordNotesArray = applyArpPattern(chordNotesArray)
-  playScaleChord(chordNotesArray)
+  playScaleChord(chordNotesArray, velocity)
+  setNotesThatArePlaying(chordNotesArray)
   updateChordText(root, chord, chordNotesArray)
 end
 
@@ -4569,7 +4818,7 @@ end
 	playOrInsertScaleChord(actionDescription)
 end
 
-function previewScaleChordAction(scaleNoteIndex)
+function previewScaleChordAction(scaleNoteIndex, velocity)
 
 	if scaleIsPentatonic() and scaleNoteIndex > 5 then
 return
@@ -4580,7 +4829,7 @@ return
 end
 
 	setSelectedScaleNote(scaleNoteIndex)
-	previewScaleChord()
+	previewScaleChord(velocity)
 end
 
 --
@@ -4964,11 +5213,429 @@ local themes = {
         pianoBlackGrey = "404040",
         chordDisplayRecognized = "FFD700",
         chordDisplayRecognizedOutOfScale = "CC0000"
+    },
+    colorful = {
+        background = "1A1A2E",
+        buttonNormal = "16213E",
+        buttonHighlight = "0F3460",
+        buttonPressed = "E94560",
+        buttonPressedText = "FFFFFF",
+        chordSelected = "533483",
+        chordSelectedHighlight = "7952B3",
+        chordSelectedScaleNote = "00D9FF",
+        chordSelectedScaleNoteHighlight = "00FFFF",
+        chordOutOfScale = "0D0D1A",
+        chordOutOfScaleHighlight = "1A1A2E",
+        chordSuggestionStrong = "00FF88",
+        chordSuggestionSafe = "00BFFF",
+        chordSuggestionSpicy = "FF6B35",
+        buttonOutline = "0F3460",
+        textNormal = "EAEAEA",
+        textHighlight = "FFFFFF",
+        textSelected = "FFFFFF",
+        textSelectedHighlight = "FFFFFF",
+        textSelectedScaleNote = "1A1A2E",
+        textSelectedScaleNoteHighlight = "000000",
+        headerOutline = "E94560",
+        headerBackground = "533483",
+        headerText = "FFFFFF",
+        frameOutline = "0F3460",
+        frameBackground = "16213E",
+        dropdownOutline = "533483",
+        dropdownBackground = "1A1A2E",
+        dropdownText = "EAEAEA",
+        valueBoxOutline = "533483",
+        valueBoxBackground = "16213E",
+        valueBoxText = "00D9FF",
+        generalText = "AAAACC",
+        slotBg = "16213E",
+        slotFilled = "533483",
+        slotFilledText = "FFFFFF",
+        slotFilledInfoText = "00D9FF",
+        slotPlaying = "E94560",
+        slotSelected = "00D9FF",
+        slotHover = "0F3460",
+        slotOutlineSelected = "00FFFF",
+        slotOutline = "533483",
+        slotLengthMarker = "FF6B35",
+        slotText = "FFFFFF",
+        slotInfoText = "AAAACC",
+        slotEmptyText = "666699",
+        tooltipBg = "16213E",
+        tooltipBorder = "E94560",
+        tooltipText = "FFFFFF",
+        headerButtonBg = "533483",
+        headerButtonBorder = "E94560",
+        headerButtonText = "FFFFFF",
+        linearViewRoot = "E94560",
+        linearViewScale = "00D9FF",
+        linearViewOutOfScale = "16213E",
+        linearViewTextInScale = "FFFFFF",
+        linearViewTextOutOfScale = "666699",
+        linearViewIntervalText = "AAAACC",
+        linearViewLegendTitle = "FFFFFF",
+        linearViewLegendSub = "AAAACC",
+        wheelBg = "1A1A2E",
+        wheelPolygon = "533483",
+        wheelPolygonActive = "E94560",
+        wheelTonic = "E94560",
+        wheelInScale = "00D9FF",
+        wheelOutOfScale = "16213E",
+        wheelOutOfScaleFifths = "0F3460",
+        wheelBorderActive = "FFFFFF",
+        wheelBorderInactive = "533483",
+        wheelHalo = "E94560",
+        wheelText = "FFFFFF",
+        wheelRelativeMinor = "FFFFFF",
+        wheelLegendTitle = "FFFFFF",
+        wheelLegendSub = "AAAACC",
+        wheelLegendHalo = "E94560",
+        wheelLegendText = "FFFFFF",
+        wheelFooterText = "AAAACC",
+        pianoWhite = "EAEAEA",
+        pianoWhiteActive = "E94560",
+        pianoWhiteText = "1A1A2E",
+        pianoBlack = "16213E",
+        pianoBlackActive = "E94560",
+        pianoBlackText = "00D9FF",
+        pianoBlackTextActive = "FFFFFF",
+        chordDisplayBg = "16213E",
+        chordDisplayText = "FFFFFF",
+        bottomButtonBg = "0F3460",
+        bottomButtonText = "EAEAEA",
+        iconColor = "00D9FF",
+        bottomButtonBgHover = "533483",
+        topButtonTextHover = "E94560",
+        topButtonText = "EAEAEA",
+        bottomButtonTextActive = "E94560",
+        pianoActive = "E94560",
+        pianoWhiteGrey = "CCCCDD",
+        pianoTextActive = "FFFFFF",
+        pianoTextExternal = "00D9FF",
+        pianoTextNormal = "1A1A2E",
+        pianoBlackGrey = "0F3460",
+        chordDisplayRecognized = "E94560",
+        chordDisplayRecognizedOutOfScale = "FF6B35"
+    },
+    neon = {
+        background = "0A0A0F",
+        buttonNormal = "151520",
+        buttonHighlight = "252535",
+        buttonPressed = "FF00FF",
+        buttonPressedText = "000000",
+        chordSelected = "1A1A2A",
+        chordSelectedHighlight = "2A2A3A",
+        chordSelectedScaleNote = "00FFFF",
+        chordSelectedScaleNoteHighlight = "00FFFF",
+        chordOutOfScale = "08080C",
+        chordOutOfScaleHighlight = "151520",
+        chordSuggestionStrong = "39FF14",
+        chordSuggestionSafe = "00FFFF",
+        chordSuggestionSpicy = "FF6600",
+        buttonOutline = "252535",
+        textNormal = "E0E0E0",
+        textHighlight = "FFFFFF",
+        textSelected = "FFFFFF",
+        textSelectedHighlight = "FFFFFF",
+        textSelectedScaleNote = "000000",
+        textSelectedScaleNoteHighlight = "000000",
+        headerOutline = "FF00FF",
+        headerBackground = "9900FF",
+        headerText = "FFFFFF",
+        frameOutline = "252535",
+        frameBackground = "151520",
+        dropdownOutline = "9900FF",
+        dropdownBackground = "0A0A0F",
+        dropdownText = "E0E0E0",
+        valueBoxOutline = "9900FF",
+        valueBoxBackground = "151520",
+        valueBoxText = "00FFFF",
+        generalText = "9999BB",
+        slotBg = "151520",
+        slotFilled = "9900FF",
+        slotFilledText = "FFFFFF",
+        slotFilledInfoText = "00FFFF",
+        slotPlaying = "FF00FF",
+        slotSelected = "00FFFF",
+        slotHover = "252535",
+        slotOutlineSelected = "00FFFF",
+        slotOutline = "9900FF",
+        slotLengthMarker = "39FF14",
+        slotText = "FFFFFF",
+        slotInfoText = "9999BB",
+        slotEmptyText = "555577",
+        tooltipBg = "151520",
+        tooltipBorder = "FF00FF",
+        tooltipText = "FFFFFF",
+        headerButtonBg = "9900FF",
+        headerButtonBorder = "FF00FF",
+        headerButtonText = "FFFFFF",
+        linearViewRoot = "FF00FF",
+        linearViewScale = "00FFFF",
+        linearViewOutOfScale = "151520",
+        linearViewTextInScale = "FFFFFF",
+        linearViewTextOutOfScale = "555577",
+        linearViewIntervalText = "9999BB",
+        linearViewLegendTitle = "FFFFFF",
+        linearViewLegendSub = "9999BB",
+        wheelBg = "0A0A0F",
+        wheelPolygon = "9900FF",
+        wheelPolygonActive = "FF00FF",
+        wheelTonic = "FF00FF",
+        wheelInScale = "00FFFF",
+        wheelOutOfScale = "151520",
+        wheelOutOfScaleFifths = "252535",
+        wheelBorderActive = "FFFFFF",
+        wheelBorderInactive = "9900FF",
+        wheelHalo = "FF00FF",
+        wheelText = "FFFFFF",
+        wheelRelativeMinor = "FFFFFF",
+        wheelLegendTitle = "FFFFFF",
+        wheelLegendSub = "9999BB",
+        wheelLegendHalo = "FF00FF",
+        wheelLegendText = "FFFFFF",
+        wheelFooterText = "9999BB",
+        pianoWhite = "E0E0E0",
+        pianoWhiteActive = "FF00FF",
+        pianoWhiteText = "0A0A0F",
+        pianoBlack = "151520",
+        pianoBlackActive = "FF00FF",
+        pianoBlackText = "00FFFF",
+        pianoBlackTextActive = "FFFFFF",
+        chordDisplayBg = "151520",
+        chordDisplayText = "FFFFFF",
+        bottomButtonBg = "252535",
+        bottomButtonText = "E0E0E0",
+        iconColor = "00FFFF",
+        bottomButtonBgHover = "9900FF",
+        topButtonTextHover = "FF00FF",
+        topButtonText = "E0E0E0",
+        bottomButtonTextActive = "FF00FF",
+        pianoActive = "FF00FF",
+        pianoWhiteGrey = "CCCCDD",
+        pianoTextActive = "000000",
+        pianoTextExternal = "00FFFF",
+        pianoTextNormal = "0A0A0F",
+        pianoBlackGrey = "252535",
+        chordDisplayRecognized = "FF00FF",
+        chordDisplayRecognizedOutOfScale = "FF6600"
+    },
+    ocean = {
+        background = "0D1B2A",
+        buttonNormal = "1B263B",
+        buttonHighlight = "274060",
+        buttonPressed = "00D4AA",
+        buttonPressedText = "000000",
+        chordSelected = "1B3A4B",
+        chordSelectedHighlight = "2D5A6B",
+        chordSelectedScaleNote = "48CAE4",
+        chordSelectedScaleNoteHighlight = "90E0EF",
+        chordOutOfScale = "091520",
+        chordOutOfScaleHighlight = "1B263B",
+        chordSuggestionStrong = "00D4AA",
+        chordSuggestionSafe = "48CAE4",
+        chordSuggestionSpicy = "FF7F50",
+        buttonOutline = "274060",
+        textNormal = "CAF0F8",
+        textHighlight = "FFFFFF",
+        textSelected = "FFFFFF",
+        textSelectedHighlight = "FFFFFF",
+        textSelectedScaleNote = "0D1B2A",
+        textSelectedScaleNoteHighlight = "000000",
+        headerOutline = "00D4AA",
+        headerBackground = "0077B6",
+        headerText = "FFFFFF",
+        frameOutline = "274060",
+        frameBackground = "1B263B",
+        dropdownOutline = "0077B6",
+        dropdownBackground = "0D1B2A",
+        dropdownText = "CAF0F8",
+        valueBoxOutline = "0077B6",
+        valueBoxBackground = "1B263B",
+        valueBoxText = "48CAE4",
+        generalText = "90A4AE",
+        slotBg = "1B263B",
+        slotFilled = "0077B6",
+        slotFilledText = "FFFFFF",
+        slotFilledInfoText = "48CAE4",
+        slotPlaying = "00D4AA",
+        slotSelected = "48CAE4",
+        slotHover = "274060",
+        slotOutlineSelected = "90E0EF",
+        slotOutline = "0077B6",
+        slotLengthMarker = "FF7F50",
+        slotText = "FFFFFF",
+        slotInfoText = "90A4AE",
+        slotEmptyText = "546E7A",
+        tooltipBg = "1B263B",
+        tooltipBorder = "00D4AA",
+        tooltipText = "FFFFFF",
+        headerButtonBg = "0077B6",
+        headerButtonBorder = "00D4AA",
+        headerButtonText = "FFFFFF",
+        linearViewRoot = "00D4AA",
+        linearViewScale = "48CAE4",
+        linearViewOutOfScale = "1B263B",
+        linearViewTextInScale = "FFFFFF",
+        linearViewTextOutOfScale = "546E7A",
+        linearViewIntervalText = "90A4AE",
+        linearViewLegendTitle = "FFFFFF",
+        linearViewLegendSub = "90A4AE",
+        wheelBg = "0D1B2A",
+        wheelPolygon = "0077B6",
+        wheelPolygonActive = "00D4AA",
+        wheelTonic = "00D4AA",
+        wheelInScale = "48CAE4",
+        wheelOutOfScale = "1B263B",
+        wheelOutOfScaleFifths = "274060",
+        wheelBorderActive = "FFFFFF",
+        wheelBorderInactive = "0077B6",
+        wheelHalo = "00D4AA",
+        wheelText = "FFFFFF",
+        wheelRelativeMinor = "FFFFFF",
+        wheelLegendTitle = "FFFFFF",
+        wheelLegendSub = "90A4AE",
+        wheelLegendHalo = "00D4AA",
+        wheelLegendText = "FFFFFF",
+        wheelFooterText = "90A4AE",
+        pianoWhite = "CAF0F8",
+        pianoWhiteActive = "00D4AA",
+        pianoWhiteText = "0D1B2A",
+        pianoBlack = "1B263B",
+        pianoBlackActive = "00D4AA",
+        pianoBlackText = "48CAE4",
+        pianoBlackTextActive = "FFFFFF",
+        chordDisplayBg = "1B263B",
+        chordDisplayText = "FFFFFF",
+        bottomButtonBg = "274060",
+        bottomButtonText = "CAF0F8",
+        iconColor = "48CAE4",
+        bottomButtonBgHover = "0077B6",
+        topButtonTextHover = "00D4AA",
+        topButtonText = "CAF0F8",
+        bottomButtonTextActive = "00D4AA",
+        pianoActive = "00D4AA",
+        pianoWhiteGrey = "B0C4DE",
+        pianoTextActive = "000000",
+        pianoTextExternal = "48CAE4",
+        pianoTextNormal = "0D1B2A",
+        pianoBlackGrey = "274060",
+        chordDisplayRecognized = "00D4AA",
+        chordDisplayRecognizedOutOfScale = "FF7F50"
+    },
+    mono = {
+        background = "1A1A1A",
+        buttonNormal = "2A2A2A",
+        buttonHighlight = "3A3A3A",
+        buttonPressed = "FF3333",
+        buttonPressedText = "FFFFFF",
+        chordSelected = "3A3A3A",
+        chordSelectedHighlight = "4A4A4A",
+        chordSelectedScaleNote = "FFFFFF",
+        chordSelectedScaleNoteHighlight = "FFFFFF",
+        chordOutOfScale = "141414",
+        chordOutOfScaleHighlight = "2A2A2A",
+        chordSuggestionStrong = "FFFFFF",
+        chordSuggestionSafe = "AAAAAA",
+        chordSuggestionSpicy = "FF3333",
+        buttonOutline = "3A3A3A",
+        textNormal = "CCCCCC",
+        textHighlight = "FFFFFF",
+        textSelected = "FFFFFF",
+        textSelectedHighlight = "FFFFFF",
+        textSelectedScaleNote = "1A1A1A",
+        textSelectedScaleNoteHighlight = "000000",
+        headerOutline = "FF3333",
+        headerBackground = "4A4A4A",
+        headerText = "FFFFFF",
+        frameOutline = "3A3A3A",
+        frameBackground = "2A2A2A",
+        dropdownOutline = "4A4A4A",
+        dropdownBackground = "1A1A1A",
+        dropdownText = "CCCCCC",
+        valueBoxOutline = "4A4A4A",
+        valueBoxBackground = "2A2A2A",
+        valueBoxText = "FFFFFF",
+        generalText = "888888",
+        slotBg = "2A2A2A",
+        slotFilled = "4A4A4A",
+        slotFilledText = "FFFFFF",
+        slotFilledInfoText = "CCCCCC",
+        slotPlaying = "FF3333",
+        slotSelected = "FFFFFF",
+        slotHover = "3A3A3A",
+        slotOutlineSelected = "FFFFFF",
+        slotOutline = "4A4A4A",
+        slotLengthMarker = "FF3333",
+        slotText = "FFFFFF",
+        slotInfoText = "888888",
+        slotEmptyText = "555555",
+        tooltipBg = "2A2A2A",
+        tooltipBorder = "FF3333",
+        tooltipText = "FFFFFF",
+        headerButtonBg = "4A4A4A",
+        headerButtonBorder = "FF3333",
+        headerButtonText = "FFFFFF",
+        linearViewRoot = "FF3333",
+        linearViewScale = "FFFFFF",
+        linearViewOutOfScale = "2A2A2A",
+        linearViewTextInScale = "1A1A1A",
+        linearViewTextOutOfScale = "555555",
+        linearViewIntervalText = "888888",
+        linearViewLegendTitle = "FFFFFF",
+        linearViewLegendSub = "888888",
+        wheelBg = "1A1A1A",
+        wheelPolygon = "4A4A4A",
+        wheelPolygonActive = "FFFFFF",
+        wheelTonic = "FF3333",
+        wheelInScale = "FFFFFF",
+        wheelOutOfScale = "2A2A2A",
+        wheelOutOfScaleFifths = "3A3A3A",
+        wheelBorderActive = "FFFFFF",
+        wheelBorderInactive = "4A4A4A",
+        wheelHalo = "FF3333",
+        wheelText = "1A1A1A",
+        wheelRelativeMinor = "1A1A1A",
+        wheelLegendTitle = "FFFFFF",
+        wheelLegendSub = "888888",
+        wheelLegendHalo = "FF3333",
+        wheelLegendText = "FFFFFF",
+        wheelFooterText = "888888",
+        pianoWhite = "E0E0E0",
+        pianoWhiteActive = "FF3333",
+        pianoWhiteText = "1A1A1A",
+        pianoBlack = "2A2A2A",
+        pianoBlackActive = "FF3333",
+        pianoBlackText = "888888",
+        pianoBlackTextActive = "FFFFFF",
+        chordDisplayBg = "2A2A2A",
+        chordDisplayText = "FFFFFF",
+        bottomButtonBg = "3A3A3A",
+        bottomButtonText = "CCCCCC",
+        iconColor = "CCCCCC",
+        bottomButtonBgHover = "4A4A4A",
+        topButtonTextHover = "FF3333",
+        topButtonText = "CCCCCC",
+        bottomButtonTextActive = "FF3333",
+        pianoActive = "FF3333",
+        pianoWhiteGrey = "CCCCCC",
+        pianoTextActive = "FFFFFF",
+        pianoTextExternal = "888888",
+        pianoTextNormal = "1A1A1A",
+        pianoBlackGrey = "3A3A3A",
+        chordDisplayRecognized = "FF3333",
+        chordDisplayRecognizedOutOfScale = "FF6666"
     }
 }
 
 local function getThemeColor(key)
-    if isLightMode then return themes.light[key] else return themes.dark[key] end
+    if themeMode == 6 then return themes.mono[key]
+    elseif themeMode == 5 then return themes.ocean[key]
+    elseif themeMode == 4 then return themes.neon[key]
+    elseif themeMode == 3 then return themes.colorful[key]
+    elseif themeMode == 2 then return themes.light[key]
+    else return themes.dark[key]
+    end
 end
 
 setThemeColor = function(key)
@@ -5437,7 +6104,7 @@ local function getHeaderRadius()
 	return s(5)
 end
 
-function Header:new(x, y, width, height, getTextCallback)
+function Header:new(x, y, width, height, getTextCallback, scaleNoteIndex)
 
   local self = {}
   setmetatable(self, Header)
@@ -5447,6 +6114,7 @@ function Header:new(x, y, width, height, getTextCallback)
   self.width = width
   self.height = height
   self.getTextCallback = getTextCallback
+  self.scaleNoteIndex = scaleNoteIndex
 
   return self
 end
@@ -5505,6 +6173,44 @@ function Header:update()
 
     local text = self.getTextCallback()
     self:drawText(text)
+    
+    if self.scaleNoteIndex and midiTriggerEnabled and midiTriggerMode == 2 then
+      local triggerNote = getMidiTriggerNoteForColumn(self.scaleNoteIndex)
+      if triggerNote then
+        gfx.set(1, 0.85, 0.2, 1)
+        local squareSize = 10
+        gfx.rect(self.x + self.width - squareSize - 2, self.y + 2, squareSize, squareSize, 1)
+      end
+    end
+    
+    if self.scaleNoteIndex and mouseIsHoveringOver(self) then
+      local rightClicked = (gfx.mouse_cap & 2 == 2)
+      if mouseButtonIsNotPressedDown and rightClicked then
+        mouseButtonIsNotPressedDown = false
+        self:onRightClick()
+      end
+    end
+end
+
+function Header:onRightClick()
+  if not self.scaleNoteIndex then return end
+  
+  local existingTrigger = getMidiTriggerNoteForColumn(self.scaleNoteIndex)
+  local triggerLabel = existingTrigger and ("Clear Column Trigger (" .. getMidiNoteName(existingTrigger) .. ")") or "Assign Column Trigger..."
+  
+  local menu = triggerLabel
+  
+  gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+  local selection = gfx.showmenu(menu)
+  
+  if selection == 1 then
+    if existingTrigger then
+      clearMidiTriggerColumnMapping(self.scaleNoteIndex)
+    else
+      midiTriggerLearnTarget = {isColumn = true, columnIndex = self.scaleNoteIndex}
+      reaper.ShowMessageBox("Press any MIDI key to assign it to column " .. self.scaleNoteIndex .. ".\n\nThe next incoming MIDI note will be mapped.", "MIDI Learn", 0)
+    end
+  end
 end
 local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/TK_ChordGun"
 
@@ -5848,15 +6554,11 @@ local workingDirectory = reaper.GetResourcePath() .. "/Scripts/TK Scripts/Midi/T
 ChordButton = {}
 ChordButton.__index = ChordButton
 
--- Generate Diatonic ii-V-I (or similar) for a given scale degree
 
 
 local currentlyHeldButton = nil
 
 local holdModeEnabled = false
--- midiTriggerEnabled moved to top
--- midiTriggerState moved to top
-
 
 local lastPlayedChord = nil
 
@@ -5865,7 +6567,7 @@ local externalMidiNotes = {}
 local lastProcessedMidiSignature = nil
 local midiQueuePrimed = false
 local internalNoteEvents = {}
-local internalNoteTimeoutSeconds = 0.3
+local internalNoteTimeoutSeconds = 0.1 -- 100ms timeout
 
 pruneInternalNoteEvents = function()
   if not reaper.time_precise then
@@ -5890,7 +6592,7 @@ registerInternalNoteEvent = function(noteNumber, isNoteOn)
     isNoteOn = isNoteOn and true or false,
     expires = reaper.time_precise() + internalNoteTimeoutSeconds
   }
-  suppressExternalMidiUntil = math.max(suppressExternalMidiUntil or 0, reaper.time_precise() + 0.05)
+  suppressExternalMidiUntil = math.max(suppressExternalMidiUntil or 0, reaper.time_precise() + 0.1) -- 100ms global suppression
 end
 
 consumeInternalNoteEvent = function(noteNumber, isNoteOn)
@@ -5900,7 +6602,7 @@ consumeInternalNoteEvent = function(noteNumber, isNoteOn)
   for i = #internalNoteEvents, 1, -1 do
     local event = internalNoteEvents[i]
     if event.note == noteNumber and event.isNoteOn == (isNoteOn and true or false) then
-      table.remove(internalNoteEvents, i)
+      -- table.remove(internalNoteEvents, i) -- FIX: Keep event until expiration to prevent multi-trigger/feedback
       return true
     end
   end
@@ -5915,6 +6617,12 @@ isExternalDevice = function(devIdx)
   if devIdx == nil then
     return false
   end
+
+  -- FIX: Ignore Virtual MIDI Keyboard (ID 63) to prevent feedback loops
+  if devIdx == 63 then
+      return false
+  end
+
   if devIdx >= 0 then
     return true
   end
@@ -5925,8 +6633,9 @@ end
 local function processExternalMidiInput()
   if not reaper.MIDI_GetRecentInputEvent then return end
 
-
-
+  if suppressExternalMidiUntil and reaper.time_precise() < suppressExternalMidiUntil then
+    return
+  end
 
   pruneInternalNoteEvents()
 
@@ -5967,20 +6676,25 @@ local function processExternalMidiInput()
     local rawMessage = event.rawMessage
     local status = rawMessage:byte(1) or 0
     local command = status & 0xF0
-    local noteNumber = rawMessage:byte(2) or 0
-    local velocity = rawMessage:byte(3) or 0
+    local channel = status & 0x0F
+    local msg2 = rawMessage:byte(2) or 0
+    local msg3 = rawMessage:byte(3) or 0
+    
     local isPhysicalInput = isExternalDevice(event.devIdx)
-    local isNoteOn = (command == 0x90 and velocity > 0)
-    local isNoteOff = (command == 0x80) or (command == 0x90 and velocity == 0)
+
+    local isNoteOn = (command == 0x90 and msg3 > 0)
+    local isNoteOff = (command == 0x80) or (command == 0x90 and msg3 == 0)
+    
     if isPhysicalInput and (isNoteOn or isNoteOff) then
-      if consumeInternalNoteEvent(noteNumber, isNoteOn) then
+      if consumeInternalNoteEvent(msg2, isNoteOn) then
 
       elseif isNoteOn then
-        externalMidiNotes[noteNumber] = true
+        externalMidiNotes[msg2] = msg3 -- SLA VELOCITY OP IPV TRUE
       else
-        externalMidiNotes[noteNumber] = nil
+        externalMidiNotes[msg2] = nil
       end
     end
+    ::continue::
   end
 
   if firstSignature then
@@ -6087,8 +6801,12 @@ end
 
 function ChordButton:drawButtonOutline()
 
+    setDrawColorToButtonOutline()
+    gfx.rect(self.x-1, self.y-1, self.width+1, self.height+1, false)
+    
     local suggestionType = getSuggestionType(self.scaleNoteIndex)
     if showHarmonicCompass and suggestionType and self.chordIsInScale and #scaleNotes == 7 then
+        local squareSize = 10
         if suggestionType == "strong" then
             setThemeColor("chordSuggestionStrong")
         elseif suggestionType == "safe" then
@@ -6096,12 +6814,16 @@ function ChordButton:drawButtonOutline()
         elseif suggestionType == "spicy" then
             setThemeColor("chordSuggestionSpicy")
         end
-        
-        gfx.rect(self.x-1, self.y-1, self.width+1, self.height+1, false)
-        gfx.rect(self.x-2, self.y-2, self.width+3, self.height+3, false)
-    else
-		setDrawColorToButtonOutline()
-		gfx.rect(self.x-1, self.y-1, self.width+1, self.height+1, false)
+        gfx.rect(self.x + self.width - squareSize - 2, self.y + self.height - squareSize - 2, squareSize, squareSize, 1)
+    end
+    
+    if midiTriggerEnabled and midiTriggerMode == 1 then
+        local triggerNote = getMidiTriggerNoteForChord(self.scaleNoteIndex, self.chordTypeIndex)
+        if triggerNote then
+            gfx.set(1, 0.85, 0.2, 1)
+            local squareSize = 10
+            gfx.rect(self.x + 2, self.y + 2, squareSize, squareSize, 1)
+        end
     end
 end
 
@@ -6298,7 +7020,11 @@ end
 
 function ChordButton:onRightClick()
     local checkCompass = showHarmonicCompass and "!" or ""
+    local existingTrigger = getMidiTriggerNoteForChord(self.scaleNoteIndex, self.chordTypeIndex)
+    local triggerLabel = existingTrigger and ("Clear MIDI Trigger (" .. getMidiNoteName(existingTrigger) .. ")") or "Assign MIDI Trigger..."
+    
     local menu = "Add to Progression (Alt+Click)|Insert to MIDI (Shift+Click)|Preview (Click)|"
+    menu = menu .. "|" .. triggerLabel .. "|"
     menu = menu .. "|>Generate Leading Chords|"
     menu = menu .. "Add Diatonic ii-V-I to Progression|"
     menu = menu .. "Insert Diatonic ii-V-I to MIDI|"
@@ -6315,13 +7041,21 @@ function ChordButton:onRightClick()
     elseif selection == 3 then
         self:onPress()
     elseif selection == 4 then
-        generateLeadingChords(self.scaleNoteIndex, 1, false)
+        if existingTrigger then
+            clearMidiTriggerMapping(self.scaleNoteIndex, self.chordTypeIndex)
+        else
+            midiTriggerLearnTarget = {scaleNoteIndex = self.scaleNoteIndex, chordTypeIndex = self.chordTypeIndex}
+            reaper.ShowMessageBox("Press any MIDI key to assign it to this chord.\n\nThe next incoming MIDI note will be mapped.", "MIDI Learn", 0)
+        end
     elseif selection == 5 then
-        generateLeadingChords(self.scaleNoteIndex, 1, true)
+        generateLeadingChords(self.scaleNoteIndex, 1, false)
     elseif selection == 6 then
-        generateLeadingChords(self.scaleNoteIndex, 2, true)
+        generateLeadingChords(self.scaleNoteIndex, 1, true)
     elseif selection == 7 then
+        generateLeadingChords(self.scaleNoteIndex, 2, true)
+    elseif selection == 8 then
         showHarmonicCompass = not showHarmonicCompass
+        setPersistentValue(ConfigKeys.showHarmonicCompass, tostring(showHarmonicCompass))
     end
 end
 
@@ -6372,6 +7106,11 @@ function ChordButton:update()
 
 	if tooltipsEnabled and isHovering then
 		local tooltip = "Click: Preview | Shift+Click: Insert | Alt+Click: Add to slot"
+		
+		local triggerNote = getMidiTriggerNoteForChord(self.scaleNoteIndex, self.chordTypeIndex)
+		if triggerNote then
+		    tooltip = tooltip .. "\nMIDI Trigger: " .. getMidiNoteName(triggerNote)
+		end
 		
         if showHarmonicCompass and self.chordIsInScale and #scaleNotes == 7 then
             local suggestionType = getSuggestionType(self.scaleNoteIndex)
@@ -8686,9 +9425,9 @@ function Interface:addChordButton(buttonText, x, y, width, height, scaleNoteInde
 	table.insert(self.elements, chordButton)
 end
 
-function Interface:addHeader(headerText, x, y, width, height, getTextCallback)
+function Interface:addHeader(x, y, width, height, getTextCallback, scaleNoteIndex)
 
-	local header = Header:new(headerText, x, y, width, height, getTextCallback)
+	local header = Header:new(x, y, width, height, getTextCallback, scaleNoteIndex)
 	table.insert(self.elements, header)
 end
 
@@ -8760,55 +9499,104 @@ end
 function handleMidiTriggers()
   if not midiTriggerEnabled then return end
   
-  local triggerMap = {
-    [24] = 1,
-    [26] = 2,
-    [28] = 3,
-    [29] = 4,
-    [31] = 5,
-    [33] = 6,
-    [35] = 7,
-    [25] = 8,
-    [27] = 9,
-    [30] = 10,
-    [32] = 11,
-    [34] = 12
-  }
-
-  for note, scaleIndex in pairs(triggerMap) do
-    local isPressed = externalMidiNotes[note]
-    
-    if isPressed then
-      if not midiTriggerState[note] then
-        if scaleIndex <= #scaleNotes then
-           previewScaleChordAction(scaleIndex)
-           activeTriggerNote = note
+  if midiTriggerLearnTarget then
+    for note = 0, 127 do
+      if externalMidiNotes[note] then
+        if midiTriggerLearnTarget.isColumn then
+          setMidiTriggerColumnMapping(note, midiTriggerLearnTarget.columnIndex)
+        else
+          setMidiTriggerMapping(note, midiTriggerLearnTarget.scaleNoteIndex, midiTriggerLearnTarget.chordTypeIndex)
         end
-        midiTriggerState[note] = true
+        midiTriggerLearnTarget = nil
+        return
       end
-    else
-      if midiTriggerState[note] then
-          midiTriggerState[note] = false
-          if activeTriggerNote == note then
-              local fallbackNote = nil
-              local fallbackIndex = nil
-              
-              for tNote, tIndex in pairs(triggerMap) do
-                  if midiTriggerState[tNote] then
-                      fallbackNote = tNote
-                      fallbackIndex = tIndex
-                      break
-                  end
-              end
-              
-              if fallbackNote and fallbackIndex <= #scaleNotes then
-                  previewScaleChordAction(fallbackIndex)
-                  activeTriggerNote = fallbackNote
-              else
-                  stopNotesFromPlaying()
-                  activeTriggerNote = nil
-              end
+    end
+  end
+
+  if midiTriggerMode == 1 then
+    for note, mapping in pairs(midiTriggerMappings) do
+      local velocity = externalMidiNotes[note]
+      local isPressed = velocity ~= nil
+      
+      if isPressed then
+        if not midiTriggerState[note] then
+          if mapping.scaleNoteIndex <= #scaleNotes then
+             setSelectedScaleNote(mapping.scaleNoteIndex)
+             setSelectedChordType(mapping.scaleNoteIndex, mapping.chordTypeIndex)
+             previewScaleChord(velocity)
+             activeTriggerNote = note
           end
+          midiTriggerState[note] = true
+        end
+      else
+        if midiTriggerState[note] then
+            midiTriggerState[note] = false
+            if activeTriggerNote == note then
+                local fallbackNote = nil
+                local fallbackMapping = nil
+                
+                for tNote, tMapping in pairs(midiTriggerMappings) do
+                    if midiTriggerState[tNote] then
+                        fallbackNote = tNote
+                        fallbackMapping = tMapping
+                        break
+                    end
+                end
+                
+                if fallbackNote and fallbackMapping and fallbackMapping.scaleNoteIndex <= #scaleNotes then
+                    local fallbackVel = externalMidiNotes[fallbackNote] or 96
+                    setSelectedScaleNote(fallbackMapping.scaleNoteIndex)
+                    setSelectedChordType(fallbackMapping.scaleNoteIndex, fallbackMapping.chordTypeIndex)
+                    previewScaleChord(fallbackVel)
+                    activeTriggerNote = fallbackNote
+                else
+                    stopNotesFromPlaying()
+                    activeTriggerNote = nil
+                end
+            end
+        end
+      end
+    end
+  else
+    for note, columnIndex in pairs(midiTriggerColumnMappings) do
+      local velocity = externalMidiNotes[note]
+      local isPressed = velocity ~= nil
+      
+      if isPressed then
+        if not midiTriggerState[note] then
+          if columnIndex <= #scaleNotes then
+             setSelectedScaleNote(columnIndex)
+             previewScaleChord(velocity)
+             activeTriggerNote = note
+          end
+          midiTriggerState[note] = true
+        end
+      else
+        if midiTriggerState[note] then
+            midiTriggerState[note] = false
+            if activeTriggerNote == note then
+                local fallbackNote = nil
+                local fallbackCol = nil
+                
+                for tNote, tCol in pairs(midiTriggerColumnMappings) do
+                    if midiTriggerState[tNote] then
+                        fallbackNote = tNote
+                        fallbackCol = tCol
+                        break
+                    end
+                end
+                
+                if fallbackNote and fallbackCol and fallbackCol <= #scaleNotes then
+                    local fallbackVel = externalMidiNotes[fallbackNote] or 96
+                    setSelectedScaleNote(fallbackCol)
+                    previewScaleChord(fallbackVel)
+                    activeTriggerNote = fallbackNote
+                else
+                    stopNotesFromPlaying()
+                    activeTriggerNote = nil
+                end
+            end
+        end
       end
     end
   end
@@ -9674,6 +10462,18 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
         gfx.drawstr(trackInfo)
     end
     
+    -- Draw Preset Info (right side, left of dice button)
+    if currentTriggerPreset and midiTriggerEnabled then
+        gfx.setfont(1, "Arial", s(12))
+        setThemeColor("chordDisplayText")
+        local presetText = currentTriggerPreset
+        local presetW, presetH = gfx.measurestr(presetText)
+        local diceOffset = sy(16) + sx(16)
+        gfx.x = x + w - presetW - diceOffset
+        gfx.y = y + sy(2)
+        gfx.drawstr(presetText)
+    end
+    
     if recognizedChord and recognizedChord ~= "" then
 
       local isInScale = false
@@ -9769,12 +10569,80 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
   table.insert(self.elements, diceButton)
   
   local trigY = diceY + diceSize + sy(2)
+  local onTrigRightClick = function()
+      local chordCount = 0
+      for _ in pairs(midiTriggerMappings) do chordCount = chordCount + 1 end
+      local colCount = 0
+      for _ in pairs(midiTriggerColumnMappings) do colCount = colCount + 1 end
+      
+      local checkChord = midiTriggerMode == 1 and "!" or ""
+      local checkColumn = midiTriggerMode == 2 and "!" or ""
+      
+      local presets = getChordMapPresets()
+      local menu = ">Mode|" .. checkChord .. "Chord Mode (" .. chordCount .. " mapped)|" .. checkColumn .. "Column Mode (" .. colCount .. " mapped)|<|"
+      menu = menu .. "Save Preset...|>Load Preset|"
+      menu = menu .. "White Keys (C2-B2)|"
+      if #presets > 0 then
+        for i, p in ipairs(presets) do
+          menu = menu .. p .. "|"
+        end
+      end
+      menu = menu .. "<|>Delete Preset|"
+      if #presets > 0 then
+        for i, p in ipairs(presets) do
+          menu = menu .. p .. "|"
+        end
+      else
+        menu = menu .. "#(no presets)|"
+      end
+      menu = menu .. "<||Clear All Mappings"
+      
+      gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+      local selection = gfx.showmenu(menu)
+      
+      if selection == 1 then
+          midiTriggerMode = 1
+          saveMidiTriggerMappings()
+          updateScaleFilterState()
+      elseif selection == 2 then
+          midiTriggerMode = 2
+          saveMidiTriggerMappings()
+          updateScaleFilterState()
+      elseif selection == 3 then
+          local retval, name = reaper.GetUserInputs("Save ChordMap Preset", 1, "Preset Name:", "")
+          if retval and name ~= "" then
+            name = name:gsub("[^%w%s%-_]", "")
+            if saveChordMapPreset(name) then
+              reaper.ShowMessageBox("Preset '" .. name .. "' saved!", "Saved", 0)
+            end
+          end
+      elseif selection == 4 then
+          loadBuiltInPreset_WhiteKeys7()
+      elseif selection >= 5 and selection <= 4 + #presets then
+          local presetName = presets[selection - 4]
+          if loadChordMapPreset(presetName) then
+            reaper.ShowMessageBox("Preset '" .. presetName .. "' loaded!", "Loaded", 0)
+          end
+      elseif selection >= 5 + #presets and selection <= 4 + #presets * 2 then
+          local presetName = presets[selection - 4 - #presets]
+          local confirm = reaper.ShowMessageBox("Delete preset '" .. presetName .. "'?", "Confirm Delete", 4)
+          if confirm == 6 then
+            deleteChordMapPreset(presetName)
+          end
+      elseif selection == 5 + #presets * 2 then
+          midiTriggerMappings = {}
+          midiTriggerColumnMappings = {}
+          currentTriggerPreset = nil
+          saveMidiTriggerMappings()
+          updateScaleFilterState()
+      end
+  end
+
   local trigButton = MidiTriggerButton:new(
       diceX,
       trigY,
       diceSize,
       function() 
-        -- Check for JSFX if enabling
         if not midiTriggerEnabled then
             local track = reaper.GetSelectedTrack(0, 0)
             local jsfxFound = false
@@ -9791,7 +10659,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
             
             if not jsfxFound then
                 local result = reaper.ShowMessageBox("TK Scale Filter JSFX is required for MIDI Trigger Mode to block trigger notes.\n\nIt was not found on the selected track's Input FX.\n\nAdd it now?", "Setup Required", 4)
-                if result == 6 then -- Yes
+                if result == 6 then
                     if not track then
                         reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0)
                         return
@@ -9802,7 +10670,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
                         return
                     end
                 else
-                    return -- Cancel toggle
+                    return
                 end
             end
         end
@@ -9810,7 +10678,17 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
         midiTriggerEnabled = not midiTriggerEnabled 
         updateScaleFilterState()
       end,
-      function() return "Click: Toggle MIDI Trigger Mode (C1-B1 triggers chords)" end
+      function() 
+          local count = 0
+          if midiTriggerMode == 1 then
+            for _ in pairs(midiTriggerMappings) do count = count + 1 end
+          else
+            for _ in pairs(midiTriggerColumnMappings) do count = count + 1 end
+          end
+          local modeName = midiTriggerMode == 1 and "Chord" or "Column"
+          return "Click: Toggle MIDI Trigger\nRight-Click: Settings\nMode: " .. modeName .. " (" .. count .. " mapped)" 
+      end,
+      onTrigRightClick
   )
   table.insert(self.elements, trigButton)
   
@@ -10033,15 +10911,26 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     true
   )
 
-  local getThemeState = function() return isLightMode end
+  local getThemeState = function() return themeMode > 1 end
+  local getThemeText = function()
+    if themeMode == 1 then return "Dark"
+    elseif themeMode == 2 then return "Light"
+    elseif themeMode == 3 then return "Color"
+    elseif themeMode == 4 then return "Neon"
+    elseif themeMode == 5 then return "Ocean"
+    else return "Mono"
+    end
+  end
   local onThemeToggle = function()
-    isLightMode = not isLightMode
+    themeMode = (themeMode % 6) + 1
+    isLightMode = (themeMode == 2)
+    reaper.SetExtState("TK_ChordGun", "themeMode", tostring(themeMode), true)
     reaper.SetExtState("TK_ChordGun", "lightMode", isLightMode and "1" or "0", true)
     gfx.clear = hexToNative(getThemeColor("background"))
     guiShouldBeUpdated = true
   end
   
-  self:addToggleButton("Theme", col3X, buttonYposRow2, buttonWidth, buttonHeight, getThemeState, onThemeToggle, nil, function() return "Toggle Dark/Light Mode" end, true)
+  self:addSimpleButton(getThemeText, col3X, buttonYposRow2, buttonWidth, buttonHeight, onThemeToggle, nil, function() return "Theme: Dark / Light / Color / Neon / Ocean / Mono" end, true)
   
 
   local getMonoState = function() return reaper.GetExtState("TK_ChordGun", "useMonospaceFont") ~= "0" end
@@ -10567,7 +11456,7 @@ end
 MidiTriggerButton = {}
 MidiTriggerButton.__index = MidiTriggerButton
 
-function MidiTriggerButton:new(x, y, size, onClick, getTooltip)
+function MidiTriggerButton:new(x, y, size, onClick, getTooltip, onRightClick)
     local self = {}
     setmetatable(self, MidiTriggerButton)
     self.x = x
@@ -10576,6 +11465,7 @@ function MidiTriggerButton:new(x, y, size, onClick, getTooltip)
     self.height = size
     self.onClick = onClick
     self.getTooltip = getTooltip
+    self.onRightClick = onRightClick
     return self
 end
 
@@ -10616,6 +11506,9 @@ function MidiTriggerButton:update()
         if leftMouseButtonIsHeldDown() then
             mouseButtonIsNotPressedDown = false
             if self.onClick then self.onClick() end
+        elseif rightMouseButtonIsHeldDown() then
+            mouseButtonIsNotPressedDown = false
+            if self.onRightClick then self.onRightClick() end
         end
     end
 end
@@ -10813,15 +11706,17 @@ function Interface:addHeaders(xMargin, yMargin, xPadding, yPadding, headerHeight
     local headerXpos = xMargin+xPadding-sx(1) + headerWidth * (i-1) + innerSpacing * i
     local headerYpos = yMargin+yPadding
     
+    local scaleIdx = i
     local textFunc = function() 
-        if i <= #scaleNotes then
-            return getScaleDegreeHeader(i) 
+        if scaleIdx <= #scaleNotes then
+            return getScaleDegreeHeader(scaleIdx) 
         else
             return "" 
         end
     end
     
-    self:addHeader(headerXpos+dockerXPadding, headerYpos, headerWidth, headerHeight, textFunc)
+    local columnIndex = (i <= #scaleNotes) and i or nil
+    self:addHeader(headerXpos+dockerXPadding, headerYpos, headerWidth, headerHeight, textFunc, columnIndex)
   end
 end
 
@@ -10910,6 +11805,7 @@ interfaceWidth = getInterfaceWidth()
 interfaceHeight = getInterfaceHeight()
 
 updateScaleData()
+loadMidiTriggerMappings()
 
 local interface = Interface:init("TK ChordGun (Mod of ChordGun by Pandabot)")
 interface:startGui()

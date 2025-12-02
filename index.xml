@@ -247,8 +247,21 @@
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.3.2" author="TouristKiller (based on pandabot ChordGun)" time="2025-11-27T22:15:00Z">
+      <version name="2.3.3" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-02T22:55:00Z">
         <changelog><![CDATA[
+
+2.3.3
++ Custom MIDI Trigger Mapping: Assign any MIDI note to any chord button (Right-click chord)
++ Column Mode: Trigger entire scale degree columns with single MIDI notes (Right-click trigger button > Mode)
++ Built-in Preset: "White Keys (C2-B2)" for quick Column Mode setup
++ Preset System: Save/Load your custom trigger mappings to ChordMaps folder
++ Visual Indicators: Yellow squares show mapped triggers (top-left for chords, top-right for columns)
++ Harmonic Compass Redesign: Colored squares in bottom-right corner (replaces border highlight)
++ Persistent Settings: Harmonic Compass state now saved between sessions
++ Trigger notes are automatically filtered from chord recognition
++ Preset Display: Current trigger preset name shown in chord display area
++ 6 Color Themes: Dark, Light, Color, Neon, Ocean, Mono (click Theme button to cycle)
+
 2.3.1
 + Added "Harmonic Compass" (Smart Suggestions): Highlights logical next chords based on functional harmony
 + Added "Use Selected Chord Types" option to Randomize (Surprise Me) feature (Right-click Dice)
