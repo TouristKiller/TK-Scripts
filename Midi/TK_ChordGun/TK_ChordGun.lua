@@ -1,8 +1,10 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.3
+-- @version 2.3.4
 -- @changelog
 --[[
+2.2.4 
++ Theme bugfix
 
 2.3.3
 + Custom MIDI Trigger Mapping: Assign any MIDI note to any chord button (Right-click chord)
@@ -5130,7 +5132,7 @@ local themes = {
         slotBg = "E0E0E0",
         slotFilled = "3A6EA5",
         slotFilledText = "FFFFFF",
-        slotFilledInfoText = "E0E0E0",
+        slotFilledInfoText = "D0E8FF",
         slotPlaying = "6699CC",
         slotSelected = "80B380",
         slotHover = "D0D0D0",
@@ -5457,7 +5459,7 @@ local themes = {
         slotBg = "1B263B",
         slotFilled = "0077B6",
         slotFilledText = "FFFFFF",
-        slotFilledInfoText = "48CAE4",
+        slotFilledInfoText = "90E0EF",
         slotPlaying = "00D4AA",
         slotSelected = "48CAE4",
         slotHover = "274060",
