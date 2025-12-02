@@ -1,6 +1,6 @@
 -- @description TK Find Similar MIDI Items
 -- @author TouristKiller
--- @version 1.4
+-- @version 1.6
 -- @changelog:
 --[[     
     + Initial release
@@ -9,12 +9,26 @@
     + Overlay comparison with detailed statistics
     + Color coding by similarity percentage
     + Select, color, and delete similar items
-    + v1.1: Added pattern matching with offset detection
-    + v1.1: Can now find similar patterns even if notes are shifted in time
-    + v1.2: Added segment matching - find partial matches within larger items
-    + v1.2: Search modes: Full Item / Segment (find reference pattern in larger items)
-    + v1.3: Added Time Selection mode - use time selection within item as search pattern
-    + v1.4: Fixed segment matching - extra notes in matched section now reduce similarity score
+    + Added pattern matching with offset detection
+    + Can now find similar patterns even if notes are shifted in time
+    + Added segment matching - find partial matches within larger items
+    + Search modes: Full Item / Segment (find reference pattern in larger items)
+    + Added Time Selection mode - use time selection within item as search pattern
+    + Fixed segment matching - extra notes in matched section now reduce similarity score
+    + Added Note Range Filter (ignore keyswitches)
+    + Added "Pin to Top" option for created tracks
+    + Added "Max Similarity" threshold
+    + Added global settings persistence (Save/Load options)
+    + Added "Show Reference" button
+    + Improved UI with tooltips and collapsible options
+    + Matches are now grouped by source track when copying
+    + Added Track Batch Mode: Select a track (without selecting items) to scan all items on that track
+    + Results are now grouped by Reference Item in Batch Mode
+    + UI Overhaul: Compact layout, collapsible settings, improved button organization
+    + Improved Sorting: Fixed sorting for items with identical similarity scores (Track # priority)
+    + Workflow: Single-click details for single matches, auto-reselect reference after replace
+    + Fix: "Replace Phrase" now correctly handles time selections with leading silence
+    + Fix: Multi-match items now sort based on their best match
 ]]--
 
 local r = reaper
@@ -27,7 +41,10 @@ end
 
 local ctx = r.ImGui_CreateContext('TK Find Similar MIDI Items')
 local threshold = 70
+local max_threshold = 100
 local results = {}
+local match_groups = {}
+local is_batch_mode = false
 local reference_item = nil
 local reference_guid = nil
 local show_main_window = true
@@ -38,11 +55,20 @@ local title_font_loaded = false
 local original_colors = {}
 local colors_applied = false
 local search_mode = 0
+local reference_mode = 0 -- 0: Single Item, 1: Track Batch
 local time_sel_start = 0
 local time_sel_end = 0
 local time_sel_valid = false
 local current_ref_notes = nil
 local current_ref_length = 0
+local make_pooled = true
+local move_to_subproject = false
+local filter_min_pitch = 0
+local filter_max_pitch = 127
+local save_settings = true
+local show_settings = true
+
+local EXT_SECTION = "TK_FindSimilarMIDIItems"
 
 local COLORS = {
     bg_window = 0x0F0F17FF,
@@ -57,6 +83,9 @@ local COLORS = {
     btn_primary = 0x4A6FA5FF,
     btn_primary_hover = 0x5A7FB8FF,
     btn_primary_active = 0x3A5F95FF,
+    btn_dark = 0x2A4065FF,
+    btn_dark_hover = 0x3A5075FF,
+    btn_dark_active = 0x1A3055FF,
     accent_blue = 0x7AA2F7FF,
     accent_green = 0x9ECE6AFF,
     accent_yellow = 0xE0AF68FF,
@@ -112,9 +141,9 @@ local function ApplyTheme()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 6.0)
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 12, 12)
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 8, 6)
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 6)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 8, 8)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 4)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 6, 4)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 1.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupBorderSize(), 1.0)
 end
@@ -122,6 +151,45 @@ end
 local function PopTheme()
     r.ImGui_PopStyleColor(ctx, 23)
     r.ImGui_PopStyleVar(ctx, 8)
+end
+
+local function DrawTooltip(text)
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_BeginTooltip(ctx)
+        r.ImGui_Text(ctx, text)
+        r.ImGui_EndTooltip(ctx)
+    end
+end
+
+local function SaveSettings()
+    r.SetExtState(EXT_SECTION, "threshold", tostring(threshold), true)
+    r.SetExtState(EXT_SECTION, "max_threshold", tostring(max_threshold), true)
+    r.SetExtState(EXT_SECTION, "make_pooled", tostring(make_pooled), true)
+    r.SetExtState(EXT_SECTION, "move_to_subproject", tostring(move_to_subproject), true)
+    r.SetExtState(EXT_SECTION, "filter_min_pitch", tostring(filter_min_pitch), true)
+    r.SetExtState(EXT_SECTION, "filter_max_pitch", tostring(filter_max_pitch), true)
+    r.SetExtState(EXT_SECTION, "search_mode", tostring(search_mode), true)
+    r.SetExtState(EXT_SECTION, "reference_mode", tostring(reference_mode), true)
+    r.SetExtState(EXT_SECTION, "show_settings", tostring(show_settings), true)
+end
+
+local function LoadSettings()
+    if r.HasExtState(EXT_SECTION, "threshold") then threshold = tonumber(r.GetExtState(EXT_SECTION, "threshold")) end
+    if r.HasExtState(EXT_SECTION, "max_threshold") then max_threshold = tonumber(r.GetExtState(EXT_SECTION, "max_threshold")) end
+    if r.HasExtState(EXT_SECTION, "make_pooled") then make_pooled = r.GetExtState(EXT_SECTION, "make_pooled") == "true" end
+    if r.HasExtState(EXT_SECTION, "move_to_subproject") then move_to_subproject = r.GetExtState(EXT_SECTION, "move_to_subproject") == "true" end
+    if r.HasExtState(EXT_SECTION, "filter_min_pitch") then filter_min_pitch = tonumber(r.GetExtState(EXT_SECTION, "filter_min_pitch")) end
+    if r.HasExtState(EXT_SECTION, "filter_max_pitch") then filter_max_pitch = tonumber(r.GetExtState(EXT_SECTION, "filter_max_pitch")) end
+    if r.HasExtState(EXT_SECTION, "search_mode") then search_mode = tonumber(r.GetExtState(EXT_SECTION, "search_mode")) end
+    if r.HasExtState(EXT_SECTION, "reference_mode") then reference_mode = tonumber(r.GetExtState(EXT_SECTION, "reference_mode")) end
+    if r.HasExtState(EXT_SECTION, "show_settings") then show_settings = r.GetExtState(EXT_SECTION, "show_settings") == "true" end
+end
+
+local function GetNoteName(pitch)
+    local notes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+    local octave = math.floor(pitch / 12) - 1 
+    local note_idx = (pitch % 12) + 1
+    return string.format("%s%d (%d)", notes[note_idx], octave, pitch)
 end
 
 local function ExtractMIDINotes(take, filter_start, filter_end)
@@ -147,6 +215,11 @@ local function ExtractMIDINotes(take, filter_start, filter_end)
                     include_note = false
                 end
             end
+            
+            if pitch < filter_min_pitch or pitch > filter_max_pitch then
+                include_note = false
+            end
+
             if include_note then
                 if first_note_time == nil then
                     first_note_time = start_time
@@ -172,7 +245,7 @@ local function ExtractMIDINotes(take, filter_start, filter_end)
     if use_filter then
         pattern_length = filter_end - filter_start
     end
-    return notes, pattern_length
+    return notes, pattern_length, first_note_time
 end
 
 local function CalculateNoteOverlap(n1, n2)
@@ -322,118 +395,115 @@ local function FindBestOffset(notes1, notes2)
     return best_similarity, best_offset, best_stats
 end
 
-local function FindSegmentMatch(ref_notes, compare_notes)
+local function FindAllSegmentMatches(ref_notes, compare_notes, min_thresh, max_thresh)
     if not ref_notes or not compare_notes or #ref_notes == 0 or #compare_notes == 0 then
-        return 0, 0, 0, {}
+        return {}
     end
-    if #ref_notes > #compare_notes then
-        return 0, 0, 0, {}
-    end
+    
     local ref_length = 0
     for _, note in ipairs(ref_notes) do
         local note_end = note.start_rel + note.duration
         if note_end > ref_length then ref_length = note_end end
     end
-    local function CountNotesInRange(notes, start_pos, end_pos)
-        local count = 0
-        for _, note in ipairs(notes) do
-            local note_start = note.start_rel
-            local note_end = note.start_rel + note.duration
-            if note_start < end_pos and note_end > start_pos then
-                count = count + 1
-            end
-        end
-        return count
-    end
-    local function CalculateSegmentSimilarity(ref_notes, compare_notes, offset, ref_length)
+
+    local function CalculateSegSim(offset)
         local exact, good, partial, matched, avg_overlap = MatchNotesWithOffset(ref_notes, compare_notes, offset)
         local segment_start = -offset
         local segment_end = segment_start + ref_length + 0.1
-        local notes_in_segment = CountNotesInRange(compare_notes, segment_start, segment_end)
+        
+        local notes_in_segment = 0
+        for _, note in ipairs(compare_notes) do
+            local note_start = note.start_rel
+            local note_end = note.start_rel + note.duration
+            if note_start < segment_end and note_end > segment_start then
+                notes_in_segment = notes_in_segment + 1
+            end
+        end
+
         local extra_in_segment = math.max(0, notes_in_segment - matched)
         local missing = #ref_notes - matched
-        local stats = {
-            exact_matches = exact,
-            good_matches = good,
-            partial_matches = partial,
-            pitch_only = 0,
-            extra_notes = extra_in_segment,
-            missing_notes = missing,
-            total_ref = #ref_notes,
-            total_compared = notes_in_segment,
-            avg_overlap = avg_overlap,
-            offset = offset,
-            matched_notes = matched,
-            segment_start = segment_start,
-            notes_in_segment = notes_in_segment
-        }
+        
         local exact_score = exact * 1.0
         local good_score = good * 0.8
         local partial_score = partial * 0.4
         local total_score = exact_score + good_score + partial_score
-        local ref_match_ratio = (#ref_notes > 0) and (total_score / #ref_notes) or 0
+        
         local total_notes_in_comparison = #ref_notes + extra_in_segment
-        local similarity
+        local similarity = 0
         if total_notes_in_comparison > 0 then
             similarity = (total_score / total_notes_in_comparison) * 100
-        else
-            similarity = 0
         end
-        similarity = math.max(0, math.min(100, similarity))
+        
+        local stats = {
+            exact_matches = exact,
+            good_matches = good,
+            partial_matches = partial,
+            extra_notes = extra_in_segment,
+            missing_notes = missing,
+            total_ref = #ref_notes,
+            matched_notes = matched,
+            segment_start = segment_start
+        }
         return similarity, stats
     end
-    local best_similarity = 0
-    local best_offset = 0
-    local best_segment_start = 0
-    local best_stats = {}
+
+    local candidates = {}
     for _, c_note in ipairs(compare_notes) do
         local ref_first = ref_notes[1]
         if c_note.pitch == ref_first.pitch then
             local offset = ref_first.start_rel - c_note.start_rel
-            local similarity, stats = CalculateSegmentSimilarity(ref_notes, compare_notes, offset, ref_length)
-            if similarity > best_similarity then
-                best_similarity = similarity
-                best_offset = offset
-                best_segment_start = c_note.start_rel
-                best_stats = stats
-                best_stats.segment_start = best_segment_start
+            local similarity, stats = CalculateSegSim(offset)
+            
+            if similarity >= min_thresh and similarity <= max_thresh then
+                table.insert(candidates, {
+                    similarity = similarity,
+                    offset = offset,
+                    segment_start = c_note.start_rel,
+                    stats = stats
+                })
             end
         end
     end
-    if best_similarity < threshold then
-        for i, c_note in ipairs(compare_notes) do
-            for j, ref_note in ipairs(ref_notes) do
-                if c_note.pitch == ref_note.pitch then
-                    local offset = ref_note.start_rel - c_note.start_rel
-                    local found = false
-                    if math.abs(offset - best_offset) < 0.01 then
-                        found = true
-                    end
-                    if not found then
-                        local similarity, stats = CalculateSegmentSimilarity(ref_notes, compare_notes, offset, ref_length)
-                        if similarity > best_similarity then
-                            best_similarity = similarity
-                            best_offset = offset
-                            best_segment_start = c_note.start_rel
-                            best_stats = stats
-                            best_stats.segment_start = best_segment_start
-                        end
-                    end
-                end
+
+    table.sort(candidates, function(a, b) return a.similarity > b.similarity end)
+
+    local final_matches = {}
+    local occupied_ranges = {} 
+
+    for _, cand in ipairs(candidates) do
+        local c_start = cand.segment_start
+        local c_end = c_start + ref_length
+        
+        local is_overlapping = false
+        for _, range in ipairs(occupied_ranges) do
+            if (c_start < range[2]) and (c_end > range[1]) then
+                is_overlapping = true
+                break
             end
         end
+
+        if not is_overlapping then
+            table.insert(final_matches, cand)
+            table.insert(occupied_ranges, {c_start, c_end})
+        end
     end
-    best_stats.offset = best_offset
-    best_stats.segment_start = best_segment_start
-    return best_similarity, best_offset, best_segment_start, best_stats
+
+    table.sort(final_matches, function(a, b) return a.segment_start < b.segment_start end)
+
+    return final_matches
 end
 
-local function CalculateSimilarity(notes1, notes2, length1, length2)
-    if search_mode == 0 then
-        return FindBestOffset(notes1, notes2)
+local function CalculateSimilarity(notes1, notes2, length1, length2, mode_override)
+    local mode = mode_override or search_mode
+    if mode == 0 then
+        local sim, offset, stats = FindBestOffset(notes1, notes2)
+        if sim >= threshold and sim <= max_threshold then
+            return {{similarity=sim, offset=offset, stats=stats, segment_start=0}}
+        else
+            return {}
+        end
     else
-        local sim, offset, seg_start, stats = FindSegmentMatch(notes1, notes2)
-        return sim, offset, stats
+        return FindAllSegmentMatches(notes1, notes2, threshold, max_threshold)
     end
 end
 
@@ -476,80 +546,245 @@ local function AnalyzeItems()
         ClearColors()
     end
     results = {}
-    local ref_item = GetSelectedMIDIItem()
-    if not ref_item then
-        r.ShowMessageBox("Please select a MIDI item as reference first.", "No Reference", 0)
-        return
-    end
-    reference_item = ref_item
-    reference_guid = r.BR_GetMediaItemGUID(ref_item)
-    local ref_take = r.GetActiveTake(ref_item)
-    local ref_notes, ref_length
-    time_sel_valid = false
-    if search_mode == 2 then
-        local ts_start, ts_end, valid = GetTimeSelection(ref_item)
-        if not valid then
-            r.ShowMessageBox("Please make a time selection within the selected MIDI item.", "No Time Selection", 0)
+    match_groups = {}
+    reference_item = nil
+    is_batch_mode = false
+    
+    local track_mode_items = {}
+    
+    if reference_mode == 0 then -- Single Item Mode
+        local ref_item = GetSelectedMIDIItem()
+        if not ref_item then
+            r.ShowMessageBox("Please select a MIDI item as reference.", "No Item Selected", 0)
             return
         end
-        time_sel_start = ts_start
-        time_sel_end = ts_end
-        time_sel_valid = true
-        ref_notes, ref_length = ExtractMIDINotes(ref_take, ts_start, ts_end)
-    else
-        ref_notes, ref_length = ExtractMIDINotes(ref_take)
-    end
-    if not ref_notes or #ref_notes == 0 then
-        if search_mode == 2 then
-            r.ShowMessageBox("No MIDI notes found within the time selection.", "No Notes", 0)
-        else
-            r.ShowMessageBox("Reference item has no MIDI notes.", "No Notes", 0)
+        table.insert(track_mode_items, ref_item)
+        is_batch_mode = false
+    else -- Track Batch Mode
+        local track = r.GetSelectedTrack(0, 0)
+        if not track then
+             r.ShowMessageBox("Please select a Track to scan all items.", "No Track Selected", 0)
+             return
         end
-        return
-    end
-    current_ref_notes = ref_notes
-    current_ref_length = ref_length
-    local num_items = r.CountMediaItems(0)
-    for i = 0, num_items - 1 do
-        local item = r.GetMediaItem(0, i)
-        local item_guid = r.BR_GetMediaItemGUID(item)
-        if item_guid ~= reference_guid then
+        
+        local count = r.CountTrackMediaItems(track)
+        for i = 0, count - 1 do
+            local item = r.GetTrackMediaItem(track, i)
             local take = r.GetActiveTake(item)
             if take and r.TakeIsMIDI(take) then
-                local notes, item_length = ExtractMIDINotes(take)
-                if notes then
-                    local similarity, offset, stats = CalculateSimilarity(ref_notes, notes, ref_length, item_length)
-                    if similarity >= threshold then
-                        local pos = r.GetMediaItemInfo_Value(item, "D_POSITION")
-                        local track = r.GetMediaItem_Track(item)
-                        local _, track_name = r.GetTrackName(track)
-                        table.insert(results, {
-                            item = item,
-                            guid = item_guid,
-                            similarity = similarity,
-                            stats = stats,
-                            offset = offset,
-                            position = pos,
-                            track_name = track_name,
-                            segment_start = stats.segment_start
-                        })
+                table.insert(track_mode_items, item)
+            end
+        end
+        
+        if #track_mode_items == 0 then
+            r.ShowMessageBox("Selected track has no MIDI items.", "No Items", 0)
+            return
+        end
+        is_batch_mode = true
+    end
+
+    if is_batch_mode then
+        local total_items = r.CountMediaItems(0)
+        local comparisons = #track_mode_items * total_items
+        if comparisons > 2500 then
+            local ret = r.ShowMessageBox(
+                string.format("This will perform approx %d comparisons.\nReaper might freeze for a moment.\n\nContinue?", comparisons),
+                "Heavy Operation Warning",
+                4
+            )
+            if ret ~= 6 then return end
+        end
+    end
+
+    local processed_guids = {} -- Keep track of items already processed as reference or matched
+
+    for _, current_ref_item in ipairs(track_mode_items) do
+        local current_ref_guid = r.BR_GetMediaItemGUID(current_ref_item)
+        
+        -- Skip if this item was already processed (either as a previous reference or as a match of a previous reference)
+        if not processed_guids[current_ref_guid] then
+            local current_ref_take = r.GetActiveTake(current_ref_item)
+            local current_ref_notes_local, current_ref_length_local, current_ref_first_note_time
+            
+            if is_batch_mode then
+                current_ref_notes_local, current_ref_length_local, current_ref_first_note_time = ExtractMIDINotes(current_ref_take)
+            else
+                time_sel_valid = false
+                if search_mode == 2 then
+                    local ts_start, ts_end, valid = GetTimeSelection(current_ref_item)
+                    if not valid then
+                        r.ShowMessageBox("Please make a time selection within the selected MIDI item.", "No Time Selection", 0)
+                        return
+                    end
+                    time_sel_start = ts_start
+                    time_sel_end = ts_end
+                    time_sel_valid = true
+                    current_ref_notes_local, current_ref_length_local, current_ref_first_note_time = ExtractMIDINotes(current_ref_take, ts_start, ts_end)
+                else
+                    current_ref_notes_local, current_ref_length_local, current_ref_first_note_time = ExtractMIDINotes(current_ref_take)
+                end
+            end
+
+            if current_ref_notes_local and #current_ref_notes_local > 0 then
+                if not is_batch_mode then
+                    reference_item = current_ref_item
+                    reference_guid = current_ref_guid
+                    current_ref_notes = current_ref_notes_local
+                    current_ref_length = current_ref_length_local
+                end
+
+                local group_results = {}
+                local num_items = r.CountMediaItems(0)
+                
+                local effective_mode = search_mode
+                if is_batch_mode and search_mode == 2 then
+                    effective_mode = 0 
+                end
+                
+                for i = 0, num_items - 1 do
+                    local item = r.GetMediaItem(0, i)
+                    local item_guid = r.BR_GetMediaItemGUID(item)
+                    local is_ref_item = (item_guid == current_ref_guid)
+                    
+                    if not is_ref_item or (search_mode == 1 or search_mode == 2) then
+                        local process_item = true
+                        
+                        if is_batch_mode then
+                            local target_track = r.GetMediaItem_Track(item)
+                            local ref_track = r.GetMediaItem_Track(current_ref_item)
+                            if target_track == ref_track then
+                                process_item = false
+                            end
+                        end
+                        
+                        if process_item then
+                            local take = r.GetActiveTake(item)
+                            if take and r.TakeIsMIDI(take) then
+                                local notes, item_length = ExtractMIDINotes(take)
+                                if notes then
+                                    local matches = CalculateSimilarity(current_ref_notes_local, notes, current_ref_length_local, item_length, effective_mode)
+                                    
+                                    -- Filter out self-reference matches
+                                    if is_ref_item and #matches > 0 then
+                                        local filtered_matches = {}
+                                        for _, m in ipairs(matches) do
+                                            local is_self = false
+                                            if search_mode == 2 then
+                                                if math.abs(m.segment_start - time_sel_start) < 0.001 then is_self = true end
+                                            elseif search_mode == 1 then
+                                                if math.abs(m.segment_start) < 0.001 then is_self = true end
+                                            end
+                                            
+                                            if not is_self then
+                                                table.insert(filtered_matches, m)
+                                            end
+                                        end
+                                        matches = filtered_matches
+                                    end
+                                    
+                                    if #matches > 0 then
+                                        -- Calculate true max similarity from all matches in this item
+                                        local best_sim = 0
+                                        for _, m in ipairs(matches) do
+                                            if m.similarity > best_sim then best_sim = m.similarity end
+                                        end
+                                        
+                                        local pos = r.GetMediaItemInfo_Value(item, "D_POSITION")
+                                        local track = r.GetMediaItem_Track(item)
+                                        local _, track_name = r.GetTrackName(track)
+                                        local track_num = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+                                        table.insert(group_results, {
+                                            item = item,
+                                            guid = item_guid,
+                                            matches = matches,
+                                            max_similarity = best_sim,
+                                            position = pos,
+                                            track_name = track_name,
+                                            track_num = track_num
+                                        })
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                table.sort(group_results, function(a, b)
+                    local sim_a = a.max_similarity
+                    local sim_b = b.max_similarity
+                    
+                    -- Force all "basically perfect" matches to be exactly equal
+                    if sim_a > 99.999 then sim_a = 100 end
+                    if sim_b > 99.999 then sim_b = 100 end
+                    
+                    -- Quantize to 4 decimal places
+                    local bin_a = math.floor(sim_a * 10000)
+                    local bin_b = math.floor(sim_b * 10000)
+                    
+                    if bin_a ~= bin_b then
+                        return bin_a > bin_b
+                    end
+                    
+                    -- Priority 2: Track Number (lower is better)
+                    if a.track_num ~= b.track_num then
+                        return a.track_num < b.track_num
+                    end
+                    
+                    -- Priority 3: Position (earlier is better)
+                    return a.position < b.position
+                end)
+                
+                if #group_results > 0 then
+                    local take = r.GetActiveTake(current_ref_item)
+                    local _, take_name = r.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                    table.insert(match_groups, {
+                        ref_item = current_ref_item,
+                        ref_guid = current_ref_guid,
+                        ref_name = take_name,
+                        matches = group_results,
+                        ref_notes = current_ref_notes_local,
+                        ref_length = current_ref_length_local,
+                        ref_silence = (current_ref_first_note_time or 0) - (time_sel_start or 0)
+                    })
+                    
+                    -- Mark this reference item as processed
+                    processed_guids[current_ref_guid] = true
+                    
+                    -- Also mark any matches that are on the reference track as processed
+                    -- This prevents using them as a reference source later in the loop
+                    if is_batch_mode then
+                        local ref_track = r.GetMediaItem_Track(current_ref_item)
+                        for _, res in ipairs(group_results) do
+                            local res_item = r.BR_GetMediaItemByGUID(0, res.guid)
+                            if res_item then
+                                local res_track = r.GetMediaItem_Track(res_item)
+                                if res_track == ref_track and res.max_similarity >= 99.0 then
+                                    processed_guids[res.guid] = true
+                                end
+                            end
+                        end
                     end
                 end
             end
         end
     end
-    table.sort(results, function(a, b) return a.similarity > b.similarity end)
+
+    if not is_batch_mode and #match_groups > 0 then
+        results = match_groups[1].matches
+    end
 end
 
 local function SelectSimilar()
     r.Undo_BeginBlock()
     r.SelectAllMediaItems(0, false)
     local count = 0
-    for _, result in ipairs(results) do
-        local item = r.BR_GetMediaItemByGUID(0, result.guid)
-        if item then
-            r.SetMediaItemSelected(item, true)
-            count = count + 1
+    for _, group in ipairs(match_groups) do
+        for _, result in ipairs(group.matches) do
+            local item = r.BR_GetMediaItemByGUID(0, result.guid)
+            if item then
+                r.SetMediaItemSelected(item, true)
+                count = count + 1
+            end
         end
     end
     r.Undo_EndBlock("Select Similar MIDI Items", -1)
@@ -557,8 +792,13 @@ local function SelectSimilar()
 end
 
 local function DeleteSimilar()
+    local total_matches = 0
+    for _, group in ipairs(match_groups) do
+        total_matches = total_matches + #group.matches
+    end
+
     local answer = r.ShowMessageBox(
-        "Are you sure you want to delete " .. #results .. " similar MIDI item(s)?\n\nThis action can be undone with Ctrl+Z.",
+        "Are you sure you want to delete " .. total_matches .. " similar MIDI item(s)?\n\nThis action can be undone with Ctrl+Z.",
         "Confirm Delete",
         4
     )
@@ -567,15 +807,18 @@ local function DeleteSimilar()
     end
     r.Undo_BeginBlock()
     local count = 0
-    for _, result in ipairs(results) do
-        local item = r.BR_GetMediaItemByGUID(0, result.guid)
-        if item then
-            local track = r.GetMediaItem_Track(item)
-            r.DeleteTrackMediaItem(track, item)
-            count = count + 1
+    for _, group in ipairs(match_groups) do
+        for _, result in ipairs(group.matches) do
+            local item = r.BR_GetMediaItemByGUID(0, result.guid)
+            if item then
+                local track = r.GetMediaItem_Track(item)
+                r.DeleteTrackMediaItem(track, item)
+                count = count + 1
+            end
         end
     end
     results = {}
+    match_groups = {}
     r.Undo_EndBlock("Delete Similar MIDI Items", -1)
     r.UpdateArrange()
 end
@@ -596,21 +839,25 @@ local function ColorSimilar()
     r.Undo_BeginBlock()
     if not colors_applied then
         original_colors = {}
-        for _, result in ipairs(results) do
-            local item = r.BR_GetMediaItemByGUID(0, result.guid)
-            if item then
-                local orig_color = r.GetMediaItemInfo_Value(item, "I_CUSTOMCOLOR")
-                original_colors[result.guid] = orig_color
+        for _, group in ipairs(match_groups) do
+            for _, result in ipairs(group.matches) do
+                local item = r.BR_GetMediaItemByGUID(0, result.guid)
+                if item then
+                    local orig_color = r.GetMediaItemInfo_Value(item, "I_CUSTOMCOLOR")
+                    original_colors[result.guid] = orig_color
+                end
             end
         end
     end
     local count = 0
-    for _, result in ipairs(results) do
-        local item = r.BR_GetMediaItemByGUID(0, result.guid)
-        if item then
-            local color = GetSimilarityColor(result.similarity)
-            r.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", color)
-            count = count + 1
+    for _, group in ipairs(match_groups) do
+        for _, result in ipairs(group.matches) do
+            local item = r.BR_GetMediaItemByGUID(0, result.guid)
+            if item then
+                local color = GetSimilarityColor(result.max_similarity)
+                r.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", color)
+                count = count + 1
+            end
         end
     end
     colors_applied = true
@@ -622,18 +869,44 @@ ClearColors = function()
     if not colors_applied then return end
     r.Undo_BeginBlock()
     local count = 0
-    for _, result in ipairs(results) do
-        local item = r.BR_GetMediaItemByGUID(0, result.guid)
-        if item then
-            local orig_color = original_colors[result.guid] or 0
-            r.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", orig_color)
-            count = count + 1
+    for _, group in ipairs(match_groups) do
+        for _, result in ipairs(group.matches) do
+            local item = r.BR_GetMediaItemByGUID(0, result.guid)
+            if item then
+                local orig_color = original_colors[result.guid] or 0
+                r.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", orig_color)
+                count = count + 1
+            end
         end
     end
     colors_applied = false
     original_colors = {}
     r.Undo_EndBlock("Restore Original Item Colors", -1)
     r.UpdateArrange()
+end
+
+local function ZoomToReference()
+    if reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
+        local pos = r.GetMediaItemInfo_Value(reference_item, "D_POSITION")
+        local track = r.GetMediaItem_Track(reference_item)
+        
+        r.SelectAllMediaItems(0, false)
+        r.SetMediaItemSelected(reference_item, true)
+        r.SetOnlyTrackSelected(track)
+        
+        if search_mode == 2 and time_sel_valid then
+             local ts_start = pos + time_sel_start
+             local ts_end = pos + time_sel_end
+             r.GetSet_LoopTimeRange(true, false, ts_start, ts_end, false)
+             r.SetEditCurPos(ts_start, true, false)
+        else
+             r.SetEditCurPos(pos, true, false)
+        end
+        
+        r.Main_OnCommand(40913, 0) 
+        r.Main_OnCommand(r.NamedCommandLookup("_SWS_HSCROLLPLAY50"), 0) 
+        r.UpdateArrange()
+    end
 end
 
 local function ZoomToItem(item, segment_start)
@@ -700,10 +973,471 @@ local function FormatOffset(offset)
     end
 end
 
+local function ReplaceWithReference(pooled)
+    r.Undo_BeginBlock()
+    local count = 0
+    
+    -- Collect all potential replacement actions
+    local all_actions = {}
+    for g_idx, group in ipairs(match_groups) do
+        for r_idx, result in ipairs(group.matches) do
+            table.insert(all_actions, {
+                similarity = result.max_similarity,
+                group_idx = g_idx,
+                result_idx = r_idx,
+                guid = result.guid
+            })
+        end
+    end
+    
+    -- Sort by similarity (highest first)
+    table.sort(all_actions, function(a, b) return a.similarity > b.similarity end)
+    
+    local processed_guids = {}
+    
+    for _, action in ipairs(all_actions) do
+        if not processed_guids[action.guid] then
+            local group = match_groups[action.group_idx]
+            local result = group.matches[action.result_idx]
+            local ref_item = group.ref_item
+            
+            if ref_item and r.ValidatePtr2(0, ref_item, "MediaItem*") then
+                local target_item = r.BR_GetMediaItemByGUID(0, result.guid)
+                if target_item then
+                    r.SelectAllMediaItems(0, false)
+                    r.SetMediaItemSelected(ref_item, true)
+                    r.Main_OnCommand(40698, 0) -- Copy
+                    
+                    local track = r.GetMediaItem_Track(target_item)
+                    local pos = r.GetMediaItemInfo_Value(target_item, "D_POSITION")
+                    
+                    r.DeleteTrackMediaItem(track, target_item)
+                    
+                    r.SetOnlyTrackSelected(track)
+                    r.SetEditCurPos(pos, false, false)
+                    
+                    if pooled then
+                        r.Main_OnCommand(41072, 0) 
+                    else
+                        r.Main_OnCommand(40058, 0) 
+                    end
+                    
+                    count = count + 1
+                    processed_guids[action.guid] = true
+                end
+            end
+        end
+    end
+    
+    results = {} 
+    match_groups = {}
+    
+    if reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
+        r.SelectAllMediaItems(0, false)
+        r.SetMediaItemSelected(reference_item, true)
+        local track = r.GetMediaItem_Track(reference_item)
+        r.SetOnlyTrackSelected(track)
+    end
+    
+    r.Undo_EndBlock("Replace Similar Items with Reference", -1)
+    r.UpdateArrange()
+end
+
+local function ReplaceSingleItem(group_index, match_index, pooled)
+    local group = match_groups[group_index]
+    if not group then return end
+    
+    local ref_item = group.ref_item
+    if not ref_item or not r.ValidatePtr2(0, ref_item, "MediaItem*") then return end
+    
+    local result = group.matches[match_index]
+    if not result then return end
+
+    r.Undo_BeginBlock()
+    
+    r.SelectAllMediaItems(0, false)
+    r.SetMediaItemSelected(ref_item, true)
+    r.Main_OnCommand(40698, 0) 
+    
+    local target_item = r.BR_GetMediaItemByGUID(0, result.guid)
+    if target_item then
+        local track = r.GetMediaItem_Track(target_item)
+        local pos = r.GetMediaItemInfo_Value(target_item, "D_POSITION")
+        
+        r.DeleteTrackMediaItem(track, target_item)
+        
+        r.SetOnlyTrackSelected(track)
+        r.SetEditCurPos(pos, false, false)
+        
+        if pooled then
+            r.Main_OnCommand(41072, 0) 
+        else
+            r.Main_OnCommand(40058, 0) 
+        end
+    end
+    
+    table.remove(group.matches, match_index)
+    if #group.matches == 0 then
+        table.remove(match_groups, group_index)
+    end
+    
+    if not is_batch_mode and #match_groups > 0 then
+        results = match_groups[1].matches
+    else
+        results = {}
+    end
+    
+    r.PreventUIRefresh(-1)
+
+    if ref_item and r.ValidatePtr2(0, ref_item, "MediaItem*") then
+        r.SelectAllMediaItems(0, false)
+        r.SetMediaItemSelected(ref_item, true)
+        local track = r.GetMediaItem_Track(ref_item)
+        r.SetOnlyTrackSelected(track)
+    end
+    
+    r.Undo_EndBlock("Replace Item with Reference", -1)
+    r.UpdateArrange()
+end
+
+local function DoReplacePhrase(target_item, match, pooled, silence_offset)
+    if not target_item then return nil end
+    
+    local track = r.GetMediaItem_Track(target_item)
+    local item_pos = r.GetMediaItemInfo_Value(target_item, "D_POSITION")
+    local original_len = r.GetMediaItemInfo_Value(target_item, "D_LENGTH")
+    local original_end = item_pos + original_len
+    
+    -- Adjust split_start by subtracting the silence prefix of the reference
+    -- match.segment_start is where the first note should be
+    -- We paste the clipboard which starts at (first_note - silence)
+    local actual_silence = silence_offset or 0
+    local split_start = item_pos + match.segment_start - actual_silence
+    local split_end = split_start + current_ref_length 
+    
+    local item_to_delete = target_item
+    
+    -- If split_start is before item start, we can't split before item.
+    -- But this shouldn't happen if match is valid within item.
+    -- However, if silence pushes it back, we need to be careful.
+    if split_start < item_pos then split_start = item_pos end
+    
+    if split_start > item_pos + 0.001 then
+        item_to_delete = r.SplitMediaItem(target_item, split_start)
+    end
+    
+    local new_item = nil
+    
+    if item_to_delete then
+        local curr_pos = r.GetMediaItemInfo_Value(item_to_delete, "D_POSITION")
+        local curr_len = r.GetMediaItemInfo_Value(item_to_delete, "D_LENGTH")
+        local curr_end = curr_pos + curr_len
+        
+        if split_end < (curr_end - 0.001) then
+            r.SplitMediaItem(item_to_delete, split_end)
+        end
+        
+        r.DeleteTrackMediaItem(track, item_to_delete)
+        
+        r.SetOnlyTrackSelected(track)
+        r.SetEditCurPos(split_start, false, false)
+        
+        if pooled then
+            r.Main_OnCommand(41072, 0) 
+        else
+            r.Main_OnCommand(40058, 0) 
+        end
+        
+        local pasted_item = r.GetSelectedMediaItem(0, 0)
+        if pasted_item then
+            local track_items_count = r.CountTrackMediaItems(track)
+            for i = 0, track_items_count - 1 do
+                local tr_item = r.GetTrackMediaItem(track, i)
+                local tr_pos = r.GetMediaItemInfo_Value(tr_item, "D_POSITION")
+                local tr_len = r.GetMediaItemInfo_Value(tr_item, "D_LENGTH")
+                local tr_end = tr_pos + tr_len
+                
+                if tr_item == pasted_item then
+                    r.SetMediaItemSelected(tr_item, true)
+                elseif math.abs(tr_end - split_start) < 0.001 then
+                    -- Left neighbor: must start >= original start
+                    if tr_pos >= item_pos - 0.001 then
+                        r.SetMediaItemSelected(tr_item, true)
+                    end
+                elseif math.abs(tr_pos - split_end) < 0.001 then
+                    -- Right neighbor: must end <= original end
+                    if tr_end <= original_end + 0.001 then
+                        r.SetMediaItemSelected(tr_item, true)
+                    end
+                end
+            end
+            r.Main_OnCommand(41588, 0) 
+            new_item = r.GetSelectedMediaItem(0, 0)
+        end
+    end
+    
+    return new_item
+end
+
+local function CopyItemToClipboard(ref_item)
+    if not ref_item then return false end
+    
+    r.SelectAllMediaItems(0, false)
+    
+    if search_mode == 2 and time_sel_valid then
+        local cur_ts_start, cur_ts_end = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
+        
+        local ref_pos = r.GetMediaItemInfo_Value(ref_item, "D_POSITION")
+        local target_ts_start = ref_pos + time_sel_start
+        local target_ts_end = ref_pos + time_sel_end
+        
+        r.GetSet_LoopTimeRange(true, false, target_ts_start, target_ts_end, false)
+        
+        r.SetMediaItemSelected(ref_item, true)
+        r.Main_OnCommand(40060, 0) 
+        
+        r.GetSet_LoopTimeRange(true, false, cur_ts_start, cur_ts_end, false)
+    else
+        r.SetMediaItemSelected(ref_item, true)
+        r.Main_OnCommand(40698, 0) 
+    end
+    return true
+end
+
+local function ReplacePhrase(group_index, result_index, match_index, pooled)
+    local group = match_groups[group_index]
+    if not group then return end
+    
+    local result = group.matches[result_index]
+    if not result then return end
+    
+    local match = result.matches[match_index]
+    local target_item = r.BR_GetMediaItemByGUID(0, result.guid)
+    
+    if not target_item then return end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local ref_item = group.ref_item
+    if ref_item and r.ValidatePtr2(0, ref_item, "MediaItem*") then
+        CopyItemToClipboard(ref_item)
+        
+        current_ref_length = group.ref_length
+        
+        DoReplacePhrase(target_item, match, pooled, group.ref_silence)
+    end
+    
+    table.remove(group.matches, result_index)
+    if #group.matches == 0 then
+        table.remove(match_groups, group_index)
+    end
+    
+    if not is_batch_mode and #match_groups > 0 then
+        results = match_groups[1].matches
+    else
+        results = {}
+    end
+    
+    r.PreventUIRefresh(-1)
+
+    if ref_item and r.ValidatePtr2(0, ref_item, "MediaItem*") then
+        r.SelectAllMediaItems(0, false)
+        r.SetMediaItemSelected(ref_item, true)
+        local track = r.GetMediaItem_Track(ref_item)
+        r.SetOnlyTrackSelected(track)
+    end
+    
+    r.Undo_EndBlock("Replace Phrase with Reference", -1)
+    r.UpdateArrange()
+end
+
+local function ReplaceAllPhrases(pooled)
+    if #match_groups == 0 then return end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    -- Collect all phrase actions
+    local all_actions = {}
+    for g_idx, group in ipairs(match_groups) do
+        for r_idx, result in ipairs(group.matches) do
+            for m_idx, match in ipairs(result.matches) do
+                table.insert(all_actions, {
+                    similarity = match.similarity,
+                    group_idx = g_idx,
+                    result_idx = r_idx,
+                    match_idx = m_idx,
+                    guid = result.guid
+                })
+            end
+        end
+    end
+    
+    -- Sort by similarity (highest first)
+    table.sort(all_actions, function(a, b) return a.similarity > b.similarity end)
+    
+    local processed_items = {} -- To prevent editing an item twice and losing the pointer
+    
+    for _, action in ipairs(all_actions) do
+        -- If we already touched this item in this batch, skip it
+        -- This is safer because splitting changes GUIDs
+        if not processed_items[action.guid] then
+            local group = match_groups[action.group_idx]
+            local result = group.matches[action.result_idx]
+            local match = result.matches[action.match_idx]
+            local ref_item = group.ref_item
+            
+            if ref_item and r.ValidatePtr2(0, ref_item, "MediaItem*") then
+                local target_item = r.BR_GetMediaItemByGUID(0, result.guid)
+                
+                if target_item then
+                    CopyItemToClipboard(ref_item)
+                    
+                    current_ref_length = group.ref_length
+                    
+                    local new_item = DoReplacePhrase(target_item, match, pooled, group.ref_silence)
+                    if new_item then
+                        processed_items[action.guid] = true
+                    end
+                end
+            end
+        end
+    end
+    
+    results = {}
+    match_groups = {}
+    
+    r.PreventUIRefresh(-1)
+
+    if reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
+        r.SelectAllMediaItems(0, false)
+        r.SetMediaItemSelected(reference_item, true)
+        local track = r.GetMediaItem_Track(reference_item)
+        r.SetOnlyTrackSelected(track)
+    end
+    
+    r.Undo_EndBlock("Replace All Phrases", -1)
+    r.UpdateArrange()
+end
+
+local function CopyMatchesToNewTrack(as_subproject, force_pin)
+    if #match_groups == 0 then return end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local created_tracks = {}
+    
+    for _, group in ipairs(match_groups) do
+        local ref_item = group.ref_item
+        if ref_item and r.ValidatePtr2(0, ref_item, "MediaItem*") then
+            -- Group results by source track
+            local matches_by_track = {}
+            local track_order = {} 
+            
+            for _, result in ipairs(group.matches) do
+                local item = r.BR_GetMediaItemByGUID(0, result.guid)
+                if item then
+                    local track = r.GetMediaItem_Track(item)
+                    if not matches_by_track[track] then
+                        matches_by_track[track] = {
+                            name = result.track_name,
+                            items = {}
+                        }
+                        table.insert(track_order, track)
+                    end
+                    table.insert(matches_by_track[track].items, result)
+                end
+            end
+            
+            -- Copy Reference
+            r.SelectAllMediaItems(0, false)
+            r.SetMediaItemSelected(ref_item, true)
+            r.Main_OnCommand(40698, 0) -- Copy
+            
+            -- Create Reference Track
+            local insert_idx = r.CountTracks(0)
+            r.InsertTrackAtIndex(insert_idx, true)
+            local ref_track = r.GetTrack(0, insert_idx)
+            
+            local ref_name = group.ref_name or "Reference"
+            r.GetSetMediaTrackInfo_String(ref_track, "P_NAME", "REF: " .. ref_name, true)
+            
+            local ref_pos = r.GetMediaItemInfo_Value(ref_item, "D_POSITION")
+            local ref_paste_pos = ref_pos
+            if not is_batch_mode and search_mode == 2 and time_sel_valid then
+                ref_paste_pos = ref_pos + time_sel_start
+            end
+            
+            r.SetOnlyTrackSelected(ref_track)
+            r.SetEditCurPos(ref_paste_pos, false, false)
+            r.Main_OnCommand(40058, 0) -- Paste
+            
+            table.insert(created_tracks, ref_track)
+            
+            -- Create tracks for matches
+            for _, source_track in ipairs(track_order) do
+                local track_data = matches_by_track[source_track]
+                
+                insert_idx = r.CountTracks(0)
+                r.InsertTrackAtIndex(insert_idx, true)
+                local new_track = r.GetTrack(0, insert_idx)
+                r.GetSetMediaTrackInfo_String(new_track, "P_NAME", "Matches: " .. track_data.name, true)
+                
+                for _, result in ipairs(track_data.items) do
+                    local target_item = r.BR_GetMediaItemByGUID(0, result.guid)
+                    if target_item then 
+                        local item_pos = r.GetMediaItemInfo_Value(target_item, "D_POSITION")
+                        
+                        for _, match in ipairs(result.matches) do
+                            local paste_pos = item_pos + match.segment_start
+                            
+                            r.SetOnlyTrackSelected(new_track)
+                            r.SetEditCurPos(paste_pos, false, false)
+                            r.Main_OnCommand(40058, 0) -- Paste
+                        end
+                    end
+                end
+                
+                table.insert(created_tracks, new_track)
+            end
+        end
+    end
+    
+    if as_subproject then
+        r.SetOnlyTrackSelected(created_tracks[1])
+        for i = 2, #created_tracks do
+            r.SetTrackSelected(created_tracks[i], true)
+        end
+        r.Main_OnCommand(41997, 0) -- Track: Move tracks to new subproject
+    end
+    
+    if reference_guid then
+        local ref_item_restore = r.BR_GetMediaItemByGUID(0, reference_guid)
+        if ref_item_restore then
+            r.SelectAllMediaItems(0, false)
+            r.SetMediaItemSelected(ref_item_restore, true)
+        end
+    end
+    
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Copy Matches to " .. (as_subproject and "Subproject" or "New Tracks"), -1)
+    r.UpdateArrange()
+
+    if force_pin and not as_subproject then
+        for i = #created_tracks, 1, -1 do
+            local tr = created_tracks[i]
+            if r.ValidatePtr2(0, tr, "MediaTrack*") then
+                r.SetOnlyTrackSelected(tr)
+                r.Main_OnCommand(40000, 0) -- Pin to top
+            end
+        end
+    end
+end
+
 local function DrawColorLegend()
     r.ImGui_Spacing(ctx)
-    r.ImGui_Text(ctx, "Color Legend:")
-    r.ImGui_SameLine(ctx)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local x, y = r.ImGui_GetCursorScreenPos(ctx)
     local box_w, box_h = 14, 14
@@ -726,7 +1460,6 @@ local function DrawColorLegend()
     r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + box_w, y + box_h, 0xC86400FF)
     r.ImGui_SetCursorScreenPos(ctx, x + box_w + 4, y)
     r.ImGui_Text(ctx, "<75%")
-    r.ImGui_NewLine(ctx)
 end
 
 local function loop()
@@ -757,33 +1490,123 @@ local function loop()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_cyan)
         r.ImGui_Text(ctx, "Find Similar MIDI Items")
         r.ImGui_PopStyleColor(ctx, 1)
+        
+        r.ImGui_SameLine(ctx)
+        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+        local btn_size = 18
+        r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail_w - btn_size)
+        
+        local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+        if r.ImGui_InvisibleButton(ctx, "##collapse_btn", btn_size, btn_size) then
+            show_settings = not show_settings
+        end
+        
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local col = COLORS.accent_cyan
+        local center_x = cursor_x + btn_size * 0.5
+        local center_y = cursor_y + btn_size * 0.5
+        local w = btn_size * 0.6
+        local h = btn_size * 0.3
+        
+        if show_settings then
+            -- Pointing Up /\
+            r.ImGui_DrawList_AddLine(draw_list, center_x - w/2, center_y + h/2, center_x, center_y - h/2, col, 2.0)
+            r.ImGui_DrawList_AddLine(draw_list, center_x, center_y - h/2, center_x + w/2, center_y + h/2, col, 2.0)
+        else
+            -- Pointing Down \/
+            r.ImGui_DrawList_AddLine(draw_list, center_x - w/2, center_y - h/2, center_x, center_y + h/2, col, 2.0)
+            r.ImGui_DrawList_AddLine(draw_list, center_x, center_y + h/2, center_x + w/2, center_y - h/2, col, 2.0)
+        end
+
         if title_font then
             r.ImGui_PopFont(ctx)
         end
         r.ImGui_Separator(ctx)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
-        r.ImGui_Text(ctx, "Search Mode:")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetNextItemWidth(ctx, -1)
-        local changed_mode, new_mode = r.ImGui_Combo(ctx, '##searchmode', search_mode, "Full Item Match\0Segment Match (find pattern in larger items)\0Time Selection (use time selection as pattern)\0")
-        if changed_mode then
-            search_mode = new_mode
+        
+        if show_settings then
+            r.ImGui_Spacing(ctx)
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
+            r.ImGui_Text(ctx, "Reference Mode:")
+            r.ImGui_PopStyleColor(ctx, 1)
+            r.ImGui_SameLine(ctx, 150)
+            r.ImGui_SetNextItemWidth(ctx, -1)
+            local changed_ref, new_ref = r.ImGui_Combo(ctx, '##refmode', reference_mode, "Single Item (Selected)\0Track Batch (Selected Track)\0")
+            if changed_ref then
+                reference_mode = new_ref
+            end
+
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
+            r.ImGui_Text(ctx, "Search Mode:")
+            r.ImGui_PopStyleColor(ctx, 1)
+            r.ImGui_SameLine(ctx, 150)
+            r.ImGui_SetNextItemWidth(ctx, -1)
+            
+            -- Adjust search mode if incompatible with reference mode
+            if reference_mode == 1 and search_mode == 2 then
+                search_mode = 0
+            end
+            
+            local search_options = "Full Item Match\0Phrase Match (find pattern in larger items)\0Time Selection (use time selection as pattern)\0"
+            if reference_mode == 1 then
+                search_options = "Full Item Match\0Phrase Match (find pattern in larger items) (Batch)\0"
+            end
+            
+            local changed_mode, new_mode = r.ImGui_Combo(ctx, '##searchmode', search_mode, search_options)
+            if changed_mode then
+                search_mode = new_mode
+            end
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
+            r.ImGui_Text(ctx, "Min Similarity:")
+            r.ImGui_PopStyleColor(ctx, 1)
+            r.ImGui_SameLine(ctx, 150)
+            r.ImGui_SetNextItemWidth(ctx, -1)
+            local changed, new_threshold = r.ImGui_SliderInt(ctx, '##threshold', threshold, 0, max_threshold, '%d%%')
+            if changed then
+                threshold = new_threshold
+            end
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
+            r.ImGui_Text(ctx, "Max Similarity:")
+            r.ImGui_PopStyleColor(ctx, 1)
+            r.ImGui_SameLine(ctx, 150)
+            r.ImGui_SetNextItemWidth(ctx, -1)
+            local changed_max, new_max = r.ImGui_SliderInt(ctx, '##max_threshold', max_threshold, threshold, 100, '%d%%')
+            if changed_max then
+                max_threshold = new_max
+            end
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
+            r.ImGui_Text(ctx, "Note Range Filter:")
+            r.ImGui_PopStyleColor(ctx, 1)
+            
+            r.ImGui_PushItemWidth(ctx, -1)
+            local changed_min_pitch, new_min_pitch = r.ImGui_SliderInt(ctx, "##minpitch", filter_min_pitch, 0, 127, "Min: " .. GetNoteName(filter_min_pitch))
+            if changed_min_pitch then
+                filter_min_pitch = new_min_pitch
+                if filter_min_pitch > filter_max_pitch then filter_max_pitch = filter_min_pitch end
+            end
+            
+            local changed_max_pitch, new_max_pitch = r.ImGui_SliderInt(ctx, "##maxpitch", filter_max_pitch, 0, 127, "Max: " .. GetNoteName(filter_max_pitch))
+            if changed_max_pitch then
+                filter_max_pitch = new_max_pitch
+                if filter_max_pitch < filter_min_pitch then filter_min_pitch = filter_max_pitch end
+            end
+            r.ImGui_PopItemWidth(ctx)
+
+            r.ImGui_Separator(ctx)
+            r.ImGui_Spacing(ctx)
         end
-        r.ImGui_Spacing(ctx)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
-        r.ImGui_Text(ctx, "Similarity Threshold:")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetNextItemWidth(ctx, -1)
-        local changed, new_threshold = r.ImGui_SliderInt(ctx, '##threshold', threshold, 0, 100, '%d%%')
-        if changed then
-            threshold = new_threshold
-        end
-        r.ImGui_Spacing(ctx)
         local ref_text = "No reference selected"
-        if reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
+        if reference_mode == 1 then
+             local track = r.GetSelectedTrack(0, 0)
+             if track then
+                 local _, track_name = r.GetTrackName(track)
+                 ref_text = "Batch Mode: Track '" .. track_name .. "'"
+             else
+                 ref_text = "Batch Mode: No track selected"
+             end
+        elseif reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
             local ref_take = r.GetActiveTake(reference_item)
             if ref_take then
                 local _, take_name = r.GetSetMediaItemTakeInfo_String(ref_take, "P_NAME", "", false)
@@ -802,6 +1625,26 @@ local function loop()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_purple)
         r.ImGui_Text(ctx, ref_text)
         r.ImGui_PopStyleColor(ctx, 1)
+        
+        if reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
+             r.ImGui_SameLine(ctx)
+             
+             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0)
+             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), COLORS.accent_cyan)
+             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_cyan)
+             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 1)
+             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 0)
+             
+             if r.ImGui_SmallButton(ctx, "Show##Ref") then
+                 ZoomToReference()
+             end
+             
+             r.ImGui_PopStyleVar(ctx, 2)
+             r.ImGui_PopStyleColor(ctx, 3)
+             
+             DrawTooltip("Zoom to and select the reference item.")
+        end
+
         if search_mode == 2 then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_muted)
             r.ImGui_Text(ctx, "Make a time selection within the item before searching")
@@ -813,110 +1656,258 @@ local function loop()
         if r.ImGui_Button(ctx, 'Find Similar Items', avail_width, 32) then
             AnalyzeItems()
         end
+        DrawTooltip("Analyze selected items and find matches based on current settings.")
         r.ImGui_PopStyleColor(ctx, 1)
         r.ImGui_Spacing(ctx)
         r.ImGui_Separator(ctx)
         r.ImGui_Spacing(ctx)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
-        r.ImGui_Text(ctx, string.format("Found: %d similar items", #results))
+        local total_matches = 0
+        for _, group in ipairs(match_groups) do
+            total_matches = total_matches + #group.matches
+        end
+        r.ImGui_Text(ctx, string.format("Found: %d similar items", total_matches))
         r.ImGui_PopStyleColor(ctx, 1)
         DrawColorLegend()
-        r.ImGui_Spacing(ctx)
-        if #results > 0 then
-            local btn_avail_width = r.ImGui_GetContentRegionAvail(ctx)
-            local btn_spacing = 8
-            local btn_count = 4
-            local btn_width = (btn_avail_width - (btn_spacing * (btn_count - 1))) / btn_count
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-            if r.ImGui_Button(ctx, 'Select All', btn_width, 28) then
-                SelectSimilar()
-            end
-            r.ImGui_SameLine(ctx, 0, btn_spacing)
-            if r.ImGui_Button(ctx, 'Color Similar', btn_width, 28) then
-                ColorSimilar()
-            end
-            r.ImGui_SameLine(ctx, 0, btn_spacing)
-            if r.ImGui_Button(ctx, 'Clear Colors', btn_width, 28) then
-                ClearColors()
-            end
-            r.ImGui_SameLine(ctx, 0, btn_spacing)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.accent_red)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF8899FF)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xDD5566FF)
-            if r.ImGui_Button(ctx, 'Delete All', btn_width, 28) then
-                DeleteSimilar()
-            end
-            r.ImGui_PopStyleColor(ctx, 3)
-            r.ImGui_PopStyleColor(ctx, 1)
-            r.ImGui_Spacing(ctx)
+        
+        local footer_height = 0
+        if total_matches > 0 then
+            footer_height = 65
         end
-        if r.ImGui_BeginChild(ctx, 'results_list', 0, 0, 1) then
-            for i, result in ipairs(results) do
-                local item = r.BR_GetMediaItemByGUID(0, result.guid)
-                if item then
-                    local sim_color
-                    if result.similarity >= 95 then
-                        sim_color = COLORS.accent_green
-                    elseif result.similarity >= 85 then
-                        sim_color = COLORS.accent_cyan
-                    elseif result.similarity >= 75 then
-                        sim_color = COLORS.accent_yellow
-                    else
-                        sim_color = COLORS.accent_red
+        
+        if r.ImGui_BeginChild(ctx, 'results_list', 0, -footer_height, 1) then
+            for g_idx, group in ipairs(match_groups) do
+                r.ImGui_PushID(ctx, g_idx)
+                local show_group = true
+                if is_batch_mode or #match_groups > 1 then
+                    local group_title = string.format("Ref: %s (%d matches)", group.ref_name, #group.matches)
+                    show_group = r.ImGui_TreeNode(ctx, group_title)
+                end
+                
+                if show_group then
+                    for i, result in ipairs(group.matches) do
+                        local item = r.BR_GetMediaItemByGUID(0, result.guid)
+                        if item then
+                            local match_count = #result.matches
+                            local best_match = result.matches[1]
+                            
+                            local sim_color
+                            if result.max_similarity >= 95 then
+                                sim_color = COLORS.accent_green
+                            elseif result.max_similarity >= 85 then
+                                sim_color = COLORS.accent_cyan
+                            elseif result.max_similarity >= 75 then
+                                sim_color = COLORS.accent_yellow
+                            else
+                                sim_color = COLORS.accent_red
+                            end
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sim_color)
+                            
+                            local header_text = string.format("%d. [%d] %s @ %s", i, result.track_num, result.track_name, FormatTime(result.position))
+                            if match_count > 1 then
+                                header_text = header_text .. string.format(" (%d matches, max %.1f%%)", match_count, result.max_similarity)
+                            else
+                                header_text = header_text .. string.format(" [%.1f%%]", best_match.similarity)
+                            end
+
+                            r.ImGui_PushID(ctx, i)
+                            local node_open = r.ImGui_TreeNode(ctx, header_text)
+                            
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_SetTooltip(ctx, string.format("Exact Similarity: %.5f%%", result.max_similarity))
+                            end
+
+                            if node_open then
+                                r.ImGui_PopStyleColor(ctx, 1)
+                                
+                                for m_idx, match in ipairs(result.matches) do
+                                    r.ImGui_PushID(ctx, m_idx)
+                                    
+                                    local show_content = true
+                                    if match_count > 1 then
+                                        local match_title = string.format("Match %d: %.1f%% at %.2fs", m_idx, match.similarity, match.segment_start)
+                                        show_content = r.ImGui_TreeNode(ctx, match_title)
+                                    end
+                                    
+                                    if show_content then
+                                        local stats = match.stats
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
+                                        r.ImGui_Text(ctx, string.format("   Notes: Ref=%d  Matched=%d", stats.total_ref, stats.matched_notes))
+                                        if stats.avg_overlap and stats.avg_overlap > 0 then
+                                            r.ImGui_Text(ctx, string.format("   Avg overlap: %.0f%%", stats.avg_overlap))
+                                        end
+                                        if match.offset and math.abs(match.offset) >= 0.001 then
+                                            r.ImGui_Text(ctx, string.format("   Time offset: %.3f seconds", match.offset))
+                                        end
+                                        r.ImGui_PopStyleColor(ctx, 1)
+                                        
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_green)
+                                        r.ImGui_Text(ctx, string.format("   Exact: %d", stats.exact_matches or 0))
+                                        r.ImGui_PopStyleColor(ctx, 1)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_cyan)
+                                        r.ImGui_Text(ctx, string.format("   Good: %d", stats.good_matches or 0))
+                                        r.ImGui_PopStyleColor(ctx, 1)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_yellow)
+                                        r.ImGui_Text(ctx, string.format("   Partial: %d", stats.partial_matches or 0))
+                                        r.ImGui_PopStyleColor(ctx, 1)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_red)
+                                        r.ImGui_Text(ctx, string.format("   Missing: %d  Extra: %d", stats.missing_notes or 0, stats.extra_notes or 0))
+                                        r.ImGui_PopStyleColor(ctx, 1)
+
+                                        r.ImGui_Spacing(ctx)
+                                        
+                                        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                                        local btn_w = (avail_w - 8) / 2
+                                        
+                                        -- Row 1: Select Item, Replace Item
+                                        if r.ImGui_Button(ctx, 'Select Item', btn_w, 22) then
+                                            ZoomToItem(item, match.segment_start)
+                                        end
+                                        DrawTooltip("Select and show this specific match.")
+                                        
+                                        r.ImGui_SameLine(ctx, 0, 8)
+                                        
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.btn_dark)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), COLORS.btn_dark_hover)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), COLORS.btn_dark_active)
+                                        
+                                        if r.ImGui_Button(ctx, 'Replace Item', btn_w, 22) then
+                                            ReplaceSingleItem(g_idx, i, false)
+                                        end
+                                        if r.ImGui_IsItemClicked(ctx, 1) then
+                                            ReplaceSingleItem(g_idx, i, true)
+                                        end
+                                        DrawTooltip("Replace the entire item with a COPY of the reference.\nRight-click for POOLED copy.")
+                                        
+                                        r.ImGui_PopStyleColor(ctx, 3)
+                                        
+                                        -- Row 2: Select Phrase, Replace Phrase
+                                        if r.ImGui_Button(ctx, 'Select Phrase', btn_w, 22) then
+                                            ZoomAndSelectPhrase(item, match.segment_start, group.ref_notes, match.offset)
+                                        end
+                                        DrawTooltip("Select the time range of this phrase.")
+                                        
+                                        r.ImGui_SameLine(ctx, 0, 8)
+                                        
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.btn_dark)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), COLORS.btn_dark_hover)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), COLORS.btn_dark_active)
+                                        
+                                        if r.ImGui_Button(ctx, 'Replace Phrase', btn_w, 22) then
+                                            ReplacePhrase(g_idx, i, m_idx, false)
+                                        end
+                                        if r.ImGui_IsItemClicked(ctx, 1) then
+                                            ReplacePhrase(g_idx, i, m_idx, true)
+                                        end
+                                        DrawTooltip("Replace this phrase with a COPY of the reference.\nRight-click for POOLED copy.")
+                                        
+                                        r.ImGui_PopStyleColor(ctx, 3)
+                                        
+                                        if match_count > 1 then
+                                            r.ImGui_TreePop(ctx)
+                                        end
+                                    end
+                                    r.ImGui_PopID(ctx)
+                                end
+                                
+                                r.ImGui_TreePop(ctx)
+                            else
+                                r.ImGui_PopStyleColor(ctx, 1)
+                            end
+                            r.ImGui_PopID(ctx)
+                        end
                     end
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sim_color)
-                    local offset_str = FormatOffset(result.offset or 0)
-                    local header_text
-                    if search_mode == 1 and result.segment_start and result.segment_start > 0 then
-                        header_text = string.format("%d. [%.1f%%] %s @ %s (segment @ %.2fs)",
-                            i, result.similarity, result.track_name, FormatTime(result.position), result.segment_start)
-                    else
-                        header_text = string.format("%d. [%.1f%%] %s @ %s (%s)",
-                            i, result.similarity, result.track_name, FormatTime(result.position), offset_str)
-                    end
-                    if r.ImGui_TreeNode(ctx, header_text) then
-                        r.ImGui_PopStyleColor(ctx, 1)
-                        local stats = result.stats
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
-                        r.ImGui_Text(ctx, string.format("   Notes: Ref=%d  Compare=%d  Matched=%d",
-                            stats.total_ref or 0, stats.total_compared or 0, stats.matched_notes or 0))
-                        if stats.avg_overlap and stats.avg_overlap > 0 then
-                            r.ImGui_Text(ctx, string.format("   Avg overlap: %.0f%%", stats.avg_overlap))
-                        end
-                        if result.offset and math.abs(result.offset) >= 0.001 then
-                            r.ImGui_Text(ctx, string.format("   Time offset: %.3f seconds", result.offset))
-                        end
-                        if search_mode == 1 and result.segment_start and result.segment_start > 0 then
-                            r.ImGui_Text(ctx, string.format("   Segment found at: %.3f seconds in item", result.segment_start))
-                        end
-                        r.ImGui_PopStyleColor(ctx, 1)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_green)
-                        r.ImGui_Text(ctx, string.format("   Exact (same pitch+start+end): %d", stats.exact_matches or 0))
-                        r.ImGui_PopStyleColor(ctx, 1)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_cyan)
-                        r.ImGui_Text(ctx, string.format("   Good (same pitch, overlap >70%%): %d", stats.good_matches or 0))
-                        r.ImGui_PopStyleColor(ctx, 1)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_yellow)
-                        r.ImGui_Text(ctx, string.format("   Partial (same pitch, some overlap): %d", stats.partial_matches or 0))
-                        r.ImGui_PopStyleColor(ctx, 1)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_red)
-                        r.ImGui_Text(ctx, string.format("   Missing: %d  Extra: %d", stats.missing_notes or 0, stats.extra_notes or 0))
-                        r.ImGui_PopStyleColor(ctx, 1)
-                        r.ImGui_Spacing(ctx)
-                        if r.ImGui_Button(ctx, 'Zoom##' .. i) then
-                            ZoomToItem(item, result.segment_start)
-                        end
-                        r.ImGui_SameLine(ctx)
-                        if r.ImGui_Button(ctx, 'Zoom + Select Phrase##' .. i) then
-                            ZoomAndSelectPhrase(item, result.segment_start, current_ref_notes, result.offset)
-                        end
+                    if is_batch_mode or #match_groups > 1 then
                         r.ImGui_TreePop(ctx)
-                    else
-                        r.ImGui_PopStyleColor(ctx, 1)
                     end
                 end
+                r.ImGui_PopID(ctx)
             end
             r.ImGui_EndChild(ctx)
+        end
+        
+        if total_matches > 0 then
+            r.ImGui_Spacing(ctx)
+            local btn_avail_width = r.ImGui_GetContentRegionAvail(ctx)
+            local btn_spacing = 8
+            
+            local btn_width_3 = (btn_avail_width - (btn_spacing * 2)) / 3
+            local btn_width_2 = (btn_avail_width - btn_spacing) / 2
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+            
+            -- Row 1: Select All, Replace, Delete All
+            if r.ImGui_Button(ctx, 'Select All', btn_width_3, 22) then
+                SelectSimilar()
+            end
+            DrawTooltip("Select all found items in the arrange view.")
+            
+            r.ImGui_SameLine(ctx, 0, btn_spacing)
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.btn_dark)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), COLORS.btn_dark_hover)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), COLORS.btn_dark_active)
+            
+            if search_mode == 0 then
+                if r.ImGui_Button(ctx, 'Replace', btn_width_3, 22) then
+                    local answer = r.ShowMessageBox("Replace all found items with a COPY of the reference?", "Confirm Replace", 4)
+                    if answer == 6 then ReplaceWithReference(false) end
+                end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    local answer = r.ShowMessageBox("Replace all found items with a POOLED copy of the reference?\n(Changes to one will affect all)", "Confirm Replace (Pooled)", 4)
+                    if answer == 6 then ReplaceWithReference(true) end
+                end
+                DrawTooltip("Replace all found items with the reference item.\nRight-click to Replace with Pooled copies.")
+            else
+                if r.ImGui_Button(ctx, 'Replace Phrases', btn_width_3, 22) then
+                    local answer = r.ShowMessageBox("Replace ALL found phrases with a COPY of the reference?\nThis will modify multiple items.", "Confirm Replace All", 4)
+                    if answer == 6 then ReplaceAllPhrases(false) end
+                end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    local answer = r.ShowMessageBox("Replace ALL found phrases with a POOLED copy of the reference?\nThis will modify multiple items.", "Confirm Replace All (Pooled)", 4)
+                    if answer == 6 then ReplaceAllPhrases(true) end
+                end
+                DrawTooltip("Replace all found phrases with the reference.\nRight-click to Replace with Pooled copies.")
+            end
+            
+            r.ImGui_SameLine(ctx, 0, btn_spacing)
+            
+            if r.ImGui_Button(ctx, 'Delete All', btn_width_3, 22) then
+                DeleteSimilar()
+            end
+            DrawTooltip("Delete all found items from the project (Destructive!).")
+            r.ImGui_PopStyleColor(ctx, 3) -- Pop btn_dark
+            
+            -- Row 2: Color Similar, Copy to Track, Copy to Sub
+            if r.ImGui_Button(ctx, 'Color Similar', btn_width_3, 22) then
+                ColorSimilar()
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                ClearColors()
+            end
+            DrawTooltip("Color code found items based on similarity percentage.\nRight-click to Clear Colors.")
+            
+            r.ImGui_SameLine(ctx, 0, btn_spacing)
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.btn_primary)
+            if r.ImGui_Button(ctx, 'Copy to Track', btn_width_3, 22) then
+                CopyMatchesToNewTrack(false, false)
+            end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                CopyMatchesToNewTrack(false, true)
+            end
+            DrawTooltip("Copy found matches to new tracks.\nRight-click to Copy and Pin to Top.")
+            
+            r.ImGui_SameLine(ctx, 0, btn_spacing)
+            
+            if r.ImGui_Button(ctx, 'Copy to Sub', btn_width_3, 22) then
+                CopyMatchesToNewTrack(true, false)
+            end
+            DrawTooltip("Copy found matches to a new subproject.")
+            r.ImGui_PopStyleColor(ctx, 1) -- Pop btn_primary
+            
+            r.ImGui_PopStyleColor(ctx, 1) -- Pop text color
+            r.ImGui_Dummy(ctx, 0, 2) -- Extra space at bottom
         end
         r.ImGui_End(ctx)
     end
@@ -929,4 +1920,13 @@ local function loop()
     end
 end
 
+local function OnExit()
+    SaveSettings()
+    if colors_applied then
+        ClearColors()
+    end
+end
+
+LoadSettings()
+r.atexit(OnExit)
 r.defer(loop)

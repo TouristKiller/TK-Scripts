@@ -487,21 +487,34 @@
     </reapack>
 
     <reapack name="TK_Find Similar MIDI Items.lua" type="script" desc="TK Find Similar MIDI Items - Find matching MIDI patterns">
-      <version name="1.4" author="TouristKiller" time="2025-11-30T03:40:00Z">
+      <version name="1.6" author="TouristKiller" time="2025-12-02T13:40:00Z">
         <changelog><![CDATA[
-1.4
-+ Fixed segment matching - extra notes in matched section now reduce similarity score
-+ More accurate matching: compares only notes within the reference time range
-
-1.3
-+ Added Time Selection mode - use time selection within item as search pattern
-+ Added Segment Match mode - find reference pattern inside larger items
-+ Added Offset Detection - finds matches even if notes are shifted in time
-+ Added "Zoom + Select Phrase" button to highlight matched sections
-+ Added auto-restore of original colors when starting new search
-+ Added color coding by similarity (95%+ Green, 85%+ Cyan, 75%+ Yellow, <75% Orange)
-+ Added detailed statistics display (Note/Pitch/Velocity/Position overlap)
-+ Dark theme GUI with Consolas font
+    + Initial release
+    + Find MIDI items similar to reference item
+    + Percentage-based similarity threshold
+    + Overlay comparison with detailed statistics
+    + Color coding by similarity percentage
+    + Select, color, and delete similar items
+    + Added pattern matching with offset detection
+    + Can now find similar patterns even if notes are shifted in time
+    + Added segment matching - find partial matches within larger items
+    + Search modes: Full Item / Segment (find reference pattern in larger items)
+    + Added Time Selection mode - use time selection within item as search pattern
+    + Fixed segment matching - extra notes in matched section now reduce similarity score
+    + Added Note Range Filter (ignore keyswitches)
+    + Added "Pin to Top" option for created tracks
+    + Added "Max Similarity" threshold
+    + Added global settings persistence (Save/Load options)
+    + Added "Show Reference" button
+    + Improved UI with tooltips and collapsible options
+    + Matches are now grouped by source track when copying
+    + Added Track Batch Mode: Select a track (without selecting items) to scan all items on that track
+    + Results are now grouped by Reference Item in Batch Mode
+    + UI Overhaul: Compact layout, collapsible settings, improved button organization
+    + Improved Sorting: Fixed sorting for items with identical similarity scores (Track # priority)
+    + Workflow: Single-click details for single matches, auto-reselect reference after replace
+    + Fix: "Replace Phrase" now correctly handles time selections with leading silence
+    + Fix: Multi-match items now sort based on their best match
         ]]></changelog>
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_Find%20Similar%20MIDI%20Items.lua</source>
       </version>
