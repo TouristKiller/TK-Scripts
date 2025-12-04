@@ -1,9 +1,16 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.4
+-- @version 2.3.5
 -- @changelog
 --[[
-2.2.4 
+2.3.5
++ Progression Templates: 70+ preset progressions (Right-click Load button)
++ 10 Genre categories: Pop/Rock, Jazz, Blues, Classical, Modal, Minor Keys, EDM, World/Folk
++ Mode-aware templates: Auto-adapts chord qualities to current scale
++ Scale validation: Templates filtered by minimum required notes
++ Safety fix: No more crash when switching scales during progression playback
+
+2.3.4 
 + Theme bugfix
 
 2.3.3
@@ -3640,6 +3647,75 @@ function showDeletePresetMenu()
   showLoadPresetMenu()
 end
 
+function applyProgressionTemplate(template)
+  chordProgression = {}
+  local numNotes = #scaleNotes
+  
+  for i, degree in ipairs(template.chords) do
+    if i > maxProgressionSlots then break end
+    
+    local actualDegree = degree
+    if actualDegree > numNotes then
+      actualDegree = ((actualDegree - 1) % numNotes) + 1
+    end
+    
+    if scaleNotes[actualDegree] then
+      local chordTypeIndex = getSelectedChordType(actualDegree) or 1
+      local chordData = scaleChords[actualDegree][chordTypeIndex]
+      if chordData then
+        local text = getScaleNoteName(actualDegree) .. chordData['display']
+        chordProgression[i] = {
+          scaleNoteIndex = actualDegree,
+          chordTypeIndex = chordTypeIndex,
+          text = text,
+          beats = 1,
+          repeats = 1,
+          octave = getOctave(),
+          inversion = getChordInversionState(actualDegree)
+        }
+      end
+    end
+  end
+  
+  progressionLength = math.min(#template.chords, maxProgressionSlots)
+  guiShouldBeUpdated = true
+end
+
+function showTemplatesMenu()
+  local templates = Data.progressionTemplates
+  if not templates or #templates == 0 then return end
+  
+  local numNotes = #scaleNotes
+  local menuStr = ""
+  local menuItems = {}
+  
+  for catIdx, category in ipairs(templates) do
+    local catAvailable = numNotes >= (category.minNotes or 7)
+    
+    if catAvailable then
+      menuStr = menuStr .. ">" .. category.name .. "|"
+      
+      for progIdx, prog in ipairs(category.progressions) do
+        menuStr = menuStr .. prog.name
+        table.insert(menuItems, {catIdx = catIdx, progIdx = progIdx})
+        menuStr = menuStr .. "|"
+      end
+      menuStr = menuStr .. "<"
+    else
+      menuStr = menuStr .. "#" .. category.name .. " (min " .. category.minNotes .. " notes)"
+    end
+    menuStr = menuStr .. "|"
+  end
+  
+  local result = gfx.showmenu(menuStr)
+  
+  if result > 0 and menuItems[result] then
+    local item = menuItems[result]
+    local template = templates[item.catIdx].progressions[item.progIdx]
+    applyProgressionTemplate(template)
+  end
+end
+
 function randomizeProgression()
   -- Define weights for scale degrees (1-7)
   -- 1=I, 2=ii, 3=iii, 4=IV, 5=V, 6=vi, 7=vii
@@ -3712,6 +3788,9 @@ function playProgressionChord(index)
   
   local chord = chordProgression[index]
   if not chord then return end
+  
+  if chord.scaleNoteIndex > #scaleNotes then return end
+  if not scaleChords[chord.scaleNoteIndex] then return end
   
   lastPlayedScaleDegree = chord.scaleNoteIndex
   setSelectedScaleNote(chord.scaleNoteIndex)
@@ -3792,7 +3871,7 @@ function updateProgressionPlayback()
       end
       
       local chord = chordProgression[currentProgressionIndex]
-      if chord then
+      if chord and chord.scaleNoteIndex <= #scaleNotes and scaleChords[chord.scaleNoteIndex] then
         local root = scaleNotes[chord.scaleNoteIndex]
         local chordData = scaleChords[chord.scaleNoteIndex][chord.chordTypeIndex]
         local octave = chord.octave or getOctave()
@@ -3838,7 +3917,7 @@ function updateProgressionPlayback()
     
 
     local chord = chordProgression[currentProgressionIndex]
-    if chord then
+    if chord and chord.scaleNoteIndex <= #scaleNotes and scaleChords[chord.scaleNoteIndex] then
 
       setSelectedScaleNote(chord.scaleNoteIndex)
       setSelectedChordType(chord.scaleNoteIndex, chord.chordTypeIndex)
@@ -10386,8 +10465,8 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 		buttonWidth,
 		buttonHeight,
 		function() showLoadPresetMenu() end,
-		nil,
-		function() return "Click: Load progression preset" end,
+		function() showTemplatesMenu() end,
+		function() return "Click: Load preset | Right-Click: Progression Templates" end,
     true
 	)
 	

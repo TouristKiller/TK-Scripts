@@ -449,4 +449,126 @@ for _, system in ipairs(Data.scaleSystems) do
   end
 end
 
+Data.progressionTemplates = {
+  {
+    name = "Pop / Rock",
+    minNotes = 7,
+    progressions = {
+      { name = "Axis of Awesome (I-V-vi-IV)", chords = {1, 5, 6, 4} },
+      { name = "50s (I-vi-IV-V)", chords = {1, 6, 4, 5} },
+      { name = "Sensitive (vi-IV-I-V)", chords = {6, 4, 1, 5} },
+      { name = "Pachelbel (I-V-vi-iii-IV-I-IV-V)", chords = {1, 5, 6, 3, 4, 1, 4, 5} },
+      { name = "Andalusian (vi-V-IV-III)", chords = {6, 5, 4, 3} },
+      { name = "Singer-Songwriter (I-IV-I-V)", chords = {1, 4, 1, 5} },
+      { name = "Rock Anthem (I-IV-V-IV)", chords = {1, 4, 5, 4} },
+      { name = "Ballad (I-V-vi-IV-I-V-iii-IV)", chords = {1, 5, 6, 4, 1, 5, 3, 4} }
+    }
+  },
+  {
+    name = "Jazz",
+    minNotes = 7,
+    progressions = {
+      { name = "ii-V-I", chords = {2, 5, 1} },
+      { name = "I-vi-ii-V (Turnaround)", chords = {1, 6, 2, 5} },
+      { name = "iii-vi-ii-V (Extended)", chords = {3, 6, 2, 5} },
+      { name = "I-IV-iii-vi (Jazzy)", chords = {1, 4, 3, 6} },
+      { name = "ii-V-I-vi", chords = {2, 5, 1, 6} },
+      { name = "I-ii-iii-IV-V", chords = {1, 2, 3, 4, 5} },
+      { name = "Autumn Leaves (ii-V-I-IV-vii-iii-vi)", chords = {2, 5, 1, 4, 7, 3, 6} },
+      { name = "Rhythm Changes A (I-vi-ii-V-I-vi-ii-V)", chords = {1, 6, 2, 5, 1, 6, 2, 5} }
+    }
+  },
+  {
+    name = "Blues",
+    minNotes = 5,
+    progressions = {
+      { name = "12-Bar Blues (I-I-I-I-IV-IV-I-I)", chords = {1, 1, 1, 1, 4, 4, 1, 1} },
+      { name = "Quick Change (I-IV-I-I-IV-IV-I-I)", chords = {1, 4, 1, 1, 4, 4, 1, 1} },
+      { name = "8-Bar Blues (I-V-IV-IV-I-V-I-V)", chords = {1, 5, 4, 4, 1, 5, 1, 5} },
+      { name = "Minor Blues (i-i-i-i-iv-iv-i-i)", chords = {1, 1, 1, 1, 4, 4, 1, 1} },
+      { name = "Jazz Blues (I-IV-I-I-IV-IV-I-vi-ii-V-I-V)", chords = {1, 4, 1, 1, 4, 4, 1, 6} }
+    }
+  },
+  {
+    name = "Classical",
+    minNotes = 7,
+    progressions = {
+      { name = "Authentic Cadence (IV-V-I)", chords = {4, 5, 1} },
+      { name = "Plagal Cadence (IV-I)", chords = {4, 1} },
+      { name = "Circle of Fifths (I-IV-vii-iii-vi-ii-V-I)", chords = {1, 4, 7, 3, 6, 2, 5, 1} },
+      { name = "Romanesca (III-VII-i-V)", chords = {3, 7, 1, 5} },
+      { name = "Passamezzo Antico (i-VII-i-V-III-VII-i-V-i)", chords = {1, 7, 1, 5, 3, 7, 1, 5} },
+      { name = "La Folia (i-V-i-VII-III-VII-i-V)", chords = {1, 5, 1, 7, 3, 7, 1, 5} }
+    }
+  },
+  {
+    name = "Modal: Dorian",
+    minNotes = 7,
+    scaleHint = "Dorian",
+    progressions = {
+      { name = "Dorian Vamp (i-IV)", chords = {1, 4} },
+      { name = "So What (i-IV-i-IV)", chords = {1, 4, 1, 4} },
+      { name = "Dorian Funk (i-IV-v-IV)", chords = {1, 4, 5, 4} },
+      { name = "Dorian Jazz (i-ii-IV-i)", chords = {1, 2, 4, 1} }
+    }
+  },
+  {
+    name = "Modal: Mixolydian",
+    minNotes = 7,
+    scaleHint = "Mixolydian",
+    progressions = {
+      { name = "Mixo Rock (I-bVII-IV-I)", chords = {1, 7, 4, 1} },
+      { name = "Sweet Home (I-bVII-IV)", chords = {1, 7, 4} },
+      { name = "Mixo Groove (I-IV-bVII-IV)", chords = {1, 4, 7, 4} },
+      { name = "Hey Joe (I-IV-I-V-IV-I)", chords = {1, 4, 1, 5, 4, 1} }
+    }
+  },
+  {
+    name = "Modal: Phrygian",
+    minNotes = 7,
+    scaleHint = "Phrygian",
+    progressions = {
+      { name = "Phrygian Vamp (i-bII)", chords = {1, 2} },
+      { name = "Flamenco (i-bII-bIII-bII)", chords = {1, 2, 3, 2} },
+      { name = "Metal Phrygian (i-bII-i-bVII)", chords = {1, 2, 1, 7} },
+      { name = "Spanish (i-bVII-bVI-V)", chords = {1, 7, 6, 5} }
+    }
+  },
+  {
+    name = "Minor Keys",
+    minNotes = 7,
+    progressions = {
+      { name = "Aeolian (i-VI-III-VII)", chords = {1, 6, 3, 7} },
+      { name = "Epic Minor (i-VII-VI-VII)", chords = {1, 7, 6, 7} },
+      { name = "Dramatic (i-iv-V-i)", chords = {1, 4, 5, 1} },
+      { name = "Minor Ballad (i-VI-III-VII-i-VI-iv-V)", chords = {1, 6, 3, 7, 1, 6, 4, 5} },
+      { name = "Neo-Classical (i-V-VI-III-iv-i-iv-V)", chords = {1, 5, 6, 3, 4, 1, 4, 5} },
+      { name = "Harmonic Minor (i-iv-V-i-VI-III-iv-V)", chords = {1, 4, 5, 1, 6, 3, 4, 5} }
+    }
+  },
+  {
+    name = "EDM / Electronic",
+    minNotes = 5,
+    progressions = {
+      { name = "Trance Gate (i-VI-III-VII)", chords = {1, 6, 3, 7} },
+      { name = "House (i-i-VI-VII)", chords = {1, 1, 6, 7} },
+      { name = "Epic Build (VI-VII-i-i)", chords = {6, 7, 1, 1} },
+      { name = "Progressive (i-VI-i-VII)", chords = {1, 6, 1, 7} },
+      { name = "Future Bass (I-vi-IV-V)", chords = {1, 6, 4, 5} },
+      { name = "Minimal (i-IV-i-IV)", chords = {1, 4, 1, 4} }
+    }
+  },
+  {
+    name = "World / Folk",
+    minNotes = 5,
+    progressions = {
+      { name = "Celtic (I-VII-VI-VII)", chords = {1, 7, 6, 7} },
+      { name = "Irish Reel (I-V-vi-IV-I-V-I-V)", chords = {1, 5, 6, 4, 1, 5, 1, 5} },
+      { name = "Klezmer (i-IV-V-i)", chords = {1, 4, 5, 1} },
+      { name = "Flamenco Cadence (iv-III-II-I)", chords = {4, 3, 2, 1} },
+      { name = "Arabic (i-bII-i-V)", chords = {1, 2, 1, 5} }
+    }
+  }
+}
+
 return Data

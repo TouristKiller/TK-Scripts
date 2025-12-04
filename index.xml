@@ -247,8 +247,15 @@
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.3.4" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-02T23:15:00Z">
+      <version name="2.3.5" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-04T16:15:00Z">
         <changelog><![CDATA[
+2.3.5
++ Progression Templates: 70+ preset progressions (Right-click Load button)
++ 10 Genre categories: Pop/Rock, Jazz, Blues, Classical, Modal, Minor Keys, EDM, World/Folk
++ Mode-aware templates: Auto-adapts chord qualities to current scale
++ Scale validation: Templates filtered by minimum required notes
++ Safety fix: No more crash when switching scales during progression playback
+
 2.3.4
 + Theme Bugfix
 
@@ -264,6 +271,10 @@
 + Preset Display: Current trigger preset name shown in chord display area
 + 6 Color Themes: Dark, Light, Color, Neon, Ocean, Mono (click Theme button to cycle)
 
+ ]]></changelog>
+
+<!-- OUDE CHANGELOG (Niet zichtbaar in ReaPack)
+
 2.3.1
 + Added "Harmonic Compass" (Smart Suggestions): Highlights logical next chords based on functional harmony
 + Added "Use Selected Chord Types" option to Randomize (Surprise Me) feature (Right-click Dice)
@@ -271,9 +282,9 @@
 + Added "Filter" Dropdown to control chord visibility (Basic, Standard, Jazz)
 + Added "All" modes to Filter Dropdown (Std All, Jazz All) to show non-scale chords
 + Replaced "In Scale" toggle with the new Filter Dropdown
- ]]></changelog>
 
-<!-- OUDE CHANGELOG (Niet zichtbaar in ReaPack)
+
+
 2.3.0
 + Added Right-Click Context Menu on Chord Buttons
 + Added "Generate Leading Chords" feature (Right-click > Add ii-V-I)
