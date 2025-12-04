@@ -1,8 +1,9 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.2.2
+-- @version 0.2.3
 -- @changelog:
 --[[     
+    + Increased max font size from 14 to 18 for font settings
     + Real-time refresh for "Current Track FX" and "Current Project FX"
     + Fixed indentation and spacing in folder tree
     + Added depth-based custom colors for folders
@@ -3280,7 +3281,7 @@ function ShowConfigWindow()
             r.ImGui_SetCursorPosX(ctx, column4_width)
             r.ImGui_PushItemWidth(ctx, slider_width)
             if r.ImGui_BeginCombo(ctx, "##FontSize", tostring(config.font_size)) then
-                for size = 9, 14 do
+                for size = 9, 18 do
                     local is_selected = (config.font_size == size)
                     if r.ImGui_Selectable(ctx, tostring(size), is_selected) then
                         config.font_size = size
@@ -3305,7 +3306,7 @@ function ShowConfigWindow()
                 r.ImGui_SetCursorPosX(ctx, column4_width)
                 r.ImGui_PushItemWidth(ctx, slider_width)
                 if r.ImGui_BeginCombo(ctx, "##CustomFolderSize", tostring(config.custom_folder_font_size)) then
-                    for size = 9, 14 do
+                    for size = 9, 18 do
                         local is_selected = (config.custom_folder_font_size == size)
                         if r.ImGui_Selectable(ctx, tostring(size), is_selected) then
                             config.custom_folder_font_size = size
