@@ -1,14 +1,14 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.3.0
 -- @changelog 
 --[[
-+ Added Track Icon support
-+ Icon browser for REAPER icons and custom images
-+ Icons can be assigned per track with configurable size, opacity, and position
++ Binary search optimization for visible tracks (significant performance improvement for large projects)
++ Improved pinned tracks detection stability
++ Fixed pinned tracks overlay issues with master track
 ]]--
 
-local SCRIPT_VERSION = "1.2.0"
+local SCRIPT_VERSION = "1.3.0"
 
 local r                  = reaper
 -- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
@@ -86,6 +86,65 @@ local function DrawOverArrange(force_update)
     end
     r.ImGui_SetNextWindowPos(ctx, LEFT, TOP)
     r.ImGui_SetNextWindowSize(ctx, (RIGHT - LEFT) - scroll_size, (BOT - TOP) - scroll_size)
+end
+
+local function GetArrangeViewBounds()
+    local _, scroll_y = r.JS_Window_GetScrollInfo(arrange, "v")
+    local _, _, _, _, view_height = r.JS_Window_GetClientRect(arrange)
+    return scroll_y, view_height
+end
+
+local function FindFirstVisibleTrack(track_count, view_top, view_bottom)
+    if track_count == 0 then return -1 end
+    
+    local low, high = 0, track_count - 1
+    local result = -1
+    
+    while low <= high do
+        local mid = math.floor((low + high) / 2)
+        local track = r.GetTrack(0, mid)
+        local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
+        local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+        local track_bottom = track_y + track_height
+        
+        if track_bottom >= 0 and track_y < view_bottom then
+            result = mid
+            high = mid - 1
+        elseif track_bottom < 0 then
+            low = mid + 1
+        else
+            high = mid - 1
+        end
+    end
+    
+    if result > 0 then result = result - 1 end
+    
+    return result
+end
+
+local function FindLastVisibleTrack(track_count, view_top, view_bottom)
+    if track_count == 0 then return -1 end
+    
+    local low, high = 0, track_count - 1
+    local result = -1
+    
+    while low <= high do
+        local mid = math.floor((low + high) / 2)
+        local track = r.GetTrack(0, mid)
+        local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
+        local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+        
+        if track_y <= view_bottom then
+            result = mid
+            low = mid + 1
+        else
+            high = mid - 1
+        end
+    end
+    
+    if result >= 0 and result < track_count - 1 then result = result + 1 end
+    
+    return result
 end
 
 local function ensureOverlayBehindWindows()
@@ -2204,31 +2263,40 @@ function loop()
         end
 
         local pinned_override = r.GetToggleCommandState(42595) == 1
+        
+        local _, view_height = GetArrangeViewBounds()
+        local view_bottom = view_height / screen_scale
+        local first_visible_idx = FindFirstVisibleTrack(track_count, 0, view_bottom)
+        local last_visible_idx = FindLastVisibleTrack(track_count, 0, view_bottom)
+        if first_visible_idx < 0 then first_visible_idx = 0 end
+        if last_visible_idx < 0 then last_visible_idx = track_count - 1 end
 
-        for pass = 1, 2 do
-            local pinned_tracks_height = 0  
-            local pinned_status = {}  
+        local pinned_tracks_height = 0  
+        local pinned_status = {}  
+        
+        for i = 0, track_count - 1 do
+            pinned_status[i] = false
+        end
+        
+        pinned_status[-1] = false  
+        if not pinned_override then
+            local master_track = r.GetMasterTrack(0)
+            local master_visible = r.GetMasterTrackVisibility() & (1<<0) ~= 0
             
-            pinned_status[-1] = false  
-            if not pinned_override then
-                local master_track = r.GetMasterTrack(0)
-                -- Thanks to Olshalom for the correct visibility check using bit mask
-                local master_visible = r.GetMasterTrackVisibility() & (1<<0) ~= 0
+            if master_visible then
+                local master_y = r.GetMediaTrackInfo_Value(master_track, "I_TCPY") / screen_scale
+                local master_height = r.GetMediaTrackInfo_Value(master_track, "I_WNDH") / screen_scale
                 
-                if master_visible then
-                    local master_y = r.GetMediaTrackInfo_Value(master_track, "I_TCPY") / screen_scale
-                    local master_height = r.GetMediaTrackInfo_Value(master_track, "I_WNDH") / screen_scale
-                    
-                    if math.abs(master_y - 0) < 1 then
-                        pinned_status[-1] = true
-                        pinned_tracks_height = pinned_tracks_height + master_height
-                    end
+                if math.abs(master_y) < 1 then
+                    pinned_status[-1] = true
+                    pinned_tracks_height = master_height
                 end
-                
-                -- Build a list of all tracks with their positions
-                local all_tracks = {}
-                for i = 0, track_count - 1 do
-                    local track = r.GetTrack(0, i)
+            end
+            
+            local all_tracks = {}
+            for i = 0, track_count - 1 do
+                local track = r.GetTrack(0, i)
+                if track then
                     local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
                     local track_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
                     all_tracks[#all_tracks + 1] = {
@@ -2238,32 +2306,27 @@ function loop()
                         bottom = track_y + track_height
                     }
                 end
-                
-                -- Sort tracks by Y position
-                table.sort(all_tracks, function(a, b) return a.y < b.y end)
-                
-                -- Detect pinned tracks based on continuous positioning from the top
-                local expected_y = pinned_tracks_height
-                for _, track_info in ipairs(all_tracks) do
-                    local gap = track_info.y - expected_y
-                    if gap >= 0 and gap < 5 then
-                        -- This track is pinned
-                        pinned_status[track_info.index] = true
-                        expected_y = track_info.bottom
-                    else
-                        -- This track is not pinned (there's a gap)
-                        pinned_status[track_info.index] = false
-                    end
-                end
-                
-                -- Calculate final pinned height
-                pinned_tracks_height = expected_y
-                
-                if pinned_tracks_height > 0 then
-                    pinned_tracks_height = pinned_tracks_height + 2
+            end
+            
+            table.sort(all_tracks, function(a, b) return a.y < b.y end)
+            
+            local expected_y = pinned_tracks_height
+            for _, track_info in ipairs(all_tracks) do
+                local gap = track_info.y - expected_y
+                if gap >= -3 and gap < 10 then
+                    pinned_status[track_info.index] = true
+                    expected_y = track_info.bottom
                 end
             end
             
+            pinned_tracks_height = expected_y
+            
+            if pinned_tracks_height > 0 then
+                pinned_tracks_height = pinned_tracks_height + 8
+            end
+        end
+
+        for pass = 1, 2 do
             local current_height = 0  
             
             do
@@ -2280,7 +2343,6 @@ function loop()
                 end
                 
                 if (pass == 1 and not is_pinned) or (pass == 2 and is_pinned) then
-                    -- Thanks to Olshalom .... again...hahaha!
                     local master_visible = r.GetMasterTrackVisibility() & (1<<0) ~= 0
                     if master_visible then
                         local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") /screen_scale
@@ -2356,9 +2418,14 @@ function loop()
             end
             
             for i = 0, track_count - 1 do 
+                local is_pinned = pinned_status[i] or false
+                local in_visible_range = (i >= first_visible_idx and i <= last_visible_idx)
+                
+                if not is_pinned and not in_visible_range then
+                    goto continue_track_loop
+                end
                 
                 local track = r.GetTrack(0, i)
-                local is_pinned = pinned_status[i] or false
                 
                 local clip_height_for_this_track = current_height
                 
@@ -2808,7 +2875,8 @@ function loop()
                         end
                     end
                 end 
-            end 
+                end 
+            ::continue_track_loop::
             end 
         end 
         
