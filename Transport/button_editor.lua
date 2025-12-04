@@ -60,6 +60,128 @@ local style_settings_window = {
     title = "Copy Style Settings"
 }
 
+local action_finder = {
+    open = false,
+    search_text = "",
+    results = {},
+    selected_index = -1,
+    target_button = nil,
+    cache = nil,
+    cache_time = 0
+}
+
+local function BuildActionCache()
+    if not r.CF_EnumerateActions then
+        return nil
+    end
+    
+    local cache = {main = {}, midi = {}}
+    
+    local idx = 0
+    while true do
+        local cmd_id = r.CF_EnumerateActions(0, idx, "")
+        if cmd_id == 0 then break end
+        local cmd_name = r.CF_GetCommandText(0, cmd_id)
+        if cmd_name and cmd_name ~= "" then
+            local cmd_str = tostring(cmd_id)
+            if cmd_id >= 65536 then
+                cmd_str = "_" .. r.ReverseNamedCommandLookup(cmd_id)
+            end
+            table.insert(cache.main, {
+                name = cmd_name,
+                id = cmd_id,
+                cmd = cmd_str
+            })
+        end
+        idx = idx + 1
+    end
+    
+    idx = 0
+    while true do
+        local cmd_id = r.CF_EnumerateActions(32060, idx, "")
+        if cmd_id == 0 then break end
+        local cmd_name = r.CF_GetCommandText(32060, cmd_id)
+        if cmd_name and cmd_name ~= "" then
+            local cmd_str = tostring(cmd_id)
+            if cmd_id >= 65536 then
+                cmd_str = "_" .. r.ReverseNamedCommandLookup(cmd_id)
+            end
+            table.insert(cache.midi, {
+                name = cmd_name,
+                id = cmd_id,
+                cmd = cmd_str
+            })
+        end
+        idx = idx + 1
+    end
+    
+    return cache
+end
+
+local function SearchActions(search_text, max_results)
+    max_results = max_results or 50
+    
+    if not action_finder.cache then
+        action_finder.cache = BuildActionCache()
+    end
+    
+    if not action_finder.cache then
+        return {}
+    end
+    
+    local results = {}
+    local search_normalized = search_text:lower():gsub("[%s_%-%.]+", " ")
+    
+    local function normalize(str)
+        return str:lower():gsub("[%s_%-%.]+", " ")
+    end
+    
+    local function fuzzy_match(name, search)
+        local name_norm = normalize(name)
+        if name_norm:find(search, 1, true) then
+            return true
+        end
+        local search_words = {}
+        for word in search:gmatch("%S+") do
+            table.insert(search_words, word)
+        end
+        for _, word in ipairs(search_words) do
+            if not name_norm:find(word, 1, true) then
+                return false
+            end
+        end
+        return #search_words > 0
+    end
+    
+    for _, action in ipairs(action_finder.cache.main) do
+        if fuzzy_match(action.name, search_normalized) then
+            table.insert(results, {
+                name = action.name,
+                cmd = action.cmd,
+                section = 0,
+                section_name = "Main"
+            })
+            if #results >= max_results then break end
+        end
+    end
+    
+    if #results < max_results then
+        for _, action in ipairs(action_finder.cache.midi) do
+            if fuzzy_match(action.name, search_normalized) then
+                table.insert(results, {
+                    name = action.name,
+                    cmd = action.cmd,
+                    section = 1,
+                    section_name = "MIDI"
+                })
+                if #results >= max_results then break end
+            end
+        end
+    end
+    
+    return results
+end
+
 -- Auto align spacing setting
 local auto_align_spacing = 3  -- default 3px
 
@@ -697,6 +819,27 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             if rvn and has_sel then
                 custom_buttons.buttons[custom_buttons.current_edit].name = newname
                 custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+            end
+            
+            r.ImGui_SameLine(ctx)
+            if has_sel then
+                if r.ImGui_Button(ctx, "Find##action_finder", 35, 0) then
+                    action_finder.open = true
+                    action_finder.target_button = custom_buttons.current_edit
+                    action_finder.search_text = current_name
+                    action_finder.results = {}
+                    action_finder.selected_index = -1
+                    if action_finder.search_text ~= "" then
+                        action_finder.results = SearchActions(action_finder.search_text)
+                    end
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Find action by name and auto-fill Action ID\n(SWS Extension required)")
+                end
+            else
+                r.ImGui_BeginDisabled(ctx)
+                r.ImGui_Button(ctx, "Find##action_finder_disabled", 35, 0)
+                r.ImGui_EndDisabled(ctx)
             end
             
             r.ImGui_SameLine(ctx)
@@ -3160,6 +3303,107 @@ end
 -- Handle Style Settings Window
 function ButtonEditor.HandleStyleSettingsWindow(ctx)
     ShowStyleSettingsWindow(ctx)
+end
+
+function ButtonEditor.RenderActionFinder(ctx, custom_buttons)
+    if not action_finder.open then return end
+    
+    if not r.CF_EnumerateActions then
+        r.MB("Action Finder requires SWS Extension.\n\nPlease install SWS from:\nhttps://www.sws-extension.org/", "SWS Required", 0)
+        action_finder.open = false
+        return
+    end
+    
+    local window_flags = r.ImGui_WindowFlags_NoCollapse()
+    r.ImGui_SetNextWindowSize(ctx, 500, 400, r.ImGui_Cond_FirstUseEver())
+    
+    local visible, open = r.ImGui_Begin(ctx, "Action Finder##action_finder_window", true, window_flags)
+    if visible then
+        r.ImGui_Text(ctx, "Search for actions:")
+        r.ImGui_SameLine(ctx)
+        
+        r.ImGui_SetNextItemWidth(ctx, -1)
+        local rv_search, new_search = r.ImGui_InputText(ctx, "##action_finder_search", action_finder.search_text)
+        if rv_search then
+            action_finder.search_text = new_search
+            if new_search ~= "" and #new_search >= 2 then
+                action_finder.results = SearchActions(new_search)
+            else
+                action_finder.results = {}
+            end
+            action_finder.selected_index = -1
+        end
+        
+        r.ImGui_Separator(ctx)
+        
+        if #action_finder.results == 0 and action_finder.search_text ~= "" and #action_finder.search_text >= 2 then
+            r.ImGui_TextColored(ctx, 0xFFAA00FF, "No actions found matching '" .. action_finder.search_text .. "'")
+        elseif #action_finder.results > 0 then
+            r.ImGui_Text(ctx, "Found " .. #action_finder.results .. " actions (click to select):")
+            r.ImGui_Spacing(ctx)
+            
+            local child_height = r.ImGui_GetContentRegionAvail(ctx) - 35
+            if r.ImGui_BeginChild(ctx, "##action_results_list", 0, child_height, 1) then
+                for i, result in ipairs(action_finder.results) do
+                    local is_selected = (action_finder.selected_index == i)
+                    local label = string.format("[%s] %s", result.section_name, result.name)
+                    
+                    if r.ImGui_Selectable(ctx, label .. "##action_" .. i, is_selected, r.ImGui_SelectableFlags_AllowDoubleClick()) then
+                        action_finder.selected_index = i
+                        
+                        if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                            if action_finder.target_button and custom_buttons.buttons[action_finder.target_button] then
+                                local btn = custom_buttons.buttons[action_finder.target_button]
+                                btn.left_click = btn.left_click or {}
+                                btn.left_click.name = result.name
+                                btn.left_click.command = result.cmd
+                                btn.left_click.type = result.section
+                                custom_buttons.SaveCurrentButtons()
+                                has_unsaved_changes = true
+                            end
+                            action_finder.open = false
+                        end
+                    end
+                    
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "ID: " .. result.cmd .. "\nSection: " .. result.section_name .. "\n\nDouble-click to apply")
+                    end
+                end
+                r.ImGui_EndChild(ctx)
+            end
+        else
+            r.ImGui_TextColored(ctx, 0x888888FF, "Type at least 2 characters to search...")
+        end
+        
+        r.ImGui_Separator(ctx)
+        
+        local selected_result = action_finder.results[action_finder.selected_index]
+        if selected_result then
+            if r.ImGui_Button(ctx, "Apply Selected", 100, 0) then
+                if action_finder.target_button and custom_buttons.buttons[action_finder.target_button] then
+                    local btn = custom_buttons.buttons[action_finder.target_button]
+                    btn.left_click = btn.left_click or {}
+                    btn.left_click.name = selected_result.name
+                    btn.left_click.command = selected_result.cmd
+                    btn.left_click.type = selected_result.section
+                    custom_buttons.SaveCurrentButtons()
+                    has_unsaved_changes = true
+                end
+                action_finder.open = false
+            end
+            r.ImGui_SameLine(ctx)
+        end
+        
+        if r.ImGui_Button(ctx, "Cancel", 80, 0) then
+            action_finder.open = false
+        end
+        
+        r.ImGui_End(ctx)
+    end
+    
+    if not open then
+        action_finder.open = false
+    end
 end
 
 ButtonEditor.cb_section_states = cb_section_states

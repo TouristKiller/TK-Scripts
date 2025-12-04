@@ -1,6 +1,6 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.4.2
+-- @version 1.4.3
 -- @changelog 
 --[[
 
@@ -9,7 +9,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
-local script_version = "unknown"
+local script_version = "1.4.2"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -11627,6 +11627,7 @@ function Main()
  if CustomButtons then
      ButtonEditor.HandleIconBrowser(ctx, CustomButtons, settings)
      ButtonEditor.HandleStyleSettingsWindow(ctx)
+     ButtonEditor.RenderActionFinder(ctx, CustomButtons)
  end
 
  if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem())
