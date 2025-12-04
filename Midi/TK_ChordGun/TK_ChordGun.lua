@@ -1,6 +1,6 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.5
+-- @version 2.3.6
 -- @changelog
 --[[
 2.3.5
@@ -905,6 +905,10 @@ function loadChordMapPreset(name)
     midiTriggerMappings = {}
     midiTriggerColumnMappings = {}
     local section = ""
+    local hasChordMappings = false
+    local hasColumnMappings = false
+    local explicitMode = nil
+    
     for line in file:lines() do
       if line == "[MODE]" then
         section = "mode"
@@ -913,25 +917,37 @@ function loadChordMapPreset(name)
       elseif line == "[COLUMNS]" then
         section = "columns"
       elseif section == "mode" then
-        midiTriggerMode = tonumber(line) or 1
+        explicitMode = tonumber(line)
       elseif section == "chords" then
         local note, s, c = line:match("(%d+),(%d+),(%d+)")
         if note and s and c then
           midiTriggerMappings[tonumber(note)] = {scaleNoteIndex = tonumber(s), chordTypeIndex = tonumber(c)}
+          hasChordMappings = true
         end
       elseif section == "columns" then
         local note, col = line:match("(%d+),(%d+)")
         if note and col then
           midiTriggerColumnMappings[tonumber(note)] = tonumber(col)
+          hasColumnMappings = true
         end
       else
         local note, s, c = line:match("(%d+),(%d+),(%d+)")
         if note and s and c then
           midiTriggerMappings[tonumber(note)] = {scaleNoteIndex = tonumber(s), chordTypeIndex = tonumber(c)}
+          hasChordMappings = true
         end
       end
     end
     file:close()
+    
+    if explicitMode then
+      midiTriggerMode = explicitMode
+    elseif hasColumnMappings and not hasChordMappings then
+      midiTriggerMode = 2
+    elseif hasChordMappings and not hasColumnMappings then
+      midiTriggerMode = 1
+    end
+    
     saveMidiTriggerMappings()
     updateScaleFilterState()
     currentTriggerPreset = name
