@@ -514,7 +514,7 @@
     </reapack>
 
     <reapack name="TK_Find Similar MIDI Items.lua" type="script" desc="TK Find Similar MIDI Items - Find matching MIDI patterns">
-      <version name="1.6" author="TouristKiller" time="2025-12-02T13:40:00Z">
+      <version name="1.7" author="TouristKiller" time="2025-12-04T20:00:00Z">
         <changelog><![CDATA[
     + Initial release
     + Find MIDI items similar to reference item
@@ -542,8 +542,16 @@
     + Workflow: Single-click details for single matches, auto-reselect reference after replace
     + Fix: "Replace Phrase" now correctly handles time selections with leading silence
     + Fix: Multi-match items now sort based on their best match
+    + Added Track Selector popup - easily select which tracks to search
+    + Track selector shows track number, name and color
+    + Search/filter tracks by name in the popup
+    + Select All / Deselect All / Invert buttons for quick selection
+    + Only tracks containing MIDI items are shown
+    + Added progress indicator during analysis - UI no longer freezes
+    + Added "Lock" checkbox in Track Batch mode to lock the reference track
         ]]></changelog>
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_Find%20Similar%20MIDI%20Items.lua</source>
+        <source file="TK_Find Similar MIDI Items (CORE).lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_Find%20Similar%20MIDI%20Items%20(CORE).lua</source>
       </version>
     </reapack>
  </category>

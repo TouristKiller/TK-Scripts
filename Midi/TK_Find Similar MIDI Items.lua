@@ -1,34 +1,57 @@
 -- @description TK Find Similar MIDI Items
 -- @author TouristKiller
--- @version 1.6
+-- @version 1.7
 -- @changelog:
 --[[     
-    + Initial release
-    + Find MIDI items similar to reference item
-    + Percentage-based similarity threshold
-    + Overlay comparison with detailed statistics
-    + Color coding by similarity percentage
-    + Select, color, and delete similar items
+    v1.7:
+    + Added Track Selector popup - easily select which tracks to search
+    + Track selector shows track number, name and color
+    + Search/filter tracks by name in the popup
+    + Select All / Deselect All / Invert buttons for quick selection
+    + Only tracks containing MIDI items are shown
+    + Added progress indicator during analysis - UI no longer freezes
+    + Analysis runs in steps allowing real-time progress feedback
+    + Added "Lock" checkbox in Track Batch mode to lock the reference track
+    
+    v1.6:
+    + Fix: "Replace Phrase" now correctly handles time selections with leading silence
+    + Fix: Multi-match items now sort based on their best match
+    
+    v1.5:
+    + UI Overhaul: Compact layout, collapsible settings, improved button organization
+    + Improved Sorting: Fixed sorting for items with identical similarity scores (Track # priority)
+    + Workflow: Single-click details for single matches, auto-reselect reference after replace
+    
+    v1.4:
+    + Added Track Batch Mode: Select a track (without selecting items) to scan all items on that track
+    + Results are now grouped by Reference Item in Batch Mode
+    + Matches are now grouped by source track when copying
+    
+    v1.3:
+    + Added "Max Similarity" threshold
+    + Added global settings persistence (Save/Load options)
+    + Added "Show Reference" button
+    + Improved UI with tooltips and collapsible options
+    
+    v1.2:
+    + Added Note Range Filter (ignore keyswitches)
+    + Added "Pin to Top" option for created tracks
+    
+    v1.1:
     + Added pattern matching with offset detection
     + Can now find similar patterns even if notes are shifted in time
     + Added segment matching - find partial matches within larger items
     + Search modes: Full Item / Segment (find reference pattern in larger items)
     + Added Time Selection mode - use time selection within item as search pattern
     + Fixed segment matching - extra notes in matched section now reduce similarity score
-    + Added Note Range Filter (ignore keyswitches)
-    + Added "Pin to Top" option for created tracks
-    + Added "Max Similarity" threshold
-    + Added global settings persistence (Save/Load options)
-    + Added "Show Reference" button
-    + Improved UI with tooltips and collapsible options
-    + Matches are now grouped by source track when copying
-    + Added Track Batch Mode: Select a track (without selecting items) to scan all items on that track
-    + Results are now grouped by Reference Item in Batch Mode
-    + UI Overhaul: Compact layout, collapsible settings, improved button organization
-    + Improved Sorting: Fixed sorting for items with identical similarity scores (Track # priority)
-    + Workflow: Single-click details for single matches, auto-reselect reference after replace
-    + Fix: "Replace Phrase" now correctly handles time selections with leading silence
-    + Fix: Multi-match items now sort based on their best match
+    
+    v1.0:
+    + Initial release
+    + Find MIDI items similar to reference item
+    + Percentage-based similarity threshold
+    + Overlay comparison with detailed statistics
+    + Color coding by similarity percentage
+    + Select, color, and delete similar items
 ]]--
 
 local r = reaper
@@ -67,6 +90,19 @@ local filter_min_pitch = 0
 local filter_max_pitch = 127
 local save_settings = true
 local show_settings = true
+local locked_ref_track = nil
+local lock_ref_track = false
+
+local show_track_selector = false
+local track_filter_text = ""
+local selected_search_tracks = {}
+local use_track_filter = false
+
+local is_analyzing = false
+local analyze_progress = 0
+local analyze_total = 0
+local analyze_status = ""
+local analyze_state = nil
 
 local EXT_SECTION = "TK_FindSimilarMIDIItems"
 
@@ -541,7 +577,11 @@ local function GetTimeSelection(item)
     return rel_start, rel_end, true
 end
 
-local function AnalyzeItems()
+local AnalyzeStep
+
+local function StartAnalysis()
+    if is_analyzing then return end
+    
     if colors_applied then
         ClearColors()
     end
@@ -552,7 +592,7 @@ local function AnalyzeItems()
     
     local track_mode_items = {}
     
-    if reference_mode == 0 then -- Single Item Mode
+    if reference_mode == 0 then
         local ref_item = GetSelectedMIDIItem()
         if not ref_item then
             r.ShowMessageBox("Please select a MIDI item as reference.", "No Item Selected", 0)
@@ -560,8 +600,13 @@ local function AnalyzeItems()
         end
         table.insert(track_mode_items, ref_item)
         is_batch_mode = false
-    else -- Track Batch Mode
-        local track = r.GetSelectedTrack(0, 0)
+    else
+        local track = nil
+        if lock_ref_track and locked_ref_track and r.ValidatePtr2(0, locked_ref_track, "MediaTrack*") then
+            track = locked_ref_track
+        else
+            track = r.GetSelectedTrack(0, 0)
+        end
         if not track then
              r.ShowMessageBox("Please select a Track to scan all items.", "No Track Selected", 0)
              return
@@ -583,195 +628,307 @@ local function AnalyzeItems()
         is_batch_mode = true
     end
 
-    if is_batch_mode then
-        local total_items = r.CountMediaItems(0)
-        local comparisons = #track_mode_items * total_items
-        if comparisons > 2500 then
-            local ret = r.ShowMessageBox(
-                string.format("This will perform approx %d comparisons.\nReaper might freeze for a moment.\n\nContinue?", comparisons),
-                "Heavy Operation Warning",
-                4
-            )
-            if ret ~= 6 then return end
+    local selected_tracks = {}
+    if use_track_filter then
+        for guid, _ in pairs(selected_search_tracks) do
+            local num_tracks = r.CountTracks(0)
+            for i = 0, num_tracks - 1 do
+                local tr = r.GetTrack(0, i)
+                if r.GetTrackGUID(tr) == guid then
+                    selected_tracks[tr] = true
+                    break
+                end
+            end
+        end
+        local count = 0
+        for _ in pairs(selected_tracks) do count = count + 1 end
+        if count == 0 then
+            r.ShowMessageBox("Track filter is enabled but no tracks are selected.\n\nPlease open the Track Selector and select at least one track.", "No Tracks Selected", 0)
+            return
         end
     end
 
-    local processed_guids = {} -- Keep track of items already processed as reference or matched
+    local all_compare_items = {}
+    local num_items = r.CountMediaItems(0)
+    for i = 0, num_items - 1 do
+        local item = r.GetMediaItem(0, i)
+        local take = r.GetActiveTake(item)
+        if take and r.TakeIsMIDI(take) then
+            table.insert(all_compare_items, item)
+        end
+    end
 
-    for _, current_ref_item in ipairs(track_mode_items) do
-        local current_ref_guid = r.BR_GetMediaItemGUID(current_ref_item)
-        
-        -- Skip if this item was already processed (either as a previous reference or as a match of a previous reference)
-        if not processed_guids[current_ref_guid] then
-            local current_ref_take = r.GetActiveTake(current_ref_item)
-            local current_ref_notes_local, current_ref_length_local, current_ref_first_note_time
-            
-            if is_batch_mode then
-                current_ref_notes_local, current_ref_length_local, current_ref_first_note_time = ExtractMIDINotes(current_ref_take)
-            else
-                time_sel_valid = false
-                if search_mode == 2 then
-                    local ts_start, ts_end, valid = GetTimeSelection(current_ref_item)
-                    if not valid then
-                        r.ShowMessageBox("Please make a time selection within the selected MIDI item.", "No Time Selection", 0)
-                        return
-                    end
-                    time_sel_start = ts_start
-                    time_sel_end = ts_end
-                    time_sel_valid = true
-                    current_ref_notes_local, current_ref_length_local, current_ref_first_note_time = ExtractMIDINotes(current_ref_take, ts_start, ts_end)
-                else
-                    current_ref_notes_local, current_ref_length_local, current_ref_first_note_time = ExtractMIDINotes(current_ref_take)
-                end
+    analyze_state = {
+        track_mode_items = track_mode_items,
+        selected_tracks = selected_tracks,
+        use_track_filter = use_track_filter,
+        all_compare_items = all_compare_items,
+        processed_guids = {},
+        ref_index = 1,
+        compare_index = 1,
+        current_ref_item = nil,
+        current_ref_guid = nil,
+        current_ref_notes = nil,
+        current_ref_length = nil,
+        current_ref_first_note_time = nil,
+        group_results = {},
+        phase = "ref_setup"
+    }
+    
+    analyze_total = #track_mode_items * #all_compare_items
+    analyze_progress = 0
+    analyze_status = "Starting..."
+    is_analyzing = true
+    
+    r.defer(AnalyzeStep)
+end
+
+AnalyzeStep = function()
+    if not is_analyzing or not analyze_state then
+        is_analyzing = false
+        analyze_state = nil
+        return
+    end
+    
+    local state = analyze_state
+    local items_per_step = 20
+    local processed_this_step = 0
+    
+    while processed_this_step < items_per_step do
+        if state.phase == "ref_setup" then
+            if state.ref_index > #state.track_mode_items then
+                state.phase = "done"
+                break
             end
-
-            if current_ref_notes_local and #current_ref_notes_local > 0 then
-                if not is_batch_mode then
-                    reference_item = current_ref_item
-                    reference_guid = current_ref_guid
-                    current_ref_notes = current_ref_notes_local
-                    current_ref_length = current_ref_length_local
+            
+            state.current_ref_item = state.track_mode_items[state.ref_index]
+            state.current_ref_guid = r.BR_GetMediaItemGUID(state.current_ref_item)
+            
+            if state.processed_guids[state.current_ref_guid] then
+                state.ref_index = state.ref_index + 1
+                processed_this_step = processed_this_step + 1
+            else
+                local current_ref_take = r.GetActiveTake(state.current_ref_item)
+                
+                if is_batch_mode then
+                    state.current_ref_notes, state.current_ref_length, state.current_ref_first_note_time = ExtractMIDINotes(current_ref_take)
+                else
+                    time_sel_valid = false
+                    if search_mode == 2 then
+                        local ts_start, ts_end, valid = GetTimeSelection(state.current_ref_item)
+                        if not valid then
+                            r.ShowMessageBox("Please make a time selection within the selected MIDI item.", "No Time Selection", 0)
+                            is_analyzing = false
+                            analyze_state = nil
+                            analyze_status = ""
+                            return
+                        end
+                        time_sel_start = ts_start
+                        time_sel_end = ts_end
+                        time_sel_valid = true
+                        state.current_ref_notes, state.current_ref_length, state.current_ref_first_note_time = ExtractMIDINotes(current_ref_take, ts_start, ts_end)
+                    else
+                        state.current_ref_notes, state.current_ref_length, state.current_ref_first_note_time = ExtractMIDINotes(current_ref_take)
+                    end
                 end
 
-                local group_results = {}
-                local num_items = r.CountMediaItems(0)
+                if state.current_ref_notes and #state.current_ref_notes > 0 then
+                    if not is_batch_mode then
+                        reference_item = state.current_ref_item
+                        reference_guid = state.current_ref_guid
+                        current_ref_notes = state.current_ref_notes
+                        current_ref_length = state.current_ref_length
+                    end
+                    
+                    state.group_results = {}
+                    state.compare_index = 1
+                    state.phase = "comparing"
+                else
+                    state.ref_index = state.ref_index + 1
+                end
+                processed_this_step = processed_this_step + 1
+            end
+            
+        elseif state.phase == "comparing" then
+            if state.compare_index > #state.all_compare_items then
+                state.phase = "finalize_group"
+            else
+                local item = state.all_compare_items[state.compare_index]
+                local item_guid = r.BR_GetMediaItemGUID(item)
+                local is_ref_item = (item_guid == state.current_ref_guid)
                 
                 local effective_mode = search_mode
                 if is_batch_mode and search_mode == 2 then
                     effective_mode = 0 
                 end
                 
-                for i = 0, num_items - 1 do
-                    local item = r.GetMediaItem(0, i)
-                    local item_guid = r.BR_GetMediaItemGUID(item)
-                    local is_ref_item = (item_guid == current_ref_guid)
+                if not is_ref_item or (search_mode == 1 or search_mode == 2) then
+                    local process_item = true
+                    local target_track = r.GetMediaItem_Track(item)
                     
-                    if not is_ref_item or (search_mode == 1 or search_mode == 2) then
-                        local process_item = true
-                        
-                        if is_batch_mode then
-                            local target_track = r.GetMediaItem_Track(item)
-                            local ref_track = r.GetMediaItem_Track(current_ref_item)
-                            if target_track == ref_track then
-                                process_item = false
-                            end
+                    if state.use_track_filter then
+                        if not state.selected_tracks[target_track] then
+                            process_item = false
                         end
-                        
-                        if process_item then
-                            local take = r.GetActiveTake(item)
-                            if take and r.TakeIsMIDI(take) then
-                                local notes, item_length = ExtractMIDINotes(take)
-                                if notes then
-                                    local matches = CalculateSimilarity(current_ref_notes_local, notes, current_ref_length_local, item_length, effective_mode)
-                                    
-                                    -- Filter out self-reference matches
-                                    if is_ref_item and #matches > 0 then
-                                        local filtered_matches = {}
-                                        for _, m in ipairs(matches) do
-                                            local is_self = false
-                                            if search_mode == 2 then
-                                                if math.abs(m.segment_start - time_sel_start) < 0.001 then is_self = true end
-                                            elseif search_mode == 1 then
-                                                if math.abs(m.segment_start) < 0.001 then is_self = true end
+                    end
+                    
+                    if is_batch_mode and process_item then
+                        local ref_track = r.GetMediaItem_Track(state.current_ref_item)
+                        if target_track == ref_track then
+                            process_item = false
+                        end
+                    end
+                    
+                    if process_item then
+                        local take = r.GetActiveTake(item)
+                        if take and r.TakeIsMIDI(take) then
+                            local notes, item_length = ExtractMIDINotes(take)
+                            if notes then
+                                local matches = CalculateSimilarity(state.current_ref_notes, notes, state.current_ref_length, item_length, effective_mode)
+                                
+                                if is_ref_item and #matches > 0 then
+                                    local filtered_matches = {}
+                                    for _, m in ipairs(matches) do
+                                        local is_self = false
+                                        local match_start = m.segment_start or 0
+                                        local tolerance = 0.05
+                                        
+                                        if effective_mode == 0 then
+                                            is_self = true
+                                        elseif search_mode == 2 and time_sel_valid then
+                                            local ref_first_note = state.current_ref_first_note_time or time_sel_start
+                                            if math.abs(match_start - ref_first_note) < tolerance then
+                                                is_self = true
                                             end
-                                            
-                                            if not is_self then
-                                                table.insert(filtered_matches, m)
+                                        elseif search_mode == 1 then
+                                            local ref_first_note = state.current_ref_first_note_time or 0
+                                            if math.abs(match_start - ref_first_note) < tolerance then
+                                                is_self = true
                                             end
-                                        end
-                                        matches = filtered_matches
-                                    end
-                                    
-                                    if #matches > 0 then
-                                        -- Calculate true max similarity from all matches in this item
-                                        local best_sim = 0
-                                        for _, m in ipairs(matches) do
-                                            if m.similarity > best_sim then best_sim = m.similarity end
                                         end
                                         
-                                        local pos = r.GetMediaItemInfo_Value(item, "D_POSITION")
-                                        local track = r.GetMediaItem_Track(item)
-                                        local _, track_name = r.GetTrackName(track)
-                                        local track_num = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
-                                        table.insert(group_results, {
-                                            item = item,
-                                            guid = item_guid,
-                                            matches = matches,
-                                            max_similarity = best_sim,
-                                            position = pos,
-                                            track_name = track_name,
-                                            track_num = track_num
-                                        })
+                                        if not is_self then
+                                            table.insert(filtered_matches, m)
+                                        end
                                     end
+                                    matches = filtered_matches
+                                end
+                                
+                                if #matches > 0 then
+                                    local best_sim = 0
+                                    for _, m in ipairs(matches) do
+                                        if m.similarity > best_sim then best_sim = m.similarity end
+                                    end
+                                    
+                                    local pos = r.GetMediaItemInfo_Value(item, "D_POSITION")
+                                    local track = r.GetMediaItem_Track(item)
+                                    local _, track_name = r.GetTrackName(track)
+                                    local track_num = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+                                    table.insert(state.group_results, {
+                                        item = item,
+                                        guid = item_guid,
+                                        matches = matches,
+                                        max_similarity = best_sim,
+                                        position = pos,
+                                        track_name = track_name,
+                                        track_num = track_num
+                                    })
                                 end
                             end
                         end
                     end
                 end
                 
-                table.sort(group_results, function(a, b)
-                    local sim_a = a.max_similarity
-                    local sim_b = b.max_similarity
-                    
-                    -- Force all "basically perfect" matches to be exactly equal
-                    if sim_a > 99.999 then sim_a = 100 end
-                    if sim_b > 99.999 then sim_b = 100 end
-                    
-                    -- Quantize to 4 decimal places
-                    local bin_a = math.floor(sim_a * 10000)
-                    local bin_b = math.floor(sim_b * 10000)
-                    
-                    if bin_a ~= bin_b then
-                        return bin_a > bin_b
-                    end
-                    
-                    -- Priority 2: Track Number (lower is better)
-                    if a.track_num ~= b.track_num then
-                        return a.track_num < b.track_num
-                    end
-                    
-                    -- Priority 3: Position (earlier is better)
-                    return a.position < b.position
-                end)
+                state.compare_index = state.compare_index + 1
+                analyze_progress = ((state.ref_index - 1) * #state.all_compare_items) + state.compare_index
+                processed_this_step = processed_this_step + 1
+            end
+            
+        elseif state.phase == "finalize_group" then
+            table.sort(state.group_results, function(a, b)
+                local sim_a = a.max_similarity
+                local sim_b = b.max_similarity
                 
-                if #group_results > 0 then
-                    local take = r.GetActiveTake(current_ref_item)
-                    local _, take_name = r.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
-                    table.insert(match_groups, {
-                        ref_item = current_ref_item,
-                        ref_guid = current_ref_guid,
-                        ref_name = take_name,
-                        matches = group_results,
-                        ref_notes = current_ref_notes_local,
-                        ref_length = current_ref_length_local,
-                        ref_silence = (current_ref_first_note_time or 0) - (time_sel_start or 0)
-                    })
-                    
-                    -- Mark this reference item as processed
-                    processed_guids[current_ref_guid] = true
-                    
-                    -- Also mark any matches that are on the reference track as processed
-                    -- This prevents using them as a reference source later in the loop
-                    if is_batch_mode then
-                        local ref_track = r.GetMediaItem_Track(current_ref_item)
-                        for _, res in ipairs(group_results) do
-                            local res_item = r.BR_GetMediaItemByGUID(0, res.guid)
-                            if res_item then
-                                local res_track = r.GetMediaItem_Track(res_item)
-                                if res_track == ref_track and res.max_similarity >= 99.0 then
-                                    processed_guids[res.guid] = true
-                                end
+                if sim_a > 99.999 then sim_a = 100 end
+                if sim_b > 99.999 then sim_b = 100 end
+                
+                local bin_a = math.floor(sim_a * 10000)
+                local bin_b = math.floor(sim_b * 10000)
+                
+                if bin_a ~= bin_b then
+                    return bin_a > bin_b
+                end
+                
+                if a.track_num ~= b.track_num then
+                    return a.track_num < b.track_num
+                end
+                
+                return a.position < b.position
+            end)
+            
+            if #state.group_results > 0 then
+                local take = r.GetActiveTake(state.current_ref_item)
+                local _, take_name = r.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                table.insert(match_groups, {
+                    ref_item = state.current_ref_item,
+                    ref_guid = state.current_ref_guid,
+                    ref_name = take_name,
+                    matches = state.group_results,
+                    ref_notes = state.current_ref_notes,
+                    ref_length = state.current_ref_length,
+                    ref_silence = (state.current_ref_first_note_time or 0) - (time_sel_start or 0)
+                })
+                
+                state.processed_guids[state.current_ref_guid] = true
+                
+                if is_batch_mode then
+                    local ref_track = r.GetMediaItem_Track(state.current_ref_item)
+                    for _, res in ipairs(state.group_results) do
+                        local res_item = r.BR_GetMediaItemByGUID(0, res.guid)
+                        if res_item then
+                            local res_track = r.GetMediaItem_Track(res_item)
+                            if res_track == ref_track and res.max_similarity >= 99.0 then
+                                state.processed_guids[res.guid] = true
                             end
                         end
                     end
                 end
             end
+            
+            state.ref_index = state.ref_index + 1
+            state.phase = "ref_setup"
+            processed_this_step = processed_this_step + 1
+            
+        elseif state.phase == "done" then
+            break
         end
     end
-
-    if not is_batch_mode and #match_groups > 0 then
-        results = match_groups[1].matches
+    
+    if state.phase == "done" then
+        if not is_batch_mode and #match_groups > 0 then
+            results = match_groups[1].matches
+        end
+        
+        local total_matches = 0
+        for _, group in ipairs(match_groups) do
+            total_matches = total_matches + #group.matches
+        end
+        
+        analyze_status = string.format("Done! %d matches", total_matches)
+        is_analyzing = false
+        analyze_state = nil
+    else
+        local pct = 0
+        if analyze_total > 0 then
+            pct = math.floor((analyze_progress / analyze_total) * 100)
+        end
+        analyze_status = string.format("Analyzing... %d%%", pct)
+        r.defer(AnalyzeStep)
     end
+end
+
+local function AnalyzeItems()
+    StartAnalysis()
 end
 
 local function SelectSimilar()
@@ -1462,6 +1619,178 @@ local function DrawColorLegend()
     r.ImGui_Text(ctx, "<75%")
 end
 
+local function GetAllTracksWithMIDI()
+    local tracks = {}
+    local num_tracks = r.CountTracks(0)
+    for i = 0, num_tracks - 1 do
+        local track = r.GetTrack(0, i)
+        local has_midi = false
+        local item_count = r.CountTrackMediaItems(track)
+        for j = 0, item_count - 1 do
+            local item = r.GetTrackMediaItem(track, j)
+            local take = r.GetActiveTake(item)
+            if take and r.TakeIsMIDI(take) then
+                has_midi = true
+                break
+            end
+        end
+        if has_midi then
+            local track_num = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+            local _, track_name = r.GetTrackName(track)
+            local track_color = r.GetTrackColor(track)
+            table.insert(tracks, {
+                track = track,
+                num = track_num,
+                name = track_name,
+                color = track_color
+            })
+        end
+    end
+    return tracks
+end
+
+local function DrawTrackSelectorPopup()
+    if not show_track_selector then return end
+    
+    r.ImGui_SetNextWindowSize(ctx, 400, 450, r.ImGui_Cond_FirstUseEver())
+    local visible, open = r.ImGui_Begin(ctx, 'Select Tracks to Search', true, r.ImGui_WindowFlags_None())
+    
+    if visible then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_cyan)
+        r.ImGui_Text(ctx, "Track Selection")
+        r.ImGui_PopStyleColor(ctx, 1)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+        
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
+        r.ImGui_Text(ctx, "Search:")
+        r.ImGui_PopStyleColor(ctx, 1)
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, -1)
+        local changed_filter, new_filter = r.ImGui_InputText(ctx, "##trackfilter", track_filter_text)
+        if changed_filter then
+            track_filter_text = new_filter
+        end
+        
+        r.ImGui_Spacing(ctx)
+        
+        local tracks = GetAllTracksWithMIDI()
+        local filtered_tracks = {}
+        local filter_lower = track_filter_text:lower()
+        
+        for _, t in ipairs(tracks) do
+            if filter_lower == "" or t.name:lower():find(filter_lower, 1, true) then
+                table.insert(filtered_tracks, t)
+            end
+        end
+        
+        if r.ImGui_Button(ctx, "Select All", 90, 0) then
+            for _, t in ipairs(filtered_tracks) do
+                local guid = r.GetTrackGUID(t.track)
+                selected_search_tracks[guid] = true
+            end
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Deselect All", 100, 0) then
+            for _, t in ipairs(filtered_tracks) do
+                local guid = r.GetTrackGUID(t.track)
+                selected_search_tracks[guid] = nil
+            end
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Invert", 70, 0) then
+            for _, t in ipairs(filtered_tracks) do
+                local guid = r.GetTrackGUID(t.track)
+                if selected_search_tracks[guid] then
+                    selected_search_tracks[guid] = nil
+                else
+                    selected_search_tracks[guid] = true
+                end
+            end
+        end
+        
+        r.ImGui_Spacing(ctx)
+        r.ImGui_Separator(ctx)
+        
+        local selected_count = 0
+        for _ in pairs(selected_search_tracks) do
+            selected_count = selected_count + 1
+        end
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_muted)
+        r.ImGui_Text(ctx, string.format("Selected: %d tracks | Showing: %d/%d tracks with MIDI", selected_count, #filtered_tracks, #tracks))
+        r.ImGui_PopStyleColor(ctx, 1)
+        
+        r.ImGui_Separator(ctx)
+        
+        local child_height = r.ImGui_GetContentRegionAvail(ctx) - 35
+        if r.ImGui_BeginChild(ctx, "##tracklist", -1, child_height, 1) then
+            for _, t in ipairs(filtered_tracks) do
+                local guid = r.GetTrackGUID(t.track)
+                local is_selected = selected_search_tracks[guid] == true
+                
+                r.ImGui_PushID(ctx, guid)
+                
+                local draw_list = r.ImGui_GetWindowDrawList(ctx)
+                local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+                
+                if t.color ~= 0 then
+                    local rr = (t.color & 0xFF)
+                    local gg = ((t.color >> 8) & 0xFF)
+                    local bb = ((t.color >> 16) & 0xFF)
+                    local color_hex = (rr << 24) | (gg << 16) | (bb << 8) | 0xFF
+                    r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy + 2, cx + 12, cy + 18, color_hex)
+                else
+                    r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy + 2, cx + 12, cy + 18, 0x666666FF)
+                end
+                
+                r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 18)
+                
+                local changed_cb, new_cb = r.ImGui_Checkbox(ctx, string.format("%02d: %s", t.num, t.name), is_selected)
+                if changed_cb then
+                    if new_cb then
+                        selected_search_tracks[guid] = true
+                    else
+                        selected_search_tracks[guid] = nil
+                    end
+                end
+                
+                r.ImGui_PopID(ctx)
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+        
+        local btn_width = 120
+        local total_width = btn_width * 2 + 10
+        local avail = r.ImGui_GetContentRegionAvail(ctx)
+        r.ImGui_SetCursorPosX(ctx, (avail - total_width) / 2 + r.ImGui_GetCursorPosX(ctx))
+        
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.accent_green)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xAEDE7AFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x8EBE5AFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x000000FF)
+        if r.ImGui_Button(ctx, "Apply", btn_width, 0) then
+            use_track_filter = selected_count > 0
+            show_track_selector = false
+        end
+        r.ImGui_PopStyleColor(ctx, 4)
+        
+        r.ImGui_SameLine(ctx)
+        
+        if r.ImGui_Button(ctx, "Cancel", btn_width, 0) then
+            show_track_selector = false
+        end
+        
+        r.ImGui_End(ctx)
+    end
+    
+    if not open then
+        show_track_selector = false
+    end
+end
+
 local function loop()
     if not font_loaded then
         font = r.ImGui_CreateFont('Consolas', 14)
@@ -1534,6 +1863,8 @@ local function loop()
             local changed_ref, new_ref = r.ImGui_Combo(ctx, '##refmode', reference_mode, "Single Item (Selected)\0Track Batch (Selected Track)\0")
             if changed_ref then
                 reference_mode = new_ref
+                lock_ref_track = false
+                locked_ref_track = nil
             end
 
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
@@ -1594,37 +1925,103 @@ local function loop()
             end
             r.ImGui_PopItemWidth(ctx)
 
+            r.ImGui_Spacing(ctx)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Spacing(ctx)
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_secondary)
+            r.ImGui_Text(ctx, "Track Filter:")
+            r.ImGui_PopStyleColor(ctx, 1)
+            
+            local filter_status = "All tracks"
+            if use_track_filter then
+                local count = 0
+                for _ in pairs(selected_search_tracks) do count = count + 1 end
+                filter_status = string.format("%d tracks selected", count)
+            end
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), use_track_filter and COLORS.accent_green or COLORS.text_muted)
+            r.ImGui_Text(ctx, "(" .. filter_status .. ")")
+            r.ImGui_PopStyleColor(ctx, 1)
+            
+            if r.ImGui_Button(ctx, "Select Tracks...", -1, 0) then
+                show_track_selector = true
+            end
+            DrawTooltip("Open a window to select specific tracks to search.\nOnly tracks with MIDI items are shown.")
+            
+            if use_track_filter then
+                r.ImGui_SameLine(ctx)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.accent_red)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF8899FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xE75668FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+                if r.ImGui_SmallButton(ctx, "Clear") then
+                    use_track_filter = false
+                    selected_search_tracks = {}
+                end
+                r.ImGui_PopStyleColor(ctx, 4)
+                DrawTooltip("Clear track selection filter and search all tracks.")
+            end
+
             r.ImGui_Separator(ctx)
             r.ImGui_Spacing(ctx)
         end
         local ref_text = "No reference selected"
+        local show_lock_checkbox = false
+        local current_batch_track = nil
         if reference_mode == 1 then
-             local track = r.GetSelectedTrack(0, 0)
-             if track then
-                 local _, track_name = r.GetTrackName(track)
-                 ref_text = "Batch Mode: Track '" .. track_name .. "'"
+             if lock_ref_track and locked_ref_track and r.ValidatePtr2(0, locked_ref_track, "MediaTrack*") then
+                 current_batch_track = locked_ref_track
+             else
+                 current_batch_track = r.GetSelectedTrack(0, 0)
+             end
+             if current_batch_track then
+                 local _, track_name = r.GetTrackName(current_batch_track)
+                 ref_text = "Batch: '" .. track_name .. "'"
+                 show_lock_checkbox = true
              else
                  ref_text = "Batch Mode: No track selected"
              end
-        elseif reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
-            local ref_take = r.GetActiveTake(reference_item)
-            if ref_take then
-                local _, take_name = r.GetSetMediaItemTakeInfo_String(ref_take, "P_NAME", "", false)
-                local ref_track = r.GetMediaItem_Track(reference_item)
-                local _, track_name = r.GetTrackName(ref_track)
-                if take_name and take_name ~= "" then
-                    ref_text = "Reference: " .. take_name .. " (" .. track_name .. ")"
-                else
-                    ref_text = "Reference: [unnamed] (" .. track_name .. ")"
-                end
-                if time_sel_valid and search_mode == 2 then
-                    ref_text = ref_text .. string.format(" [%.2fs - %.2fs]", time_sel_start, time_sel_end)
+        else
+            local display_item = reference_item
+            if not display_item or not r.ValidatePtr2(0, display_item, "MediaItem*") then
+                display_item = GetSelectedMIDIItem()
+            end
+            if display_item and r.ValidatePtr2(0, display_item, "MediaItem*") then
+                local ref_take = r.GetActiveTake(display_item)
+                if ref_take then
+                    local _, take_name = r.GetSetMediaItemTakeInfo_String(ref_take, "P_NAME", "", false)
+                    local ref_track = r.GetMediaItem_Track(display_item)
+                    local _, track_name = r.GetTrackName(ref_track)
+                    if take_name and take_name ~= "" then
+                        ref_text = "Reference: " .. take_name .. " (" .. track_name .. ")"
+                    else
+                        ref_text = "Reference: [unnamed] (" .. track_name .. ")"
+                    end
+                    if time_sel_valid and search_mode == 2 then
+                        ref_text = ref_text .. string.format(" [%.2fs - %.2fs]", time_sel_start, time_sel_end)
+                    end
                 end
             end
         end
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_purple)
         r.ImGui_Text(ctx, ref_text)
         r.ImGui_PopStyleColor(ctx, 1)
+        
+        if show_lock_checkbox and current_batch_track then
+            r.ImGui_SameLine(ctx)
+            local changed_lock, new_lock = r.ImGui_Checkbox(ctx, "Lock", lock_ref_track)
+            if changed_lock then
+                lock_ref_track = new_lock
+                if lock_ref_track then
+                    locked_ref_track = current_batch_track
+                else
+                    locked_ref_track = nil
+                end
+            end
+            DrawTooltip("Lock the reference track so you can select other tracks to search without changing the reference.")
+        end
         
         if reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
              r.ImGui_SameLine(ctx)
@@ -1652,12 +2049,34 @@ local function loop()
         end
         r.ImGui_Spacing(ctx)
         local avail_width = r.ImGui_GetContentRegionAvail(ctx)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-        if r.ImGui_Button(ctx, 'Find Similar Items', avail_width, 32) then
-            AnalyzeItems()
+        
+        if is_analyzing then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.text_muted)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), COLORS.text_muted)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), COLORS.text_muted)
+            r.ImGui_Button(ctx, 'Analyzing...', avail_width, 32)
+            r.ImGui_PopStyleColor(ctx, 3)
+            
+            local pct = 0
+            if analyze_total > 0 then
+                pct = analyze_progress / analyze_total
+            end
+            r.ImGui_ProgressBar(ctx, pct, avail_width, 18, analyze_status)
+        else
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+            if r.ImGui_Button(ctx, 'Find Similar Items', avail_width, 32) then
+                AnalyzeItems()
+            end
+            DrawTooltip("Analyze selected items and find matches based on current settings.")
+            r.ImGui_PopStyleColor(ctx, 1)
+            
+            if analyze_status ~= "" then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_green)
+                r.ImGui_Text(ctx, analyze_status)
+                r.ImGui_PopStyleColor(ctx, 1)
+            end
         end
-        DrawTooltip("Analyze selected items and find matches based on current settings.")
-        r.ImGui_PopStyleColor(ctx, 1)
+        
         r.ImGui_Spacing(ctx)
         r.ImGui_Separator(ctx)
         r.ImGui_Spacing(ctx)
@@ -1744,11 +2163,13 @@ local function loop()
                                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_green)
                                         r.ImGui_Text(ctx, string.format("   Exact: %d", stats.exact_matches or 0))
                                         r.ImGui_PopStyleColor(ctx, 1)
+                                        r.ImGui_SameLine(ctx)
                                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_cyan)
-                                        r.ImGui_Text(ctx, string.format("   Good: %d", stats.good_matches or 0))
+                                        r.ImGui_Text(ctx, string.format("  Good: %d", stats.good_matches or 0))
                                         r.ImGui_PopStyleColor(ctx, 1)
+                                        r.ImGui_SameLine(ctx)
                                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_yellow)
-                                        r.ImGui_Text(ctx, string.format("   Partial: %d", stats.partial_matches or 0))
+                                        r.ImGui_Text(ctx, string.format("  Partial: %d", stats.partial_matches or 0))
                                         r.ImGui_PopStyleColor(ctx, 1)
                                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent_red)
                                         r.ImGui_Text(ctx, string.format("   Missing: %d  Extra: %d", stats.missing_notes or 0, stats.extra_notes or 0))
@@ -1911,6 +2332,9 @@ local function loop()
         end
         r.ImGui_End(ctx)
     end
+    
+    DrawTrackSelectorPopup()
+    
     PopTheme()
     if font then
         r.ImGui_PopFont(ctx)
