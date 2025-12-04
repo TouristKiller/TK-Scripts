@@ -1,9 +1,8 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.2.3
+-- @version 0.2.4
 -- @changelog:
 --[[     
-    + Increased max font size from 14 to 18 for font settings
     + Real-time refresh for "Current Track FX" and "Current Project FX"
     + Fixed indentation and spacing in folder tree
     + Added depth-based custom colors for folders
