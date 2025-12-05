@@ -1,9 +1,16 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.6
+-- @version 2.3.7
 -- @changelog
 --[[
-2.3.5
+2.3.7
++ Slot Settings Dropdown: Click [+] button on progression slots to open settings panel
++ Direct arrow controls for Beats, Repeats, Octave, and Inversion
++ Dropdown appears below the slot, over other content
++ Click outside dropdown or [+] again to close
++ Original slot appearance preserved
+
+2.3.6
 + Progression Templates: 70+ preset progressions (Right-click Load button)
 + 10 Genre categories: Pop/Rock, Jazz, Blues, Classical, Modal, Minor Keys, EDM, World/Folk
 + Mode-aware templates: Auto-adapts chord qualities to current scale
@@ -346,7 +353,10 @@ function renderPendingTooltips()
 	end
 end
 
+dropdownBlocksInput = false
+
 function mouseIsHoveringOver(element)
+	if dropdownBlocksInput then return false end
 
 	local x = gfx.mouse_x
 	local y = gfx.mouse_y
@@ -3818,10 +3828,32 @@ function playProgressionChord(index)
   local inversion = chord.inversion
   
   local chordNotesArray = getChordNotesArray(root, chordData, octave, inversion)
+  chordNotesArray = applyArpPattern(chordNotesArray)
   
-
-  for noteIndex = 1, #chordNotesArray do
-    playMidiNote(chordNotesArray[noteIndex])
+  if strumEnabled then
+    local delaySeconds = strumDelayMs / 1000.0
+    for noteIndex = 1, #chordNotesArray do
+      playMidiNote(chordNotesArray[noteIndex])
+      if noteIndex < #chordNotesArray then
+        local startTime = reaper.time_precise()
+        local targetTime = startTime + delaySeconds
+        while reaper.time_precise() < targetTime do end
+      end
+    end
+  elseif arpEnabled then
+    local delaySeconds = arpSpeedMs / 1000.0
+    for noteIndex = 1, #chordNotesArray do
+      playMidiNote(chordNotesArray[noteIndex])
+      if noteIndex < #chordNotesArray then
+        local startTime = reaper.time_precise()
+        local targetTime = startTime + delaySeconds
+        while reaper.time_precise() < targetTime do end
+      end
+    end
+  else
+    for noteIndex = 1, #chordNotesArray do
+      playMidiNote(chordNotesArray[noteIndex])
+    end
   end
   setNotesThatArePlaying(chordNotesArray)
   
@@ -3893,10 +3925,21 @@ function updateProgressionPlayback()
         local octave = chord.octave or getOctave()
         local inversion = chord.inversion
         local newNotes = getChordNotesArray(root, chordData, octave, inversion)
+        newNotes = applyArpPattern(newNotes)
         
 
         if strumEnabled then
           local delaySeconds = strumDelayMs / 1000.0
+          for noteIndex = 1, #newNotes do
+            playMidiNote(newNotes[noteIndex])
+            if noteIndex < #newNotes then
+              local startTime = reaper.time_precise()
+              local targetTime = startTime + delaySeconds
+              while reaper.time_precise() < targetTime do end
+            end
+          end
+        elseif arpEnabled then
+          local delaySeconds = arpSpeedMs / 1000.0
           for noteIndex = 1, #newNotes do
             playMidiNote(newNotes[noteIndex])
             if noteIndex < #newNotes then
@@ -5104,7 +5147,10 @@ local themes = {
         slotBg = "262626",
         slotFilled = "3A6EA5",
         slotFilledText = "FFFFFF",
+        slotSelectedText = "FFFFFF",
         slotFilledInfoText = "D0D0D0",
+        slotSelectedInfoText = "FFFFFF",
+        slotSelectedArrow = "FFFFFF",
         slotPlaying = "336699",
         slotSelected = "4D804D",
         slotHover = "333333",
@@ -5114,6 +5160,11 @@ local themes = {
         slotText = "FFFFFF",
         slotInfoText = "B3B3B3",
         slotEmptyText = "666666",
+        slotArrow = "80B0D0",
+        slotArrowHover = "FFFFFF",
+        slotArrowBg = "2A4A6A",
+        slotArrowBgHover = "3A5A7A",
+        slotValueText = "C0D8E8",
         
         -- Tooltip
         tooltipBg = "1A1A1A",
@@ -5227,7 +5278,10 @@ local themes = {
         slotBg = "E0E0E0",
         slotFilled = "3A6EA5",
         slotFilledText = "FFFFFF",
+        slotSelectedText = "FFFFFF",
         slotFilledInfoText = "D0E8FF",
+        slotSelectedInfoText = "FFFFFF",
+        slotSelectedArrow = "FFFFFF",
         slotPlaying = "6699CC",
         slotSelected = "80B380",
         slotHover = "D0D0D0",
@@ -5237,6 +5291,11 @@ local themes = {
         slotText = "000000",
         slotInfoText = "404040",
         slotEmptyText = "808080",
+        slotArrow = "FFFFFF",
+        slotArrowHover = "000000",
+        slotArrowBg = "B0D0F0",
+        slotArrowBgHover = "90C0E0",
+        slotValueText = "1A4A7A",
         
         -- Tooltip
         tooltipBg = "F0F0F0",
@@ -5348,7 +5407,10 @@ local themes = {
         slotBg = "16213E",
         slotFilled = "533483",
         slotFilledText = "FFFFFF",
+        slotSelectedText = "16213E",
         slotFilledInfoText = "00D9FF",
+        slotSelectedInfoText = "16213E",
+        slotSelectedArrow = "16213E",
         slotPlaying = "E94560",
         slotSelected = "00D9FF",
         slotHover = "0F3460",
@@ -5358,6 +5420,11 @@ local themes = {
         slotText = "FFFFFF",
         slotInfoText = "AAAACC",
         slotEmptyText = "666699",
+        slotArrow = "00D9FF",
+        slotArrowHover = "FFFFFF",
+        slotArrowBg = "533483",
+        slotArrowBgHover = "7952B3",
+        slotValueText = "00FFFF",
         tooltipBg = "16213E",
         tooltipBorder = "E94560",
         tooltipText = "FFFFFF",
@@ -5451,7 +5518,10 @@ local themes = {
         slotBg = "151520",
         slotFilled = "9900FF",
         slotFilledText = "FFFFFF",
+        slotSelectedText = "151520",
         slotFilledInfoText = "00FFFF",
+        slotSelectedInfoText = "151520",
+        slotSelectedArrow = "151520",
         slotPlaying = "FF00FF",
         slotSelected = "00FFFF",
         slotHover = "252535",
@@ -5461,6 +5531,11 @@ local themes = {
         slotText = "FFFFFF",
         slotInfoText = "9999BB",
         slotEmptyText = "555577",
+        slotArrow = "00FFFF",
+        slotArrowHover = "FFFFFF",
+        slotArrowBg = "9900FF",
+        slotArrowBgHover = "CC00FF",
+        slotValueText = "39FF14",
         tooltipBg = "151520",
         tooltipBorder = "FF00FF",
         tooltipText = "FFFFFF",
@@ -5554,7 +5629,10 @@ local themes = {
         slotBg = "1B263B",
         slotFilled = "0077B6",
         slotFilledText = "FFFFFF",
+        slotSelectedText = "1B263B",
         slotFilledInfoText = "90E0EF",
+        slotSelectedInfoText = "1B263B",
+        slotSelectedArrow = "1B263B",
         slotPlaying = "00D4AA",
         slotSelected = "48CAE4",
         slotHover = "274060",
@@ -5564,6 +5642,11 @@ local themes = {
         slotText = "FFFFFF",
         slotInfoText = "90A4AE",
         slotEmptyText = "546E7A",
+        slotArrow = "48CAE4",
+        slotArrowHover = "FFFFFF",
+        slotArrowBg = "0077B6",
+        slotArrowBgHover = "00A3CC",
+        slotValueText = "90E0EF",
         tooltipBg = "1B263B",
         tooltipBorder = "00D4AA",
         tooltipText = "FFFFFF",
@@ -5657,7 +5740,10 @@ local themes = {
         slotBg = "2A2A2A",
         slotFilled = "4A4A4A",
         slotFilledText = "FFFFFF",
+        slotSelectedText = "2A2A2A",
         slotFilledInfoText = "CCCCCC",
+        slotSelectedInfoText = "2A2A2A",
+        slotSelectedArrow = "2A2A2A",
         slotPlaying = "FF3333",
         slotSelected = "FFFFFF",
         slotHover = "3A3A3A",
@@ -5667,6 +5753,11 @@ local themes = {
         slotText = "FFFFFF",
         slotInfoText = "888888",
         slotEmptyText = "555555",
+        slotArrow = "CCCCCC",
+        slotArrowHover = "FFFFFF",
+        slotArrowBg = "4A4A4A",
+        slotArrowBgHover = "5A5A5A",
+        slotValueText = "FFFFFF",
         tooltipBg = "2A2A2A",
         tooltipBorder = "FF3333",
         tooltipText = "FFFFFF",
@@ -7318,6 +7409,8 @@ end
 function SimpleButton:update()
 	self:draw()
 	
+	if dropdownBlocksInput then return end
+	
 	if mouseButtonIsNotPressedDown and mouseIsHoveringOver(self) then
 
 		if self.onRightClick and gfx.mouse_cap == 2 then
@@ -7396,6 +7489,8 @@ end
 function ToggleButton:update()
 	self:draw()
 	
+	if dropdownBlocksInput then return end
+	
 	if mouseButtonIsNotPressedDown and mouseIsHoveringOver(self) then
     if leftMouseButtonIsHeldDown() then
       mouseButtonIsNotPressedDown = false
@@ -7468,6 +7563,8 @@ end
 
 function CycleButton:update()
 	self:draw()
+	
+	if dropdownBlocksInput then return end
 	
 	if mouseButtonIsNotPressedDown and mouseIsHoveringOver(self) and leftMouseButtonIsHeldDown() then
 		mouseButtonIsNotPressedDown = false
@@ -7601,6 +7698,11 @@ function showFifthWheel()
 			slotText = "FFFFFF",
 			slotInfoText = "B3B3B3",
 			slotEmptyText = "666666",
+			slotArrow = "80B0D0",
+			slotArrowHover = "FFFFFF",
+			slotArrowBg = "2A4A6A",
+			slotArrowBgHover = "3A5A7A",
+			slotValueText = "C0D8E8",
 			
 			-- Tooltip
 			tooltipBg = "1A1A1A",
@@ -7718,6 +7820,11 @@ function showFifthWheel()
 			slotText = "000000",
 			slotInfoText = "404040",
 			slotEmptyText = "808080",
+			slotArrow = "2A5A8A",
+			slotArrowHover = "000000",
+			slotArrowBg = "B0D0F0",
+			slotArrowBgHover = "90C0E0",
+			slotValueText = "1A4A7A",
 			
 			-- Tooltip
 			tooltipBg = "F0F0F0",
@@ -8562,6 +8669,8 @@ function PianoKeyboard:updateDimensions()
 end
 
 local currentlyHeldSlot = nil
+local openSlotDropdown = nil
+local slotDropdownData = nil
 
 ProgressionSlots = {}
 ProgressionSlots.__index = ProgressionSlots
@@ -8576,6 +8685,119 @@ function ProgressionSlots:new(x, y, width, height)
 	return self
 end
 
+function handleSlotDropdownInput()
+	dropdownBlocksInput = false
+	if not openSlotDropdown or not chordProgression[openSlotDropdown] or not slotDropdownData then
+		return
+	end
+	
+	local i = openSlotDropdown
+	local slotWidth = slotDropdownData.slotWidth
+	local slotHeight = slotDropdownData.slotHeight
+	local dropdownHeight = s(36)
+	local blockMargin = s(25)
+	
+	local x = slotDropdownData.x + ((i - 1) * slotWidth) + ((i - 1) * s(2))
+	local y = slotDropdownData.y
+	local dropY = y + slotHeight + s(2)
+	
+	local isHoveringDropdown = gfx.mouse_x >= x and gfx.mouse_x <= x + slotWidth and
+	                           gfx.mouse_y >= dropY and gfx.mouse_y <= dropY + dropdownHeight
+	
+	local isNearDropdown = gfx.mouse_x >= x - blockMargin and gfx.mouse_x <= x + slotWidth + blockMargin and
+	                       gfx.mouse_y >= dropY - blockMargin and gfx.mouse_y <= dropY + dropdownHeight + blockMargin
+	
+	if isNearDropdown then
+		dropdownBlocksInput = true
+	end
+	
+	if not isHoveringDropdown then
+		return
+	end
+	
+	local beats = chordProgression[i].beats or 1
+	local repeats = chordProgression[i].repeats or 1
+	local octave = chordProgression[i].octave or getOctave()
+	local inversion = chordProgression[i].inversion
+	if not inversion then
+		inversion = getChordInversionState(chordProgression[i].scaleNoteIndex)
+	end
+	
+	local arrowH = s(12)
+	local arrowSpacing = s(6)
+	local totalH = arrowH + arrowSpacing + arrowH
+	local startY = dropY + (dropdownHeight - totalH) / 2
+	local innerPadding = s(8)
+	local innerWidth = slotWidth - (innerPadding * 2)
+	local colSpacing = s(4)
+	local totalSpacing = colSpacing * 3
+	local colW = (innerWidth - totalSpacing) / 4
+	
+	local controls = {
+		{value = beats, min = 0.5, max = 8, values = {0.5, 1, 2, 4, 8}, key = "beats"},
+		{value = repeats, min = 1, max = 4, key = "repeats"},
+		{value = octave, min = -1, max = 8, key = "octave"},
+		{value = inversion, min = 0, max = 4, key = "inversion"}
+	}
+	
+	for c, ctrl in ipairs(controls) do
+		local colX = x + innerPadding + (c - 1) * (colW + colSpacing)
+		
+		local upY = startY
+		local downY = startY + arrowH + arrowSpacing
+		
+		local mouseInCol = gfx.mouse_x >= colX and gfx.mouse_x <= colX + colW
+		local mouseOnUp = mouseInCol and gfx.mouse_y >= upY and gfx.mouse_y < upY + arrowH
+		local mouseOnDown = mouseInCol and gfx.mouse_y >= downY and gfx.mouse_y < downY + arrowH
+		
+		if mouseButtonIsNotPressedDown and gfx.mouse_cap & 1 == 1 then
+			if mouseOnUp then
+				mouseButtonIsNotPressedDown = false
+				local newVal
+				if ctrl.values then
+					local idx = 1
+					for vi, v in ipairs(ctrl.values) do
+						if v == ctrl.value then idx = vi break end
+					end
+					if idx < #ctrl.values then
+						newVal = ctrl.values[idx + 1]
+					end
+				else
+					if ctrl.value < ctrl.max then
+						newVal = ctrl.value + 1
+					end
+				end
+				if newVal then
+					chordProgression[i][ctrl.key] = newVal
+				end
+			elseif mouseOnDown then
+				mouseButtonIsNotPressedDown = false
+				local newVal
+				if ctrl.values then
+					local idx = 1
+					for vi, v in ipairs(ctrl.values) do
+						if v == ctrl.value then idx = vi break end
+					end
+					if idx > 1 then
+						newVal = ctrl.values[idx - 1]
+					end
+				else
+					if ctrl.value > ctrl.min then
+						newVal = ctrl.value - 1
+					end
+				end
+				if newVal then
+					chordProgression[i][ctrl.key] = newVal
+				end
+			end
+		end
+	end
+	
+	if isHoveringDropdown and mouseButtonIsNotPressedDown and gfx.mouse_cap & 1 == 1 then
+		mouseButtonIsNotPressedDown = false
+	end
+end
+
 function ProgressionSlots:update()
   if currentlyHeldSlot and (gfx.mouse_cap & 1 == 0) then
     stopAllNotesFromPlaying()
@@ -8585,16 +8807,22 @@ function ProgressionSlots:update()
 	local slotWidth = (self.width - s(14)) / 8
 	local slotHeight = self.height
 	
+	local dropdownHandled = false
+	
+	slotDropdownData = {
+		x = self.x,
+		y = self.y,
+		slotWidth = slotWidth,
+		slotHeight = slotHeight
+	}
 
 	for i = 1, maxProgressionSlots do
 		local x = self.x + ((i - 1) * slotWidth) + ((i - 1) * s(2))
 		local y = self.y
 		
-
 		local isHovering = gfx.mouse_x >= x and gfx.mouse_x <= x + slotWidth and
 		                   gfx.mouse_y >= y and gfx.mouse_y <= y + slotHeight
 		
-
 		if currentProgressionIndex == i and progressionPlaying then
 			setThemeColor("slotPlaying")
 		elseif selectedProgressionSlot == i then
@@ -8607,59 +8835,101 @@ function ProgressionSlots:update()
 			setThemeColor("slotBg")
 		end
 		
-		gfx.rect(x, y, slotWidth, slotHeight, true)
+		gfx.rect(x, y, slotWidth, slotHeight, 1)
 		
-
 		if selectedProgressionSlot == i then
 			setThemeColor("slotOutlineSelected")
-			gfx.rect(x, y, slotWidth, slotHeight, false)
-			gfx.rect(x+1, y+1, slotWidth-2, slotHeight-2, false)
+			gfx.rect(x, y, slotWidth, slotHeight, 0)
+			gfx.rect(x+1, y+1, slotWidth-2, slotHeight-2, 0)
 		else
 			setThemeColor("slotOutline")
-			gfx.rect(x, y, slotWidth, slotHeight, false)
+			gfx.rect(x, y, slotWidth, slotHeight, 0)
 		end
 		
-
 		if i == progressionLength then
 			setThemeColor("slotLengthMarker")
-			gfx.rect(x + slotWidth - s(3), y, s(3), slotHeight, true)
+			gfx.rect(x + slotWidth - s(3), y, s(3), slotHeight, 1)
 		end
 		
-
-    if chordProgression[i] then
-
-      setThemeColor("slotFilledText")
-      gfx.setfont(1, "Arial", fontSize(13))
+		if chordProgression[i] then
+			local isSelected = (selectedProgressionSlot == i)
+			if isSelected then
+				setThemeColor("slotSelectedText")
+			else
+				setThemeColor("slotFilledText")
+			end
+			gfx.setfont(1, "Arial", fontSize(13))
 			local textW, textH = gfx.measurestr(chordProgression[i].text)
 			gfx.x = x + (slotWidth - textW) / 2
 			gfx.y = y + s(5)
 			gfx.drawstr(chordProgression[i].text)
 			
-
 			local beats = chordProgression[i].beats or 1
 			local repeats = chordProgression[i].repeats or 1
-			local infoText = beats .. "b"
-			if repeats > 1 then
-				infoText = infoText .. " x" .. repeats
+			local octave = chordProgression[i].octave or getOctave()
+			local inversion = chordProgression[i].inversion
+			if not inversion then
+				inversion = getChordInversionState(chordProgression[i].scaleNoteIndex)
 			end
 			
-			if chordProgression[i].octave then
-				infoText = infoText .. " o" .. chordProgression[i].octave
+			local colW = (slotWidth - s(6)) / 4
+			local colSpacing = s(2)
+			local infoY = y + slotHeight - s(14)
+			
+			if isSelected then
+				setThemeColor("slotSelectedInfoText")
+			else
+				setThemeColor("slotFilledInfoText")
+			end
+			gfx.setfont(1, "Arial", fontSize(10))
+			
+			local infoItems = {
+				beats .. "b",
+				"x" .. repeats,
+				"o" .. octave,
+				"i" .. inversion
+			}
+			
+			for c, txt in ipairs(infoItems) do
+				local colX = x + s(1) + (c - 1) * colW + (c - 1) * colSpacing
+				local txtW = gfx.measurestr(txt)
+				gfx.x = colX + (colW - txtW) / 2
+				gfx.y = infoY
+				gfx.drawstr(txt)
 			end
 			
-			if chordProgression[i].inversion then
-				infoText = infoText .. " i" .. chordProgression[i].inversion
+			local plusSize = s(20)
+			local plusX = x + slotWidth - plusSize
+			local plusY = y
+			local hoveringPlus = gfx.mouse_x >= plusX and gfx.mouse_x <= plusX + plusSize and
+			                     gfx.mouse_y >= plusY and gfx.mouse_y <= plusY + plusSize
+			
+			if hoveringPlus or openSlotDropdown == i then
+				setThemeColor("slotArrowHover")
+			elseif isSelected then
+				setThemeColor("slotSelectedArrow")
+			else
+				setThemeColor("slotArrow")
 			end
-      setThemeColor("slotFilledInfoText")
-      gfx.setfont(1, "Arial", fontSize(12))
-			local infoW, infoH = gfx.measurestr(infoText)
-			gfx.x = x + (slotWidth - infoW) / 2
-			gfx.y = y + slotHeight - infoH - s(3)
-			gfx.drawstr(infoText)
-    else
-
-      setThemeColor("slotEmptyText")
-      gfx.setfont(1, "Arial", fontSize(12))
+			gfx.setfont(1, "Arial", fontSize(18))
+			local plusStr = "+"
+			local plusW, plusH = gfx.measurestr(plusStr)
+			gfx.x = plusX + (plusSize - plusW) / 2
+			gfx.y = plusY + (plusSize - plusH) / 2
+			gfx.drawstr(plusStr)
+			
+			if mouseButtonIsNotPressedDown and hoveringPlus and gfx.mouse_cap & 1 == 1 then
+				if openSlotDropdown == i then
+					openSlotDropdown = nil
+				else
+					openSlotDropdown = i
+				end
+				mouseButtonIsNotPressedDown = false
+				dropdownHandled = true
+			end
+		else
+			setThemeColor("slotEmptyText")
+			gfx.setfont(1, "Arial", fontSize(12))
 			local num = tostring(i)
 			local textW, textH = gfx.measurestr(num)
 			gfx.x = x + (slotWidth - textW) / 2
@@ -8667,89 +8937,178 @@ function ProgressionSlots:update()
 			gfx.drawstr(num)
 		end
 		
-
-		if mouseButtonIsNotPressedDown and isHovering and gfx.mouse_cap & 1 == 1 and shiftModifierIsHeldDown() then
-			progressionLength = i
-			mouseButtonIsNotPressedDown = false
-
-		elseif mouseButtonIsNotPressedDown and chordProgression[i] and isHovering and gfx.mouse_cap & 1 == 1 and ctrlModifierIsHeldDown() then
-			local currentBeats = chordProgression[i].beats or 1
-			local currentRepeats = chordProgression[i].repeats or 1
-			local currentOctave = chordProgression[i].octave or getOctave()
-			local currentInversion = chordProgression[i].inversion
-			if not currentInversion then
-				currentInversion = getChordInversionState(chordProgression[i].scaleNoteIndex)
-			end
-			
-			local retval, userInput = reaper.GetUserInputs("Slot " .. i .. " Settings", 4, 
-				"Beats (1/2/4/8):,Repeats (1-4):,Octave (-1 to 8):,Inversion (0-3):,extrawidth=100", 
-				currentBeats .. "," .. currentRepeats .. "," .. currentOctave .. "," .. currentInversion)
-			
-			if retval then
-				local beats, repeats, octave, inversion = userInput:match("([^,]+),([^,]+),([^,]+),([^,]+)")
-				beats = tonumber(beats)
-				repeats = tonumber(repeats)
-				octave = tonumber(octave)
-				inversion = tonumber(inversion)
-				
-
-				if beats and (beats == 1 or beats == 2 or beats == 4 or beats == 8) then
-					chordProgression[i].beats = beats
-				end
-				
-
-				if repeats and repeats >= 1 and repeats <= 4 then
-					chordProgression[i].repeats = math.floor(repeats)
-				end
-				
-				if octave and octave >= -1 and octave <= 8 then
-					chordProgression[i].octave = math.floor(octave)
-				end
-				
-				if inversion and inversion >= 0 and inversion <= 4 then
-					chordProgression[i].inversion = math.floor(inversion)
-				end
-			end
-			mouseButtonIsNotPressedDown = false
-
-		elseif mouseButtonIsNotPressedDown and chordProgression[i] and isHovering and gfx.mouse_cap & 1 == 1 and not altModifierIsHeldDown() and not shiftModifierIsHeldDown() and not ctrlModifierIsHeldDown() then
-
-			selectedProgressionSlot = i
-
-			playChordFromSlot(i)
-      
-      currentlyHeldSlot = i
-      
-			mouseButtonIsNotPressedDown = false
-
-		elseif mouseButtonIsNotPressedDown and not chordProgression[i] and isHovering and gfx.mouse_cap & 1 == 1 and not altModifierIsHeldDown() and not shiftModifierIsHeldDown() and not ctrlModifierIsHeldDown() then
-			if selectedProgressionSlot == i then
-
-				selectedProgressionSlot = nil
-			else
-
+		if not dropdownHandled then
+			if mouseButtonIsNotPressedDown and isHovering and gfx.mouse_cap & 1 == 1 and shiftModifierIsHeldDown() then
+				progressionLength = i
+				mouseButtonIsNotPressedDown = false
+			elseif mouseButtonIsNotPressedDown and chordProgression[i] and isHovering and gfx.mouse_cap & 1 == 1 and not altModifierIsHeldDown() and not shiftModifierIsHeldDown() and not ctrlModifierIsHeldDown() then
 				selectedProgressionSlot = i
-			end
-			mouseButtonIsNotPressedDown = false
-		end
-		
-
-		if mouseButtonIsNotPressedDown and chordProgression[i] and isHovering then
-			if gfx.mouse_cap & 2 == 2 then
-				removeChordFromProgression(i)
+				playChordFromSlot(i)
+				currentlyHeldSlot = i
+				mouseButtonIsNotPressedDown = false
+			elseif mouseButtonIsNotPressedDown and not chordProgression[i] and isHovering and gfx.mouse_cap & 1 == 1 and not altModifierIsHeldDown() and not shiftModifierIsHeldDown() and not ctrlModifierIsHeldDown() then
+				if selectedProgressionSlot == i then
+					selectedProgressionSlot = nil
+				else
+					selectedProgressionSlot = i
+				end
 				mouseButtonIsNotPressedDown = false
 			end
 		end
 		
-
-		if tooltipsEnabled and isHovering then
+		if mouseButtonIsNotPressedDown and isHovering and gfx.mouse_cap & 2 == 2 then
+			if shiftModifierIsHeldDown() and chordProgression[i] then
+				removeChordFromProgression(i)
+				mouseButtonIsNotPressedDown = false
+			elseif not shiftModifierIsHeldDown() then
+				selectedProgressionSlot = nil
+				mouseButtonIsNotPressedDown = false
+			end
+		end
+		
+		if tooltipsEnabled and isHovering and openSlotDropdown ~= i then
 			local tooltip
 			if chordProgression[i] then
-				tooltip = "Click: Preview chord | Shift+Click: Set loop end | Ctrl+Click: Edit beats/repeats | Right-Click: Clear slot"
+				tooltip = "Click: Preview | [+]: Edit settings | Shift+Click: Loop end | Right-Click: Deselect | Shift+Right-Click: Clear"
 			else
-				tooltip = "Click: Select slot for chord assignment | Shift+Click: Set loop endpoint"
+				tooltip = "Click: Select slot | Shift+Click: Set loop endpoint | Right-Click: Deselect"
 			end
 			queueTooltip(tooltip, gfx.mouse_x, gfx.mouse_y)
+		end
+	end
+end
+
+function drawSlotSettingsDropdown()
+	if not openSlotDropdown or not chordProgression[openSlotDropdown] or not slotDropdownData then
+		return
+	end
+	
+	local i = openSlotDropdown
+	local slotWidth = slotDropdownData.slotWidth
+	local slotHeight = slotDropdownData.slotHeight
+	local dropdownHeight = s(36)
+	
+	local x = slotDropdownData.x + ((i - 1) * slotWidth) + ((i - 1) * s(2))
+	local y = slotDropdownData.y
+	local dropY = y + slotHeight + s(2)
+	
+	local beats = chordProgression[i].beats or 1
+	local repeats = chordProgression[i].repeats or 1
+	local octave = chordProgression[i].octave or getOctave()
+	local inversion = chordProgression[i].inversion
+	if not inversion then
+		inversion = getChordInversionState(chordProgression[i].scaleNoteIndex)
+	end
+	
+	setThemeColor("slotArrowBg")
+	gfx.rect(x, dropY, slotWidth, dropdownHeight, 1)
+	setThemeColor("slotOutline")
+	gfx.rect(x, dropY, slotWidth, dropdownHeight, 0)
+	
+	local arrowH = s(12)
+	local arrowSpacing = s(6)
+	local totalH = arrowH + arrowSpacing + arrowH
+	local startY = dropY + (dropdownHeight - totalH) / 2
+	local innerPadding = s(8)
+	local innerWidth = slotWidth - (innerPadding * 2)
+	local colSpacing = s(4)
+	local totalSpacing = colSpacing * 3
+	local colW = (innerWidth - totalSpacing) / 4
+	
+	local controls = {
+		{value = beats, min = 0.5, max = 8, values = {0.5, 1, 2, 4, 8}, key = "beats"},
+		{value = repeats, min = 1, max = 4, key = "repeats"},
+		{value = octave, min = -1, max = 8, key = "octave"},
+		{value = inversion, min = 0, max = 4, key = "inversion"}
+	}
+	
+	local isHoveringDropdown = gfx.mouse_x >= x and gfx.mouse_x <= x + slotWidth and
+	                           gfx.mouse_y >= dropY and gfx.mouse_y <= dropY + dropdownHeight
+	
+	for c, ctrl in ipairs(controls) do
+		local colX = x + innerPadding + (c - 1) * (colW + colSpacing)
+		
+		local upY = startY
+		local downY = startY + arrowH + arrowSpacing
+		
+		local mouseInCol = gfx.mouse_x >= colX and gfx.mouse_x <= colX + colW
+		local mouseOnUp = mouseInCol and gfx.mouse_y >= upY and gfx.mouse_y < upY + arrowH
+		local mouseOnDown = mouseInCol and gfx.mouse_y >= downY and gfx.mouse_y < downY + arrowH
+		
+		if mouseOnUp then
+			setThemeColor("slotArrowHover")
+		else
+			setThemeColor("slotArrow")
+		end
+		gfx.setfont(1, "Arial", fontSize(10))
+		local upStr = "▲"
+		local upW = gfx.measurestr(upStr)
+		gfx.x = colX + (colW - upW) / 2
+		gfx.y = upY
+		gfx.drawstr(upStr)
+		
+		if mouseOnDown then
+			setThemeColor("slotArrowHover")
+		else
+			setThemeColor("slotArrow")
+		end
+		local downStr = "▼"
+		local downW = gfx.measurestr(downStr)
+		gfx.x = colX + (colW - downW) / 2
+		gfx.y = downY
+		gfx.drawstr(downStr)
+		
+		if mouseButtonIsNotPressedDown and gfx.mouse_cap & 1 == 1 then
+			if mouseOnUp then
+				local newVal
+				if ctrl.values then
+					local idx = 1
+					for vi, v in ipairs(ctrl.values) do
+						if v == ctrl.value then idx = vi break end
+					end
+					if idx < #ctrl.values then
+						newVal = ctrl.values[idx + 1]
+					end
+				else
+					if ctrl.value < ctrl.max then
+						newVal = ctrl.value + 1
+					end
+				end
+				if newVal then
+					chordProgression[i][ctrl.key] = newVal
+					mouseButtonIsNotPressedDown = false
+				end
+			elseif mouseOnDown then
+				local newVal
+				if ctrl.values then
+					local idx = 1
+					for vi, v in ipairs(ctrl.values) do
+						if v == ctrl.value then idx = vi break end
+					end
+					if idx > 1 then
+						newVal = ctrl.values[idx - 1]
+					end
+				else
+					if ctrl.value > ctrl.min then
+						newVal = ctrl.value - 1
+					end
+				end
+				if newVal then
+					chordProgression[i][ctrl.key] = newVal
+					mouseButtonIsNotPressedDown = false
+				end
+			end
+		end
+	end
+	
+	if mouseButtonIsNotPressedDown and gfx.mouse_cap & 1 == 1 and not isHoveringDropdown then
+		local plusSize = s(12)
+		local plusX = x + slotWidth - plusSize - s(2)
+		local plusY = slotDropdownData.y + s(2)
+		local hoveringPlus = gfx.mouse_x >= plusX and gfx.mouse_x <= plusX + plusSize and
+		                     gfx.mouse_y >= plusY and gfx.mouse_y <= plusY + plusSize
+		if not hoveringPlus then
+			openSlotDropdown = nil
 		end
 	end
 end
@@ -9005,6 +9364,23 @@ end
 function PianoKeyboard:update()
 	self:updateDimensions()
 	self:draw()
+	
+	if gfx.mouse_wheel ~= 0 then
+		if gfx.mouse_x >= self.x and gfx.mouse_x <= self.x + self.width and
+		   gfx.mouse_y >= self.y and gfx.mouse_y <= self.y + self.height then
+			local currentOctave = getOctave()
+			if gfx.mouse_wheel > 0 then
+				if currentOctave < getOctaveMax() then
+					setOctave(currentOctave + 1)
+				end
+			else
+				if currentOctave > getOctaveMin() then
+					setOctave(currentOctave - 1)
+				end
+			end
+			gfx.mouse_wheel = 0
+		end
+	end
 end
 
 inputCharacters = {}
@@ -9584,12 +9960,14 @@ end
 
 function Interface:updateElements()
 
+  handleSlotDropdownInput()
+  
   for _, element in pairs(self.elements) do
     applyDefaultFont()
     element:update()
   end
 	
-
+	drawSlotSettingsDropdown()
 	renderPendingTooltips()
 end
 

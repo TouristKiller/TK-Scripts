@@ -248,8 +248,15 @@
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.3.6" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-04T21:21:00Z">
+      <version name="2.3.7" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-05T13:51:00Z">
         <changelog><![CDATA[
+2.3.7
++ Slot Settings Dropdown: Click [+] button on progression slots to open settings panel
++ Direct arrow controls for Beats, Repeats, Octave, and Inversion
++ Dropdown appears below the slot, over other content
++ Click outside dropdown or [+] again to close
++ Original slot appearance preserved
+
 2.3.5
 + Progression Templates: 70+ preset progressions (Right-click Load button)
 + 10 Genre categories: Pop/Rock, Jazz, Blues, Classical, Modal, Minor Keys, EDM, World/Folk
