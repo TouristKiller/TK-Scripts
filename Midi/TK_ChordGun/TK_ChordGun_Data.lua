@@ -124,6 +124,19 @@ Data.chords = {
     display = '5-',
     pattern = '10000010'
   },
+  -- Dyads (Added in v2.3.8 - IDM/Ambient)
+  {name="perfect fourth", code="4th", display="4", pattern="100001"},
+  {name="minor third", code="m3", display="m3", pattern="1001"},
+  {name="major third", code="M3", display="M3", pattern="10001"},
+  {name="minor second", code="m2", display="m2", pattern="11"},
+  {name="major second", code="M2", display="M2", pattern="101"},
+  {name="minor sixth", code="m6", display="m6", pattern="100000001"},
+  {name="major sixth", code="M6", display="M6", pattern="1000000001"},
+  {name="minor seventh", code="m7", display="m7int", pattern="10000000001"},
+  {name="major seventh", code="M7", display="M7int", pattern="100000000001"},
+  -- Stacked Fifths (BoC-style)
+  {name="stacked fifths", code="55", display="5/5", pattern="1000000100000001"},
+  {name="sus2 stacked", code="sus2stack", display="sus2/5", pattern="10100001000000100000001"},
 }
 
 local function parseReascaleFile(filePath)
@@ -567,6 +580,28 @@ Data.progressionTemplates = {
       { name = "Klezmer (i-IV-V-i)", chords = {1, 4, 5, 1} },
       { name = "Flamenco Cadence (iv-III-II-I)", chords = {4, 3, 2, 1} },
       { name = "Arabic (i-bII-i-V)", chords = {1, 2, 1, 5} }
+    }
+  },
+  {
+    name = "IDM / Ambient",
+    minNotes = 5,
+    progressions = {
+      { name = "BoC: Pete Standing Alone (I-IV-V-I)", chords = {1, 4, 5, 1}, chordType = "5" },
+      { name = "BoC: Chromakey Dreamcoat (I-II-IV-V)", chords = {1, 2, 4, 5}, chordType = "sus2" },
+      { name = "BoC: Everything You Do (I-IV-I-V)", chords = {1, 4, 1, 5}, chordType = "m3" },
+      { name = "BoC: Cold Earth (I-IV)", chords = {1, 4}, chordType = "5" },
+      { name = "BoC: Under The Coke Sign (I-IV-I)", chords = {1, 4, 1}, chordType = "5" },
+      { name = "Ambient Fifths (I-V-IV-I)", chords = {1, 5, 4, 1}, chordType = "5" },
+      { name = "Ambient Fourths (I-IV-VII-IV)", chords = {1, 4, 7, 4}, chordType = "4" },
+      { name = "Stacked Fifths (I-IV-V-IV)", chords = {1, 4, 5, 4}, chordType = "55" },
+      { name = "Warp Records (i-VI-III-VII)", chords = {1, 6, 3, 7} },
+      { name = "Autechre Style (i-ii-IV-III)", chords = {1, 2, 4, 3} },
+      { name = "Aphex Ambient (I-III-V-IV)", chords = {1, 3, 5, 4} },
+      { name = "Floating (I-V-I-IV)", chords = {1, 5, 1, 4}, chordType = "sus2" },
+      { name = "Ethereal (i-VII-VI-III)", chords = {1, 7, 6, 3} },
+      { name = "Nostalgic (I-vi-IV-I)", chords = {1, 6, 4, 1} },
+      { name = "Lo-Fi Drift (i-IV-i-VII)", chords = {1, 4, 1, 7} },
+      { name = "Campfire Headphase (I-IV-V-I-IV-I)", chords = {1, 4, 5, 1, 4, 1}, chordType = "sus2" }
     }
   }
 }

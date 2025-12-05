@@ -1,8 +1,16 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.7
+-- @version 2.3.8
 -- @changelog
 --[[
+2.3.8
++ Dyads: Added interval chord types (4th, m3, M3, m2, M2, m6, M6, m7, M7)
++ Stacked Fifths: Added 5/5 (stacked fifths) and sus2/5 (sus2 stacked) chord types
++ IDM/Ambient Templates: 16 new progressions inspired by Boards of Canada, Autechre, Aphex Twin
++ Fifth Stack Voicing: New voicing mode that stacks perfect fifths on each note (BoC-style)
++ Piano Scroll: Mouse wheel on piano to change octave
++ Half-beat option: 0.5 beat available for progression slots
+
 2.3.7
 + Slot Settings Dropdown: Click [+] button on progression slots to open settings panel
 + Direct arrow controls for Beats, Repeats, Octave, and Inversion
@@ -639,7 +647,8 @@ local voicingState = {
   drop2 = false,
   drop3 = false,
   bass1 = false,
-  bass2 = false
+  bass2 = false,
+  fifthStack = false
 }
 
 
@@ -2727,6 +2736,15 @@ function getChordNotesArray(root, chord, octave, inversionOverride)
   if voicingState.bass2 == true then
     local bassNote = root + ((octave + 1 - 2) * 12) - 1
     table.insert(chordNotesArray, 1, bassNote)
+  end
+  
+  if voicingState.fifthStack == true then
+    local stackedNotes = {}
+    for _, note in ipairs(chordNotesArray) do
+      table.insert(stackedNotes, note)
+      table.insert(stackedNotes, note + 7)
+    end
+    chordNotesArray = stackedNotes
   end
   
   local uniqueNotes = {}
@@ -11300,11 +11318,12 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     true
   )
 
-  local getDropState = function() return voicingState.drop2 or voicingState.drop3 end
+  local getDropState = function() return voicingState.drop2 or voicingState.drop3 or voicingState.fifthStack end
   local onDropToggle = function()
-    if voicingState.drop2 or voicingState.drop3 then
+    if voicingState.drop2 or voicingState.drop3 or voicingState.fifthStack then
       voicingState.drop2 = false
       voicingState.drop3 = false
+      voicingState.fifthStack = false
     else
       voicingState.drop2 = true
     end
@@ -11313,15 +11332,22 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
   local onDropRightClick = function()
     local checkDrop2 = voicingState.drop2 and "!" or ""
     local checkDrop3 = voicingState.drop3 and "!" or ""
-    local menu = checkDrop2 .. "Drop 2|" .. checkDrop3 .. "Drop 3"
+    local checkFifth = voicingState.fifthStack and "!" or ""
+    local menu = checkDrop2 .. "Drop 2|" .. checkDrop3 .. "Drop 3|" .. checkFifth .. "Fifth Stack (BoC)"
     gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
     local selection = gfx.showmenu(menu)
     if selection == 1 then
       voicingState.drop2 = true
       voicingState.drop3 = false
+      voicingState.fifthStack = false
     elseif selection == 2 then
       voicingState.drop3 = true
       voicingState.drop2 = false
+      voicingState.fifthStack = false
+    elseif selection == 3 then
+      voicingState.fifthStack = true
+      voicingState.drop2 = false
+      voicingState.drop3 = false
     end
     if selection > 0 then guiShouldBeUpdated = true end
   end
