@@ -244,6 +244,67 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
     local scale_w = (scale_with_w and ref_w and ref_w > 0) and (window_width / ref_w) or 1
     local scale_h = (scale_with_h and ref_h and ref_h > 0) and (window_height / ref_h) or 1
 
+    local image_scale = (settings and settings.custom_buttons_image_scale) or 1.0
+    local scale_mode = (settings and settings.custom_buttons_scale_mode) or 0
+    local lock_y_position = settings and settings.custom_buttons_lock_y_position
+    local auto_scale = settings and settings.custom_buttons_auto_scale
+    local auto_scale_target = (settings and settings.custom_buttons_auto_scale_target_width) or 40
+    
+    if auto_scale then
+        local visible_count = 0
+        local total_original_width = 0
+        local max_x = 0
+        local min_x = math.huge
+        
+        for _, btn in ipairs(custom_buttons.buttons) do
+            if btn.visible then
+                visible_count = visible_count + 1
+                local btn_width = btn.width or 32
+                total_original_width = total_original_width + btn_width
+                
+                local btn_x
+                if btn.position_px ~= nil then
+                    btn_x = btn.position_px
+                else
+                    btn_x = (btn.position or 0) * window_width
+                end
+                if btn_x < min_x then min_x = btn_x end
+                if btn_x + btn_width > max_x then max_x = btn_x + btn_width end
+            end
+        end
+        
+        if visible_count > 0 then
+            local avg_width = total_original_width / visible_count
+            if avg_width > 0 then
+                image_scale = auto_scale_target / avg_width
+                image_scale = math.max(0.1, math.min(3.0, image_scale))
+                if settings then
+                    settings.custom_buttons_image_scale = image_scale
+                end
+            end
+        end
+    end
+    
+    local group_first_positions = {}
+    if scale_mode == 1 then
+        for _, btn in ipairs(custom_buttons.buttons) do
+            if btn.visible and btn.group and btn.group ~= "" then
+                if not group_first_positions[btn.group] then
+                    local base_x
+                    if btn.position_px ~= nil then
+                        base_x = (btn.position_px + x_offset_px) * scale_w
+                    else
+                        base_x = (btn.position + x_offset) * window_width
+                    end
+                    group_first_positions[btn.group] = {
+                        first_x = base_x,
+                        first_x_raw = btn.position_px or (btn.position * window_width)
+                    }
+                end
+            end
+        end
+    end
+
     local active_toggle = nil
     for _, btn in ipairs(custom_buttons.buttons) do
         if btn.is_group_visibility_toggle and btn.toggle_state then
@@ -293,16 +354,40 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
 
 
             local x_pos, y_pos
+            local base_x
             if button.position_px ~= nil then
-                x_pos = (button.position_px + x_offset_px) * scale_w
+                base_x = (button.position_px + x_offset_px) * scale_w
             else
-                x_pos = (button.position + x_offset) * window_width
+                base_x = (button.position + x_offset) * window_width
             end
             
-            if button.position_y_px ~= nil then
-                y_pos = (button.position_y_px + y_offset_px) * (scale_h ~= 0 and scale_h or 1)
+            if scale_mode == 0 then
+                x_pos = base_x * image_scale
+            elseif scale_mode == 1 and button.group and button.group ~= "" and group_first_positions[button.group] then
+                local group_info = group_first_positions[button.group]
+                local offset_from_first = base_x - group_info.first_x
+                x_pos = group_info.first_x + (offset_from_first * image_scale)
             else
-                y_pos = ((button.position_y or 0.15) + y_offset) * window_height
+                x_pos = base_x
+            end
+            
+            if lock_y_position then
+                local base_y
+                if button.position_y_px ~= nil then
+                    base_y = button.position_y_px + y_offset_px
+                else
+                    base_y = ((button.position_y or 0.15) + y_offset) * window_height
+                end
+                local original_height = button.width or 32
+                local scaled_height = original_height * image_scale
+                local height_diff = original_height - scaled_height
+                y_pos = base_y + (height_diff / 2)
+            else
+                if button.position_y_px ~= nil then
+                    y_pos = (button.position_y_px + y_offset_px) * (scale_h ~= 0 and scale_h or 1)
+                else
+                    y_pos = ((button.position_y or 0.15) + y_offset) * window_height
+                end
             end
             
             r.ImGui_SetCursorPosX(ctx, x_pos)
@@ -383,6 +468,9 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
             if scale_sizes and draw_w and draw_w > 0 then
                 draw_w = math.max(1, math.floor(draw_w * scale_w))
             end
+            if draw_w and draw_w > 0 then
+                draw_w = math.max(1, math.floor(draw_w * image_scale))
+            end
 
             if button.use_image and button.image_path then
                 if not r.ImGui_ValidatePtr(ButtonRenderer.image_cache[button.image_path], 'ImGui_Image*') then
@@ -404,16 +492,16 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                 if r.ImGui_ValidatePtr(button.image, 'ImGui_Image*') then
                     local img_w, img_h = r.ImGui_Image_GetSize(button.image)
                     
-                    local max_width = draw_w
                     local display_w, display_h
                     
                     if img_w > 0 and img_h > 0 then
-                        local scale = math.min(max_width / img_w, 1.0)
-                        display_w = img_w * scale
-                        display_h = img_h * scale
+                        local base_scale = (draw_w and draw_w > 0) and (draw_w / img_w) or 1.0
+                        display_w = img_w * base_scale
+                        display_h = img_h * base_scale
                     else
-                        display_w = max_width
-                        display_h = max_width
+                        local fallback_size = (draw_w and draw_w > 0) and draw_w or 32
+                        display_w = fallback_size
+                        display_h = fallback_size
                     end
                     
                     if button.show_text_with_icon and button.name and button.name ~= "" then
@@ -726,7 +814,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
             
                 if r.ImGui_ValidatePtr(button.icon, 'ImGui_Image*') then
                     if button.show_text_with_icon and button.name and button.name ~= "" then
-                        local icon_size = draw_w 
+                        local icon_size = draw_w or 32
                         local text_label = button.name .. "##btn" .. i
                         
                         local cursorX, cursorY = r.ImGui_GetCursorPos(ctx)
@@ -839,8 +927,9 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), btn_active_color)
                         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
                         
+                        local icon_size = draw_w or 32
                         local cursorX, cursorY = r.ImGui_GetCursorPos(ctx)
-                        local clicked = r.ImGui_Button(ctx, "##btn" .. i, draw_w, draw_w)
+                        local clicked = r.ImGui_Button(ctx, "##btn" .. i, icon_size, icon_size)
                         
                         r.ImGui_SetCursorPos(ctx, cursorX, cursorY)
                         
@@ -866,7 +955,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                             end
                         end
                         
-                        r.ImGui_Image(ctx, button.icon, draw_w, draw_w, uv_x, 0, uv_x + 0.33, 1)
+                        r.ImGui_Image(ctx, button.icon, icon_size, icon_size, uv_x, 0, uv_x + 0.33, 1)
                         
                         r.ImGui_PopStyleVar(ctx)
                         r.ImGui_PopStyleColor(ctx, 3)

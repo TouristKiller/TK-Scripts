@@ -1,9 +1,12 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.4.3
+-- @version 1.4.4
 -- @changelog 
 --[[
-
+  + Added Image Scale slider for custom buttons (0.25x - 3.0x)
+  + Added Scale Mode: "Scale All" or "Group Internal Only"
+  + Added Lock Y position option to keep vertical alignment centered
+  + Added Auto-scale option with configurable target size
   ]]--
 ---------------------------------------------------------------------------------------------
 local r = reaper
@@ -270,6 +273,11 @@ local default_settings = {
  edit_snap_mode = "step", -- "step" = move by grid steps, "magnetic" = snap to nearest grid line
  -- Custom buttons UX
  show_custom_button_tooltip = true,
+ custom_buttons_image_scale = 1.0,
+ custom_buttons_scale_mode = 0,
+ custom_buttons_lock_y_position = false,
+ custom_buttons_auto_scale = false,
+ custom_buttons_auto_scale_target_width = 40,
 
  -- Color settings
  background = 0x000000FF,
@@ -5375,6 +5383,62 @@ function ShowSettings(main_window_width , main_window_height)
  
  r.ImGui_EndTable(ctx)
  end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Image Scale:")
+ 
+ local rv_auto
+ rv_auto, settings.custom_buttons_auto_scale = r.ImGui_Checkbox(ctx, "Auto-scale (fit to window)", settings.custom_buttons_auto_scale or false)
+ if rv_auto then MarkTransportPresetChanged() end
+ 
+ if settings.custom_buttons_auto_scale then
+  r.ImGui_SameLine(ctx)
+  r.ImGui_Text(ctx, "Target size:")
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 80)
+  local rv_target, new_target = r.ImGui_InputInt(ctx, "##TargetWidth", settings.custom_buttons_auto_scale_target_width or 40)
+  if rv_target then
+   settings.custom_buttons_auto_scale_target_width = math.max(16, math.min(200, new_target))
+   MarkTransportPresetChanged()
+  end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_Text(ctx, "px")
+  
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xA0A0A0FF)
+  r.ImGui_Text(ctx, string.format("Current auto-scale: %.2fx", settings.custom_buttons_image_scale or 1.0))
+  r.ImGui_PopStyleColor(ctx)
+ else
+  r.ImGui_SetNextItemWidth(ctx, 200)
+  local scale_changed, new_scale = r.ImGui_SliderDouble(ctx, "##ImageScale", settings.custom_buttons_image_scale or 1.0, 0.25, 3.0, "%.2fx")
+  if scale_changed then
+   settings.custom_buttons_image_scale = new_scale
+   MarkTransportPresetChanged()
+  end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "Reset##ImageScale") then
+   settings.custom_buttons_image_scale = 1.0
+   MarkTransportPresetChanged()
+  end
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Scale Mode:")
+ r.ImGui_SetNextItemWidth(ctx, 250)
+ local scale_modes = {"Scale All (positions + sizes)", "Group Internal Only (keep group positions)"}
+ local current_mode = settings.custom_buttons_scale_mode or 0
+ if r.ImGui_BeginCombo(ctx, "##ScaleMode", scale_modes[current_mode + 1]) then
+  for idx, mode_name in ipairs(scale_modes) do
+   if r.ImGui_Selectable(ctx, mode_name, current_mode == idx - 1) then
+    settings.custom_buttons_scale_mode = idx - 1
+    MarkTransportPresetChanged()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
+ 
+ local rv_lock_y
+ rv_lock_y, settings.custom_buttons_lock_y_position = r.ImGui_Checkbox(ctx, "Lock Y position (keep vertical alignment)", settings.custom_buttons_lock_y_position or false)
+ if rv_lock_y then MarkTransportPresetChanged() end
  
  r.ImGui_Spacing(ctx)
  r.ImGui_Text(ctx, "Reference Size Settings:")
