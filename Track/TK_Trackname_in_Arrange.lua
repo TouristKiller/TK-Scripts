@@ -1,14 +1,25 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.3.0
+-- @version 1.5.0
 -- @changelog 
 --[[
+v1.5.0:
++ Settings window reorganized with 4-column layout and tabs
++ Labels tab: Added Label Border with thickness/opacity settings
++ Labels tab: Added Label Height padding control
++ Icons tab: Embedded icon browser directly in tab (no popup)
++ added track Visibility; show /hide track labels for specific tracks
++ Removed Autosave toggle and Save button (autosave always on)
++ Fixed inherit parent label positioning for all alignment modes (center/left/right)
++ Track labels now stay vertically aligned regardless of icons or parent labels
+
+v1.3.0:
 + Binary search optimization for visible tracks (significant performance improvement for large projects)
 + Improved pinned tracks detection stability
 + Fixed pinned tracks overlay issues with master track
 ]]--
 
-local SCRIPT_VERSION = "1.3.0"
+local SCRIPT_VERSION = "1.5.0"
 
 local r                  = reaper
 -- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
@@ -39,6 +50,11 @@ local zorder_handled_at_startup = false -- Only fix z-order once at startup
 
 local color_cache        = {}
 local cached_bg_color    = nil
+
+local excluded_tracks    = {}
+local exclude_filter     = ""
+local tcp_synced         = false
+local settings_tab       = 1
 
 local flags              = r.ImGui_WindowFlags_NoTitleBar() |
                            r.ImGui_WindowFlags_NoResize() |
@@ -213,6 +229,7 @@ local default_settings              = {
     text_opacity                    = 1.0,
     show_parent_tracks              = true,
     show_child_tracks               = true,
+    show_normal_tracks              = true,
     show_first_fx                   = false,
     show_parent_label               = false,
     show_record_color               = true,
@@ -242,7 +259,7 @@ local default_settings              = {
     blend_mode                      = 1,
     show_track_numbers              = false,
     track_number_style              = 1,
-    autosave_enabled                = false,
+    autosave_enabled                = true,
     gradient_enabled                = false,
     gradient_direction              = 1,
     gradient_start_alpha            = 1.0,
@@ -251,6 +268,10 @@ local default_settings              = {
     fixed_label_length              = 10,
     fixed_length_padding_char       = "·",  
     all_text_enabled                = true,
+    label_border                    = false,
+    label_border_thickness          = 1.0,
+    label_border_opacity            = 1.0,
+    label_height_padding            = 1,
     folder_border                   = false,
     folder_border_left              = true,
     folder_border_right             = true,
@@ -314,7 +335,7 @@ local blend_modes = {
 local text_sizes = {8, 10, 12, 14, 16, 18, 20, 24, 28, 32}
 local fonts = {
     "Arial", "Helvetica", "Verdana", "Tahoma", "Times New Roman",
-    "Georgia", "Courier New", "Trebuchet MS", "Impact", "Roboto",
+    "Georgia", "Courier New", "Consolas", "Trebuchet MS", "Impact", "Roboto",
     "Open Sans", "Ubuntu", "Segoe UI", "Noto Sans", "Liberation Sans",
     "DejaVu Sans"
 }
@@ -626,14 +647,51 @@ function UpdateTrackColors()
     reaper.UpdateArrange()
 end
 
+function LoadExcludedTracks()
+    local proj = r.EnumProjects(-1)
+    local retval, data = r.GetProjExtState(proj, "TK_TRACKNAMES", "excluded_tracks")
+    if retval == 1 and data ~= "" then
+        local loaded = json.decode(data)
+        if loaded then
+            excluded_tracks = loaded
+        end
+    else
+        excluded_tracks = {}
+    end
+end
+
+function SaveExcludedTracks()
+    local proj = r.EnumProjects(-1)
+    r.SetProjExtState(proj, "TK_TRACKNAMES", "excluded_tracks", json.encode(excluded_tracks))
+end
+
+function GetTrackGUID(track)
+    return r.GetTrackGUID(track)
+end
+
+function IsTrackExcluded(track)
+    local guid = GetTrackGUID(track)
+    return excluded_tracks[guid] == true
+end
+
+function SetTrackExcluded(track, excluded)
+    local guid = GetTrackGUID(track)
+    if excluded then
+        excluded_tracks[guid] = true
+    else
+        excluded_tracks[guid] = nil
+    end
+    SaveExcludedTracks()
+end
+
 function RefreshProjectState()
     UpdateBgColorCache()
     track_icon_manager.RefreshAllIcons()
+    LoadExcludedTracks()
     if settings.custom_colors_enabled then
         UpdateGridColors()
         UpdateArrangeBG()
         UpdateTrackColors()
-        
     end
     reaper.UpdateArrange()
     last_update_time = 0
@@ -805,10 +863,10 @@ function ShowSettingsWindow()
     -- Use Sexan's positioning
     local _, DPI_RPR = r.get_config_var_string("uiscale")
     local window_x = LEFT + (RIGHT - LEFT - 520) / 2  
-    local window_y = TOP + (BOT - TOP - 800) / 2      
+    local window_y = TOP + (BOT - TOP - 520) / 2      
     
     r.ImGui_SetNextWindowPos(ctx, window_x, window_y, r.ImGui_Cond_FirstUseEver())
-    r.ImGui_SetNextWindowSize(ctx, 520, 800)
+    r.ImGui_SetNextWindowSize(ctx, 520, 565)
     
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6.0)
@@ -816,7 +874,7 @@ function ShowSettingsWindow()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 12.0)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 8.0)
 
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x111111D9) 
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x111111FF) 
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x333333FF)        
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x444444FF)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x555555FF)  
@@ -841,7 +899,14 @@ function ShowSettingsWindow()
         r.ImGui_PopStyleColor(ctx)
         
         local window_width = r.ImGui_GetWindowWidth(ctx)
-        local column_width = window_width / 5
+        local padding = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_WindowPadding())
+        local item_spacing = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+        local content_width = window_width - (padding * 2)
+        local column_width = content_width / 4
+        local slider_width = column_width - item_spacing
+        local col2 = column_width + 8
+        local col3 = column_width * 2
+        local col4 = col3 + slider_width + item_spacing
 
         r.ImGui_SameLine(ctx)
         r.ImGui_SetCursorPosX(ctx, window_width - 25)
@@ -851,133 +916,86 @@ function ShowSettingsWindow()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF6666FF)
         
         if r.ImGui_Button(ctx, "##close", 14, 14) then
-            if settings.autosave_enabled then
-                SaveSettings()
-            end
+            SaveSettings()
             r.SetExtState("TK_TRACKNAMES", "settings_visible", "0", false)
         end
         r.ImGui_PopStyleColor(ctx, 3)
         r.ImGui_Separator(ctx)
 
-
-        -- PRESETS
-        if r.ImGui_Button(ctx, "Save Preset" , 90) then
-            r.ImGui_OpenPopup(ctx, "Save Preset##popup")
-        end
-        r.ImGui_SameLine(ctx, column_width)
-        local presets = GetPresetList()
-        r.ImGui_SetNextItemWidth(ctx, 90)
-        if r.ImGui_BeginCombo(ctx, "##Load Preset", "Select Preset") then
-            for _, preset_name in ipairs(presets) do
-                local is_clicked = r.ImGui_Selectable(ctx, preset_name)
-                if r.ImGui_BeginPopupContextItem(ctx) then
-                    if r.ImGui_MenuItem(ctx, "Delete") then
-                        os.remove(preset_path .. preset_name .. '.json')
-                    end
-                    r.ImGui_EndPopup(ctx)
-                end
-                if is_clicked then
-                    hasDrawingFocusBeenHandled = false
-                    LoadPreset(preset_name)
-                end
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Tab(), 0x404040FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabHovered(), 0xFF5555FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabSelected(), 0xFF0000FF)
+        
+        if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
+            if r.ImGui_BeginTabItem(ctx, "Labels") then
+                settings_tab = 1
+                r.ImGui_EndTabItem(ctx)
             end
-            r.ImGui_EndCombo(ctx)
-        end
-        if r.ImGui_BeginPopup(ctx, "Save Preset##popup") then
-            r.ImGui_Text(ctx, "Enter preset name:")
-            local changed, new_name = r.ImGui_InputText(ctx, "##preset_name", preset_name)
-            if changed then preset_name = new_name end
-            
-            if r.ImGui_Button(ctx, "Save") then
-                if preset_name ~= "" then
-                    SavePreset(preset_name)
-                    r.ImGui_CloseCurrentPopup(ctx)
-                end
+            if r.ImGui_BeginTabItem(ctx, "Colors") then
+                settings_tab = 2
+                r.ImGui_EndTabItem(ctx)
             end
-            r.ImGui_EndPopup(ctx)
+            if r.ImGui_BeginTabItem(ctx, "Grid & BG") then
+                settings_tab = 3
+                r.ImGui_EndTabItem(ctx)
+            end
+            if r.ImGui_BeginTabItem(ctx, "Icons") then
+                settings_tab = 4
+                r.ImGui_EndTabItem(ctx)
+            end
+            if r.ImGui_BeginTabItem(ctx, "Track Visibility") then
+                settings_tab = 5
+                r.ImGui_EndTabItem(ctx)
+            end
+            r.ImGui_EndTabBar(ctx)
         end
-        r.ImGui_SameLine(ctx, column_width * 2)
-        if r.ImGui_Button(ctx, settings.custom_colors_enabled and "Reset Colors" or "Custom Colors", 90) then
-            reaper.Undo_BeginBlock()
-            ToggleColors()
-            reaper.Undo_EndBlock("Toggle Custom Grid and Background Colors", -1)
-        end
-        r.ImGui_SameLine(ctx, column_width * 3)
-        if r.ImGui_Button(ctx, "Reset Settings", 90) then
-            hasDrawingFocusBeenHandled = false
-            ResetSettings()
-        end
-        r.ImGui_SameLine(ctx, column_width * 4)
-        if r.ImGui_Button(ctx, "Save Settings", 90) then 
-            SaveSettings()
-        end
+        
+        r.ImGui_PopStyleColor(ctx, 3)
+        
         r.ImGui_Separator(ctx)
-        r.ImGui_Dummy(ctx, 0, 2)
-      
+
+        if settings_tab == 1 then
+        -- ═══════════════════════════════════════════════════════════════════
+        -- LABELS TAB - tekst, fonts, posities, lengtes, nummers, visibility
+        -- ═══════════════════════════════════════════════════════════════════
         local changed
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
-        if r.ImGui_RadioButton(ctx, "Parent Track", settings.show_parent_tracks) then
+        
+        r.ImGui_Text(ctx, "Label Visibility:")
+        if r.ImGui_RadioButton(ctx, "Parent", settings.show_parent_tracks) then
             settings.show_parent_tracks = not settings.show_parent_tracks
             needs_font_update = CheckNeedsUpdate()
         end
         r.ImGui_SameLine(ctx, column_width)
         
-        if r.ImGui_RadioButton(ctx, "Normal/Child", settings.show_child_tracks) then
+        if r.ImGui_RadioButton(ctx, "Child", settings.show_child_tracks) then
             settings.show_child_tracks = not settings.show_child_tracks
             needs_font_update = CheckNeedsUpdate()
         end
         r.ImGui_SameLine(ctx, column_width * 2)
         
+        if r.ImGui_RadioButton(ctx, "Normal", settings.show_normal_tracks) then
+            settings.show_normal_tracks = not settings.show_normal_tracks
+            needs_font_update = CheckNeedsUpdate()
+        end
+        r.ImGui_SameLine(ctx, column_width * 3)
+        
+        if r.ImGui_RadioButton(ctx, "Env Names", settings.show_envelope_names) then
+            settings.show_envelope_names = not settings.show_envelope_names
+        end
+        
         if r.ImGui_RadioButton(ctx, "First FX", settings.show_first_fx) then
             settings.show_first_fx = not settings.show_first_fx
         end
-        r.ImGui_SameLine(ctx, column_width * 3)
+        r.ImGui_SameLine(ctx, column_width)
         if r.ImGui_RadioButton(ctx, "Info Line", settings.show_info_line) then
             settings.show_info_line = not settings.show_info_line
         end
-        r.ImGui_SameLine(ctx, column_width * 4)
-        if r.ImGui_RadioButton(ctx, "Autosave", settings.autosave_enabled) then
-            settings.autosave_enabled = not settings.autosave_enabled
-        end
-        if r.ImGui_RadioButton(ctx, "Pass Through (for linux users only)", settings.pass_through_overlay) then
-            settings.pass_through_overlay = not settings.pass_through_overlay
-        end
-
-        if r.ImGui_RadioButton(ctx, "Track Label", settings.show_label) then
-            settings.show_label = not settings.show_label
-        end
-        r.ImGui_SameLine(ctx, column_width)
-        if r.ImGui_RadioButton(ctx, "Parent label", settings.show_parent_label) then
-            settings.show_parent_label = not settings.show_parent_label
-            needs_font_update = CheckNeedsUpdate()
-        end
         r.ImGui_SameLine(ctx, column_width * 2)
-        if r.ImGui_RadioButton(ctx, "Center", settings.text_centered) then
-            settings.text_centered = not settings.text_centered
-            if settings.text_centered then
-                settings.right_align = false
-            end
-        end
-        r.ImGui_SameLine(ctx, column_width * 3)
-        if r.ImGui_RadioButton(ctx, "Auto Center", settings.auto_center) then
-            settings.auto_center = not settings.auto_center
-            if settings.auto_center then
-                settings.text_centered = true
-                settings.right_align = false
-            end
-        end
-        r.ImGui_SameLine(ctx, column_width * 4)
-        r.ImGui_BeginDisabled(ctx, settings.text_centered)
-        if r.ImGui_RadioButton(ctx, "Right align", settings.right_align) then
-            settings.right_align = not settings.right_align
-        end
-        r.ImGui_EndDisabled(ctx)
-
         if r.ImGui_RadioButton(ctx, "Track #", settings.show_track_numbers) then
             settings.show_track_numbers = not settings.show_track_numbers
         end
         r.ImGui_BeginDisabled(ctx, not settings.show_track_numbers)
-        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_SameLine(ctx, column_width * 3)
         r.ImGui_SetNextItemWidth(ctx, 90)
         if r.ImGui_BeginCombo(ctx, "##Number Style", 
             settings.track_number_style == 1 and " Before Name" or
@@ -992,12 +1010,127 @@ function ShowSettingsWindow()
             r.ImGui_EndCombo(ctx)
         end
         r.ImGui_EndDisabled(ctx)
-
-
+        
+        if r.ImGui_RadioButton(ctx, "Inherit parent", settings.show_parent_label) then
+            settings.show_parent_label = not settings.show_parent_label
+            needs_font_update = CheckNeedsUpdate()
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        if r.ImGui_RadioButton(ctx, "Hide selected", settings.text_hover_hide) then
+            settings.text_hover_hide = not settings.text_hover_hide
+        end
         r.ImGui_SameLine(ctx, column_width * 2)
+        if r.ImGui_RadioButton(ctx, "Hide on hover", settings.text_hover_enabled) then
+            settings.text_hover_enabled = not settings.text_hover_enabled
+        end
+        
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+        r.ImGui_Text(ctx, "Label BG:")
+
+        if r.ImGui_RadioButton(ctx, "Show Label BG", settings.show_label) then
+            settings.show_label = not settings.show_label
+        end
+
+        if settings.show_label then
+            r.ImGui_SetNextItemWidth(ctx, slider_width)
+            changed, settings.label_alpha = r.ImGui_SliderDouble(ctx, "##LabelOpacity", settings.label_alpha, 0.0, 1.0)
+            r.ImGui_SameLine(ctx, col2)
+            r.ImGui_Text(ctx, "Opacity")
+            r.ImGui_SameLine(ctx, col3)
+            r.ImGui_SetNextItemWidth(ctx, slider_width)
+            if r.ImGui_BeginCombo(ctx, "##LabelColor", color_modes[settings.label_color_mode]) then
+                for i, color_name in ipairs(color_modes) do
+                    if r.ImGui_Selectable(ctx, color_name, settings.label_color_mode == i) then
+                        settings.label_color_mode = i
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_SameLine(ctx, col4)
+            r.ImGui_Text(ctx, "Color")
+            
+            r.ImGui_SetNextItemWidth(ctx, slider_width)
+            changed, settings.label_height_padding = r.ImGui_SliderInt(ctx, "##LabelHeight", settings.label_height_padding, 0, 10)
+            r.ImGui_SameLine(ctx, col2)
+            r.ImGui_Text(ctx, "Height")
+        end
+        
+        if r.ImGui_RadioButton(ctx, "Border", settings.label_border) then
+            settings.label_border = not settings.label_border
+        end
+        r.ImGui_BeginDisabled(ctx, not settings.label_border)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.label_border_thickness = r.ImGui_SliderDouble(ctx, "##LabelBorderThickness", settings.label_border_thickness, 0.5, 4.0)
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Thickness")
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.label_border_opacity = r.ImGui_SliderDouble(ctx, "##LabelBorderOpacity", settings.label_border_opacity, 0.0, 1.0)
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Opacity")
+        r.ImGui_EndDisabled(ctx)
+        
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+        r.ImGui_Text(ctx, "Label Text:")
+        
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        if r.ImGui_BeginCombo(ctx, "##Font", fonts[settings.selected_font]) then
+            for i, font_name in ipairs(fonts) do
+                if r.ImGui_Selectable(ctx, font_name, settings.selected_font == i) then
+                    settings.selected_font = i
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Font")
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        if r.ImGui_BeginCombo(ctx, "##Size", tostring(settings.text_size)) then
+            for _, size in ipairs(text_sizes) do
+                if r.ImGui_Selectable(ctx, tostring(size), settings.text_size == size) then
+                    settings.text_size = size
+                    needs_font_update = true
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Size")
+        
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        if r.ImGui_BeginCombo(ctx, "##Color", color_modes[settings.color_mode]) then
+            for i, color_name in ipairs(color_modes) do
+                if r.ImGui_Selectable(ctx, color_name, settings.color_mode == i) then
+                    settings.color_mode = i
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Color")
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.text_opacity = r.ImGui_SliderDouble(ctx, "##TextOpacity", settings.text_opacity, 0.0, 1.0)
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Opacity")
+        
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "##EnvOpacity", settings.envelope_text_opacity, 0.0, 1.0)
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Env Opacity")
+
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+        
         r.ImGui_Text(ctx, "Name length:")
-        r.ImGui_SameLine(ctx, column_width * 3)
-        r.ImGui_SetNextItemWidth(ctx, 90)
+        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_SetNextItemWidth(ctx, 140)
         if r.ImGui_BeginCombo(ctx, "##Track name length", 
             settings.track_name_length == 1 and " Full length" or
             settings.track_name_length == 2 and " Max 16 chars" or 
@@ -1016,9 +1149,7 @@ function ShowSettingsWindow()
             end
             r.ImGui_EndCombo(ctx)
         end
-        
         if settings.track_name_length == 4 then
-            r.ImGui_SameLine(ctx, column_width * 4)  
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 80)  
             local changed, new_length = r.ImGui_InputInt(ctx, "##FixedLength", settings.fixed_label_length)
@@ -1026,12 +1157,10 @@ function ShowSettingsWindow()
                 settings.fixed_label_length = math.max(1, math.min(100, new_length)) 
             end
         end
-
-    r.ImGui_Dummy(ctx, 0, 4)
-    r.ImGui_SameLine(ctx, column_width * 2)
+        
         r.ImGui_Text(ctx, "FX length:")
-        r.ImGui_SameLine(ctx, column_width * 3)
-        r.ImGui_SetNextItemWidth(ctx, 90)
+        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_SetNextItemWidth(ctx, 140)
         if r.ImGui_BeginCombo(ctx, "##FX name length", 
             settings.fx_name_length == 1 and " Full length" or
             settings.fx_name_length == 2 and " Max 16 chars" or 
@@ -1051,7 +1180,6 @@ function ShowSettingsWindow()
             r.ImGui_EndCombo(ctx)
         end
         if settings.fx_name_length == 4 then
-            r.ImGui_SameLine(ctx, column_width * 4)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 80)
             local changed, new_fx_length = r.ImGui_InputInt(ctx, "##FixedFXLength", settings.fx_fixed_label_length)
@@ -1059,167 +1187,208 @@ function ShowSettingsWindow()
                 settings.fx_fixed_label_length = math.max(1, math.min(100, new_fx_length))
             end
         end
-        if r.ImGui_RadioButton(ctx, "Env Names", settings.show_envelope_names) then
-            settings.show_envelope_names = not settings.show_envelope_names
-        end
-        r.ImGui_SameLine(ctx, column_width)
-        if r.ImGui_RadioButton(ctx, "Hide text for selected tracks", settings.text_hover_hide) then
-            settings.text_hover_hide = not settings.text_hover_hide
-        end
-        r.ImGui_SameLine(ctx, column_width * 3)
-        if r.ImGui_RadioButton(ctx, "Hide on hover", settings.text_hover_enabled) then
-            settings.text_hover_enabled = not settings.text_hover_enabled
-        end
-        r.ImGui_SameLine(ctx, column_width * 4)
-        if r.ImGui_RadioButton(ctx, "Show button", settings.show_settings_button) then
-            settings.show_settings_button = not settings.show_settings_button
-        end
-
-        r.ImGui_Dummy(ctx, 0, 2)
+        
+        r.ImGui_Dummy(ctx, 0, 4)
         r.ImGui_Separator(ctx)
         r.ImGui_Dummy(ctx, 0, 2)
-        if r.ImGui_RadioButton(ctx, "Track colors:", settings.show_track_colors) then
+        r.ImGui_Text(ctx, "Label Positioning:")
+        
+        if r.ImGui_RadioButton(ctx, "Center", settings.text_centered) then
+            settings.text_centered = not settings.text_centered
+            settings.auto_center = settings.text_centered
+            if settings.text_centered then
+                settings.right_align = false
+            end
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_BeginDisabled(ctx, settings.text_centered)
+        if r.ImGui_RadioButton(ctx, "Right align", settings.right_align) then
+            settings.right_align = not settings.right_align
+        end
+        r.ImGui_EndDisabled(ctx)
+        
+        r.ImGui_BeginDisabled(ctx, settings.text_centered)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "##HOffset", settings.horizontal_offset, 0, RIGHT - LEFT)
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "H Offset")
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "##VOffset", settings.vertical_offset, -50, 50)
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "V Offset")
+
+        elseif settings_tab == 2 then
+        -- ═══════════════════════════════════════════════════════════════════
+        -- COLORS TAB - track kleuren, gradients, borders, master
+        -- ═══════════════════════════════════════════════════════════════════
+        local changed
+        local Slider_Collumn_2 = 270
+        r.ImGui_PushItemWidth(ctx, 140)
+        
+        -- Rij 1: Parent Color, Child Color, Normal Color, Env Color
+        if r.ImGui_RadioButton(ctx, "Parent Color", settings.show_parent_colors) then
+            settings.show_parent_colors = not settings.show_parent_colors
+            needs_font_update = CheckTrackColorUpdate()
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        if r.ImGui_RadioButton(ctx, "Child Color", settings.show_child_colors) then
+            settings.show_child_colors = not settings.show_child_colors
+            needs_font_update = CheckTrackColorUpdate()
+        end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        if r.ImGui_RadioButton(ctx, "Normal Color", settings.show_normal_colors) then
+            settings.show_normal_colors = not settings.show_normal_colors
+            needs_font_update = CheckTrackColorUpdate()
+        end
+        r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Env Color", settings.show_envelope_colors) then
+            settings.show_envelope_colors = not settings.show_envelope_colors
+        end
+        
+        -- Rij 2: Dark Parent, Dark Nested, Inherit, Deep Inherit
+        if r.ImGui_RadioButton(ctx, "Dark Parent", settings.darker_parent_tracks) then
+            settings.darker_parent_tracks = not settings.darker_parent_tracks
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        if r.ImGui_RadioButton(ctx, "Dark Nested", settings.nested_parents_darker) then
+            settings.nested_parents_darker = not settings.nested_parents_darker
+        end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        if r.ImGui_RadioButton(ctx, "Inherit", settings.inherit_parent_color) then
+            settings.inherit_parent_color = not settings.inherit_parent_color
+            if settings.inherit_parent_color then
+                settings.deep_inherit_color = false
+            end
+        end
+        r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Deep Inherit", settings.deep_inherit_color) then
+            settings.deep_inherit_color = not settings.deep_inherit_color
+            if settings.deep_inherit_color then
+                settings.inherit_parent_color = false
+            end
+        end
+        
+        -- Rij 3: Gradual, Master Color + ColorPicker, Master Grad, Rec Color
+        if r.ImGui_RadioButton(ctx, "Gradual", settings.color_gradient_enabled) then
+            settings.color_gradient_enabled = not settings.color_gradient_enabled
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        if r.ImGui_RadioButton(ctx, "Master Color", settings.use_custom_master_color) then
+            settings.use_custom_master_color = not settings.use_custom_master_color
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_BeginDisabled(ctx, not settings.use_custom_master_color)
+        if r.ImGui_ColorButton(ctx, "##MasterColor", settings.master_track_color) then
+            r.ImGui_OpenPopup(ctx, "MasterColorPopup")
+        end
+        r.ImGui_EndDisabled(ctx)
+        if r.ImGui_BeginPopup(ctx, "MasterColorPopup") then
+            local changed, new_color = r.ImGui_ColorEdit4(ctx, "Master Color", settings.master_track_color)
+            if changed then settings.master_track_color = new_color end
+            r.ImGui_EndPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        r.ImGui_BeginDisabled(ctx, not settings.use_custom_master_color)
+        if r.ImGui_RadioButton(ctx, "Master Gradual", settings.master_gradient_enabled) then
+            settings.master_gradient_enabled = not settings.master_gradient_enabled
+        end
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Rec Color", settings.show_record_color) then
+            settings.show_record_color = not settings.show_record_color
+        end
+        
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+        
+        -- Rij 4: Track colors, dropdown, Gradient, dropdown
+        if r.ImGui_RadioButton(ctx, "Track colors", settings.show_track_colors) then
             settings.show_track_colors = not settings.show_track_colors
-            hasDrawingFocusBeenHandled = false
-            handleDrawingFocus()
             needs_font_update = true
         end
-        if settings.show_track_colors then
-            r.ImGui_SameLine(ctx, column_width)
-            r.ImGui_SetNextItemWidth(ctx, 90)
-            if r.ImGui_BeginCombo(ctx, "##Blend Mode", blend_modes[settings.blend_mode]) then
-                for i, mode in ipairs(blend_modes) do
-                    if r.ImGui_Selectable(ctx, mode, settings.blend_mode == i) then
-                        settings.blend_mode = i
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end
-            r.ImGui_SameLine(ctx, column_width * 2)
-            if r.ImGui_RadioButton(ctx, "Gradient:", settings.gradient_enabled) then
-                settings.gradient_enabled = not settings.gradient_enabled
-            end
-            r.ImGui_BeginDisabled(ctx, not settings.gradient_enabled)
-                r.ImGui_SameLine(ctx, column_width * 3)
-                r.ImGui_SetNextItemWidth(ctx, 90)
-                if r.ImGui_BeginCombo(ctx, "##Gradient Direction", 
-                    settings.gradient_direction == 1 and " Horizontal" or " Vertical") then
-                    if r.ImGui_Selectable(ctx, " Horizontal", settings.gradient_direction == 1) then
-                        settings.gradient_direction = 1
-                    end
-                    if r.ImGui_Selectable(ctx, " Vertical", settings.gradient_direction == 2) then
-                        settings.gradient_direction = 2
-                    end
-                    r.ImGui_EndCombo(ctx)
-                end
-            r.ImGui_EndDisabled(ctx)
-
-            if r.ImGui_RadioButton(ctx, "Parent Color", settings.show_parent_colors) then
-                settings.show_parent_colors = not settings.show_parent_colors
-                needs_font_update = CheckTrackColorUpdate()
-            end
-            r.ImGui_SameLine(ctx, column_width)
-            if r.ImGui_RadioButton(ctx, "Child Color", settings.show_child_colors) then
-                settings.show_child_colors = not settings.show_child_colors
-                needs_font_update = CheckTrackColorUpdate()
-            end
-            r.ImGui_SameLine(ctx, column_width * 2)
-            if r.ImGui_RadioButton(ctx, "Normal Color", settings.show_normal_colors) then
-                settings.show_normal_colors = not settings.show_normal_colors
-                needs_font_update = CheckTrackColorUpdate()
-            end
-            r.ImGui_SameLine(ctx, column_width * 3)
-            if r.ImGui_RadioButton(ctx, "Dark Parent", settings.darker_parent_tracks) then
-                settings.darker_parent_tracks = not settings.darker_parent_tracks
-            end
-            r.ImGui_SameLine(ctx, column_width * 4)
-            if r.ImGui_RadioButton(ctx, "Dark Nested", settings.nested_parents_darker) then
-                settings.nested_parents_darker = not settings.nested_parents_darker
-            end
-            if r.ImGui_RadioButton(ctx, "Env Color", settings.show_envelope_colors) then
-                settings.show_envelope_colors = not settings.show_envelope_colors
-            end
-            r.ImGui_SameLine(ctx, column_width)
-            if r.ImGui_RadioButton(ctx, "Rec color", settings.show_record_color) then
-                settings.show_record_color = not settings.show_record_color
-            end
-            r.ImGui_SameLine(ctx, column_width * 2)
-            if r.ImGui_RadioButton(ctx, "Inherit", settings.inherit_parent_color) then
-                settings.inherit_parent_color = not settings.inherit_parent_color
-                if settings.inherit_parent_color then
-                    settings.deep_inherit_color = false
-                end
-            end 
-            r.ImGui_SameLine(ctx, column_width * 3)
-            if r.ImGui_RadioButton(ctx, "Deep Inherit", settings.deep_inherit_color) then
-                settings.deep_inherit_color = not settings.deep_inherit_color
-                if settings.deep_inherit_color then
-                    settings.inherit_parent_color = false
-                end
-            end  
-            r.ImGui_SameLine(ctx, column_width * 4)
-            if settings.show_track_colors then
-                if r.ImGui_RadioButton(ctx, "Gradual", settings.color_gradient_enabled) then
-                    settings.color_gradient_enabled = not settings.color_gradient_enabled
+        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        if r.ImGui_BeginCombo(ctx, "##Blend Mode", blend_modes[settings.blend_mode]) then
+            for i, mode in ipairs(blend_modes) do
+                if r.ImGui_Selectable(ctx, mode, settings.blend_mode == i) then
+                    settings.blend_mode = i
                 end
             end
-            if r.ImGui_RadioButton(ctx, "F Borders:", settings.folder_border) then
-                settings.folder_border = not settings.folder_border
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx, col3)
+        if r.ImGui_RadioButton(ctx, "Gradient", settings.gradient_enabled) then
+            settings.gradient_enabled = not settings.gradient_enabled
+        end
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        if r.ImGui_BeginCombo(ctx, "##Gradient Direction", 
+            settings.gradient_direction == 1 and " Horizontal" or " Vertical") then
+            if r.ImGui_Selectable(ctx, " Horizontal", settings.gradient_direction == 1) then
+                settings.gradient_direction = 1
             end
-            r.ImGui_BeginDisabled(ctx, not settings.folder_border)
-                r.ImGui_SameLine(ctx, column_width)
-                r.ImGui_SetNextItemWidth(ctx, 90)
-                if r.ImGui_BeginCombo(ctx, "##Folder Border Options", " Sel Borders") then
-                    local clicked, new_state = r.ImGui_Checkbox(ctx, "All Borders", 
-                        settings.folder_border_left and
-                        settings.folder_border_right and
-                        settings.folder_border_top and
-                        settings.folder_border_bottom)
-                    if clicked then
-                        settings.folder_border_left = new_state
-                        settings.folder_border_right = new_state
-                        settings.folder_border_top = new_state
-                        settings.folder_border_bottom = new_state
-                    end
-                        clicked, settings.folder_border_left = r.ImGui_Checkbox(ctx, "Left Border", settings.folder_border_left)
-                        clicked, settings.folder_border_right = r.ImGui_Checkbox(ctx, "Right Border", settings.folder_border_right)
-                        clicked, settings.folder_border_top = r.ImGui_Checkbox(ctx, "Top Border", settings.folder_border_top)
-                        clicked, settings.folder_border_bottom = r.ImGui_Checkbox(ctx, "Bottom Border", settings.folder_border_bottom)
-                        r.ImGui_EndCombo(ctx)
-                 end
-            r.ImGui_EndDisabled(ctx)
-
-
-                r.ImGui_SameLine(ctx, column_width * 2)
-                if r.ImGui_RadioButton(ctx, "T Borders:", settings.track_border) then
-                    settings.track_border = not settings.track_border
-                end
-                r.ImGui_BeginDisabled(ctx, not settings.track_border)
-                    r.ImGui_SameLine(ctx, column_width * 3)
-                    r.ImGui_SetNextItemWidth(ctx, 90)
-                    if r.ImGui_BeginCombo(ctx, "##Track Border Options", " Sel Borders") then
-                        local clicked, new_state = r.ImGui_Checkbox(ctx, "All Borders",
-                            settings.track_border_left and
-                            settings.track_border_right and
-                            settings.track_border_top and
-                            settings.track_border_bottom)
-                        if clicked then
-                            settings.track_border_left = new_state
-                            settings.track_border_right = new_state
-                            settings.track_border_top = new_state
-                            settings.track_border_bottom = new_state
-                        end
-                        
-                        clicked, settings.track_border_left = r.ImGui_Checkbox(ctx, "Left Border", settings.track_border_left)
-                        clicked, settings.track_border_right = r.ImGui_Checkbox(ctx, "Right Border", settings.track_border_right)
-                        clicked, settings.track_border_top = r.ImGui_Checkbox(ctx, "Top Border", settings.track_border_top)
-                        clicked, settings.track_border_bottom = r.ImGui_Checkbox(ctx, "Bottom Border", settings.track_border_bottom)
-                        
-                    r.ImGui_EndCombo(ctx)
-                    end
-                r.ImGui_EndDisabled(ctx)   
-            end  
-        r.ImGui_PopStyleVar(ctx)
+            if r.ImGui_Selectable(ctx, " Vertical", settings.gradient_direction == 2) then
+                settings.gradient_direction = 2
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        
+        -- Rij 5: F Border, dropdown, T Border, dropdown
+        if r.ImGui_RadioButton(ctx, "Folder Border", settings.folder_border) then
+            settings.folder_border = not settings.folder_border
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_BeginDisabled(ctx, not settings.folder_border)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        if r.ImGui_BeginCombo(ctx, "##Folder Border Options", " Sel Borders") then
+            local clicked, new_state = r.ImGui_Checkbox(ctx, "All Borders", 
+                settings.folder_border_left and
+                settings.folder_border_right and
+                settings.folder_border_top and
+                settings.folder_border_bottom)
+            if clicked then
+                settings.folder_border_left = new_state
+                settings.folder_border_right = new_state
+                settings.folder_border_top = new_state
+                settings.folder_border_bottom = new_state
+            end
+            clicked, settings.folder_border_left = r.ImGui_Checkbox(ctx, "Left Border", settings.folder_border_left)
+            clicked, settings.folder_border_right = r.ImGui_Checkbox(ctx, "Right Border", settings.folder_border_right)
+            clicked, settings.folder_border_top = r.ImGui_Checkbox(ctx, "Top Border", settings.folder_border_top)
+            clicked, settings.folder_border_bottom = r.ImGui_Checkbox(ctx, "Bottom Border", settings.folder_border_bottom)
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_SameLine(ctx, col3)
+        if r.ImGui_RadioButton(ctx, "Track Border", settings.track_border) then
+            settings.track_border = not settings.track_border
+        end
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_BeginDisabled(ctx, not settings.track_border)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        if r.ImGui_BeginCombo(ctx, "##Track Border Options", " Sel Borders") then
+            local clicked, new_state = r.ImGui_Checkbox(ctx, "All Borders",
+                settings.track_border_left and
+                settings.track_border_right and
+                settings.track_border_top and
+                settings.track_border_bottom)
+            if clicked then
+                settings.track_border_left = new_state
+                settings.track_border_right = new_state
+                settings.track_border_top = new_state
+                settings.track_border_bottom = new_state
+            end
+            clicked, settings.track_border_left = r.ImGui_Checkbox(ctx, "Left Border", settings.track_border_left)
+            clicked, settings.track_border_right = r.ImGui_Checkbox(ctx, "Right Border", settings.track_border_right)
+            clicked, settings.track_border_top = r.ImGui_Checkbox(ctx, "Top Border", settings.track_border_top)
+            clicked, settings.track_border_bottom = r.ImGui_Checkbox(ctx, "Bottom Border", settings.track_border_bottom)
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_EndDisabled(ctx)
+        
         r.ImGui_Dummy(ctx, 0, 2)
         r.ImGui_Separator(ctx)
         r.ImGui_Dummy(ctx, 0, 2)
@@ -1237,24 +1406,7 @@ function ShowSettingsWindow()
                 changed, settings.gradient_end_alpha = r.ImGui_SliderDouble(ctx, "End Gradient", settings.gradient_end_alpha, 0.0, 1.0)
                 if changed then UpdateGradientAlphaCache() end
             end
-            if settings.show_envelope_colors then
-                if settings.gradient_enabled then
-                changed, settings.envelope_color_intensity = r.ImGui_SliderDouble(ctx, "Env Intensity", settings.envelope_color_intensity, 0.0, 1.0)
-                else
-                r.ImGui_SameLine(ctx) 
-                r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-                changed, settings.envelope_color_intensity = r.ImGui_SliderDouble(ctx, "Env Intensity", settings.envelope_color_intensity, 0.0, 1.0)
-                end
-            end
             
-            r.ImGui_SetNextItemWidth(ctx, 140)
-            if settings.gradient_enabled then
-            r.ImGui_SameLine(ctx)    
-            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-            changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "Env Text Opacity", settings.envelope_text_opacity, 0.0, 1.0)
-            else
-            changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "Env Text Opacity", settings.envelope_text_opacity, 0.0, 1.0)   
-            end
             if settings.darker_parent_tracks then
                 changed, settings.parent_darkness = r.ImGui_SliderDouble(ctx, "Parent Darkness", settings.parent_darkness, 0.1, 1.0)
                 r.ImGui_SameLine(ctx)
@@ -1268,68 +1420,236 @@ function ShowSettingsWindow()
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
                 changed, settings.border_opacity = r.ImGui_SliderDouble(ctx, "Border Opacity", settings.border_opacity, 0.0, 1.0)     
-            end               
+            end
+            
+            if settings.use_custom_master_color then
+                if not settings.master_gradient_enabled then
+                    changed, settings.master_overlay_alpha = r.ImGui_SliderDouble(ctx, "Master Intensity", settings.master_overlay_alpha, 0.0, 1.0)
+                end
+                if settings.master_gradient_enabled then
+                    changed, settings.master_gradient_start_alpha = r.ImGui_SliderDouble(ctx, "Master Start", settings.master_gradient_start_alpha, 0.0, 1.0)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+                    changed, settings.master_gradient_end_alpha = r.ImGui_SliderDouble(ctx, "Master End", settings.master_gradient_end_alpha, 0.0, 1.0)
+                end
+            end
+            
+            if settings.show_envelope_colors then
+                changed, settings.envelope_color_intensity = r.ImGui_SliderDouble(ctx, "Env Intensity", settings.envelope_color_intensity, 0.0, 1.0)
+            end
         end
-        if settings.show_label then                            
-            changed, settings.label_alpha = r.ImGui_SliderDouble(ctx, "Label Opacity", settings.label_alpha, 0.0, 1.0)
-            local label_combo_pos_x = LEFT + settings.horizontal_offset
-            local label_combo_pos_y = WY + settings.vertical_offset 
+        
+        r.ImGui_PopItemWidth(ctx)
+
+        elseif settings_tab == 4 then
+        -- ═══════════════════════════════════════════════════════════════════
+        -- ICONS TAB - icon settings
+        -- ═══════════════════════════════════════════════════════════════════
+        local changed
+        
+        -- Rij 1: Show Icons, Clear Icons
+        if r.ImGui_RadioButton(ctx, "Show Icons", settings.show_track_icons) then
+            settings.show_track_icons = not settings.show_track_icons
+        end
+        r.ImGui_SameLine(ctx, col3)
+        if r.ImGui_Button(ctx, "Clear Icons", slider_width) then
+            for i = 0, r.CountSelectedTracks(0) - 1 do
+                local track = r.GetSelectedTrack(0, i)
+                track_icon_manager.ClearTrackIcon(track)
+            end
+        end
+        
+        -- Rij 2: Size slider + label, Spacing slider + label
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.icon_size = r.ImGui_SliderInt(ctx, "##IconSize", settings.icon_size, 12, 64)
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Size")
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.icon_spacing = r.ImGui_SliderInt(ctx, "##IconSpacing", settings.icon_spacing, 0, 40)
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Spacing")
+        
+        -- Rij 3: Opacity slider + label, Position radio buttons + label
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.icon_opacity = r.ImGui_SliderDouble(ctx, "##IconOpacity", settings.icon_opacity, 0.0, 1.0)
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Opacity")
+        r.ImGui_SameLine(ctx, col3)
+        if r.ImGui_RadioButton(ctx, "Left", settings.icon_position == 1) then
+            settings.icon_position = 1
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, "Right", settings.icon_position == 2) then
+            settings.icon_position = 2
+        end
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Position")
+        
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+        
+        -- Embedded Icon Browser
+        -- Mode selection row
+        if r.ImGui_RadioButton(ctx, "REAPER", track_icon_browser.browse_mode == "icons") then
+            if track_icon_browser.browse_mode ~= "icons" then
+                track_icon_browser.SetBrowseMode("icons")
+            end
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, "Custom", track_icon_browser.browse_mode == "images") then
+            if track_icon_browser.browse_mode ~= "images" then
+                track_icon_browser.SetBrowseMode("images", track_icon_browser.custom_image_folder)
+            end
+        end
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_SetNextItemWidth(ctx, slider_width + column_width)
+        local rv
+        rv, track_icon_browser.search_text = r.ImGui_InputTextWithHint(ctx, "##IconSearch", "Search...", track_icon_browser.search_text)
+        if rv then
+            track_icon_browser.FilterIcons()
+        end
+        
+        -- Scale/Folder selection row
+        if track_icon_browser.browse_mode == "icons" then
+            if r.ImGui_RadioButton(ctx, "100%", track_icon_browser.icon_scale == 100) then
+                if track_icon_browser.icon_scale ~= 100 then
+                    track_icon_browser.icon_scale = 100
+                    track_icon_browser.ReloadIcons()
+                end
+            end
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-            if r.ImGui_BeginCombo(ctx, "Label Color", color_modes[settings.label_color_mode]) then
-                for i, color_name in ipairs(color_modes) do
-                    if r.ImGui_Selectable(ctx, color_name, settings.label_color_mode == i) then
-                        settings.label_color_mode = i
+            if r.ImGui_RadioButton(ctx, "150%", track_icon_browser.icon_scale == 150) then
+                if track_icon_browser.icon_scale ~= 150 then
+                    track_icon_browser.icon_scale = 150
+                    track_icon_browser.ReloadIcons()
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_RadioButton(ctx, "200%", track_icon_browser.icon_scale == 200) then
+                if track_icon_browser.icon_scale ~= 200 then
+                    track_icon_browser.icon_scale = 200
+                    track_icon_browser.ReloadIcons()
+                end
+            end
+            r.ImGui_SameLine(ctx, col3)
+            r.ImGui_Text(ctx, string.format("(%d icons)", #track_icon_browser.filtered_icons))
+        else
+            if r.ImGui_Button(ctx, "Select Folder", slider_width) then
+                if r.JS_Dialog_BrowseForFolder then
+                    local retval, folder = r.JS_Dialog_BrowseForFolder("Select image folder", track_icon_browser.custom_image_folder)
+                    if retval == 1 and folder ~= "" then
+                        track_icon_browser.custom_image_folder = folder
+                        track_icon_browser.SaveLastImageFolder()
+                        track_icon_browser.ReloadIcons()
                     end
                 end
-                r.ImGui_EndCombo(ctx)
             end
+            r.ImGui_SameLine(ctx, col3)
+            r.ImGui_Text(ctx, string.format("(%d icons)", #track_icon_browser.filtered_icons))
         end
-        r.ImGui_BeginDisabled(ctx, settings.auto_center and settings.text_centered)
-            changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal Offset", settings.horizontal_offset, 0, RIGHT - LEFT)
-        r.ImGui_EndDisabled(ctx)
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-        changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical Offset", settings.vertical_offset, -50, 50)
-        if r.ImGui_BeginCombo(ctx, "Font Selection", fonts[settings.selected_font]) then
-            for i, font_name in ipairs(fonts) do
-                if r.ImGui_Selectable(ctx, font_name, settings.selected_font == i) then
-                    settings.selected_font = i
+        
+        r.ImGui_Dummy(ctx, 0, 2)
+        
+        -- Load icons if not loaded
+        if #track_icon_browser.icons == 0 then
+            if track_icon_browser.browse_mode == "images" and track_icon_browser.custom_image_folder == "" then
+                track_icon_browser.LoadLastImageFolder()
+            end
+            track_icon_browser.LoadIcons()
+            track_icon_browser.FilterIcons()
+        end
+        
+        -- Icon grid (fills remaining space before footer)
+        local footer_height = 32
+        local _, avail_height = r.ImGui_GetContentRegionAvail(ctx)
+        local available_height = avail_height - footer_height - 8
+        if available_height < 50 then available_height = 50 end
+        
+        if r.ImGui_BeginChild(ctx, "EmbeddedIconGrid", 0, available_height, 1) then
+            local child_width = r.ImGui_GetContentRegionAvail(ctx)
+            local icon_size = 32
+            local icon_spacing = 4
+            local columns = math.floor(child_width / (icon_size + icon_spacing))
+            if columns < 1 then columns = 1 end
+            
+            local total_icons = #track_icon_browser.filtered_icons
+            
+            for idx, icon in ipairs(track_icon_browser.filtered_icons) do
+                if idx > 1 and ((idx - 1) % columns) ~= 0 then
+                    r.ImGui_SameLine(ctx)
+                end
+                
+                local has_image = track_icon_browser.image_cache[icon.name] and 
+                                r.ImGui_ValidatePtr(track_icon_browser.image_cache[icon.name], 'ImGui_Image*')
+                
+                if has_image then
+                    local uv_u2 = (track_icon_browser.browse_mode == "icons") and 0.33 or 1.0
+                    
+                    if r.ImGui_ImageButton(ctx, "##embicon" .. idx, track_icon_browser.image_cache[icon.name],
+                        icon_size, icon_size, 0, 0, uv_u2, 1) then
+                        -- Assign icon to selected tracks
+                        for i = 0, r.CountSelectedTracks(0) - 1 do
+                            local track = r.GetSelectedTrack(0, i)
+                            if track then
+                                track_icon_manager.SetTrackIcon(track, icon.path)
+                            end
+                        end
+                    end
+                else
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x404040FF)
+                    if r.ImGui_Button(ctx, "##embicon" .. idx, icon_size, icon_size) then
+                        for i = 0, r.CountSelectedTracks(0) - 1 do
+                            local track = r.GetSelectedTrack(0, i)
+                            if track then
+                                track_icon_manager.SetTrackIcon(track, icon.path)
+                            end
+                        end
+                    end
+                    r.ImGui_PopStyleColor(ctx)
+                    
+                    if r.ImGui_IsItemVisible(ctx) then
+                        local ok, img = pcall(r.ImGui_CreateImage, icon.path)
+                        if ok and img then
+                            track_icon_browser.image_cache[icon.name] = img
+                        end
+                    end
+                end
+                
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_BeginTooltip(ctx)
+                    r.ImGui_Text(ctx, icon.name)
+                    r.ImGui_EndTooltip(ctx)
                 end
             end
-            r.ImGui_EndCombo(ctx)
+            
+            r.ImGui_EndChild(ctx)
         end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-        if r.ImGui_BeginCombo(ctx, "Text Color", color_modes[settings.color_mode]) then
-            for i, color_name in ipairs(color_modes) do
-                if r.ImGui_Selectable(ctx, color_name, settings.color_mode == i) then
-                    settings.color_mode = i
-                end
-            end
-            r.ImGui_EndCombo(ctx)
+
+        elseif settings_tab == 3 then
+        -- ═══════════════════════════════════════════════════════════════════
+        -- GRID & BG TAB - custom colors grid/background
+        -- ═══════════════════════════════════════════════════════════════════
+        local changed
+        local Slider_Collumn_2 = 270
+        r.ImGui_PushItemWidth(ctx, 140)
+        
+        if r.ImGui_Button(ctx, settings.custom_colors_enabled and "Disable Custom Colors" or "Enable Custom Colors", 180) then
+            reaper.Undo_BeginBlock()
+            ToggleColors()
+            reaper.Undo_EndBlock("Toggle Custom Grid and Background Colors", -1)
         end
-        if r.ImGui_BeginCombo(ctx, "Text Size", tostring(settings.text_size)) then
-            for _, size in ipairs(text_sizes) do
-                if r.ImGui_Selectable(ctx, tostring(size), settings.text_size == size) then
-                    settings.text_size = size
-                    needs_font_update = true
-                end
-            end
-            r.ImGui_EndCombo(ctx)
-        end
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-        changed, settings.text_opacity = r.ImGui_SliderDouble(ctx, "Text Opacity", settings.text_opacity, 0.0, 1.0)
+        
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
         
         if settings.custom_colors_enabled then
-            r.ImGui_Dummy(ctx, 0, 2)
-            r.ImGui_Separator(ctx)
-            r.ImGui_Dummy(ctx, 0, 2)
-        
+            r.ImGui_Text(ctx, "Grid Settings:")
             r.ImGui_BeginDisabled(ctx, not settings.grid_color_enabled)
-            r.ImGui_SetNextItemWidth(ctx, 110)
-            changed_grid, settings.grid_color = r.ImGui_SliderDouble(ctx, "Grid Color", settings.grid_color, 0.0, 1.0)
+            r.ImGui_SetNextItemWidth(ctx, 140)
+            local changed_grid, new_grid = r.ImGui_SliderDouble(ctx, "Grid Color", settings.grid_color, 0.0, 1.0)
+            if changed_grid then settings.grid_color = new_grid end
             r.ImGui_EndDisabled(ctx)
             
             r.ImGui_SameLine(ctx)
@@ -1347,11 +1667,19 @@ function ShowSettingsWindow()
                 end
             end
             
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+            if changed_grid and settings.grid_color_enabled then
+                UpdateGridColors()
+            end
+            
+            r.ImGui_Dummy(ctx, 0, 4)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Dummy(ctx, 0, 2)
+            r.ImGui_Text(ctx, "Background Settings:")
+            
             r.ImGui_BeginDisabled(ctx, not settings.bg_brightness_enabled)
-            r.ImGui_SetNextItemWidth(ctx, 110)
-            changed_bg, settings.bg_brightness = r.ImGui_SliderDouble(ctx, "Bg Brightness", settings.bg_brightness, 0.0, 1.0)
+            r.ImGui_SetNextItemWidth(ctx, 140)
+            local changed_bg, new_bg = r.ImGui_SliderDouble(ctx, "Bg Brightness", settings.bg_brightness, 0.0, 1.0)
+            if changed_bg then settings.bg_brightness = new_bg end
             r.ImGui_EndDisabled(ctx)
             
             r.ImGui_SameLine(ctx)
@@ -1365,104 +1693,275 @@ function ShowSettingsWindow()
                 end
             end
             
-            changed_bg_tr1, settings.bg_brightness_tr1 = r.ImGui_SliderDouble(ctx, "Track (odd) ", settings.bg_brightness_tr1, 0.0, 1.0)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-            changed_sel_tr1, settings.sel_brightness_tr1 = r.ImGui_SliderDouble(ctx, "Sel Track (odd)", settings.sel_brightness_tr1, 0.0, 1.0)
-            changed_bg_tr2, settings.bg_brightness_tr2 = r.ImGui_SliderDouble(ctx, "Track (even) ", settings.bg_brightness_tr2, 0.0, 1.0)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-            changed_sel_tr2, settings.sel_brightness_tr2 = r.ImGui_SliderDouble(ctx, "Sel Track (even)", settings.sel_brightness_tr2, 0.0, 1.0)
-            if changed_grid and settings.grid_color_enabled then
-                UpdateGridColors()
-            end
             if changed_bg and settings.bg_brightness_enabled then
                 UpdateArrangeBG()
             end
+            
+            r.ImGui_Dummy(ctx, 0, 4)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Dummy(ctx, 0, 2)
+            r.ImGui_Text(ctx, "Track Background Colors:")
+            
+            local changed_bg_tr1, new_bg_tr1 = r.ImGui_SliderDouble(ctx, "Track (odd) ", settings.bg_brightness_tr1, 0.0, 1.0)
+            if changed_bg_tr1 then settings.bg_brightness_tr1 = new_bg_tr1 end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+            local changed_sel_tr1, new_sel_tr1 = r.ImGui_SliderDouble(ctx, "Sel Track (odd)", settings.sel_brightness_tr1, 0.0, 1.0)
+            if changed_sel_tr1 then settings.sel_brightness_tr1 = new_sel_tr1 end
+            
+            local changed_bg_tr2, new_bg_tr2 = r.ImGui_SliderDouble(ctx, "Track (even) ", settings.bg_brightness_tr2, 0.0, 1.0)
+            if changed_bg_tr2 then settings.bg_brightness_tr2 = new_bg_tr2 end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+            local changed_sel_tr2, new_sel_tr2 = r.ImGui_SliderDouble(ctx, "Sel Track (even)", settings.sel_brightness_tr2, 0.0, 1.0)
+            if changed_sel_tr2 then settings.sel_brightness_tr2 = new_sel_tr2 end
+            
             if changed_bg_tr1 or changed_bg_tr2 or changed_sel_tr1 or changed_sel_tr2 then
                 UpdateTrackColors()
             end
-        end
-
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Master Track Settings")
-        
-        changed, settings.use_custom_master_color = r.ImGui_Checkbox(ctx, "Use Custom Master Color", settings.use_custom_master_color)
-        
-        if settings.use_custom_master_color then
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_ColorButton(ctx, "Master Track Color##master", settings.master_track_color) then
-                r.ImGui_OpenPopup(ctx, "MasterColorPopup")
-            end
-            
-            if r.ImGui_BeginPopup(ctx, "MasterColorPopup") then
-                local changed, new_color = r.ImGui_ColorEdit4(ctx, "Master Color", settings.master_track_color)
-                if changed then settings.master_track_color = new_color end
-                r.ImGui_EndPopup(ctx)
-            end
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-            r.ImGui_BeginDisabled(ctx, settings.master_gradient_enabled)
-            changed, settings.master_overlay_alpha = r.ImGui_SliderDouble(ctx, "Intensity", settings.master_overlay_alpha, 0.0, 1.0)
-            r.ImGui_EndDisabled(ctx)
-
-            changed, settings.master_gradient_enabled = r.ImGui_Checkbox(ctx, "Gradient", settings.master_gradient_enabled)
-            if settings.master_gradient_enabled then
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-                r.ImGui_SetNextItemWidth(ctx, 70)
-                changed, settings.master_gradient_start_alpha = r.ImGui_SliderDouble(ctx, "Start", settings.master_gradient_start_alpha, 0.0, 1.0)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_SetNextItemWidth(ctx, 70)
-                changed, settings.master_gradient_end_alpha = r.ImGui_SliderDouble(ctx, "End", settings.master_gradient_end_alpha, 0.0, 1.0)
-            end
+        else
+            r.ImGui_TextWrapped(ctx, "Custom colors are disabled. Click the button above to enable custom grid and background colors.")
         end
         
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Track Icon Settings")
-        
-        changed, settings.show_track_icons = r.ImGui_Checkbox(ctx, "Show Track Icons", settings.show_track_icons)
-        
-        if settings.show_track_icons then
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-            changed, settings.icon_size = r.ImGui_SliderInt(ctx, "Icon Size", settings.icon_size, 12, 64)
-            
-            changed, settings.icon_opacity = r.ImGui_SliderDouble(ctx, "Icon Opacity", settings.icon_opacity, 0.0, 1.0)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
-            changed, settings.icon_spacing = r.ImGui_SliderInt(ctx, "Icon Spacing", settings.icon_spacing, 0, 40)
-            
-            r.ImGui_Text(ctx, "Icon Position:")
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_RadioButton(ctx, "Left of Text", settings.icon_position == 1) then
-                settings.icon_position = 1
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_RadioButton(ctx, "Right of Text", settings.icon_position == 2) then
-                settings.icon_position = 2
-            end
-            
-            if r.ImGui_Button(ctx, "Assign Icon to Selected Tracks", 250, 0) then
-                local sel_track_count = r.CountSelectedTracks(0)
-                if sel_track_count > 0 then
-                    track_icon_browser.show_window = true
-                end
-            end
-            
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Clear Icons", 120, 0) then
-                for i = 0, r.CountSelectedTracks(0) - 1 do
-                    local track = r.GetSelectedTrack(0, i)
-                    track_icon_manager.ClearTrackIcon(track)
-                end
-            end
-        end
-
         r.ImGui_PopItemWidth(ctx)
-        r.ImGui_End(ctx)
+
+        elseif settings_tab == 5 then
+        -- ═══════════════════════════════════════════════════════════════════
+        -- TRACK VISIBILITY TAB
+        -- ═══════════════════════════════════════════════════════════════════
+        
+            if r.ImGui_Button(ctx, "Show All", 80) then
+                excluded_tracks = {}
+                SaveExcludedTracks()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Hide All", 80) then
+                for i = 0, r.CountTracks(0) - 1 do
+                    local track = r.GetTrack(0, i)
+                    excluded_tracks[GetTrackGUID(track)] = true
+                end
+                SaveExcludedTracks()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Folders Only", 90) then
+                excluded_tracks = {}
+                for i = 0, r.CountTracks(0) - 1 do
+                    local track = r.GetTrack(0, i)
+                    local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+                    if not is_folder then
+                        excluded_tracks[GetTrackGUID(track)] = true
+                    end
+                end
+                SaveExcludedTracks()
+            end
+            r.ImGui_SameLine(ctx)
+            local tcp_label = tcp_synced and "Show in TCP" or "Hide in TCP"
+            if r.ImGui_Button(ctx, tcp_label, 90) then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                if tcp_synced then
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
+                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
+                    end
+                    tcp_synced = false
+                else
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        local is_visible = not IsTrackExcluded(track)
+                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", is_visible and 1 or 0)
+                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", is_visible and 1 or 0)
+                    end
+                    tcp_synced = true
+                end
+                r.TrackList_AdjustWindows(true)
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock(tcp_synced and "Hide unchecked in TCP" or "Show all in TCP", -1)
+            end
+            
+            local track_count = r.CountTracks(0)
+            local visible_count = 0
+            for i = 0, track_count - 1 do
+                local track = r.GetTrack(0, i)
+                if not IsTrackExcluded(track) then
+                    visible_count = visible_count + 1
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, string.format("(%d/%d)", visible_count, track_count))
+            
+            r.ImGui_Separator(ctx)
+            r.ImGui_Dummy(ctx, 0, 2)
+            
+            r.ImGui_Text(ctx, "Exclude by name:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 150)
+            local changed
+            changed, exclude_filter = r.ImGui_InputText(ctx, "##exclude_filter", exclude_filter)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Hide", 50) and exclude_filter ~= "" then
+                local filter_lower = exclude_filter:lower()
+                for i = 0, r.CountTracks(0) - 1 do
+                    local track = r.GetTrack(0, i)
+                    local _, track_name = r.GetTrackName(track)
+                    if track_name:lower():find(filter_lower, 1, true) then
+                        excluded_tracks[GetTrackGUID(track)] = true
+                    end
+                end
+                SaveExcludedTracks()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Show", 50) and exclude_filter ~= "" then
+                local filter_lower = exclude_filter:lower()
+                for i = 0, r.CountTracks(0) - 1 do
+                    local track = r.GetTrack(0, i)
+                    local _, track_name = r.GetTrackName(track)
+                    if track_name:lower():find(filter_lower, 1, true) then
+                        excluded_tracks[GetTrackGUID(track)] = nil
+                    end
+                end
+                SaveExcludedTracks()
+            end
+            
+            r.ImGui_Separator(ctx)
+            r.ImGui_Dummy(ctx, 0, 2)
+            
+            local footer_height = 32
+            local _, avail_height = r.ImGui_GetContentRegionAvail(ctx)
+            local list_height = avail_height - footer_height - 8
+            
+            r.ImGui_BeginChild(ctx, "TrackVisibilityList", 0, list_height, 1)
+            
+            for i = 0, track_count - 1 do
+                local track = r.GetTrack(0, i)
+                local _, track_name = r.GetTrackName(track)
+                local depth = 0
+                local parent = r.GetParentTrack(track)
+                while parent do
+                    depth = depth + 1
+                    parent = r.GetParentTrack(parent)
+                end
+                
+                local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+                local indent = string.rep("  ", depth)
+                local folder_icon = is_folder and "[F] " or "     "
+                local display_name = indent .. folder_icon .. track_name
+                
+                local show_label = not IsTrackExcluded(track)
+                
+                local display_color = r.GetTrackColor(track)
+                
+                if settings.deep_inherit_color then
+                    local current = track
+                    local main_parent = nil
+                    while r.GetParentTrack(current) do
+                        current = r.GetParentTrack(current)
+                        if not r.GetParentTrack(current) then
+                            main_parent = current
+                        end
+                    end
+                    if main_parent then
+                        display_color = r.GetTrackColor(main_parent)
+                    end
+                elseif settings.inherit_parent_color then
+                    local parent_track = r.GetParentTrack(track)
+                    if parent_track then
+                        display_color = r.GetTrackColor(parent_track)
+                    end
+                end
+                
+                if display_color ~= 0 then
+                    local b = (display_color >> 16) & 0xFF
+                    local g = (display_color >> 8) & 0xFF
+                    local rb = display_color & 0xFF
+                    local imgui_color = (rb << 24) | (g << 16) | (b << 8) | 0xFF
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), imgui_color)
+                end
+                
+                r.ImGui_PushID(ctx, i)
+                local changed, new_value = r.ImGui_Checkbox(ctx, display_name, show_label)
+                if changed then
+                    SetTrackExcluded(track, not new_value)
+                end
+                r.ImGui_PopID(ctx)
+                
+                if display_color ~= 0 then
+                    r.ImGui_PopStyleColor(ctx)
+                end
+            end
+            
+            r.ImGui_EndChild(ctx)
+        
+        end
+        
+        -- ═══════════════════════════════════════════════════════════════════
+        -- FOOTER - presets, autosave, save/reset (altijd zichtbaar)
+        -- ═══════════════════════════════════════════════════════════════════
+        local footer_height = 32
+        local window_height = r.ImGui_GetWindowHeight(ctx)
+        
+        r.ImGui_SetCursorPosY(ctx, window_height - footer_height)
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x1A1A1AFF)
+        r.ImGui_BeginChild(ctx, "Footer", 0, 0, 0)
+        r.ImGui_PopStyleVar(ctx)
+        
+        local footer_btn_width = column_width - item_spacing
+        
+        if r.ImGui_Button(ctx, "Save Preset", footer_btn_width) then
+            r.ImGui_OpenPopup(ctx, "Save Preset##popup")
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        local presets = GetPresetList()
+        r.ImGui_SetNextItemWidth(ctx, footer_btn_width)
+        if r.ImGui_BeginCombo(ctx, "##Load Preset", "Load Preset") then
+            for _, preset_name in ipairs(presets) do
+                local is_clicked = r.ImGui_Selectable(ctx, preset_name)
+                if r.ImGui_BeginPopupContextItem(ctx) then
+                    if r.ImGui_MenuItem(ctx, "Delete") then
+                        os.remove(preset_path .. preset_name .. '.json')
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+                if is_clicked then
+                    LoadPreset(preset_name)
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        if r.ImGui_Button(ctx, "Reset", footer_btn_width) then
+            ResetSettings()
+        end
+        
+        r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Show button", settings.show_settings_button) then
+            settings.show_settings_button = not settings.show_settings_button
+        end
+        
+        if r.ImGui_BeginPopup(ctx, "Save Preset##popup") then
+            r.ImGui_Text(ctx, "Enter preset name:")
+            local changed, new_name = r.ImGui_InputText(ctx, "##preset_name", preset_name)
+            if changed then preset_name = new_name end
+            
+            if r.ImGui_Button(ctx, "Save") then
+                if preset_name ~= "" then
+                    SavePreset(preset_name)
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+        
+        r.ImGui_EndChild(ctx)
+        r.ImGui_PopStyleColor(ctx)
         
     end
+    
+    r.ImGui_End(ctx)
     r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleVar(ctx, 5)
     r.ImGui_PopStyleColor(ctx, 10)
@@ -1550,7 +2049,7 @@ function TruncateTrackName(name, mode, fixed_len_override)
     return name
 end
 
-function RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height)
+function RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height, keep_text_aligned)
     if not settings.show_track_icons then return text_x end
     
     local icon_path = track_icon_manager.GetTrackIcon(track)
@@ -1564,10 +2063,8 @@ function RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_w
     local icon_size = settings.icon_size
     local icon_spacing = settings.icon_spacing
     
-    -- Calculate icon Y position - centered vertically in track
     local icon_y = WY + track_y + (track_height * 0.5) - (icon_size * 0.5) + vertical_offset
     
-    -- Only draw if within visible area
     if not is_pinned and icon_y < WY + pinned_tracks_height then 
         return text_x 
     end
@@ -1576,15 +2073,16 @@ function RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_w
     local adjusted_text_x = text_x
     
     if settings.icon_position == 1 then 
-        -- Icon LEFT: draw icon before text, adjust text position right
-        icon_x = text_x
-        adjusted_text_x = text_x + icon_size + icon_spacing
+        if keep_text_aligned then
+            icon_x = text_x - icon_size - icon_spacing
+        else
+            icon_x = text_x
+            adjusted_text_x = text_x + icon_size + icon_spacing
+        end
     else 
-        -- Icon RIGHT: draw icon after text, text stays in place
         icon_x = text_x + text_width + icon_spacing
     end
     
-    -- UV coordinates
     local uv0_x, uv0_y = 0, 0
     local uv1_x, uv1_y = icon_path:find("toolbar_icons") and 0.33 or 1, 1
     local tint_col = r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.icon_opacity)
@@ -1619,6 +2117,7 @@ end
 
 function CheckNeedsUpdate()
     return not (settings.show_child_tracks or 
+                settings.show_normal_tracks or
                 settings.show_parent_tracks or 
                 settings.show_parent_label)
 end
@@ -2576,15 +3075,22 @@ function loop()
                     local should_show_track = false
                     local should_show_name = false
 
-                    if settings.show_parent_tracks and is_parent then
+                    if IsTrackExcluded(track) then
+                        should_show_track = false
+                        should_show_name = false
+                    elseif settings.show_parent_tracks and is_parent then
                         should_show_track = true
                         should_show_name = true
                     end
-                    if settings.show_child_tracks and (is_child or (not is_parent and not is_child)) then
+                    if not IsTrackExcluded(track) and settings.show_child_tracks and is_child then
                         should_show_track = true
                         should_show_name = true
                     end
-                    if settings.show_parent_label and is_child then
+                    if not IsTrackExcluded(track) and settings.show_normal_tracks and (not is_parent and not is_child) then
+                        should_show_track = true
+                        should_show_name = true
+                    end
+                    if not IsTrackExcluded(track) and settings.show_parent_label and is_child then
                         should_show_track = true
                     end
 
@@ -2639,28 +3145,20 @@ function loop()
                                 if settings.text_centered then
                                     if settings.auto_center then
                                         local window_width = RIGHT - LEFT - scroll_size
+                                        local total_spacing = BASE_SPACING + TEXT_SIZE_FACTOR
+                                        if settings.show_track_numbers then
+                                            total_spacing = total_spacing + NUMBER_SPACING / 2
+                                        end
+                                        
                                         if should_show_track then
-                                            local _, track_name = r.GetTrackName(track)
-                                            local track_display = TruncateTrackName(track_name, settings.track_name_length, settings.fixed_label_length)
-                                            local fx_display = nil
-                                            if settings.show_first_fx then
-                                                local fx_count = r.TrackFX_GetCount(track)
-                                                if fx_count > 0 then
-                                                    local _, fx_name = r.TrackFX_GetFXName(track, 0, "")
-                                                    local fx_name_clean = fx_name:gsub("^[^:]+:%s*", "")
-                                                    fx_display = TruncateTrackName(fx_name_clean, settings.fx_name_length, settings.fx_fixed_label_length)
-                                                end
+                                            local center_x = LEFT + (window_width / 2) - (track_text_width / 2)
+                                            if settings.icon_position == 1 then
+                                                parent_text_pos = center_x + track_text_width + total_spacing
+                                            else
+                                                parent_text_pos = center_x - total_spacing - parent_text_width
                                             end
-                                            local display_name = fx_display and (track_display .. " - " .. fx_display) or track_display
-                                            local total_spacing = BASE_SPACING + TEXT_SIZE_FACTOR
-                                            if settings.show_track_numbers then
-                                                total_spacing = total_spacing + NUMBER_SPACING /2
-                                            end
-                                            local offset = (max_width - track_text_width) / 2
-                                            parent_text_pos = WX + settings.horizontal_offset + offset + track_text_width + total_spacing
                                         else
-                                            local offset = (max_width - parent_text_width) / 2
-                                            parent_text_pos = WX + settings.horizontal_offset + offset
+                                            parent_text_pos = LEFT + (window_width / 2) - (parent_text_width / 2)
                                         end
                                     end
                                 elseif settings.right_align then
@@ -2670,9 +3168,14 @@ function loop()
                                         total_spacing = total_spacing + NUMBER_SPACING
                                     end
                                     
+                                    local icon_offset = 0
+                                    if settings.show_track_icons and track_icon_manager.GetTrackIcon(track) and settings.icon_position == 1 then
+                                        icon_offset = settings.icon_size + settings.icon_spacing
+                                    end
+                                    
                                     parent_text_pos = RIGHT - scroll_size - parent_text_width - right_margin - settings.horizontal_offset
                                     if should_show_name then
-                                        parent_text_pos = parent_text_pos - track_text_width - total_spacing
+                                        parent_text_pos = parent_text_pos - track_text_width - total_spacing - icon_offset
                                     end
                                 else
                                     if should_show_name then
@@ -2680,7 +3183,24 @@ function loop()
                                         if settings.show_track_numbers then
                                             total_spacing = total_spacing + NUMBER_SPACING
                                         end
-                                        parent_text_pos = WX + settings.horizontal_offset + track_text_width + total_spacing
+                                        
+                                        local actual_text_width = track_text_width
+                                        if settings.show_track_numbers then
+                                            local temp_name = display_name
+                                            if settings.track_number_style == 1 then
+                                                temp_name = string.format("%02d. %s", track_number, display_name)
+                                            elseif settings.track_number_style == 2 then
+                                                temp_name = string.format("%s -%02d", display_name, track_number)
+                                            end
+                                            actual_text_width = r.ImGui_CalcTextSize(ctx, temp_name)
+                                        end
+                                        
+                                        local icon_offset = 0
+                                        if settings.show_track_icons and track_icon_manager.GetTrackIcon(track) and settings.icon_position == 2 then
+                                            icon_offset = settings.icon_size + settings.icon_spacing
+                                        end
+                                        
+                                        parent_text_pos = WX + settings.horizontal_offset + actual_text_width + total_spacing + icon_offset
                                     end
                                 end
                                 
@@ -2698,12 +3218,27 @@ function loop()
                                         r.ImGui_DrawList_AddRectFilled(
                                             draw_list,
                                             label_x - 10,
-                                            text_y - 1,
+                                            text_y - settings.label_height_padding,
                                             label_x + parent_text_width + 10,
-                                            text_y + settings.text_size + 1,
+                                            text_y + settings.text_size + settings.label_height_padding,
                                             parent_label_color,
                                             4.0
                                         )
+                                        if settings.label_border then
+                                            local parent_text_color = GetTextColor(parents[#parents], false, true)
+                                            local border_color = (parent_text_color & 0xFFFFFF00) | ((settings.label_border_opacity * 255)//1)
+                                            r.ImGui_DrawList_AddRect(
+                                                draw_list,
+                                                label_x - 10,
+                                                text_y - settings.label_height_padding,
+                                                label_x + parent_text_width + 10,
+                                                text_y + settings.text_size + settings.label_height_padding,
+                                                border_color,
+                                                4.0,
+                                                0,
+                                                settings.label_border_thickness
+                                            )
+                                        end
                                     end
                                 end
 
@@ -2733,8 +3268,10 @@ function loop()
                             
                             local text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
                             local text_x
+                            local keep_text_aligned = false
 
                             if settings.text_centered then
+                                keep_text_aligned = true
                                 if settings.auto_center then
                                     local window_width = RIGHT - LEFT - scroll_size
                                     text_x = LEFT + (window_width / 2) - (text_width / 2)
@@ -2743,13 +3280,14 @@ function loop()
                                     text_x = WX + settings.horizontal_offset + offset
                                 end
                             elseif settings.right_align then
+                                keep_text_aligned = true
                                 text_x = RIGHT - scroll_size - text_width - 20 - settings.horizontal_offset
                             else
+                                keep_text_aligned = true
                                 text_x = WX + settings.horizontal_offset
                             end
 
-                            -- Render Track Icon (before label and text)
-                            text_x = RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height)
+                            text_x = RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height, keep_text_aligned)
 
                             if settings.show_label then
                                 local label_color = GetLabelColor(track)
@@ -2757,12 +3295,27 @@ function loop()
                                     r.ImGui_DrawList_AddRectFilled(
                                         draw_list,
                                         text_x - 10,
-                                        text_y - 1,
+                                        text_y - settings.label_height_padding,
                                         text_x + text_width + 10,
-                                        text_y + settings.text_size + 1,
+                                        text_y + settings.text_size + settings.label_height_padding,
                                         label_color,
                                         4.0
                                     )
+                                    if settings.label_border then
+                                        local border_color = GetTextColor(track, is_child)
+                                        border_color = (border_color & 0xFFFFFF00) | ((settings.label_border_opacity * 255)//1)
+                                        r.ImGui_DrawList_AddRect(
+                                            draw_list,
+                                            text_x - 10,
+                                            text_y - settings.label_height_padding,
+                                            text_x + text_width + 10,
+                                            text_y + settings.text_size + settings.label_height_padding,
+                                            border_color,
+                                            4.0,
+                                            0,
+                                            settings.label_border_thickness
+                                        )
+                                    end
                                 end
                             end
                         
@@ -2942,9 +3495,7 @@ function loop()
         r.defer(loop)
     else
         if script_active then
-            if settings.autosave_enabled then
-                SaveSettings()
-            end
+            SaveSettings()
             script_active = false
         end
     end
@@ -2955,6 +3506,7 @@ local success = pcall(function()
     cached_bg_color = nil
     
     LoadSettings()
+    LoadExcludedTracks()
     CreateFonts()
 
     if settings.custom_colors_enabled then
@@ -2989,9 +3541,7 @@ end)
 
 r.atexit(function() 
     SetButtonState(0) 
-    if settings.autosave_enabled then
-        SaveSettings()
-    end
+    SaveSettings()
     
     r.SetThemeColor("col_gridlines", -1, 0)
     r.SetThemeColor("col_gridlines2", -1, 0)
