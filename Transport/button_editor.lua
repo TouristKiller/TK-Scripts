@@ -7,7 +7,155 @@ local ButtonEditor = {}
 local new_preset_name = ""
 local new_group_name = ""
 local has_unsaved_changes = false
-local active_icon_button = nil  -- Track which button is selecting an icon
+local active_icon_button = nil
+local selecting_background_image = false
+
+local font_styles = {"Regular", "Bold", "Italic", "Bold Italic"}
+local font_style_flags = {
+    [1] = 0,
+    [2] = 1 << 8,
+    [3] = 1 << 9,
+    [4] = (1 << 8) | (1 << 9)
+}
+
+local default_fonts = {
+    "Arial", "Helvetica", "Verdana", "Tahoma", "Times New Roman",
+    "Georgia", "Courier New", "Consolas", "Trebuchet MS", "Impact", 
+    "Roboto", "Open Sans", "Ubuntu", "Segoe UI", "Noto Sans", 
+    "Liberation Sans", "DejaVu Sans", "Comic Sans MS", "Lucida Console",
+    "Palatino Linotype", "Book Antiqua", "Garamond", "Century Gothic",
+    "Calibri", "Cambria", "Candara", "Franklin Gothic Medium"
+}
+
+local cached_system_fonts = nil
+local font_search_text = ""
+
+local function LoadCachedFonts()
+    local cached = r.GetExtState("TK_Transport", "cached_system_fonts")
+    if cached and cached ~= "" then
+        local fonts = {}
+        for font in cached:gmatch("[^|]+") do
+            table.insert(fonts, font)
+        end
+        if #fonts > 0 then
+            cached_system_fonts = fonts
+            return true
+        end
+    end
+    return false
+end
+
+local function SaveCachedFonts(fonts)
+    local str = table.concat(fonts, "|")
+    r.SetExtState("TK_Transport", "cached_system_fonts", str, true)
+end
+
+local function ScanSystemFonts()
+    local fonts = {}
+    local seen = {}
+    
+    local function add_font(name)
+        name = name:gsub("%s*%(TrueType%)%s*$", "")
+        name = name:gsub("%s*%(OpenType%)%s*$", "")
+        name = name:gsub("%s*Bold%s*Italic%s*$", "")
+        name = name:gsub("%s*Bold%s*$", "")
+        name = name:gsub("%s*Italic%s*$", "")
+        name = name:gsub("%s*Light%s*$", "")
+        name = name:gsub("%s*Medium%s*$", "")
+        name = name:gsub("%s*Semibold%s*$", "")
+        name = name:gsub("%s*Black%s*$", "")
+        name = name:gsub("%s*Thin%s*$", "")
+        name = name:gsub("%s*Regular%s*$", "")
+        name = name:gsub("%s+$", "")
+        
+        if name ~= "" and #name > 1 and not seen[name:lower()] then
+            seen[name:lower()] = true
+            table.insert(fonts, name)
+        end
+    end
+    
+    local os_name = r.GetOS()
+    
+    if os_name:match("Win") then
+        local p = io.popen('reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" 2>nul')
+        if p then
+            for line in p:lines() do
+                local font_name = line:match("^%s+(.-)%s+REG_SZ")
+                if font_name then
+                    add_font(font_name)
+                end
+            end
+            p:close()
+        end
+        
+    elseif os_name:match("OSX") or os_name:match("macOS") then
+        local p = io.popen('system_profiler SPFontsDataType 2>/dev/null | grep "Full Name:" | cut -d: -f2')
+        if p then
+            for line in p:lines() do
+                local name = line:match("^%s*(.-)%s*$")
+                if name then add_font(name) end
+            end
+            p:close()
+        end
+        
+        if #fonts == 0 then
+            local p2 = io.popen('fc-list : family 2>/dev/null | sort -u')
+            if p2 then
+                for line in p2:lines() do
+                    local name = line:match("^%s*(.-)%s*$")
+                    if name then add_font(name) end
+                end
+                p2:close()
+            end
+        end
+        
+    else
+        local p = io.popen('fc-list : family 2>/dev/null | sort -u')
+        if p then
+            for line in p:lines() do
+                local name = line:match("^%s*(.-)%s*$")
+                if name and name ~= "" then
+                    for part in name:gmatch("[^,]+") do
+                        part = part:match("^%s*(.-)%s*$")
+                        if part then add_font(part) end
+                    end
+                end
+            end
+            p:close()
+        end
+    end
+    
+    if #fonts > 0 then
+        table.sort(fonts, function(a, b) return a:lower() < b:lower() end)
+        cached_system_fonts = fonts
+        SaveCachedFonts(fonts)
+        return fonts, #fonts
+    end
+    
+    return nil, 0
+end
+
+local function GetFontList(use_system_fonts)
+    if not use_system_fonts then
+        return default_fonts
+    end
+    
+    if cached_system_fonts then
+        return cached_system_fonts
+    end
+    
+    LoadCachedFonts()
+    if cached_system_fonts then
+        return cached_system_fonts
+    end
+    
+    return default_fonts
+end
+
+local function HasCachedSystemFonts()
+    if cached_system_fonts then return true end
+    return LoadCachedFonts()
+end
 
 local cb_section_states = {
     basic_open = true,
@@ -42,6 +190,7 @@ local style_clipboard = {
         tooltip = true,
         use_icon = true,
         show_text = true,
+        vertical_text = true,
         color_base = true,
         color_hover = true,
         color_active = true,
@@ -49,8 +198,10 @@ local style_clipboard = {
         color_border = true,
         font = true,
         font_size = true,
+        font_style = true,
         rounding = true,
         border_thickness = true,
+        shape = true,
     }
 }
 
@@ -291,7 +442,7 @@ local function sanitize_button_xy(button, canvas_width, canvas_height)
     if py == nil then
         py = fallback_y
     end
-    local new_py = clamp(to_int(py, fallback_y), 0, canvas_height)
+    local new_py = clamp(to_int(py, fallback_y), -100, canvas_height)
     if new_py ~= orig_py then changed = true end
     button.position_y_px = new_py
 
@@ -461,6 +612,8 @@ local function ShowStyleSettingsWindow(ctx)
         if rv then SaveStyleCopySettings() end
         rv, style_clipboard.copy_settings.show_text = r.ImGui_Checkbox(ctx, "Show Text with Icon", style_clipboard.copy_settings.show_text)
         if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.vertical_text = r.ImGui_Checkbox(ctx, "Vertical Text", style_clipboard.copy_settings.vertical_text)
+        if rv then SaveStyleCopySettings() end
         
         r.ImGui_Separator(ctx)
         r.ImGui_Text(ctx, "Colors:")
@@ -481,12 +634,16 @@ local function ShowStyleSettingsWindow(ctx)
         if rv then SaveStyleCopySettings() end
         rv, style_clipboard.copy_settings.font_size = r.ImGui_Checkbox(ctx, "Font Size", style_clipboard.copy_settings.font_size)
         if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.font_style = r.ImGui_Checkbox(ctx, "Font Style", style_clipboard.copy_settings.font_style)
+        if rv then SaveStyleCopySettings() end
         
         r.ImGui_Separator(ctx)
         r.ImGui_Text(ctx, "Border Style:")
         rv, style_clipboard.copy_settings.rounding = r.ImGui_Checkbox(ctx, "Button Rounding", style_clipboard.copy_settings.rounding)
         if rv then SaveStyleCopySettings() end
         rv, style_clipboard.copy_settings.border_thickness = r.ImGui_Checkbox(ctx, "Border Thickness", style_clipboard.copy_settings.border_thickness)
+        if rv then SaveStyleCopySettings() end
+        rv, style_clipboard.copy_settings.shape = r.ImGui_Checkbox(ctx, "Shape Settings", style_clipboard.copy_settings.shape)
         if rv then SaveStyleCopySettings() end
         
         r.ImGui_Separator(ctx)
@@ -545,6 +702,9 @@ local function CopyButtonStyle(button)
     if settings.show_text then
         style_clipboard.data.show_text_with_icon = button.show_text_with_icon
     end
+    if settings.vertical_text then
+        style_clipboard.data.vertical_text = button.vertical_text
+    end
     if settings.color_base then
         style_clipboard.data.color = button.color
     end
@@ -566,11 +726,20 @@ local function CopyButtonStyle(button)
     if settings.font_size then
         style_clipboard.data.font_size = button.font_size
     end
+    if settings.font_style then
+        style_clipboard.data.font_style = button.font_style
+    end
     if settings.rounding then
         style_clipboard.data.rounding = button.rounding
     end
     if settings.border_thickness then
         style_clipboard.data.border_thickness = button.border_thickness
+    end
+    if settings.shape then
+        style_clipboard.data.use_shape = button.use_shape
+        style_clipboard.data.shape_type = button.shape_type
+        style_clipboard.data.show_shape_border = button.show_shape_border
+        style_clipboard.data.image_only = button.image_only
     end
     
     style_clipboard.has_data = true
@@ -594,8 +763,7 @@ local function PasteButtonStyle(button)
                 button.icon = nil
                 changed = true
             end
-        elseif key == "font_name" or key == "font_size" then
-            -- Clear font cache when font properties change
+        elseif key == "font_name" or key == "font_size" or key == "font_style" then
             if button[key] ~= value then
                 button[key] = value
                 button.font = nil
@@ -700,7 +868,7 @@ function ButtonEditor.ShowPresetsInline(ctx, custom_buttons, opts)
     local presets = custom_buttons.GetButtonPresets()
     local current_preset = custom_buttons.current_preset or "Select Preset"
     local avail_w1, _ = r.ImGui_GetContentRegionAvail(ctx)
-    r.ImGui_SetNextItemWidth(ctx, math.max(120, math.floor(avail_w1 * 0.3))) -- Reduced from 0.35 to 0.3
+    r.ImGui_SetNextItemWidth(ctx, math.max(100, math.floor(avail_w1 * 0.22)))
     if r.ImGui_BeginCombo(ctx, "##ButtonPresetCombo", current_preset) then
         for _, preset in ipairs(presets) do
             if preset and type(preset) == "string" then
@@ -736,24 +904,51 @@ function ButtonEditor.ShowPresetsInline(ctx, custom_buttons, opts)
         custom_buttons.DeleteButtonPreset(custom_buttons.current_preset)
     end
 
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Clear") then
+        r.ImGui_OpenPopup(ctx, "ConfirmClearAll")
+    end
+    
+    if r.ImGui_BeginPopupModal(ctx, "ConfirmClearAll", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Are you sure you want to remove all buttons?")
+        r.ImGui_Text(ctx, "This will give you an empty preset.")
+        r.ImGui_Spacing(ctx)
+        if r.ImGui_Button(ctx, "Yes, Clear All", 120) then
+            custom_buttons.buttons = {}
+            custom_buttons.current_edit = nil
+            custom_buttons.current_preset = nil
+            custom_buttons.SaveCurrentButtons()
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 120) then
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+
     if not new_preset_name then new_preset_name = "" end
     r.ImGui_SameLine(ctx)
     local avail_w2, _ = r.ImGui_GetContentRegionAvail(ctx)
-    local save_tw, _ = r.ImGui_CalcTextSize(ctx, "Save As New")
+    local save_tw, _ = r.ImGui_CalcTextSize(ctx, "Save New")
     local save_btn_w = save_tw + 18
-    local input_w = math.max(100, math.floor(avail_w2 - save_btn_w - 80)) -- Reduced width for Action button
+    local action_btn_w = 60
+    local input_w = math.max(60, math.floor(avail_w2 - save_btn_w - action_btn_w - 10))
     r.ImGui_SetNextItemWidth(ctx, input_w)
     local rv
     rv, new_preset_name = r.ImGui_InputText(ctx, "##ButtonNewPreset", new_preset_name)
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Save As New") and new_preset_name ~= "" then
+    if r.ImGui_Button(ctx, "Save New##SaveNew") and new_preset_name ~= "" then
         custom_buttons.SaveButtonPreset(new_preset_name)
         if r.file_exists(button_presets_path .. new_preset_name .. '.json') then
             new_preset_name = ""
         end
     end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Save as new preset")
+    end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Action") and custom_buttons.current_preset then
+    if r.ImGui_Button(ctx, "Action", action_btn_w, 0) and custom_buttons.current_preset then
         r.ShowConsoleMsg("Attempting to create action for: " .. custom_buttons.current_preset .. "\n")
         local cmd_id = custom_buttons.RegisterCommandToLoadPreset(custom_buttons.current_preset)
         r.ShowConsoleMsg("Command ID: " .. tostring(cmd_id) .. "\n")
@@ -810,7 +1005,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             
             r.ImGui_Text(ctx, "Name")
             r.ImGui_SameLine(ctx)
-            local name_w = 120
+            local name_w = 100
             r.ImGui_SetNextItemWidth(ctx, name_w)
             
             local current_name = ""
@@ -849,9 +1044,9 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_Text(ctx, "Group")
             r.ImGui_SameLine(ctx)
             
-            local delete_w = 65
+            local delete_w = 55
             local cursor_x = select(1, r.ImGui_GetCursorPos(ctx))
-            local group_w = math.max(80, avail_w - cursor_x - delete_w - 16)
+            local group_w = math.max(80, avail_w - cursor_x - delete_w - 12)
             r.ImGui_SetNextItemWidth(ctx, group_w)
             
             if has_sel then
@@ -888,8 +1083,6 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 r.ImGui_EndDisabled(ctx)
             end
 
-            r.ImGui_SameLine(ctx)
-            r.ImGui_Dummy(ctx, 8, 0)
             r.ImGui_SameLine(ctx)
             local can_delete = has_sel
             if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_delete) end
@@ -955,65 +1148,147 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_Text(ctx, "Y")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, math.max(50, y_slider_w))
-            local rvy; rvy, button.position_y_px = r.ImGui_SliderInt(ctx, "##btnPosY_slider", button.position_y_px, 0, canvas_height, "%d px")
+            local rvy; rvy, button.position_y_px = r.ImGui_SliderInt(ctx, "##btnPosY_slider", button.position_y_px, -100, canvas_height, "%d px")
             if rvy then
-                button.position_y_px = clamp(to_int(button.position_y_px, 0), 0, canvas_height)
+                button.position_y_px = clamp(to_int(button.position_y_px, 0), -100, canvas_height)
                 changed = true
             end
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 90)
             local rvyi; rvyi, button.position_y_px = r.ImGui_InputInt(ctx, "##btnPosYInputInline", button.position_y_px)
             if rvyi then
-                button.position_y_px = clamp(to_int(button.position_y_px, 0), 0, canvas_height)
+                button.position_y_px = clamp(to_int(button.position_y_px, 0), -100, canvas_height)
                 changed = true
             end
             
-            local width_label = "Width"
-            local show_total_width = false
-            if button.use_icon then
-                if button.show_text_with_icon then
-                    width_label = "Icon Size"  
-                    show_total_width = true  
-                else
-                    width_label = "Icon Size" 
-                end
-            elseif button.use_image then
-                if button.show_text_with_icon then
-                    width_label = "Image Max Width"
-                    show_total_width = true
-                else
-                    width_label = "Max Width"
-                end
-            end
-            
-            r.ImGui_Text(ctx, width_label)
+            r.ImGui_Text(ctx, "Width")
             r.ImGui_SameLine(ctx)
             
-            r.ImGui_SetNextItemWidth(ctx, 150)
+            local is_radius_shape = (button.image_only or button.use_shape) and (button.shape_type == "circle" or button.shape_type == "star" or button.shape_type == "pentagon" or button.shape_type == "hexagon")
+            local old_width = button.width or 60
+            local old_height = button.height or old_width
+            r.ImGui_SetNextItemWidth(ctx, 140)
             local rvw; rvw, button.width = r.ImGui_SliderInt(ctx, "##btnWidth_inline", button.width, 12, 400)
             if rvw then
-                button.width = clamp(to_int(button.width, 60), 12, 400)
+                local new_width = clamp(to_int(button.width, 60), 12, 400)
+                local delta_w = new_width - old_width
+                local half_delta = math.floor(delta_w * 0.5)
+                
+                local at_left = button.position_px <= 0
+                local at_top = button.position_y_px <= 0
+                
+                if delta_w > 0 then
+                    local new_pos_x = button.position_px - half_delta
+                    button.position_px = clamp(new_pos_x, 0, canvas_width)
+                    if is_radius_shape then
+                        local new_pos_y = button.position_y_px - half_delta
+                        button.position_y_px = clamp(new_pos_y, -100, canvas_height)
+                    end
+                else
+                    if not at_left then
+                        button.position_px = clamp(button.position_px - half_delta, 0, canvas_width)
+                    end
+                    if is_radius_shape and not at_top then
+                        button.position_y_px = clamp(button.position_y_px - half_delta, -100, canvas_height)
+                    end
+                end
+                
+                button.width = new_width
+                if is_radius_shape then
+                    button.height = new_width
+                end
                 changed = true
             end
             r.ImGui_SameLine(ctx)
             
             if r.ImGui_Button(ctx, "-##btnWidthMinus", 20, 0) then
-                button.width = clamp(to_int(button.width, 60) - 1, 12, 400)
+                local new_width = clamp(to_int(button.width, 60) - 1, 12, 400)
+                local delta_w = new_width - (button.width or 60)
+                local half_delta = math.floor(delta_w * 0.5)
+                
+                local at_left = button.position_px <= 0
+                local at_top = button.position_y_px <= 0
+                
+                if not at_left then
+                    button.position_px = clamp(button.position_px - half_delta, 0, canvas_width)
+                end
+                if is_radius_shape and not at_top then
+                    button.position_y_px = clamp(button.position_y_px - half_delta, -100, canvas_height)
+                end
+                
+                button.width = new_width
+                if is_radius_shape then
+                    button.height = new_width
+                end
                 changed = true
             end
             r.ImGui_SameLine(ctx)
             
             if r.ImGui_Button(ctx, "+##btnWidthPlus", 20, 0) then
-                button.width = clamp(to_int(button.width, 60) + 1, 12, 400)
+                local new_width = clamp(to_int(button.width, 60) + 1, 12, 400)
+                local delta_w = new_width - (button.width or 60)
+                local half_delta = math.floor(delta_w * 0.5)
+                
+                local new_pos_x = button.position_px - half_delta
+                button.position_px = clamp(new_pos_x, 0, canvas_width)
+                if is_radius_shape then
+                    local new_pos_y = button.position_y_px - half_delta
+                    button.position_y_px = clamp(new_pos_y, -100, canvas_height)
+                end
+                
+                button.width = new_width
+                if is_radius_shape then
+                    button.height = new_width
+                end
                 changed = true
             end
             
-            if show_total_width and button.name and button.name ~= "" then
+            local show_height = not (button.use_icon or button.use_image)
+            if show_height and not is_radius_shape then
+                r.ImGui_SameLine(ctx, 0, 15)
+                r.ImGui_Text(ctx, "Height")
                 r.ImGui_SameLine(ctx)
-                local text_size = r.ImGui_CalcTextSize(ctx, " | " .. button.name)
-                local padding = 8
-                local total_width = button.width + text_size + padding
-                r.ImGui_TextDisabled(ctx, string.format("(Total: %d)", math.floor(total_width)))
+                
+                local old_height = button.height or 0
+                if not button.height then button.height = 0 end
+                r.ImGui_SetNextItemWidth(ctx, 145)
+                local rvh; rvh, button.height = r.ImGui_SliderInt(ctx, "##btnHeight_inline", button.height, 0, 400, button.height == 0 and "Auto" or "%d")
+                if rvh then
+                    local new_height = clamp(to_int(button.height, 0), 0, 400)
+                    if old_height > 0 and new_height > 0 then
+                        local delta_h = new_height - old_height
+                        button.position_y_px = clamp(to_int(button.position_y_px - delta_h * 0.5, 0), -100, canvas_height)
+                    end
+                    button.height = new_height
+                    changed = true
+                end
+                r.ImGui_SameLine(ctx)
+                
+                if r.ImGui_Button(ctx, "-##btnHeightMinus", 20, 0) then
+                    local current_h = button.height or 0
+                    local new_height = clamp(current_h - 1, 0, 400)
+                    if current_h > 0 and new_height > 0 then
+                        local delta_h = new_height - current_h
+                        button.position_y_px = clamp(to_int(button.position_y_px - delta_h * 0.5, 0), -100, canvas_height)
+                    end
+                    button.height = new_height
+                    changed = true
+                end
+                r.ImGui_SameLine(ctx)
+                
+                if r.ImGui_Button(ctx, "+##btnHeightPlus", 20, 0) then
+                    local current_h = button.height or 0
+                    local new_height = clamp(current_h + 1, 0, 400)
+                    if current_h > 0 and new_height > 0 then
+                        local delta_h = new_height - current_h
+                        button.position_y_px = clamp(to_int(button.position_y_px - delta_h * 0.5, 0), -100, canvas_height)
+                    end
+                    button.height = new_height
+                    changed = true
+                end
+            elseif is_radius_shape then
+                r.ImGui_SameLine(ctx, 0, 15)
+                r.ImGui_TextDisabled(ctx, "(Height syncs with Width for this shape)")
             end
 
             if changed then
@@ -1039,78 +1314,210 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
 
             button.border_color = button.border_color or 0xFFFFFFFF
             local colorFlags = r.ImGui_ColorEditFlags_NoInputs()
-            if r.ImGui_BeginTable(ctx, "CB_PropsWrapper", 2, r.ImGui_TableFlags_SizingStretchProp()) then
-                r.ImGui_TableSetupColumn(ctx, "Left", r.ImGui_TableColumnFlags_WidthFixed(), props_w)
-                r.ImGui_TableSetupColumn(ctx, "Right", r.ImGui_TableColumnFlags_WidthStretch())
-                r.ImGui_TableNextRow(ctx)
-                r.ImGui_TableSetColumnIndex(ctx, 0)
                 
-                if r.ImGui_BeginTable(ctx, "CB_Props", 5, r.ImGui_TableFlags_SizingFixedFit()) then
-                    r.ImGui_TableSetupColumn(ctx, "Col0", r.ImGui_TableColumnFlags_WidthFixed(), 110)
-                    r.ImGui_TableSetupColumn(ctx, "Col1", r.ImGui_TableColumnFlags_WidthFixed(), 80)
-                    r.ImGui_TableSetupColumn(ctx, "Col2", r.ImGui_TableColumnFlags_WidthFixed(), 120)
-                    r.ImGui_TableSetupColumn(ctx, "Col3", r.ImGui_TableColumnFlags_WidthFixed(), 90)
-                    r.ImGui_TableSetupColumn(ctx, "Col4", r.ImGui_TableColumnFlags_WidthStretch())
-                    r.ImGui_TableNextRow(ctx)
-                    r.ImGui_TableSetColumnIndex(ctx, 0)
-                    local rv
-                    rv, button.show_border = r.ImGui_Checkbox(ctx, "Border", button.show_border ~= false)
-                    if rv then
-                        button.show_border = (button.show_border ~= false)
-                        changed = true
+            local col1 = 0
+            local col2 = 130
+            local col3 = 270
+            local col4 = 410
+            
+            r.ImGui_Spacing(ctx)
+            r.ImGui_Separator(ctx)
+            r.ImGui_TextDisabled(ctx, "Button Image")
+            r.ImGui_Spacing(ctx)
+                
+                local rv
+                local use_icon_or_image = button.use_icon or button.use_image
+                r.ImGui_SetCursorPosX(ctx, col1)
+                rv, use_icon_or_image = r.ImGui_Checkbox(ctx, "Use Icon/Image", use_icon_or_image)
+                if rv then
+                    if use_icon_or_image then
+                        if not button.use_icon and not button.use_image then
+                            button.use_icon = true
+                        end
+                    else
+                        button.use_icon = false
+                        button.use_image = false
                     end
-
-                    r.ImGui_TableSetColumnIndex(ctx, 1)
-                    local rv_tt
-                    rv_tt, settings.show_custom_button_tooltip = r.ImGui_Checkbox(ctx, "Tooltip", settings.show_custom_button_tooltip)
-                    changed = changed or rv_tt
-
-                    r.ImGui_TableSetColumnIndex(ctx, 2)
-                    local use_icon_or_image = button.use_icon or button.use_image
-                    rv, use_icon_or_image = r.ImGui_Checkbox(ctx, "Use Icon/Image", use_icon_or_image)
-                    if rv then
-                        if use_icon_or_image then
-                            if not button.use_icon and not button.use_image then
-                                button.use_icon = true
-                            end
+                    changed = true
+                end
+                
+                if button.use_icon or button.use_image then
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col2)
+                    local is_browser_active = IconBrowser.show_window and active_icon_button == button
+                    
+                    if r.ImGui_Button(ctx, is_browser_active and "Close Browser##browse" or "Open Browser##browse") then
+                        if is_browser_active then
+                            IconBrowser.show_window = false
+                            active_icon_button = nil
                         else
-                            button.use_icon = false
-                            button.use_image = false
+                            if button.use_image and button.image_path then
+                                local last_folder = button.image_path:match("(.+[/\\])") or ""
+                                IconBrowser.SetBrowseMode("images", last_folder)
+                            else
+                                IconBrowser.SetBrowseMode("icons")
+                            end
+                            IconBrowser.show_window = true
+                            active_icon_button = button
                         end
-                        changed = true
                     end
-
-                    r.ImGui_TableSetColumnIndex(ctx, 3)
-                    if button.use_icon or button.use_image then
-                        rv, button.show_text_with_icon = r.ImGui_Checkbox(ctx, "Show Text", button.show_text_with_icon)
-                        changed = changed or rv
-                    end
-
-                    r.ImGui_TableSetColumnIndex(ctx, 4)
-                    r.ImGui_SetNextItemWidth(ctx, -1)
-                    if button.use_image and button.show_text_with_icon then
-                        if not button.text_position then
-                            button.text_position = "right"
+                    
+                    r.ImGui_SetCursorPosX(ctx, col1)
+                    rv, button.use_image_tinting = r.ImGui_Checkbox(ctx, "##ImageTinting", button.use_image_tinting or false)
+                    if rv then changed = true end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Image Tinting")
+                    
+                    if button.use_image_tinting then
+                        local toggle_tint_active = button.show_toggle_state
+                        if toggle_tint_active then
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_TextDisabled(ctx, "(Toggle active - set Tint ON/OFF in Toggle section)")
+                        else
+                            local rv_tint
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_SetCursorPosX(ctx, col2)
+                            rv_tint, button.image_tint_normal = r.ImGui_ColorEdit4(ctx, "##TintNormal", button.image_tint_normal or 0xFFFFFFFF, colorFlags)
+                            changed = changed or rv_tint
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_Text(ctx, "Normal")
+                            
+                            if not button.image_only then
+                                r.ImGui_SameLine(ctx)
+                                r.ImGui_SetCursorPosX(ctx, col3)
+                                rv_tint, button.image_tint_hover = r.ImGui_ColorEdit4(ctx, "##TintHover", button.image_tint_hover or 0xDDDDDDFF, colorFlags)
+                                changed = changed or rv_tint
+                                r.ImGui_SameLine(ctx)
+                                r.ImGui_Text(ctx, "Hover")
+                                
+                                r.ImGui_SameLine(ctx)
+                                r.ImGui_SetCursorPosX(ctx, col4)
+                                rv_tint, button.image_tint_pressed = r.ImGui_ColorEdit4(ctx, "##TintPressed", button.image_tint_pressed or 0xAAAAAAFF, colorFlags)
+                                changed = changed or rv_tint
+                                r.ImGui_SameLine(ctx)
+                                r.ImGui_Text(ctx, "Pressed")
+                            end
                         end
                         
-                        local pos_labels = {"Left", "Right", "Bottom", "Top", "Overlay Center", "Overlay Bottom", "Overlay Top"}
-                        local pos_values = {"left", "right", "bottom", "top", "overlay", "overlay_bottom", "overlay_top"}
+                        r.ImGui_SetCursorPosX(ctx, col1)
+                        local rv_io
+                        rv_io, button.image_only = r.ImGui_Checkbox(ctx, "Image Only", button.image_only or false)
+                        if rv_io then
+                            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+                        end
                         
-                        local current_idx = 0
-                        for i, val in ipairs(pos_values) do
-                            if button.text_position == val then
-                                current_idx = i - 1
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, col2)
+                        local rv_ct
+                        rv_ct, button.click_through = r.ImGui_Checkbox(ctx, "Click-through", button.click_through or false)
+                        if rv_ct then
+                            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+                        end
+                    else
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, col2)
+                        local rv_io
+                        rv_io, button.image_only = r.ImGui_Checkbox(ctx, "Image Only", button.image_only or false)
+                        if rv_io then
+                            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+                        end
+                        
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, col3)
+                        local rv_ct
+                        rv_ct, button.click_through = r.ImGui_Checkbox(ctx, "Click-through", button.click_through or false)
+                        if rv_ct then
+                            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+                        end
+                    end
+                    
+                    local show_state_text = not button.image_only or button.use_shape
+                    if show_state_text then
+                        r.ImGui_SetCursorPosX(ctx, col1)
+                        rv, button.use_state_text = r.ImGui_Checkbox(ctx, "##StateText", button.use_state_text or false)
+                        if rv then changed = true end
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_Text(ctx, "State Text")
+                        
+                        local toggle_text_active = button.show_toggle_state
+                        if toggle_text_active then
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_TextDisabled(ctx, "(Toggle active - set Text ON/OFF in Toggle section)")
+                        elseif button.use_state_text then
+                            local rv_txt
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_SetCursorPosX(ctx, col2)
+                            r.ImGui_SetNextItemWidth(ctx, 120)
+                            rv_txt, button.text_normal = r.ImGui_InputText(ctx, "##TextNormal", button.text_normal or button.name)
+                            changed = changed or rv_txt
+                            
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_SetCursorPosX(ctx, col3)
+                            r.ImGui_SetNextItemWidth(ctx, 120)
+                            rv_txt, button.text_hover = r.ImGui_InputText(ctx, "##TextHover", button.text_hover or "")
+                            changed = changed or rv_txt
+                            
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_SetCursorPosX(ctx, col4)
+                            r.ImGui_SetNextItemWidth(ctx, 110)
+                            rv_txt, button.text_pressed = r.ImGui_InputText(ctx, "##TextPressed", button.text_pressed or "")
+                            changed = changed or rv_txt
+                        end
+                    end
+                else
+                    r.ImGui_SetCursorPosX(ctx, col1)
+                    local rv_io
+                    rv_io, button.image_only = r.ImGui_Checkbox(ctx, "Decorative", button.image_only or false)
+                    if rv_io then
+                        if button.image_only then button.use_shape = false end
+                        custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+                    end
+                    
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col2)
+                    local rv_shape
+                    rv_shape, button.use_shape = r.ImGui_Checkbox(ctx, "Use Shape", button.use_shape or false)
+                    if rv_shape then
+                        if button.use_shape then button.image_only = false end
+                        custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+                    end
+                    
+                    if button.image_only then
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, col3)
+                        local rv_ct
+                        rv_ct, button.click_through = r.ImGui_Checkbox(ctx, "Click-through", button.click_through or false)
+                        if rv_ct then
+                            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+                        end
+                    end
+                    
+                    if button.image_only or button.use_shape then
+                        r.ImGui_SetCursorPosX(ctx, col1)
+                        r.ImGui_Text(ctx, "Shape Type:")
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, col2)
+                        
+                        if not button.shape_type then button.shape_type = "rectangle" end
+                        
+                        local shape_labels = {"Rectangle", "Circle", "Triangle", "Pentagon", "Hexagon", "Star"}
+                        local shape_values = {"rectangle", "circle", "triangle", "pentagon", "hexagon", "star"}
+                        
+                        local current_idx = 1
+                        for idx, val in ipairs(shape_values) do
+                            if button.shape_type == val then
+                                current_idx = idx
                                 break
                             end
                         end
                         
-                        local combo_label = pos_labels[current_idx + 1] or "Right"
-                        if r.ImGui_BeginCombo(ctx, "##textpos", combo_label) then
-                            for i, val in ipairs(pos_values) do
-                                local is_selected = (button.text_position == val)
-                                if r.ImGui_Selectable(ctx, pos_labels[i], is_selected) then
-                                    button.text_position = val
-                                    changed = true
+                        r.ImGui_SetNextItemWidth(ctx, 100)
+                        if r.ImGui_BeginCombo(ctx, "##shape_type", shape_labels[current_idx]) then
+                            for idx, val in ipairs(shape_values) do
+                                local is_selected = (button.shape_type == val)
+                                if r.ImGui_Selectable(ctx, shape_labels[idx], is_selected) then
+                                    button.shape_type = val
+                                    custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
                                 end
                                 if is_selected then
                                     r.ImGui_SetItemDefaultFocus(ctx)
@@ -1118,171 +1525,349 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                             end
                             r.ImGui_EndCombo(ctx)
                         end
-                    else
-                        r.ImGui_BeginDisabled(ctx)
-                        if r.ImGui_BeginCombo(ctx, "##textpos_disabled", "") then
-                            r.ImGui_EndCombo(ctx)
-                        end
-                        r.ImGui_EndDisabled(ctx)
-                    end
-
-                    r.ImGui_TableNextRow(ctx)
-                    r.ImGui_TableSetColumnIndex(ctx, 0)
-                    if button.use_icon or button.use_image then
-                        local is_browser_active = IconBrowser.show_window and active_icon_button == button
                         
-                        if not is_browser_active then
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF4040FF)
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF5555FF)
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF2020FF)
-                        else
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
-                        end
-                        
-                        if r.ImGui_Button(ctx, is_browser_active and "Close Browser##browse" or "Open Browser##browse") then
-                            if is_browser_active then
-                                IconBrowser.show_window = false
-                                active_icon_button = nil
-                            else
-                                if button.use_image and button.image_path then
-                                    local last_folder = button.image_path:match("(.+[/\\])") or ""
-                                    IconBrowser.SetBrowseMode("images", last_folder)
-                                else
-                                    IconBrowser.SetBrowseMode("icons")
-                                end
-                                IconBrowser.show_window = true
-                                active_icon_button = button
-                            end
-                        end
-                        
-                        if not is_browser_active then
-                            r.ImGui_PopStyleColor(ctx, 3)
-                        else
-                            r.ImGui_PopStyleColor(ctx)
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, col3)
+                        if button.show_shape_border == nil then button.show_shape_border = true end
+                        local rv_sb
+                        rv_sb, button.show_shape_border = r.ImGui_Checkbox(ctx, "Shape Border", button.show_shape_border)
+                        if rv_sb then
+                            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
                         end
                     end
-
-                    r.ImGui_TableNextRow(ctx)
-                    r.ImGui_TableSetColumnIndex(ctx, 0)
-                    r.ImGui_SetNextItemWidth(ctx, -1)
-                    local rv_col
-                    rv_col, button.color = r.ImGui_ColorEdit4(ctx, "Base", button.color, colorFlags)
-                    changed = changed or rv_col
-
-                    r.ImGui_TableSetColumnIndex(ctx, 1)
-                    r.ImGui_SetNextItemWidth(ctx, -1)
-                    rv_col, button.hover_color = r.ImGui_ColorEdit4(ctx, "Hover", button.hover_color, colorFlags)
-                    changed = changed or rv_col
-
-                    r.ImGui_TableSetColumnIndex(ctx, 2)
-                    r.ImGui_SetNextItemWidth(ctx, -1)
-                    rv_col, button.active_color = r.ImGui_ColorEdit4(ctx, "Active", button.active_color, colorFlags)
-                    changed = changed or rv_col
-
-                    r.ImGui_TableSetColumnIndex(ctx, 3)
-                    r.ImGui_SetNextItemWidth(ctx, -1)
-                    rv_col, button.text_color = r.ImGui_ColorEdit4(ctx, "Text", button.text_color, colorFlags)
-                    changed = changed or rv_col
-
-                    r.ImGui_TableSetColumnIndex(ctx, 4)
-                    r.ImGui_SetNextItemWidth(ctx, -1)
-                    rv_col, button.border_color = r.ImGui_ColorEdit4(ctx, "Border", button.border_color, colorFlags)
-                    changed = changed or rv_col
-
-                    r.ImGui_EndTable(ctx)
+                    
+                    local show_state_text_regular = not button.image_only or button.use_shape
+                    if show_state_text_regular then
+                        r.ImGui_SetCursorPosX(ctx, col1)
+                        rv, button.use_state_text = r.ImGui_Checkbox(ctx, "##StateTextRegular", button.use_state_text or false)
+                        if rv then changed = true end
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_Text(ctx, "State Text")
+                        
+                        local is_regular_or_shape = not (button.use_icon or button.use_image) or button.use_shape
+                        local toggle_active = is_regular_or_shape and button.show_toggle_state
+                        if toggle_active then
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_TextDisabled(ctx, "(Toggle active - set Text ON/OFF in Toggle section)")
+                        elseif button.use_state_text then
+                            local rv_txt
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_SetCursorPosX(ctx, col2)
+                            r.ImGui_SetNextItemWidth(ctx, 120)
+                            rv_txt, button.text_normal = r.ImGui_InputText(ctx, "##TextNormalRegular", button.text_normal or button.name)
+                            changed = changed or rv_txt
+                            
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_SetCursorPosX(ctx, col3)
+                            r.ImGui_SetNextItemWidth(ctx, 120)
+                            rv_txt, button.text_hover = r.ImGui_InputText(ctx, "##TextHoverRegular", button.text_hover or "")
+                            changed = changed or rv_txt
+                            
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_SetCursorPosX(ctx, col4)
+                            r.ImGui_SetNextItemWidth(ctx, 110)
+                            rv_txt, button.text_pressed = r.ImGui_InputText(ctx, "##TextPressedRegular", button.text_pressed or "")
+                            changed = changed or rv_txt
+                        end
+                    end
                 end
                 
                 r.ImGui_Spacing(ctx)
-                if r.ImGui_BeginTable(ctx, "CB_Font", 2, r.ImGui_TableFlags_SizingStretchSame()) then
-                        r.ImGui_TableNextRow(ctx)
-                        r.ImGui_TableSetColumnIndex(ctx, 0)
-                        
-                        local fonts = {
-                            "Arial", "Helvetica", "Verdana", "Tahoma", "Times New Roman",
-                            "Georgia", "Courier New", "Consolas", "Trebuchet MS", "Impact", "Roboto",
-                            "Open Sans", "Ubuntu", "Segoe UI", "Noto Sans", "Liberation Sans",
-                            "DejaVu Sans"
-                        }
-                        
-                        if not button.font_name then
-                            button.font_name = settings.transport_font_name or "Arial"
+                r.ImGui_Separator(ctx)
+                r.ImGui_TextDisabled(ctx, "Button Color")
+                r.ImGui_Spacing(ctx)
+                
+                local toggle_colors_active = button.show_toggle_state
+                
+                if not button.image_only then
+                    if button.invisible_bg == nil then
+                        button.invisible_bg = settings.use_transparent_buttons or false
+                    end
+                    
+                    r.ImGui_SetCursorPosX(ctx, col1)
+                    local rv_inv
+                    rv_inv, button.invisible_bg = r.ImGui_Checkbox(ctx, "##InvisibleBG", button.invisible_bg)
+                    if rv_inv then changed = true end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Invisible BG")
+                    
+                    if toggle_colors_active then
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_TextDisabled(ctx, "(Toggle active - set colors in Toggle section)")
+                    else
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, col2)
+                    end
+                else
+                    r.ImGui_SetCursorPosX(ctx, col1)
+                end
+                
+                if not toggle_colors_active then
+                    local rv_col
+                    rv_col, button.color = r.ImGui_ColorEdit4(ctx, "##NormalColor", button.color, colorFlags)
+                    changed = changed or rv_col
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Normal")
+                    
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col3)
+                    rv_col, button.hover_color = r.ImGui_ColorEdit4(ctx, "##HoverColor", button.hover_color, colorFlags)
+                    changed = changed or rv_col
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Hover")
+                    
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col4)
+                    rv_col, button.active_color = r.ImGui_ColorEdit4(ctx, "##ActiveColor", button.active_color, colorFlags)
+                    changed = changed or rv_col
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Active")
+                end
+                
+                r.ImGui_Spacing(ctx)
+                r.ImGui_Separator(ctx)
+                r.ImGui_TextDisabled(ctx, "Button Text")
+                r.ImGui_Spacing(ctx)
+                
+                local is_graphic_button = button.use_icon or button.use_image
+                if button.show_text_with_icon == nil then 
+                    button.show_text_with_icon = not is_graphic_button
+                end
+                
+                r.ImGui_SetCursorPosX(ctx, col1)
+                rv, button.show_text_with_icon = r.ImGui_Checkbox(ctx, "Show Text", button.show_text_with_icon)
+                changed = changed or rv
+                
+                if button.show_text_with_icon then
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col2)
+                    rv, button.vertical_text = r.ImGui_Checkbox(ctx, "Vertical", button.vertical_text or false)
+                    changed = changed or rv
+                    
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col3)
+                    if not button.text_position then
+                        button.text_position = is_graphic_button and "right" or "center"
+                    end
+                    
+                    local pos_labels, pos_values
+                    if is_graphic_button then
+                        pos_labels = {"Left", "Right", "Bottom", "Top", "Overlay Center", "Overlay Bottom", "Overlay Top"}
+                        pos_values = {"left", "right", "bottom", "top", "overlay", "overlay_bottom", "overlay_top"}
+                    else
+                        pos_labels = {"Center", "Top", "Bottom", "Left", "Right"}
+                        pos_values = {"center", "top", "bottom", "left", "right"}
+                    end
+                    
+                    local current_idx = 0
+                    for idx, val in ipairs(pos_values) do
+                        if button.text_position == val then
+                            current_idx = idx - 1
+                            break
                         end
-                        if not button.font_size then
-                            button.font_size = settings.transport_font_size or 12
-                        end
-                        
-                        local current_font_index = 0
-                        for i, font_name in ipairs(fonts) do
-                            if font_name == button.font_name then
-                                current_font_index = i - 1
-                                break
+                    end
+                    
+                    local combo_label = pos_labels[current_idx + 1] or pos_labels[1]
+                    r.ImGui_SetNextItemWidth(ctx, 100)
+                    if r.ImGui_BeginCombo(ctx, "##textpos", combo_label) then
+                        for idx, val in ipairs(pos_values) do
+                            local is_selected = (button.text_position == val)
+                            if r.ImGui_Selectable(ctx, pos_labels[idx], is_selected) then
+                                button.text_position = val
+                                changed = true
+                            end
+                            if is_selected then
+                                r.ImGui_SetItemDefaultFocus(ctx)
                             end
                         end
-                        
-                        r.ImGui_Text(ctx, "Font:")
-                        r.ImGui_SameLine(ctx)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
-                        rv, current_font_index = r.ImGui_Combo(ctx, "##ButtonFont", current_font_index, table.concat(fonts, '\0') .. '\0')
-                        if rv then
-                            button.font_name = fonts[current_font_index + 1]
-                            button.font = nil 
-                            changed = true
-                        end
-                        
-                        r.ImGui_TableSetColumnIndex(ctx, 1)
-                        r.ImGui_Text(ctx, "Font Size:")
-                        r.ImGui_SameLine(ctx)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
-                        rv, button.font_size = r.ImGui_SliderInt(ctx, "##ButtonFontSize", button.font_size, 8, 48)
-                        if rv then
-                            button.font = nil 
-                            changed = true
-                        end
-
-                        r.ImGui_EndTable(ctx)
+                        r.ImGui_EndCombo(ctx)
                     end
+                    
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col4)
+                    local text_color = button.text_color or 0xFFFFFFFF
+                    local rv_col, new_text_color = r.ImGui_ColorEdit4(ctx, "##TextColor", text_color, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel())
+                    if rv_col then
+                        button.text_color = new_text_color
+                        changed = true
+                    end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Color")
+                end
+                
+                if button.use_system_fonts == nil then
+                    button.use_system_fonts = false
+                end
+                
+                local fonts = GetFontList(button.use_system_fonts)
+                
+                if not button.font_name then
+                    button.font_name = settings.transport_font_name or "Arial"
+                end
+                if not button.font_size then
+                    button.font_size = settings.transport_font_size or 12
+                end
+                if not button.font_style then
+                    button.font_style = 1
+                end
+                
+                local ctrl_width = 120
+                
+                r.ImGui_SetCursorPosX(ctx, col1)
+                rv, button.use_system_fonts = r.ImGui_Checkbox(ctx, "System Fonts", button.use_system_fonts)
+                if rv then changed = true end
+                
+                r.ImGui_SameLine(ctx)
+                local has_cache = HasCachedSystemFonts()
+                local scan_label = has_cache and "R" or "S"
+                local scan_tip = has_cache and ("Rescan system fonts (currently " .. #fonts .. " fonts)") or "Scan system for installed fonts"
+                if r.ImGui_Button(ctx, scan_label .. "##scanfonts", 20, 0) then
+                    local scanned, count = ScanSystemFonts()
+                    if scanned then
+                        r.ShowMessageBox("Found " .. count .. " fonts!", "Font Scan Complete", 0)
+                    else
+                        r.ShowMessageBox("No fonts found. Using default list.", "Font Scan", 0)
+                    end
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, scan_tip)
+                end
+                
+                if button.use_system_fonts then
+                    if not has_cache then
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_TextDisabled(ctx, "(Click S first)")
+                    else
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetNextItemWidth(ctx, 90)
+                        local rv_search
+                        rv_search, font_search_text = r.ImGui_InputText(ctx, "##FontSearch", font_search_text)
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Search fonts")
+                        end
+                        
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetNextItemWidth(ctx, 90)
+                        
+                        local display_font = button.font_name or "Arial"
+                        if r.ImGui_BeginCombo(ctx, "##ButtonFont", display_font) then
+                            local search_lower = font_search_text:lower()
+                            for i, font_name in ipairs(fonts) do
+                                if font_search_text == "" or font_name:lower():find(search_lower, 1, true) then
+                                    local is_selected = (font_name == button.font_name)
+                                    if r.ImGui_Selectable(ctx, font_name, is_selected) then
+                                        button.font_name = font_name
+                                        button.font = nil 
+                                        changed = true
+                                    end
+                                    if is_selected then
+                                        r.ImGui_SetItemDefaultFocus(ctx)
+                                    end
+                                end
+                            end
+                            r.ImGui_EndCombo(ctx)
+                        end
+                    end
+                else
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetNextItemWidth(ctx, 90)
+                    
+                    local display_font = button.font_name or "Arial"
+                    if r.ImGui_BeginCombo(ctx, "##ButtonFont", display_font) then
+                        for i, font_name in ipairs(fonts) do
+                            local is_selected = (font_name == button.font_name)
+                            if r.ImGui_Selectable(ctx, font_name, is_selected) then
+                                button.font_name = font_name
+                                button.font = nil 
+                                changed = true
+                            end
+                            if is_selected then
+                                r.ImGui_SetItemDefaultFocus(ctx)
+                            end
+                        end
+                        r.ImGui_EndCombo(ctx)
+                    end
+                end
+                
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetNextItemWidth(ctx, 90)
+                rv, button.font_size = r.ImGui_SliderInt(ctx, "##ButtonFontSize", button.font_size, 8, 48)
+                if rv then
+                    button.font = nil 
+                    changed = true
+                end
+                
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetNextItemWidth(ctx, 90)
+                local current_style_idx = (button.font_style or 1) - 1
+                local new_style_idx
+                rv, new_style_idx = r.ImGui_Combo(ctx, "##ButtonFontStyle", current_style_idx, table.concat(font_styles, '\0') .. '\0')
+                if rv then
+                    button.font_style = new_style_idx + 1
+                    button.font = nil
+                    changed = true
+                end
                 end
                 
                 if not is_graphic_mode then
                     r.ImGui_Spacing(ctx)
-                    if r.ImGui_BeginTable(ctx, "CB_RoundingBorder", 2, r.ImGui_TableFlags_SizingStretchSame()) then
-                        r.ImGui_TableNextRow(ctx)
-                        r.ImGui_TableSetColumnIndex(ctx, 0)
-                        
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_TextDisabled(ctx, "Button Border")
+                    r.ImGui_Spacing(ctx)
+                    
+                    local col1 = 0
+                    local col2 = 130
+                    local col3 = 270
+                    local col4 = 410
+                    local ctrl_width = 120
+                    
+                    r.ImGui_SetCursorPosX(ctx, col1)
+                    rv, button.show_border = r.ImGui_Checkbox(ctx, "##BorderEnabled", button.show_border ~= false)
+                    if rv then
+                        button.show_border = (button.show_border ~= false)
+                        changed = true
+                    end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Border")
+                    
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col2)
+                    if not button.border_thickness then
+                        button.border_thickness = 1.0
+                    end
+                    r.ImGui_SetNextItemWidth(ctx, ctrl_width)
+                    rv, button.border_thickness = r.ImGui_SliderDouble(ctx, "##BorderThickness", button.border_thickness, 0.5, 5.0, "%.1f")
+                    changed = changed or rv
+                    
+                    local show_rounding = not (button.use_shape or button.image_only) or button.shape_type == "rectangle" or button.shape_type == nil
+                    if show_rounding then
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_SetCursorPosX(ctx, col3)
                         if not button.rounding then
                             button.rounding = 0
                         end
-                        
-                        r.ImGui_Text(ctx, "Button Rounding:")
-                        r.ImGui_SameLine(ctx)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
+                        r.ImGui_SetNextItemWidth(ctx, ctrl_width)
                         rv, button.rounding = r.ImGui_SliderDouble(ctx, "##ButtonRounding", button.rounding, 0.0, 20.0, "%.1f")
                         changed = changed or rv
-                        
-                        r.ImGui_TableSetColumnIndex(ctx, 1)
-                        
-                        if not button.border_thickness then
-                            button.border_thickness = 1.0
-                        end
-                        
-                        r.ImGui_Text(ctx, "Border Thickness:")
-                        r.ImGui_SameLine(ctx)
-                        r.ImGui_SetNextItemWidth(ctx, -1)
-                        rv, button.border_thickness = r.ImGui_SliderDouble(ctx, "##BorderThickness", button.border_thickness, 0.5, 5.0, "%.1f")
-                        changed = changed or rv
-
-                        r.ImGui_EndTable(ctx)
                     end
-                r.ImGui_EndTable(ctx)
-            end
-        end
+                    
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_SetCursorPosX(ctx, col4)
+                    local border_color = button.border_color or 0xFFFFFFFF
+                    local rv_bc, new_border_color = r.ImGui_ColorEdit4(ctx, "##BorderColor", border_color, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel())
+                    if rv_bc then
+                        button.border_color = new_border_color
+                        changed = true
+                    end
+                end
+        
         local gname = (custom_buttons.current_edit and custom_buttons.buttons[custom_buttons.current_edit]) and 
                       custom_buttons.buttons[custom_buttons.current_edit].group or ""
         if gname == "" then
             r.ImGui_TextDisabled(ctx, "(This Button is not in a group)")
         else
             r.ImGui_Separator(ctx)
-            r.ImGui_Text(ctx, "Group Settings:")
+            r.ImGui_TextDisabled(ctx, "Group Settings")
             local gcount = 0
             for _, b in ipairs(custom_buttons.buttons) do
                 if b.group and b.group ~= "" and button.group == b.group then
@@ -1295,20 +1880,6 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             local all_visible = true
             for _, b in ipairs(custom_buttons.buttons) do
                 if b.group == gname and not b.visible then all_visible = false break end
-            end
-            r.ImGui_SameLine(ctx)
-            local vis_label = all_visible and "Hide Group" or "Show Group"
-            if r.ImGui_Button(ctx, vis_label .. "##grpToggleVis") then
-                local new_state = not all_visible
-                for _, b in ipairs(custom_buttons.buttons) do if b.group == gname then b.visible = new_state end end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                if all_visible then
-                    r.ImGui_SetTooltip(ctx, "Hide all buttons in this group")
-                else
-                    r.ImGui_SetTooltip(ctx, "Show all buttons in this group")
-                end
             end
             
             local raw_w = (opts and opts.canvas_width) or r.ImGui_GetWindowWidth(ctx)
@@ -1332,7 +1903,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                             end
                         end
                         if dy ~= 0 then
-                            local new_py = clamp(to_int((tonumber(b.position_y_px) or 0) + dy, 0), 0, canvas_h)
+                            local new_py = clamp(to_int((tonumber(b.position_y_px) or 0) + dy, 0), -100, canvas_h)
                             if new_py ~= b.position_y_px then
                                 b.position_y_px = new_py
                                 b.position_y = new_py / math.max(1, canvas_h)
@@ -1346,26 +1917,39 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 end
             end
 
-            if r.ImGui_Button(ctx, "← X##grpMoveLeft") then
+            local rv_hide
+            rv_hide, all_visible = r.ImGui_Checkbox(ctx, "##HideGroup", all_visible)
+            if rv_hide then
+                for _, b in ipairs(custom_buttons.buttons) do 
+                    if b.group == gname then b.visible = all_visible end 
+                end
+                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_Text(ctx, "Visible")
+            
+            r.ImGui_SameLine(ctx, 0, 20)
+            if r.ImGui_Button(ctx, "←##grpMoveLeft") then
                 adjust_group(-1, 0)
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel left") end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "X →##grpMoveRight") then
+            if r.ImGui_Button(ctx, "→##grpMoveRight") then
                 adjust_group(1, 0)
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel right") end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "↑ Y##grpMoveUp") then
+            if r.ImGui_Button(ctx, "↑##grpMoveUp") then
                 adjust_group(0, -1)
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel up") end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Y ↓##grpMoveDown") then
+            if r.ImGui_Button(ctx, "↓##grpMoveDown") then
                 adjust_group(0, 1)
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel down") end
-            r.ImGui_SameLine(ctx)
+            
+            r.ImGui_SameLine(ctx, 0, 20)
             if r.ImGui_Button(ctx, "Align Y") then
                 for _, b in ipairs(custom_buttons.buttons) do
                     if b.group == gname then
@@ -1378,18 +1962,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Set all buttons in this group to the same Y position") end
             
-            -- Auto Align X with spacing input
-            r.ImGui_Text(ctx, "Spacing:")
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 50)
-            local rv, new_spacing = r.ImGui_InputDouble(ctx, "px##alignSpacing", auto_align_spacing, 0, 0, "%.0f")
-            if rv then
-                auto_align_spacing = clamp(to_int(new_spacing, 3), 0, 50)
-                SaveAutoAlignSpacing()
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Spacing between buttons for Auto Align X (0-50 pixels)") end
-            
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 20)
             if r.ImGui_Button(ctx, "Auto Align X") then
                 -- Collect all buttons in this group
                 local group_buttons = {}
@@ -1420,15 +1993,23 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Auto-align buttons horizontally with custom spacing\n(calculates actual width including text and icons)") end
+            
+            r.ImGui_SameLine(ctx, 0, 20)
+            r.ImGui_SetNextItemWidth(ctx, 40)
+            local rv, new_spacing = r.ImGui_InputDouble(ctx, "px##alignSpacing", auto_align_spacing, 0, 0, "%.0f")
+            if rv then
+                auto_align_spacing = clamp(to_int(new_spacing, 3), 0, 50)
+                SaveAutoAlignSpacing()
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Spacing between buttons for Auto Align X (0-50 pixels)") end
         end
         
+        r.ImGui_Spacing(ctx)
         r.ImGui_Separator(ctx)
+        r.ImGui_TextDisabled(ctx, "Copy Style")
         r.ImGui_Spacing(ctx)
         
         local has_sel = custom_buttons.current_edit ~= nil
-        
-        r.ImGui_Text(ctx, "Button Style:")
-        r.ImGui_SameLine(ctx)
         
         if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not has_sel) end
         if r.ImGui_Button(ctx, "Copy Style", 100, 0) and has_sel then
@@ -1505,7 +2086,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
         -- "Copy style from button" dropdown for quick style copying
         if has_sel and #custom_buttons.buttons > 1 then
             r.ImGui_Text(ctx, "Copy style from:")
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 120)
             r.ImGui_SetNextItemWidth(ctx, 200)
             if r.ImGui_BeginCombo(ctx, "##copy_style_from_button", "Select button...") then
                 for i, btn in ipairs(custom_buttons.buttons) do
@@ -1535,7 +2116,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
         -- "Copy position from button" dropdown - places button to the right of selected button
         if has_sel and #custom_buttons.buttons > 1 then
             r.ImGui_Text(ctx, "Place next to:")
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 120)
             r.ImGui_SetNextItemWidth(ctx, 200)
             if r.ImGui_BeginCombo(ctx, "##copy_position_from_button", "Select button...") then
                 for i, btn in ipairs(custom_buttons.buttons) do
@@ -1587,9 +2168,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 r.ImGui_SetTooltip(ctx, "Spacing between buttons when using 'Place next to'\nor when creating new buttons")
             end
         end
-        
-        r.ImGui_Spacing(ctx)
-    end  
+    end
 
         if opts and opts.render_global_offset then
             opts.render_global_offset(ctx)
@@ -2417,67 +2996,113 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                     r.ImGui_TextDisabled(ctx, "No groups available")
                 end
             end
+        end
+        
+        r.ImGui_Separator(ctx)
+        
+        r.ImGui_Text(ctx, "Toggle State Visualization:")
+        
+        if not button.show_toggle_state then
+            button.show_toggle_state = false
+        end
+        if not button.toggle_on_color then
+            button.toggle_on_color = 0x00FF00FF
+        end
+        
+        local rv_toggle, new_toggle_state = r.ImGui_Checkbox(ctx, "Show Toggle State##toggleVis", button.show_toggle_state)
+        if rv_toggle then 
+            button.show_toggle_state = new_toggle_state
+            changed = true
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Visualize the ON/OFF state of the button")
+        end
+        
+        if button.show_toggle_state then
+            local color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
             
-            r.ImGui_Separator(ctx)
+            local is_icon_or_image = button.use_icon or button.use_image
+            local has_image_tinting = is_icon_or_image and button.use_image_tinting and not button.use_shape
             
-            r.ImGui_Text(ctx, "Toggle State Visualization:")
+            local col1 = 20
+            local col2 = 150
+            local col3 = 260
+            local col4 = 390
             
-            if not button.show_toggle_state then
-                button.show_toggle_state = false
+            r.ImGui_SetCursorPosX(ctx, col1)
+            r.ImGui_Text(ctx, "Toggle ON Color:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, col2)
+            rv, button.toggle_on_color = r.ImGui_ColorEdit4(ctx, "##toggleOnColor", button.toggle_on_color, color_flags)
+            if rv then changed = true end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Button background color when the toggle is active")
             end
-            if not button.toggle_on_color then
-                button.toggle_on_color = 0x00FF00FF
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, col3)
+            r.ImGui_Text(ctx, "Toggle OFF Color:")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, col4)
+            if button.toggle_off_color == nil then
+                button.toggle_off_color = button.color or 0x333333FF
+            end
+            rv, button.toggle_off_color = r.ImGui_ColorEdit4(ctx, "##toggleOffColor", button.toggle_off_color, color_flags)
+            if rv then changed = true end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Button background color when the toggle is inactive")
             end
             
-            local rv_toggle, new_toggle_state = r.ImGui_Checkbox(ctx, "Show Toggle State##toggleVis", button.show_toggle_state)
-            if rv_toggle then 
-                button.show_toggle_state = new_toggle_state
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_SmallButton(ctx, "Reset##toggleOffReset") then
+                button.toggle_off_color = nil
                 changed = true
             end
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Visualize the ON/OFF state (Shows if group is visible/hidden)")
+            
+            if has_image_tinting then
+                r.ImGui_SetCursorPosX(ctx, col1)
+                r.ImGui_Text(ctx, "Tint ON:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, col2)
+                local rv_tint
+                rv_tint, button.image_tint_on = r.ImGui_ColorEdit4(ctx, "##TintOn", button.image_tint_on or 0x00FF00FF, color_flags)
+                if rv_tint then changed = true end
+                
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, col3)
+                r.ImGui_Text(ctx, "Tint OFF:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, col4)
+                rv_tint, button.image_tint_off = r.ImGui_ColorEdit4(ctx, "##TintOff", button.image_tint_off or 0xFFFFFFFF, color_flags)
+                if rv_tint then changed = true end
             end
             
-            if button.show_toggle_state then
-                local color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
-                
-                r.ImGui_Text(ctx, "Toggle ON Color:")
+            if button.use_state_text then
+                r.ImGui_SetCursorPosX(ctx, col1)
+                r.ImGui_Text(ctx, "Text ON:")
                 r.ImGui_SameLine(ctx)
-                rv, button.toggle_on_color = r.ImGui_ColorEdit4(ctx, "##toggleOnColor", button.toggle_on_color, color_flags)
-                if rv then changed = true end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Color when the toggle is active (group visible)")
-                end
-                
-                r.ImGui_Text(ctx, "Toggle OFF Color:")
-                r.ImGui_SameLine(ctx)
-                if button.toggle_off_color == nil then
-                    button.toggle_off_color = button.color or 0x333333FF
-                end
-                rv, button.toggle_off_color = r.ImGui_ColorEdit4(ctx, "##toggleOffColor", button.toggle_off_color, color_flags)
-                if rv then changed = true end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Color when the toggle is inactive (group hidden)")
-                end
+                r.ImGui_SetCursorPosX(ctx, col2)
+                r.ImGui_SetNextItemWidth(ctx, 100)
+                local rv_txt
+                rv_txt, button.text_on = r.ImGui_InputText(ctx, "##TextOn", button.text_on or "")
+                if rv_txt then changed = true end
                 
                 r.ImGui_SameLine(ctx)
-                if r.ImGui_SmallButton(ctx, "Reset##toggleOffReset") then
-                    button.toggle_off_color = nil
-                    changed = true
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Reset to use normal button colors when OFF")
-                end
+                r.ImGui_SetCursorPosX(ctx, col3)
+                r.ImGui_Text(ctx, "Text OFF:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, col4)
+                r.ImGui_SetNextItemWidth(ctx, 100)
+                rv_txt, button.text_off = r.ImGui_InputText(ctx, "##TextOff", button.text_off or "")
+                if rv_txt then changed = true end
             end
-            
-            if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
-            
-            r.ImGui_Separator(ctx)
         end
+        
+        if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
+        
+        r.ImGui_Separator(ctx)
     end
-    
-    end  
-    
+    end
 
 end
 
@@ -3271,33 +3896,60 @@ function ButtonEditor.HandleIconBrowser(ctx, custom_buttons, settings)
         return
     end
     
-    if selected_icon and active_icon_button then
-        local ButtonRenderer = require('button_renderer')
-        
-        if IconBrowser.browse_mode == "images" and IconBrowser.selected_image_path then
-            active_icon_button.use_image = true
-            active_icon_button.use_icon = false
-            active_icon_button.image_path = IconBrowser.selected_image_path
-            active_icon_button.image = nil
-            if active_icon_button.image_path and ButtonRenderer.image_cache[active_icon_button.image_path] then
-                ButtonRenderer.image_cache[active_icon_button.image_path] = nil
+    if selected_icon then
+        if selecting_background_image then
+            local image_path = nil
+            if IconBrowser.browse_mode == "images" and IconBrowser.selected_image_path then
+                image_path = IconBrowser.selected_image_path
+            elseif IconBrowser.browse_mode == "icons" and selected_icon then
+                image_path = selected_icon
             end
-        else
-            active_icon_button.use_icon = true
-            active_icon_button.use_image = false
-            if active_icon_button.icon_name and ButtonRenderer.image_cache[active_icon_button.icon_name] then
-                ButtonRenderer.image_cache[active_icon_button.icon_name] = nil
+            
+            if image_path and ButtonEditor.OnBackgroundImageSelected then
+                ButtonEditor.OnBackgroundImageSelected(image_path)
             end
-            active_icon_button.icon_name = selected_icon
-            active_icon_button.icon = nil
+            selecting_background_image = false
+            IconBrowser.selected_icon = nil
+            IconBrowser.selected_image_path = nil
+            IconBrowser.show_window = false
+        elseif active_icon_button then
+            local ButtonRenderer = require('button_renderer')
+            
+            if IconBrowser.browse_mode == "images" and IconBrowser.selected_image_path then
+                active_icon_button.use_image = true
+                active_icon_button.use_icon = false
+                active_icon_button.image_path = IconBrowser.selected_image_path
+                active_icon_button.image = nil
+                if active_icon_button.image_path and ButtonRenderer.image_cache[active_icon_button.image_path] then
+                    ButtonRenderer.image_cache[active_icon_button.image_path] = nil
+                end
+            else
+                active_icon_button.use_icon = true
+                active_icon_button.use_image = false
+                if active_icon_button.icon_name and ButtonRenderer.image_cache[active_icon_button.icon_name] then
+                    ButtonRenderer.image_cache[active_icon_button.icon_name] = nil
+                end
+                active_icon_button.icon_name = selected_icon
+                active_icon_button.icon = nil
+            end
+            
+            custom_buttons.SaveCurrentButtons()
+            has_unsaved_changes = true
+            
+            IconBrowser.selected_icon = nil
+            IconBrowser.selected_image_path = nil
         end
-        
-        custom_buttons.SaveCurrentButtons()
-        has_unsaved_changes = true
-        
-        IconBrowser.selected_icon = nil
-        IconBrowser.selected_image_path = nil
     end
+end
+
+function ButtonEditor.OpenBackgroundImageBrowser()
+    selecting_background_image = true
+    active_icon_button = nil
+    IconBrowser.show_window = true
+end
+
+function ButtonEditor.SetMarkPresetChangedCallback(callback)
+    ButtonEditor.MarkTransportPresetChanged = callback
 end
 
 -- Handle Style Settings Window
@@ -3317,6 +3969,8 @@ function ButtonEditor.RenderActionFinder(ctx, custom_buttons)
     local window_flags = r.ImGui_WindowFlags_NoCollapse()
     r.ImGui_SetNextWindowSize(ctx, 500, 400, r.ImGui_Cond_FirstUseEver())
     
+    local bg_color = (settings and settings.background) or 0x1E1E1EFF
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), bg_color)
     local visible, open = r.ImGui_Begin(ctx, "Action Finder##action_finder_window", true, window_flags)
     if visible then
         r.ImGui_Text(ctx, "Search for actions:")
@@ -3400,6 +4054,7 @@ function ButtonEditor.RenderActionFinder(ctx, custom_buttons)
         
         r.ImGui_End(ctx)
     end
+    r.ImGui_PopStyleColor(ctx)
     
     if not open then
         action_finder.open = false

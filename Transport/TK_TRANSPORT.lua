@@ -1,18 +1,33 @@
-﻿-- @description TK_TRANSPORT
+-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.4.4
+-- @version 1.5
 -- @changelog 
 --[[
-  + Added Image Scale slider for custom buttons (0.25x - 3.0x)
-  + Added Scale Mode: "Scale All" or "Group Internal Only"
-  + Added Lock Y position option to keep vertical alignment centered
-  + Added Auto-scale option with configurable target size
+  v1.5:
+  + Vertical and horizontal decorative lines (customizable color, thickness, position)
+  + Various button shapes: star, hexagon, pentagon, triangle, circle, rectangle
+  + Image-only decorative mode with extensive formatting options
+  + Window background image support (tiled, centered, horizontal/vertical stretch)
+  + Background image scale control
+  + Improved toggle button settings with separate state configurations
+  + Adjustable button state text and overlay colors (independent from button color)
+  + Font styles: Bold, Italic, Bold Italic support for all text elements
+  + System Fonts: scan and use installed system fonts with search functionality
+  + Vertical text display option for custom buttons
+  + Text color picker repositioned for better workflow
+  + Y position range extended to -100 for larger custom buttons
+  + Font UI improvements: compact R/S scan button, aligned controls
+  
+  v1.4.5:
+  + Added style dropdown in settings for: Transport, Tempo, Time Signature, Local Time, 
+    TapTempo, Envelope, Cursor Position, Time Selection, Battery, Window Set Picker,
+    Master Volume, Monitor Volume, Simple Mixer, Simple Mixer Button, Transport Popup
   ]]--
 ---------------------------------------------------------------------------------------------
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
-local script_version = "1.4.2"
+local script_version = "1.5.0"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -207,6 +222,18 @@ local fonts = {
  "DejaVu Sans"
 }
 
+local font_styles = {
+ {name = "Regular", flags = 0},
+ {name = "Bold", flags = 256},
+ {name = "Italic", flags = 512},
+ {name = "Bold Italic", flags = 768}
+}
+
+local function GetFontFlags(style_index)
+ if not style_index or style_index < 1 or style_index > 4 then return 0 end
+ return font_styles[style_index].flags
+end
+
 local default_settings = {
 
  -- Style settings
@@ -227,17 +254,33 @@ local default_settings = {
  snap_offset_x = 0,
  snap_offset_y = 0,
 
+ font_style = 1,
  transport_font_name = "Arial",
  transport_font_size = 12,
+ transport_font_style = 1,
  tempo_font_name = "Arial",
- timesig_font_name = "Arial",
- local_time_font_name = "Arial",
- taptempo_font_name = "Arial",
  tempo_font_size = 12,
+ tempo_font_style = 1,
+ timesig_font_name = "Arial",
  timesig_font_size = 12, 
- show_timesig_button = false, 
+ timesig_font_style = 1,
+ local_time_font_name = "Arial",
  local_time_font_size = 12, 
+ local_time_font_style = 1,
+ taptempo_font_name = "Arial",
  taptempo_font_size = 12,
+ taptempo_font_style = 1,
+ env_font_style = 1,
+ timesel_font_style = 1,
+ cursorpos_font_style = 1,
+ battery_font_style = 1,
+ master_volume_font_style = 1,
+ monitor_volume_font_style = 1,
+ simple_mixer_font_style = 1,
+ simple_mixer_button_font_style = 1,
+ window_set_picker_font_style = 1,
+ transport_popup_font_style = 1,
+ show_timesig_button = false,
  center_transport = true,
  current_preset_name = "",
 
@@ -287,6 +330,14 @@ local default_settings = {
  gradient_color_top = 0x1A1A1AFF,
  gradient_color_middle = 0x0D0D0DFF,
  gradient_color_bottom = 0x000000FF,
+ 
+ -- Background image settings
+ use_background_image = false,
+ background_image_path = "",
+ background_image_mode = "fit_both", -- "centered", "repeat", "fit_width", "fit_height", "fit_both"
+ background_image_opacity = 1.0,
+ background_image_scale = 1.0,
+ background_image_keep_bg_color = true,
  
  -- Transparent buttons settings
  use_transparent_buttons = false,
@@ -603,6 +654,14 @@ local default_settings = {
  alignment_guide_color = 0x00FFFF88,
  alignment_guide_thickness = 1,
 
+ -- H-Line widgets (horizontal lines)
+ h_lines = {},
+ h_line_next_id = 1,
+
+ -- V-Line widgets (vertical lines)
+ v_lines = {},
+ v_line_next_id = 1,
+
 }
 
 local settings = {}
@@ -813,7 +872,7 @@ function Layout.move_pixel(dx_px, dy_px, dx_frac, dy_frac, keyx, keyy, max_width
  end
  
  settings[pixel_keyx] = math.max(0, math.min(max_width, (settings[pixel_keyx] or 0) + dx_px))
- settings[pixel_keyy] = math.max(-20, math.min(max_height, (settings[pixel_keyy] or 0) + dy_px))
+ settings[pixel_keyy] = math.max(-100, math.min(max_height, (settings[pixel_keyy] or 0) + dy_px))
  
  settings[keyx] = settings[pixel_keyx] / math.max(1, max_width)
  settings[keyy] = settings[pixel_keyy] / math.max(1, max_height)
@@ -870,14 +929,14 @@ local function DrawPixelXYControls(keyx, keyy, main_window_width, main_window_he
  r.ImGui_Text(ctx, "Y")
  r.ImGui_SameLine(ctx)
  r.ImGui_SetNextItemWidth(ctx, slider_w)
- rv, settings[pixel_keyy] = r.ImGui_SliderInt(ctx, "##"..keyy.."_slider", settings[pixel_keyy], -20, main_window_height, "%d px")
+ rv, settings[pixel_keyy] = r.ImGui_SliderInt(ctx, "##"..keyy.."_slider", settings[pixel_keyy], -100, main_window_height, "%d px")
  if rv then MarkTransportPresetChanged() end
  local y_slider_active = r.ImGui_IsItemActive(ctx) or r.ImGui_IsItemHovered(ctx)
  r.ImGui_SameLine(ctx)
  r.ImGui_SetNextItemWidth(ctx, input_w)
  rv, settings[pixel_keyy] = r.ImGui_InputInt(ctx, "##"..keyy.."Input", settings[pixel_keyy])
  if rv then
- settings[pixel_keyy] = math.max(-20, math.min(main_window_height, settings[pixel_keyy]))
+ settings[pixel_keyy] = math.max(-100, math.min(main_window_height, settings[pixel_keyy]))
  MarkTransportPresetChanged()
  end
  local y_input_active = r.ImGui_IsItemActive(ctx) or r.ImGui_IsItemHovered(ctx)
@@ -953,7 +1012,9 @@ local transport_components = {
  { id = "playrate", name = "Playrate" },
  { id = "matrix_ticker", name = "Matrix Ticker" },
  { id = "quick_fx", name = "Quick FX" },
- { id = "window_set_picker", name = "Window Set Picker" }
+ { id = "window_set_picker", name = "Window Set Picker" },
+ { id = "h_line", name = "H-Line (Horizontal)" },
+ { id = "v_line", name = "V-Line (Vertical)" }
 }
 
 function ShowComponentList(ctx)
@@ -1030,6 +1091,10 @@ function ShowComponentSettings(ctx, main_window_width, main_window_height)
  ShowQuickFXSettings(ctx, main_window_width, main_window_height)
  elseif component_id == "window_set_picker" then
  ShowWindowSetPickerSettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "h_line" then
+ ShowHLineSettings(ctx, main_window_width, main_window_height)
+ elseif component_id == "v_line" then
+ ShowVLineSettings(ctx, main_window_width, main_window_height)
  else
  r.ImGui_TextDisabled(ctx, "Settings for this component are not yet implemented")
  end
@@ -1188,6 +1253,22 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  rv, settings.transport_font_size = r.ImGui_SliderInt(ctx, "##Size", settings.transport_font_size or settings.font_size, 8, 48)
  if rv then
  RebuildSectionFonts()
+ end
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.transport_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##FontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.transport_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
  end
  
  r.ImGui_EndTable(ctx)
@@ -1519,6 +1600,22 @@ function ShowTimeDisplaySettings(ctx, main_window_width, main_window_height)
  RebuildSectionFonts()
  end
 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.local_time_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##LocalTimeFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.local_time_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
+
  r.ImGui_EndTable(ctx)
  end
 
@@ -1745,6 +1842,22 @@ function ShowBatteryStatusSettings(ctx, main_window_width, main_window_height)
  if rv then
  RebuildSectionFonts()
  end
+
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.battery_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##BatteryFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.battery_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
  
  r.ImGui_EndTable(ctx)
  end
@@ -1940,6 +2053,22 @@ function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  settings.master_volume_font_size = font_size
  RebuildSectionFonts()
  end
+
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.master_volume_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##MasterVolumeFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.master_volume_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
  
  r.ImGui_EndTable(ctx)
  end
@@ -2087,6 +2216,22 @@ function ShowMonitorVolumeSettings(ctx, main_window_width, main_window_height)
  settings.monitor_volume_font_size = font_size
  RebuildSectionFonts()
  end
+
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.monitor_volume_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##MonitorVolumeFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.monitor_volume_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
  
  r.ImGui_EndTable(ctx)
  end
@@ -2204,6 +2349,21 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
  if rv then
  RebuildSectionFonts()
  end
+
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ local current_style = settings.simple_mixer_button_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##SimpleMixerButtonFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.simple_mixer_button_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
  
  r.ImGui_Text(ctx, "Dimensions:")
  r.ImGui_SetNextItemWidth(ctx, -1)
@@ -2293,6 +2453,21 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
  rv, settings.simple_mixer_font_size = r.ImGui_SliderInt(ctx, "##SimpleMixerFontSize", settings.simple_mixer_font_size or 12, 10, 15, "%d")
  if rv then
  RebuildSectionFonts()
+ end
+
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ local current_style = settings.simple_mixer_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##SimpleMixerFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.simple_mixer_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
  end
  
  r.ImGui_Separator(ctx)
@@ -2425,6 +2600,22 @@ function ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  if rv then
  RebuildSectionFonts()
  end
+
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.env_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##EnvFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.env_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
  
  r.ImGui_EndTable(ctx)
  end
@@ -2511,6 +2702,22 @@ function ShowTempoBPMSettings(ctx, main_window_width, main_window_height)
  RebuildSectionFonts()
  end
 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.tempo_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##TempoFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.tempo_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
+
  r.ImGui_EndTable(ctx)
  end
 
@@ -2588,6 +2795,22 @@ function ShowTimeSignatureSettings(ctx, main_window_width, main_window_height)
  rv, settings.timesig_font_size = r.ImGui_SliderInt(ctx, "##TimeSigSize", settings.timesig_font_size or settings.font_size, 8, 48)
  if rv then
  RebuildSectionFonts()
+ end
+
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.timesig_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##TimeSigFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.timesig_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
  end
 
  r.ImGui_EndTable(ctx)
@@ -2671,6 +2894,22 @@ function ShowTimeSelectionSettings(ctx, main_window_width, main_window_height)
  RebuildSectionFonts()
  end
 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.timesel_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##TimeSelFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.timesel_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
+
  r.ImGui_EndTable(ctx)
  end
 
@@ -2751,6 +2990,22 @@ function ShowCursorPositionSettings(ctx, main_window_width, main_window_height)
  rv, settings.cursorpos_font_size = r.ImGui_SliderInt(ctx, "##CursorPosSize", settings.cursorpos_font_size or settings.font_size, 8, 48)
  if rv then
  RebuildSectionFonts()
+ end
+
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.cursorpos_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##CursorPosFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.cursorpos_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
  end
 
  r.ImGui_EndTable(ctx)
@@ -3074,6 +3329,21 @@ function ShowWindowSetPickerSettings(ctx, main_window_width, main_window_height)
  if rv then
   RebuildSectionFonts()
  end
+
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, 150)
+ local current_style = settings.window_set_picker_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##WindowSetPickerFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.window_set_picker_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
  
  r.ImGui_Separator(ctx)
  
@@ -3203,6 +3473,278 @@ function ShowWindowSetPickerSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TextWrapped(ctx, "Window Sets 1-10 (Command IDs 40454-40463)")
  r.ImGui_TextDisabled(ctx, "Left-click to load window set")
  r.ImGui_TextDisabled(ctx, "Right-click for menu (Save or Take Screenshot)")
+ end
+end
+
+function ShowHLineSettings(ctx, main_window_width, main_window_height)
+ local rv
+ 
+ if not settings.h_lines then settings.h_lines = {} end
+ if not settings.h_line_next_id then settings.h_line_next_id = 1 end
+ 
+ r.ImGui_Text(ctx, "Horizontal Lines")
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_Button(ctx, "+ Add H-Line") then
+  local new_line = {
+   id = settings.h_line_next_id,
+   x = 0,
+   y = 0.5,
+   length = 1.0,
+   color = 0x888888FF,
+   thickness = 1,
+   visible = true
+  }
+  table.insert(settings.h_lines, new_line)
+  settings.h_line_next_id = settings.h_line_next_id + 1
+  SaveSettings()
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ if #settings.h_lines == 0 then
+  r.ImGui_TextDisabled(ctx, "No horizontal lines. Click '+ Add H-Line' to create one.")
+ else
+  local color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
+  local to_delete = nil
+  local slider_w = 120
+  local input_w = 70
+  
+  for i, line in ipairs(settings.h_lines) do
+   r.ImGui_PushID(ctx, "hline_" .. line.id)
+   
+   r.ImGui_Separator(ctx)
+   r.ImGui_Text(ctx, "H-Line " .. i)
+   
+   r.ImGui_SameLine(ctx, 80)
+   rv, line.visible = r.ImGui_Checkbox(ctx, "Visible", line.visible)
+   
+   r.ImGui_SameLine(ctx, 170)
+   rv, line.color = r.ImGui_ColorEdit4(ctx, "##color", line.color or 0x888888FF, color_flags)
+   r.ImGui_SameLine(ctx)
+   r.ImGui_Text(ctx, "Color")
+   
+   r.ImGui_SameLine(ctx, 280)
+   r.ImGui_SetNextItemWidth(ctx, 60)
+   rv, line.thickness = r.ImGui_SliderInt(ctx, "Thick", line.thickness or 1, 1, 10, "%d")
+   
+   r.ImGui_SameLine(ctx, 380)
+   if r.ImGui_Button(ctx, "Delete") then
+    to_delete = i
+   end
+   
+   if line.x == nil then line.x = 0 end
+   if line.y == nil then line.y = 0.5 end
+   if line.length == nil then line.length = 1.0 end
+   if not line.x_px then line.x_px = math.floor(line.x * main_window_width) end
+   if not line.y_px then line.y_px = math.floor(line.y * main_window_height) end
+   if not line.length_px then line.length_px = math.floor(line.length * main_window_width) end
+   
+   r.ImGui_Text(ctx, "X")
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, slider_w)
+   rv, line.x_px = r.ImGui_SliderInt(ctx, "##x_slider", line.x_px, 0, math.floor(main_window_width), "%d px")
+   if rv then
+    line.x = line.x_px / main_window_width
+    SaveSettings()
+   end
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, input_w)
+   rv, line.x_px = r.ImGui_InputInt(ctx, "##x_input", line.x_px)
+   if rv then
+    line.x_px = math.max(0, math.min(math.floor(main_window_width), line.x_px))
+    line.x = line.x_px / main_window_width
+    SaveSettings()
+   end
+   
+   r.ImGui_SameLine(ctx)
+   r.ImGui_Dummy(ctx, 10, 0)
+   r.ImGui_SameLine(ctx)
+   r.ImGui_Text(ctx, "Y")
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, slider_w)
+   rv, line.y_px = r.ImGui_SliderInt(ctx, "##y_slider", line.y_px, 0, math.floor(main_window_height), "%d px")
+   if rv then
+    line.y = line.y_px / main_window_height
+    SaveSettings()
+   end
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, input_w)
+   rv, line.y_px = r.ImGui_InputInt(ctx, "##y_input", line.y_px)
+   if rv then
+    line.y_px = math.max(0, math.min(math.floor(main_window_height), line.y_px))
+    line.y = line.y_px / main_window_height
+    SaveSettings()
+   end
+   
+   r.ImGui_Text(ctx, "Length")
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, slider_w)
+   rv, line.length_px = r.ImGui_SliderInt(ctx, "##length_slider", line.length_px, 1, math.floor(main_window_width), "%d px")
+   if rv then
+    line.length = line.length_px / main_window_width
+    SaveSettings()
+   end
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, input_w)
+   rv, line.length_px = r.ImGui_InputInt(ctx, "##length_input", line.length_px)
+   if rv then
+    line.length_px = math.max(1, math.min(math.floor(main_window_width), line.length_px))
+    line.length = line.length_px / main_window_width
+    SaveSettings()
+   end
+   r.ImGui_SameLine(ctx)
+   if r.ImGui_Button(ctx, "Full Width") then
+    line.x_px = 0
+    line.x = 0
+    line.length_px = math.floor(main_window_width)
+    line.length = 1.0
+    SaveSettings()
+   end
+   
+   r.ImGui_PopID(ctx)
+  end
+  
+  if to_delete then
+   table.remove(settings.h_lines, to_delete)
+   SaveSettings()
+  end
+ end
+end
+
+function ShowVLineSettings(ctx, main_window_width, main_window_height)
+ local rv
+ 
+ if not settings.v_lines then settings.v_lines = {} end
+ if not settings.v_line_next_id then settings.v_line_next_id = 1 end
+ 
+ r.ImGui_Text(ctx, "Vertical Lines")
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_Button(ctx, "+ Add V-Line") then
+  local new_line = {
+   id = settings.v_line_next_id,
+   x = 0.5,
+   y = 0,
+   length = 1.0,
+   color = 0x888888FF,
+   thickness = 1,
+   visible = true
+  }
+  table.insert(settings.v_lines, new_line)
+  settings.v_line_next_id = settings.v_line_next_id + 1
+  SaveSettings()
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ if #settings.v_lines == 0 then
+  r.ImGui_TextDisabled(ctx, "No vertical lines. Click '+ Add V-Line' to create one.")
+ else
+  local color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
+  local to_delete = nil
+  local slider_w = 120
+  local input_w = 70
+  
+  for i, line in ipairs(settings.v_lines) do
+   r.ImGui_PushID(ctx, "vline_" .. line.id)
+   
+   r.ImGui_Separator(ctx)
+   r.ImGui_Text(ctx, "V-Line " .. i)
+   
+   r.ImGui_SameLine(ctx, 80)
+   rv, line.visible = r.ImGui_Checkbox(ctx, "Visible", line.visible)
+   
+   r.ImGui_SameLine(ctx, 170)
+   rv, line.color = r.ImGui_ColorEdit4(ctx, "##color", line.color or 0x888888FF, color_flags)
+   r.ImGui_SameLine(ctx)
+   r.ImGui_Text(ctx, "Color")
+   
+   r.ImGui_SameLine(ctx, 280)
+   r.ImGui_SetNextItemWidth(ctx, 60)
+   rv, line.thickness = r.ImGui_SliderInt(ctx, "Thick", line.thickness or 1, 1, 10, "%d")
+   
+   r.ImGui_SameLine(ctx, 380)
+   if r.ImGui_Button(ctx, "Delete") then
+    to_delete = i
+   end
+   
+   if line.x == nil then line.x = 0.5 end
+   if line.y == nil then line.y = 0 end
+   if line.length == nil then line.length = 1.0 end
+   if not line.x_px then line.x_px = math.floor(line.x * main_window_width) end
+   if not line.y_px then line.y_px = math.floor(line.y * main_window_height) end
+   if not line.length_px then line.length_px = math.floor(line.length * main_window_height) end
+   
+   r.ImGui_Text(ctx, "X")
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, slider_w)
+   rv, line.x_px = r.ImGui_SliderInt(ctx, "##x_slider", line.x_px, 0, math.floor(main_window_width), "%d px")
+   if rv then
+    line.x = line.x_px / main_window_width
+    SaveSettings()
+   end
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, input_w)
+   rv, line.x_px = r.ImGui_InputInt(ctx, "##x_input", line.x_px)
+   if rv then
+    line.x_px = math.max(0, math.min(math.floor(main_window_width), line.x_px))
+    line.x = line.x_px / main_window_width
+    SaveSettings()
+   end
+   
+   r.ImGui_SameLine(ctx)
+   r.ImGui_Dummy(ctx, 10, 0)
+   r.ImGui_SameLine(ctx)
+   r.ImGui_Text(ctx, "Y")
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, slider_w)
+   rv, line.y_px = r.ImGui_SliderInt(ctx, "##y_slider", line.y_px, 0, math.floor(main_window_height), "%d px")
+   if rv then
+    line.y = line.y_px / main_window_height
+    SaveSettings()
+   end
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, input_w)
+   rv, line.y_px = r.ImGui_InputInt(ctx, "##y_input", line.y_px)
+   if rv then
+    line.y_px = math.max(0, math.min(math.floor(main_window_height), line.y_px))
+    line.y = line.y_px / main_window_height
+    SaveSettings()
+   end
+   
+   r.ImGui_Text(ctx, "Length")
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, slider_w)
+   rv, line.length_px = r.ImGui_SliderInt(ctx, "##length_slider", line.length_px, 1, math.floor(main_window_height), "%d px")
+   if rv then
+    line.length = line.length_px / main_window_height
+    SaveSettings()
+   end
+   r.ImGui_SameLine(ctx)
+   r.ImGui_SetNextItemWidth(ctx, input_w)
+   rv, line.length_px = r.ImGui_InputInt(ctx, "##length_input", line.length_px)
+   if rv then
+    line.length_px = math.max(1, math.min(math.floor(main_window_height), line.length_px))
+    line.length = line.length_px / main_window_height
+    SaveSettings()
+   end
+   r.ImGui_SameLine(ctx)
+   if r.ImGui_Button(ctx, "Full Height") then
+    line.y_px = 0
+    line.y = 0
+    line.length_px = math.floor(main_window_height)
+    line.length = 1.0
+    SaveSettings()
+   end
+   
+   r.ImGui_PopID(ctx)
+  end
+  
+  if to_delete then
+   table.remove(settings.v_lines, to_delete)
+   SaveSettings()
+  end
  end
 end
 
@@ -3462,6 +4004,22 @@ function ShowTapTempoSettings(ctx, main_window_width, main_window_height)
  RebuildSectionFonts()
  end
 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.taptempo_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##TapTempoFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.taptempo_font_style = i
+    RebuildSectionFonts()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
+
  r.ImGui_EndTable(ctx)
  end
 
@@ -3649,25 +4207,27 @@ function ShowTransportButtonsImagesSettings(ctx, main_window_width, main_window_
  end
 end
 
-local font = r.ImGui_CreateFont(settings.current_font, settings.font_size)
-local font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, settings.transport_font_size or settings.font_size)
-local font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, settings.env_font_size or settings.font_size)
-local font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, settings.master_volume_font_size or settings.font_size)
-local font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, settings.monitor_volume_font_size or settings.font_size)
-local font_simple_mixer = r.ImGui_CreateFont(fonts[settings.simple_mixer_font or 1], settings.simple_mixer_font_size or 12)
-local font_simple_mixer_button = r.ImGui_CreateFont(fonts[settings.simple_mixer_button_font or 1], settings.simple_mixer_button_font_size or 14)
-local font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
-local font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
-local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
-local font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, settings.cursorpos_font_size or settings.font_size)
-local font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
-local font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, settings.battery_font_size or 14)
-local font_windowset_picker = r.ImGui_CreateFont(settings.window_set_picker_font_name or "Arial", settings.window_set_picker_font_size or 12)
+local font = r.ImGui_CreateFont(settings.current_font, GetFontFlags(settings.font_style))
+local font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, GetFontFlags(settings.transport_font_style))
+local font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, GetFontFlags(settings.env_font_style))
+local font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, GetFontFlags(settings.master_volume_font_style))
+local font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, GetFontFlags(settings.monitor_volume_font_style))
+local font_simple_mixer = r.ImGui_CreateFont(fonts[settings.simple_mixer_font or 1], GetFontFlags(settings.simple_mixer_font_style))
+local font_simple_mixer_button = r.ImGui_CreateFont(fonts[settings.simple_mixer_button_font or 1], GetFontFlags(settings.simple_mixer_button_font_style))
+local font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, GetFontFlags(settings.tempo_font_style))
+local font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, GetFontFlags(settings.timesig_font_style))
+local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, GetFontFlags(settings.timesel_font_style))
+local font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, GetFontFlags(settings.cursorpos_font_style))
+local font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, GetFontFlags(settings.local_time_font_style))
+local font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, GetFontFlags(settings.battery_font_style))
+local font_windowset_picker = r.ImGui_CreateFont(settings.window_set_picker_font_name or "Arial", GetFontFlags(settings.window_set_picker_font_style))
+local font_taptempo = r.ImGui_CreateFont(settings.taptempo_font_name or settings.current_font, GetFontFlags(settings.taptempo_font_style))
+local font_popup = r.ImGui_CreateFont(settings.transport_popup_font_name or settings.current_font, GetFontFlags(settings.transport_popup_font_style))
 local SETTINGS_UI_FONT_NAME = 'Segoe UI'
 local SETTINGS_UI_FONT_SIZE = 13
-local settings_ui_font = r.ImGui_CreateFont(SETTINGS_UI_FONT_NAME, SETTINGS_UI_FONT_SIZE)
+local settings_ui_font = r.ImGui_CreateFont(SETTINGS_UI_FONT_NAME, 0)
 local SETTINGS_UI_FONT_SMALL_SIZE = 10
-local settings_ui_font_small = r.ImGui_CreateFont(SETTINGS_UI_FONT_NAME, SETTINGS_UI_FONT_SMALL_SIZE)
+local settings_ui_font_small = r.ImGui_CreateFont(SETTINGS_UI_FONT_NAME, 0)
 r.ImGui_Attach(ctx, font)
 r.ImGui_Attach(ctx, font_transport)
 r.ImGui_Attach(ctx, font_env)
@@ -3682,9 +4242,12 @@ r.ImGui_Attach(ctx, font_cursorpos)
 r.ImGui_Attach(ctx, font_localtime)
 r.ImGui_Attach(ctx, font_battery)
 r.ImGui_Attach(ctx, font_windowset_picker)
+r.ImGui_Attach(ctx, font_taptempo)
+r.ImGui_Attach(ctx, font_popup)
 r.ImGui_Attach(ctx, settings_ui_font)
 r.ImGui_Attach(ctx, settings_ui_font_small)
 local font_needs_update = false
+local fonts_need_rebuild = false
 function UpdateFont()
  font_needs_update = true
 end
@@ -3805,21 +4368,37 @@ local function DrawTabUnderlineAccent(baseColor, is_active)
 end
 
 function RebuildSectionFonts()
- local new_font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, settings.transport_font_size or settings.font_size)
- local new_font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, settings.env_font_size or settings.font_size)
- local new_font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, settings.master_volume_font_size or settings.font_size)
- local new_font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, settings.monitor_volume_font_size or settings.font_size)
- local new_font_simple_mixer = r.ImGui_CreateFont(fonts[settings.simple_mixer_font or 1], settings.simple_mixer_font_size or 12)
- local new_font_simple_mixer_button = r.ImGui_CreateFont(fonts[settings.simple_mixer_button_font or 1], settings.simple_mixer_button_font_size or 14)
- local new_font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, settings.tempo_font_size or settings.font_size)
- local new_font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, settings.timesig_font_size or settings.font_size)
- local new_font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, settings.timesel_font_size or settings.font_size)
- local new_font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, settings.cursorpos_font_size or settings.font_size)
- local new_font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, settings.local_time_font_size or settings.font_size)
- local new_font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, settings.battery_font_size or 14)
- local new_font_windowset_picker = r.ImGui_CreateFont(settings.window_set_picker_font_name or "Arial", settings.window_set_picker_font_size or 12)
- local new_font_popup = r.ImGui_CreateFont(settings.transport_popup_font_name or settings.current_font, settings.transport_popup_font_size or settings.font_size)
- local new_font_taptempo = r.ImGui_CreateFont(settings.taptempo_font_name or settings.current_font, settings.taptempo_font_size or settings.font_size)
+ if font_transport then pcall(r.ImGui_Detach, ctx, font_transport) end
+ if font_env then pcall(r.ImGui_Detach, ctx, font_env) end
+ if font_master_volume then pcall(r.ImGui_Detach, ctx, font_master_volume) end
+ if font_monitor_volume then pcall(r.ImGui_Detach, ctx, font_monitor_volume) end
+ if font_simple_mixer then pcall(r.ImGui_Detach, ctx, font_simple_mixer) end
+ if font_simple_mixer_button then pcall(r.ImGui_Detach, ctx, font_simple_mixer_button) end
+ if font_tempo then pcall(r.ImGui_Detach, ctx, font_tempo) end
+ if font_timesig then pcall(r.ImGui_Detach, ctx, font_timesig) end
+ if font_timesel then pcall(r.ImGui_Detach, ctx, font_timesel) end
+ if font_cursorpos then pcall(r.ImGui_Detach, ctx, font_cursorpos) end
+ if font_localtime then pcall(r.ImGui_Detach, ctx, font_localtime) end
+ if font_battery then pcall(r.ImGui_Detach, ctx, font_battery) end
+ if font_windowset_picker then pcall(r.ImGui_Detach, ctx, font_windowset_picker) end
+ if font_popup then pcall(r.ImGui_Detach, ctx, font_popup) end
+ if font_taptempo then pcall(r.ImGui_Detach, ctx, font_taptempo) end
+
+ local new_font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, GetFontFlags(settings.transport_font_style))
+ local new_font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, GetFontFlags(settings.env_font_style))
+ local new_font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, GetFontFlags(settings.master_volume_font_style))
+ local new_font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, GetFontFlags(settings.monitor_volume_font_style))
+ local new_font_simple_mixer = r.ImGui_CreateFont(fonts[settings.simple_mixer_font or 1], GetFontFlags(settings.simple_mixer_font_style))
+ local new_font_simple_mixer_button = r.ImGui_CreateFont(fonts[settings.simple_mixer_button_font or 1], GetFontFlags(settings.simple_mixer_button_font_style))
+ local new_font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, GetFontFlags(settings.tempo_font_style))
+ local new_font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, GetFontFlags(settings.timesig_font_style))
+ local new_font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, GetFontFlags(settings.timesel_font_style))
+ local new_font_cursorpos = r.ImGui_CreateFont(settings.cursorpos_font_name or settings.current_font, GetFontFlags(settings.cursorpos_font_style))
+ local new_font_localtime = r.ImGui_CreateFont(settings.local_time_font_name or settings.current_font, GetFontFlags(settings.local_time_font_style))
+ local new_font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.current_font, GetFontFlags(settings.battery_font_style))
+ local new_font_windowset_picker = r.ImGui_CreateFont(settings.window_set_picker_font_name or "Arial", GetFontFlags(settings.window_set_picker_font_style))
+ local new_font_popup = r.ImGui_CreateFont(settings.transport_popup_font_name or settings.current_font, GetFontFlags(settings.transport_popup_font_style))
+ local new_font_taptempo = r.ImGui_CreateFont(settings.taptempo_font_name or settings.current_font, GetFontFlags(settings.taptempo_font_style))
  
  r.ImGui_Attach(ctx, new_font_transport)
  r.ImGui_Attach(ctx, new_font_env)
@@ -4226,6 +4805,9 @@ function LoadPreset(name)
  if old_font_size ~= settings.font_size or old_font_name ~= settings.current_font then
  font_needs_update = true
  end
+ 
+ fonts_need_rebuild = true
+ 
  UpdateCustomImages()
  transport_preset_has_unsaved_changes = false 
  end
@@ -4691,6 +5273,52 @@ function RenderVisualMetronome(main_window_width, main_window_height)
 
 end
 
+function RenderHLines(main_window_width, main_window_height)
+ if not settings.h_lines or #settings.h_lines == 0 then return end
+ 
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local wx, wy = r.ImGui_GetWindowPos(ctx)
+ 
+ for _, line in ipairs(settings.h_lines) do
+  if line.visible then
+   local x_start = line.x_px or (line.x or 0) * main_window_width
+   local y = line.y_px or (line.y or 0.5) * main_window_height
+   local length = line.length_px or (line.length or 1.0) * main_window_width
+   
+   local x1 = wx + x_start
+   local x2 = wx + x_start + length
+   local y1 = wy + y
+   local color = line.color or 0x888888FF
+   local thickness = line.thickness or 1
+   
+   r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y1, color, thickness)
+  end
+ end
+end
+
+function RenderVLines(main_window_width, main_window_height)
+ if not settings.v_lines or #settings.v_lines == 0 then return end
+ 
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local wx, wy = r.ImGui_GetWindowPos(ctx)
+ 
+ for _, line in ipairs(settings.v_lines) do
+  if line.visible then
+   local x = line.x_px or (line.x or 0.5) * main_window_width
+   local y_start = line.y_px or (line.y or 0) * main_window_height
+   local length = line.length_px or (line.length or 1.0) * main_window_height
+   
+   local x1 = wx + x
+   local y1 = wy + y_start
+   local y2 = wy + y_start + length
+   local color = line.color or 0x888888FF
+   local thickness = line.thickness or 1
+   
+   r.ImGui_DrawList_AddLine(draw_list, x1, y1, x1, y2, color, thickness)
+  end
+ end
+end
+
 LoadLastUsedPreset()
 
 function SetColorAlpha(color, alpha)
@@ -4706,6 +5334,101 @@ function GetButtonColorWithTransparency(color)
   return SetColorAlpha(color, alpha)
  end
  return color
+end
+
+local background_image_cache = nil
+local background_image_path_cached = nil
+
+function LoadBackgroundImage()
+ local path = settings.background_image_path
+ if not path or path == "" then 
+  background_image_cache = nil
+  background_image_path_cached = nil
+  return nil 
+ end
+ 
+ if background_image_cache and background_image_path_cached == path then
+  if r.ImGui_ValidatePtr(background_image_cache, 'ImGui_Image*') then
+   return background_image_cache
+  end
+ end
+ 
+ local ok, img = pcall(r.ImGui_CreateImage, path)
+ if ok and img and r.ImGui_ValidatePtr(img, 'ImGui_Image*') then
+  background_image_cache = img
+  background_image_path_cached = path
+  return img
+ end
+ 
+ background_image_cache = nil
+ background_image_path_cached = nil
+ return nil
+end
+
+function DrawBackgroundImage()
+ if not settings.use_background_image then return end
+ 
+ local img = LoadBackgroundImage()
+ if not img then return end
+ 
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local win_x, win_y = r.ImGui_GetWindowPos(ctx)
+ local win_w, win_h = r.ImGui_GetWindowSize(ctx)
+ 
+ local img_w, img_h = r.ImGui_Image_GetSize(img)
+ if img_w == 0 or img_h == 0 then return end
+ 
+ local mode = settings.background_image_mode or "fit_both"
+ local opacity = settings.background_image_opacity or 1.0
+ local scale = settings.background_image_scale or 1.0
+ local alpha = math.floor(opacity * 255)
+ local col = 0xFFFFFF00 | alpha
+ 
+ local scaled_img_w = img_w * scale
+ local scaled_img_h = img_h * scale
+ 
+ if mode == "centered" then
+  local x = win_x + (win_w - scaled_img_w) / 2
+  local y = win_y + (win_h - scaled_img_h) / 2
+  r.ImGui_DrawList_AddImage(draw_list, img, x, y, x + scaled_img_w, y + scaled_img_h, 0, 0, 1, 1, col)
+  
+ elseif mode == "repeat" then
+  local cols = math.ceil(win_w / scaled_img_w)
+  local rows = math.ceil(win_h / scaled_img_h)
+  for row = 0, rows - 1 do
+   for c = 0, cols - 1 do
+    local x = win_x + c * scaled_img_w
+    local y = win_y + row * scaled_img_h
+    r.ImGui_DrawList_AddImage(draw_list, img, x, y, x + scaled_img_w, y + scaled_img_h, 0, 0, 1, 1, col)
+   end
+  end
+  
+ elseif mode == "fit_width" then
+  local fit_scale = win_w / img_w * scale
+  local new_h = img_h * fit_scale
+  local new_w = img_w * fit_scale
+  local x = win_x + (win_w - new_w) / 2
+  local y = win_y + (win_h - new_h) / 2
+  r.ImGui_DrawList_AddImage(draw_list, img, x, y, x + new_w, y + new_h, 0, 0, 1, 1, col)
+  
+ elseif mode == "fit_height" then
+  local fit_scale = win_h / img_h * scale
+  local new_w = img_w * fit_scale
+  local new_h = img_h * fit_scale
+  local x = win_x + (win_w - new_w) / 2
+  local y = win_y + (win_h - new_h) / 2
+  r.ImGui_DrawList_AddImage(draw_list, img, x, y, x + new_w, y + new_h, 0, 0, 1, 1, col)
+  
+ elseif mode == "fit_both" then
+  local fit_scale_w = win_w / img_w
+  local fit_scale_h = win_h / img_h
+  local fit_scale = math.min(fit_scale_w, fit_scale_h) * scale
+  local new_w = img_w * fit_scale
+  local new_h = img_h * fit_scale
+  local x = win_x + (win_w - new_w) / 2
+  local y = win_y + (win_h - new_h) / 2
+  r.ImGui_DrawList_AddImage(draw_list, img, x, y, x + new_w, y + new_h, 0, 0, 1, 1, col)
+ end
 end
 
 function DrawGradientBackground()
@@ -4770,7 +5493,8 @@ function SetTransportStyle()
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0) 
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), settings.button_border_size)
  
- local bg_color = settings.use_gradient_background and 0x00000000 or (settings.transport_background or settings.background)
+ local use_transparent_bg = settings.use_gradient_background or (settings.use_background_image and not settings.background_image_keep_bg_color)
+ local bg_color = use_transparent_bg and 0x00000000 or (settings.transport_background or settings.background)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), bg_color)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.border) 
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), settings.transport_popup_bg or settings.background)
@@ -4809,8 +5533,8 @@ function PushTransportPopupStyling(ctx, settings)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.transport_popup_text or settings.text_normal)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.transport_border or settings.border)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), settings.transport_popup_bg or settings.background)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), settings.transport_border or settings.border)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), settings.transport_border or settings.border)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), settings.transport_popup_hover or 0x555555FF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), settings.transport_popup_hover or 0x666666FF)
  local popup_font = nil
  if settings.transport_popup_font_name and settings.transport_popup_font_size then
  local cache_key = settings.transport_popup_font_name .. "_" .. settings.transport_popup_font_size
@@ -4917,7 +5641,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), 0x1E1E1EFF)
  
- local settings_window_height = 650 
+ local settings_window_height = 720 
  r.ImGui_SetNextWindowSize(ctx, settings.settings_window_width or 780, settings_window_height)
  local settings_visible, settings_open = r.ImGui_Begin(ctx, 'Transport Settings', true, settings_flags)
  if settings_visible then
@@ -5031,7 +5755,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_Text(ctx, "Settings for: Base Style")
  r.ImGui_Separator(ctx)
  
- if r.ImGui_BeginTable(ctx, "TransportBaseStyle", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "TransportBaseStyle", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Window Rounding")
@@ -5045,13 +5769,11 @@ function ShowSettings(main_window_width , main_window_height)
  rv, settings.transport_popup_rounding = r.ImGui_SliderDouble(ctx, "##PopupRounding", settings.transport_popup_rounding or settings.popup_rounding or 0.0, 0.0, 20.0)
  if rv then MarkTransportPresetChanged() end
  
- r.ImGui_TableNextRow(ctx)
- r.ImGui_TableSetColumnIndex(ctx, 0)
- r.ImGui_Text(ctx, "Window Border Size")
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ r.ImGui_Text(ctx, "Border Size")
  r.ImGui_SetNextItemWidth(ctx, -1)
  rv, settings.transport_border_size = r.ImGui_SliderDouble(ctx, "##BorderSize", settings.transport_border_size or settings.border_size or 0.0, 0.0, 5.0)
  if rv then MarkTransportPresetChanged() end
- r.ImGui_TableSetColumnIndex(ctx, 1)
  
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
@@ -5095,6 +5817,22 @@ function ShowSettings(main_window_width , main_window_height)
  RebuildSectionFonts()
  MarkTransportPresetChanged()
  end
+
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ r.ImGui_Text(ctx, "Popup Font Style")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_popup_style = settings.transport_popup_font_style or 1
+ local current_popup_style_name = font_styles[current_popup_style] and font_styles[current_popup_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##PopupFontStyle", current_popup_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_popup_style) then
+    settings.transport_popup_font_style = i
+    RebuildSectionFonts()
+    MarkTransportPresetChanged()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
  
  r.ImGui_EndTable(ctx)
  end
@@ -5102,32 +5840,42 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_Spacing(ctx)
  
  local flags = r.ImGui_ColorEditFlags_NoInputs()
- local columns = 2
 
- local transport_window_colors = {
- { 'transport_background', 'Window Background', 'background' },
- { 'transport_border', 'Window Border Color', 'border' },
- { 'transport_popup_bg', 'Popup Background', 'background' },
- { 'transport_popup_text', 'Popup Text', 'text_normal' },
- }
-
- if r.ImGui_BeginTable(ctx, '##transport_window_colors', columns, r.ImGui_TableFlags_SizingStretchSame()) then
- local col = 0
- for idx, item in ipairs(transport_window_colors) do
- if col == 0 then r.ImGui_TableNextRow(ctx) end
- r.ImGui_TableSetColumnIndex(ctx, col)
- local key = item[1]
- local label = item[2]
- local fallback_key = item[3]
- local current = settings[key] or settings[fallback_key]
- local rv_col, new_col = r.ImGui_ColorEdit4(ctx, label, current, flags)
- if rv_col then 
- settings[key] = new_col
- MarkTransportPresetChanged()
+ if r.ImGui_BeginTable(ctx, '##transport_window_colors', 3, r.ImGui_TableFlags_SizingStretchSame()) then
+  r.ImGui_TableNextRow(ctx)
+  r.ImGui_TableSetColumnIndex(ctx, 0)
+  local bg_current = settings.transport_background or settings.background
+  local rv_bg, new_bg = r.ImGui_ColorEdit4(ctx, "Window Background", bg_current, flags)
+  if rv_bg then settings.transport_background = new_bg; MarkTransportPresetChanged() end
+  
+  r.ImGui_TableSetColumnIndex(ctx, 1)
+  local border_current = settings.transport_border or settings.border
+  local rv_border, new_border = r.ImGui_ColorEdit4(ctx, "Window Border", border_current, flags)
+  if rv_border then settings.transport_border = new_border; MarkTransportPresetChanged() end
+  
+  r.ImGui_TableSetColumnIndex(ctx, 2)
+  r.ImGui_EndTable(ctx)
  end
- col = (col + 1) % columns
- end
- r.ImGui_EndTable(ctx)
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, '##transport_popup_colors', 3, r.ImGui_TableFlags_SizingStretchSame()) then
+  r.ImGui_TableNextRow(ctx)
+  r.ImGui_TableSetColumnIndex(ctx, 0)
+  local popup_bg_current = settings.transport_popup_bg or settings.background
+  local rv_popup_bg, new_popup_bg = r.ImGui_ColorEdit4(ctx, "Popup Background", popup_bg_current, flags)
+  if rv_popup_bg then settings.transport_popup_bg = new_popup_bg; MarkTransportPresetChanged() end
+  
+  r.ImGui_TableSetColumnIndex(ctx, 1)
+  local popup_text_current = settings.transport_popup_text or settings.text_normal
+  local rv_popup_text, new_popup_text = r.ImGui_ColorEdit4(ctx, "Popup Text", popup_text_current, flags)
+  if rv_popup_text then settings.transport_popup_text = new_popup_text; MarkTransportPresetChanged() end
+  
+  r.ImGui_TableSetColumnIndex(ctx, 2)
+  local popup_hover_current = settings.transport_popup_hover or 0x555555FF
+  local rv_popup_hover, new_popup_hover = r.ImGui_ColorEdit4(ctx, "Popup Hover", popup_hover_current, flags)
+  if rv_popup_hover then settings.transport_popup_hover = new_popup_hover; MarkTransportPresetChanged() end
+  r.ImGui_EndTable(ctx)
  end
  
  r.ImGui_Spacing(ctx)
@@ -5161,31 +5909,113 @@ function ShowSettings(main_window_width , main_window_height)
  if settings.use_gradient_background then
   r.ImGui_Spacing(ctx)
   
-  if r.ImGui_BeginTable(ctx, '##gradient_colors', 2, r.ImGui_TableFlags_SizingStretchSame()) then
-   r.ImGui_TableNextRow(ctx)
-   r.ImGui_TableSetColumnIndex(ctx, 0)
-   local rv_top, new_top = r.ImGui_ColorEdit4(ctx, "Gradient Top Color", settings.gradient_color_top or 0x1A1A1AFF, flags)
-   if rv_top then 
-    settings.gradient_color_top = new_top
+  local rv_top, new_top = r.ImGui_ColorEdit4(ctx, "Top", settings.gradient_color_top or 0x1A1A1AFF, flags)
+  if rv_top then 
+   settings.gradient_color_top = new_top
+   MarkTransportPresetChanged()
+  end
+  
+  r.ImGui_SameLine(ctx)
+  local rv_middle, new_middle = r.ImGui_ColorEdit4(ctx, "Middle", settings.gradient_color_middle or 0x0D0D0DFF, flags)
+  if rv_middle then 
+   settings.gradient_color_middle = new_middle
+   MarkTransportPresetChanged()
+  end
+  
+  r.ImGui_SameLine(ctx)
+  local rv_bottom, new_bottom = r.ImGui_ColorEdit4(ctx, "Bottom", settings.gradient_color_bottom or 0x000000FF, flags)
+  if rv_bottom then 
+   settings.gradient_color_bottom = new_bottom
+   MarkTransportPresetChanged()
+  end
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x4A90E2FF)
+ r.ImGui_Text(ctx, "BACKGROUND IMAGE")
+ r.ImGui_PopStyleColor(ctx)
+ r.ImGui_Separator(ctx)
+ 
+ local rv_bg_image = r.ImGui_Checkbox(ctx, "Use Background Image", settings.use_background_image or false)
+ if rv_bg_image then
+  settings.use_background_image = not settings.use_background_image
+  MarkTransportPresetChanged()
+ end
+ 
+ if settings.use_background_image then
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "Select##BgImage") then
+   ButtonEditor.OnBackgroundImageSelected = function(path)
+    settings.background_image_path = path
+    background_image_cache = nil
     MarkTransportPresetChanged()
    end
-   
-   r.ImGui_TableSetColumnIndex(ctx, 1)
-   local rv_middle, new_middle = r.ImGui_ColorEdit4(ctx, "Gradient Middle Color", settings.gradient_color_middle or 0x0D0D0DFF, flags)
-   if rv_middle then 
-    settings.gradient_color_middle = new_middle
+   ButtonEditor.OpenBackgroundImageBrowser()
+  end
+  
+  if settings.background_image_path and settings.background_image_path ~= "" then
+   r.ImGui_SameLine(ctx)
+   if r.ImGui_Button(ctx, "X##ClearBgImage") then
+    settings.background_image_path = ""
+    background_image_cache = nil
     MarkTransportPresetChanged()
    end
-   
-   r.ImGui_TableNextRow(ctx)
-   r.ImGui_TableSetColumnIndex(ctx, 0)
-   local rv_bottom, new_bottom = r.ImGui_ColorEdit4(ctx, "Gradient Bottom Color", settings.gradient_color_bottom or 0x000000FF, flags)
-   if rv_bottom then 
-    settings.gradient_color_bottom = new_bottom
-    MarkTransportPresetChanged()
+   r.ImGui_SameLine(ctx)
+   local filename = settings.background_image_path:match("([^/\\]+)$") or settings.background_image_path
+   r.ImGui_TextDisabled(ctx, filename)
+  end
+  
+  local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+  local item_spacing = 8
+  local mode_width = 100
+  local opacity_width = (avail_w - mode_width - item_spacing) * 0.5
+  local checkbox_width = (avail_w - mode_width - item_spacing) * 0.5
+  
+  r.ImGui_SetNextItemWidth(ctx, mode_width)
+  local mode_names = {"Centered", "Repeat", "Fit Width", "Fit Height", "Fit Both"}
+  local mode_values = {"centered", "repeat", "fit_width", "fit_height", "fit_both"}
+  local current_mode = settings.background_image_mode or "fit_both"
+  local current_idx = 1
+  for i, v in ipairs(mode_values) do
+   if v == current_mode then current_idx = i break end
+  end
+  if r.ImGui_BeginCombo(ctx, "##BgImageMode", mode_names[current_idx]) then
+   for i, name in ipairs(mode_names) do
+    local is_selected = (mode_values[i] == current_mode)
+    if r.ImGui_Selectable(ctx, name, is_selected) then
+     settings.background_image_mode = mode_values[i]
+     MarkTransportPresetChanged()
+    end
    end
-   
-   r.ImGui_EndTable(ctx)
+   r.ImGui_EndCombo(ctx)
+  end
+  
+  r.ImGui_SameLine(ctx)
+  r.ImGui_Text(ctx, "Opacity:")
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 60)
+  local rv_opacity, new_opacity = r.ImGui_SliderDouble(ctx, "##BgImageOpacity", settings.background_image_opacity or 1.0, 0.0, 1.0, "%.2f")
+  if rv_opacity then
+   settings.background_image_opacity = new_opacity
+   MarkTransportPresetChanged()
+  end
+  
+  r.ImGui_SameLine(ctx)
+  r.ImGui_Text(ctx, "Scale:")
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 60)
+  local rv_scale, new_scale = r.ImGui_SliderDouble(ctx, "##BgImageScale", settings.background_image_scale or 1.0, 0.1, 3.0, "%.2f")
+  if rv_scale then
+   settings.background_image_scale = new_scale
+   MarkTransportPresetChanged()
+  end
+  
+  r.ImGui_SameLine(ctx)
+  local rv_keep_bg = r.ImGui_Checkbox(ctx, "Keep BG", settings.background_image_keep_bg_color ~= false)
+  if rv_keep_bg then
+   settings.background_image_keep_bg_color = not settings.background_image_keep_bg_color
+   MarkTransportPresetChanged()
   end
  end
  
@@ -5204,7 +6034,7 @@ function ShowSettings(main_window_width , main_window_height)
  
  if settings.use_transparent_buttons then
   r.ImGui_Spacing(ctx)
-  r.ImGui_Text(ctx, "Button Opacity (0 = fully transparent):")
+  r.ImGui_Text(ctx, "Button Opacity:")
   r.ImGui_SetNextItemWidth(ctx, -1)
   local rv_opacity, new_opacity = r.ImGui_SliderInt(ctx, "##ButtonOpacity", settings.transparent_button_opacity or 0, 0, 255, "%d")
   if rv_opacity then
@@ -5215,7 +6045,7 @@ function ShowSettings(main_window_width , main_window_height)
   r.ImGui_Spacing(ctx)
   r.ImGui_PushFont(ctx, settings_ui_font_small, SETTINGS_UI_FONT_SMALL_SIZE)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xA0A0A0FF)
-  r.ImGui_TextWrapped(ctx, "Applies to: Tempo, Time Signature, Tap Tempo, ENV, and Custom Buttons. Main transport buttons (Play, Stop, etc.) keep their normal colors.")
+  r.ImGui_TextWrapped(ctx, "Applies to: Tempo, Time Signature, Tap Tempo, and ENV buttons. Custom Buttons have individual opacity settings. Main transport buttons (Play, Stop, etc.) keep their normal colors.")
   r.ImGui_PopStyleColor(ctx)
   r.ImGui_PopFont(ctx)
  end
@@ -5257,31 +6087,36 @@ function ShowSettings(main_window_width , main_window_height)
  local changed_scaling = false
  local rvb
  
- if r.ImGui_BeginTable(ctx, "ScalingOptions", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "ScalingOptions", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
- rvb, settings.lock_window_size = r.ImGui_Checkbox(ctx, "Lock Window Size", settings.lock_window_size or false)
+ rvb, settings.lock_window_size = r.ImGui_Checkbox(ctx, "Lock Size", settings.lock_window_size or false)
  if rvb then
  MarkTransportPresetChanged()
  end
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
- rvb, settings.lock_window_position = r.ImGui_Checkbox(ctx, "Lock Window Position", settings.lock_window_position or false)
+ rvb, settings.lock_window_position = r.ImGui_Checkbox(ctx, "Lock Position", settings.lock_window_position or false)
  if rvb then
  MarkTransportPresetChanged()
  end
  
- r.ImGui_TableNextRow(ctx)
- r.ImGui_TableSetColumnIndex(ctx, 0)
- rvb, settings.window_topmost = r.ImGui_Checkbox(ctx, "Window Always On Top", settings.window_topmost ~= false)
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rvb, settings.window_topmost = r.ImGui_Checkbox(ctx, "Always On Top", settings.window_topmost ~= false)
  if rvb then
  MarkTransportPresetChanged()
  end
  
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "SnapOptions", 2, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  local snap_changed
- snap_changed, settings.snap_to_reaper_transport = r.ImGui_Checkbox(ctx, "Snap to REAPER Transport", settings.snap_to_reaper_transport or false)
+ snap_changed, settings.snap_to_reaper_transport = r.ImGui_Checkbox(ctx, "Snap to Transport", settings.snap_to_reaper_transport or false)
  if snap_changed then
  MarkTransportPresetChanged()
  last_reaper_transport_x = nil
@@ -5309,10 +6144,9 @@ function ShowSettings(main_window_width , main_window_height)
  end
  end
  
- r.ImGui_TableNextRow(ctx)
- r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_TableSetColumnIndex(ctx, 1)
  local tcp_changed
- tcp_changed, settings.snap_to_reaper_tcp = r.ImGui_Checkbox(ctx, "Snap to REAPER TCP (Track Panel)", settings.snap_to_reaper_tcp or false)
+ tcp_changed, settings.snap_to_reaper_tcp = r.ImGui_Checkbox(ctx, "Snap to TCP", settings.snap_to_reaper_tcp or false)
  if tcp_changed then
  MarkTransportPresetChanged()
  last_reaper_tcp_x = nil
@@ -5344,11 +6178,8 @@ function ShowSettings(main_window_width , main_window_height)
  if settings.snap_to_reaper_transport or settings.snap_to_reaper_tcp then
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
- r.ImGui_Text(ctx, "Snap Offset X:")
- r.ImGui_SameLine(ctx)
- r.ImGui_PushItemWidth(ctx, -1)
- local offset_x_changed, new_offset_x = r.ImGui_DragInt(ctx, "##SnapOffsetX", settings.snap_offset_x or 0, 1, -1000, 1000)
- r.ImGui_PopItemWidth(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -50)
+ local offset_x_changed, new_offset_x = r.ImGui_DragInt(ctx, "Offset X##SnapOffsetX", settings.snap_offset_x or 0, 1, -1000, 1000)
  if offset_x_changed then
   settings.snap_offset_x = new_offset_x
   force_snap_position = true
@@ -5356,11 +6187,8 @@ function ShowSettings(main_window_width , main_window_height)
  end
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
- r.ImGui_Text(ctx, "Snap Offset Y:")
- r.ImGui_SameLine(ctx)
- r.ImGui_PushItemWidth(ctx, -1)
- local offset_y_changed, new_offset_y = r.ImGui_DragInt(ctx, "##SnapOffsetY", settings.snap_offset_y or 0, 1, -1000, 1000)
- r.ImGui_PopItemWidth(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -50)
+ local offset_y_changed, new_offset_y = r.ImGui_DragInt(ctx, "Offset Y##SnapOffsetY", settings.snap_offset_y or 0, 1, -1000, 1000)
  if offset_y_changed then
   settings.snap_offset_y = new_offset_y
   force_snap_position = true
@@ -5368,126 +6196,127 @@ function ShowSettings(main_window_width , main_window_height)
  end
  end
  
- r.ImGui_TableNextRow(ctx)
- r.ImGui_TableSetColumnIndex(ctx, 0)
- rvb, settings.custom_buttons_scale_with_width = r.ImGui_Checkbox(ctx, "Scale positions with window width", settings.custom_buttons_scale_with_width or false)
- changed_scaling = changed_scaling or rvb
- r.ImGui_TableSetColumnIndex(ctx, 1)
- rvb, settings.custom_buttons_scale_with_height = r.ImGui_Checkbox(ctx, "Scale positions with window height", settings.custom_buttons_scale_with_height or false)
- changed_scaling = changed_scaling or rvb
- 
- r.ImGui_TableNextRow(ctx)
- r.ImGui_TableSetColumnIndex(ctx, 0)
- rvb, settings.custom_buttons_scale_sizes = r.ImGui_Checkbox(ctx, "Scale custom button size with width", settings.custom_buttons_scale_sizes or false)
- changed_scaling = changed_scaling or rvb
- 
  r.ImGui_EndTable(ctx)
  end
  
  r.ImGui_Spacing(ctx)
- r.ImGui_Text(ctx, "Image Scale:")
+ r.ImGui_Separator(ctx)
+ r.ImGui_TextDisabled(ctx, "SCALING")
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Position Scaling:")
+ 
+ rvb, settings.custom_buttons_scale_with_width = r.ImGui_Checkbox(ctx, "Scale X positions", settings.custom_buttons_scale_with_width or false)
+ changed_scaling = changed_scaling or rvb
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "When the window gets wider/narrower, X positions scale proportionally.\n\nExample: Button at X=100 in 400px window → X=200 in 800px window.")
+ end
+ 
+ r.ImGui_SameLine(ctx, 180)
+ rvb, settings.custom_buttons_scale_with_height = r.ImGui_Checkbox(ctx, "Scale Y positions", settings.custom_buttons_scale_with_height or false)
+ changed_scaling = changed_scaling or rvb
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "When the window gets taller/shorter, Y positions scale proportionally.\n\nExample: Button at Y=50 in 100px window → Y=100 in 200px window.")
+ end
+ 
+ if settings.custom_buttons_scale_with_height then
+  r.ImGui_SameLine(ctx, 360)
+  local rv_lock_y
+  rv_lock_y, settings.custom_buttons_lock_y_position = r.ImGui_Checkbox(ctx, "Lock Y", settings.custom_buttons_lock_y_position or false)
+  if rv_lock_y then MarkTransportPresetChanged() end
+  if r.ImGui_IsItemHovered(ctx) then
+   r.ImGui_SetTooltip(ctx, "Keep Y positions fixed even when Y scaling is enabled.\n\nUseful for horizontal button rows that should stay at the same height.")
+  end
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Size Scaling:")
+ 
+ rvb, settings.custom_buttons_scale_sizes = r.ImGui_Checkbox(ctx, "Scale button sizes", settings.custom_buttons_scale_sizes or false)
+ changed_scaling = changed_scaling or rvb
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "Button sizes (width/height) scale with window width.\n\nExample: 60px button in 400px window → 120px in 800px window.")
+ end
+ 
+ r.ImGui_SameLine(ctx, 180)
+ local rv_scale_text
+ rv_scale_text, settings.custom_buttons_scale_text = r.ImGui_Checkbox(ctx, "Scale text sizes", settings.custom_buttons_scale_text or false)
+ if rv_scale_text then MarkTransportPresetChanged() end
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "Button text (font size) scales with window width.\n\nKeeps text proportional to button size when scaling.")
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Text(ctx, "Image Scaling:")
  
  local rv_auto
- rv_auto, settings.custom_buttons_auto_scale = r.ImGui_Checkbox(ctx, "Auto-scale (fit to window)", settings.custom_buttons_auto_scale or false)
+ rv_auto, settings.custom_buttons_auto_scale = r.ImGui_Checkbox(ctx, "Auto-scale images", settings.custom_buttons_auto_scale or false)
  if rv_auto then MarkTransportPresetChanged() end
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "Automatically scale icon/image sizes to fit the window.\n\nDisable this for fixed-size images.")
+ end
  
- if settings.custom_buttons_auto_scale then
-  r.ImGui_SameLine(ctx)
-  r.ImGui_Text(ctx, "Target size:")
-  r.ImGui_SameLine(ctx)
-  r.ImGui_SetNextItemWidth(ctx, 80)
-  local rv_target, new_target = r.ImGui_InputInt(ctx, "##TargetWidth", settings.custom_buttons_auto_scale_target_width or 40)
-  if rv_target then
-   settings.custom_buttons_auto_scale_target_width = math.max(16, math.min(200, new_target))
-   MarkTransportPresetChanged()
-  end
-  r.ImGui_SameLine(ctx)
-  r.ImGui_Text(ctx, "px")
-  
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xA0A0A0FF)
-  r.ImGui_Text(ctx, string.format("Current auto-scale: %.2fx", settings.custom_buttons_image_scale or 1.0))
-  r.ImGui_PopStyleColor(ctx)
- else
-  r.ImGui_SetNextItemWidth(ctx, 200)
-  local scale_changed, new_scale = r.ImGui_SliderDouble(ctx, "##ImageScale", settings.custom_buttons_image_scale or 1.0, 0.25, 3.0, "%.2fx")
-  if scale_changed then
-   settings.custom_buttons_image_scale = new_scale
-   MarkTransportPresetChanged()
-  end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Reset##ImageScale") then
-   settings.custom_buttons_image_scale = 1.0
-   MarkTransportPresetChanged()
-  end
+ r.ImGui_SameLine(ctx, 180)
+ r.ImGui_SetNextItemWidth(ctx, 120)
+ local scale_changed, new_scale = r.ImGui_SliderDouble(ctx, "##ImageScale", settings.custom_buttons_image_scale or 1.0, 0.25, 3.0, "%.2fx")
+ if scale_changed then
+  settings.custom_buttons_image_scale = new_scale
+  MarkTransportPresetChanged()
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "Manual scale multiplier for all images.\n\n1.0 = original size\n2.0 = double size\n0.5 = half size")
+ end
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Reset##ImageScale") then
+  settings.custom_buttons_image_scale = 1.0
+  MarkTransportPresetChanged()
  end
  
  r.ImGui_Spacing(ctx)
- r.ImGui_Text(ctx, "Scale Mode:")
- r.ImGui_SetNextItemWidth(ctx, 250)
- local scale_modes = {"Scale All (positions + sizes)", "Group Internal Only (keep group positions)"}
- local current_mode = settings.custom_buttons_scale_mode or 0
- if r.ImGui_BeginCombo(ctx, "##ScaleMode", scale_modes[current_mode + 1]) then
-  for idx, mode_name in ipairs(scale_modes) do
-   if r.ImGui_Selectable(ctx, mode_name, current_mode == idx - 1) then
-    settings.custom_buttons_scale_mode = idx - 1
-    MarkTransportPresetChanged()
-   end
-  end
-  r.ImGui_EndCombo(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Text(ctx, "Reference Size:")
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "The 'design size' of your layout.\n\nScaling is calculated relative to this size.\nSet this to the window size where your layout looks correct.")
  end
- 
- local rv_lock_y
- rv_lock_y, settings.custom_buttons_lock_y_position = r.ImGui_Checkbox(ctx, "Lock Y position (keep vertical alignment)", settings.custom_buttons_lock_y_position or false)
- if rv_lock_y then MarkTransportPresetChanged() end
- 
- r.ImGui_Spacing(ctx)
- r.ImGui_Text(ctx, "Reference Size Settings:")
  
  local ref_w = settings.custom_buttons_ref_width or 0
  local ref_h = settings.custom_buttons_ref_height or 0
  
- if r.ImGui_BeginTable(ctx, "ReferenceSize", 3, r.ImGui_TableFlags_SizingStretchSame()) then
- 
- r.ImGui_TableNextRow(ctx)
- r.ImGui_TableSetColumnIndex(ctx, 0)
- r.ImGui_PushItemWidth(ctx, -1)
+ r.ImGui_SetNextItemWidth(ctx, 100)
  local rvi
  rvi, ref_w = r.ImGui_InputInt(ctx, "##ref_width", ref_w)
  if rvi then settings.custom_buttons_ref_width = math.max(1, ref_w); changed_scaling = true end
- r.ImGui_PopItemWidth(ctx)
  
- r.ImGui_TableSetColumnIndex(ctx, 1)
- r.ImGui_PushItemWidth(ctx, -1)
+ r.ImGui_SameLine(ctx, 0, 10)
+ r.ImGui_Text(ctx, "x")
+ r.ImGui_SameLine(ctx, 0, 10)
+ 
+ r.ImGui_SetNextItemWidth(ctx, 100)
  rvi, ref_h = r.ImGui_InputInt(ctx, "##ref_height", ref_h)
  if rvi then settings.custom_buttons_ref_height = math.max(1, ref_h); changed_scaling = true end
- r.ImGui_PopItemWidth(ctx)
  
- r.ImGui_TableSetColumnIndex(ctx, 2)
- if r.ImGui_Button(ctx, "Auto Set (Current)") then
- settings.custom_buttons_ref_width = math.floor(main_window_width)
- settings.custom_buttons_ref_height = math.floor(main_window_height)
- ref_w = math.floor(main_window_width)
- ref_h = math.floor(main_window_height)
- changed_scaling = true
+ r.ImGui_SameLine(ctx, 0, 20)
+ if r.ImGui_Button(ctx, "Set to Current") then
+  settings.custom_buttons_ref_width = math.floor(main_window_width)
+  settings.custom_buttons_ref_height = math.floor(main_window_height)
+  changed_scaling = true
  end
- 
- r.ImGui_EndTable(ctx)
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "Set the reference size to the current window size.\n\nCurrent size: " .. math.floor(main_window_width) .. " x " .. math.floor(main_window_height))
  end
  
  r.ImGui_Spacing(ctx)
- r.ImGui_Text(ctx, string.format("Reference Size: %d x %d", ref_w, ref_h))
- 
- r.ImGui_Spacing(ctx)
- r.ImGui_PushFont(ctx, settings_ui_font_small, SETTINGS_UI_FONT_SMALL_SIZE)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xA0A0A0FF)
- r.ImGui_TextWrapped(ctx, "Tip: First set the layout at your desired 'design' window size. With the toggles enabled, that size will be saved automatically as the reference (one-time).")
- r.ImGui_PopStyleColor(ctx)
- r.ImGui_PopFont(ctx)
+ r.ImGui_TextDisabled(ctx, string.format("Current: %d x %d", settings.custom_buttons_ref_width or 0, settings.custom_buttons_ref_height or 0))
+ if (settings.custom_buttons_ref_width or 0) == 0 or (settings.custom_buttons_ref_height or 0) == 0 then
+  r.ImGui_TextColored(ctx, 0xFFAA00FF, "⚠ Resize window to desired size, then click 'Set to Current' before designing!")
+ else
+  r.ImGui_TextColored(ctx, 0x666666FF, "Tip: Resize window, then click 'Set to Current' to update reference.")
+ end
  
  if changed_scaling then 
- SaveSettings()
+  SaveSettings()
  else
- if rvb then MarkTransportPresetChanged() end
+  if rvb then MarkTransportPresetChanged() end
  end
  elseif selected_transport_component == "alignment_guides" then
  local rv
@@ -5672,8 +6501,8 @@ function ShowSettings(main_window_width , main_window_height)
  
  r.ImGui_Separator(ctx)
  
- local import_button_height = r.ImGui_GetFrameHeightWithSpacing(ctx) + 8
- local scroll_height = SETTINGS_TAB_HEIGHT - import_button_height
+ local buttons_section_height = (r.ImGui_GetFrameHeightWithSpacing(ctx) * 2) + 1
+ local scroll_height = SETTINGS_TAB_HEIGHT - buttons_section_height
  
  if r.ImGui_BeginChild(ctx, "ButtonGroups", 0, scroll_height) then
  if CustomButtons and CustomButtons.buttons then
@@ -6005,6 +6834,11 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_SetTooltip(ctx, "Import buttons from other presets")
  end
  
+ local tooltip_label = settings.show_custom_button_tooltip and "Tooltip On" or "Tooltip Off"
+ if r.ImGui_Button(ctx, tooltip_label, -1, 0) then
+ settings.show_custom_button_tooltip = not settings.show_custom_button_tooltip
+ end
+ 
  r.ImGui_TableSetColumnIndex(ctx, 1)
  
  if show_button_import_inline then
@@ -6013,9 +6847,19 @@ function ShowSettings(main_window_width , main_window_height)
  local button_index = tonumber(selected_button_component:sub(8))
  if CustomButtons and CustomButtons.buttons and CustomButtons.buttons[button_index] then
  local button = CustomButtons.buttons[button_index]
- r.ImGui_Text(ctx, "Settings for: " .. (button.name or ("Button " .. button_index)))
+ 
+ local btn_width = 100
+ local btn_spacing = 4
+ local total_btns_width = (btn_width * 3) + (btn_spacing * 2)
+ local window_width = r.ImGui_GetWindowWidth(ctx)
+ local margin = 10
+ local buttons_start_x = window_width - margin - total_btns_width
+ 
+ r.ImGui_Text(ctx, button.name or ("Button " .. button_index))
  
  r.ImGui_SameLine(ctx)
+ r.ImGui_SetCursorPosX(ctx, buttons_start_x)
+ 
  local props_pushed = false
  if not ButtonEditor.cb_section_states.actions_open and not ButtonEditor.cb_section_states.toggle_open then
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
@@ -6023,7 +6867,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3070FFFF)
  props_pushed = true
  end
- if r.ImGui_Button(ctx, "⚙ Properties") then
+ if r.ImGui_Button(ctx, "⚙ Properties", btn_width, 0) then
  ButtonEditor.cb_section_states.actions_open = false
  ButtonEditor.cb_section_states.toggle_open = false
  end
@@ -6034,7 +6878,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_SetTooltip(ctx, "Show Properties view")
  end
  
- r.ImGui_SameLine(ctx)
+ r.ImGui_SameLine(ctx, 0, btn_spacing)
  local actions_pushed = false
  if ButtonEditor.cb_section_states.actions_open then
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
@@ -6042,7 +6886,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3070FFFF)
  actions_pushed = true
  end
- if r.ImGui_Button(ctx, "⚡ Actions") then
+ if r.ImGui_Button(ctx, "⚡ Actions", btn_width, 0) then
  ButtonEditor.cb_section_states.actions_open = true
  ButtonEditor.cb_section_states.toggle_open = false
  end
@@ -6053,7 +6897,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_SetTooltip(ctx, "Show Actions view")
  end
  
- r.ImGui_SameLine(ctx)
+ r.ImGui_SameLine(ctx, 0, btn_spacing)
  local toggle_pushed = false
  if ButtonEditor.cb_section_states.toggle_open then
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4080FFFF)
@@ -6061,7 +6905,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3070FFFF)
  toggle_pushed = true
  end
- if r.ImGui_Button(ctx, "🔄 Toggle") then
+ if r.ImGui_Button(ctx, "🔄 Toggle", btn_width, 0) then
  ButtonEditor.cb_section_states.actions_open = false
  ButtonEditor.cb_section_states.toggle_open = true
  end
@@ -11428,9 +12272,10 @@ function Main()
  r.SetExtState("TK_TRANSPORT", "refresh_buttons", "0", false)
  end
  
- if font_needs_update then
+ if font_needs_update or fonts_need_rebuild then
  RebuildSectionFonts()
  font_needs_update = false
+ fonts_need_rebuild = false
  end
  
  if ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
@@ -11516,6 +12361,7 @@ function Main()
    end
  
  DrawGradientBackground()
+ DrawBackgroundImage()
  
  local main_window_width = r.ImGui_GetWindowWidth(ctx)
  local main_window_height = r.ImGui_GetWindowHeight(ctx)
@@ -11561,6 +12407,8 @@ function Main()
  PlayRate_Slider(main_window_width, main_window_height) 
  TapTempo(main_window_width, main_window_height)
  RenderVisualMetronome(main_window_width, main_window_height)
+ RenderHLines(main_window_width, main_window_height)
+ RenderVLines(main_window_width, main_window_height)
  ShowLocalTime(main_window_width, main_window_height) 
  ShowBatteryStatus(main_window_width, main_window_height) 
 

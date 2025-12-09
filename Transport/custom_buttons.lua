@@ -65,6 +65,7 @@ function CustomButtons.CreateNewButton(options)
             new_button.border_color = last_button.border_color
             new_button.font_size = last_button.font_size
             new_button.font_name = last_button.font_name
+            new_button.font_style = last_button.font_style
             new_button.use_icon = last_button.use_icon
             new_button.icon_name = last_button.icon_name
             new_button.show_text_with_icon = last_button.show_text_with_icon

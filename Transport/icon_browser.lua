@@ -184,6 +184,8 @@ function IconBrowser.Show(ctx, settings)
     
     r.ImGui_SetNextWindowSize(ctx, width, height, r.ImGui_Cond_Always())
     
+    local bg_color = (settings and settings.background) or 0x1E1E1EFF
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), bg_color)
     local visible, open = r.ImGui_Begin(ctx, "TK Icon Browser", true, window_flags)
     
     if visible then
@@ -378,6 +380,7 @@ function IconBrowser.Show(ctx, settings)
     end
     
     r.ImGui_End(ctx)
+    r.ImGui_PopStyleColor(ctx)
     
     if not open then
         IconBrowser.show_window = false
