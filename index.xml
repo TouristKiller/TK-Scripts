@@ -575,8 +575,16 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.5.0" author="TouristKiller" time="2025-12-06T19:40:00Z">
+        <version name="1.6.0" author="TouristKiller" time="2025-12-10T02:00:00Z">
             <changelog><![CDATA[
+v1.6.0:
++ Track Visibility tab: Replaced dropdown with individual checkboxes (Label, Color, Border)
++ Track Visibility tab: Added "Toplevel" preset mode (hides toplevel and closed folder tracks)
++ Track Visibility tab: Added "Reverse" checkbox to invert exclusion logic
++ Track Visibility tab: Dark Parent is now hidden for all excluded tracks
++ Track Visibility tab: Improved 5-column UI layout
++ Track Visibility tab: Track list shows colored backgrounds and folder icons
+
 v1.5.0:
 + Settings window reorganized with 4-column layout and tabs
 + Labels tab: Added Label Border with thickness/opacity settings

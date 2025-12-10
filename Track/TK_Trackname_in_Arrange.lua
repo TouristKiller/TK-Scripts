@@ -1,17 +1,34 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.5.0
+-- @version 1.6.0
 -- @changelog 
 --[[
+v1.6.0:
++ Track Visibility tab: Replaced dropdown with individual checkboxes (Label, Color, Border)
++ Track Visibility tab: Added "Toplevel" preset mode (hides toplevel and closed folder tracks)
++ Track Visibility tab: Added "Reverse" checkbox to invert exclusion logic
++ Track Visibility tab: Dark Parent is now hidden for all excluded tracks
++ Track Visibility tab: Improved 5-column UI layout
++ Track Visibility tab: Track list shows colored backgrounds and folder icons
+
 v1.5.0:
-+ Settings window reorganized with 4-column layout and tabs
++ Settings window reorganized with 4-column layout
 + Labels tab: Added Label Border with thickness/opacity settings
 + Labels tab: Added Label Height padding control
++ Labels tab: Moved Label BG and Label Border sections together
 + Icons tab: Embedded icon browser directly in tab (no popup)
-+ added track Visibility; show /hide track labels for specific tracks
++ Icons tab: Reorganized layout with 4-column grid
++ Track Visibility tab: Added "Exclude by name" filter with Hide/Show buttons
++ Track Visibility tab: Added "Hide in TCP" toggle to sync with REAPER TCP/MCP visibility
++ Track Visibility tab: Added visible track counter (X/Y)
++ Track Visibility tab: Track colors now respect Inherit/Deep Inherit settings
++ Swapped Grid & BG tab with Icons tab (Grid & BG is now tab 3, Icons is tab 4)
++ Tab styling: Inactive tabs are gray, active tab is red
 + Removed Autosave toggle and Save button (autosave always on)
 + Fixed inherit parent label positioning for all alignment modes (center/left/right)
++ Fixed icon and inherit parent label overlap issues
 + Track labels now stay vertically aligned regardless of icons or parent labels
++ Window height increased to accommodate new controls
 
 v1.3.0:
 + Binary search optimization for visible tracks (significant performance improvement for large projects)
@@ -19,7 +36,22 @@ v1.3.0:
 + Fixed pinned tracks overlay issues with master track
 ]]--
 
-local SCRIPT_VERSION = "1.5.0"
+local function GetScriptVersion()
+    local file = io.open(debug.getinfo(1,'S').source:match[[^@?(.*)$]], "r")
+    if file then
+        for line in file:lines() do
+            local version = line:match("^%-%- @version%s+(.+)$")
+            if version then
+                file:close()
+                return version
+            end
+        end
+        file:close()
+    end
+    return "unknown"
+end
+
+local SCRIPT_VERSION = GetScriptVersion()
 
 local r                  = reaper
 -- OS detectie + Linux pass-through overlay (voorkomt click-capture op Linux window managers)
@@ -54,6 +86,7 @@ local cached_bg_color    = nil
 local excluded_tracks    = {}
 local exclude_filter     = ""
 local tcp_synced         = false
+local mcp_synced         = false
 local settings_tab       = 1
 
 local flags              = r.ImGui_WindowFlags_NoTitleBar() |
@@ -289,6 +322,7 @@ local default_settings              = {
     gradient_start_alpha_cached     = 0,
     gradient_end_alpha_cached       = 0,
     darker_parent_tracks            = false,
+    hide_dark_parent_for_excluded   = false,
     parent_darkness                 = 0.7,
     darker_parent_opacity           = 1.0,
     nested_parents_darker           = false,
@@ -320,6 +354,12 @@ local default_settings              = {
     icon_position                   = 1,  -- 1=left, 2=right
     icon_spacing                    = 8,
     icon_opacity                    = 1.0,
+    exclude_hide_label             = true,
+    exclude_hide_color              = true,
+    exclude_hide_border             = true,
+    folders_only_mode               = false,
+    toplevel_mode                   = false,
+    reversed_mode                   = false,
 }
 
 local settings = {}
@@ -1730,57 +1770,33 @@ function ShowSettingsWindow()
         -- TRACK VISIBILITY TAB
         -- ═══════════════════════════════════════════════════════════════════
         
-            if r.ImGui_Button(ctx, "Show All", 80) then
-                excluded_tracks = {}
-                SaveExcludedTracks()
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Hide All", 80) then
-                for i = 0, r.CountTracks(0) - 1 do
+            local track_count = r.CountTracks(0)
+            
+            if settings.toplevel_mode and not settings.reversed_mode then
+                local needs_update = false
+                for i = 0, track_count - 1 do
                     local track = r.GetTrack(0, i)
-                    excluded_tracks[GetTrackGUID(track)] = true
-                end
-                SaveExcludedTracks()
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Folders Only", 90) then
-                excluded_tracks = {}
-                for i = 0, r.CountTracks(0) - 1 do
-                    local track = r.GetTrack(0, i)
-                    local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
-                    if not is_folder then
-                        excluded_tracks[GetTrackGUID(track)] = true
+                    local guid = GetTrackGUID(track)
+                    local is_toplevel = IsToplevelOrClosedFolder(track)
+                    local should_exclude = is_toplevel and not settings.dark_parent
+                    local is_excluded = excluded_tracks[guid] ~= nil
+                    if should_exclude ~= is_excluded then
+                        needs_update = true
+                        break
                     end
                 end
-                SaveExcludedTracks()
-            end
-            r.ImGui_SameLine(ctx)
-            local tcp_label = tcp_synced and "Show in TCP" or "Hide in TCP"
-            if r.ImGui_Button(ctx, tcp_label, 90) then
-                r.Undo_BeginBlock()
-                r.PreventUIRefresh(1)
-                if tcp_synced then
-                    for i = 0, r.CountTracks(0) - 1 do
+                if needs_update then
+                    excluded_tracks = {}
+                    for i = 0, track_count - 1 do
                         local track = r.GetTrack(0, i)
-                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
-                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
+                        if IsToplevelOrClosedFolder(track) and not settings.dark_parent then
+                            excluded_tracks[GetTrackGUID(track)] = true
+                        end
                     end
-                    tcp_synced = false
-                else
-                    for i = 0, r.CountTracks(0) - 1 do
-                        local track = r.GetTrack(0, i)
-                        local is_visible = not IsTrackExcluded(track)
-                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", is_visible and 1 or 0)
-                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", is_visible and 1 or 0)
-                    end
-                    tcp_synced = true
+                    SaveExcludedTracks()
                 end
-                r.TrackList_AdjustWindows(true)
-                r.PreventUIRefresh(-1)
-                r.Undo_EndBlock(tcp_synced and "Hide unchecked in TCP" or "Show all in TCP", -1)
             end
             
-            local track_count = r.CountTracks(0)
             local visible_count = 0
             for i = 0, track_count - 1 do
                 local track = r.GetTrack(0, i)
@@ -1788,31 +1804,47 @@ function ShowSettingsWindow()
                     visible_count = visible_count + 1
                 end
             end
-            r.ImGui_SameLine(ctx)
-            r.ImGui_Text(ctx, string.format("(%d/%d)", visible_count, track_count))
             
-            r.ImGui_Separator(ctx)
-            r.ImGui_Dummy(ctx, 0, 2)
+            local col1 = 0
+            local col2 = 104
+            local col3 = 208
+            local col4 = 312
+            local col5 = 416
+            local btn_width = 95
             
-            r.ImGui_Text(ctx, "Exclude by name:")
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 150)
             local changed
-            changed, exclude_filter = r.ImGui_InputText(ctx, "##exclude_filter", exclude_filter)
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Hide", 50) and exclude_filter ~= "" then
-                local filter_lower = exclude_filter:lower()
-                for i = 0, r.CountTracks(0) - 1 do
-                    local track = r.GetTrack(0, i)
-                    local _, track_name = r.GetTrackName(track)
-                    if track_name:lower():find(filter_lower, 1, true) then
-                        excluded_tracks[GetTrackGUID(track)] = true
-                    end
-                end
+            changed, settings.exclude_hide_label = r.ImGui_Checkbox(ctx, "Label", settings.exclude_hide_label)
+            r.ImGui_SameLine(ctx, col2)
+            changed, settings.exclude_hide_color = r.ImGui_Checkbox(ctx, "Color", settings.exclude_hide_color)
+            r.ImGui_SameLine(ctx, col3)
+            changed, settings.exclude_hide_border = r.ImGui_Checkbox(ctx, "Border", settings.exclude_hide_border)
+            r.ImGui_SameLine(ctx, col4)
+            if r.ImGui_Button(ctx, "Check All", btn_width) then
+                excluded_tracks = {}
+                settings.reversed_mode = false
+                settings.toplevel_mode = false
+                settings.folders_only_mode = false
                 SaveExcludedTracks()
             end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Show", 50) and exclude_filter ~= "" then
+            r.ImGui_SameLine(ctx, col5)
+            if r.ImGui_Button(ctx, "Uncheck All", btn_width) then
+                for i = 0, r.CountTracks(0) - 1 do
+                    local track = r.GetTrack(0, i)
+                    excluded_tracks[GetTrackGUID(track)] = true
+                end
+                settings.reversed_mode = false
+                settings.toplevel_mode = false
+                settings.folders_only_mode = false
+                SaveExcludedTracks()
+            end
+            
+            r.ImGui_Text(ctx, "Name:")
+            r.ImGui_SameLine(ctx, 45)
+            r.ImGui_SetNextItemWidth(ctx, col3 - 55)
+            local changed
+            changed, exclude_filter = r.ImGui_InputText(ctx, "##exclude_filter", exclude_filter)
+            r.ImGui_SameLine(ctx, col3)
+            if r.ImGui_Button(ctx, "Check", btn_width) and exclude_filter ~= "" then
                 local filter_lower = exclude_filter:lower()
                 for i = 0, r.CountTracks(0) - 1 do
                     local track = r.GetTrack(0, i)
@@ -1823,6 +1855,124 @@ function ShowSettingsWindow()
                 end
                 SaveExcludedTracks()
             end
+            r.ImGui_SameLine(ctx, col4)
+            if r.ImGui_Button(ctx, "Uncheck", btn_width) and exclude_filter ~= "" then
+                local filter_lower = exclude_filter:lower()
+                for i = 0, r.CountTracks(0) - 1 do
+                    local track = r.GetTrack(0, i)
+                    local _, track_name = r.GetTrackName(track)
+                    if track_name:lower():find(filter_lower, 1, true) then
+                        excluded_tracks[GetTrackGUID(track)] = true
+                    end
+                end
+                SaveExcludedTracks()
+            end
+            r.ImGui_SameLine(ctx, col5)
+            if r.ImGui_Checkbox(ctx, "Reverse", settings.reversed_mode) then
+                local new_excluded = {}
+                for i = 0, r.CountTracks(0) - 1 do
+                    local track = r.GetTrack(0, i)
+                    local guid = GetTrackGUID(track)
+                    if not excluded_tracks[guid] then
+                        new_excluded[guid] = true
+                    end
+                end
+                excluded_tracks = new_excluded
+                settings.reversed_mode = not settings.reversed_mode
+                SaveExcludedTracks()
+            end
+            
+            if r.ImGui_Checkbox(ctx, "Folder", settings.folders_only_mode) then
+                settings.folders_only_mode = not settings.folders_only_mode
+                if settings.folders_only_mode then
+                    settings.toplevel_mode = false
+                    settings.reversed_mode = false
+                    excluded_tracks = {}
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+                        if not is_folder then
+                            excluded_tracks[GetTrackGUID(track)] = true
+                        end
+                    end
+                    SaveExcludedTracks()
+                else
+                    settings.reversed_mode = false
+                    excluded_tracks = {}
+                    SaveExcludedTracks()
+                end
+            end
+            r.ImGui_SameLine(ctx, col2)
+            if r.ImGui_Checkbox(ctx, "Toplevel", settings.toplevel_mode) then
+                settings.toplevel_mode = not settings.toplevel_mode
+                if settings.toplevel_mode then
+                    settings.folders_only_mode = false
+                    settings.reversed_mode = false
+                    excluded_tracks = {}
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        if IsToplevelOrClosedFolder(track) and not settings.dark_parent then
+                            excluded_tracks[GetTrackGUID(track)] = true
+                        end
+                    end
+                    SaveExcludedTracks()
+                else
+                    settings.reversed_mode = false
+                    excluded_tracks = {}
+                    SaveExcludedTracks()
+                end
+            end
+            r.ImGui_SameLine(ctx, col3)
+            local tcp_label = tcp_synced and "Show TCP" or "Hide TCP"
+            if r.ImGui_Button(ctx, tcp_label, btn_width) then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                if tcp_synced then
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
+                    end
+                    tcp_synced = false
+                else
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        local is_visible = not IsTrackExcluded(track)
+                        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", is_visible and 1 or 0)
+                    end
+                    tcp_synced = true
+                end
+                r.TrackList_AdjustWindows(true)
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock(tcp_synced and "Hide unchecked in TCP" or "Show all in TCP", -1)
+            end
+            r.ImGui_SameLine(ctx, col4)
+            local mcp_label = mcp_synced and "Show MCP" or "Hide MCP"
+            if r.ImGui_Button(ctx, mcp_label, btn_width) then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                if mcp_synced then
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
+                    end
+                    mcp_synced = false
+                else
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        local is_visible = not IsTrackExcluded(track)
+                        r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", is_visible and 1 or 0)
+                    end
+                    mcp_synced = true
+                end
+                r.TrackList_AdjustWindows(true)
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock(mcp_synced and "Hide unchecked in MCP" or "Show all in MCP", -1)
+            end
+            local count_text = string.format("(%d/%d)", visible_count, track_count)
+            local count_width = r.ImGui_CalcTextSize(ctx, count_text)
+            local avail_width = r.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_SameLine(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - count_width)
+            r.ImGui_Text(ctx, count_text)
             
             r.ImGui_Separator(ctx)
             r.ImGui_Dummy(ctx, 0, 2)
@@ -1832,6 +1982,10 @@ function ShowSettingsWindow()
             local list_height = avail_height - footer_height - 8
             
             r.ImGui_BeginChild(ctx, "TrackVisibilityList", 0, list_height, 1)
+            
+            local draw_list = r.ImGui_GetWindowDrawList(ctx)
+            local content_width = r.ImGui_GetContentRegionAvail(ctx)
+            local indent_pixels = 20
             
             for i = 0, track_count - 1 do
                 local track = r.GetTrack(0, i)
@@ -1844,9 +1998,10 @@ function ShowSettingsWindow()
                 end
                 
                 local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
-                local indent = string.rep("  ", depth)
-                local folder_icon = is_folder and "[F] " or "     "
-                local display_name = indent .. folder_icon .. track_name
+                local is_child = depth > 0 and not is_folder
+                local folder_space = is_folder and "     " or ""
+                local child_indent = is_child and "          " or ""
+                local display_name = child_indent .. folder_space .. track_name
                 
                 local show_label = not IsTrackExcluded(track)
                 
@@ -1871,12 +2026,29 @@ function ShowSettingsWindow()
                     end
                 end
                 
-                if display_color ~= 0 then
+                local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+                local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                local item_indent = is_child and indent_pixels or 0
+                
+                local has_color = display_color ~= 0
+                local text_color = 0xFFFFFFFF
+                local icon_color = 0xAAAAAAFF
+                
+                if has_color then
                     local b = (display_color >> 16) & 0xFF
                     local g = (display_color >> 8) & 0xFF
                     local rb = display_color & 0xFF
-                    local imgui_color = (rb << 24) | (g << 16) | (b << 8) | 0xFF
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), imgui_color)
+                    
+                    local luminance = (0.299 * rb + 0.587 * g + 0.114 * b) / 255
+                    text_color = luminance > 0.5 and 0x000000FF or 0xFFFFFFFF
+                    icon_color = text_color
+                    
+                    local bg_color = (rb << 24) | (g << 16) | (b << 8) | 0xDD
+                    
+                    local bg_start_x = cursor_x + 20 + item_indent
+                    r.ImGui_DrawList_AddRectFilled(draw_list, bg_start_x, cursor_y, cursor_x + content_width, cursor_y + line_height - 2, bg_color, 2)
+                    
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 end
                 
                 r.ImGui_PushID(ctx, i)
@@ -1886,8 +2058,16 @@ function ShowSettingsWindow()
                 end
                 r.ImGui_PopID(ctx)
                 
-                if display_color ~= 0 then
-                    r.ImGui_PopStyleColor(ctx)
+                if is_folder then
+                    local icon_x = cursor_x + 24
+                    local icon_y = cursor_y + 2
+                    
+                    r.ImGui_DrawList_AddRectFilled(draw_list, icon_x, icon_y + 3, icon_x + 12, icon_y + 11, icon_color, 1)
+                    r.ImGui_DrawList_AddRectFilled(draw_list, icon_x, icon_y, icon_x + 6, icon_y + 4, icon_color, 1)
+                end
+                
+                if has_color then
+                    r.ImGui_PopStyleColor(ctx, 1)
                 end
             end
             
@@ -2168,7 +2348,7 @@ function RenderSolidOverlay(draw_list, track, track_y, track_height, color, wind
     end
     
     local track_env_cnt = r.CountTrackEnvelopes(track)
-    if track_env_cnt > 0 and settings.show_envelope_colors then
+    if track_env_cnt > 0 and settings.show_envelope_colors and not settings.disable_all_color_overlays then
         local env_y = track_y + track_height
         local env_height = (r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale) - track_height
         local env_color = (color & 0xFFFFFF00) | ((settings.envelope_color_intensity * settings.overlay_alpha * 255)//1)
@@ -2236,7 +2416,8 @@ function RenderGradientOverlay(draw_list, track, track_y, track_height, color, w
         local actual_height = track_height - (pinned_height - track_y)
         
         if is_parent and settings.darker_parent_tracks and 
-           (not r.GetParentTrack(track) or settings.nested_parents_darker) then
+           (not r.GetParentTrack(track) or settings.nested_parents_darker) and
+           not (settings.exclude_hide_color and IsTrackExcluded(track)) then
             r.ImGui_DrawList_AddRectFilled(
                 window_draw_list,
                 LEFT,
@@ -2257,7 +2438,8 @@ function RenderGradientOverlay(draw_list, track, track_y, track_height, color, w
         end
     else
         if is_parent and settings.darker_parent_tracks and 
-           (not r.GetParentTrack(track) or settings.nested_parents_darker) then
+           (not r.GetParentTrack(track) or settings.nested_parents_darker) and
+           not (settings.exclude_hide_color and IsTrackExcluded(track)) then
             r.ImGui_DrawList_AddRectFilled(
                 window_draw_list,
                 LEFT,
@@ -2279,7 +2461,7 @@ function RenderGradientOverlay(draw_list, track, track_y, track_height, color, w
     end
     
     local track_env_cnt = r.CountTrackEnvelopes(track)
-    if track_env_cnt > 0 and settings.show_envelope_colors then
+    if track_env_cnt > 0 and settings.show_envelope_colors and not settings.disable_all_color_overlays then
         local env_y = track_y + track_height
         local env_height = (r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale) - track_height
         
@@ -2596,6 +2778,38 @@ function GetDarkerColor(color)
         (g_val * settings.parent_darkness)//1,
         (b_val * settings.parent_darkness)//1
     )
+end
+
+function IsToplevelOrClosedFolder(track)
+    local parent = r.GetParentTrack(track)
+    if parent then
+        return false
+    end
+    
+    local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+    if folder_depth ~= 1 then
+        return true
+    end
+    
+    local folder_state = r.GetMediaTrackInfo_Value(track, "I_FOLDERCOMPACT")
+    if folder_state == 2 then
+        return true
+    end
+    
+    local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
+    local next_track = r.GetTrack(0, track_idx + 1)
+    if not next_track then
+        return true
+    end
+    
+    local next_height = r.GetMediaTrackInfo_Value(next_track, "I_TCPH")
+    local next_is_child = r.GetParentTrack(next_track) == track
+    
+    if next_is_child and next_height == 0 then
+        return true
+    end
+    
+    return false
 end
 
 function GetLighterColor(color, step, total_steps)
@@ -2943,17 +3157,20 @@ function loop()
                 local track_color = r.GetTrackColor(track)
                 
                 if settings.show_track_colors and settings.folder_border and (is_parent or is_child) then
-                    local border_base_color = r.GetTrackColor(track)
-                    if is_child then
-                        local parent = r.GetParentTrack(track)
-                        if parent then
-                            border_base_color = r.GetTrackColor(parent)
+                    local hide_folder_border = settings.exclude_hide_border and IsTrackExcluded(track)
+                    if not hide_folder_border then
+                        local border_base_color = r.GetTrackColor(track)
+                        if is_child then
+                            local parent = r.GetParentTrack(track)
+                            if parent then
+                                border_base_color = r.GetTrackColor(parent)
+                            end
                         end
+                        local darker_color = GetDarkerColor(border_base_color)
+                        local border_color = GetCachedColor(darker_color, settings.border_opacity)
+                        local border_clip_height = is_pinned and 0 or pinned_tracks_height
+                        DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, border_clip_height)
                     end
-                    local darker_color = GetDarkerColor(border_base_color)
-                    local border_color = GetCachedColor(darker_color, settings.border_opacity)
-                    local border_clip_height = is_pinned and 0 or pinned_tracks_height
-                    DrawFolderBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, border_clip_height)
                 end
                 
                 local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
@@ -2967,7 +3184,9 @@ function loop()
                     max_width = math.max(max_width, text_width)
             
                     if settings.show_track_colors then
-                        if ((is_parent and settings.show_parent_colors) or
+                        local hide_color = settings.exclude_hide_color and IsTrackExcluded(track)
+                        
+                        if not hide_color and ((is_parent and settings.show_parent_colors) or
                             (is_child and settings.show_child_colors) or
                             (not is_parent and not is_child and settings.show_normal_colors)) then
                             
@@ -3045,7 +3264,8 @@ function loop()
                                     local color
                                     
                                     if is_parent and settings.darker_parent_tracks and 
-                                    (not r.GetParentTrack(track) or settings.nested_parents_darker) then
+                                    (not r.GetParentTrack(track) or settings.nested_parents_darker) and
+                                    not (settings.exclude_hide_color and IsTrackExcluded(track)) then
                                     local darker_color = GetDarkerColor(blended_color)
                                     color = GetCachedColor(darker_color, settings.darker_parent_opacity)
                                     else
@@ -3064,33 +3284,38 @@ function loop()
                         end
                         
                         if settings.track_border and not is_parent and not is_child and track_color ~= 0 then
-                            local blended_color = BlendColor(track, track_color, settings.blend_mode)
+                            local hide_border = settings.exclude_hide_border and IsTrackExcluded(track)
+                            if not hide_border then
+                                local blended_color = BlendColor(track, track_color, settings.blend_mode)
 
-                            local border_color = GetCachedColor(blended_color, settings.border_opacity)
-                            local border_clip_height = is_pinned and 0 or pinned_tracks_height
-                            DrawTrackBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, border_clip_height)
+                                local border_color = GetCachedColor(blended_color, settings.border_opacity)
+                                local border_clip_height = is_pinned and 0 or pinned_tracks_height
+                                DrawTrackBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, border_clip_height)
+                            end
                         end
                     end
 
                     local should_show_track = false
                     local should_show_name = false
+                    
+                    local hide_label = settings.exclude_hide_label and IsTrackExcluded(track)
 
-                    if IsTrackExcluded(track) then
+                    if hide_label then
                         should_show_track = false
                         should_show_name = false
                     elseif settings.show_parent_tracks and is_parent then
                         should_show_track = true
                         should_show_name = true
                     end
-                    if not IsTrackExcluded(track) and settings.show_child_tracks and is_child then
+                    if not hide_label and settings.show_child_tracks and is_child then
                         should_show_track = true
                         should_show_name = true
                     end
-                    if not IsTrackExcluded(track) and settings.show_normal_tracks and (not is_parent and not is_child) then
+                    if not hide_label and settings.show_normal_tracks and (not is_parent and not is_child) then
                         should_show_track = true
                         should_show_name = true
                     end
-                    if not IsTrackExcluded(track) and settings.show_parent_label and is_child then
+                    if not hide_label and settings.show_parent_label and is_child then
                         should_show_track = true
                     end
 
