@@ -1,8 +1,14 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.6.0
+-- @version 1.7.0
 -- @changelog 
 --[[
+v1.7.0:
++ Icons tab: New built-in folder browser (replaces native OS dialog)
++ Icons tab: Quick access buttons for Pictures, Downloads, Documents folders
++ Icons tab: Drive selection buttons for Windows
++ Folder browser always opens on top (fixes z-order issues)
+
 v1.6.0:
 + Track Visibility tab: Replaced dropdown with individual checkboxes (Label, Color, Border)
 + Track Visibility tab: Added "Toplevel" preset mode (hides toplevel and closed folder tracks)
@@ -88,6 +94,218 @@ local exclude_filter     = ""
 local tcp_synced         = false
 local mcp_synced         = false
 local settings_tab       = 1
+
+local folder_browser_open = false
+local folder_browser_path = ""
+local folder_browser_drives = {}
+local folder_browser_quick_paths = {}
+
+local function GetQuickPaths()
+    local paths = {}
+    if OS:match("Win") then
+        local userprofile = os.getenv("USERPROFILE")
+        if userprofile then
+            local pictures = userprofile .. "\\Pictures"
+            if r.EnumerateSubdirectories(pictures .. "\\", 0) or r.EnumerateFiles(pictures .. "\\", 0) then
+                table.insert(paths, {name = "📷 Pictures", path = pictures})
+            end
+            local downloads = userprofile .. "\\Downloads"
+            if r.EnumerateSubdirectories(downloads .. "\\", 0) or r.EnumerateFiles(downloads .. "\\", 0) then
+                table.insert(paths, {name = "📥 Downloads", path = downloads})
+            end
+            local documents = userprofile .. "\\Documents"
+            if r.EnumerateSubdirectories(documents .. "\\", 0) or r.EnumerateFiles(documents .. "\\", 0) then
+                table.insert(paths, {name = "📄 Documents", path = documents})
+            end
+        end
+    elseif OS:match("OSX") or OS:match("macOS") then
+        local home = os.getenv("HOME")
+        if home then
+            table.insert(paths, {name = "📷 Pictures", path = home .. "/Pictures"})
+            table.insert(paths, {name = "📥 Downloads", path = home .. "/Downloads"})
+            table.insert(paths, {name = "📄 Documents", path = home .. "/Documents"})
+        end
+    else
+        local home = os.getenv("HOME")
+        if home then
+            table.insert(paths, {name = "📷 Pictures", path = home .. "/Pictures"})
+            table.insert(paths, {name = "📥 Downloads", path = home .. "/Downloads"})
+            table.insert(paths, {name = "📄 Documents", path = home .. "/Documents"})
+        end
+    end
+    return paths
+end
+
+local function GetDrives()
+    local drives = {}
+    if OS:match("Win") then
+        for i = 65, 90 do
+            local drive = string.char(i) .. ":"
+            local test_path = drive .. "\\"
+            local subdir = r.EnumerateSubdirectories(test_path, 0)
+            local file = r.EnumerateFiles(test_path, 0)
+            if subdir or file or r.file_exists(test_path .. "desktop.ini") then
+                table.insert(drives, drive)
+            end
+        end
+        if #drives == 0 then
+            table.insert(drives, "C:")
+            table.insert(drives, "D:")
+        end
+    else
+        table.insert(drives, "/")
+    end
+    return drives
+end
+
+local function GetSubdirectories(path)
+    local dirs = {}
+    local idx = 0
+    local subdir = r.EnumerateSubdirectories(path, idx)
+    while subdir do
+        if subdir ~= "." and subdir ~= ".." then
+            table.insert(dirs, subdir)
+        end
+        idx = idx + 1
+        subdir = r.EnumerateSubdirectories(path, idx)
+    end
+    table.sort(dirs, function(a, b) return a:lower() < b:lower() end)
+    return dirs
+end
+
+local function DrawFolderBrowserPopup(ctx)
+    local selected_folder = nil
+    local popup_flags = r.ImGui_WindowFlags_AlwaysAutoResize()
+    
+    r.ImGui_SetNextWindowSize(ctx, 400, 500, r.ImGui_Cond_FirstUseEver())
+    
+    if r.ImGui_BeginPopupModal(ctx, "TK FOLDER BROWSER##FolderBrowser", nil, 0) then
+        if #folder_browser_drives == 0 then
+            folder_browser_drives = GetDrives()
+        end
+        if #folder_browser_quick_paths == 0 then
+            folder_browser_quick_paths = GetQuickPaths()
+        end
+        
+        r.ImGui_Text(ctx, "Current folder:")
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x88AAFFFF)
+        r.ImGui_TextWrapped(ctx, folder_browser_path ~= "" and folder_browser_path or "(none)")
+        r.ImGui_PopStyleColor(ctx)
+        
+        r.ImGui_Separator(ctx)
+        
+        if #folder_browser_quick_paths > 0 then
+            r.ImGui_Text(ctx, "Quick Access:")
+            for _, qp in ipairs(folder_browser_quick_paths) do
+                if r.ImGui_Button(ctx, qp.name) then
+                    folder_browser_path = qp.path
+                end
+                r.ImGui_SameLine(ctx)
+            end
+            r.ImGui_Dummy(ctx, 0, 0)
+            r.ImGui_Separator(ctx)
+        end
+        
+        if OS:match("Win") then
+            r.ImGui_Text(ctx, "Drives:")
+            for _, drive in ipairs(folder_browser_drives) do
+                if r.ImGui_Button(ctx, drive, 40) then
+                    folder_browser_path = drive
+                end
+                r.ImGui_SameLine(ctx)
+            end
+            r.ImGui_Dummy(ctx, 0, 0)
+            r.ImGui_Separator(ctx)
+        end
+        
+        if folder_browser_path ~= "" then
+            if r.ImGui_Button(ctx, "^ Parent Folder") then
+                local parent = folder_browser_path:match("(.+)[/\\][^/\\]+$")
+                if parent then
+                    if OS:match("Win") and #parent == 2 then
+                        folder_browser_path = parent
+                    elseif parent ~= "" then
+                        folder_browser_path = parent
+                    end
+                elseif OS:match("Win") then
+                    if #folder_browser_path <= 3 then
+                        folder_browser_path = ""
+                    else
+                        folder_browser_path = folder_browser_path:sub(1, 2)
+                    end
+                else
+                    folder_browser_path = "/"
+                end
+            end
+        end
+        
+        r.ImGui_Dummy(ctx, 0, 5)
+        
+        local _, avail_h = r.ImGui_GetContentRegionAvail(ctx)
+        local list_height = avail_h - 45
+        if list_height < 100 then list_height = 100 end
+        
+        if r.ImGui_BeginChild(ctx, "FolderList", 0, list_height, 1) then
+            if folder_browser_path ~= "" then
+                local path_with_sep = folder_browser_path
+                if not path_with_sep:match("[/\\]$") then
+                    path_with_sep = path_with_sep .. (OS:match("Win") and "\\" or "/")
+                end
+                
+                local subdirs = GetSubdirectories(path_with_sep)
+                
+                for _, dir in ipairs(subdirs) do
+                    local icon = "📁 "
+                    if r.ImGui_Selectable(ctx, icon .. dir, false, r.ImGui_SelectableFlags_DontClosePopups()) then
+                        local sep = OS:match("Win") and "\\" or "/"
+                        if folder_browser_path:match("[/\\]$") then
+                            folder_browser_path = folder_browser_path .. dir
+                        else
+                            folder_browser_path = folder_browser_path .. sep .. dir
+                        end
+                    end
+                end
+                
+                if #subdirs == 0 then
+                    r.ImGui_TextDisabled(ctx, "(no subfolders)")
+                end
+            else
+                r.ImGui_TextDisabled(ctx, "Select a drive above")
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        
+        r.ImGui_Separator(ctx)
+        
+        local btn_width = 120
+        local spacing = 10
+        local total_width = btn_width * 2 + spacing
+        local avail_width = r.ImGui_GetContentRegionAvail(ctx)
+        r.ImGui_SetCursorPosX(ctx, (avail_width - total_width) / 2 + r.ImGui_GetCursorPosX(ctx))
+        
+        if folder_browser_path ~= "" then
+            if r.ImGui_Button(ctx, "Select This Folder", btn_width) then
+                selected_folder = folder_browser_path
+                folder_browser_open = false
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+        else
+            r.ImGui_BeginDisabled(ctx)
+            r.ImGui_Button(ctx, "Select This Folder", btn_width)
+            r.ImGui_EndDisabled(ctx)
+        end
+        
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", btn_width) then
+            folder_browser_open = false
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        
+        r.ImGui_EndPopup(ctx)
+    end
+    
+    return selected_folder
+end
 
 local flags              = r.ImGui_WindowFlags_NoTitleBar() |
                            r.ImGui_WindowFlags_NoResize() |
@@ -1577,15 +1795,18 @@ function ShowSettingsWindow()
             r.ImGui_Text(ctx, string.format("(%d icons)", #track_icon_browser.filtered_icons))
         else
             if r.ImGui_Button(ctx, "Select Folder", slider_width) then
-                if r.JS_Dialog_BrowseForFolder then
-                    local retval, folder = r.JS_Dialog_BrowseForFolder("Select image folder", track_icon_browser.custom_image_folder)
-                    if retval == 1 and folder ~= "" then
-                        track_icon_browser.custom_image_folder = folder
-                        track_icon_browser.SaveLastImageFolder()
-                        track_icon_browser.ReloadIcons()
-                    end
-                end
+                folder_browser_path = track_icon_browser.custom_image_folder ~= "" and track_icon_browser.custom_image_folder or ""
+                folder_browser_open = true
+                r.ImGui_OpenPopup(ctx, "TK FOLDER BROWSER##FolderBrowser")
             end
+            
+            local selected = DrawFolderBrowserPopup(ctx)
+            if selected then
+                track_icon_browser.custom_image_folder = selected
+                track_icon_browser.SaveLastImageFolder()
+                track_icon_browser.ReloadIcons()
+            end
+            
             r.ImGui_SameLine(ctx, col3)
             r.ImGui_Text(ctx, string.format("(%d icons)", #track_icon_browser.filtered_icons))
         end
