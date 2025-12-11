@@ -1,8 +1,11 @@
 -- @description TK Find Similar MIDI Items
 -- @author TouristKiller
--- @version 1.7
+-- @version 1.8
 -- @changelog:
 --[[     
+    v1.8:
+    + Added "NEW" button to clear all results and start a fresh search
+    
     v1.7:
     + Added Track Selector popup - easily select which tracks to search
     + Track selector shows track number, name and color
@@ -1042,6 +1045,32 @@ ClearColors = function()
     r.UpdateArrange()
 end
 
+local function ResetState()
+    ClearColors()
+    results = {}
+    match_groups = {}
+    is_batch_mode = false
+    reference_item = nil
+    reference_guid = nil
+    current_ref_notes = nil
+    current_ref_length = 0
+    time_sel_start = 0
+    time_sel_end = 0
+    time_sel_valid = false
+    locked_ref_track = nil
+    lock_ref_track = false
+    is_analyzing = false
+    analyze_progress = 0
+    analyze_total = 0
+    analyze_status = ""
+    analyze_state = nil
+    selected_search_tracks = {}
+    use_track_filter = false
+    track_filter_text = ""
+    r.SelectAllMediaItems(0, false)
+    r.UpdateArrange()
+end
+
 local function ZoomToReference()
     if reference_item and r.ValidatePtr2(0, reference_item, "MediaItem*") then
         local pos = r.GetMediaItemInfo_Value(reference_item, "D_POSITION")
@@ -2063,11 +2092,22 @@ local function loop()
             end
             r.ImGui_ProgressBar(ctx, pct, avail_width, 18, analyze_status)
         else
+            local btn_width = (avail_width - 6) * 0.75
+            local new_btn_width = (avail_width - 6) * 0.25
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-            if r.ImGui_Button(ctx, 'Find Similar Items', avail_width, 32) then
+            if r.ImGui_Button(ctx, 'Find Similar Items', btn_width, 32) then
                 AnalyzeItems()
             end
             DrawTooltip("Analyze selected items and find matches based on current settings.")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.btn_dark)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), COLORS.btn_dark_hover)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), COLORS.btn_dark_active)
+            if r.ImGui_Button(ctx, 'NEW', new_btn_width, 32) then
+                ResetState()
+            end
+            DrawTooltip("Clear all results and start a new search.")
+            r.ImGui_PopStyleColor(ctx, 3)
             r.ImGui_PopStyleColor(ctx, 1)
             
             if analyze_status ~= "" then
