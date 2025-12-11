@@ -1,8 +1,19 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.7.0
+-- @version 1.7.2
 -- @changelog 
 --[[
+v1.7.2:
++ New Time Selection tab with integration for TK_time selection loop color script
++ Overlay Grid: Added Adaptive grid division mode (zooms with arrange view)
++ Overlay Grid: Added "Avoid Items" option to hide grid lines behind items
++ Overlay Grid: Added 1/16 and 1/32 subdivisions
++ Performance optimizations for Settings window
++ Track Visibility list uses cached ListClipper for virtual scrolling
+
+v1.7.1:
++ Added audio, MIDI, bus, folder track type filters to Icons tab
+
 v1.7.0:
 + Icons tab: New built-in folder browser (replaces native OS dialog)
 + Icons tab: Quick access buttons for Pictures, Downloads, Documents folders
@@ -94,6 +105,7 @@ local exclude_filter     = ""
 local tcp_synced         = false
 local mcp_synced         = false
 local settings_tab       = 1
+local track_visibility_clipper = nil
 
 local folder_browser_open = false
 local folder_browser_path = ""
@@ -578,6 +590,22 @@ local default_settings              = {
     folders_only_mode               = false,
     toplevel_mode                   = false,
     reversed_mode                   = false,
+    filter_hide_audio               = false,
+    filter_hide_midi                = false,
+    filter_hide_bus                 = false,
+    filter_hide_folder              = false,
+    overlay_grid_enabled            = false,
+    overlay_grid_color              = 0x000000FF,
+    overlay_grid_beat_color         = 0x000000FF,
+    overlay_grid_bar_color          = 0x000000FF,
+    overlay_grid_thickness          = 1.0,
+    overlay_grid_bar_thickness      = 2.0,
+    overlay_grid_beat_thickness     = 1.0,
+    overlay_grid_opacity            = 1.0,
+    overlay_grid_vertical           = true,
+    overlay_grid_horizontal         = false,
+    overlay_grid_division           = 1,
+    overlay_grid_avoid_items        = false,
 }
 
 local settings = {}
@@ -891,6 +919,213 @@ function UpdateArrangeBG()
     reaper.UpdateArrange()
 end
 
+function DrawOverlayGrid(draw_list, WY)
+    if not settings.overlay_grid_enabled then return end
+    
+    local viewport_start, viewport_end = r.GetSet_ArrangeView2(0, false, 0, 0)
+    local arrange_width = RIGHT - LEFT
+    if arrange_width <= 0 then return end
+    
+    local alpha = math.floor(settings.overlay_grid_opacity * 255)
+    local h_color = (settings.overlay_grid_color & 0xFFFFFF00) | alpha
+    
+    local item_regions = {}
+    if settings.overlay_grid_avoid_items then
+        local num_items = r.CountMediaItems(0)
+        for i = 0, num_items - 1 do
+            local item = r.GetMediaItem(0, i)
+            local item_pos = r.GetMediaItemInfo_Value(item, "D_POSITION")
+            local item_len = r.GetMediaItemInfo_Value(item, "D_LENGTH")
+            local item_end = item_pos + item_len
+            
+            if item_end > viewport_start and item_pos < viewport_end then
+                local track = r.GetMediaItem_Track(item)
+                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
+                local track_h = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+                
+                local item_y_top = WY + track_y
+                local item_y_bot = WY + track_y + track_h
+                
+                if item_y_bot > WY and item_y_top < BOT - scroll_size then
+                    table.insert(item_regions, {
+                        x_start = item_pos,
+                        x_end = item_end,
+                        y_top = math.max(item_y_top, WY),
+                        y_bot = math.min(item_y_bot, BOT - scroll_size)
+                    })
+                end
+            end
+        end
+    end
+    
+    if settings.overlay_grid_horizontal then
+        local num_tracks = r.CountTracks(0)
+        for i = 0, num_tracks - 1 do
+            local track = r.GetTrack(0, i)
+            local y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
+            local h = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+            local line_y = WY + y + h
+            if line_y >= WY and line_y <= BOT - scroll_size then
+                r.ImGui_DrawList_AddLine(draw_list,
+                    LEFT, line_y,
+                    RIGHT - scroll_size, line_y,
+                    h_color, settings.overlay_grid_thickness)
+            end
+        end
+    end
+    
+    if not settings.overlay_grid_vertical then return end
+    
+    local line_count = 0
+    local max_lines = 5000
+    
+    local _, start_measures, start_cml = r.TimeMap2_timeToBeats(0, viewport_start)
+    local start_measure = math.floor(start_measures)
+    
+    local division = settings.overlay_grid_division or 1
+    local show_beats = true
+    local bar_interval = 1
+    
+    if division == 0 then
+        local tempo = r.Master_GetTempo()
+        local seconds_per_beat = 60 / tempo
+        local viewport_duration = viewport_end - viewport_start
+        local pixels_per_beat = arrange_width * seconds_per_beat / viewport_duration
+        
+        if pixels_per_beat > 400 then
+            division = 32
+        elseif pixels_per_beat > 200 then
+            division = 16
+        elseif pixels_per_beat > 100 then
+            division = 8
+        elseif pixels_per_beat > 50 then
+            division = 4
+        elseif pixels_per_beat > 25 then
+            division = 2
+        elseif pixels_per_beat > 10 then
+            division = 1
+        elseif pixels_per_beat > 3 then
+            division = 1
+            show_beats = false
+        elseif pixels_per_beat > 0.8 then
+            division = 1
+            show_beats = false
+            bar_interval = 4
+        elseif pixels_per_beat > 0.2 then
+            division = 1
+            show_beats = false
+            bar_interval = 8
+        elseif pixels_per_beat > 0.05 then
+            division = 1
+            show_beats = false
+            bar_interval = 16
+        elseif pixels_per_beat > 0.01 then
+            division = 1
+            show_beats = false
+            bar_interval = 32
+        else
+            division = 1
+            show_beats = false
+            bar_interval = 64
+        end
+    end
+    
+    local measure = start_measure
+    while line_count < max_lines do
+        if bar_interval > 1 and measure % bar_interval ~= 0 then
+            measure = measure + 1
+            goto continue_measure
+        end
+        
+        local measure_start = r.TimeMap2_beatsToTime(0, 0, measure)
+        if measure_start > viewport_end then break end
+        
+        local timesig_num, timesig_denom = r.TimeMap_GetTimeSigAtTime(0, measure_start)
+        
+        local qn_per_beat = 4 / timesig_denom
+        local beats_in_measure = timesig_num
+        
+        for beat = 0, beats_in_measure do
+            local qn_in_measure = beat * qn_per_beat
+            local beat_time = r.TimeMap2_beatsToTime(0, qn_in_measure, measure)
+            
+            local next_qn_in_measure
+            if beat < beats_in_measure then
+                next_qn_in_measure = (beat + 1) * qn_per_beat
+            else
+                next_qn_in_measure = beats_in_measure * qn_per_beat
+            end
+            local next_beat_time = r.TimeMap2_beatsToTime(0, next_qn_in_measure, measure)
+            
+            for sub = 0, division - 1 do
+                if beat == beats_in_measure and sub > 0 then break end
+                
+                local is_bar = (beat == 0 and sub == 0)
+                local is_beat = (sub == 0)
+                
+                if not show_beats and not is_bar then goto continue_sub end
+                
+                local time = beat_time + (next_beat_time - beat_time) * sub / division
+                if time < viewport_start then goto continue_sub end
+                if time > viewport_end then break end
+                
+                local pixels = arrange_width * (time - viewport_start) / (viewport_end - viewport_start)
+                local screen_x = LEFT + pixels
+                
+                local base_color, thickness
+                if is_bar then
+                    base_color = settings.overlay_grid_bar_color & 0xFFFFFF00
+                    thickness = settings.overlay_grid_bar_thickness
+                elseif is_beat then
+                    base_color = settings.overlay_grid_beat_color & 0xFFFFFF00
+                    thickness = settings.overlay_grid_beat_thickness
+                else
+                    base_color = settings.overlay_grid_color & 0xFFFFFF00
+                    thickness = settings.overlay_grid_thickness
+                end
+                
+                local color = base_color | alpha
+                
+                if settings.overlay_grid_avoid_items and #item_regions > 0 then
+                    local blocked = {}
+                    for _, region in ipairs(item_regions) do
+                        if time >= region.x_start and time <= region.x_end then
+                            table.insert(blocked, { y_top = region.y_top, y_bot = region.y_bot })
+                        end
+                    end
+                    
+                    table.sort(blocked, function(a, b) return a.y_top < b.y_top end)
+                    
+                    local y_cursor = WY
+                    for _, block in ipairs(blocked) do
+                        if block.y_top > y_cursor then
+                            r.ImGui_DrawList_AddLine(draw_list, screen_x, y_cursor, screen_x, block.y_top, color, thickness)
+                        end
+                        y_cursor = math.max(y_cursor, block.y_bot)
+                    end
+                    if y_cursor < BOT - scroll_size then
+                        r.ImGui_DrawList_AddLine(draw_list, screen_x, y_cursor, screen_x, BOT - scroll_size, color, thickness)
+                    end
+                else
+                    r.ImGui_DrawList_AddLine(
+                        draw_list,
+                        screen_x, WY,
+                        screen_x, BOT - scroll_size,
+                        color,
+                        thickness
+                    )
+                end
+                
+                line_count = line_count + 1
+                ::continue_sub::
+            end
+        end
+        
+        measure = measure + 1
+        ::continue_measure::
+    end
+end
+
 function UpdateTrackColors()
     local MIN_BG_VALUE = 13
     local bg_value_tr1 = math.max((settings.bg_brightness_tr1 * 255)//1, MIN_BG_VALUE)
@@ -1115,6 +1350,104 @@ function GetMasterTrackColor()
     return color
 end
 
+local function GetTimeSelScriptPath()
+    local resource_path = r.GetResourcePath()
+    local sep = package.config:sub(1,1)
+    return resource_path .. sep .. "Scripts" .. sep .. "TK Scripts" .. sep .. "Tools" .. sep .. "TK_time selection loop color.lua"
+end
+
+local cached_timesel_cmd_id = nil
+local function GetTimeSelCommandID()
+    if cached_timesel_cmd_id then return cached_timesel_cmd_id end
+    local main_script_path = GetTimeSelScriptPath()
+    local file = io.open(main_script_path, "r")
+    if file then
+        file:close()
+        cached_timesel_cmd_id = r.AddRemoveReaScript(true, 0, main_script_path, true)
+        return cached_timesel_cmd_id
+    end
+    return nil
+end
+
+local function IsWindowsOS()
+    return package.config:sub(1,1) == '\\'
+end
+
+local cached_is_windows = nil
+local function ProcessTimeSelColor(color)
+    if cached_is_windows == nil then cached_is_windows = IsWindowsOS() end
+    if cached_is_windows then
+        local rv = (color >> 16) & 0xFF
+        local g = (color >> 8) & 0xFF
+        local b = color & 0xFF
+        return (b << 16) | (g << 8) | rv
+    end
+    return color
+end
+
+local function GetTimeSelSettings()
+    local loop_color = tonumber(r.GetExtState("TK_time selection loop color", "loop_color")) or r.ColorToNative(0, 0, 255)
+    local default_color = tonumber(r.GetExtState("TK_time selection loop color", "default_color")) or r.ColorToNative(255, 255, 255)
+    local midi_color = tonumber(r.GetExtState("TK_time selection loop color", "midi_color")) or r.ColorToNative(255, 0, 0)
+    local only_loop = r.GetExtState("TK_time selection loop color", "only_loop") == "1"
+    local only_arrange = r.GetExtState("TK_time selection loop color", "only_arrange") == "1"
+    local enable_midi = r.GetExtState("TK_time selection loop color", "enable_midi") == "1"
+    local disco_mode = r.GetExtState("TK_time selection loop color", "disco_mode") == "1"
+    return loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi, disco_mode
+end
+
+local function SaveTimeSelSettings(loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi, disco_mode)
+    r.SetExtState("TK_time selection loop color", "loop_color", tostring(loop_color), true)
+    r.SetExtState("TK_time selection loop color", "default_color", tostring(default_color), true)
+    r.SetExtState("TK_time selection loop color", "midi_color", tostring(midi_color), true)
+    r.SetExtState("TK_time selection loop color", "only_loop", only_loop and "1" or "0", true)
+    r.SetExtState("TK_time selection loop color", "only_arrange", only_arrange and "1" or "0", true)
+    r.SetExtState("TK_time selection loop color", "enable_midi", enable_midi and "1" or "0", true)
+    r.SetExtState("TK_time selection loop color", "disco_mode", disco_mode and "1" or "0", true)
+end
+
+local track_visibility_cache = nil
+local track_visibility_cache_count = -1
+
+local function InvalidateTrackVisibilityCache()
+    track_visibility_cache = nil
+    track_visibility_cache_count = -1
+end
+
+local function GetTrackVisibilityData()
+    local track_count = r.CountTracks(0)
+    if track_visibility_cache and track_visibility_cache_count == track_count then
+        return track_visibility_cache
+    end
+    
+    local data = {}
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local _, track_name = r.GetTrackName(track)
+        local depth = 0
+        local parent = r.GetParentTrack(track)
+        while parent do
+            depth = depth + 1
+            parent = r.GetParentTrack(parent)
+        end
+        
+        local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+        local is_child = depth > 0 and not is_folder
+        
+        data[i] = {
+            track = track,
+            name = track_name,
+            depth = depth,
+            is_folder = is_folder,
+            is_child = is_child
+        }
+    end
+    
+    track_visibility_cache = data
+    track_visibility_cache_count = track_count
+    return data
+end
+
 function ShowSettingsWindow()
     if not settings_visible then return end
     
@@ -1203,6 +1536,10 @@ function ShowSettingsWindow()
             end
             if r.ImGui_BeginTabItem(ctx, "Track Visibility") then
                 settings_tab = 5
+                r.ImGui_EndTabItem(ctx)
+            end
+            if r.ImGui_BeginTabItem(ctx, "Time Selection") then
+                settings_tab = 6
                 r.ImGui_EndTabItem(ctx)
             end
             r.ImGui_EndTabBar(ctx)
@@ -1984,6 +2321,104 @@ function ShowSettingsWindow()
             r.ImGui_TextWrapped(ctx, "Custom colors are disabled. Click the button above to enable custom grid and background colors.")
         end
         
+        r.ImGui_Dummy(ctx, 0, 8)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Text(ctx, "Overlay Grid:")
+        
+        if r.ImGui_Checkbox(ctx, "Show Overlay Grid", settings.overlay_grid_enabled) then
+            settings.overlay_grid_enabled = not settings.overlay_grid_enabled
+        end
+        
+        r.ImGui_BeginDisabled(ctx, not settings.overlay_grid_enabled)
+        
+        if r.ImGui_Checkbox(ctx, "Vertical", settings.overlay_grid_vertical) then
+            settings.overlay_grid_vertical = not settings.overlay_grid_vertical
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, 120)
+        if r.ImGui_Checkbox(ctx, "Horizontal", settings.overlay_grid_horizontal) then
+            settings.overlay_grid_horizontal = not settings.overlay_grid_horizontal
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+        if r.ImGui_Checkbox(ctx, "Avoid Items", settings.overlay_grid_avoid_items) then
+            settings.overlay_grid_avoid_items = not settings.overlay_grid_avoid_items
+        end
+        
+        local grid_divisions = { "Adaptive", "1 (Beat)", "1/2", "1/4", "1/8", "1/16", "1/32" }
+        local grid_div_values = { 0, 1, 2, 4, 8, 16, 32 }
+        local current_div_idx = 2
+        for i, v in ipairs(grid_div_values) do
+            if settings.overlay_grid_division == v then current_div_idx = i break end
+        end
+        r.ImGui_SetNextItemWidth(ctx, 140)
+        if r.ImGui_BeginCombo(ctx, "Grid Division", grid_divisions[current_div_idx]) then
+            for i, label in ipairs(grid_divisions) do
+                if r.ImGui_Selectable(ctx, label, i == current_div_idx) then
+                    settings.overlay_grid_division = grid_div_values[i]
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+        r.ImGui_SetNextItemWidth(ctx, 140)
+        local changed_opac, new_opac = r.ImGui_SliderDouble(ctx, "Grid Opacity", settings.overlay_grid_opacity, 0.0, 1.0)
+        if changed_opac then settings.overlay_grid_opacity = new_opac end
+        
+        r.ImGui_SetNextItemWidth(ctx, 140)
+        local changed_bar_thick, new_bar_thick = r.ImGui_SliderDouble(ctx, "Bar Thickness", settings.overlay_grid_bar_thickness, 0.5, 5.0)
+        if changed_bar_thick then settings.overlay_grid_bar_thickness = new_bar_thick end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+        r.ImGui_SetNextItemWidth(ctx, 140)
+        local changed_beat_thick, new_beat_thick = r.ImGui_SliderDouble(ctx, "Beat Thickness", settings.overlay_grid_beat_thickness, 0.5, 3.0)
+        if changed_beat_thick then settings.overlay_grid_beat_thickness = new_beat_thick end
+        
+        r.ImGui_SetNextItemWidth(ctx, 140)
+        local changed_grid_thick, new_grid_thick = r.ImGui_SliderDouble(ctx, "Grid Thickness", settings.overlay_grid_thickness, 0.5, 2.0)
+        if changed_grid_thick then settings.overlay_grid_thickness = new_grid_thick end
+        
+        local btn_flags = r.ImGui_ColorEditFlags_NoAlpha()
+        if r.ImGui_ColorButton(ctx, "##OverlayBarColor", settings.overlay_grid_bar_color, btn_flags) then
+            r.ImGui_OpenPopup(ctx, "OverlayBarColorPopup")
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, "Bar")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, 120)
+        if r.ImGui_ColorButton(ctx, "##OverlayBeatColor", settings.overlay_grid_beat_color, btn_flags) then
+            r.ImGui_OpenPopup(ctx, "OverlayBeatColorPopup")
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, "Beat")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
+        if r.ImGui_ColorButton(ctx, "##OverlayGridColor", settings.overlay_grid_color, btn_flags) then
+            r.ImGui_OpenPopup(ctx, "OverlayGridColorPopup")
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Text(ctx, "Grid")
+        
+        if r.ImGui_BeginPopup(ctx, "OverlayGridColorPopup") then
+            local chg, new_color = r.ImGui_ColorPicker4(ctx, "##gridpick", settings.overlay_grid_color)
+            if chg then settings.overlay_grid_color = new_color end
+            r.ImGui_EndPopup(ctx)
+        end
+        if r.ImGui_BeginPopup(ctx, "OverlayBeatColorPopup") then
+            local chg, new_color = r.ImGui_ColorPicker4(ctx, "##beatpick", settings.overlay_grid_beat_color)
+            if chg then settings.overlay_grid_beat_color = new_color end
+            r.ImGui_EndPopup(ctx)
+        end
+        if r.ImGui_BeginPopup(ctx, "OverlayBarColorPopup") then
+            local chg, new_color = r.ImGui_ColorPicker4(ctx, "##barpick", settings.overlay_grid_bar_color)
+            if chg then settings.overlay_grid_bar_color = new_color end
+            r.ImGui_EndPopup(ctx)
+        end
+        
+        r.ImGui_EndDisabled(ctx)
+        
         r.ImGui_PopItemWidth(ctx)
 
         elseif settings_tab == 5 then
@@ -2189,11 +2624,77 @@ function ShowSettingsWindow()
                 r.PreventUIRefresh(-1)
                 r.Undo_EndBlock(mcp_synced and "Hide unchecked in MCP" or "Show all in MCP", -1)
             end
-            local count_text = string.format("(%d/%d)", visible_count, track_count)
-            local count_width = r.ImGui_CalcTextSize(ctx, count_text)
-            local avail_width = r.ImGui_GetContentRegionAvail(ctx)
-            r.ImGui_SameLine(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - count_width)
-            r.ImGui_Text(ctx, count_text)
+            r.ImGui_SameLine(ctx, col5)
+            r.ImGui_SetNextItemWidth(ctx, btn_width)
+            if r.ImGui_BeginCombo(ctx, "##TrackTypeFilter", "Filter") then
+                local changed_filter = false
+                local _, new_audio = r.ImGui_Checkbox(ctx, "Hide Audio", settings.filter_hide_audio)
+                if new_audio ~= settings.filter_hide_audio then
+                    settings.filter_hide_audio = new_audio
+                    changed_filter = true
+                end
+                local _, new_midi = r.ImGui_Checkbox(ctx, "Hide MIDI", settings.filter_hide_midi)
+                if new_midi ~= settings.filter_hide_midi then
+                    settings.filter_hide_midi = new_midi
+                    changed_filter = true
+                end
+                local _, new_bus = r.ImGui_Checkbox(ctx, "Hide Bus/Aux", settings.filter_hide_bus)
+                if new_bus ~= settings.filter_hide_bus then
+                    settings.filter_hide_bus = new_bus
+                    changed_filter = true
+                end
+                local _, new_folder = r.ImGui_Checkbox(ctx, "Hide Folders", settings.filter_hide_folder)
+                if new_folder ~= settings.filter_hide_folder then
+                    settings.filter_hide_folder = new_folder
+                    changed_filter = true
+                end
+                if changed_filter then
+                    for i = 0, r.CountTracks(0) - 1 do
+                        local track = r.GetTrack(0, i)
+                        local guid = GetTrackGUID(track)
+                        local num_items = r.CountTrackMediaItems(track)
+                        local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+                        local has_audio = false
+                        local has_midi = false
+                        for j = 0, num_items - 1 do
+                            local item = r.GetTrackMediaItem(track, j)
+                            local take = r.GetActiveTake(item)
+                            if take then
+                                if r.TakeIsMIDI(take) then
+                                    has_midi = true
+                                else
+                                    has_audio = true
+                                end
+                            end
+                        end
+                        local is_bus = num_items == 0 and not is_folder and r.GetTrackNumSends(track, -1) > 0
+                        
+                        local dominated_by_audio = has_audio and not has_midi
+                        local dominated_by_midi = has_midi and not has_audio
+                        
+                        local should_hide = false
+                        if settings.filter_hide_audio and dominated_by_audio then should_hide = true end
+                        if settings.filter_hide_midi and dominated_by_midi then should_hide = true end
+                        if settings.filter_hide_bus and is_bus then should_hide = true end
+                        if settings.filter_hide_folder and is_folder then should_hide = true end
+                        
+                        local dominated_by_audio_filter = dominated_by_audio and not settings.filter_hide_audio
+                        local dominated_by_midi_filter = dominated_by_midi and not settings.filter_hide_midi
+                        local is_bus_filter = is_bus and not settings.filter_hide_bus
+                        local is_folder_filter = is_folder and not settings.filter_hide_folder
+                        
+                        local should_show = dominated_by_audio_filter or dominated_by_midi_filter or is_bus_filter or is_folder_filter
+                        
+                        if should_hide then
+                            excluded_tracks[guid] = true
+                        elseif should_show then
+                            excluded_tracks[guid] = nil
+                        end
+                    end
+                    SaveExcludedTracks()
+                end
+                r.ImGui_EndCombo(ctx)
+            end
             
             r.ImGui_Separator(ctx)
             r.ImGui_Dummy(ctx, 0, 2)
@@ -2207,24 +2708,33 @@ function ShowSettingsWindow()
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
             local content_width = r.ImGui_GetContentRegionAvail(ctx)
             local indent_pixels = 20
+            local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
             
-            for i = 0, track_count - 1 do
-                local track = r.GetTrack(0, i)
-                local _, track_name = r.GetTrackName(track)
-                local depth = 0
-                local parent = r.GetParentTrack(track)
-                while parent do
-                    depth = depth + 1
-                    parent = r.GetParentTrack(parent)
-                end
-                
-                local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
-                local is_child = depth > 0 and not is_folder
-                local folder_space = is_folder and "     " or ""
-                local child_indent = is_child and "          " or ""
-                local display_name = child_indent .. folder_space .. track_name
-                
-                local show_label = not IsTrackExcluded(track)
+            if not track_visibility_clipper or not r.ImGui_ValidatePtr(track_visibility_clipper, 'ImGui_ListClipper*') then
+                track_visibility_clipper = r.ImGui_CreateListClipper(ctx)
+            end
+            r.ImGui_ListClipper_Begin(track_visibility_clipper, track_count)
+            
+            while r.ImGui_ListClipper_Step(track_visibility_clipper) do
+                local display_start, display_end = r.ImGui_ListClipper_GetDisplayRange(track_visibility_clipper)
+                for i = display_start, display_end - 1 do
+                    local track = r.GetTrack(0, i)
+                    if track then
+                        local _, track_name = r.GetTrackName(track)
+                        local depth = 0
+                        local parent = r.GetParentTrack(track)
+                        while parent do
+                            depth = depth + 1
+                            parent = r.GetParentTrack(parent)
+                        end
+                        
+                        local is_folder = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1
+                        local is_child = depth > 0 and not is_folder
+                        local folder_space = is_folder and "     " or ""
+                        local child_indent = is_child and "          " or ""
+                        local display_name = child_indent .. folder_space .. track_name
+                        
+                        local show_label = not IsTrackExcluded(track)
                 
                 local display_color = r.GetTrackColor(track)
                 
@@ -2248,7 +2758,6 @@ function ShowSettingsWindow()
                 end
                 
                 local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
-                local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 local item_indent = is_child and indent_pixels or 0
                 
                 local has_color = display_color ~= 0
@@ -2290,9 +2799,111 @@ function ShowSettingsWindow()
                 if has_color then
                     r.ImGui_PopStyleColor(ctx, 1)
                 end
+                    end
+                end
             end
             
+            local child_draw_list = r.ImGui_GetWindowDrawList(ctx)
+            local child_pos_x, child_pos_y = r.ImGui_GetWindowPos(ctx)
+            local child_size_x, child_size_y = r.ImGui_GetWindowSize(ctx)
+            
+            local count_text = string.format(" %d / %d ", visible_count, track_count)
+            local text_width = r.ImGui_CalcTextSize(ctx, count_text)
+            local box_padding = 6
+            local box_width = text_width + box_padding * 2
+            local box_height = 22
+            local box_x = child_pos_x + child_size_x - box_width - 10
+            local box_y = child_pos_y + child_size_y - box_height - 6
+            
+            r.ImGui_DrawList_AddRectFilled(child_draw_list, box_x, box_y, box_x + box_width, box_y + box_height, 0x1A1A1ACC, 4)
+            r.ImGui_DrawList_AddRect(child_draw_list, box_x, box_y, box_x + box_width, box_y + box_height, 0x666666FF, 4, 0, 1)
+            r.ImGui_DrawList_AddText(child_draw_list, box_x + box_padding, box_y + 4, 0xFFFFFFFF, count_text)
+            
             r.ImGui_EndChild(ctx)
+        
+        elseif settings_tab == 6 then
+        -- ═══════════════════════════════════════════════════════════════════
+        -- TIME SELECTION TAB - time selection/loop color settings
+        -- ═══════════════════════════════════════════════════════════════════
+        
+        local timesel_cmd_id = GetTimeSelCommandID()
+        
+        if not timesel_cmd_id then
+            r.ImGui_TextColored(ctx, 0xFF6666FF, "TK_time selection loop color.lua not found!")
+            r.ImGui_Dummy(ctx, 0, 4)
+            r.ImGui_TextWrapped(ctx, "Please install the script from:")
+            r.ImGui_TextWrapped(ctx, "TK Scripts/Tools/TK_time selection loop color.lua")
+            r.ImGui_Dummy(ctx, 0, 8)
+            r.ImGui_TextWrapped(ctx, "This script allows you to change the time selection and loop colors dynamically.")
+        else
+            local is_enabled = r.GetToggleCommandState(timesel_cmd_id) == 1
+            local loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi, disco_mode = GetTimeSelSettings()
+            
+            r.ImGui_PushItemWidth(ctx, 140)
+            
+            if r.ImGui_Button(ctx, is_enabled and "Disable Time Selection Colors" or "Enable Time Selection Colors", 220) then
+                r.Main_OnCommand(timesel_cmd_id, 0)
+            end
+            
+            r.ImGui_Dummy(ctx, 0, 4)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Dummy(ctx, 0, 4)
+            
+            r.ImGui_Text(ctx, "Loop Color")
+            r.ImGui_SameLine(ctx, 120)
+            local rv1, new_loop = r.ImGui_ColorEdit3(ctx, "##timesel_loop_color", ProcessTimeSelColor(loop_color))
+            if rv1 then
+                SaveTimeSelSettings(ProcessTimeSelColor(new_loop), default_color, midi_color, only_loop, only_arrange, enable_midi, disco_mode)
+            end
+            
+            r.ImGui_Text(ctx, "Default Color")
+            r.ImGui_SameLine(ctx, 120)
+            local rv2, new_default = r.ImGui_ColorEdit3(ctx, "##timesel_default_color", ProcessTimeSelColor(default_color))
+            if rv2 then
+                SaveTimeSelSettings(loop_color, ProcessTimeSelColor(new_default), midi_color, only_loop, only_arrange, enable_midi, disco_mode)
+            end
+            
+            r.ImGui_Text(ctx, "MIDI Color")
+            r.ImGui_SameLine(ctx, 120)
+            local rv3, new_midi = r.ImGui_ColorEdit3(ctx, "##timesel_midi_color", ProcessTimeSelColor(midi_color))
+            if rv3 then
+                SaveTimeSelSettings(loop_color, default_color, ProcessTimeSelColor(new_midi), only_loop, only_arrange, enable_midi, disco_mode)
+            end
+            
+            r.ImGui_Dummy(ctx, 0, 4)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Dummy(ctx, 0, 4)
+            
+            local link_state = r.GetToggleCommandState(40621) == 1
+            if r.ImGui_Checkbox(ctx, "Link loop points to time selection", link_state) then
+                r.Main_OnCommand(40621, 0)
+            end
+            
+            local new_only_loop = only_loop
+            local new_only_arrange = only_arrange
+            
+            if r.ImGui_Checkbox(ctx, "Only loop color", only_loop) then
+                new_only_loop = not only_loop
+                if new_only_loop then new_only_arrange = false end
+                SaveTimeSelSettings(loop_color, default_color, midi_color, new_only_loop, new_only_arrange, enable_midi, disco_mode)
+            end
+            
+            if r.ImGui_Checkbox(ctx, "Only arrange color", only_arrange) then
+                new_only_arrange = not only_arrange
+                if new_only_arrange then new_only_loop = false end
+                SaveTimeSelSettings(loop_color, default_color, midi_color, new_only_loop, new_only_arrange, enable_midi, disco_mode)
+            end
+            
+            if r.ImGui_Checkbox(ctx, "Enable MIDI editor colors", enable_midi) then
+                SaveTimeSelSettings(loop_color, default_color, midi_color, only_loop, only_arrange, not enable_midi, disco_mode)
+            end
+            
+            if r.ImGui_Checkbox(ctx, "Disco mode", disco_mode) then
+                SaveTimeSelSettings(loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi, not disco_mode)
+            end
+            
+            r.ImGui_PopItemWidth(ctx)
+        end
         
         end
         
@@ -3195,6 +3806,8 @@ function loop()
         if not cached_bg_color then
             UpdateBgColorCache()
         end
+        
+        DrawOverlayGrid(draw_list, WY)
 
         local pinned_override = r.GetToggleCommandState(42595) == 1
         

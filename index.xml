@@ -575,8 +575,19 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.7.0" author="TouristKiller" time="2025-12-10T02:00:00Z">
+        <version name="1.7.2" author="TouristKiller" time="2025-12-11T14:2:00Z">
             <changelog><![CDATA[
+v1.7.2:
++ New Time Selection tab with integration for TK_time selection loop color script
++ Overlay Grid: Added Adaptive grid division mode (zooms with arrange view)
++ Overlay Grid: Added "Avoid Items" option to hide grid lines behind items
++ Overlay Grid: Added 1/16 and 1/32 subdivisions
++ Performance optimizations for Settings window
++ Track Visibility list uses cached ListClipper for virtual scrolling
+
+v1.7.1:
++ Added audio, MIDI, bus, folder track type filters to Icons tab
+          
 
 v1.7.0:
 + Icons tab: New built-in folder browser (replaces native OS dialog)
@@ -584,29 +595,6 @@ v1.7.0:
 + Icons tab: Drive selection buttons for Windows
 + Folder browser always opens on top (fixes z-order issues)
 
-v1.6.0:
-+ Track Visibility tab: Replaced dropdown with individual checkboxes (Label, Color, Border)
-+ Track Visibility tab: Added "Toplevel" preset mode (hides toplevel and closed folder tracks)
-+ Track Visibility tab: Added "Reverse" checkbox to invert exclusion logic
-+ Track Visibility tab: Dark Parent is now hidden for all excluded tracks
-+ Track Visibility tab: Improved 5-column UI layout
-+ Track Visibility tab: Track list shows colored backgrounds and folder icons
-
-]]>
-            </changelog>
-            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
-            <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
-            <source main="main" file="TK_Trackname_DarkParentToggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_DarkParentToggle.lua</source>
-            <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/json.lua</source>
-            <source file="track_icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/track_icon_browser.lua</source>
-            <source file="track_icon_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/track_icon_manager.lua</source>
-        </version>
-    </reapack>
-
-    <reapack name="TK_Set selected MIDI item shape and view.lua" type="script" desc="TK_Set selected MIDI item shape and view">
-        <version name="0.3.1" author="TouristKiller" time="2025-09-08T12:00:00Z">
-            <changelog><![CDATA[           
-+  View, shape and grid can now be set per track or per take
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Set%20selected%20MIDI%20item%20shape%20and%20view.lua</source>
         </version>
