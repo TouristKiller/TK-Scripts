@@ -1,6 +1,6 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.9
+-- @version 2.4.0
 -- @changelog
 --[[
 2.3.9
@@ -10070,6 +10070,8 @@ function handleMidiTriggers()
           setMidiTriggerMapping(note, midiTriggerLearnTarget.scaleNoteIndex, midiTriggerLearnTarget.chordTypeIndex)
         end
         midiTriggerLearnTarget = nil
+        externalMidiNotes[note] = nil
+        stopAllNotesFromPlaying()
         return
       end
     end
