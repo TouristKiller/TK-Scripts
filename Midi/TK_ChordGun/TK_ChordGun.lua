@@ -1,8 +1,13 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.3.8
+-- @version 2.3.9
 -- @changelog
 --[[
+2.3.9
++ Voice Leading Modes: Right-click Lead button to choose mode
+  - Average (default): Smooth transitions based on average pitch
+  - Bass (Escalator): Stepwise bass movement for "rolling" progressions
+
 2.3.8
 + Dyads: Added interval chord types (4th, m3, M3, m2, M2, m6, M6, m7, M7)
 + Stacked Fifths: Added 5/5 (stacked fifths) and sus2/5 (sus2 stacked) chord types
@@ -630,6 +635,8 @@ local arpSpeedMode = "ms" -- "ms" or "grid"
 local arpGrid = "1/8"
 
 local voiceLeadingEnabled = false
+local voiceLeadingMode = 1
+local voiceLeadingBassDirection = -1
 local lastPlayedNotes = {}
 
 local function getAveragePitch(notes)
@@ -2562,25 +2569,87 @@ end
 function getBestVoiceLeadingInversion(root, chordData, octave)
     if not lastPlayedNotes or #lastPlayedNotes == 0 then return 0 end
     
-    local lastAvg = getAveragePitch(lastPlayedNotes)
-    local bestInversion = 0
-    local minDiff = 10000
-    
-    -- Get base notes to determine number of possible inversions
     local baseNotes = getChordNotesArray(root, chordData, octave, 0)
     local numNotes = #baseNotes
     if numNotes == 0 then return 0 end
     
     local maxInversions = numNotes - 1
+    local bestInversion = 0
+    local minDiff = 10000
     
-    for inv = 0, maxInversions do
-        local candidateNotes = getChordNotesArray(root, chordData, octave, inv)
-        local avg = getAveragePitch(candidateNotes)
-        local diff = math.abs(avg - lastAvg)
+    if voiceLeadingMode == 2 then
+        local lastBass = math.min(table.unpack(lastPlayedNotes))
         
-        if diff < minDiff then
-            minDiff = diff
-            bestInversion = inv
+        local BASS_LOW_LIMIT = 36
+        local BASS_HIGH_LIMIT = 67
+        
+        if lastBass <= BASS_LOW_LIMIT then
+            voiceLeadingBassDirection = 1
+        elseif lastBass >= BASS_HIGH_LIMIT then
+            voiceLeadingBassDirection = -1
+        end
+        
+        local hasZeroDiff = false
+        local zeroDiffInversion = 0
+        local candidates = {}
+        
+        for inv = 0, maxInversions do
+            local candidateNotes = getChordNotesArray(root, chordData, octave, inv)
+            local candidateBass = math.min(table.unpack(candidateNotes))
+            local diff = math.abs(candidateBass - lastBass)
+            local direction = candidateBass < lastBass and -1 or (candidateBass > lastBass and 1 or 0)
+            
+            if diff == 0 then
+                hasZeroDiff = true
+                zeroDiffInversion = inv
+            else
+                table.insert(candidates, {inv = inv, bass = candidateBass, diff = diff, dir = direction})
+            end
+        end
+        
+        local sameChord = hasZeroDiff and (lastPlayedNotes[1] == baseNotes[1] or 
+                                            lastPlayedNotes[1] == baseNotes[2] or 
+                                            lastPlayedNotes[1] == baseNotes[3])
+        
+        if sameChord then
+            bestInversion = zeroDiffInversion
+        else
+            local bestCandidate = nil
+            
+            for _, c in ipairs(candidates) do
+                if c.dir == voiceLeadingBassDirection then
+                    if not bestCandidate or c.diff < bestCandidate.diff then
+                        bestCandidate = c
+                    end
+                end
+            end
+            
+            if not bestCandidate then
+                for _, c in ipairs(candidates) do
+                    if not bestCandidate or c.diff < bestCandidate.diff then
+                        bestCandidate = c
+                    end
+                end
+            end
+            
+            if bestCandidate then
+                bestInversion = bestCandidate.inv
+            elseif hasZeroDiff then
+                bestInversion = zeroDiffInversion
+            end
+        end
+    else
+        local lastAvg = getAveragePitch(lastPlayedNotes)
+        
+        for inv = 0, maxInversions do
+            local candidateNotes = getChordNotesArray(root, chordData, octave, inv)
+            local avg = getAveragePitch(candidateNotes)
+            local diff = math.abs(avg - lastAvg)
+            
+            if diff < minDiff then
+                minDiff = diff
+                bestInversion = inv
+            end
         end
     end
     
@@ -10534,9 +10603,25 @@ function Interface:addVoiceLeadingButton(xMargin, yMargin, xPadding)
     voiceLeadingEnabled = not voiceLeadingEnabled
     if not voiceLeadingEnabled then lastPlayedNotes = {} end
   end
-  local getTooltip = function() return "Auto Voice Leading: Automatically chooses inversions for smooth transitions" end
+  local onRightClick = function()
+    local checkAvg = voiceLeadingMode == 1 and "!" or ""
+    local checkBass = voiceLeadingMode == 2 and "!" or ""
+    
+    local menu = "#Voice Leading Mode|" .. checkAvg .. "Average (Smooth)|" .. checkBass .. "Bass (Escalator)"
+    
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    
+    if selection == 2 then voiceLeadingMode = 1
+    elseif selection == 3 then voiceLeadingMode = 2
+    end
+  end
+  local getTooltip = function()
+    local modeName = voiceLeadingMode == 1 and "Average" or "Bass (Escalator)"
+    return "Voice Leading [" .. modeName .. "]\nClick: Toggle | Right-Click: Mode"
+  end
   
-  self:addToggleButton("Lead", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getState, onToggle, nil, getTooltip)
+  self:addToggleButton("Lead", buttonXpos+dockerXPadding, buttonYpos, buttonWidth, buttonHeight, getState, onToggle, onRightClick, getTooltip)
 end
 
 function Interface:addScaleFilterButton(xMargin, yMargin, xPadding, opts)
