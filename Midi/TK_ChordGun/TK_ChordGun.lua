@@ -1,9 +1,18 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.4.0
+-- @version 2.4.1
 -- @changelog
 --[[
-2.3.9
+2.4.1
++ MIDI Trigger Cascade Fix: Fixed issue where chord notes could re-trigger other chords
++ Virtual MIDI Detection: Dynamic detection of virtual MIDI devices (cross-platform)
++ Channel 16 Bypass: Triggered chords now play on channel 16 to avoid JSFX blocking
++ Chord Display Fix: Correct chord recognition when using MIDI triggers
++ Piano Trigger Visualization: Trigger notes shown in separate color on piano
++ Split Key Display: Keys that are both trigger and chord note show both colors
++ Theme Support: Unique trigger colors for all 6 themes
+
+2.4.0
 + Voice Leading Modes: Right-click Lead button to choose mode
   - Average (default): Smooth transitions based on average pitch
   - Bass (Escalator): Stepwise bass movement for "rolling" progressions
@@ -676,10 +685,10 @@ local midiTriggerMappings = {}
 local midiTriggerColumnMappings = {}
 local midiTriggerMode = 1
 local midiTriggerLearnTarget = nil
-local midiTriggerState = {}
+local midiTriggerState = { _virtualDeviceCache = {} }
 local activeTriggerNote = nil
 local currentTriggerPreset = nil
-
+local activeTriggeredChordNotes = {}
 
 
 
@@ -1143,15 +1152,16 @@ end
 local function getActiveExternalNotes()
 
   local notes = {}
-  for note, _ in pairs(chordInputNotes) do
-
-    if midiTriggerEnabled then
-      if midiTriggerMode == 1 and midiTriggerMappings[note] then
-        goto continue
-      elseif midiTriggerMode == 2 and midiTriggerColumnMappings[note] then
-        goto continue
-      end
+  
+  if midiTriggerEnabled and activeTriggerNote then
+    for note, _ in pairs(activeTriggeredChordNotes) do
+      table.insert(notes, note)
     end
+    table.sort(notes)
+    return notes
+  end
+  
+  for note, _ in pairs(chordInputNotes) do
 
     local noteToAnalyze = note
     if scaleFilterMode == 2 and scalePattern then
@@ -1187,7 +1197,6 @@ local function getActiveExternalNotes()
       end
     end
     table.insert(notes, noteToAnalyze)
-    ::continue::
   end
   table.sort(notes)
   return notes
@@ -2661,7 +2670,7 @@ function playMidiNote(midiNote, velocityOverride)
   local virtualKeyboardMode = 0
   local channel = getCurrentNoteChannel()
   
-  if scaleFilterMode == 2 then
+  if scaleFilterMode == 2 or midiTriggerEnabled then
     channel = 15
   end
 
@@ -2679,7 +2688,7 @@ function stopAllNotesFromPlaying()
     local virtualKeyboardMode = 0
     local channel = getCurrentNoteChannel()
     
-    if scaleFilterMode == 2 then
+    if scaleFilterMode == 2 or midiTriggerEnabled then
       channel = 15
     end
 
@@ -2699,7 +2708,7 @@ function stopNoteFromPlaying(midiNote)
   local virtualKeyboardMode = 0
   local channel = getCurrentNoteChannel()
   
-  if scaleFilterMode == 2 then
+  if scaleFilterMode == 2 or midiTriggerEnabled then
     channel = 15
   end
 
@@ -5324,7 +5333,8 @@ local themes = {
         pianoTextNormal = "000000",
         pianoBlackGrey = "333333",
         chordDisplayRecognized = "FFD700",
-        chordDisplayRecognizedOutOfScale = "FF4444"
+        chordDisplayRecognizedOutOfScale = "FF4444",
+        pianoTrigger = "FF8C00"
     },
     light = {
         background = "E0E0E0",
@@ -5455,7 +5465,8 @@ local themes = {
         pianoTextNormal = "000000",
         pianoBlackGrey = "404040",
         chordDisplayRecognized = "FFD700",
-        chordDisplayRecognizedOutOfScale = "CC0000"
+        chordDisplayRecognizedOutOfScale = "CC0000",
+        pianoTrigger = "0066CC"
     },
     colorful = {
         background = "1A1A2E",
@@ -5566,7 +5577,8 @@ local themes = {
         pianoTextNormal = "1A1A2E",
         pianoBlackGrey = "0F3460",
         chordDisplayRecognized = "E94560",
-        chordDisplayRecognizedOutOfScale = "FF6B35"
+        chordDisplayRecognizedOutOfScale = "FF6B35",
+        pianoTrigger = "00D9FF"
     },
     neon = {
         background = "0A0A0F",
@@ -5677,7 +5689,8 @@ local themes = {
         pianoTextNormal = "0A0A0F",
         pianoBlackGrey = "252535",
         chordDisplayRecognized = "FF00FF",
-        chordDisplayRecognizedOutOfScale = "FF6600"
+        chordDisplayRecognizedOutOfScale = "FF6600",
+        pianoTrigger = "39FF14"
     },
     ocean = {
         background = "0D1B2A",
@@ -5788,7 +5801,8 @@ local themes = {
         pianoTextNormal = "0D1B2A",
         pianoBlackGrey = "274060",
         chordDisplayRecognized = "00D4AA",
-        chordDisplayRecognizedOutOfScale = "FF7F50"
+        chordDisplayRecognizedOutOfScale = "FF7F50",
+        pianoTrigger = "FF7F50"
     },
     mono = {
         background = "1A1A1A",
@@ -5899,7 +5913,8 @@ local themes = {
         pianoTextNormal = "1A1A1A",
         pianoBlackGrey = "3A3A3A",
         chordDisplayRecognized = "FF3333",
-        chordDisplayRecognizedOutOfScale = "FF6666"
+        chordDisplayRecognizedOutOfScale = "FF6666",
+        pianoTrigger = "888888"
     }
 }
 
@@ -6893,10 +6908,23 @@ isExternalDevice = function(devIdx)
     return false
   end
 
-  -- FIX: Ignore Virtual MIDI Keyboard (ID 63) to prevent feedback loops
-  if devIdx == 63 then
-      return false
+  local cache = midiTriggerState._virtualDeviceCache
+  if cache[devIdx] ~= nil then
+    return not cache[devIdx]
   end
+
+  if devIdx >= 0 and reaper.GetMIDIInputName then
+    local retval, name = reaper.GetMIDIInputName(devIdx, "")
+    if retval and name then
+      local lowerName = name:lower()
+      if lowerName:find("virtual") or lowerName:find("loopmidi") or lowerName:find("loopbe") then
+        cache[devIdx] = true
+        return false
+      end
+    end
+  end
+
+  cache[devIdx] = false
 
   if devIdx >= 0 then
     return true
@@ -9260,7 +9288,7 @@ function PianoKeyboard:getActiveNotes()
 	return activeNotes
 end
 
-function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActive, isCKey, octaveIndex)
+function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActive, isCKey, octaveIndex, isTrigger)
 	local x = self.x + (index * self.whiteKeyWidth)
 	local y = self.y
 	local w = self.whiteKeyWidth - s(1)
@@ -9270,15 +9298,26 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
 	local noteForScale = noteInChromatic + 1
 	local inScale = scalePattern[noteForScale] or false
 	
+  local isBothTriggerAndChord = isTrigger and isActive
 
-  if isActive or isExternalActive then
+  if isBothTriggerAndChord then
+    setThemeColor("pianoTrigger")
+    gfx.rect(x, y, w, h / 2, true)
     setThemeColor("pianoActive")
+    gfx.rect(x, y + h / 2, w, h / 2, true)
+  elseif isTrigger then
+    setThemeColor("pianoTrigger")
+    gfx.rect(x, y, w, h, true)
+  elseif isActive or isExternalActive then
+    setThemeColor("pianoActive")
+    gfx.rect(x, y, w, h, true)
   elseif inScale then
 		setThemeColor("pianoWhite")
+    gfx.rect(x, y, w, h, true)
 	else
 		setThemeColor("pianoWhiteGrey")
+    gfx.rect(x, y, w, h, true)
 	end
-	gfx.rect(x, y, w, h, true)
 	
 
 	setColor("000000")
@@ -9357,7 +9396,7 @@ function PianoKeyboard:drawWhiteKey(index, isActive, noteNumber, isExternalActiv
   gfx.setfont(1, "Arial", fontSize(15))
 end
 
-function PianoKeyboard:drawBlackKey(whiteKeyIndex, noteInOctave, isActive, noteNumber, isExternalActive)
+function PianoKeyboard:drawBlackKey(whiteKeyIndex, noteInOctave, isActive, noteNumber, isExternalActive, isTrigger)
 	local x = self.x + ((whiteKeyIndex + 1) * self.whiteKeyWidth) - (self.blackKeyWidth / 2)
 	local y = self.y
 	local w = self.blackKeyWidth
@@ -9367,15 +9406,26 @@ function PianoKeyboard:drawBlackKey(whiteKeyIndex, noteInOctave, isActive, noteN
 	local noteForScale = noteInChromatic + 1
 	local inScale = scalePattern[noteForScale] or false
 	
+  local isBothTriggerAndChord = isTrigger and isActive
 
-  if isActive or isExternalActive then
+  if isBothTriggerAndChord then
+    setThemeColor("pianoTrigger")
+    gfx.rect(x, y, w, h / 2, true)
     setThemeColor("pianoActive")
+    gfx.rect(x, y + h / 2, w, h / 2, true)
+  elseif isTrigger then
+    setThemeColor("pianoTrigger")
+    gfx.rect(x, y, w, h, true)
+  elseif isActive or isExternalActive then
+    setThemeColor("pianoActive")
+    gfx.rect(x, y, w, h, true)
   elseif inScale then
 		setThemeColor("pianoBlack")
+    gfx.rect(x, y, w, h, true)
 	else
 		setThemeColor("pianoBlackGrey")
+    gfx.rect(x, y, w, h, true)
 	end
-	gfx.rect(x, y, w, h, true)
 	
 
 	setColor("000000")
@@ -9410,9 +9460,13 @@ function PianoKeyboard:draw()
 	for _, note in ipairs(activeNotes) do
 		activeNoteSet[note] = true
 	end
+	for note, _ in pairs(activeTriggeredChordNotes) do
+		activeNoteSet[note] = true
+	end
   local externalNoteSet = externalMidiNotes or {}
 	
 	local startNote = self:getStartNote()
+	local currentTrigger = (midiTriggerEnabled and activeTriggerNote) or nil
 	
 
 	for i = 0, self.numWhiteKeys - 1 do
@@ -9426,8 +9480,9 @@ function PianoKeyboard:draw()
 		
     local isActive = activeNoteSet[noteNumber] or false
     local isExternalActive = externalNoteSet[noteNumber] or false
+    local isTrigger = (currentTrigger == noteNumber)
       local isCKey = (whiteKeyToNote[keyInOctave + 1] == 0)
-      self:drawWhiteKey(i, isActive, noteNumber, isExternalActive, isCKey, octave)
+      self:drawWhiteKey(i, isActive, noteNumber, isExternalActive, isCKey, octave, isTrigger)
 	end
 	
 
@@ -9443,7 +9498,8 @@ function PianoKeyboard:draw()
 			
       local isActive = activeNoteSet[noteNumber] or false
       local isExternalActive = externalNoteSet[noteNumber] or false
-      self:drawBlackKey(i, keyInOctave, isActive, noteNumber, isExternalActive)
+      local isTrigger = (currentTrigger == noteNumber)
+      self:drawBlackKey(i, keyInOctave, isActive, noteNumber, isExternalActive, isTrigger)
 		end
 	end
 end
@@ -10079,6 +10135,10 @@ function handleMidiTriggers()
 
   if midiTriggerMode == 1 then
     for note, mapping in pairs(midiTriggerMappings) do
+      if activeTriggerNote and note ~= activeTriggerNote then
+        goto continue_chord
+      end
+      
       local velocity = externalMidiNotes[note]
       local isPressed = velocity ~= nil
       
@@ -10087,6 +10147,17 @@ function handleMidiTriggers()
           if mapping.scaleNoteIndex <= #scaleNotes then
              setSelectedScaleNote(mapping.scaleNoteIndex)
              setSelectedChordType(mapping.scaleNoteIndex, mapping.chordTypeIndex)
+             
+             local root = scaleNotes[mapping.scaleNoteIndex]
+             local chord = scaleChords[mapping.scaleNoteIndex][mapping.chordTypeIndex]
+             local octave = getOctave()
+             local chordNotes = getChordNotesArray(root, chord, octave, nil)
+             
+             activeTriggeredChordNotes = {}
+             for _, n in ipairs(chordNotes) do
+                activeTriggeredChordNotes[n] = true
+             end
+             
              previewScaleChord(velocity)
              activeTriggerNote = note
           end
@@ -10096,33 +10167,43 @@ function handleMidiTriggers()
         if midiTriggerState[note] then
             midiTriggerState[note] = false
             if activeTriggerNote == note then
-                local fallbackNote = nil
-                local fallbackMapping = nil
+                stopNotesFromPlaying()
+                activeTriggeredChordNotes = {}
+                activeTriggerNote = nil
                 
                 for tNote, tMapping in pairs(midiTriggerMappings) do
-                    if midiTriggerState[tNote] then
-                        fallbackNote = tNote
-                        fallbackMapping = tMapping
+                    if externalMidiNotes[tNote] and tNote ~= note then
+                        local fallbackVel = externalMidiNotes[tNote] or 96
+                        setSelectedScaleNote(tMapping.scaleNoteIndex)
+                        setSelectedChordType(tMapping.scaleNoteIndex, tMapping.chordTypeIndex)
+                        
+                        local root = scaleNotes[tMapping.scaleNoteIndex]
+                        local chord = scaleChords[tMapping.scaleNoteIndex][tMapping.chordTypeIndex]
+                        local octave = getOctave()
+                        local chordNotes = getChordNotesArray(root, chord, octave, nil)
+                        
+                        activeTriggeredChordNotes = {}
+                        for _, n in ipairs(chordNotes) do
+                           activeTriggeredChordNotes[n] = true
+                        end
+                        
+                        midiTriggerState[tNote] = true
+                        previewScaleChord(fallbackVel)
+                        activeTriggerNote = tNote
                         break
                     end
-                end
-                
-                if fallbackNote and fallbackMapping and fallbackMapping.scaleNoteIndex <= #scaleNotes then
-                    local fallbackVel = externalMidiNotes[fallbackNote] or 96
-                    setSelectedScaleNote(fallbackMapping.scaleNoteIndex)
-                    setSelectedChordType(fallbackMapping.scaleNoteIndex, fallbackMapping.chordTypeIndex)
-                    previewScaleChord(fallbackVel)
-                    activeTriggerNote = fallbackNote
-                else
-                    stopNotesFromPlaying()
-                    activeTriggerNote = nil
                 end
             end
         end
       end
+      ::continue_chord::
     end
   else
     for note, columnIndex in pairs(midiTriggerColumnMappings) do
+      if activeTriggerNote and note ~= activeTriggerNote then
+        goto continue_column
+      end
+      
       local velocity = externalMidiNotes[note]
       local isPressed = velocity ~= nil
       
@@ -10130,6 +10211,18 @@ function handleMidiTriggers()
         if not midiTriggerState[note] then
           if columnIndex <= #scaleNotes then
              setSelectedScaleNote(columnIndex)
+             
+             local chordTypeIndex = getSelectedChordType(columnIndex)
+             local root = scaleNotes[columnIndex]
+             local chord = scaleChords[columnIndex][chordTypeIndex]
+             local octave = getOctave()
+             local chordNotes = getChordNotesArray(root, chord, octave, nil)
+             
+             activeTriggeredChordNotes = {}
+             for _, n in ipairs(chordNotes) do
+                activeTriggeredChordNotes[n] = true
+             end
+             
              previewScaleChord(velocity)
              activeTriggerNote = note
           end
@@ -10139,29 +10232,36 @@ function handleMidiTriggers()
         if midiTriggerState[note] then
             midiTriggerState[note] = false
             if activeTriggerNote == note then
-                local fallbackNote = nil
-                local fallbackCol = nil
+                stopNotesFromPlaying()
+                activeTriggeredChordNotes = {}
+                activeTriggerNote = nil
                 
                 for tNote, tCol in pairs(midiTriggerColumnMappings) do
-                    if midiTriggerState[tNote] then
-                        fallbackNote = tNote
-                        fallbackCol = tCol
+                    if externalMidiNotes[tNote] and tNote ~= note then
+                        local fallbackVel = externalMidiNotes[tNote] or 96
+                        setSelectedScaleNote(tCol)
+                        
+                        local chordTypeIndex = getSelectedChordType(tCol)
+                        local root = scaleNotes[tCol]
+                        local chord = scaleChords[tCol][chordTypeIndex]
+                        local octave = getOctave()
+                        local chordNotes = getChordNotesArray(root, chord, octave, nil)
+                        
+                        activeTriggeredChordNotes = {}
+                        for _, n in ipairs(chordNotes) do
+                           activeTriggeredChordNotes[n] = true
+                        end
+                        
+                        midiTriggerState[tNote] = true
+                        previewScaleChord(fallbackVel)
+                        activeTriggerNote = tNote
                         break
                     end
-                end
-                
-                if fallbackNote and fallbackCol and fallbackCol <= #scaleNotes then
-                    local fallbackVel = externalMidiNotes[fallbackNote] or 96
-                    setSelectedScaleNote(fallbackCol)
-                    previewScaleChord(fallbackVel)
-                    activeTriggerNote = fallbackNote
-                else
-                    stopNotesFromPlaying()
-                    activeTriggerNote = nil
                 end
             end
         end
       end
+      ::continue_column::
     end
   end
 end
