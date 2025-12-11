@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.7.2
+-- @version 1.7.3
 -- @changelog 
 --[[
 v1.7.2:
