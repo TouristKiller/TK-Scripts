@@ -1,8 +1,26 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.4.1
+-- @version 2.5.1
 -- @changelog
 --[[
+2.5.1
++ Absolute Chord Storage: Progressions now store chords by root note + chord type (not relative position)
++ Filter-Independent Playback: Progression plays the exact chords shown, regardless of scale/filter changes
++ Backwards Compatible: Old preset files still work (fallback to legacy behavior)
++ Chord Button Highlighting: Correct chord button highlights during progression playback (matches actual chord, not position)
++ Out-of-Scale Display: Chord display now shows correct out-of-scale color for progression chords
++ Chord Name Display: Extended chord names (e.g. Amaj#11) now display correctly during playback
++ Hidden Chord Indicator: Subtle orange overlay when playing chord is not visible in current filter
++ Piano Visualization Fix: Piano keys now clear properly when releasing chord buttons
++ Crash Fix: Fixed nil chord access when switching Chord Style filters
+
+2.5.0
++ UI Reorganization: Lead button moved to bottom row (between Drop and Melody)
++ Circle Icon: Circle of Fifths now accessible via icon in chord display area (bottom left)
++ Chord Style Dropdown: Combined filter with Simple, Standard, Extended, Ambient, Jazz, Pop, Neo-Soul
++ "All" Checkbox: Toggle to show out-of-scale chords
++ Track Name Truncation: Long track names truncated to 10 characters
+
 2.4.1
 + MIDI Trigger Cascade Fix: Fixed issue where chord notes could re-trigger other chords
 + Virtual MIDI Detection: Dynamic detection of virtual MIDI devices (cross-platform)
@@ -350,15 +368,37 @@ end
 
 chords = Data.chords
 
--- NEW: Vocabulary / Visibility Logic
-local chordVisibilityMode = tonumber(reaper.GetExtState("TK_ChordGun", "vocabMode")) or 2 -- 1=Basic, 2=Std, 3=Jazz
+-- Chord Style: Combined filter for complexity and style
+-- mode: 1=Simple, 2=Standard, 3=Extended, 4=Ambient, 5=Jazz, 6=Pop, 7=Neo-Soul
+-- showAll: true = also show out-of-scale chords
+chordStyle = {
+  mode = tonumber(reaper.GetExtState("TK_ChordGun", "chordStyleMode")) or 2,
+  showAll = reaper.GetExtState("TK_ChordGun", "chordStyleShowAll") == "1",
+  sets = {
+    [4] = {sus2 = true, sus4 = true, add9 = true, power = true, ["add9no5"] = true, ["sus2add6"] = true, ["5/5"] = true, ["sus2/5"] = true, major = true, minor = true},
+    [5] = {maj7 = true, min7 = true, dom7 = true, dim7 = true, min7b5 = true, maj9 = true, min9 = true, dom9 = true, maj11 = true, min11 = true, maj13 = true, min13 = true, dom13 = true, ["7#9"] = true, ["7b9"] = true},
+    [6] = {major = true, minor = true, power = true, sus2 = true, sus4 = true, maj7 = true, min7 = true, dom7 = true, add9 = true},
+    [7] = {maj7 = true, min9 = true, ["7#9"] = true, min7 = true, dom9 = true, maj9 = true, min11 = true, ["7b9"] = true, ["7#5"] = true}
+  },
+  getLimit = function()
+    local m = chordStyle.mode
+    if m == 1 then return 7 end
+    if m == 2 then return 15 end
+    return 999
+  end,
+  match = function(chordCode)
+    local m = chordStyle.mode
+    if m <= 3 then return true end
+    local styleSet = chordStyle.sets[m]
+    if not styleSet then return true end
+    return styleSet[chordCode] == true
+  end
+}
 
 -- REMOVED: Manual injection of extended chords (now in Data file)
 
 local function getChordVisibilityLimit()
-  if chordVisibilityMode == 1 then return 7 end -- Basic (Triads)
-  if chordVisibilityMode == 2 then return 15 end -- Standard (7ths)
-  return 999 -- Extended
+  return chordStyle.getLimit()
 end
 
 
@@ -654,7 +694,6 @@ local function getAveragePitch(notes)
     for _, note in ipairs(notes) do sum = sum + note end
     return sum / #notes
 end
-local showOnlyScaleChords = reaper.GetExtState("TK_ChordGun", "showOnlyScaleChords") == "1"
 local chordListScrollOffset = 0
 local maxVisibleRows = 12
 local isLightMode = reaper.GetExtState("TK_ChordGun", "lightMode") == "1"
@@ -1835,6 +1874,92 @@ function chordIsNotAlreadyIncluded(scaleChordsForRootNote, chordCode)
   return true
 end
 
+function findChordByCode(chordCode)
+  for chordIndex, chord in ipairs(chords) do
+    if chord.code == chordCode then
+      return chord, chordIndex
+    end
+  end
+  return nil, nil
+end
+
+function resolveSlotChord(slot)
+  if not slot then return nil end
+  
+  if slot.chordCode and slot.rootNote then
+    local chord = findChordByCode(slot.chordCode)
+    if chord then
+      return chord, slot.rootNote
+    end
+  end
+  
+  if slot.scaleNoteIndex and slot.chordTypeIndex then
+    if scaleChords[slot.scaleNoteIndex] and scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex] then
+      local chord = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
+      local root = scaleNotes[slot.scaleNoteIndex]
+      return chord, root
+    end
+  end
+  
+  return nil, nil
+end
+
+function isCurrentlyPlayingChordVisible()
+  if not currentlyPlayingChord then return true end
+  
+  local playingRoot = currentlyPlayingChord.rootNote % 12
+  
+  for scaleNoteIndex = 1, #scaleNotes do
+    if (scaleNotes[scaleNoteIndex] % 12) == playingRoot then
+      if scaleChords[scaleNoteIndex] then
+        for chordTypeIndex, chord in ipairs(scaleChords[scaleNoteIndex]) do
+          if chord.code == currentlyPlayingChord.chordCode then
+            return true
+          end
+        end
+      end
+    end
+  end
+  return false
+end
+
+function isCurrentlyPlayingChordInScale()
+  if not currentlyPlayingChord then return true end
+  
+  local playingRoot = currentlyPlayingChord.rootNote % 12
+  
+  for chordIndex, chord in ipairs(chords) do
+    if chord.code == currentlyPlayingChord.chordCode then
+      return chordIsInScale(playingRoot, chordIndex)
+    end
+  end
+  return false
+end
+
+function getCurrentlyPlayingChordDisplayName()
+  if not currentlyPlayingChord then return nil end
+  
+  local rootIndex = ((currentlyPlayingChord.rootNote - 1) % 12) + 1
+  local rootName = notes[rootIndex]
+  
+  if scaleNoteNames and #scaleNoteNames > 0 then
+    for i = 1, #scaleNotes do
+      if ((scaleNotes[i] - 1) % 12) == ((currentlyPlayingChord.rootNote - 1) % 12) then
+        rootName = scaleNoteNames[i]
+        break
+      end
+    end
+  end
+  
+  for _, chord in ipairs(chords) do
+    if chord.code == currentlyPlayingChord.chordCode then
+      return rootName .. chord.display
+    end
+  end
+  
+  return rootName
+end
+
 function getNumberOfScaleChordsForScaleNoteIndex(scaleNoteIndex)
 
   local chordCount = 0
@@ -1858,39 +1983,22 @@ function getScaleChordsForRootNote(rootNote)
   local limit = getChordVisibilityLimit()
   
   for chordIndex, chord in ipairs(chords) do
-  
-    -- Filter by visibility mode
-    if chordIndex <= limit or (chordVisibilityMode == 3) then
-        if chordIsInScale(rootNote, chordIndex) then
+    if chordIndex <= limit or (chordStyle.mode >= 3) then
+        if chordIsInScale(rootNote, chordIndex) and chordStyle.match(chord.code) then
           chordCount = chordCount + 1
           scaleChordsForRootNote[chordCount] = chord   
         end
     end
   end
-    
-  --[[  
-  if preferences.enableModalMixtureCheckbox.value then
 
+  if chordStyle.showAll then
     for chordIndex, chord in ipairs(chords) do
-             
-      if chordIsNotAlreadyIncluded(scaleChordsForRootNote, chord.code) and chordIsInModalMixtureScale(rootNote, chordIndex) then
-        chordCount = chordCount + 1
-        scaleChordsForRootNote[chordCount] = chord
+      if chordIndex <= limit or (chordStyle.mode >= 3) then
+          if chordIsNotAlreadyIncluded(scaleChordsForRootNote, chord.code) and chordStyle.match(chord.code) then
+            chordCount = chordCount + 1
+            scaleChordsForRootNote[chordCount] = chord
+          end
       end
-    end
-  end
-  ]]--
-
-
-
-  for chordIndex, chord in ipairs(chords) do
-           
-    -- Filter by visibility mode
-    if chordIndex <= limit or (chordVisibilityMode == 3) then
-        if chordIsNotAlreadyIncluded(scaleChordsForRootNote, chord.code) then
-          chordCount = chordCount + 1
-          scaleChordsForRootNote[chordCount] = chord
-        end
     end
   end
   
@@ -1903,6 +2011,17 @@ end
 
 function noteIsNotInScale(note)
   return not noteIsInScale(note)
+end
+
+function chordObjectIsInScale(rootNote, chord)
+  local chordPattern = chord['pattern']
+  for i = 0, #chordPattern do
+    local note = getNotesIndex(rootNote+i)
+    if chordPattern:sub(i+1, i+1) == '1' and noteIsNotInScale(note) then
+      return false
+    end
+  end
+  return true
 end
 
 function chordIsInScale(rootNote, chordIndex)
@@ -2019,8 +2138,11 @@ function updateScaleDegreeHeaders()
   for i = 1, #scaleNotes do
   
     local symbol = ""
-    local chord = scaleChords[i][1]
-    
+    local chord = scaleChords[i] and scaleChords[i][1]
+    if not chord then
+      setScaleDegreeHeader(i, "")
+      goto continue_degree
+    end
 
     local noteOffset = (scaleNotes[i] - tonicNote) % 12
     local scaleDegree = semitoneToScaleDegree[noteOffset]
@@ -2047,7 +2169,8 @@ function updateScaleDegreeHeaders()
       symbol = symbol .. seventhSymbol
     end
         
-    setScaleDegreeHeader(i, symbol) 
+    setScaleDegreeHeader(i, symbol)
+    ::continue_degree::
   end
 end
 
@@ -2698,6 +2821,8 @@ function stopAllNotesFromPlaying()
     reaper.StuffMIDIMessage(virtualKeyboardMode, noteOffCommand, midiNote, velocity)
   end
 
+  setNotesThatArePlaying({})
+
   if reaper.time_precise then
     suppressExternalMidiUntil = math.max(suppressExternalMidiUntil or 0, reaper.time_precise() + 0.05)
   end
@@ -2775,7 +2900,8 @@ function applyInversion(chord, inversionOverride)
 end
 
 function getChordNotesArray(root, chord, octave, inversionOverride)
-
+  if not chord or not chord["pattern"] then return {} end
+  
   local chordLength = 0
   local chordNotesArray = {}
   local chordPattern = chord["pattern"]
@@ -3019,6 +3145,10 @@ function addChordToProgression(scaleNoteIndex, chordTypeIndex, chordText, target
   if targetSlot and targetSlot >= 1 and targetSlot <= maxProgressionSlots then
     local currentSlot = chordProgression[targetSlot] or {}
     
+    local rootNote = scaleNotes[scaleNoteIndex]
+    local chordData = scaleChords[scaleNoteIndex] and scaleChords[scaleNoteIndex][chordTypeIndex]
+    local chordCode = chordData and chordData.code or nil
+    
     chordProgression[targetSlot] = {
       scaleNoteIndex = scaleNoteIndex,
       chordTypeIndex = chordTypeIndex,
@@ -3026,7 +3156,9 @@ function addChordToProgression(scaleNoteIndex, chordTypeIndex, chordText, target
       beats = currentSlot.beats or 1,
       repeats = currentSlot.repeats or 1,
       octave = octave or getOctave(),
-      inversion = inversion
+      inversion = inversion,
+      rootNote = rootNote,
+      chordCode = chordCode
     }
   end
 end
@@ -3036,12 +3168,16 @@ function playChordFromSlot(slotIndex)
   local slot = chordProgression[slotIndex]
   if not slot then return end
   
+  local chordData, root = resolveSlotChord(slot)
+  if not chordData or not root then return end
+
+  currentlyPlayingChord = {
+    rootNote = root,
+    chordCode = chordData.code
+  }
 
   stopAllNotesFromPlaying()
   
-
-  local root = scaleNotes[slot.scaleNoteIndex]
-  local chordData = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
   local octave = slot.octave or getOctave()
   
   local inversionOverride = slot.inversion
@@ -3080,6 +3216,9 @@ function playChordFromSlot(slotIndex)
         playMidiNote(note)
       end
   end
+  
+  setNotesThatArePlaying(notes)
+  updateChordText(root, chordData, notes)
 end
 
 function clearChordProgression()
@@ -3303,10 +3442,8 @@ function generateMelodyFromProgression()
   for i = 1, progressionLength do
     local slot = chordProgression[i]
     
-    if slot then
-      local root = scaleNotes[slot.scaleNoteIndex]
-      local chordData = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
-      
+    local chordData, root = resolveSlotChord(slot)
+    if chordData and root then
 
       local allNotes = {}
       
@@ -3485,10 +3622,8 @@ function insertProgressionToMIDI()
   for slotIndex = 1, progressionLength do
     local slot = chordProgression[slotIndex]
     
-    if slot then
-
-      local root = scaleNotes[slot.scaleNoteIndex]
-      local chordData = scaleChords[slot.scaleNoteIndex][slot.chordTypeIndex]
+    local chordData, root = resolveSlotChord(slot)
+    if chordData and root then
       local octave = slot.octave or getOctave()
       
       local inversionOverride = slot.inversion
@@ -3607,7 +3742,9 @@ function saveProgressionPreset()
       local slot = chordProgression[i]
       local octave = slot.octave or ""
       local inversion = slot.inversion or ""
-      file:write(slot.scaleNoteIndex .. "," .. slot.chordTypeIndex .. "," .. slot.text .. "," .. slot.beats .. "," .. slot.repeats .. "," .. octave .. "," .. inversion .. "\n")
+      local rootNote = slot.rootNote or ""
+      local chordCode = slot.chordCode or ""
+      file:write(slot.scaleNoteIndex .. "," .. slot.chordTypeIndex .. "," .. slot.text .. "," .. slot.beats .. "," .. slot.repeats .. "," .. octave .. "," .. inversion .. "," .. rootNote .. "," .. chordCode .. "\n")
     else
       file:write("\n")
     end
@@ -3691,7 +3828,7 @@ function loadProgressionPreset(presetName)
       end
     elseif line ~= "" and slotIndex <= maxProgressionSlots then
 
-      local scaleNoteIndex, chordTypeIndex, text, beats, repeats, octave, inversion = line:match("(%d+),(%d+),([^,]+),(%d+),(%d+),?([^,]*),?([^,]*)")
+      local scaleNoteIndex, chordTypeIndex, text, beats, repeats, octave, inversion, rootNote, chordCode = line:match("(%d+),(%d+),([^,]+),([%d%.]+),(%d+),?([^,]*),?([^,]*),?([^,]*),?([^,]*)")
       if scaleNoteIndex then
         chordProgression[slotIndex] = {
           scaleNoteIndex = tonumber(scaleNoteIndex),
@@ -3700,7 +3837,9 @@ function loadProgressionPreset(presetName)
           beats = tonumber(beats),
           repeats = tonumber(repeats),
           octave = tonumber(octave),
-          inversion = tonumber(inversion)
+          inversion = tonumber(inversion),
+          rootNote = rootNote ~= "" and tonumber(rootNote) or nil,
+          chordCode = chordCode ~= "" and chordCode or nil
         }
       end
       slotIndex = slotIndex + 1
@@ -3786,6 +3925,7 @@ function applyProgressionTemplate(template)
       local chordData = scaleChords[actualDegree][chordTypeIndex]
       if chordData then
         local text = getScaleNoteName(actualDegree) .. chordData['display']
+        local rootNote = scaleNotes[actualDegree]
         chordProgression[i] = {
           scaleNoteIndex = actualDegree,
           chordTypeIndex = chordTypeIndex,
@@ -3793,7 +3933,9 @@ function applyProgressionTemplate(template)
           beats = 1,
           repeats = 1,
           octave = getOctave(),
-          inversion = getChordInversionState(actualDegree)
+          inversion = getChordInversionState(actualDegree),
+          rootNote = rootNote,
+          chordCode = chordData.code
         }
       end
     end
@@ -3908,20 +4050,27 @@ end
 function playProgressionChord(index)
   if index < 1 or index > #chordProgression then return end
   
-  local chord = chordProgression[index]
-  if not chord then return end
+  local slot = chordProgression[index]
+  if not slot then return end
   
-  if chord.scaleNoteIndex > #scaleNotes then return end
-  if not scaleChords[chord.scaleNoteIndex] then return end
+  local chordData, root = resolveSlotChord(slot)
+  if not chordData or not root then return end
   
-  lastPlayedScaleDegree = chord.scaleNoteIndex
-  setSelectedScaleNote(chord.scaleNoteIndex)
-  setSelectedChordType(chord.scaleNoteIndex, chord.chordTypeIndex)
+  currentlyPlayingChord = {
+    rootNote = root,
+    chordCode = chordData.code
+  }
   
-  local root = scaleNotes[chord.scaleNoteIndex]
-  local chordData = scaleChords[chord.scaleNoteIndex][chord.chordTypeIndex]
-  local octave = chord.octave or getOctave()
-  local inversion = chord.inversion
+  if slot.scaleNoteIndex and slot.scaleNoteIndex <= #scaleNotes then
+    lastPlayedScaleDegree = slot.scaleNoteIndex
+    setSelectedScaleNote(slot.scaleNoteIndex)
+    if slot.chordTypeIndex then
+      setSelectedChordType(slot.scaleNoteIndex, slot.chordTypeIndex)
+    end
+  end
+  
+  local octave = slot.octave or getOctave()
+  local inversion = slot.inversion
   
   local chordNotesArray = getChordNotesArray(root, chordData, octave, inversion)
   chordNotesArray = applyArpPattern(chordNotesArray)
@@ -3967,6 +4116,7 @@ end
 function stopProgressionPlayback()
   progressionPlaying = false
   currentProgressionIndex = 0
+  currentlyPlayingChord = nil
   stopNotesFromPlaying()
 end
 
@@ -4014,12 +4164,15 @@ function updateProgressionPlayback()
         stopNoteFromPlaying(oldNotes[i])
       end
       
-      local chord = chordProgression[currentProgressionIndex]
-      if chord and chord.scaleNoteIndex <= #scaleNotes and scaleChords[chord.scaleNoteIndex] then
-        local root = scaleNotes[chord.scaleNoteIndex]
-        local chordData = scaleChords[chord.scaleNoteIndex][chord.chordTypeIndex]
-        local octave = chord.octave or getOctave()
-        local inversion = chord.inversion
+      local slot = chordProgression[currentProgressionIndex]
+      local chordData, root = resolveSlotChord(slot)
+      if chordData and root then
+        currentlyPlayingChord = {
+          rootNote = root,
+          chordCode = chordData.code
+        }
+        local octave = slot.octave or getOctave()
+        local inversion = slot.inversion
         local newNotes = getChordNotesArray(root, chordData, octave, inversion)
         newNotes = applyArpPattern(newNotes)
         
@@ -4050,6 +4203,7 @@ function updateProgressionPlayback()
           end
         end
         setNotesThatArePlaying(newNotes)
+        updateChordText(root, chordData, newNotes)
       end
       return
     end
@@ -4071,16 +4225,24 @@ function updateProgressionPlayback()
     end
     
 
-    local chord = chordProgression[currentProgressionIndex]
-    if chord and chord.scaleNoteIndex <= #scaleNotes and scaleChords[chord.scaleNoteIndex] then
+    local slot = chordProgression[currentProgressionIndex]
+    local chordData, root = resolveSlotChord(slot)
+    if chordData and root then
 
-      setSelectedScaleNote(chord.scaleNoteIndex)
-      setSelectedChordType(chord.scaleNoteIndex, chord.chordTypeIndex)
+      currentlyPlayingChord = {
+        rootNote = root,
+        chordCode = chordData.code
+      }
+
+      if slot.scaleNoteIndex and slot.scaleNoteIndex <= #scaleNotes then
+        setSelectedScaleNote(slot.scaleNoteIndex)
+        if slot.chordTypeIndex then
+          setSelectedChordType(slot.scaleNoteIndex, slot.chordTypeIndex)
+        end
+      end
       
-      local root = scaleNotes[chord.scaleNoteIndex]
-      local chordData = scaleChords[chord.scaleNoteIndex][chord.chordTypeIndex]
-      local octave = chord.octave or getOctave()
-      local inversion = chord.inversion
+      local octave = slot.octave or getOctave()
+      local inversion = slot.inversion
       local newNotes = getChordNotesArray(root, chordData, octave, inversion)
       newNotes = applyArpPattern(newNotes)
       
@@ -4143,6 +4305,9 @@ function previewScaleChord(velocity)
   lastPlayedScaleDegree = scaleNoteIndex
   local chordTypeIndex = getSelectedChordType(scaleNoteIndex)
 
+  if not scaleChords[scaleNoteIndex] then return end
+  if not scaleChords[scaleNoteIndex][chordTypeIndex] then return end
+  
   local root = scaleNotes[scaleNoteIndex]
   local chord = scaleChords[scaleNoteIndex][chordTypeIndex]
   local octave = getOctave()
@@ -4280,6 +4445,9 @@ function playOrInsertScaleChord(actionDescription)
   local scaleNoteIndex = getSelectedScaleNote()
   local chordTypeIndex = getSelectedChordType(scaleNoteIndex)
 
+  if not scaleChords[scaleNoteIndex] then return end
+  if not scaleChords[scaleNoteIndex][chordTypeIndex] then return end
+  
   local root = scaleNotes[scaleNoteIndex]
   local chord = scaleChords[scaleNoteIndex][chordTypeIndex]
   local octave = getOctave()
@@ -6852,6 +7020,7 @@ local holdModeEnabled = false
 
 local lastPlayedChord = nil
 
+currentlyPlayingChord = nil
 
 local externalMidiNotes = {}
 local lastProcessedMidiSignature = nil
@@ -7063,12 +7232,35 @@ function ChordButton:isSelectedChordTypeAndSelectedScaleNote()
 	return chordTypeIsSelected and scaleNoteIsSelected
 end
 
+function ChordButton:matchesCurrentlyPlayingChord()
+	if not currentlyPlayingChord then return false end
+	if not scaleChords[self.scaleNoteIndex] then return false end
+	if not scaleChords[self.scaleNoteIndex][self.chordTypeIndex] then return false end
+	
+	local myChord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
+	local myRoot = scaleNotes[self.scaleNoteIndex]
+	
+	return (myRoot % 12) == (currentlyPlayingChord.rootNote % 12) and myChord.code == currentlyPlayingChord.chordCode
+end
+
 
 function ChordButton:drawButtonRectangle()
 
 
 		if currentlyHeldButton == self then
 			setDrawColorToPressedButton()
+		elseif currentlyPlayingChord and self:matchesCurrentlyPlayingChord() then
+			setDrawColorToSelectedChordTypeAndScaleNoteButton()
+		elseif currentlyPlayingChord then
+			if mouseIsHoveringOver(self) then
+				setDrawColorToHighlightedButton()
+			else
+				if self.chordIsInScale then
+					setDrawColorToNormalButton()
+				else
+					setDrawColorToOutOfScaleButton()
+				end
+			end
 		elseif self:isSelectedChordTypeAndSelectedScaleNote() then
 
 			if mouseIsHoveringOver(self) then
@@ -7200,6 +7392,7 @@ end
 function ChordButton:onShiftPress()
 
 	local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
+	if not chord then return end
 	local actionDescription = "scale chord " .. self.scaleNoteIndex .. "  (" .. chord.code .. ")"
 	playOrInsertScaleChord(actionDescription)
 end
@@ -7208,6 +7401,7 @@ function ChordButton:onAltPress()
 
 
 	local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
+	if not chord then return end
 	addChordToProgression(self.scaleNoteIndex, self.chordTypeIndex, self.text, selectedProgressionSlot, getOctave(), getChordInversionState(self.scaleNoteIndex))
 	
 
@@ -7433,9 +7627,11 @@ function ChordButton:update()
 		local currentScale = scales[getScaleType()]
 		if currentScale.isCustom then
 			local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
-			local stepIntervals, cumulativeIntervals = getChordIntervals(chord)
-			if stepIntervals then
-				tooltip = tooltip .. "\n" .. self.text .. " intervals: " .. stepIntervals .. " (steps) | " .. cumulativeIntervals .. " (from root)"
+			if chord then
+				local stepIntervals, cumulativeIntervals = getChordIntervals(chord)
+				if stepIntervals then
+					tooltip = tooltip .. "\n" .. self.text .. " intervals: " .. stepIntervals .. " (steps) | " .. cumulativeIntervals .. " (from root)"
+				end
 			end
 		end
 		
@@ -9262,6 +9458,10 @@ function PianoKeyboard:getActiveNotes()
 
 	local activeNotes = {}
 	
+	local notesThatArePlaying = getNotesThatArePlaying()
+	if #notesThatArePlaying > 0 then
+		return notesThatArePlaying
+	end
 
 	local activeButton = currentlyHeldButton or lastPlayedChord
 	
@@ -10145,11 +10345,12 @@ function handleMidiTriggers()
       if isPressed then
         if not midiTriggerState[note] then
           if mapping.scaleNoteIndex <= #scaleNotes then
+             local chord = scaleChords[mapping.scaleNoteIndex][mapping.chordTypeIndex]
+             if not chord then goto continue_chord end
              setSelectedScaleNote(mapping.scaleNoteIndex)
              setSelectedChordType(mapping.scaleNoteIndex, mapping.chordTypeIndex)
              
              local root = scaleNotes[mapping.scaleNoteIndex]
-             local chord = scaleChords[mapping.scaleNoteIndex][mapping.chordTypeIndex]
              local octave = getOctave()
              local chordNotes = getChordNotesArray(root, chord, octave, nil)
              
@@ -10173,12 +10374,13 @@ function handleMidiTriggers()
                 
                 for tNote, tMapping in pairs(midiTriggerMappings) do
                     if externalMidiNotes[tNote] and tNote ~= note then
+                        local chord = scaleChords[tMapping.scaleNoteIndex][tMapping.chordTypeIndex]
+                        if not chord then goto continue_fallback_mapped end
                         local fallbackVel = externalMidiNotes[tNote] or 96
                         setSelectedScaleNote(tMapping.scaleNoteIndex)
                         setSelectedChordType(tMapping.scaleNoteIndex, tMapping.chordTypeIndex)
                         
                         local root = scaleNotes[tMapping.scaleNoteIndex]
-                        local chord = scaleChords[tMapping.scaleNoteIndex][tMapping.chordTypeIndex]
                         local octave = getOctave()
                         local chordNotes = getChordNotesArray(root, chord, octave, nil)
                         
@@ -10192,6 +10394,7 @@ function handleMidiTriggers()
                         activeTriggerNote = tNote
                         break
                     end
+                    ::continue_fallback_mapped::
                 end
             end
         end
@@ -10210,11 +10413,12 @@ function handleMidiTriggers()
       if isPressed then
         if not midiTriggerState[note] then
           if columnIndex <= #scaleNotes then
+             local chordTypeIndex = getSelectedChordType(columnIndex)
+             local chord = scaleChords[columnIndex][chordTypeIndex]
+             if not chord then goto continue_column end
              setSelectedScaleNote(columnIndex)
              
-             local chordTypeIndex = getSelectedChordType(columnIndex)
              local root = scaleNotes[columnIndex]
-             local chord = scaleChords[columnIndex][chordTypeIndex]
              local octave = getOctave()
              local chordNotes = getChordNotesArray(root, chord, octave, nil)
              
@@ -10238,12 +10442,13 @@ function handleMidiTriggers()
                 
                 for tNote, tCol in pairs(midiTriggerColumnMappings) do
                     if externalMidiNotes[tNote] and tNote ~= note then
+                        local chordTypeIndex = getSelectedChordType(tCol)
+                        local chord = scaleChords[tCol][chordTypeIndex]
+                        if not chord then goto continue_fallback_col end
                         local fallbackVel = externalMidiNotes[tNote] or 96
                         setSelectedScaleNote(tCol)
                         
-                        local chordTypeIndex = getSelectedChordType(tCol)
                         local root = scaleNotes[tCol]
-                        local chord = scaleChords[tCol][chordTypeIndex]
                         local octave = getOctave()
                         local chordNotes = getChordNotesArray(root, chord, octave, nil)
                         
@@ -10257,6 +10462,7 @@ function handleMidiTriggers()
                         activeTriggerNote = tNote
                         break
                     end
+                    ::continue_fallback_col::
                 end
             end
         end
@@ -11126,12 +11332,17 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     
 
     setThemeColor("chordDisplayBg")
-    gfx.rect(x, y, w, h, false)
+    gfx.rect(x, y, w, h, true)
     
-    -- Draw Track Info
+    if currentlyPlayingChord and not isCurrentlyPlayingChordVisible() then
+      gfx.set(1, 0.5, 0, 0.3)
+      gfx.rect(x, y, w, h, true)
+    end
+        -- Draw Track Info
     local track = reaper.GetSelectedTrack(0, 0)
     if track then
         local retval, name = reaper.GetTrackName(track)
+        if #name > 10 then name = name:sub(1, 10) .. ".." end
         local number = reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
         local trackInfo = string.format("%d: %s", number, name)
         
@@ -11157,7 +11368,10 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     if recognizedChord and recognizedChord ~= "" then
 
       local isInScale = false
-      if scalePattern and #recognizedChord > 0 then
+      
+      if currentlyPlayingChord then
+        isInScale = isCurrentlyPlayingChordInScale()
+      elseif scalePattern and #recognizedChord > 0 then
 
         local rootStr = recognizedChord:match("^([A-G][#b]?)")
         if rootStr then
@@ -11184,6 +11398,14 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       local fontSizeVal = fontSize(28)
       gfx.setfont(1, "Arial", fontSizeVal, string.byte('b'))
       local text = recognizedChord
+      
+      if currentlyPlayingChord then
+        local playingChordName = getCurrentlyPlayingChordDisplayName()
+        if playingChordName then
+          text = playingChordName
+        end
+      end
+      
       local textW, textH = gfx.measurestr(text)
       
 
@@ -11203,6 +11425,26 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
   end
   
   table.insert(self.elements, ChordDisplay)
+  
+  -- Add Circle of Fifths Button (Bottom Left of Chord Display Box)
+  local circleSize = sy(14)
+  local circleX = chordDisplayX + sx(4)
+  local circleY = buttonYpos + chordDisplayHeight - circleSize - sy(4)
+  local circleButton = CircleButton:new(
+      circleX,
+      circleY,
+      circleSize,
+      function()
+        if fifthWheelWindowOpen then
+          reaper.SetExtState("TK_ChordGun_FifthWheel", "forceClose", "1", false)
+          fifthWheelWindowOpen = false
+        else
+          showFifthWheel()
+        end
+      end,
+      function() return "Toggle Circle of Fifths" end
+  )
+  table.insert(self.elements, circleButton)
   
   -- Add Randomize Dice Button (Top Right of Chord Display Box)
   local diceSize = sy(16)
@@ -11409,16 +11651,6 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       function() return "Click: Toggle Always on Top (Requires JS_API)" end
   )
   table.insert(self.elements, pinButton)
-	
-
-
-	
-
-
-	
-
-
-	
 
   local buttonYposRow2 = buttonYpos + buttonHeight + s(1)
   
@@ -11552,6 +11784,37 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     true
   )
 
+  local getLeadState = function() return voiceLeadingEnabled end
+  local onLeadToggle = function()
+    voiceLeadingEnabled = not voiceLeadingEnabled
+    if not voiceLeadingEnabled then lastPlayedNotes = {} end
+  end
+  local onLeadRightClick = function()
+    local checkAvg = voiceLeadingMode == 1 and "!" or ""
+    local checkBass = voiceLeadingMode == 2 and "!" or ""
+    local menu = "#Voice Leading Mode|" .. checkAvg .. "Average (Smooth)|" .. checkBass .. "Bass (Escalator)"
+    gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+    local selection = gfx.showmenu(menu)
+    if selection == 2 then voiceLeadingMode = 1
+    elseif selection == 3 then voiceLeadingMode = 2
+    end
+  end
+  self:addToggleButton(
+    "Lead",
+    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4,
+    buttonYposRow2,
+    buttonWidth,
+    buttonHeight,
+    getLeadState,
+    onLeadToggle,
+    onLeadRightClick,
+    function() 
+      local modeName = voiceLeadingMode == 1 and "Average" or "Bass (Escalator)"
+      return "Voice Leading [" .. modeName .. "]\nClick: Toggle | Right-Click: Mode"
+    end,
+    true
+  )
+
 
   local onMelodyRightClick = function()
     local checkSlow = melodySettings.density == 1 and "!" or ""
@@ -11589,7 +11852,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 
   self:addSimpleButton(
     "Melody",
-    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 4,
+    buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 5,
     buttonYposRow2,
     buttonWidth,
     buttonHeight,
@@ -11802,25 +12065,13 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
 	)
 
   -- Row 2 (Bottom)
-  -- Font, Ratio, Circle
+  -- Font, Ratio
   
   -- Font Button (Moved from earlier in the code)
   self:addToggleButton("Font", col1X, buttonYposRow2, buttonWidth, buttonHeight, getMonoState, onMonoToggle, onFontRightClick, function() return "Toggle Monospace Font | Right-click: Set Font Scale" end, true)
 
   -- Ratio Button (Moved from earlier in the code)
   self:addToggleButton("Ratio", col2X, buttonYposRow2, buttonWidth, buttonHeight, getRatioState, onRatioToggle, onRatioRightClick, function() return "Toggle Fixed Aspect Ratio | Right-click: Set Window Size" end, true)
-
-  -- Circle Button
-  local getCircleState = function() return fifthWheelWindowOpen end
-  local onCircleToggle = function()
-    if fifthWheelWindowOpen then
-      reaper.SetExtState("TK_ChordGun_FifthWheel", "forceClose", "1", false)
-      fifthWheelWindowOpen = false
-    else
-      showFifthWheel()
-    end
-  end
-  self:addToggleButton("Circle", buttonXpos + dockerXPadding + (buttonWidth + buttonSpacing) * 5, buttonYposRow2, buttonWidth, buttonHeight, getCircleState, onCircleToggle, nil, function() return "Toggle Circle of Fifths" end, true)
 
 	
 end
@@ -12261,6 +12512,67 @@ function PinButton:update()
     end
 end
 
+CircleButton = {}
+CircleButton.__index = CircleButton
+
+function CircleButton:new(x, y, size, onClick, getTooltip)
+    local self = {}
+    setmetatable(self, CircleButton)
+    self.x = x
+    self.y = y
+    self.width = size
+    self.height = size
+    self.onClick = onClick
+    self.getTooltip = getTooltip
+    return self
+end
+
+function CircleButton:draw()
+    local r = self.width / 2
+    local cx = self.x + r
+    local cy = self.y + r
+    
+    if mouseIsHoveringOver(self) or fifthWheelWindowOpen then
+        setThemeColor("topButtonTextHover")
+    else
+        setThemeColor("topButtonText")
+    end
+    
+    gfx.circle(cx, cy, r, 0)
+    
+    local innerR = r * 0.6
+    gfx.circle(cx, cy, innerR, 0)
+    
+    local dotR = math.max(1, r * 0.15)
+    gfx.circle(cx, cy - innerR*0.7, dotR, 1)
+    gfx.circle(cx + innerR*0.5, cy - innerR*0.3, dotR, 1)
+    gfx.circle(cx + innerR*0.5, cy + innerR*0.3, dotR, 1)
+    gfx.circle(cx, cy + innerR*0.7, dotR, 1)
+    gfx.circle(cx - innerR*0.5, cy + innerR*0.3, dotR, 1)
+    gfx.circle(cx - innerR*0.5, cy - innerR*0.3, dotR, 1)
+    
+    if fifthWheelWindowOpen then
+       gfx.circle(cx, cy, dotR*2, 1)
+    end
+
+    if tooltipsEnabled and mouseIsHoveringOver(self) and self.getTooltip then
+        local tooltip = self.getTooltip()
+        if tooltip then
+            queueTooltip(tooltip, gfx.mouse_x, gfx.mouse_y)
+        end
+    end
+end
+
+function CircleButton:update()
+    self:draw()
+    if mouseButtonIsNotPressedDown and mouseIsHoveringOver(self) then
+        if leftMouseButtonIsHeldDown() then
+            mouseButtonIsNotPressedDown = false
+            if self.onClick then self.onClick() end
+        end
+    end
+end
+
 local chordTextWidth = nil
 
 function Interface:addBottomFrame()
@@ -12281,49 +12593,48 @@ function Interface:addBottomFrame()
   self:addKillButton(xMargin, yMargin, xPadding)
   self:addStrumButton(xMargin, yMargin, xPadding)
   self:addArpButton(xMargin, yMargin, xPadding)
-  self:addVoiceLeadingButton(xMargin, yMargin, xPadding)
 
-  -- REPLACED "In Scale" Toggle with "Filter" Dropdown
-  local extraSpacing = sx(15)
-  local inScaleButtonX = topButtonXPos(xMargin, xPadding, 5) + extraSpacing
+  -- Filter and Genre Dropdowns
+  local inScaleButtonX = topButtonXPos(xMargin, xPadding, 4)
   local inScaleButtonY = topButtonYPos(yMargin)
-  local buttonWidth = sx(120) -- Wider to fit "Jazz (All)"
+  local buttonWidth = sx(100)
   local buttonHeight = topButtonHeight()
   
-  local filterOptions = {"Basic", "Standard", "Jazz", "Std (All)", "Jazz (All)"}
+  -- Chord Style dropdown: Simple, Standard, Extended, Ambient, Jazz, Pop, Neo-Soul
+  local styleOptions = {"Simple", "Standard", "Extended", "Ambient", "Jazz", "Pop", "Neo-Soul"}
   
-  -- Determine current index based on state
-  local currentIndex = 2 -- Default Standard
-  if chordVisibilityMode == 1 then currentIndex = 1
-  elseif chordVisibilityMode == 2 then
-      if showOnlyScaleChords then currentIndex = 2 else currentIndex = 4 end
-  elseif chordVisibilityMode == 3 then
-      if showOnlyScaleChords then currentIndex = 3 else currentIndex = 5 end
-  end
-  
-  local onFilterSelect = function(index)
-      if index == 1 then
-          chordVisibilityMode = 1; showOnlyScaleChords = true
-      elseif index == 2 then
-          chordVisibilityMode = 2; showOnlyScaleChords = true
-      elseif index == 3 then
-          chordVisibilityMode = 3; showOnlyScaleChords = true
-      elseif index == 4 then
-          chordVisibilityMode = 2; showOnlyScaleChords = false
-      elseif index == 5 then
-          chordVisibilityMode = 3; showOnlyScaleChords = false
-      end
-      
-      reaper.SetExtState("TK_ChordGun", "vocabMode", tostring(chordVisibilityMode), true)
-      reaper.SetExtState("TK_ChordGun", "showOnlyScaleChords", showOnlyScaleChords and "1" or "0", true)
+  local onStyleSelect = function(index)
+      chordStyle.mode = index
+      reaper.SetExtState("TK_ChordGun", "chordStyleMode", tostring(chordStyle.mode), true)
       chordListScrollOffset = 0
-      updateScaleChords() -- Refresh lists
+      updateScaleChords()
       guiShouldBeUpdated = true
   end
   
-  self:addDropdown(inScaleButtonX+dockerXPadding, inScaleButtonY, buttonWidth, buttonHeight, filterOptions, currentIndex, onFilterSelect)
+  self:addDropdown(inScaleButtonX+dockerXPadding, inScaleButtonY, buttonWidth, buttonHeight, styleOptions, chordStyle.mode, onStyleSelect)
 
-  local lenButtonX = topButtonXPos(xMargin, xPadding, 6) + extraSpacing + sx(15) + (buttonWidth - topButtonWidth())
+  -- "All" checkbox (show out-of-scale chords)
+  local allCheckX = inScaleButtonX + buttonWidth + sx(8)
+  self:addToggleButton(
+    "All",
+    allCheckX + dockerXPadding,
+    inScaleButtonY,
+    sx(32),
+    buttonHeight,
+    function() return chordStyle.showAll end,
+    function()
+      chordStyle.showAll = not chordStyle.showAll
+      reaper.SetExtState("TK_ChordGun", "chordStyleShowAll", chordStyle.showAll and "1" or "0", true)
+      chordListScrollOffset = 0
+      updateScaleChords()
+      guiShouldBeUpdated = true
+    end,
+    nil,
+    function() return "Toggle: Show out-of-scale chords" end,
+    true
+  )
+
+  local lenButtonX = allCheckX + sx(32) + sx(8)
   local lenButtonY = topButtonYPos(yMargin)
   self:addNoteLengthControl(lenButtonX, lenButtonY, {showLabel = false, buttonWidth = topButtonWidth()})
 
@@ -12423,12 +12734,13 @@ function Interface:addChordButtons(xMargin, yMargin, xPadding, yPadding, headerH
             currentNote = currentNote + 1
         end
 
+        local rootNote = currentNote
+
         for chordTypeIndex, chord in ipairs(scaleChords[scaleNoteIndex]) do
 
-            local numberOfChordsInScale = getNumberOfScaleChordsForScaleNoteIndex(scaleNoteIndex)
-            local chordIsInScale = chordTypeIndex <= numberOfChordsInScale
+            local chordInScale = chordObjectIsInScale(rootNote, chord)
 
-            if showOnlyScaleChords and not chordIsInScale then
+            if not chordStyle.showAll and not chordInScale then
                 goto continue
             end
 
@@ -12452,7 +12764,7 @@ function Interface:addChordButtons(xMargin, yMargin, xPadding, yPadding, headerH
             local yPos = yMargin + yPadding + headerHeight + buttonHeight * (visualRowIndex-1) + innerSpacing * (visualRowIndex-1) - sy(3)
     
             if yPos + buttonHeight < self.height - sy(10) then
-                self:addChordButton(text, xPos, yPos, buttonWidth, buttonHeight, scaleNoteIndex, chordTypeIndex, chordIsInScale)   	
+                self:addChordButton(text, xPos, yPos, buttonWidth, buttonHeight, scaleNoteIndex, chordTypeIndex, chordInScale)   	
             end
 
             ::continue::

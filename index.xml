@@ -248,8 +248,43 @@
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.4.1" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-11T22:31:00Z">
+      <version name="2.5.1" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-12T22:51:00Z">
         <changelog><![CDATA[
+2.5.1
++ Absolute Chord Storage: Progressions now store chords by root note + chord type (not relative position)
++ Filter-Independent Playback: Progression plays the exact chords shown, regardless of scale/filter changes
++ Backwards Compatible: Old preset files still work (fallback to legacy behavior)
++ Chord Button Highlighting: Correct chord button highlights during progression playback (matches actual chord, not position)
++ Out-of-Scale Display: Chord display now shows correct out-of-scale color for progression chords
++ Chord Name Display: Extended chord names (e.g. Amaj#11) now display correctly during playback
++ Hidden Chord Indicator: Subtle orange overlay when playing chord is not visible in current filter
++ Piano Visualization Fix: Piano keys now clear properly when releasing chord buttons
++ Crash Fix: Fixed nil chord access when switching Chord Style filters
+
+2.5.0
++ UI Reorganization: Lead button moved to bottom row (between Drop and Melody)
++ Circle Icon: Circle of Fifths now accessible via icon in chord display area (bottom left)
++ Chord Style Dropdown: Combined filter with Simple, Standard, Extended, Ambient, Jazz, Pop, Neo-Soul
++ "All" Checkbox: Toggle to show out-of-scale chords
++ Track Name Truncation: Long track names truncated to 10 characters
+
+2.4.1
++ MIDI Trigger Cascade Fix: Fixed issue where chord notes could re-trigger other chords
++ Virtual MIDI Detection: Dynamic detection of virtual MIDI devices (cross-platform)
++ Channel 16 Bypass: Triggered chords now play on channel 16 to avoid JSFX blocking
++ Chord Display Fix: Correct chord recognition when using MIDI triggers
++ Piano Trigger Visualization: Trigger notes shown in separate color on piano
++ Split Key Display: Keys that are both trigger and chord note show both colors
++ Theme Support: Unique trigger colors for all 6 themes
+
+2.4.0
++ Voice Leading Modes: Right-click Lead button to choose mode
+  - Average (default): Smooth transitions based on average pitch
+  - Bass (Escalator): Stepwise bass movement for "rolling" progressions
+
+ ]]></changelog>
+
+<!-- OUDE CHANGELOG (Niet zichtbaar in ReaPack)
 2.3.8
 + Dyads: Added interval chord types (4th, m3, M3, m2, M2, m6, M6, m7, M7)
 + Stacked Fifths: Added 5/5 (stacked fifths) and sus2/5 (sus2 stacked) chord types
@@ -265,16 +300,12 @@
 + Click outside dropdown or [+] again to close
 + Original slot appearance preserved
 
-2.3.5
+2.3.6
 + Progression Templates: 70+ preset progressions (Right-click Load button)
 + 10 Genre categories: Pop/Rock, Jazz, Blues, Classical, Modal, Minor Keys, EDM, World/Folk
 + Mode-aware templates: Auto-adapts chord qualities to current scale
 + Scale validation: Templates filtered by minimum required notes
 + Safety fix: No more crash when switching scales during progression playback
-
- ]]></changelog>
-
-<!-- OUDE CHANGELOG (Niet zichtbaar in ReaPack)
 
 2.3.4
 + Theme Bugfix
