@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.7.3
+-- @version 1.7.4
 -- @changelog 
 --[[
 v1.7.2:
@@ -2172,11 +2172,11 @@ function ShowSettingsWindow()
             local columns = math.floor(child_width / (icon_size + icon_spacing))
             if columns < 1 then columns = 1 end
             
-            local total_icons = #track_icon_browser.filtered_icons
-            
             for idx, icon in ipairs(track_icon_browser.filtered_icons) do
-                if idx > 1 and ((idx - 1) % columns) ~= 0 then
-                    r.ImGui_SameLine(ctx)
+                local col = (idx - 1) % columns
+                
+                if col > 0 then
+                    r.ImGui_SameLine(ctx, nil, icon_spacing)
                 end
                 
                 local has_image = track_icon_browser.image_cache[icon.name] and 
