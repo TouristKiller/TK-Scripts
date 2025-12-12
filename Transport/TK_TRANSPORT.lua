@@ -1,8 +1,16 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.5
+-- @version 1.6
 -- @changelog 
 --[[
+  v1.6:
+  + Z-Order system for all transport elements and custom buttons
+  + Control render order: higher values draw on top of lower values
+  + Z-Order settings panel in Transport > Z-Order (Layer)
+  + Individual z-order per custom button in button editor
+  + Arrow buttons to quickly swap element order
+  + Reset to defaults option
+  
   v1.5:
   + Vertical and horizontal decorative lines (customizable color, thickness, position)
   + Various button shapes: star, hexagon, pentagon, triangle, circle, rectangle
@@ -27,7 +35,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
-local script_version = "1.5.0"
+local script_version = "1.6.0"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -661,6 +669,31 @@ local default_settings = {
  -- V-Line widgets (vertical lines)
  v_lines = {},
  v_line_next_id = 1,
+
+ -- Z-Order settings (higher = rendered on top)
+ z_order_transport = 10,
+ z_order_master_volume = 11,
+ z_order_monitor_volume = 12,
+ z_order_simple_mixer_button = 13,
+ z_order_cursorpos = 14,
+ z_order_localtime = 15,
+ z_order_battery_status = 16,
+ z_order_tempo = 17,
+ z_order_playrate = 18,
+ z_order_timesig = 19,
+ z_order_env = 20,
+ z_order_timesel = 21,
+ z_order_taptempo = 22,
+ z_order_visual_metronome = 23,
+ z_order_shuttle_wheel = 24,
+ z_order_waveform_scrubber = 25,
+ z_order_matrix_ticker = 26,
+ z_order_quick_fx = 27,
+ z_order_color_picker = 28,
+ z_order_window_set_picker = 29,
+ z_order_h_lines = 30,
+ z_order_v_lines = 31,
+ z_order_custom_buttons = 50,
 
 }
 
@@ -3748,6 +3781,102 @@ function ShowVLineSettings(ctx, main_window_width, main_window_height)
  end
 end
 
+function ShowZOrderSettings(ctx, main_window_width, main_window_height)
+ local rv
+ 
+ r.ImGui_TextWrapped(ctx, "Z-Order determines the render order of elements. Higher values are drawn on top of lower values.")
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ local z_order_items = {
+  { key = "z_order_transport", name = "Transport", default = 10 },
+  { key = "z_order_master_volume", name = "Master Volume", default = 11 },
+  { key = "z_order_monitor_volume", name = "Monitor Volume", default = 12 },
+  { key = "z_order_simple_mixer_button", name = "Simple Mixer Button", default = 13 },
+  { key = "z_order_cursorpos", name = "Cursor Position", default = 14 },
+  { key = "z_order_localtime", name = "Local Time", default = 15 },
+  { key = "z_order_battery_status", name = "Battery Status", default = 16 },
+  { key = "z_order_tempo", name = "Tempo (BPM)", default = 17 },
+  { key = "z_order_playrate", name = "Playrate", default = 18 },
+  { key = "z_order_timesig", name = "Time Signature", default = 19 },
+  { key = "z_order_env", name = "Envelope", default = 20 },
+  { key = "z_order_timesel", name = "Time Selection", default = 21 },
+  { key = "z_order_taptempo", name = "TapTempo", default = 22 },
+  { key = "z_order_visual_metronome", name = "Visual Metronome", default = 23 },
+  { key = "z_order_shuttle_wheel", name = "Shuttle Wheel", default = 24 },
+  { key = "z_order_waveform_scrubber", name = "Waveform Scrubber", default = 25 },
+  { key = "z_order_matrix_ticker", name = "Matrix Ticker", default = 26 },
+  { key = "z_order_quick_fx", name = "Quick FX", default = 27 },
+  { key = "z_order_color_picker", name = "Color Picker", default = 28 },
+  { key = "z_order_window_set_picker", name = "Window Set Picker", default = 29 },
+  { key = "z_order_h_lines", name = "H-Lines", default = 30 },
+  { key = "z_order_v_lines", name = "V-Lines", default = 31 },
+  { key = "z_order_custom_buttons", name = "Custom Buttons", default = 50 },
+ }
+ 
+ table.sort(z_order_items, function(a, b)
+  return (settings[a.key] or a.default) < (settings[b.key] or b.default)
+ end)
+ 
+ if r.ImGui_BeginTable(ctx, "ZOrderTable", 3, r.ImGui_TableFlags_Borders() | r.ImGui_TableFlags_RowBg()) then
+  r.ImGui_TableSetupColumn(ctx, "Element", r.ImGui_TableColumnFlags_WidthStretch())
+  r.ImGui_TableSetupColumn(ctx, "Z-Order", r.ImGui_TableColumnFlags_WidthFixed(), 100)
+  r.ImGui_TableSetupColumn(ctx, "Actions", r.ImGui_TableColumnFlags_WidthFixed(), 80)
+  r.ImGui_TableHeadersRow(ctx)
+  
+  for i, item in ipairs(z_order_items) do
+   r.ImGui_TableNextRow(ctx)
+   r.ImGui_PushID(ctx, item.key)
+   
+   r.ImGui_TableSetColumnIndex(ctx, 0)
+   r.ImGui_Text(ctx, item.name)
+   
+   r.ImGui_TableSetColumnIndex(ctx, 1)
+   r.ImGui_SetNextItemWidth(ctx, -1)
+   local current_value = settings[item.key] or item.default
+   rv, settings[item.key] = r.ImGui_InputInt(ctx, "##zorder", current_value)
+   if rv then
+    MarkTransportPresetChanged()
+   end
+   
+   r.ImGui_TableSetColumnIndex(ctx, 2)
+   if i > 1 and r.ImGui_ArrowButton(ctx, "##up", r.ImGui_Dir_Up()) then
+    local prev_item = z_order_items[i - 1]
+    local prev_value = settings[prev_item.key] or prev_item.default
+    local curr_value = settings[item.key] or item.default
+    settings[prev_item.key] = curr_value
+    settings[item.key] = prev_value
+    MarkTransportPresetChanged()
+   end
+   r.ImGui_SameLine(ctx)
+   if i < #z_order_items and r.ImGui_ArrowButton(ctx, "##down", r.ImGui_Dir_Down()) then
+    local next_item = z_order_items[i + 1]
+    local next_value = settings[next_item.key] or next_item.default
+    local curr_value = settings[item.key] or item.default
+    settings[next_item.key] = curr_value
+    settings[item.key] = next_value
+    MarkTransportPresetChanged()
+   end
+   
+   r.ImGui_PopID(ctx)
+  end
+  
+  r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_Button(ctx, "Reset Z-Order to defaults") then
+  for _, item in ipairs(z_order_items) do
+   settings[item.key] = item.default
+  end
+  MarkTransportPresetChanged()
+ end
+end
+
 function ShowMatrixTickerSettings(ctx, main_window_width, main_window_height)
  local rv
  rv, settings.show_matrix_ticker = r.ImGui_Checkbox(ctx, "Show Matrix Ticker", settings.show_matrix_ticker ~= false)
@@ -5739,6 +5868,10 @@ function ShowSettings(main_window_width , main_window_height)
  selected_transport_component = "alignment_guides"
  end
  
+ if r.ImGui_Selectable(ctx, "Z-Order (Layer)", selected_transport_component == "z_order") then
+ selected_transport_component = "z_order"
+ end
+ 
  r.ImGui_Separator(ctx)
  
  if r.ImGui_BeginChild(ctx, "ComponentList", 0, SETTINGS_TAB_HEIGHT) then
@@ -6405,6 +6538,8 @@ function ShowSettings(main_window_width , main_window_height)
  end
  end
  end
+ elseif selected_transport_component == "z_order" then
+ ShowZOrderSettings(ctx, main_window_width, main_window_height)
  else
  ShowComponentSettings(ctx, main_window_width, main_window_height)
  end
@@ -12379,38 +12514,45 @@ function Main()
  if changed_ref then SaveSettings() end
  end
 
-
- ShowTimeSelection(main_window_width, main_window_height)
- EnvelopeOverride(main_window_width, main_window_height)
- Transport_Buttons(main_window_width, main_window_height)
- MasterVolumeSlider(main_window_width, main_window_height)
- MonitorVolumeSlider(main_window_width, main_window_height)
- SimpleMixerButton(main_window_width, main_window_height)
- ShowCursorPosition(main_window_width, main_window_height)
- ShowShuttleWheel(main_window_width, main_window_height)
- ShowWaveformScrubber(main_window_width, main_window_height)
- ShowMatrixTicker(main_window_width, main_window_height)
- ShowQuickFX(main_window_width, main_window_height)
- ShowColorPicker(main_window_width, main_window_height)
- 
  CustomButtons.x_offset_px = settings.custom_buttons_x_offset_px or (settings.custom_buttons_x_offset * main_window_width)
  CustomButtons.y_offset_px = settings.custom_buttons_y_offset_px or (settings.custom_buttons_y_offset * main_window_height)
  CustomButtons.x_offset = CustomButtons.x_offset_px / main_window_width
  CustomButtons.y_offset = CustomButtons.y_offset_px / main_window_height
 
- ButtonRenderer.RenderButtons(ctx, CustomButtons, settings)
- CustomButtons.CheckForCommandPick()
- 
- ShowTempo(main_window_width, main_window_height)
- ShowTimeSignature(main_window_width, main_window_height)
- ShowWindowSetPicker(main_window_width, main_window_height)
- PlayRate_Slider(main_window_width, main_window_height) 
- TapTempo(main_window_width, main_window_height)
- RenderVisualMetronome(main_window_width, main_window_height)
- RenderHLines(main_window_width, main_window_height)
- RenderVLines(main_window_width, main_window_height)
- ShowLocalTime(main_window_width, main_window_height) 
- ShowBatteryStatus(main_window_width, main_window_height) 
+ local render_elements = {
+  { z_order = settings.z_order_timesel or 21, render = function() ShowTimeSelection(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_env or 20, render = function() EnvelopeOverride(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_transport or 10, render = function() Transport_Buttons(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_master_volume or 11, render = function() MasterVolumeSlider(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_monitor_volume or 12, render = function() MonitorVolumeSlider(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_simple_mixer_button or 13, render = function() SimpleMixerButton(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_cursorpos or 14, render = function() ShowCursorPosition(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_shuttle_wheel or 24, render = function() ShowShuttleWheel(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_waveform_scrubber or 25, render = function() ShowWaveformScrubber(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_matrix_ticker or 26, render = function() ShowMatrixTicker(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_quick_fx or 27, render = function() ShowQuickFX(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_color_picker or 28, render = function() ShowColorPicker(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_custom_buttons or 50, render = function() 
+   ButtonRenderer.RenderButtons(ctx, CustomButtons, settings)
+   CustomButtons.CheckForCommandPick()
+  end },
+  { z_order = settings.z_order_tempo or 17, render = function() ShowTempo(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_timesig or 19, render = function() ShowTimeSignature(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_window_set_picker or 29, render = function() ShowWindowSetPicker(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_playrate or 18, render = function() PlayRate_Slider(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_taptempo or 22, render = function() TapTempo(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_visual_metronome or 23, render = function() RenderVisualMetronome(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_h_lines or 30, render = function() RenderHLines(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_v_lines or 31, render = function() RenderVLines(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_localtime or 15, render = function() ShowLocalTime(main_window_width, main_window_height) end },
+  { z_order = settings.z_order_battery_status or 16, render = function() ShowBatteryStatus(main_window_width, main_window_height) end },
+ }
+
+ table.sort(render_elements, function(a, b) return a.z_order < b.z_order end)
+
+ for _, elem in ipairs(render_elements) do
+  elem.render()
+ end
 
  if settings.edit_mode then
  local dl = r.ImGui_GetWindowDrawList(ctx)

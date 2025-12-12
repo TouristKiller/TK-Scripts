@@ -1290,6 +1290,19 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 r.ImGui_SameLine(ctx, 0, 15)
                 r.ImGui_TextDisabled(ctx, "(Height syncs with Width for this shape)")
             end
+            
+            r.ImGui_Text(ctx, "Z-Order")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetNextItemWidth(ctx, 80)
+            local rvz
+            local z_order_val = button.z_order or 0
+            rvz, button.z_order = r.ImGui_InputInt(ctx, "##btnZOrder", z_order_val)
+            if rvz then
+                changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Higher value = drawn on top of other elements")
+            end
 
             if changed then
                 button.position   = button.position_px   / math.max(1, canvas_width)

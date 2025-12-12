@@ -41,6 +41,7 @@ function CustomButtons.CreateNewButton(options)
         toggle_off_color = nil,
         is_group_visibility_toggle = false,
         target_group = nil,
+        z_order = 0,
         left_click = {
             command = nil,
             name = "No Action"

@@ -526,8 +526,18 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
         return button.visible and should_show
     end
 
+    local sorted_buttons = {}
     for i, button in ipairs(custom_buttons.buttons) do
         if should_show_button(button) then
+            table.insert(sorted_buttons, {index = i, button = button, z_order = button.z_order or 0})
+        end
+    end
+    table.sort(sorted_buttons, function(a, b) return a.z_order < b.z_order end)
+
+    for _, entry in ipairs(sorted_buttons) do
+        local i = entry.index
+        local button = entry.button
+        
             r.ImGui_SameLine(ctx)
             
             local font_pushed = false
@@ -2343,7 +2353,6 @@ if r.ImGui_BeginPopup(ctx, "CustomButtonMenu" .. i) then
             if font_pushed then
                 r.ImGui_PopFont(ctx)
             end
-        end
         ::continue_button_loop::
     end
 end
