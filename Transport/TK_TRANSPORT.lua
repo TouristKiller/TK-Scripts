@@ -1,8 +1,16 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.7.1
+-- @version 1.7.2
 -- @changelog 
 --[[
+  v1.7.2:
+  + Added: Peak meters with decay and hold indicators
+  + Added: Peak display above meters (shows max peak, red background on clip)
+  + Added: Click peak display to reset max value
+  + Added: Meters settings tab with customizable colors
+  + Added: Tick marks with dB values on meters
+  + Fixed: Clip detection now correctly triggers at 0 dB
+
   v1.7.1:
   + Fixed: Folder border 
   + Fixed: Fx slots Scrolling
@@ -42,7 +50,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
-local script_version = "1.7.1"
+local script_version = "1.7.2"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -511,6 +519,19 @@ local default_settings = {
  simple_mixer_folder_border_color = 0x00AAFFFF,
  simple_mixer_folder_border_rounding = 4,
  simple_mixer_folder_padding = 2,
+ simple_mixer_show_meters = true,
+ simple_mixer_meter_width = 12,
+ simple_mixer_meter_show_ticks = true,
+ simple_mixer_meter_tick_color_below = 0x888888FF,
+ simple_mixer_meter_tick_color_above = 0x000000FF,
+ simple_mixer_meter_segment_gap = 1,
+ simple_mixer_meter_decay_speed = 0.92,
+ simple_mixer_meter_hold_time = 1.5,
+ simple_mixer_meter_color_normal = 0x00CC00FF,
+ simple_mixer_meter_color_mid = 0xCCFF00FF,
+ simple_mixer_meter_color_high = 0xFFFF00FF,
+ simple_mixer_meter_color_clip = 0xFF0000FF,
+ simple_mixer_meter_bg_color = 0x1A1A1AFF,
 
  -- Custom Transport Button settings
  use_custom_play_image = false,
@@ -2400,7 +2421,7 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
  
  if r.ImGui_BeginTabBar(ctx, "MixerSettingsTabs") then
   
-  if r.ImGui_BeginTabItem(ctx, "Toggle Button") then
+  if r.ImGui_BeginTabItem(ctx, "Button") then
    simple_mixer_settings_tab = 0
    r.ImGui_Spacing(ctx)
    
@@ -2517,7 +2538,7 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
    r.ImGui_EndTabItem(ctx)
   end
   
-  if r.ImGui_BeginTabItem(ctx, "Mixer Window") then
+  if r.ImGui_BeginTabItem(ctx, "Mixer") then
    simple_mixer_settings_tab = 1
    r.ImGui_Spacing(ctx)
    
@@ -2654,6 +2675,99 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
     end
     
     r.ImGui_EndTable(ctx)
+   end
+   
+   r.ImGui_EndTabItem(ctx)
+  end
+  
+  if r.ImGui_BeginTabItem(ctx, "Meters") then
+   simple_mixer_settings_tab = 5
+   r.ImGui_Spacing(ctx)
+   
+   rv, settings.simple_mixer_show_meters = r.ImGui_Checkbox(ctx, "Show Meters", settings.simple_mixer_show_meters ~= false)
+   if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Display peak meters next to volume faders (50/50 split)")
+   end
+   
+   if settings.simple_mixer_show_meters then
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Text(ctx, "Display Options:")
+    
+    if r.ImGui_BeginTable(ctx, "MeterOptionsTable", 2, r.ImGui_TableFlags_None()) then
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_show_ticks = r.ImGui_Checkbox(ctx, "Show dB Ticks", settings.simple_mixer_meter_show_ticks ~= false)
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Show tick marks at 0, -6, -12, -24, -48 dB")
+     end
+     r.ImGui_TableNextColumn(ctx)
+     r.ImGui_Text(ctx, "Segment Gap:")
+     r.ImGui_SameLine(ctx)
+     r.ImGui_SetNextItemWidth(ctx, 60)
+     rv, settings.simple_mixer_meter_segment_gap = r.ImGui_SliderInt(ctx, "##SegGap", settings.simple_mixer_meter_segment_gap or 1, 0, 3)
+     r.ImGui_EndTable(ctx)
+    end
+    
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Text(ctx, "Behavior:")
+    
+    if r.ImGui_BeginTable(ctx, "MeterBehaviorTable", 2, r.ImGui_TableFlags_None()) then
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     r.ImGui_Text(ctx, "Decay Speed:")
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     rv, settings.simple_mixer_meter_decay_speed = r.ImGui_SliderDouble(ctx, "##Decay", settings.simple_mixer_meter_decay_speed or 0.92, 0.8, 0.99, "%.2f")
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "How fast the meter falls back (higher = slower)")
+     end
+     
+     r.ImGui_TableNextColumn(ctx)
+     r.ImGui_Text(ctx, "Peak Hold Time:")
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     rv, settings.simple_mixer_meter_hold_time = r.ImGui_SliderDouble(ctx, "##Hold", settings.simple_mixer_meter_hold_time or 1.5, 0.5, 3.0, "%.1f s")
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "How long the peak indicator stays visible")
+     end
+     r.ImGui_EndTable(ctx)
+    end
+    
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Text(ctx, "Colors:")
+    
+    if r.ImGui_BeginTable(ctx, "MeterColorsTable", 2, r.ImGui_TableFlags_None()) then
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_color_normal = r.ImGui_ColorEdit4(ctx, "Normal##MtrNorm", settings.simple_mixer_meter_color_normal or 0x00CC00FF, r.ImGui_ColorEditFlags_NoInputs())
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_color_mid = r.ImGui_ColorEdit4(ctx, "Mid##MtrMid", settings.simple_mixer_meter_color_mid or 0xCCFF00FF, r.ImGui_ColorEditFlags_NoInputs())
+     
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_color_high = r.ImGui_ColorEdit4(ctx, "High##MtrHigh", settings.simple_mixer_meter_color_high or 0xFFFF00FF, r.ImGui_ColorEditFlags_NoInputs())
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_color_clip = r.ImGui_ColorEdit4(ctx, "Clip##MtrClip", settings.simple_mixer_meter_color_clip or 0xFF0000FF, r.ImGui_ColorEditFlags_NoInputs())
+     
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_bg_color = r.ImGui_ColorEdit4(ctx, "Background##MtrBg", settings.simple_mixer_meter_bg_color or 0x1A1A1AFF, r.ImGui_ColorEditFlags_NoInputs())
+     r.ImGui_TableNextColumn(ctx)
+     
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_tick_color_below = r.ImGui_ColorEdit4(ctx, "Tick (below)##MtrTickBelow", settings.simple_mixer_meter_tick_color_below or 0x888888FF, r.ImGui_ColorEditFlags_NoInputs())
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Tick color when meter is below this level")
+     end
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_tick_color_above = r.ImGui_ColorEdit4(ctx, "Tick (above)##MtrTickAbove", settings.simple_mixer_meter_tick_color_above or 0x000000FF, r.ImGui_ColorEditFlags_NoInputs())
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Tick color when meter is at or above this level")
+     end
+     r.ImGui_EndTable(ctx)
+    end
    end
    
    r.ImGui_EndTabItem(ctx)
@@ -8888,6 +9002,204 @@ local simple_mixer_divider_names = {}
 local simple_mixer_track_icon_cache = {}
 local simple_mixer_track_icon_paths = {}
 
+local simple_mixer_meter_data = {}
+local simple_mixer_meter_last_update = 0
+local simple_mixer_meter_update_interval = 1/30
+
+local function UpdateMeterData(track_guid, track)
+    if not track then return end
+    
+    if not simple_mixer_meter_data[track_guid] then
+        simple_mixer_meter_data[track_guid] = {
+            peak_L = 0,
+            peak_R = 0,
+            peak_L_decay = 0,
+            peak_R_decay = 0,
+            peak_L_hold = 0,
+            peak_R_hold = 0,
+            hold_time_L = 0,
+            hold_time_R = 0,
+            max_peak = 0
+        }
+    end
+    
+    local data = simple_mixer_meter_data[track_guid]
+    local current_time = r.time_precise()
+    local decay_speed = settings.simple_mixer_meter_decay_speed or 0.92
+    local hold_time = settings.simple_mixer_meter_hold_time or 1.5
+    
+    local peak_L = r.Track_GetPeakInfo(track, 0)
+    local peak_R = r.Track_GetPeakInfo(track, 1)
+    
+    if peak_L > data.peak_L_decay then
+        data.peak_L_decay = peak_L
+    else
+        data.peak_L_decay = data.peak_L_decay * decay_speed
+    end
+    
+    if peak_R > data.peak_R_decay then
+        data.peak_R_decay = peak_R
+    else
+        data.peak_R_decay = data.peak_R_decay * decay_speed
+    end
+    
+    if peak_L >= data.peak_L_hold then
+        data.peak_L_hold = peak_L
+        data.hold_time_L = current_time
+    elseif current_time - data.hold_time_L > hold_time then
+        data.peak_L_hold = data.peak_L_hold * 0.95
+    end
+    
+    if peak_R >= data.peak_R_hold then
+        data.peak_R_hold = peak_R
+        data.hold_time_R = current_time
+    elseif current_time - data.hold_time_R > hold_time then
+        data.peak_R_hold = data.peak_R_hold * 0.95
+    end
+    
+    local current_max = math.max(peak_L, peak_R)
+    if current_max > (data.max_peak or 0) then
+        data.max_peak = current_max
+    end
+    
+    data.peak_L = peak_L
+    data.peak_R = peak_R
+end
+
+local function PeakToDb(peak)
+    if peak <= 0 then return -150 end
+    return 20 * math.log(peak, 10)
+end
+
+local function DbToNormalized(db, min_db, max_db)
+    min_db = min_db or -60
+    max_db = max_db or 6
+    if db <= min_db then return 0 end
+    if db >= max_db then return 1 end
+    return (db - min_db) / (max_db - min_db)
+end
+
+local function GetMeterColor(normalized_value)
+    local color_clip = settings.simple_mixer_meter_color_clip or 0xFF0000FF
+    local color_high = settings.simple_mixer_meter_color_high or 0xFFFF00FF
+    local color_mid = settings.simple_mixer_meter_color_mid or 0xCCFF00FF
+    local color_normal = settings.simple_mixer_meter_color_normal or 0x00CC00FF
+    
+    local zero_db = 60 / 66
+    if normalized_value >= zero_db then
+        return color_clip
+    elseif normalized_value > 0.75 then
+        return color_high
+    elseif normalized_value > 0.5 then
+        return color_mid
+    else
+        return color_normal
+    end
+end
+
+local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid)
+    local data = simple_mixer_meter_data[track_guid]
+    if not data then
+        data = { peak_L = 0, peak_R = 0, peak_L_decay = 0, peak_R_decay = 0, peak_L_hold = 0, peak_R_hold = 0, max_peak = 0 }
+    end
+    
+    local meter_bg = settings.simple_mixer_meter_bg_color or 0x1A1A1AFF
+    local hold_color = 0xFFFFFFFF
+    local tick_color_below = settings.simple_mixer_meter_tick_color_below or 0x888888FF
+    local tick_color_above = settings.simple_mixer_meter_tick_color_above or 0x000000FF
+    local segment_gap = settings.simple_mixer_meter_segment_gap or 1
+    local show_ticks = settings.simple_mixer_meter_show_ticks ~= false
+    
+    local peak_display_height = 14
+    local max_peak_db = PeakToDb(data.max_peak or 0)
+    local is_clipping = max_peak_db >= 0
+    
+    local peak_bg_color = is_clipping and 0xFF0000FF or meter_bg
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + peak_display_height, peak_bg_color)
+    
+    local peak_text = max_peak_db > -100 and string.format("%.1f", max_peak_db) or "-∞"
+    local text_w, text_h = r.ImGui_CalcTextSize(ctx, peak_text)
+    text_w = text_w * 0.7
+    text_h = text_h * 0.7
+    local text_x = x + (width - text_w) / 2
+    local text_y = y + (peak_display_height - text_h) / 2
+    local text_color = is_clipping and 0xFFFFFFFF or 0xCCCCCCFF
+    r.ImGui_DrawList_AddTextEx(draw_list, nil, 9, text_x, text_y, text_color, peak_text)
+    
+    local mx, my = r.ImGui_GetMousePos(ctx)
+    if mx >= x and mx <= x + width and my >= y and my <= y + peak_display_height then
+        if r.ImGui_IsMouseClicked(ctx, 0) then
+            data.max_peak = 0
+        end
+    end
+    
+    local meter_y = y + peak_display_height + 2
+    local meter_height = height - peak_display_height - 2
+    
+    local tick_db_values = {0, -6, -12, -24, -48}
+    local meter_width = math.floor(width / 2 - 1)
+    
+    local current_peak_db = math.max(PeakToDb(data.peak_L_decay), PeakToDb(data.peak_R_decay))
+    
+    local function DrawSingleMeter(mx, my, mw, mh, peak_decay, peak_hold)
+        r.ImGui_DrawList_AddRectFilled(draw_list, mx, my, mx + mw, my + mh, meter_bg)
+        
+        local peak_db = PeakToDb(peak_decay)
+        local normalized = DbToNormalized(peak_db)
+        
+        if normalized > 0.001 then
+            local segments = 20
+            local total_segments = math.floor(normalized * segments)
+            local segment_height = (mh - (segments - 1) * segment_gap) / segments
+            
+            for i = 0, total_segments - 1 do
+                local seg_normalized = (i + 1) / segments
+                local seg_color = GetMeterColor(seg_normalized)
+                local seg_y = my + mh - (i + 1) * (segment_height + segment_gap)
+                r.ImGui_DrawList_AddRectFilled(draw_list, mx, seg_y, mx + mw, seg_y + segment_height, seg_color)
+            end
+        end
+        
+        local hold_db = PeakToDb(peak_hold)
+        local hold_normalized = DbToNormalized(hold_db)
+        if hold_normalized > 0.01 then
+            local hold_y = my + mh - (mh * hold_normalized)
+            r.ImGui_DrawList_AddLine(draw_list, mx, hold_y, mx + mw, hold_y, hold_color, 2)
+        end
+    end
+    
+    DrawSingleMeter(x, meter_y, meter_width, meter_height, data.peak_L_decay, data.peak_L_hold)
+    DrawSingleMeter(x + meter_width + 2, meter_y, meter_width, meter_height, data.peak_R_decay, data.peak_R_hold)
+    
+    if show_ticks then
+        for _, db_val in ipairs(tick_db_values) do
+            local tick_normalized = DbToNormalized(db_val)
+            if tick_normalized > 0 and tick_normalized < 1 then
+                local tick_y = meter_y + meter_height - (meter_height * tick_normalized)
+                local tick_color = (current_peak_db >= db_val) and tick_color_above or tick_color_below
+                
+                local label = tostring(db_val)
+                local text_w, text_h = r.ImGui_CalcTextSize(ctx, label)
+                text_w = text_w * 0.7
+                text_h = text_h * 0.7
+                local text_x = x + (width - text_w) / 2
+                local text_y = tick_y - text_h / 2
+                local gap = 2
+                
+                if text_y > meter_y + 2 and text_y < meter_y + meter_height - text_h - 2 then
+                    r.ImGui_DrawList_AddLine(draw_list, x, tick_y, text_x - gap, tick_y, tick_color, 1)
+                    r.ImGui_DrawList_AddLine(draw_list, text_x + text_w + gap, tick_y, x + width, tick_y, tick_color, 1)
+                    r.ImGui_DrawList_AddTextEx(draw_list, nil, 8, text_x, text_y, tick_color, label)
+                else
+                    r.ImGui_DrawList_AddLine(draw_list, x, tick_y, x + width, tick_y, tick_color, 1)
+                end
+            end
+        end
+    end
+    
+    return data
+end
+
 local function GetTrackIcon(ctx, track)
  local track_guid = r.GetTrackGUID(track)
  
@@ -9588,8 +9900,12 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
  local slider_start_x, slider_start_y = r.ImGui_GetCursorScreenPos(ctx)
  
- r.ImGui_PushItemWidth(ctx, track_width)
- local rv, new_vol_db = r.ImGui_VSliderDouble(ctx, "##vol", track_width, slider_height, volume_db, -60.0, 12.0, "%.1f dB")
+ local show_meters = settings.simple_mixer_show_meters ~= false
+ local slider_actual_width = show_meters and math.floor(track_width * 0.70) or track_width
+ local meter_width = show_meters and (track_width - slider_actual_width - 2) or 0
+ 
+ r.ImGui_PushItemWidth(ctx, slider_actual_width)
+ local rv, new_vol_db = r.ImGui_VSliderDouble(ctx, "##vol", slider_actual_width, slider_height, volume_db, -60.0, 12.0, "%.1f")
  if rv then
   local new_volume = 10.0 ^ (new_vol_db / 20.0)
   r.SetMediaTrackInfo_Value(track, "D_VOL", new_volume)
@@ -9599,7 +9915,30 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  if settings.simple_mixer_show_track_icons and not is_master then
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local opacity = settings.simple_mixer_track_icon_opacity or 0.3
-  DrawTrackIcon(ctx, draw_list, track, slider_start_x, slider_start_y, track_width, slider_height, opacity)
+  DrawTrackIcon(ctx, draw_list, track, slider_start_x, slider_start_y, slider_actual_width, slider_height, opacity)
+ end
+
+ if show_meters and meter_width > 0 then
+  UpdateMeterData(track_guid_for_fx, track)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local meter_x = slider_start_x + slider_actual_width + 2
+  local meter_y = slider_start_y
+  local meter_height = slider_height
+  local meter_data = DrawMeter(ctx, draw_list, meter_x, meter_y, meter_width, meter_height, track_guid_for_fx)
+  
+  local mx, my = r.ImGui_GetMousePos(ctx)
+  if mx >= meter_x and mx <= meter_x + meter_width and my >= meter_y and my <= meter_y + meter_height then
+   local peak_L_db = PeakToDb(meter_data.peak_L_decay)
+   local peak_R_db = PeakToDb(meter_data.peak_R_decay)
+   local hold_L_db = PeakToDb(meter_data.peak_L_hold)
+   local hold_R_db = PeakToDb(meter_data.peak_R_hold)
+   local tooltip = string.format("L: %.1f dB (peak: %.1f)\nR: %.1f dB (peak: %.1f)", 
+    peak_L_db > -100 and peak_L_db or -math.huge,
+    hold_L_db > -100 and hold_L_db or -math.huge,
+    peak_R_db > -100 and peak_R_db or -math.huge,
+    hold_R_db > -100 and hold_R_db or -math.huge)
+   r.ImGui_SetTooltip(ctx, tooltip)
+  end
  end
 
  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, r.ImGui_MouseButton_Left()) then
