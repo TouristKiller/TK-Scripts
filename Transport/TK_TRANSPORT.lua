@@ -1,8 +1,12 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.7
+-- @version 1.7.1
 -- @changelog 
 --[[
+  v1.7.1:
+  + Fixed: Folder border 
+  + Fixed: Fx slots Scrolling
+
   v1.7:
   + Greatly expanded mixer functionality
   
@@ -38,7 +42,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
-local script_version = "1.6.0"
+local script_version = "1.7.1"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -8877,6 +8881,7 @@ local simple_mixer_collapsed_folders = {}
 local simple_mixer_fx_handle_clicked = false
 local simple_mixer_track_fx_heights = {}
 local simple_mixer_fx_sync_resize = false
+local simple_mixer_fx_section_hovered = false
 local simple_mixer_editing_divider_guid = nil
 local simple_mixer_editing_divider_name = ""
 local simple_mixer_divider_names = {}
@@ -9262,7 +9267,10 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local section_height = simple_mixer_track_fx_heights[track_guid_for_fx] or settings.simple_mixer_fx_section_height or 80
 
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x1A1A1AFF)
-  if r.ImGui_BeginChild(ctx, "FXSection##" .. (is_master and "master" or idx), track_width, section_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
+  if r.ImGui_BeginChild(ctx, "FXSection##" .. (is_master and "master" or idx), track_width, section_height, 0, r.ImGui_WindowFlags_None()) then
+   if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_None()) then
+    simple_mixer_fx_section_hovered = true
+   end
    for slot = 0, fx_count - 1 do
     r.ImGui_PushID(ctx, "fx_slot_" .. slot)
     
@@ -9994,6 +10002,8 @@ end
 function DrawSimpleMixerWindow()
  if not settings.simple_mixer_window_open then return end
  
+ simple_mixer_fx_section_hovered = false
+ 
  local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar()
  local mixer_ctx = ctx
  
@@ -10312,57 +10322,10 @@ function DrawSimpleMixerWindow()
  local child_width = master_right_width > 0 and (avail_width - master_right_width - pinned_width) or (pinned_width > 0 and (avail_width - pinned_width) or 0)
  if r.ImGui_BeginChild(mixer_ctx, "MixerTracks", child_width, avail_height, r.ImGui_ChildFlags_None(), r.ImGui_WindowFlags_NoScrollbar()) then
  
- if r.ImGui_IsWindowHovered(mixer_ctx, r.ImGui_HoveredFlags_ChildWindows()) then
-  local wheel_y = r.ImGui_GetMouseWheel(mixer_ctx)
-  if wheel_y ~= 0 then
-   local scroll_x = r.ImGui_GetScrollX(mixer_ctx)
-   local scroll_speed = 50
-   r.ImGui_SetScrollX(mixer_ctx, scroll_x - wheel_y * scroll_speed)
-  end
-  
-  if r.ImGui_IsKeyPressed(mixer_ctx, r.ImGui_Key_Delete()) then
-   local shift_held = r.ImGui_IsKeyDown(mixer_ctx, r.ImGui_Mod_Shift())
-   local selected_guids = {}
-   for _, track_guid in ipairs(project_mixer_tracks) do
-    local track = r.BR_GetMediaTrackByGUID(0, track_guid)
-    if track and r.IsTrackSelected(track) then
-     table.insert(selected_guids, track_guid)
-    end
-   end
-   
-   if #selected_guids > 0 then
-    if shift_held then
-     r.Undo_BeginBlock()
-     r.PreventUIRefresh(1)
-     for i = #selected_guids, 1, -1 do
-      local track = r.BR_GetMediaTrackByGUID(0, selected_guids[i])
-      if track and r.ValidatePtr(track, "MediaTrack*") then
-       r.DeleteTrack(track)
-      end
-      for j = #project_mixer_tracks, 1, -1 do
-       if project_mixer_tracks[j] == selected_guids[i] then
-        table.remove(project_mixer_tracks, j)
-        break
-       end
-      end
-     end
-     SaveProjectMixerTracks(project_mixer_tracks)
-     r.PreventUIRefresh(-1)
-     r.Undo_EndBlock("Delete selected tracks from mixer", -1)
-    else
-     for _, guid in ipairs(selected_guids) do
-      for j = #project_mixer_tracks, 1, -1 do
-       if project_mixer_tracks[j] == guid then
-        table.remove(project_mixer_tracks, j)
-        break
-       end
-      end
-     end
-     SaveProjectMixerTracks(project_mixer_tracks)
-    end
-   end
-  end
- end
+ local mixer_tracks_hovered = r.ImGui_IsWindowHovered(mixer_ctx, r.ImGui_HoveredFlags_ChildWindows())
+ local pending_wheel_y = r.ImGui_GetMouseWheel(mixer_ctx)
+ local pending_delete = r.ImGui_IsKeyPressed(mixer_ctx, r.ImGui_Key_Delete())
+ local pending_shift_held = r.ImGui_IsKeyDown(mixer_ctx, r.ImGui_Mod_Shift())
  
  local tracks_to_remove = {}
  local tracks_to_delete = {}
@@ -10773,16 +10736,22 @@ function DrawSimpleMixerWindow()
     end
     
     local rect_x1 = start_pos.x - padding
+    local rect_y1 = start_pos.y
     local rect_y2 = child_start_y + avail_height - name_area_height
-    local fx_handle_height = 6
-    local actual_slider_height = base_slider_height - (settings.simple_mixer_fx_section_height or 80) - track_number_height
-    if settings.simple_mixer_fx_section_collapsed or not settings.simple_mixer_show_fx_slots then
-     actual_slider_height = base_slider_height - track_number_height
-    end
-    local rect_y1 = rect_y2 - actual_slider_height - padding
     local rect_x2 = end_pos.x + track_width + padding
     
-    r.ImGui_DrawList_AddRect(draw_list, rect_x1, rect_y1, rect_x2, rect_y2, border_color, rounding, 0, thickness)
+    if rounding > 0 then
+     local corner_y = rect_y2 - rounding
+     r.ImGui_DrawList_AddLine(draw_list, rect_x1, rect_y1, rect_x1, corner_y, border_color, thickness)
+     r.ImGui_DrawList_AddLine(draw_list, rect_x2, rect_y1, rect_x2, corner_y, border_color, thickness)
+     r.ImGui_DrawList_AddBezierQuadratic(draw_list, rect_x1, corner_y, rect_x1, rect_y2, rect_x1 + rounding, rect_y2, border_color, thickness, 12)
+     r.ImGui_DrawList_AddBezierQuadratic(draw_list, rect_x2, corner_y, rect_x2, rect_y2, rect_x2 - rounding, rect_y2, border_color, thickness, 12)
+     r.ImGui_DrawList_AddLine(draw_list, rect_x1 + rounding, rect_y2, rect_x2 - rounding, rect_y2, border_color, thickness)
+    else
+     r.ImGui_DrawList_AddLine(draw_list, rect_x1, rect_y1, rect_x1, rect_y2, border_color, thickness)
+     r.ImGui_DrawList_AddLine(draw_list, rect_x2, rect_y1, rect_x2, rect_y2, border_color, thickness)
+     r.ImGui_DrawList_AddLine(draw_list, rect_x1, rect_y2, rect_x2, rect_y2, border_color, thickness)
+    end
    end
   end
  end
@@ -10813,6 +10782,56 @@ function DrawSimpleMixerWindow()
   SaveProjectMixerTracks(project_mixer_tracks)
   r.PreventUIRefresh(-1)
   r.Undo_EndBlock("Delete tracks from mixer", -1)
+ end
+
+ if mixer_tracks_hovered and not simple_mixer_fx_section_hovered then
+  if pending_wheel_y ~= 0 then
+   local scroll_x = r.ImGui_GetScrollX(mixer_ctx)
+   local scroll_speed = 50
+   r.ImGui_SetScrollX(mixer_ctx, scroll_x - pending_wheel_y * scroll_speed)
+  end
+  
+  if pending_delete then
+   local selected_guids = {}
+   for _, track_guid in ipairs(project_mixer_tracks) do
+    local track = r.BR_GetMediaTrackByGUID(0, track_guid)
+    if track and r.IsTrackSelected(track) then
+     table.insert(selected_guids, track_guid)
+    end
+   end
+   
+   if #selected_guids > 0 then
+    if pending_shift_held then
+     r.Undo_BeginBlock()
+     r.PreventUIRefresh(1)
+     for i = #selected_guids, 1, -1 do
+      local track = r.BR_GetMediaTrackByGUID(0, selected_guids[i])
+      if track and r.ValidatePtr(track, "MediaTrack*") then
+       r.DeleteTrack(track)
+      end
+      for j = #project_mixer_tracks, 1, -1 do
+       if project_mixer_tracks[j] == selected_guids[i] then
+        table.remove(project_mixer_tracks, j)
+        break
+       end
+      end
+     end
+     SaveProjectMixerTracks(project_mixer_tracks)
+     r.PreventUIRefresh(-1)
+     r.Undo_EndBlock("Delete selected tracks from mixer", -1)
+    else
+     for _, guid in ipairs(selected_guids) do
+      for j = #project_mixer_tracks, 1, -1 do
+       if project_mixer_tracks[j] == guid then
+        table.remove(project_mixer_tracks, j)
+        break
+       end
+      end
+     end
+     SaveProjectMixerTracks(project_mixer_tracks)
+    end
+   end
+  end
  end
 
  r.ImGui_EndChild(mixer_ctx)
