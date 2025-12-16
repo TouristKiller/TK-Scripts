@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.7.2
+-- @version 1.7.3
 -- @changelog 
 --[[
   v1.7.2:
@@ -50,7 +50,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
-local script_version = "1.7.2"
+local script_version = "1.7.3"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -485,6 +485,14 @@ local default_settings = {
  simple_mixer_button_border_size = 0,
  simple_mixer_button_border_color = 0xFFFFFFFF,
  simple_mixer_button_text_color = 0xFFFFFFFF,
+ simple_mixer_channel_text_color = 0xFFFFFFFF,
+ simple_mixer_control_bg_color = 0x333333FF,
+ simple_mixer_slider_handle_color = 0x888888FF,
+ simple_mixer_rms_button_off_color = 0x404040FF,
+ simple_mixer_rms_text_color = 0xFFFFFFFF,
+ simple_mixer_fader_bg_color = 0x404040FF,
+ simple_mixer_master_fader_color = 0x4A90D9FF,
+ simple_mixer_icon_color = 0xAAAAAAFF,
  simple_mixer_show_fx_slots = false,
  simple_mixer_fx_slot_count = 4,
  simple_mixer_fx_slot_height = 16,
@@ -2674,6 +2682,9 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
      r.ImGui_EndCombo(ctx)
     end
     
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_channel_text_color = r.ImGui_ColorEdit4(ctx, "Text Color##MixerText", settings.simple_mixer_channel_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs())
+    
     r.ImGui_EndTable(ctx)
    end
    
@@ -2814,6 +2825,36 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
    r.ImGui_SetNextItemWidth(ctx, -1)
    rv, settings.simple_mixer_channel_rounding = r.ImGui_SliderDouble(ctx, "##ChRnd", settings.simple_mixer_channel_rounding or 0, 0, 10, "%.0f px")
    if rv then MarkTransportPresetChanged() end
+   
+   r.ImGui_Separator(ctx)
+   r.ImGui_Spacing(ctx)
+   r.ImGui_Text(ctx, "Colors:")
+   if r.ImGui_BeginTable(ctx, "ChannelColorsTable", 2, r.ImGui_TableFlags_None()) then
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_control_bg_color = r.ImGui_ColorEdit4(ctx, "Controls##CtrlBG", settings.simple_mixer_control_bg_color or 0x333333FF, r.ImGui_ColorEditFlags_NoInputs())
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_fader_bg_color = r.ImGui_ColorEdit4(ctx, "Fader BG##FdrBG", settings.simple_mixer_fader_bg_color or 0x404040FF, r.ImGui_ColorEditFlags_NoInputs())
+    
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_slider_handle_color = r.ImGui_ColorEdit4(ctx, "Handle##SldrH", settings.simple_mixer_slider_handle_color or 0x888888FF, r.ImGui_ColorEditFlags_NoInputs())
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_icon_color = r.ImGui_ColorEdit4(ctx, "Icons##IcnClr", settings.simple_mixer_icon_color or 0xAAAAAAFF, r.ImGui_ColorEditFlags_NoInputs())
+    
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_rms_button_off_color = r.ImGui_ColorEdit4(ctx, "RMS Off##RMSOff", settings.simple_mixer_rms_button_off_color or 0x404040FF, r.ImGui_ColorEditFlags_NoInputs())
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_rms_text_color = r.ImGui_ColorEdit4(ctx, "RMS Text##RMSTxt", settings.simple_mixer_rms_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs())
+    
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_master_fader_color = r.ImGui_ColorEdit4(ctx, "Master##MstrClr", settings.simple_mixer_master_fader_color or 0x4A90D9FF, r.ImGui_ColorEditFlags_NoInputs())
+    r.ImGui_TableNextColumn(ctx)
+    
+    r.ImGui_EndTable(ctx)
+   end
    
    r.ImGui_EndTabItem(ctx)
   end
@@ -9114,8 +9155,9 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid)
     local max_peak_db = PeakToDb(data.max_peak or 0)
     local is_clipping = max_peak_db >= 0
     
-    local peak_bg_color = is_clipping and 0xFF0000FF or meter_bg
-    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + peak_display_height, peak_bg_color)
+    if is_clipping then
+        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + peak_display_height, 0xFF0000FF)
+    end
     
     local peak_text = max_peak_db > -100 and string.format("%.1f", max_peak_db) or "-∞"
     local text_w, text_h = r.ImGui_CalcTextSize(ctx, peak_text)
@@ -9142,8 +9184,6 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid)
     local current_peak_db = math.max(PeakToDb(data.peak_L_decay), PeakToDb(data.peak_R_decay))
     
     local function DrawSingleMeter(mx, my, mw, mh, peak_decay, peak_hold)
-        r.ImGui_DrawList_AddRectFilled(draw_list, mx, my, mx + mw, my + mh, meter_bg)
-        
         local peak_db = PeakToDb(peak_decay)
         local normalized = DbToNormalized(peak_db)
         
@@ -9323,15 +9363,20 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local text_w = r.ImGui_CalcTextSize(ctx, track_number_str)
   local text_x = cx + (track_width - text_w) / 2
   local text_y = cy + (num_height - r.ImGui_GetTextLineHeight(ctx)) / 2
-  r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0xFFFFFFFF, track_number_str)
+  local text_color = settings.simple_mixer_channel_text_color or 0xFFFFFFFF
+  r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, track_number_str)
   r.ImGui_Dummy(ctx, track_width, num_height)
  end
 
  if settings.simple_mixer_show_rms then
   local is_muted = r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
+  local rms_off_color = settings.simple_mixer_rms_button_off_color or 0x404040FF
+  local rms_text_color = settings.simple_mixer_rms_text_color or 0xFFFFFFFF
+  
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rms_text_color)
   
   if is_master then
-   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_muted and 0xFF0000FF or 0x404040FF)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_muted and 0xFF0000FF or rms_off_color)
    if r.ImGui_Button(ctx, "M", track_width, 20) then
     r.SetMediaTrackInfo_Value(track, "B_MUTE", is_muted and 0 or 1)
    end
@@ -9341,7 +9386,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    local is_solo = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
    local rms_btn_width = (track_width - 6) / 3
 
-   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_armed and 0xFF0000FF or 0x404040FF)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_armed and 0xFF0000FF or rms_off_color)
    if r.ImGui_Button(ctx, "R", rms_btn_width, 20) then
     r.SetMediaTrackInfo_Value(track, "I_RECARM", is_armed and 0 or 1)
    end
@@ -9349,7 +9394,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
    r.ImGui_SameLine(ctx, 0, 3)
 
-   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_muted and 0xFF0000FF or 0x404040FF)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_muted and 0xFF0000FF or rms_off_color)
    if r.ImGui_Button(ctx, "M", rms_btn_width, 20) then
     r.SetMediaTrackInfo_Value(track, "B_MUTE", is_muted and 0 or 1)
    end
@@ -9357,18 +9402,20 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
    r.ImGui_SameLine(ctx, 0, 3)
 
-   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_solo and 0xFFFF00FF or 0x404040FF)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_solo and 0xFFFF00FF or rms_off_color)
    if r.ImGui_Button(ctx, "S", rms_btn_width, 20) then
     r.SetMediaTrackInfo_Value(track, "I_SOLO", is_solo and 0 or 1)
    end
    r.ImGui_PopStyleColor(ctx, 1)
   end
+  
+  r.ImGui_PopStyleColor(ctx, 1)
  end
 
  local pan_slider_height = 10
  local slider_grab_width = 6
- local slider_bg_col = 0x333333FF
- local slider_grab_col = 0x888888FF
+ local control_bg_col = settings.simple_mixer_control_bg_color or 0x333333FF
+ local slider_grab_col = settings.simple_mixer_slider_handle_color or 0x888888FF
  local slider_grab_active_col = 0xAAAAAAFF
  
  if settings.simple_mixer_show_pan then
@@ -9393,7 +9440,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   end
   
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + track_width, y + pan_slider_height, slider_bg_col, 2)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + track_width, y + pan_slider_height, control_bg_col, 2)
   
   local grab_x = x + ((pan + 1) / 2) * (track_width - slider_grab_width)
   local grab_col = is_active and slider_grab_active_col or slider_grab_col
@@ -9434,7 +9481,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   end
   
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + track_width, y + pan_slider_height, slider_bg_col, 2)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + track_width, y + pan_slider_height, control_bg_col, 2)
   
   local grab_x = x + ((width + 1) / 2) * (track_width - slider_grab_width)
   local grab_col = is_active and slider_grab_active_col or slider_grab_col
@@ -9460,8 +9507,9 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local btn_height = settings.simple_mixer_track_buttons_height or 16
   local btn_width = (track_width - 6) / 4
   local is_phase_inverted = r.GetMediaTrackInfo_Value(track, "B_PHASE") == 1
+  local icon_color = settings.simple_mixer_icon_color or 0xAAAAAAFF
   
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), control_bg_col)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x44444488)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x66666688)
   
@@ -9478,7 +9526,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local cy = btn_y + btn_height / 2
   local line_size = math.min(btn_width, btn_height) / 2 - 2
   local radius = line_size * 0.65
-  local phase_color = is_phase_inverted and 0xFF6666FF or 0xAAAAAAFF
+  local phase_color = is_phase_inverted and 0xFF6666FF or icon_color
   r.ImGui_DrawList_AddCircle(draw_list, cx, cy, radius, phase_color, 12, 1.5)
   local offset = line_size * 0.85
   r.ImGui_DrawList_AddLine(draw_list, cx - offset, cy + offset, cx + offset, cy - offset, phase_color, 1.5)
@@ -9543,7 +9591,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local route_cx = route_btn_x + btn_width / 2
   local route_cy = route_btn_y + btn_height / 2
   local route_size = math.min(btn_width, btn_height) / 2 - 2
-  local route_color = 0xAAAAAAFF
+  local route_color = icon_color
   local arrow_len = route_size * 0.5
   local arrow_head = route_size * 0.3
   r.ImGui_DrawList_AddLine(draw_list, route_cx, route_cy - arrow_len, route_cx, route_cy + arrow_len, route_color, 1.5)
@@ -9562,7 +9610,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local env_cx = env_btn_x + btn_width / 2
   local env_cy = env_btn_y + btn_height / 2
   local env_size = math.min(btn_width, btn_height) / 2 - 2
-  local env_color = 0xAAAAAAFF
+  local env_color = icon_color
   local wave_amp = env_size * 0.4
   local wave_width = env_size * 0.8
   r.ImGui_DrawList_AddBezierCubic(draw_list, env_cx - wave_width, env_cy, env_cx - wave_width * 0.3, env_cy - wave_amp, env_cx + wave_width * 0.3, env_cy + wave_amp, env_cx + wave_width, env_cy, env_color, 1.5, 12)
@@ -9578,7 +9626,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local fx_btn_width = track_width - (show_bypass and bypass_btn_width + 2 or 0)
   local section_height = simple_mixer_track_fx_heights[track_guid_for_fx] or settings.simple_mixer_fx_section_height or 80
 
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x1A1A1AFF)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
   if r.ImGui_BeginChild(ctx, "FXSection##" .. (is_master and "master" or idx), track_width, section_height, 0, r.ImGui_WindowFlags_None()) then
    if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_None()) then
     simple_mixer_fx_section_hovered = true
@@ -9858,7 +9906,17 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  local is_track_selected = r.IsTrackSelected(track)
  local slider_color_pushed = false
 
- if settings.simple_mixer_use_track_color then
+ if is_master then
+  local master_col = settings.simple_mixer_master_fader_color or 0x4A90D9FF
+  local mr, mg, mb, ma = r.ImGui_ColorConvertU32ToDouble4(master_col)
+  local fader_bg = r.ImGui_ColorConvertDouble4ToU32(mr, mg, mb, 0.25)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), fader_bg)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), fader_bg)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), fader_bg)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), master_col)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), master_col)
+  slider_color_pushed = true
+ elseif settings.simple_mixer_use_track_color then
   local track_color = r.GetTrackColor(track)
   if track_color ~= 0 then
    local r_val, g_val, b_val = r.ColorFromNative(track_color)
@@ -9888,6 +9946,15 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x7AC0FFFF)
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x8AD0FFFF)
    slider_color_pushed = true
+  else
+   local fader_bg = settings.simple_mixer_fader_bg_color or 0x404040FF
+   local handle_col = settings.simple_mixer_slider_handle_color or 0x888888FF
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), fader_bg)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), fader_bg)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), fader_bg)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), handle_col)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), handle_col)
+   slider_color_pushed = true
   end
  elseif is_track_selected then
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x4A90D9AA)
@@ -9895,6 +9962,15 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x6AB0F9CC)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x7AC0FFFF)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x8AD0FFFF)
+  slider_color_pushed = true
+ else
+  local fader_bg = settings.simple_mixer_fader_bg_color or 0x404040FF
+  local handle_col = settings.simple_mixer_slider_handle_color or 0x888888FF
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), fader_bg)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), fader_bg)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), fader_bg)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), handle_col)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), handle_col)
   slider_color_pushed = true
  end
 
@@ -9904,6 +9980,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  local slider_actual_width = show_meters and math.floor(track_width * 0.70) or track_width
  local meter_width = show_meters and (track_width - slider_actual_width - 2) or 0
  
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.simple_mixer_channel_text_color or 0xFFFFFFFF)
  r.ImGui_PushItemWidth(ctx, slider_actual_width)
  local rv, new_vol_db = r.ImGui_VSliderDouble(ctx, "##vol", slider_actual_width, slider_height, volume_db, -60.0, 12.0, "%.1f")
  if rv then
@@ -9911,6 +9988,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   r.SetMediaTrackInfo_Value(track, "D_VOL", new_volume)
  end
  r.ImGui_PopItemWidth(ctx)
+ r.ImGui_PopStyleColor(ctx, 1)
 
  if settings.simple_mixer_show_track_icons and not is_master then
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -10128,9 +10206,21 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     local _, current_icon = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
     local has_icon = current_icon and current_icon ~= ""
     
-    if r.ImGui_MenuItem(ctx, "Browse Icons...") then
+    if r.ImGui_MenuItem(ctx, "Track Icons...") then
+     simple_mixer_icon_target_track = track
+     IconBrowser.SetBrowseMode("track_icons")
+     IconBrowser.show_window = true
+    end
+    
+    if r.ImGui_MenuItem(ctx, "Toolbar Icons...") then
      simple_mixer_icon_target_track = track
      IconBrowser.SetBrowseMode("icons")
+     IconBrowser.show_window = true
+    end
+    
+    if r.ImGui_MenuItem(ctx, "Custom Images...") then
+     simple_mixer_icon_target_track = track
+     IconBrowser.SetBrowseMode("images")
      IconBrowser.show_window = true
     end
     
@@ -10244,6 +10334,10 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
    name_color_pushed = true
   end
+ end
+ if not name_color_pushed then
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.simple_mixer_channel_text_color or 0xFFFFFFFF)
+  name_color_pushed = true
  end
  
  local track_guid = not is_master and r.GetTrackGUID(track) or nil
@@ -10366,7 +10460,7 @@ function DrawSimpleMixerWindow()
  local sidebar_width = sidebar_collapsed and 24 or 140
  local full_avail_width, full_avail_height = r.ImGui_GetContentRegionAvail(mixer_ctx)
  
- r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), 0x1A1A1AFF)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
  if r.ImGui_BeginChild(mixer_ctx, "SidebarPanel", sidebar_width, full_avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
   
   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x00000000)
@@ -10559,6 +10653,51 @@ function DrawSimpleMixerWindow()
    if r.ImGui_IsItemHovered(mixer_ctx) then
     r.ImGui_SetTooltip(mixer_ctx, "Include volume & pan in presets")
    end
+   
+   r.ImGui_Spacing(mixer_ctx)
+   r.ImGui_Separator(mixer_ctx)
+   r.ImGui_Spacing(mixer_ctx)
+   
+   r.ImGui_Text(mixer_ctx, "Show")
+   r.ImGui_Spacing(mixer_ctx)
+   
+   if r.ImGui_BeginTable(mixer_ctx, "ShowToggles", 2) then
+    local changed = false
+    
+    r.ImGui_TableNextRow(mixer_ctx)
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_rms = r.ImGui_Checkbox(mixer_ctx, "RMS##QT", settings.simple_mixer_show_rms ~= false)
+    if rv then changed = true end
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_pan = r.ImGui_Checkbox(mixer_ctx, "Pan##QT", settings.simple_mixer_show_pan ~= false)
+    if rv then changed = true end
+    
+    r.ImGui_TableNextRow(mixer_ctx)
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_width = r.ImGui_Checkbox(mixer_ctx, "Wdth##QT", settings.simple_mixer_show_width ~= false)
+    if rv then changed = true end
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_track_buttons = r.ImGui_Checkbox(mixer_ctx, "Btns##QT", settings.simple_mixer_show_track_buttons ~= false)
+    if rv then changed = true end
+    
+    r.ImGui_TableNextRow(mixer_ctx)
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_fx_slots = r.ImGui_Checkbox(mixer_ctx, "FX##QT", settings.simple_mixer_show_fx_slots or false)
+    if rv then changed = true end
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_meters = r.ImGui_Checkbox(mixer_ctx, "Mtrs##QT", settings.simple_mixer_show_meters ~= false)
+    if rv then changed = true end
+    
+    r.ImGui_TableNextRow(mixer_ctx)
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_track_icons = r.ImGui_Checkbox(mixer_ctx, "Icons##QT", settings.simple_mixer_show_track_icons ~= false)
+    if rv then changed = true end
+    r.ImGui_TableNextColumn(mixer_ctx)
+    
+    r.ImGui_EndTable(mixer_ctx)
+    
+    if changed then SaveSettings() end
+   end
   end
   
   r.ImGui_EndChild(mixer_ctx)
@@ -10631,7 +10770,7 @@ function DrawSimpleMixerWindow()
  end
 
  if settings.simple_mixer_show_master and settings.simple_mixer_master_position == "left" then
-  r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), 0x222222FF)
+  r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
   if r.ImGui_BeginChild(mixer_ctx, "MasterFaderLeft", track_width + 4, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
    RenderMasterFader()
    r.ImGui_EndChild(mixer_ctx)
@@ -10641,7 +10780,7 @@ function DrawSimpleMixerWindow()
  end
 
  if #pinned_tracks_data > 0 then
-  r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), 0x252525FF)
+  r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
   if r.ImGui_BeginChild(mixer_ctx, "PinnedTracks", pinned_width, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
    for pidx, pdata in ipairs(pinned_tracks_data) do
     local _, ptrack_name = r.GetTrackName(pdata.track)
@@ -11178,7 +11317,7 @@ function DrawSimpleMixerWindow()
 
  if settings.simple_mixer_show_master and settings.simple_mixer_master_position == "right" then
   r.ImGui_SameLine(mixer_ctx, 0, 4)
-  r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), 0x222222FF)
+  r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
   if r.ImGui_BeginChild(mixer_ctx, "MasterFaderRight", track_width + 4, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
    RenderMasterFader()
    r.ImGui_EndChild(mixer_ctx)
@@ -11228,7 +11367,7 @@ function DrawSimpleMixerWindow()
   local selected_icon = IconBrowser.Show(mixer_ctx, settings)
   if selected_icon then
    local icon_path
-   if IconBrowser.browse_mode == "images" and IconBrowser.selected_image_path then
+   if (IconBrowser.browse_mode == "images" or IconBrowser.browse_mode == "track_icons") and IconBrowser.selected_image_path then
     icon_path = IconBrowser.selected_image_path
    elseif IconBrowser.browse_mode == "icons" and selected_icon then
     icon_path = selected_icon

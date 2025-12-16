@@ -17,6 +17,8 @@ local IconBrowser = {
     browse_mode = "icons",
     custom_image_folder = "",
     selected_image_path = nil,
+    track_icon_subfolders = {},
+    selected_track_subfolder = "All",
 }
 
 function IconBrowser.LoadLastImageFolder()
@@ -59,6 +61,50 @@ function IconBrowser.LoadIcons()
             idx = idx + 1
             
             if idx > 10000 then break end
+        end
+    elseif IconBrowser.browse_mode == "track_icons" then
+        local base_path = r.GetResourcePath() .. "/Data/track_icons"
+        IconBrowser.track_icon_subfolders = {}
+        
+        local dir_idx = 0
+        while true do
+            local subdir = r.EnumerateSubdirectories(base_path, dir_idx)
+            if not subdir then break end
+            if subdir:sub(1,1) ~= "." then
+                table.insert(IconBrowser.track_icon_subfolders, subdir)
+            end
+            dir_idx = dir_idx + 1
+            if dir_idx > 1000 then break end
+        end
+        table.sort(IconBrowser.track_icon_subfolders)
+        
+        local function scanFolder(folder_path, subfolder_name)
+            local idx = 0
+            while true do
+                local file = r.EnumerateFiles(folder_path, idx)
+                if not file then break end
+                
+                local ext = file:match("^.+(%..+)$")
+                if ext then ext = ext:lower() end
+                
+                if file:sub(1,1) ~= "." and (ext == ".png" or ext == ".jpg" or ext == ".jpeg") then
+                    local display_name = subfolder_name ~= "" and (subfolder_name .. "/" .. file) or file
+                    local icon = {
+                        name = display_name,
+                        path = folder_path .. "/" .. file,
+                        subfolder = subfolder_name
+                    }
+                    table.insert(IconBrowser.icons, icon)
+                end
+                idx = idx + 1
+                if idx > 10000 then break end
+            end
+        end
+        
+        scanFolder(base_path, "")
+        
+        for _, subdir in ipairs(IconBrowser.track_icon_subfolders) do
+            scanFolder(base_path .. "/" .. subdir, subdir)
         end
     else
         local resource_path = r.GetResourcePath() .. "/Data/toolbar_icons"
@@ -119,17 +165,19 @@ function IconBrowser.FilterIcons()
     IconBrowser.filtered_icons = {}
     local search = IconBrowser.search_text:lower()
     
-    if search == "" then
-        IconBrowser.filtered_icons = IconBrowser.icons
-    else
-        for _, icon in ipairs(IconBrowser.icons) do
-            if icon.name:lower():find(search) then
-                table.insert(IconBrowser.filtered_icons, icon)
-            end
+    for _, icon in ipairs(IconBrowser.icons) do
+        local matches_search = (search == "") or icon.name:lower():find(search)
+        local matches_subfolder = true
+        
+        if IconBrowser.browse_mode == "track_icons" and IconBrowser.selected_track_subfolder ~= "All" then
+            matches_subfolder = (icon.subfolder == IconBrowser.selected_track_subfolder)
+        end
+        
+        if matches_search and matches_subfolder then
+            table.insert(IconBrowser.filtered_icons, icon)
         end
     end
     
-    -- Clear pending loads when filter changes
     IconBrowser.pending_loads = {}
 end
 
@@ -212,6 +260,14 @@ function IconBrowser.Show(ctx, settings)
         end
         
         r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, "Track", IconBrowser.browse_mode == "track_icons") then
+            if IconBrowser.browse_mode ~= "track_icons" then
+                IconBrowser.SetBrowseMode("track_icons")
+                mode_changed = true
+            end
+        end
+        
+        r.ImGui_SameLine(ctx)
         if r.ImGui_RadioButton(ctx, "Images", IconBrowser.browse_mode == "images") then
             if IconBrowser.browse_mode ~= "images" then
                 IconBrowser.SetBrowseMode("images", IconBrowser.custom_image_folder)
@@ -251,7 +307,29 @@ function IconBrowser.Show(ctx, settings)
             if scale_changed then
                 IconBrowser.ReloadIcons()
             end
-        else
+        elseif IconBrowser.browse_mode == "track_icons" then
+            if #IconBrowser.track_icon_subfolders > 0 then
+                r.ImGui_Text(ctx, "Folder:")
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, IconBrowser.selected_track_subfolder .. "##subfolder", 80, 0) then
+                    r.ImGui_OpenPopup(ctx, "TrackIconSubfolderPopup")
+                end
+                if r.ImGui_BeginPopup(ctx, "TrackIconSubfolderPopup") then
+                    if r.ImGui_MenuItem(ctx, "All", nil, IconBrowser.selected_track_subfolder == "All") then
+                        IconBrowser.selected_track_subfolder = "All"
+                        IconBrowser.FilterIcons()
+                    end
+                    r.ImGui_Separator(ctx)
+                    for _, subfolder in ipairs(IconBrowser.track_icon_subfolders) do
+                        if r.ImGui_MenuItem(ctx, subfolder, nil, IconBrowser.selected_track_subfolder == subfolder) then
+                            IconBrowser.selected_track_subfolder = subfolder
+                            IconBrowser.FilterIcons()
+                        end
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+            end
+        elseif IconBrowser.browse_mode == "images" then
             r.ImGui_Text(ctx, "Folder: " .. (IconBrowser.custom_image_folder ~= "" and IconBrowser.custom_image_folder or "Not selected"))
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Select Folder") then
@@ -326,7 +404,7 @@ function IconBrowser.Show(ctx, settings)
                                 
                                 if r.ImGui_ImageButton(ctx, "##" .. idx, IconBrowser.image_cache[icon.name],
                                     IconBrowser.grid_size, IconBrowser.grid_size, 0, 0, uv_u2, 1) then
-                                    if IconBrowser.browse_mode == "images" then
+                                    if IconBrowser.browse_mode == "images" or IconBrowser.browse_mode == "track_icons" then
                                         IconBrowser.selected_image_path = icon.path
                                         IconBrowser.selected_icon = icon.path
                                     else
@@ -337,7 +415,7 @@ function IconBrowser.Show(ctx, settings)
                             else
                                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x404040FF)
                                 if r.ImGui_Button(ctx, "##" .. idx, IconBrowser.grid_size, IconBrowser.grid_size) then
-                                    if IconBrowser.browse_mode == "images" then
+                                    if IconBrowser.browse_mode == "images" or IconBrowser.browse_mode == "track_icons" then
                                         IconBrowser.selected_image_path = icon.path
                                         IconBrowser.selected_icon = icon.path
                                     else
