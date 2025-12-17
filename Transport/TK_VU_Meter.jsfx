@@ -1,0 +1,42 @@
+desc:TK VU Meter (Pre-Fader)
+author:TouristKiller
+version:1.2
+
+options:gmem=TK_VU_Meters
+
+slider1:0<0,1000,1>Track Slot ID
+slider2:0<-60,6,0.1>Peak L (dB) [Output]
+slider3:0<-60,6,0.1>Peak R (dB) [Output]
+slider4:0<-60,6,0.1>Peak Max (dB) [Output]
+
+@init
+ext_noinit = 1;
+peak_l = 0;
+peak_r = 0;
+decay_coef = exp(-1.0 / (srate * 0.05));
+slot_id = slider1;
+
+@slider
+slot_id = slider1;
+
+@sample
+abs_l = abs(spl0);
+abs_r = abs(spl1);
+
+peak_l = max(abs_l, peak_l * decay_coef);
+peak_r = max(abs_r, peak_r * decay_coef);
+
+@block
+peak_l_db = peak_l > 0.0000001 ? 20 * log10(peak_l) : -60;
+peak_r_db = peak_r > 0.0000001 ? 20 * log10(peak_r) : -60;
+peak_max_db = max(peak_l_db, peak_r_db);
+
+slider2 = max(-60, min(6, peak_l_db));
+slider3 = max(-60, min(6, peak_r_db));
+slider4 = max(-60, min(6, peak_max_db));
+
+slot_id > 0 ? (
+  gmem[slot_id * 3] = slider2;
+  gmem[slot_id * 3 + 1] = slider3;
+  gmem[slot_id * 3 + 2] = slider4;
+);

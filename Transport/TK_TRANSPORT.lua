@@ -1,8 +1,10 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.7.4
+-- @version 1.7.5
 -- @changelog 
 --[[
+  v1.7.5:
+  + forgotten to add the jsfx file in previous version
 
   v1.7.4:
   + Added: Tabs system - create multiple tabs with different transport/button presets
@@ -72,7 +74,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
-local script_version = "1.7.4"
+local script_version = "1.7.5"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then

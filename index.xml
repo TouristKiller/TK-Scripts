@@ -123,14 +123,15 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.7.4" author="TouristKiller" time="2026-12-17T01:15:00Z">
+        <version name="1.7.5" author="TouristKiller" time="2026-12-17T01:45:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
             <source file="button_renderer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_renderer.lua</source>
             <source file="custom_buttons.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/custom_buttons.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
-            <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>           
+            <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
+            <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_VU_Meter.jsfx</source>           
         </version>
     </reapack>
 </category>
