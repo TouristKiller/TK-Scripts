@@ -217,9 +217,22 @@ local action_finder = {
     results = {},
     selected_index = -1,
     target_button = nil,
+    target_action_type = "left_click",
+    target_menu_idx = nil,
+    needs_search = false,
     cache = nil,
     cache_time = 0
 }
+
+local function OpenActionFinder(target_button_idx, action_type, initial_search)
+    action_finder.open = true
+    action_finder.target_button = target_button_idx
+    action_finder.target_action_type = action_type
+    action_finder.search_text = initial_search or ""
+    action_finder.results = {}
+    action_finder.selected_index = -1
+    action_finder.needs_search = (action_finder.search_text ~= "" and #action_finder.search_text >= 2)
+end
 
 local function BuildActionCache()
     if not r.CF_EnumerateActions then
@@ -2193,7 +2206,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
        
             r.ImGui_Text(ctx, "Name")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 160)
+            r.ImGui_SetNextItemWidth(ctx, 120)
             do
                 local rv_name, new_name = r.ImGui_InputText(ctx, "##lcaName", button.left_click.name)
                 if rv_name then button.left_click.name = new_name; changed = true end
@@ -2208,6 +2221,16 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 if rv_cmd then button.left_click.command = new_command; changed = true end
             end
             
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "X##lcaClear", 20, 0) then
+                button.left_click.name = ""
+                button.left_click.command = ""
+                changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Clear action")
+            end
+
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Paste##lcaPaste", 50, 0) then
                 local clipboard = ""
@@ -2242,6 +2265,14 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             end
 
             r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Find##lcaFind", 35, 0) then
+                OpenActionFinder(custom_buttons.current_edit, "left_click", button.left_click.name or "")
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Open Action Finder")
+            end
+
+            r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Type")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 80)
@@ -2259,7 +2290,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
        
             r.ImGui_Text(ctx, "Name")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 160)
+            r.ImGui_SetNextItemWidth(ctx, 120)
             do
                 button.alt_left_click = button.alt_left_click or { name = "", command = "", type = 0 }
                 local rv_name, new_name = r.ImGui_InputText(ctx, "##alcaName", button.alt_left_click.name)
@@ -2275,6 +2306,16 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 if rv_cmd then button.alt_left_click.command = new_command; changed = true end
             end
             
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "X##alcaClear", 20, 0) then
+                button.alt_left_click.name = ""
+                button.alt_left_click.command = ""
+                changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Clear action")
+            end
+
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Paste##alcaPaste", 50, 0) then
                 local clipboard = ""
@@ -2309,6 +2350,14 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             end
 
             r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Find##alcaFind", 35, 0) then
+                OpenActionFinder(custom_buttons.current_edit, "alt_left_click", button.alt_left_click.name or "")
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Open Action Finder")
+            end
+
+            r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Type")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 80)
@@ -2326,7 +2375,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
        
             r.ImGui_Text(ctx, "Name")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 160)
+            r.ImGui_SetNextItemWidth(ctx, 120)
             do
                 button.shift_left_click = button.shift_left_click or { name = "", command = "", type = 0 }
                 local rv_name, new_name = r.ImGui_InputText(ctx, "##slcaName", button.shift_left_click.name)
@@ -2342,6 +2391,16 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 if rv_cmd then button.shift_left_click.command = new_command; changed = true end
             end
             
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "X##slcaClear", 20, 0) then
+                button.shift_left_click.name = ""
+                button.shift_left_click.command = ""
+                changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Clear action")
+            end
+
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Paste##slcaPaste", 50, 0) then
                 local clipboard = ""
@@ -2376,6 +2435,14 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             end
 
             r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Find##slcaFind", 35, 0) then
+                OpenActionFinder(custom_buttons.current_edit, "shift_left_click", button.shift_left_click.name or "")
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Open Action Finder")
+            end
+
+            r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Type")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 80)
@@ -2393,7 +2460,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
        
             r.ImGui_Text(ctx, "Name")
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetNextItemWidth(ctx, 160)
+            r.ImGui_SetNextItemWidth(ctx, 120)
             do
                 button.ctrl_left_click = button.ctrl_left_click or { name = "", command = "", type = 0 }
                 local rv_name, new_name = r.ImGui_InputText(ctx, "##clcaName", button.ctrl_left_click.name)
@@ -2409,6 +2476,16 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 if rv_cmd then button.ctrl_left_click.command = new_command; changed = true end
             end
             
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "X##clcaClear", 20, 0) then
+                button.ctrl_left_click.name = ""
+                button.ctrl_left_click.command = ""
+                changed = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Clear action")
+            end
+
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Paste##clcaPaste", 50, 0) then
                 local clipboard = ""
@@ -2443,6 +2520,14 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             end
 
             r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Find##clcaFind", 35, 0) then
+                OpenActionFinder(custom_buttons.current_edit, "ctrl_left_click", button.ctrl_left_click.name or "")
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Open Action Finder")
+            end
+
+            r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Type")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetNextItemWidth(ctx, 80)
@@ -2468,16 +2553,18 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 local payload_type = "TK_BTN_RCMENU_ITEM"
 
                 
-                if r.ImGui_BeginTable(ctx, "RCM_TABLE", 6,
+                if r.ImGui_BeginTable(ctx, "RCM_TABLE", 8,
                         r.ImGui_TableFlags_SizingStretchProp()
                         | r.ImGui_TableFlags_BordersInnerV()
                     ) then
                     r.ImGui_TableSetupColumn(ctx, "Drag", r.ImGui_TableColumnFlags_WidthFixed(), 30)
                     r.ImGui_TableSetupColumn(ctx, "Name", 0)
                     r.ImGui_TableSetupColumn(ctx, "Cmd", r.ImGui_TableColumnFlags_WidthFixed(), 100)
-                    r.ImGui_TableSetupColumn(ctx, "Paste", r.ImGui_TableColumnFlags_WidthFixed(), 40)
-                    r.ImGui_TableSetupColumn(ctx, "Type", r.ImGui_TableColumnFlags_WidthFixed(), 60)
                     r.ImGui_TableSetupColumn(ctx, "X", r.ImGui_TableColumnFlags_WidthFixed(), 20)
+                    r.ImGui_TableSetupColumn(ctx, "Paste", r.ImGui_TableColumnFlags_WidthFixed(), 40)
+                    r.ImGui_TableSetupColumn(ctx, "Find", r.ImGui_TableColumnFlags_WidthFixed(), 35)
+                    r.ImGui_TableSetupColumn(ctx, "Type", r.ImGui_TableColumnFlags_WidthFixed(), 60)
+                    r.ImGui_TableSetupColumn(ctx, "Del", r.ImGui_TableColumnFlags_WidthFixed(), 20)
                     r.ImGui_TableHeadersRow(ctx)
 
                     local display_order = GetDisplayOrder(button.right_menu.items)
@@ -2629,6 +2716,19 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
 
                         r.ImGui_TableSetColumnIndex(ctx, 3)
                         if not is_submenu then
+                            if r.ImGui_SmallButton(ctx, "X##clear" .. idx) then
+                                item.name = ""
+                                item.command = ""
+                                custom_buttons.SaveCurrentButtons()
+                                has_unsaved_changes = true
+                            end
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_SetTooltip(ctx, "Clear action")
+                            end
+                        end
+
+                        r.ImGui_TableSetColumnIndex(ctx, 4)
+                        if not is_submenu then
                             if r.ImGui_SmallButton(ctx, "Paste##paste" .. idx) then
                                 local clipboard = ""
                                 if r.CF_GetClipboard then
@@ -2650,14 +2750,31 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                             end
                         end
 
-                        r.ImGui_TableSetColumnIndex(ctx, 4)
+                        r.ImGui_TableSetColumnIndex(ctx, 5)
+                        if not is_submenu then
+                            if r.ImGui_SmallButton(ctx, "Find##find" .. idx) then
+                                action_finder.open = true
+                                action_finder.target_button = custom_buttons.current_edit
+                                action_finder.target_action_type = "right_menu"
+                                action_finder.target_menu_idx = idx
+                                action_finder.search_text = item.name or ""
+                                action_finder.results = {}
+                                action_finder.selected_index = -1
+                                action_finder.needs_search = (action_finder.search_text ~= "" and #action_finder.search_text >= 2)
+                            end
+                            if r.ImGui_IsItemHovered(ctx) then
+                                r.ImGui_SetTooltip(ctx, "Open Action Finder")
+                            end
+                        end
+
+                        r.ImGui_TableSetColumnIndex(ctx, 6)
                         if not is_submenu then
                             r.ImGui_SetNextItemWidth(ctx, -1)
                             local rv_type, new_type = r.ImGui_Combo(ctx, "##type", item.type or 0, "Main\0MIDI Editor\0")
                             if rv_type then item.type = new_type; custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
                         end
 
-                        r.ImGui_TableSetColumnIndex(ctx, 5)
+                        r.ImGui_TableSetColumnIndex(ctx, 7)
                         r.ImGui_SetNextItemWidth(ctx, -1)
                         if r.ImGui_Button(ctx, "X##del") then
                             remove_index = idx
@@ -3933,12 +4050,23 @@ function ButtonEditor.HandleIconBrowser(ctx, custom_buttons, settings)
                 active_icon_button.use_icon = false
                 active_icon_button.image_path = IconBrowser.selected_image_path
                 active_icon_button.image = nil
+                active_icon_button.is_single_state_icon = true
                 if active_icon_button.image_path and ButtonRenderer.image_cache[active_icon_button.image_path] then
                     ButtonRenderer.image_cache[active_icon_button.image_path] = nil
                 end
+            elseif IconBrowser.browse_mode == "track_icons" then
+                active_icon_button.use_icon = true
+                active_icon_button.use_image = false
+                active_icon_button.is_single_state_icon = true
+                if active_icon_button.icon_name and ButtonRenderer.image_cache[active_icon_button.icon_name] then
+                    ButtonRenderer.image_cache[active_icon_button.icon_name] = nil
+                end
+                active_icon_button.icon_name = selected_icon
+                active_icon_button.icon = nil
             else
                 active_icon_button.use_icon = true
                 active_icon_button.use_image = false
+                active_icon_button.is_single_state_icon = false
                 if active_icon_button.icon_name and ButtonRenderer.image_cache[active_icon_button.icon_name] then
                     ButtonRenderer.image_cache[active_icon_button.icon_name] = nil
                 end
@@ -3999,6 +4127,11 @@ function ButtonEditor.RenderActionFinder(ctx, custom_buttons)
                 action_finder.results = {}
             end
             action_finder.selected_index = -1
+        elseif action_finder.needs_search then
+            action_finder.needs_search = false
+            if action_finder.search_text ~= "" and #action_finder.search_text >= 2 then
+                action_finder.results = SearchActions(action_finder.search_text)
+            end
         end
         
         r.ImGui_Separator(ctx)
@@ -4021,10 +4154,21 @@ function ButtonEditor.RenderActionFinder(ctx, custom_buttons)
                         if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
                             if action_finder.target_button and custom_buttons.buttons[action_finder.target_button] then
                                 local btn = custom_buttons.buttons[action_finder.target_button]
-                                btn.left_click = btn.left_click or {}
-                                btn.left_click.name = result.name
-                                btn.left_click.command = result.cmd
-                                btn.left_click.type = result.section
+                                local action_type = action_finder.target_action_type or "left_click"
+                                
+                                if action_type == "right_menu" and action_finder.target_menu_idx then
+                                    local item = btn.right_menu and btn.right_menu.items and btn.right_menu.items[action_finder.target_menu_idx]
+                                    if item then
+                                        item.name = result.name
+                                        item.command = result.cmd
+                                        item.type = result.section
+                                    end
+                                else
+                                    btn[action_type] = btn[action_type] or {}
+                                    btn[action_type].name = result.name
+                                    btn[action_type].command = result.cmd
+                                    btn[action_type].type = result.section
+                                end
                                 custom_buttons.SaveCurrentButtons()
                                 has_unsaved_changes = true
                             end
@@ -4049,10 +4193,21 @@ function ButtonEditor.RenderActionFinder(ctx, custom_buttons)
             if r.ImGui_Button(ctx, "Apply Selected", 100, 0) then
                 if action_finder.target_button and custom_buttons.buttons[action_finder.target_button] then
                     local btn = custom_buttons.buttons[action_finder.target_button]
-                    btn.left_click = btn.left_click or {}
-                    btn.left_click.name = selected_result.name
-                    btn.left_click.command = selected_result.cmd
-                    btn.left_click.type = selected_result.section
+                    local action_type = action_finder.target_action_type or "left_click"
+                    
+                    if action_type == "right_menu" and action_finder.target_menu_idx then
+                        local item = btn.right_menu and btn.right_menu.items and btn.right_menu.items[action_finder.target_menu_idx]
+                        if item then
+                            item.name = selected_result.name
+                            item.command = selected_result.cmd
+                            item.type = selected_result.section
+                        end
+                    else
+                        btn[action_type] = btn[action_type] or {}
+                        btn[action_type].name = selected_result.name
+                        btn[action_type].command = selected_result.cmd
+                        btn[action_type].type = selected_result.section
+                    end
                     custom_buttons.SaveCurrentButtons()
                     has_unsaved_changes = true
                 end

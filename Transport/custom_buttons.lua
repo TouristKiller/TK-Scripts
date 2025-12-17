@@ -4,7 +4,15 @@ local json = require('json')
 local instance_suffix = _G.TK_TRANSPORT_INSTANCE_NAME or ""
 local button_presets_path = script_path .. "tk_transport_buttons/presets/"
 
-local current_buttons_path = script_path .. "tk_transport_buttons/current_buttons" .. (instance_suffix ~= "" and "_" .. instance_suffix or "") .. ".json"
+local function GetCurrentButtonsPath(tab_id)
+    local tab_suffix = ""
+    if tab_id and tab_id > 1 then
+        tab_suffix = "_tab" .. tab_id
+    end
+    return script_path .. "tk_transport_buttons/current_buttons" .. (instance_suffix ~= "" and "_" .. instance_suffix or "") .. tab_suffix .. ".json"
+end
+
+local current_buttons_path = GetCurrentButtonsPath(1)
 
 local CustomButtons = {
     buttons = {},
@@ -16,7 +24,8 @@ local CustomButtons = {
     icon = nil,  
     use_icon = false,
     current_preset = nil,
-    remember_toggle_states = false  -- Per-preset setting for toggle state memory
+    remember_toggle_states = false,
+    current_tab_id = 1
 }
 
 function CustomButtons.CreateNewButton(options)
@@ -51,43 +60,55 @@ function CustomButtons.CreateNewButton(options)
         }
     }
     
-    if #CustomButtons.buttons > 0 then
-        local last_button = CustomButtons.buttons[#CustomButtons.buttons]
-        
-        if options.copy_style then
-            new_button.width = last_button.width or 60
-            new_button.show_border = last_button.show_border
-            new_button.color = last_button.color or 0x333333FF
-            new_button.hover_color = last_button.hover_color or 0x444444FF
-            new_button.active_color = last_button.active_color or 0x555555FF
-            new_button.text_color = last_button.text_color or 0xFFFFFFFF
-            new_button.rounding = last_button.rounding
-            new_button.border_thickness = last_button.border_thickness
-            new_button.border_color = last_button.border_color
-            new_button.font_size = last_button.font_size
-            new_button.font_name = last_button.font_name
-            new_button.font_style = last_button.font_style
-            new_button.use_icon = last_button.use_icon
-            new_button.icon_name = last_button.icon_name
-            new_button.show_text_with_icon = last_button.show_text_with_icon
-        end
-        
-        if options.place_next_to then
-            local spacing = 5
-            local spacing_str = r.GetExtState("TK_TRANSPORT_BUTTON_EDITOR", "new_button_spacing")
-            if spacing_str and spacing_str ~= "" then
-                local num = tonumber(spacing_str)
-                if num and num >= 0 and num <= 50 then
-                    spacing = num
-                end
+    local source_button = nil
+    
+    if options.copy_style_from and CustomButtons.buttons[options.copy_style_from] then
+        source_button = CustomButtons.buttons[options.copy_style_from]
+    elseif options.copy_style and #CustomButtons.buttons > 0 then
+        source_button = CustomButtons.buttons[#CustomButtons.buttons]
+    end
+    
+    if source_button then
+        new_button.width = source_button.width or 60
+        new_button.show_border = source_button.show_border
+        new_button.color = source_button.color or 0x333333FF
+        new_button.hover_color = source_button.hover_color or 0x444444FF
+        new_button.active_color = source_button.active_color or 0x555555FF
+        new_button.text_color = source_button.text_color or 0xFFFFFFFF
+        new_button.rounding = source_button.rounding
+        new_button.border_thickness = source_button.border_thickness
+        new_button.border_color = source_button.border_color
+        new_button.font_size = source_button.font_size
+        new_button.font_name = source_button.font_name
+        new_button.font_style = source_button.font_style
+        new_button.use_icon = source_button.use_icon
+        new_button.icon_name = source_button.icon_name
+        new_button.show_text_with_icon = source_button.show_text_with_icon
+    end
+    
+    local position_source = nil
+    
+    if options.place_next_to_idx and CustomButtons.buttons[options.place_next_to_idx] then
+        position_source = CustomButtons.buttons[options.place_next_to_idx]
+    elseif options.place_next_to and #CustomButtons.buttons > 0 then
+        position_source = CustomButtons.buttons[#CustomButtons.buttons]
+    end
+    
+    if position_source then
+        local spacing = 5
+        local spacing_str = r.GetExtState("TK_TRANSPORT_BUTTON_EDITOR", "new_button_spacing")
+        if spacing_str and spacing_str ~= "" then
+            local num = tonumber(spacing_str)
+            if num and num >= 0 and num <= 50 then
+                spacing = num
             end
-            
-            local last_x = last_button.position_px or 0
-            local last_width = last_button.width or 60
-            new_button.position_px = last_x + last_width + spacing
-            new_button.position_y_px = last_button.position_y_px
-            new_button.position_y = last_button.position_y or 0.15
         end
+        
+        local last_x = position_source.position_px or 0
+        local last_width = position_source.width or 60
+        new_button.position_px = last_x + last_width + spacing
+        new_button.position_y_px = position_source.position_y_px
+        new_button.position_y = position_source.position_y or 0.15
     end
     
     return new_button
@@ -110,15 +131,19 @@ end
 function CustomButtons.SaveCurrentButtons()
     r.RecursiveCreateDirectory(script_path .. "tk_transport_buttons", 0)
     local save_data = CustomButtons.PrepareForSave()
-    local file = io.open(current_buttons_path, 'w')
+    local path = GetCurrentButtonsPath(CustomButtons.current_tab_id)
+    local file = io.open(path, 'w')
     if file then
         file:write(json.encode(save_data))
         file:close()
     end
 end
 
-function CustomButtons.LoadCurrentButtons()
-    local file = io.open(current_buttons_path, 'r')
+function CustomButtons.LoadCurrentButtons(tab_id)
+    tab_id = tab_id or CustomButtons.current_tab_id or 1
+    CustomButtons.current_tab_id = tab_id
+    local path = GetCurrentButtonsPath(tab_id)
+    local file = io.open(path, 'r')
     if file then
         local content = file:read('*all')
         file:close()
@@ -129,7 +154,22 @@ function CustomButtons.LoadCurrentButtons()
             reaper.ShowMessageBox("Error loading custom buttons: " .. tostring(result) .. "\n\nResetting to default buttons.", "Custom Buttons Error", 0)
             CustomButtons.buttons = {}
         end
+    else
+        CustomButtons.buttons = {}
     end
+end
+
+function CustomButtons.SwitchToTab(tab_id)
+    if tab_id == CustomButtons.current_tab_id then return end
+    CustomButtons.SaveCurrentButtons()
+    CustomButtons.LoadCurrentButtons(tab_id)
+    CustomButtons.current_edit = nil
+    CustomButtons.show_editor = false
+end
+
+function CustomButtons.DeleteTabButtons(tab_id)
+    local path = GetCurrentButtonsPath(tab_id)
+    os.remove(path)
 end
 
 function CustomButtons.ResetToggleStatesIfNeeded(settings)

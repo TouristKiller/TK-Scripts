@@ -1,8 +1,30 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.7.3
+-- @version 1.7.4
 -- @changelog 
 --[[
+
+  v1.7.4:
+  + Added: Tabs system - create multiple tabs with different transport/button presets
+  + Added: Tab bar with collapsible toggle, customizable colors and styling
+  + Added: Per-tab transport preset and button preset assignment
+  + Added: Quick Toggle panel for fast visibility control of all transport elements
+  + Added: Clear All button in TK Mixer sidebar
+  + Added: Mono/stereo toggle button for master track
+  + Added: VU meter with dual needles (VU + Peak hold)
+  + Added: FX slot font size setting
+  + Added: FX slot text left-aligned, reduced spacing
+  + Added: Action Finder for all click actions (left, alt, shift, ctrl, right-click menu)
+  + Added: Find button to search and assign actions directly
+  + Added: Clear (X) button to remove action from any click type
+  + Added: Edit and Add button icons on group headers
+  + Fixed: Mixer styling now saved separately (persists across tab/preset switches)
+  + Fixed: Mixer button visibility/position saved per transport preset
+  + Fixed: Mixer presets now project-specific (removed global option)
+  + Fixed: Corrupt mixer track data validation and auto-repair
+  + Fixed: Missing tracks in presets are filtered with warning
+
+
   v1.7.2:
   + Added: Peak meters with decay and hold indicators
   + Added: Peak display above meters (shows max peak, red background on clip)
@@ -50,7 +72,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
-local script_version = "1.7.3"
+local script_version = "1.7.4"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -74,6 +96,7 @@ package.path = script_path .. "?.lua;"
 
 local json = require("json")
 local preset_path = script_path .. "tk_transport_presets" .. os_separator
+local mixer_settings_path = script_path .. "tk_transport_mixer" .. os_separator
 local preset_name = ""
 local transport_preset_has_unsaved_changes = false
 
@@ -237,6 +260,7 @@ local show_settings = false
 local show_instance_manager = false
 local instance_name_input = "" 
 local instance_start_empty = true
+local current_tab_bar_offset = 0
 local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
 local settings_flags = r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() 
 
@@ -333,6 +357,21 @@ local default_settings = {
  cursorpos_y = 0.15,
  local_time_y = 0.02,
  custom_buttons_y_offset = 0.0,
+ 
+ -- Tab system settings
+ show_tabs = false,
+ tabs_collapsed = true,
+ tabs_expand_window = false,
+ tabs = { { name = "Main", id = 1 } },
+ active_tab = 1,
+ tab_bar_height = 22,
+ tab_toggle_size = 16,
+ tab_bar_color = 0x2A2A2AFF,
+ tab_color = 0x3A3A3AFF,
+ tab_active_color = 0x4A4A4AFF,
+ tab_hover_color = 0x5A5A5AFF,
+ tab_text_color = 0xFFFFFFFF,
+ 
  -- Edit mode & grid for custom buttons
  edit_mode = false,
  edit_grid_show = true,
@@ -456,7 +495,6 @@ local default_settings = {
  show_simple_mixer_button = false,
  simple_mixer_window_open = false,
  simple_mixer_tracks = {},
- simple_mixer_presets = {},
  simple_mixer_current_preset = "",
  simple_mixer_window_width = 400,
  simple_mixer_window_height = 600,
@@ -540,6 +578,19 @@ local default_settings = {
  simple_mixer_meter_color_high = 0xFFFF00FF,
  simple_mixer_meter_color_clip = 0xFF0000FF,
  simple_mixer_meter_bg_color = 0x1A1A1AFF,
+
+ simple_mixer_show_vu_meter = false,
+ simple_mixer_vu_pre_fader = false,
+ simple_mixer_vu_height = 50,
+ simple_mixer_vu_bg_color = 0x2A2015FF,
+ simple_mixer_vu_color_normal = 0xC9A855FF,
+ simple_mixer_vu_color_mid = 0xC9A855FF,
+ simple_mixer_vu_color_high = 0xC9A855FF,
+ simple_mixer_vu_color_clip = 0xCC5544FF,
+ simple_mixer_vu_border_color = 0xB89840FF,
+ simple_mixer_vu_show_db = true,
+ simple_mixer_vu_integration_time = 300,
+ simple_mixer_vu_needle_color = 0xDDDDDDFF,
 
  -- Custom Transport Button settings
  use_custom_play_image = false,
@@ -841,6 +892,9 @@ local last_reaper_transport_y = nil
 local last_reaper_tcp_x = nil
 local last_reaper_tcp_y = nil
 local last_our_window_height = nil
+local last_base_window_height = nil
+local last_base_window_width = nil
+local startup_resize_done = false
 local force_snap_position = false
 local window_name_suffix = ""
 
@@ -2779,6 +2833,40 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
      end
      r.ImGui_EndTable(ctx)
     end
+    
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Text(ctx, "VU Meter (Analog Style):")
+    
+    rv, settings.simple_mixer_show_vu_meter = r.ImGui_Checkbox(ctx, "Show VU Meter", settings.simple_mixer_show_vu_meter or false)
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Shows an analog-style VU meter below the track number.")
+    end
+    
+    if settings.simple_mixer_show_vu_meter then
+     r.ImGui_Indent(ctx, 10)
+     
+     local old_pre_fader = settings.simple_mixer_vu_pre_fader
+     rv, settings.simple_mixer_vu_pre_fader = r.ImGui_Checkbox(ctx, "Pre-Fader (Gain Staging)", settings.simple_mixer_vu_pre_fader or false)
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Pre-Fader: Shows input level before volume fader - good for gain staging.\\nPost-Fader: Shows output level after volume fader - good for mixing.")
+     end
+     if rv and old_pre_fader ~= settings.simple_mixer_vu_pre_fader then
+      ResetVUData()
+     end
+     
+     if settings.simple_mixer_vu_pre_fader then
+      r.ImGui_SameLine(ctx, 0, 20)
+      if r.ImGui_Button(ctx, "Remove JSFX from tracks") then
+       CleanupVUJSFX()
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+       r.ImGui_SetTooltip(ctx, "Removes the TK_VU_Meter JSFX from all tracks.\\nUseful when switching to Post-Fader mode.")
+      end
+     end
+     
+     r.ImGui_Unindent(ctx, 10)
+    end
    end
    
    r.ImGui_EndTabItem(ctx)
@@ -2880,6 +2968,14 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
      r.ImGui_Text(ctx, "Slot Height:")
      r.ImGui_SetNextItemWidth(ctx, -1)
      rv, settings.simple_mixer_fx_slot_height = r.ImGui_SliderInt(ctx, "##FXSlotH", settings.simple_mixer_fx_slot_height or 16, 12, 24, "%d px")
+     
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     r.ImGui_Text(ctx, "Font Size:")
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     rv, settings.simple_mixer_fx_font_size = r.ImGui_SliderInt(ctx, "##FXFontSize", settings.simple_mixer_fx_font_size or 12, 8, 16, "%d px")
+     
+     r.ImGui_TableNextColumn(ctx)
      
      r.ImGui_EndTable(ctx)
     end
@@ -3065,21 +3161,18 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
     r.ImGui_Text(ctx, "Preset Name:")
     rv, settings.simple_mixer_preset_name_input = r.ImGui_InputText(ctx, "##PresetName", settings.simple_mixer_preset_name_input or "")
     
-    settings.simple_mixer_preset_is_global = settings.simple_mixer_preset_is_global or false
-    rv, settings.simple_mixer_preset_is_global = r.ImGui_Checkbox(ctx, "Global (all projects)", settings.simple_mixer_preset_is_global)
-    
     if r.ImGui_Button(ctx, "Save", 100, 0) then
-     if settings.simple_mixer_preset_name_input and settings.simple_mixer_preset_name_input ~= "" then
-      settings.simple_mixer_presets = settings.simple_mixer_presets or {}
+     local current_project_path = r.GetProjectPath("")
+     if current_project_path ~= "" and settings.simple_mixer_preset_name_input and settings.simple_mixer_preset_name_input ~= "" then
+      local mixer_presets = GetProjectMixerPresets()
       local project_tracks = GetProjectMixerTracks()
-      settings.simple_mixer_presets[settings.simple_mixer_preset_name_input] = {
-       tracks = {},
-       is_global = settings.simple_mixer_preset_is_global
+      mixer_presets[settings.simple_mixer_preset_name_input] = {
+       tracks = {}
       }
       for i, track_guid in ipairs(project_tracks) do
-       table.insert(settings.simple_mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
+       table.insert(mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
       end
-      SaveSettings()
+      SaveProjectMixerPresets(mixer_presets)
       r.ImGui_CloseCurrentPopup(ctx)
      end
     end
@@ -3093,20 +3186,35 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
    r.ImGui_Separator(ctx)
    r.ImGui_Spacing(ctx)
    
-   if settings.simple_mixer_presets then
+   local mixer_presets = GetProjectMixerPresets()
+   local has_presets = false
+   for preset_name, preset_data in pairs(mixer_presets) do
+    has_presets = true
+    break
+   end
+   
+   if has_presets then
     r.ImGui_Text(ctx, "Saved Presets:")
-    for preset_name, preset_data in pairs(settings.simple_mixer_presets) do
+    
+    for preset_name, preset_data in pairs(mixer_presets) do
      local track_list = preset_data.tracks or preset_data
-     local is_global = preset_data.is_global or false
-     local display_name = preset_name .. (is_global and " [Global]" or " [Project]")
      
-     if r.ImGui_Selectable(ctx, display_name, settings.simple_mixer_current_preset == preset_name) then
+     if r.ImGui_Selectable(ctx, preset_name, settings.simple_mixer_current_preset == preset_name) then
       settings.simple_mixer_current_preset = preset_name
       local new_tracks = {}
+      local missing_count = 0
       for i, guid in ipairs(track_list) do
-       table.insert(new_tracks, guid)
+       local track = r.BR_GetMediaTrackByGUID(0, guid)
+       if track then
+        table.insert(new_tracks, guid)
+       else
+        missing_count = missing_count + 1
+       end
       end
       SaveProjectMixerTracks(new_tracks)
+      if missing_count > 0 then
+       r.ShowMessageBox(missing_count .. " track(s) from preset not found in project.\nThey may have been deleted.", "Mixer Preset", 0)
+      end
      end
      
      if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
@@ -3115,11 +3223,11 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
      
      if r.ImGui_BeginPopup(ctx, "DeletePreset_" .. preset_name) then
       if r.ImGui_MenuItem(ctx, "Delete Preset") then
-       settings.simple_mixer_presets[preset_name] = nil
+       mixer_presets[preset_name] = nil
+       SaveProjectMixerPresets(mixer_presets)
        if settings.simple_mixer_current_preset == preset_name then
         settings.simple_mixer_current_preset = ""
        end
-       SaveSettings()
       end
       r.ImGui_EndPopup(ctx)
      end
@@ -4328,6 +4436,79 @@ function ShowVLineSettings(ctx, main_window_width, main_window_height)
  end
 end
 
+function ShowQuickToggleSettings(ctx, main_window_width, main_window_height)
+ local rv
+ 
+ r.ImGui_TextWrapped(ctx, "Quickly toggle visibility of transport elements.")
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ local toggle_items = {
+  { key = "show_transport", name = "Transport Buttons" },
+  { key = "show_cursorpos", name = "Cursor Position" },
+  { key = "show_local_time", name = "Local Time" },
+  { key = "show_battery_status", name = "Battery Status" },
+  { key = "show_tempo", name = "Tempo (BPM)" },
+  { key = "show_playrate", name = "Playrate" },
+  { key = "show_timesig", name = "Time Signature" },
+  { key = "show_env_button", name = "Envelope Button" },
+  { key = "show_timesel", name = "Time Selection" },
+  { key = "show_taptempo", name = "Tap Tempo" },
+  { key = "show_visual_metronome", name = "Visual Metronome" },
+  { key = "show_shuttle_wheel", name = "Shuttle Wheel" },
+  { key = "show_waveform_scrubber", name = "Waveform Scrubber" },
+  { key = "show_matrix_ticker", name = "Matrix Ticker" },
+  { key = "show_quick_fx", name = "Quick FX" },
+  { key = "show_color_picker", name = "Color Picker" },
+  { key = "show_window_set_picker", name = "Window Set Picker" },
+  { key = "show_master_volume", name = "Master Volume" },
+  { key = "show_monitor_volume", name = "Monitor Volume" },
+  { key = "show_simple_mixer_button", name = "TK Mixer Button" },
+ }
+ 
+ if r.ImGui_BeginTable(ctx, "QuickToggleTable", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+  for i, item in ipairs(toggle_items) do
+   if (i - 1) % 2 == 0 then
+    r.ImGui_TableNextRow(ctx)
+   end
+   r.ImGui_TableNextColumn(ctx)
+   
+   local current_val = settings[item.key]
+   if current_val == nil then current_val = false end
+   
+   rv, settings[item.key] = r.ImGui_Checkbox(ctx, item.name, current_val)
+   if rv then
+    MarkTransportPresetChanged()
+   end
+  end
+  r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "QuickToggleActions", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+  r.ImGui_TableNextRow(ctx)
+  r.ImGui_TableNextColumn(ctx)
+  if r.ImGui_Button(ctx, "Show All", -1, 0) then
+   for _, item in ipairs(toggle_items) do
+    settings[item.key] = true
+   end
+   MarkTransportPresetChanged()
+  end
+  r.ImGui_TableNextColumn(ctx)
+  if r.ImGui_Button(ctx, "Hide All", -1, 0) then
+   for _, item in ipairs(toggle_items) do
+    settings[item.key] = false
+   end
+   MarkTransportPresetChanged()
+  end
+  r.ImGui_EndTable(ctx)
+ end
+end
+
 function ShowZOrderSettings(ctx, main_window_width, main_window_height)
  local rv
  
@@ -5406,10 +5587,11 @@ end
 LoadSettings()
 EnsureWindowSetScreenshotFolder()
 UpdateCustomImages()
+CustomButtons.current_tab_id = settings.active_tab or 1
 if not is_new_empty_instance then
  CustomButtons.LoadLastUsedPreset()
  if #CustomButtons.buttons == 0 then
- CustomButtons.LoadCurrentButtons()
+ CustomButtons.LoadCurrentButtons(settings.active_tab or 1)
  end
  CustomButtons.ResetToggleStatesIfNeeded(settings)
 else
@@ -5437,7 +5619,11 @@ end
 function SavePreset(name)
  local preset_data = {}
  for k, v in pairs(settings) do
- preset_data[k] = v
+ local dominated_by_mixer_json = k:find("^simple_mixer_") and not k:find("^simple_mixer_button")
+ local is_tab_setting = k:find("^tab_") or k:find("^tabs_") or k == "show_tabs" or k == "active_tab" or k == "tabs"
+ if not dominated_by_mixer_json and not is_tab_setting then
+     preset_data[k] = v
+ end
  end
  
  preset_data.visual_metronome = {}
@@ -6134,6 +6320,397 @@ function DrawGradientBackground()
 end
 
 
+local tab_rename_popup = {
+    open = false,
+    tab_idx = nil,
+    new_name = ""
+}
+
+local function GetNextTabId()
+    local max_id = 0
+    for _, tab in ipairs(settings.tabs or {}) do
+        if tab.id > max_id then max_id = tab.id end
+    end
+    return max_id + 1
+end
+
+local function SaveTabsToExtState()
+    local tabs_data = {
+        tabs = settings.tabs or {},
+        active_tab = settings.active_tab or 1,
+        show_tabs = settings.show_tabs or false,
+        tabs_collapsed = settings.tabs_collapsed or true,
+        tabs_expand_window = settings.tabs_expand_window or false,
+        tab_bar_height = settings.tab_bar_height or 22,
+        tab_toggle_size = settings.tab_toggle_size or 16,
+        tab_bar_color = settings.tab_bar_color or 0x2A2A2AFF,
+        tab_color = settings.tab_color or 0x3A3A3AFF,
+        tab_active_color = settings.tab_active_color or 0x4A4A4AFF,
+        tab_hover_color = settings.tab_hover_color or 0x5A5A5AFF,
+        tab_text_color = settings.tab_text_color or 0xFFFFFFFF,
+        tab_font_size = settings.tab_font_size or 13,
+        tab_rounding = settings.tab_rounding or 4,
+        tab_border_size = settings.tab_border_size or 0,
+        tab_border_color = settings.tab_border_color or 0x555555FF,
+    }
+    local tabs_json = json.encode(tabs_data)
+    r.SetExtState("TK_TRANSPORT", "tabs_config" .. (instance_suffix or ""), tabs_json, true)
+end
+
+local function LoadTabsFromExtState()
+    local tabs_json = r.GetExtState("TK_TRANSPORT", "tabs_config" .. (instance_suffix or ""))
+    if tabs_json and tabs_json ~= "" then
+        local success, tabs_data = pcall(json.decode, tabs_json)
+        if success and tabs_data then
+            settings.tabs = tabs_data.tabs or { { name = "Main", id = 1, transport_preset = "", button_preset = "" } }
+            settings.active_tab = tabs_data.active_tab or 1
+            settings.show_tabs = tabs_data.show_tabs or false
+            settings.tabs_collapsed = tabs_data.tabs_collapsed
+            if settings.tabs_collapsed == nil then settings.tabs_collapsed = true end
+            settings.tabs_expand_window = tabs_data.tabs_expand_window or false
+            settings.tab_bar_height = tabs_data.tab_bar_height or 22
+            settings.tab_toggle_size = tabs_data.tab_toggle_size or 16
+            settings.tab_bar_color = tabs_data.tab_bar_color or 0x2A2A2AFF
+            settings.tab_color = tabs_data.tab_color or 0x3A3A3AFF
+            settings.tab_active_color = tabs_data.tab_active_color or 0x4A4A4AFF
+            settings.tab_hover_color = tabs_data.tab_hover_color or 0x5A5A5AFF
+            settings.tab_text_color = tabs_data.tab_text_color or 0xFFFFFFFF
+            settings.tab_font_size = tabs_data.tab_font_size or 13
+            settings.tab_rounding = tabs_data.tab_rounding or 4
+            settings.tab_border_size = tabs_data.tab_border_size or 0
+            settings.tab_border_color = tabs_data.tab_border_color or 0x555555FF
+            return true
+        end
+    end
+    return false
+end
+
+local function EnsureMixerSettingsFolder()
+    if not r.file_exists(mixer_settings_path) then
+        r.RecursiveCreateDirectory(mixer_settings_path, 0)
+    end
+end
+
+local function GetMixerSettingsFilename()
+    local instance_name = instance_suffix or ""
+    if instance_name == "" then instance_name = "default" end
+    return mixer_settings_path .. "mixer_" .. instance_name .. ".json"
+end
+
+local function SaveMixerSettings()
+    EnsureMixerSettingsFolder()
+    
+    local mixer_data = {}
+    for key, value in pairs(settings) do
+        if key:find("^simple_mixer_") and not key:find("^simple_mixer_button") then
+            mixer_data[key] = value
+        end
+    end
+    
+    local filename = GetMixerSettingsFilename()
+    local file = io.open(filename, 'w')
+    if file then
+        file:write(json.encode(mixer_data))
+        file:close()
+    end
+end
+
+local function LoadMixerSettings()
+    local filename = GetMixerSettingsFilename()
+    local file = io.open(filename, 'r')
+    if file then
+        local content = file:read('*all')
+        file:close()
+        
+        local success, mixer_data = pcall(json.decode, content)
+        if success and mixer_data then
+            for key, value in pairs(mixer_data) do
+                if not key:find("^simple_mixer_button") and key ~= "show_simple_mixer_button" then
+                    settings[key] = value
+                end
+            end
+            return true
+        end
+    end
+    return false
+end
+
+local function SwitchToTab(tab_id)
+    local tabs = settings.tabs or {}
+    local target_tab = nil
+    for _, tab in ipairs(tabs) do
+        if tab.id == tab_id then
+            target_tab = tab
+            break
+        end
+    end
+    
+    if not target_tab then return end
+    
+    local old_tabs = settings.tabs
+    local old_tabs_collapsed = settings.tabs_collapsed
+    local old_show_tabs = settings.show_tabs
+    local old_tab_settings = {
+        tab_bar_height = settings.tab_bar_height,
+        tab_toggle_size = settings.tab_toggle_size,
+        tab_bar_color = settings.tab_bar_color,
+        tab_color = settings.tab_color,
+        tab_active_color = settings.tab_active_color,
+        tab_hover_color = settings.tab_hover_color,
+        tab_text_color = settings.tab_text_color,
+        tab_border_color = settings.tab_border_color,
+        tab_font_size = settings.tab_font_size,
+        tab_rounding = settings.tab_rounding,
+        tab_border_size = settings.tab_border_size,
+        tabs_expand_window = settings.tabs_expand_window,
+    }
+    
+    local old_mixer_styling = {}
+    for key, value in pairs(settings) do
+        if key:find("^simple_mixer_") and not key:find("^simple_mixer_button") then
+            old_mixer_styling[key] = value
+        end
+    end
+    
+    if target_tab.transport_preset and target_tab.transport_preset ~= "" then
+        LoadPreset(target_tab.transport_preset)
+        preset_name = target_tab.transport_preset
+        SaveLastUsedPreset(preset_name)
+    end
+    
+    settings.tabs = old_tabs
+    settings.tabs_collapsed = old_tabs_collapsed
+    settings.show_tabs = old_show_tabs
+    settings.active_tab = tab_id
+    for k, v in pairs(old_tab_settings) do
+        settings[k] = v
+    end
+    
+    for k, v in pairs(old_mixer_styling) do
+        settings[k] = v
+    end
+    
+    if not settings.tabs_expand_window then
+        settings.tabs_collapsed = true
+    end
+    
+    if target_tab.button_preset and target_tab.button_preset ~= "" then
+        CustomButtons.LoadButtonPreset(target_tab.button_preset)
+    end
+    
+    SaveTabsToExtState()
+end
+
+LoadTabsFromExtState()
+LoadMixerSettings()
+
+local function RenderTabBar()
+    if not settings.show_tabs then return 0 end
+    
+    local tab_height = settings.tab_bar_height or 22
+    local toggle_size = settings.tab_toggle_size or 16
+    local win_x, win_y = r.ImGui_GetWindowPos(ctx)
+    local win_w = r.ImGui_GetWindowWidth(ctx)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    
+    if settings.tabs_collapsed then
+        r.ImGui_SetCursorPos(ctx, 2, 2)
+        
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.tab_color or 0x3A3A3AFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.tab_hover_color or 0x5A5A5AFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.tab_active_color or 0x4A4A4AFF)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+        
+        if r.ImGui_Button(ctx, "▼##tabtoggle", toggle_size, toggle_size) then
+            settings.tabs_collapsed = false
+            if settings.tabs_expand_window then
+                local current_h = select(2, r.ImGui_GetWindowSize(ctx))
+                local tab_h = settings.tab_bar_height or 22
+                if last_base_window_height then
+                    r.ImGui_SetWindowSize(ctx, win_w, last_base_window_height + tab_h)
+                else
+                    r.ImGui_SetWindowSize(ctx, win_w, current_h + tab_h)
+                end
+            end
+            SaveTabsToExtState()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            local tabs = settings.tabs or { { name = "Main", id = 1 } }
+            local active_tab_name = "Main"
+            for _, tab in ipairs(tabs) do
+                if tab.id == (settings.active_tab or 1) then
+                    active_tab_name = tab.name
+                    break
+                end
+            end
+            r.ImGui_SetTooltip(ctx, "Show tabs\nActive: " .. active_tab_name)
+        end
+        
+        r.ImGui_PopStyleVar(ctx)
+        r.ImGui_PopStyleColor(ctx, 3)
+        
+        return 0
+    end
+    
+    r.ImGui_DrawList_AddRectFilled(draw_list, win_x, win_y, win_x + win_w, win_y + tab_height, settings.tab_bar_color or 0x2A2A2AFF)
+    
+    r.ImGui_SetCursorPos(ctx, 4, 2)
+    
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.tab_hover_color or 0x5A5A5AFF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.tab_active_color or 0x4A4A4AFF)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
+    
+    if r.ImGui_Button(ctx, "▲##tabtoggle", toggle_size, tab_height - 4) then
+        settings.tabs_collapsed = true
+        local current_h = select(2, r.ImGui_GetWindowSize(ctx))
+        if settings.tabs_expand_window and last_base_window_height then
+            r.ImGui_SetWindowSize(ctx, win_w, last_base_window_height)
+        else
+            r.ImGui_SetWindowSize(ctx, win_w, current_h - tab_height)
+        end
+        SaveTabsToExtState()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Hide tabs")
+    end
+    
+    r.ImGui_PopStyleVar(ctx, 2)
+    r.ImGui_PopStyleColor(ctx, 3)
+    
+    r.ImGui_SameLine(ctx, 0, 4)
+    
+    local tabs = settings.tabs or { { name = "Main", id = 1 } }
+    local active_tab = settings.active_tab or 1
+    
+    local tab_changed = false
+    local delete_tab_idx = nil
+    
+    for i, tab in ipairs(tabs) do
+        local is_active = (tab.id == active_tab)
+        local tab_color = is_active and (settings.tab_active_color or 0x4A4A4AFF) or (settings.tab_color or 0x3A3A3AFF)
+        
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), tab_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.tab_hover_color or 0x5A5A5AFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.tab_active_color or 0x4A4A4AFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.tab_text_color or 0xFFFFFFFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.tab_border_color or 0x555555FF)
+        
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.tab_rounding or 4)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 8, 2)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), settings.tab_border_size or 0)
+        
+        local tab_font_size = settings.tab_font_size or 13
+        r.ImGui_PushFont(ctx, nil, tab_font_size)
+        
+        if r.ImGui_Button(ctx, tab.name .. "##tab" .. tab.id, 0, tab_height - 4) then
+            if tab.id ~= active_tab then
+                SwitchToTab(tab.id)
+                tab_changed = true
+            end
+        end
+        
+        r.ImGui_PopFont(ctx)
+        
+        if r.ImGui_IsItemHovered(ctx) then
+            local tooltip = tab.name
+            if tab.transport_preset and tab.transport_preset ~= "" then
+                tooltip = tooltip .. "\nTransport: " .. tab.transport_preset
+            else
+                tooltip = tooltip .. "\nTransport: (current)"
+            end
+            if tab.button_preset and tab.button_preset ~= "" then
+                tooltip = tooltip .. "\nButtons: " .. tab.button_preset
+            else
+                tooltip = tooltip .. "\nButtons: (current)"
+            end
+            r.ImGui_SetTooltip(ctx, tooltip)
+        end
+        
+        if r.ImGui_IsItemClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "TabContextMenu##" .. tab.id)
+        end
+        
+        if r.ImGui_BeginPopup(ctx, "TabContextMenu##" .. tab.id) then
+            if r.ImGui_MenuItem(ctx, "Rename") then
+                tab_rename_popup.open = true
+                tab_rename_popup.tab_idx = i
+                tab_rename_popup.new_name = tab.name
+            end
+            if #tabs > 1 then
+                if r.ImGui_MenuItem(ctx, "Delete") then
+                    delete_tab_idx = i
+                end
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+        
+        r.ImGui_PopStyleVar(ctx, 3)
+        r.ImGui_PopStyleColor(ctx, 5)
+        
+        r.ImGui_SameLine(ctx, 0, 4)
+    end
+    
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.tab_hover_color or 0x5A5A5AFF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.tab_active_color or 0x4A4A4AFF)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 6, 2)
+    
+    if r.ImGui_Button(ctx, "+##addtab", 0, tab_height - 4) then
+        local new_id = GetNextTabId()
+        table.insert(settings.tabs, { name = "Tab " .. new_id, id = new_id, transport_preset = "", button_preset = "" })
+        settings.active_tab = new_id
+        SaveTabsToExtState()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Add new tab")
+    end
+    
+    r.ImGui_PopStyleVar(ctx, 2)
+    r.ImGui_PopStyleColor(ctx, 3)
+    
+    if delete_tab_idx then
+        local deleted_tab = tabs[delete_tab_idx]
+        table.remove(settings.tabs, delete_tab_idx)
+        if settings.active_tab == deleted_tab.id then
+            settings.active_tab = settings.tabs[1].id
+            SwitchToTab(settings.active_tab)
+        end
+        SaveTabsToExtState()
+    end
+    
+    if tab_rename_popup.open then
+        r.ImGui_OpenPopup(ctx, "RenameTabPopup")
+        tab_rename_popup.open = false
+    end
+    
+    if r.ImGui_BeginPopupModal(ctx, "RenameTabPopup", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "New name:")
+        r.ImGui_SetNextItemWidth(ctx, 150)
+        local rv, new_name = r.ImGui_InputText(ctx, "##renametab", tab_rename_popup.new_name)
+        if rv then tab_rename_popup.new_name = new_name end
+        
+        if r.ImGui_Button(ctx, "OK", 60, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+            if tab_rename_popup.tab_idx and settings.tabs[tab_rename_popup.tab_idx] then
+                settings.tabs[tab_rename_popup.tab_idx].name = tab_rename_popup.new_name
+                SaveTabsToExtState()
+                SaveSettings()
+            end
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 60, 0) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+    
+    return tab_height
+end
+
+
 function SetStyle()
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), settings.window_rounding)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.frame_rounding)
@@ -6413,6 +6990,10 @@ function ShowSettings(main_window_width , main_window_height)
  
  if r.ImGui_Selectable(ctx, "Alignment Guides", selected_transport_component == "alignment_guides") then
  selected_transport_component = "alignment_guides"
+ end
+ 
+ if r.ImGui_Selectable(ctx, "Quick Toggle", selected_transport_component == "quick_toggle") then
+ selected_transport_component = "quick_toggle"
  end
  
  if r.ImGui_Selectable(ctx, "Z-Order (Layer)", selected_transport_component == "z_order") then
@@ -7085,6 +7666,8 @@ function ShowSettings(main_window_width , main_window_height)
  end
  end
  end
+ elseif selected_transport_component == "quick_toggle" then
+ ShowQuickToggleSettings(ctx, main_window_width, main_window_height)
  elseif selected_transport_component == "z_order" then
  ShowZOrderSettings(ctx, main_window_width, main_window_height)
  else
@@ -7252,12 +7835,53 @@ function ShowSettings(main_window_width , main_window_height)
  group_name_input = ""
  end
  else
- if r.ImGui_Selectable(ctx, group_name .. " ✏️##group_" .. group_name, false, r.ImGui_SelectableFlags_AllowDoubleClick()) then
- if r.ImGui_IsMouseDoubleClicked(ctx, r.ImGui_MouseButton_Left()) then
- editing_group_name = group_name
- group_name_input = group_name
+ r.ImGui_Text(ctx, group_name)
+ r.ImGui_SameLine(ctx, 0, 4)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x44444488)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x66666688)
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 0)
+ if r.ImGui_SmallButton(ctx, "✎##edit_" .. group_name) then
+  editing_group_name = group_name
+  group_name_input = group_name
  end
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "Rename group")
  end
+ r.ImGui_SameLine(ctx, 0, 0)
+ if r.ImGui_SmallButton(ctx, "🔘##add_" .. group_name) then
+  if CustomButtons and CustomButtons.CreateNewButton then
+   local last_button_in_group = buttons[#buttons]
+   local new_button
+   if last_button_in_group then
+    new_button = CustomButtons.CreateNewButton({copy_style_from = last_button_in_group.index, place_next_to_idx = last_button_in_group.index})
+   else
+    new_button = CustomButtons.CreateNewButton()
+   end
+   new_button.group = group_name
+   table.insert(CustomButtons.buttons, new_button)
+   selected_button_component = "button_" .. #CustomButtons.buttons
+   CustomButtons.SaveCurrentButtons()
+  end
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, "Add new button to this group\n(copies style from last button in group)\nRight-click for default style")
+ end
+ if r.ImGui_BeginPopupContextItem(ctx, "new_button_group_context_" .. group_name) then
+  if r.ImGui_MenuItem(ctx, "New Button (default style)") then
+   if CustomButtons and CustomButtons.CreateNewButton then
+    local new_button = CustomButtons.CreateNewButton()
+    new_button.group = group_name
+    table.insert(CustomButtons.buttons, new_button)
+    selected_button_component = "button_" .. #CustomButtons.buttons
+    CustomButtons.SaveCurrentButtons()
+   end
+  end
+  r.ImGui_EndPopup(ctx)
+ end
+ r.ImGui_PopStyleVar(ctx)
+ r.ImGui_PopStyleColor(ctx, 4)
  
  if r.ImGui_BeginDragDropTarget(ctx) then
  local ok, payload = r.ImGui_AcceptDragDropPayload(ctx, "TK_BUTTON_REORDER")
@@ -7271,10 +7895,6 @@ function ShowSettings(main_window_width , main_window_height)
  end
  end
  r.ImGui_EndDragDropTarget(ctx)
- end
- 
- if r.ImGui_IsItemHovered(ctx) then
- r.ImGui_SetTooltip(ctx, "Double-click to rename group\nDrag buttons here to move them to this group")
  end
  end
  
@@ -7641,6 +8261,239 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_EndTabItem(ctx)
  end
  
+ pushed_tab = PushTabColors(0x9370DBFF)
+ local tabs_open = r.ImGui_BeginTabItem(ctx, "Tabs")
+ if pushed_tab and pushed_tab < 0 then DrawTabUnderlineAccent(0x9370DBFF, tabs_open) end
+ if pushed_tab and pushed_tab ~= 0 then PopTabColors(pushed_tab) end
+ if tabs_open then
+ r.ImGui_Text(ctx, "Tab Configuration")
+ r.ImGui_TextDisabled(ctx, "Tabs are global and not tied to any preset")
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ local rv
+ rv, settings.show_tabs = r.ImGui_Checkbox(ctx, "Show Tab Bar", settings.show_tabs or false)
+ if rv then SaveTabsToExtState() end
+ 
+ r.ImGui_SameLine(ctx)
+ rv, settings.tabs_expand_window = r.ImGui_Checkbox(ctx, "Expand window", settings.tabs_expand_window or false)
+ if rv then 
+     last_base_window_height = nil
+     last_base_window_width = nil
+     SaveTabsToExtState()
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "When enabled, window height increases to show tabs.\nWhen disabled, content shifts down (overlay mode).")
+ end
+ 
+ if settings.show_tabs then
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "TabSettingsLayout", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Height")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.tab_bar_height = r.ImGui_SliderInt(ctx, "##tabbarheight", settings.tab_bar_height or 22, 18, 40)
+ if rv then SaveTabsToExtState() end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Toggle Size")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.tab_toggle_size = r.ImGui_SliderInt(ctx, "##tabtogglesize", settings.tab_toggle_size or 16, 12, 24)
+ if rv then SaveTabsToExtState() end
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "TabColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.tab_bar_color = r.ImGui_ColorEdit4(ctx, "##tabbarcolor", settings.tab_bar_color or 0x2A2A2AFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Bar BG")
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.tab_color = r.ImGui_ColorEdit4(ctx, "##tabcolor", settings.tab_color or 0x3A3A3AFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Normal")
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.tab_active_color = r.ImGui_ColorEdit4(ctx, "##tabactivecolor", settings.tab_active_color or 0x4A4A4AFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Active")
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ rv, settings.tab_hover_color = r.ImGui_ColorEdit4(ctx, "##tabhovercolor", settings.tab_hover_color or 0x5A5A5AFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Hover")
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.tab_text_color = r.ImGui_ColorEdit4(ctx, "##tabtextcolor", settings.tab_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Text")
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.tab_border_color = r.ImGui_ColorEdit4(ctx, "##tabbordercolor", settings.tab_border_color or 0x555555FF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Border")
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "TabStyleLayout", 3, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Font Size")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.tab_font_size = r.ImGui_SliderInt(ctx, "##tabfontsize", settings.tab_font_size or 13, 8, 24)
+ if rv then SaveTabsToExtState() end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Rounding")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.tab_rounding = r.ImGui_SliderInt(ctx, "##tabrounding", settings.tab_rounding or 4, 0, 12)
+ if rv then SaveTabsToExtState() end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ r.ImGui_Text(ctx, "Border")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ rv, settings.tab_border_size = r.ImGui_SliderInt(ctx, "##tabbordersize", settings.tab_border_size or 0, 0, 3)
+ if rv then SaveTabsToExtState() end
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ r.ImGui_Text(ctx, "Manage Tabs")
+ r.ImGui_Spacing(ctx)
+ 
+ local transport_presets = GetPresetList()
+ local button_presets = CustomButtons.GetButtonPresets and CustomButtons.GetButtonPresets() or {}
+ 
+ local tabs = settings.tabs or { { name = "Main", id = 1, transport_preset = "", button_preset = "" } }
+ for i, tab in ipairs(tabs) do
+ r.ImGui_PushID(ctx, "tab_manage_" .. i)
+ local is_active = (tab.id == (settings.active_tab or 1))
+ 
+ local header_label = tab.name .. (is_active and " *" or "")
+ if r.ImGui_CollapsingHeader(ctx, header_label .. "###tab_header_" .. i) then
+     if r.ImGui_BeginTable(ctx, "TabEdit" .. i, 2, r.ImGui_TableFlags_SizingStretchSame()) then
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableSetColumnIndex(ctx, 0)
+     r.ImGui_Text(ctx, "Name")
+     r.ImGui_SameLine(ctx)
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     local rv_name, new_name = r.ImGui_InputText(ctx, "##tabname_" .. i, tab.name)
+     if rv_name and new_name ~= "" then
+         tab.name = new_name
+         SaveTabsToExtState()
+     end
+     
+     r.ImGui_TableSetColumnIndex(ctx, 1)
+     r.ImGui_Text(ctx, "Transport")
+     r.ImGui_SameLine(ctx)
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     local current_transport = tab.transport_preset or ""
+     if current_transport == "" then current_transport = "(current)" end
+     if r.ImGui_BeginCombo(ctx, "##transport_preset_" .. i, current_transport) then
+         if r.ImGui_Selectable(ctx, "(current)##tp_current_" .. i, tab.transport_preset == "" or tab.transport_preset == nil) then
+             tab.transport_preset = ""
+             SaveTabsToExtState()
+         end
+         for pi, pname in ipairs(transport_presets) do
+             if pname and pname ~= "" then
+                 if r.ImGui_Selectable(ctx, pname .. "##tp_" .. i .. "_" .. pi, tab.transport_preset == pname) then
+                     tab.transport_preset = pname
+                     SaveTabsToExtState()
+                 end
+             end
+         end
+         r.ImGui_EndCombo(ctx)
+     end
+     
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableSetColumnIndex(ctx, 0)
+     r.ImGui_Text(ctx, "Buttons")
+     r.ImGui_SameLine(ctx)
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     local current_buttons = tab.button_preset or ""
+     if current_buttons == "" then current_buttons = "(current)" end
+     if r.ImGui_BeginCombo(ctx, "##button_preset_" .. i, current_buttons) then
+         if r.ImGui_Selectable(ctx, "(current)##bp_current_" .. i, tab.button_preset == "" or tab.button_preset == nil) then
+             tab.button_preset = ""
+             SaveTabsToExtState()
+         end
+         for pi, pname in ipairs(button_presets) do
+             if pname and pname ~= "" then
+                 if r.ImGui_Selectable(ctx, pname .. "##bp_" .. i .. "_" .. pi, tab.button_preset == pname) then
+                     tab.button_preset = pname
+                     SaveTabsToExtState()
+                 end
+             end
+         end
+         r.ImGui_EndCombo(ctx)
+     end
+     
+     r.ImGui_TableSetColumnIndex(ctx, 1)
+     if not is_active then
+         if r.ImGui_Button(ctx, "Switch##" .. i) then
+             SwitchToTab(tab.id)
+         end
+         r.ImGui_SameLine(ctx)
+     end
+     if #tabs > 1 then
+         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x882222FF)
+         if r.ImGui_Button(ctx, "Delete##" .. i) then
+             table.remove(settings.tabs, i)
+             if settings.active_tab == tab.id then
+                 settings.active_tab = settings.tabs[1].id
+                 SwitchToTab(settings.active_tab)
+             end
+             SaveTabsToExtState()
+         end
+         r.ImGui_PopStyleColor(ctx)
+     end
+     
+     r.ImGui_EndTable(ctx)
+     end
+ end
+ 
+ r.ImGui_PopID(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ if r.ImGui_Button(ctx, "+ Add New Tab") then
+ local new_id = GetNextTabId()
+ table.insert(settings.tabs, { name = "Tab " .. new_id, id = new_id, transport_preset = "", button_preset = "" })
+ SaveTabsToExtState()
+ end
+ end
+ 
+ r.ImGui_EndTabItem(ctx)
+ end
+ 
  r.ImGui_EndTabBar(ctx)
  end
  
@@ -7735,6 +8588,11 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PopStyleVar(ctx, 8) 
  r.ImGui_End(ctx)
  end
+ 
+ if not settings_open and show_settings then
+     SaveMixerSettings()
+ end
+ 
  show_settings = settings_open
 end
 
@@ -9015,7 +9873,24 @@ function GetProjectMixerTracks()
  if tracks_json ~= "" then
  local success, tracks = pcall(function() return json.decode(tracks_json) end)
  if success and tracks then
- return tracks
+ local validated_tracks = {}
+ local needs_repair = false
+ for _, track_data in ipairs(tracks) do
+  if type(track_data) == "string" then
+   table.insert(validated_tracks, track_data)
+  elseif type(track_data) == "table" then
+   needs_repair = true
+   if track_data.guid and type(track_data.guid) == "string" then
+    table.insert(validated_tracks, track_data.guid)
+   elseif track_data[1] and type(track_data[1]) == "string" then
+    table.insert(validated_tracks, track_data[1])
+   end
+  end
+ end
+ if needs_repair then
+  SaveProjectMixerTracks(validated_tracks)
+ end
+ return validated_tracks
  end
  end
  return {}
@@ -9028,6 +9903,30 @@ function SaveProjectMixerTracks(tracks)
  local key = "simple_mixer_tracks_" .. project_file
  local tracks_json = json.encode(tracks)
  r.SetExtState("TK_TRANSPORT", key, tracks_json, true)
+end
+
+function GetProjectMixerPresets()
+ local project_file = r.GetProjectPath("")
+ if project_file == "" then return {} end
+ 
+ local key = "simple_mixer_presets_" .. project_file
+ local presets_json = r.GetExtState("TK_TRANSPORT", key)
+ if presets_json and presets_json ~= "" then
+  local success, presets = pcall(json.decode, presets_json)
+  if success and presets then
+   return presets
+  end
+ end
+ return {}
+end
+
+function SaveProjectMixerPresets(presets)
+ local project_file = r.GetProjectPath("")
+ if project_file == "" then return end
+ 
+ local key = "simple_mixer_presets_" .. project_file
+ local presets_json = json.encode(presets)
+ r.SetExtState("TK_TRANSPORT", key, presets_json, true)
 end
 
 local simple_mixer_editing_track_guid = nil
@@ -9046,6 +9945,359 @@ local simple_mixer_track_icon_paths = {}
 local simple_mixer_meter_data = {}
 local simple_mixer_meter_last_update = 0
 local simple_mixer_meter_update_interval = 1/30
+
+local simple_mixer_vu_data = {}
+local vu_jsfx_cache = {}
+
+ResetVUData = nil
+CleanupVUJSFX = nil
+
+local function GetPostFaderPeakDB(track)
+    if not track then return -60, -60, -60 end
+    
+    local peak_l = r.Track_GetPeakInfo(track, 0)
+    local peak_r = r.Track_GetPeakInfo(track, 1)
+    local peak_combined = math.max(peak_l, peak_r)
+    
+    local db_l = peak_l > 0.0000001 and 20 * math.log(peak_l, 10) or -60
+    local db_r = peak_r > 0.0000001 and 20 * math.log(peak_r, 10) or -60
+    local db_combined = peak_combined > 0.0000001 and 20 * math.log(peak_combined, 10) or -60
+    
+    db_l = math.max(-60, math.min(6, db_l))
+    db_r = math.max(-60, math.min(6, db_r))
+    db_combined = math.max(-60, math.min(6, db_combined))
+    
+    return db_l, db_r, db_combined
+end
+
+local vu_gmem_attached = false
+local vu_track_slot_counter = 0
+local vu_track_slots = {}
+
+local function EnsureVUJSFX(track)
+    local track_guid = r.GetTrackGUID(track)
+    
+    if not vu_gmem_attached then
+        r.gmem_attach("TK_VU_Meters")
+        vu_gmem_attached = true
+    end
+    
+    if vu_jsfx_cache[track_guid] then
+        local cached = vu_jsfx_cache[track_guid]
+        if cached.fx_index >= 0 then
+            local retval, fx_name = r.TrackFX_GetFXName(track, cached.fx_index, "")
+            if retval then
+                local name_lower = fx_name:lower()
+                if name_lower:find("tk_vu_meter") or name_lower:find("tk vu meter") then
+                    return cached.fx_index, cached.slot_id
+                end
+            end
+        end
+        vu_jsfx_cache[track_guid] = nil
+    end
+    
+    local fx_count = r.TrackFX_GetCount(track)
+    for i = 0, fx_count - 1 do
+        local retval, fx_name = r.TrackFX_GetFXName(track, i, "")
+        if retval then
+            local name_lower = fx_name:lower()
+            if name_lower:find("tk_vu_meter") or name_lower:find("tk vu meter") then
+                local slot_id = vu_track_slots[track_guid]
+                if not slot_id then
+                    vu_track_slot_counter = vu_track_slot_counter + 1
+                    slot_id = vu_track_slot_counter
+                    vu_track_slots[track_guid] = slot_id
+                    r.TrackFX_SetParam(track, i, 0, slot_id)
+                end
+                vu_jsfx_cache[track_guid] = {fx_index = i, slot_id = slot_id}
+                return i, slot_id
+            end
+        end
+    end
+    
+    local fx_index = r.TrackFX_AddByName(track, "JS:TK_VU_Meter", false, -1)
+    if fx_index >= 0 then
+        vu_track_slot_counter = vu_track_slot_counter + 1
+        local slot_id = vu_track_slot_counter
+        vu_track_slots[track_guid] = slot_id
+        r.TrackFX_SetParam(track, fx_index, 0, slot_id)
+        r.TrackFX_SetEnabled(track, fx_index, true)
+        r.TrackFX_Show(track, fx_index, 0)
+        vu_jsfx_cache[track_guid] = {fx_index = fx_index, slot_id = slot_id}
+        return fx_index, slot_id
+    end
+    return -1, 0
+end
+
+local function GetPreFaderPeakDB(track, slot_id)
+    if not track or slot_id <= 0 then return -60, -60, -60 end
+    
+    local db_l = r.gmem_read(slot_id * 3)
+    local db_r = r.gmem_read(slot_id * 3 + 1)
+    local db_combined = r.gmem_read(slot_id * 3 + 2)
+    
+    if db_l == 0 and db_r == 0 and db_combined == 0 then
+        return -60, -60, -60
+    end
+    
+    return db_l, db_r, db_combined
+end
+
+local function GetPeakDB(track, track_guid)
+    local use_pre_fader = settings.simple_mixer_vu_pre_fader
+    
+    if use_pre_fader then
+        local data = simple_mixer_vu_data[track_guid]
+        local slot_id = data and data.slot_id or 0
+        
+        if slot_id <= 0 then
+            local fx_index
+            fx_index, slot_id = EnsureVUJSFX(track)
+            if data then 
+                data.fx_index = fx_index
+                data.slot_id = slot_id
+            end
+        end
+        
+        if slot_id > 0 then
+            return GetPreFaderPeakDB(track, slot_id)
+        end
+    end
+    
+    return GetPostFaderPeakDB(track)
+end
+
+CleanupVUJSFX = function()
+    r.Undo_BeginBlock()
+    for i = 0, r.CountTracks(0) - 1 do
+        local track = r.GetTrack(0, i)
+        local fx_count = r.TrackFX_GetCount(track)
+        for j = fx_count - 1, 0, -1 do
+            local retval, fx_name = r.TrackFX_GetFXName(track, j, "")
+            if retval then
+                local name_lower = fx_name:lower()
+                if name_lower:find("tk_vu_meter") or name_lower:find("tk vu meter") then
+                    r.TrackFX_Delete(track, j)
+                end
+            end
+        end
+    end
+    local master = r.GetMasterTrack(0)
+    if master then
+        local fx_count = r.TrackFX_GetCount(master)
+        for j = fx_count - 1, 0, -1 do
+            local retval, fx_name = r.TrackFX_GetFXName(master, j, "")
+            if retval then
+                local name_lower = fx_name:lower()
+                if name_lower:find("tk_vu_meter") or name_lower:find("tk vu meter") then
+                    r.TrackFX_Delete(master, j)
+                end
+            end
+        end
+    end
+    r.Undo_EndBlock("Remove TK VU Meter JSFX", -1)
+    vu_jsfx_cache = {}
+    vu_track_slots = {}
+    vu_track_slot_counter = 0
+end
+
+local function UpdateVUData(track_guid, track)
+    if not track then return nil end
+    
+    local data = simple_mixer_vu_data[track_guid] or {
+        peak_l = -60,
+        peak_r = -60,
+        peak_combined = -60,
+        smoothed_input = -20,
+        smoothed_vu = -20,
+        peak_hold = -20,
+        peak_hold_time = 0,
+        display_value = 0,
+        last_time = r.time_precise(),
+        fx_index = -1,
+        slot_id = 0
+    }
+    
+    local current_time = r.time_precise()
+    local delta_time = current_time - (data.last_time or current_time)
+    if delta_time > 0.1 then delta_time = 0.1 end
+    data.last_time = current_time
+    
+    simple_mixer_vu_data[track_guid] = data
+    data.peak_l, data.peak_r, data.peak_combined = GetPeakDB(track, track_guid)
+    
+    local input_attack_time = 0.15
+    local input_release_time = 0.1
+    
+    if data.peak_combined > data.smoothed_input then
+        local input_coef = 1 - math.exp(-delta_time / input_attack_time)
+        data.smoothed_input = data.smoothed_input + (data.peak_combined - data.smoothed_input) * input_coef
+    else
+        local input_coef = 1 - math.exp(-delta_time / input_release_time)
+        data.smoothed_input = data.smoothed_input + (data.peak_combined - data.smoothed_input) * input_coef
+    end
+    
+    local vu_reference = 18
+    local target_vu = data.smoothed_input + vu_reference
+    target_vu = math.max(-20, math.min(3, target_vu))
+    
+    data.smoothed_vu = target_vu
+    
+    local hold_duration = 2.0
+    if data.smoothed_vu > data.peak_hold then
+        data.peak_hold = data.smoothed_vu
+        data.peak_hold_time = hold_duration
+    else
+        data.peak_hold_time = data.peak_hold_time - delta_time
+        if data.peak_hold_time <= 0 then
+            data.peak_hold = data.smoothed_vu
+        end
+    end
+    
+    data.smoothed_peak_vu = data.peak_hold
+    data.display_value = (data.smoothed_vu - (-20)) / 23
+    
+    simple_mixer_vu_data[track_guid] = data
+    return data
+end
+
+local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, track)
+    if not settings.simple_mixer_show_vu_meter then return 0 end
+    
+    local data = UpdateVUData(track_guid, track)
+    if not data then return 0 end
+    
+    local vu_height = 55
+    
+    local bg_color = 0x000000FF
+    local scale_color = 0xAAAAAAFF
+    local red_color = 0xFF4444FF
+    local needle_color = 0xFFFFFFFF
+    
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + vu_height, bg_color, 4)
+    
+    r.ImGui_DrawList_PushClipRect(draw_list, x, y, x + width, y + vu_height, true)
+    
+    local center_x = x + width / 2
+    local radius = width * 0.7
+    local pivot_y = y + vu_height + radius * 0.15
+    local inner_radius = radius * 0.92
+    
+    local glow_layers = 7
+    for i = glow_layers, 1, -1 do
+        local glow_radius = radius * (0.25 + i * 0.13)
+        local alpha = math.floor(20 - i * 2)
+        local glow_color = (0xFFAA40 * 256) + alpha
+        r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, pivot_y, glow_radius, glow_color, 32)
+    end
+    
+    local start_angle = math.pi * 0.68
+    local end_angle = math.pi * 0.32
+    local angle_range = start_angle - end_angle
+    
+    local segments = 40
+    for i = 0, segments - 1 do
+        local t1 = i / segments
+        local t2 = (i + 1) / segments
+        local a1 = start_angle - t1 * angle_range
+        local a2 = start_angle - t2 * angle_range
+        
+        local x1 = center_x + math.cos(a1) * radius
+        local y1 = pivot_y - math.sin(a1) * radius
+        local x2 = center_x + math.cos(a2) * radius
+        local y2 = pivot_y - math.sin(a2) * radius
+        
+        local db_at_t = -20 + t1 * 23
+        local arc_color = db_at_t >= 0 and red_color or scale_color
+        r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, arc_color, 1.5)
+    end
+    
+    local tick_db_values = {-20, -10, -7, -5, -3, 0, 3}
+    for _, db in ipairs(tick_db_values) do
+        local t = (db - (-20)) / 23
+        local angle = start_angle - t * angle_range
+        
+        local tick_outer = radius
+        local tick_inner = inner_radius
+        
+        local x_outer = center_x + math.cos(angle) * tick_outer
+        local y_outer = pivot_y - math.sin(angle) * tick_outer
+        local x_inner = center_x + math.cos(angle) * tick_inner
+        local y_inner = pivot_y - math.sin(angle) * tick_inner
+        
+        local tick_color = db >= 0 and red_color or scale_color
+        r.ImGui_DrawList_AddLine(draw_list, x_inner, y_inner, x_outer, y_outer, tick_color, 1)
+        
+        local label = tostring(math.abs(db))
+        local text_w, text_h = r.ImGui_CalcTextSize(ctx, label)
+        local label_radius = radius + 5
+        local label_x = center_x + math.cos(angle) * label_radius - text_w / 2
+        local label_y = pivot_y - math.sin(angle) * label_radius - text_h / 2
+        local label_color = db >= 0 and red_color or 0x888888FF
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, 7, label_x, label_y, label_color, label)
+    end
+    
+    local needle_length = radius * 0.88
+    local vu_needle_color = 0x4A90D9FF
+    local peak_needle_color = 0xAAAAAAFF
+    
+    local peak_vu = data.smoothed_peak_vu or (data.smoothed_peak_db + 18)
+    peak_vu = math.max(-20, math.min(3, peak_vu))
+    local peak_t = (peak_vu - (-20)) / 23
+    local peak_angle = start_angle - peak_t * angle_range
+    local peak_tip_x = center_x + math.cos(peak_angle) * needle_length
+    local peak_tip_y = pivot_y - math.sin(peak_angle) * needle_length
+    r.ImGui_DrawList_AddLine(draw_list, center_x, pivot_y, peak_tip_x, peak_tip_y, peak_needle_color, 1.5)
+    
+    local needle_vu = data.smoothed_vu or (data.smoothed_db + 18)
+    needle_vu = math.max(-20, math.min(3, needle_vu))
+    local needle_t = (needle_vu - (-20)) / 23
+    local needle_angle = start_angle - needle_t * angle_range
+    local needle_tip_x = center_x + math.cos(needle_angle) * needle_length
+    local needle_tip_y = pivot_y - math.sin(needle_angle) * needle_length
+    r.ImGui_DrawList_AddLine(draw_list, center_x, pivot_y, needle_tip_x, needle_tip_y, vu_needle_color, 1.5)
+    
+    local vu_text = "VU"
+    local vu_text_w, vu_text_h = r.ImGui_CalcTextSize(ctx, vu_text)
+    local vu_text_x = center_x - vu_text_w / 2
+    local vu_text_y = y + vu_height * 0.55
+    r.ImGui_DrawList_AddTextEx(draw_list, nil, 10, vu_text_x, vu_text_y, 0x666666FF, vu_text)
+    
+    r.ImGui_DrawList_PopClipRect(draw_list)
+    
+    local is_clipping = data.smoothed_vu >= 0
+    local led_radius = 4
+    local led_x = x + width - led_radius - 4
+    local led_y = y + vu_height - led_radius - 4
+    local led_color = is_clipping and 0xFF0000FF or 0x440000FF
+    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, led_radius, led_color)
+    
+    local pivot_radius = 8
+    local pivot_center_y = y + vu_height
+    local pivot_color = 0x000000FF
+    local pivot_segments = 16
+    for i = 0, pivot_segments - 1 do
+        local a1 = (i / pivot_segments) * math.pi
+        local a2 = ((i + 1) / pivot_segments) * math.pi
+        local px1 = center_x + math.cos(a1) * pivot_radius
+        local py1 = pivot_center_y - math.sin(a1) * pivot_radius
+        local px2 = center_x + math.cos(a2) * pivot_radius
+        local py2 = pivot_center_y - math.sin(a2) * pivot_radius
+        r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, pivot_center_y, px1, py1, px2, py2, pivot_color)
+    end
+    
+    local border_color = 0x333333FF
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, border_color, 4, 0, 1)
+    
+    return vu_height + 4
+end
+
+ResetVUData = function()
+    simple_mixer_vu_data = {}
+    vu_jsfx_cache = {}
+    vu_track_slots = {}
+    vu_track_slot_counter = 0
+end
 
 local function UpdateMeterData(track_guid, track)
     if not track then return end
@@ -9339,8 +10591,12 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  if settings.simple_mixer_show_fx_slots and not settings.simple_mixer_fx_section_collapsed then
   track_fx_height = simple_mixer_track_fx_heights[track_guid_for_fx] or settings.simple_mixer_fx_section_height or 80
  end
- local track_number_height = is_master and 0 or 22
- local slider_height = base_slider_height - track_fx_height - track_number_height
+ local track_number_height = 22
+ local vu_meter_height = 0
+ if settings.simple_mixer_show_vu_meter then
+  vu_meter_height = 60
+ end
+ local slider_height = base_slider_height - track_fx_height - track_number_height - vu_meter_height
  if slider_height < 50 then slider_height = 50 end
  
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.simple_mixer_channel_rounding or 0)
@@ -9366,6 +10622,36 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local text_color = settings.simple_mixer_channel_text_color or 0xFFFFFFFF
   r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, track_number_str)
   r.ImGui_Dummy(ctx, track_width, num_height)
+  
+  if settings.simple_mixer_show_vu_meter then
+   local vu_cx, vu_cy = r.ImGui_GetCursorScreenPos(ctx)
+   local track_guid = r.GetTrackGUID(track)
+   local vu_height = DrawVUMeter(ctx, draw_list, vu_cx, vu_cy, track_width, settings.simple_mixer_vu_height or 8, track_guid, track)
+   if vu_height > 0 then
+    r.ImGui_Dummy(ctx, track_width, vu_height)
+   end
+  end
+ else
+  local master_col = settings.simple_mixer_master_fader_color or 0x4A90D9FF
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+  local num_height = 18
+  r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy, cx + track_width, cy + num_height, master_col, 2)
+  local label_text = "MST"
+  local label_w = r.ImGui_CalcTextSize(ctx, label_text)
+  local text_x = cx + (track_width - label_w) / 2
+  local text_y = cy + (num_height - r.ImGui_GetTextLineHeight(ctx)) / 2
+  r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0xFFFFFFFF, label_text)
+  r.ImGui_Dummy(ctx, track_width, num_height)
+  
+  if settings.simple_mixer_show_vu_meter then
+   local vu_cx, vu_cy = r.ImGui_GetCursorScreenPos(ctx)
+   local master_guid = "master"
+   local vu_height = DrawVUMeter(ctx, draw_list, vu_cx, vu_cy, track_width, settings.simple_mixer_vu_height or 8, master_guid, track)
+   if vu_height > 0 then
+    r.ImGui_Dummy(ctx, track_width, vu_height)
+   end
+  end
  end
 
  if settings.simple_mixer_show_rms then
@@ -9627,6 +10913,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local section_height = simple_mixer_track_fx_heights[track_guid_for_fx] or settings.simple_mixer_fx_section_height or 80
 
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
   if r.ImGui_BeginChild(ctx, "FXSection##" .. (is_master and "master" or idx), track_width, section_height, 0, r.ImGui_WindowFlags_None()) then
    if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_None()) then
     simple_mixer_fx_section_hovered = true
@@ -9649,13 +10936,14 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
      slot_color = settings.simple_mixer_fx_slot_bypass_color or 0x666600FF
     end
     
-    local is_drag_target = r.ImGui_BeginDragDropTarget(ctx)
-    if is_drag_target then
-     slot_color = 0x0088FFFF
-    end
-    
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), slot_color)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.simple_mixer_fx_slot_text_color or 0x888888FF)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), 0.0, 0.5)
+    
+    local fx_font_size = settings.simple_mixer_fx_font_size or 12
+    if font_simple_mixer then
+     r.ImGui_PushFont(ctx, font_simple_mixer, fx_font_size)
+    end
     
     if r.ImGui_Button(ctx, short_name .. "##fx" .. slot, fx_btn_width, slot_height) then
      local alt_held = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
@@ -9749,6 +11037,10 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
      r.ImGui_EndPopup(ctx)
     end
     
+    if font_simple_mixer then
+     r.ImGui_PopFont(ctx)
+    end
+    r.ImGui_PopStyleVar(ctx)
     r.ImGui_PopStyleColor(ctx, 2)
     
     if show_bypass then
@@ -9826,6 +11118,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    
    r.ImGui_EndChild(ctx)
   end
+  r.ImGui_PopStyleVar(ctx)
   r.ImGui_PopStyleColor(ctx, 1)
  end
 
@@ -10385,12 +11678,41 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    r.ImGui_SetCursorScreenPos(ctx, name_start_x, cursor_y)
    r.ImGui_InvisibleButton(ctx, "##name_area", track_width - indicator_width, text_h)
   else
-   r.ImGui_Text(ctx, display_name)
-   r.ImGui_SetCursorScreenPos(ctx, cursor_x, cursor_y)
-   r.ImGui_InvisibleButton(ctx, "##name_area", track_width, text_h)
+   if is_master then
+    local is_mono = r.GetToggleCommandState(40917) == 1
+    local icon_size = 12
+    local icon_spacing = 5
+    local total_text_w = r.ImGui_CalcTextSize(ctx, display_name)
+    local total_w = total_text_w + icon_spacing + icon_size
+    local start_x = cursor_x + (track_width - total_w) / 2
+    r.ImGui_SetCursorScreenPos(ctx, start_x, cursor_y)
+    r.ImGui_Text(ctx, display_name)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local icon_x = start_x + total_text_w + icon_spacing
+    local icon_y = cursor_y + (text_h - icon_size) / 2
+    if is_mono then
+     r.ImGui_DrawList_AddCircleFilled(draw_list, icon_x + icon_size/2, icon_y + icon_size/2, icon_size/2, 0xFFCC00FF)
+    else
+     r.ImGui_DrawList_AddCircleFilled(draw_list, icon_x + 3, icon_y + icon_size/2, 3, 0x00AAFFFF)
+     r.ImGui_DrawList_AddCircleFilled(draw_list, icon_x + icon_size - 3, icon_y + icon_size/2, 3, 0x00AAFFFF)
+    end
+    r.ImGui_SetCursorScreenPos(ctx, cursor_x, cursor_y)
+    if r.ImGui_InvisibleButton(ctx, "##master_mono_btn", track_width, text_h) then
+     r.Main_OnCommand(40917, 0)
+    end
+   else
+    r.ImGui_Text(ctx, display_name)
+    r.ImGui_SetCursorScreenPos(ctx, cursor_x, cursor_y)
+    r.ImGui_InvisibleButton(ctx, "##name_area", track_width, text_h)
+   end
   end
   if r.ImGui_IsItemHovered(ctx) then
-   r.ImGui_SetTooltip(ctx, is_master and "MASTER" or (track_name .. "\nClick to select | Double-click to rename"))
+   if is_master then
+    local is_mono = r.GetMediaTrackInfo_Value(track, "B_MONO") == 1
+    r.ImGui_SetTooltip(ctx, is_mono and "MASTER: MONO\nClick to toggle Stereo" or "MASTER: STEREO\nClick to toggle Mono")
+   else
+    r.ImGui_SetTooltip(ctx, track_name .. "\nClick to select | Double-click to rename")
+   end
    if not is_master then
     if r.ImGui_IsMouseDoubleClicked(ctx, r.ImGui_MouseButton_Left()) then
      simple_mixer_editing_track_guid = track_guid
@@ -10471,6 +11793,7 @@ function DrawSimpleMixerWindow()
   if r.ImGui_Button(mixer_ctx, "##toggle_sidebar", sidebar_collapsed and 20 or sidebar_width - 8, 20) then
    settings.simple_mixer_sidebar_collapsed = not sidebar_collapsed
    sidebar_collapsed = settings.simple_mixer_sidebar_collapsed
+   SaveMixerSettings()
   end
   local draw_list = r.ImGui_GetWindowDrawList(mixer_ctx)
   local arrow_cx = toggle_btn_x + (sidebar_collapsed and 10 or (sidebar_width - 8) / 2)
@@ -10539,6 +11862,14 @@ function DrawSimpleMixerWindow()
     r.ImGui_SetTooltip(mixer_ctx, "Add All Tracks")
    end
    
+   if r.ImGui_Button(mixer_ctx, "Clear All", sidebar_width - 16) then
+    project_mixer_tracks = {}
+    SaveProjectMixerTracks(project_mixer_tracks)
+   end
+   if r.ImGui_IsItemHovered(mixer_ctx) then
+    r.ImGui_SetTooltip(mixer_ctx, "Remove All Tracks from Mixer")
+   end
+   
    r.ImGui_Spacing(mixer_ctx)
    r.ImGui_Separator(mixer_ctx)
    r.ImGui_Spacing(mixer_ctx)
@@ -10555,18 +11886,12 @@ function DrawSimpleMixerWindow()
     local rv
     rv, settings.simple_mixer_preset_name_input = r.ImGui_InputText(mixer_ctx, "##PresetNameInWindow", settings.simple_mixer_preset_name_input or "")
     
-    settings.simple_mixer_preset_is_global = settings.simple_mixer_preset_is_global or false
-    rv, settings.simple_mixer_preset_is_global = r.ImGui_Checkbox(mixer_ctx, "Global", settings.simple_mixer_preset_is_global)
-    if r.ImGui_IsItemHovered(mixer_ctx) then
-     r.ImGui_SetTooltip(mixer_ctx, "Available in all projects")
-    end
-    
     if r.ImGui_Button(mixer_ctx, "Save", 80, 0) then
-     if settings.simple_mixer_preset_name_input and settings.simple_mixer_preset_name_input ~= "" then
-      settings.simple_mixer_presets = settings.simple_mixer_presets or {}
-      settings.simple_mixer_presets[settings.simple_mixer_preset_name_input] = {
-       tracks = {},
-       is_global = settings.simple_mixer_preset_is_global
+     local current_project_path = r.GetProjectPath("")
+     if current_project_path ~= "" and settings.simple_mixer_preset_name_input and settings.simple_mixer_preset_name_input ~= "" then
+      local mixer_presets = GetProjectMixerPresets()
+      mixer_presets[settings.simple_mixer_preset_name_input] = {
+       tracks = {}
       }
       
       for i, track_guid in ipairs(project_mixer_tracks) do
@@ -10575,20 +11900,20 @@ function DrawSimpleMixerWindow()
         if track then
          local volume = r.GetMediaTrackInfo_Value(track, "D_VOL")
          local pan = r.GetMediaTrackInfo_Value(track, "D_PAN")
-         table.insert(settings.simple_mixer_presets[settings.simple_mixer_preset_name_input].tracks, {
+         table.insert(mixer_presets[settings.simple_mixer_preset_name_input].tracks, {
           guid = track_guid,
           volume = volume,
           pan = pan
          })
         else
-         table.insert(settings.simple_mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
+         table.insert(mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
         end
        else
-        table.insert(settings.simple_mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
+        table.insert(mixer_presets[settings.simple_mixer_preset_name_input].tracks, track_guid)
        end
       end
       
-      SaveSettings()  
+      SaveProjectMixerPresets(mixer_presets)
       r.ImGui_CloseCurrentPopup(mixer_ctx)
      end
     end
@@ -10600,46 +11925,51 @@ function DrawSimpleMixerWindow()
    end
    
    r.ImGui_SetNextItemWidth(mixer_ctx, sidebar_width - 16)
+   local mixer_presets = GetProjectMixerPresets()
    if r.ImGui_BeginCombo(mixer_ctx, "##LoadPresetInWindow", settings.simple_mixer_current_preset or "Load...") then
-    for preset_name, preset_data in pairs(settings.simple_mixer_presets or {}) do
-     local project_path = r.GetProjectPath("")
-     local display_name = preset_name
-     if preset_data.is_global then
-      display_name = preset_name .. " [G]"
-     end
+    for preset_name, preset_data in pairs(mixer_presets) do
      
-     if preset_data.is_global or project_path ~= "" then
-      if r.ImGui_Selectable(mixer_ctx, display_name, false) then
-       project_mixer_tracks = {}
-       if preset_data.tracks then
-        for _, track_data in ipairs(preset_data.tracks) do
-         if type(track_data) == "string" then
-          table.insert(project_mixer_tracks, track_data)
-         elseif type(track_data) == "table" and track_data.guid then
-          table.insert(project_mixer_tracks, track_data.guid)
-          
-          if track_data.volume and track_data.pan then
-           local track = r.BR_GetMediaTrackByGUID(0, track_data.guid)
-           if track then
-            r.SetMediaTrackInfo_Value(track, "D_VOL", track_data.volume)
-            r.SetMediaTrackInfo_Value(track, "D_PAN", track_data.pan)
-           end
+     if r.ImGui_Selectable(mixer_ctx, preset_name, false) then
+      project_mixer_tracks = {}
+      local missing_count = 0
+      if preset_data.tracks then
+       for _, track_data in ipairs(preset_data.tracks) do
+        local guid = nil
+        if type(track_data) == "string" then
+         guid = track_data
+        elseif type(track_data) == "table" and track_data.guid then
+         guid = track_data.guid
+        end
+        
+        if guid then
+         local track = r.BR_GetMediaTrackByGUID(0, guid)
+         if track then
+          table.insert(project_mixer_tracks, guid)
+          if type(track_data) == "table" and track_data.volume and track_data.pan then
+           r.SetMediaTrackInfo_Value(track, "D_VOL", track_data.volume)
+           r.SetMediaTrackInfo_Value(track, "D_PAN", track_data.pan)
           end
+         else
+          missing_count = missing_count + 1
          end
         end
        end
-       SaveProjectMixerTracks(project_mixer_tracks)
-       settings.simple_mixer_current_preset = preset_name
       end
-      
-      if r.ImGui_IsItemClicked(mixer_ctx, r.ImGui_MouseButton_Right()) then
-       settings.simple_mixer_presets[preset_name] = nil
+      SaveProjectMixerTracks(project_mixer_tracks)
+      settings.simple_mixer_current_preset = preset_name
+      if missing_count > 0 then
+       r.ShowMessageBox(missing_count .. " track(s) from preset not found in project.\nThey may have been deleted.", "Mixer Preset", 0)
+      end
+     end
+     
+     if r.ImGui_IsItemClicked(mixer_ctx, r.ImGui_MouseButton_Right()) then
+       local delete_presets = GetProjectMixerPresets()
+       delete_presets[preset_name] = nil
+       SaveProjectMixerPresets(delete_presets)
        if settings.simple_mixer_current_preset == preset_name then
         settings.simple_mixer_current_preset = ""
        end
-       SaveSettings()  
       end
-     end
     end
     r.ImGui_EndCombo(mixer_ctx)
    end
@@ -10696,7 +12026,7 @@ function DrawSimpleMixerWindow()
     
     r.ImGui_EndTable(mixer_ctx)
     
-    if changed then SaveSettings() end
+    if changed then SaveMixerSettings() end
    end
   end
   
@@ -10747,6 +12077,7 @@ function DrawSimpleMixerWindow()
  local pinned_spacers = {}
  if settings.simple_mixer_show_pinned_first then
   for _, track_guid in ipairs(project_mixer_tracks) do
+   if type(track_guid) ~= "string" then goto continue_pinned end
    local track = r.BR_GetMediaTrackByGUID(0, track_guid)
    if track then
     local is_pinned = r.GetMediaTrackInfo_Value(track, "B_TCPPIN") == 1
@@ -10759,6 +12090,7 @@ function DrawSimpleMixerWindow()
      end
     end
    end
+   ::continue_pinned::
   end
   table.sort(pinned_tracks_data, function(a, b) return a.num < b.num end)
   table.sort(pinned_spacers, function(a, b) return a.track_num < b.track_num end)
@@ -10817,6 +12149,7 @@ function DrawSimpleMixerWindow()
 
  local sorted_tracks = {}
  for idx, track_guid in ipairs(project_mixer_tracks) do
+  if type(track_guid) ~= "string" then goto continue_sorted end
   local track = r.BR_GetMediaTrackByGUID(0, track_guid)
   if track then
    local track_num = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
@@ -10825,6 +12158,7 @@ function DrawSimpleMixerWindow()
     table.insert(sorted_tracks, {guid = track_guid, track = track, num = track_num, is_pinned = false})
    end
   end
+  ::continue_sorted::
  end
  table.sort(sorted_tracks, function(a, b) return a.num < b.num end)
 
@@ -15006,13 +16340,59 @@ function Main()
   if settings.window_alpha and settings.window_alpha < 1.0 then
    r.ImGui_SetNextWindowBgAlpha(ctx, settings.window_alpha)
   end
+  
+  local tabs_visible = settings.show_tabs and not settings.tabs_collapsed
+  local tab_bar_h = tabs_visible and (settings.tab_bar_height or 22) or 0
+  
+  if settings.tabs_expand_window and tabs_visible and last_base_window_height and last_base_window_width then
+   local target_height = last_base_window_height + tab_bar_h
+   local current_w, current_h = r.ImGui_GetWindowSize(ctx)
+   if current_h ~= target_height then
+       r.ImGui_SetNextWindowSize(ctx, last_base_window_width, target_height)
+   end
+  end
  
   visible, open = r.ImGui_Begin(ctx, 'Transport' .. window_name_suffix, true, current_window_flags)
   if visible then
    r.ImGui_SetScrollY(ctx, 0)
    
    local our_window_height = r.ImGui_GetWindowHeight(ctx)
+   local our_window_width = r.ImGui_GetWindowWidth(ctx)
    last_our_window_height = our_window_height
+   
+   local tabs_are_visible = settings.show_tabs and not settings.tabs_collapsed
+   local tab_h = settings.tab_bar_height or 22
+   
+   if not startup_resize_done then
+       startup_resize_done = true
+       if settings.tabs_expand_window and settings.show_tabs and settings.tabs_collapsed then
+           local corrected_height = our_window_height - tab_h
+           if corrected_height > 20 then
+               r.ImGui_SetWindowSize(ctx, our_window_width, corrected_height)
+               our_window_height = corrected_height
+           end
+       end
+   end
+   
+   if settings.tabs_expand_window then
+       if tabs_are_visible then
+           if not last_base_window_height then
+               last_base_window_height = our_window_height - tab_h
+               last_base_window_width = our_window_width
+           end
+       else
+           last_base_window_height = our_window_height
+           last_base_window_width = our_window_width
+       end
+   else
+       if tabs_are_visible then
+           last_base_window_height = our_window_height - tab_h
+           last_base_window_width = our_window_width
+       else
+           last_base_window_height = our_window_height
+           last_base_window_width = our_window_width
+       end
+   end
    
    if settings.snap_to_reaper_transport and last_reaper_transport_x and last_reaper_transport_y then
     if force_snap_position then
@@ -15034,8 +16414,27 @@ function Main()
  DrawGradientBackground()
  DrawBackgroundImage()
  
+ local tab_bar_offset = RenderTabBar()
+ current_tab_bar_offset = tab_bar_offset
+ 
+ if tab_bar_offset > 0 then
+     r.ImGui_SetCursorPosY(ctx, tab_bar_offset)
+ end
+ 
  local main_window_width = r.ImGui_GetWindowWidth(ctx)
- local main_window_height = r.ImGui_GetWindowHeight(ctx)
+ local main_window_height = r.ImGui_GetWindowHeight(ctx) - tab_bar_offset
+ 
+ local content_child_open = true
+ if tab_bar_offset > 0 then
+     r.ImGui_SetCursorPos(ctx, 0, tab_bar_offset)
+     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x00000000)
+     content_child_open = r.ImGui_BeginChild(ctx, "##transport_content", main_window_width, main_window_height, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
+     r.ImGui_PopStyleColor(ctx)
+     r.ImGui_PopStyleVar(ctx)
+ end
+ 
+ if content_child_open then
 
  do
  local changed_ref = false
@@ -15054,6 +16453,7 @@ function Main()
  CustomButtons.y_offset_px = settings.custom_buttons_y_offset_px or (settings.custom_buttons_y_offset * main_window_height)
  CustomButtons.x_offset = CustomButtons.x_offset_px / main_window_width
  CustomButtons.y_offset = CustomButtons.y_offset_px / main_window_height
+ CustomButtons.tab_bar_offset = 0
 
  local render_elements = {
   { z_order = settings.z_order_timesel or 21, render = function() ShowTimeSelection(main_window_width, main_window_height) end },
@@ -15292,6 +16692,12 @@ function Main()
  r.ImGui_DrawList_AddRect(dl, win_x, win_y, win_x + win_w, win_y + win_h, border_col, rounding, nil, border_thickness)
  end
  
+ if current_tab_bar_offset > 0 then
+     r.ImGui_EndChild(ctx)
+ end
+ 
+ end
+ 
  r.ImGui_End(ctx)
  end
  
@@ -15365,6 +16771,8 @@ function Main()
  if open then
  r.defer(Main)
  else
+ SaveTabsToExtState()
+ SaveMixerSettings()
  CustomButtons.SaveCurrentButtons()
  CleanupImages()
  CleanupFonts()

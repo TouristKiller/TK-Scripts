@@ -1299,7 +1299,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         local rounding = button.rounding or 0
                         
                         local uv_x = 0
-                        local uv_w = 0.33
+                        local uv_w = button.is_single_state_icon and 1.0 or 0.33
                         local tint_col = 0xFFFFFFFF
                         
                         if button.use_image_tinting then
@@ -1476,14 +1476,16 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         end
                         
                         local uv_x = 0
-                        local uv_w = 0.33
+                        local uv_w = button.is_single_state_icon and 1.0 or 0.33
                         local tint_col = 0xFFFFFFFF
                         
-                        if toggle_state ~= nil and button.show_toggle_state then
-                            uv_x = (toggle_state == 1) and 0.66 or 0
-                        else
-                            if is_active then uv_x = 0.66
-                            elseif is_hovered then uv_x = 0.33 end
+                        if not button.is_single_state_icon then
+                            if toggle_state ~= nil and button.show_toggle_state then
+                                uv_x = (toggle_state == 1) and 0.66 or 0
+                            else
+                                if is_active then uv_x = 0.66
+                                elseif is_hovered then uv_x = 0.33 end
+                            end
                         end
                         
                         if button.use_image_tinting then
@@ -1623,20 +1625,22 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         r.ImGui_SetCursorPos(ctx, cursorX, cursorY)
                         
                         local uv_x = 0
-                        local uv_w = 0.33
+                        local uv_w = button.is_single_state_icon and 1.0 or 0.33
                         local tint_col = 0xFFFFFFFF
                         
-                        if toggle_state ~= nil and button.show_toggle_state then
-                            if toggle_state == 1 then
-                                uv_x = 0.66
+                        if not button.is_single_state_icon then
+                            if toggle_state ~= nil and button.show_toggle_state then
+                                if toggle_state == 1 then
+                                    uv_x = 0.66
+                                else
+                                    uv_x = 0
+                                end
                             else
-                                uv_x = 0
-                            end
-                        else
-                            if is_active then
-                                uv_x = 0.66
-                            elseif is_hovered then
-                                uv_x = 0.33
+                                if is_active then
+                                    uv_x = 0.66
+                                elseif is_hovered then
+                                    uv_x = 0.33
+                                end
                             end
                         end
                         
