@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.2.5
+-- @version 0.2.6
 -- @changelog:
 --[[     
     + Added: Option to only show names on hover in screenshot view
@@ -6911,11 +6911,24 @@ end
 function SearchAllPlugins()
     screenshot_search_results = {}
     local MAX_RESULTS = 250
-    local term = (browser_search_term or ""):lower()
+    local term = (browser_search_term or "")
+    
+    if term == "" then
+        search_warning_message = nil
+        new_search_performed = true
+        RequestClearScreenshotCache()
+        return
+    end
+    
+    if selected_folder then
+        last_selected_folder_before_global = selected_folder
+    end
+    
+    local term_lower = term:lower()
     local matches = {}
     
     for _, plugin in ipairs(PLUGIN_LIST) do
-        if plugin:lower():find(term, 1, true) then
+        if plugin:lower():find(term_lower, 1, true) then
             matches[#matches+1] = plugin
         end
     end
@@ -6941,17 +6954,30 @@ function SearchAllPlugins()
     new_search_performed = true
     selected_folder = nil
     browser_panel_selected = nil
-    last_selected_folder_before_global = nil
     RequestClearScreenshotCache()
 end
 
 function ClearSearch()
     browser_search_term = ""
+    search_warning_message = nil
+    
+    if last_selected_folder_before_global then
+        selected_folder = last_selected_folder_before_global
+        last_selected_folder_before_global = nil
+        screenshot_search_results = nil
+        current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
+        if config.apply_type_priority then
+            current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
+        end
+        RequestClearScreenshotCache()
+        new_search_performed = true
+        return
+    end
+    
     if config.always_search_all then
         SearchAllPlugins()
     else
         screenshot_search_results = {}
-        search_warning_message = nil
         if current_filtered_fx and #current_filtered_fx > 0 then
             for _, plugin in ipairs(current_filtered_fx) do
                 table.insert(screenshot_search_results, {name = plugin})
