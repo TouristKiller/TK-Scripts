@@ -1,13 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.3.1
+-- @version 2.3.2
 -- @changelog:
 --[[     
-    + Increased max font size from 14 to 18 for font settings
-    + Real-time refresh for "Current Track FX" and "Current Project FX"
-    + Fixed indentation and spacing in folder tree
-    + Added depth-based custom colors for folders
-    + Added safety mechanism for screenshots to prevent refresh loops
+    + Added: Option to only show names on hover in screenshot view
+
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -848,6 +845,7 @@ function SetDefaultConfig()
         hide_default_titlebar_menu_items = false,
         add_instruments_on_top = false, 
         show_name_in_screenshot_window = true,
+        show_name_on_hover_only = false,
         show_name_in_main_window = true,
         clean_plugin_names = false, 
         remove_manufacturer_names = false, 
@@ -7600,6 +7598,9 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, config.show_name_in_screenshot_window and "Hide Names" or "Show Names") then
                 config.show_name_in_screenshot_window = not config.show_name_in_screenshot_window; SaveConfig()
             end
+            if r.ImGui_MenuItem(ctx, config.show_name_on_hover_only and "Show Names Always" or "Show Names on Hover Only") then
+                config.show_name_on_hover_only = not config.show_name_on_hover_only; SaveConfig()
+            end
             if r.ImGui_MenuItem(ctx, (config.show_screenshot_info_box and "Hide" or "Show") .. " Info Box") then
                 config.show_screenshot_info_box = not config.show_screenshot_info_box; SaveConfig()
             end
@@ -10475,10 +10476,11 @@ function DrawMasonryLayout(screenshots, top_offset)
                     end
 
                     local text_height = 0
-                    if config.show_name_in_screenshot_window and not config.hidden_names[fx.name] then
+                    local display_name = GetDisplayPluginName(fx.name)
+                    local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[fx.name] and not config.show_name_on_hover_only
+                    if show_name_text then
                         local y_before = r.ImGui_GetCursorPosY(ctx)
                         r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                        local display_name = GetDisplayPluginName(fx.name)
                         r.ImGui_Text(ctx, display_name)
                         r.ImGui_PopTextWrapPos(ctx)
                         r.ImGui_Text(ctx, GetStarsString(fx.name)) 
@@ -10487,6 +10489,10 @@ function DrawMasonryLayout(screenshots, top_offset)
                     end
 
                     r.ImGui_EndGroup(ctx)
+                    if config.show_name_on_hover_only and r.ImGui_IsItemHovered(ctx) then
+                        local stars = GetStarsString(fx.name)
+                        r.ImGui_SetTooltip(ctx, display_name .. (stars ~= "" and "\n" .. stars or ""))
+                    end
 
                     local total_height = display_height + text_height + (config.compact_screenshots and 2 or 10)
                     column_heights[shortest_column] = column_heights[shortest_column] + total_height
@@ -11789,9 +11795,10 @@ function ShowScreenshotWindow()
                                                 end
                                             end
                                             ShowPluginContextMenu(plugin_name, "favorites_win_" .. i)
-                                            if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
+                                            local display_name = GetDisplayPluginName(plugin_name)
+                                            local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only
+                                            if show_name_text then
                                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + dw)
-                                                local display_name = GetDisplayPluginName(plugin_name)
                                                 r.ImGui_Text(ctx, display_name)
                                                 r.ImGui_PopTextWrapPos(ctx)
                                                 r.ImGui_Text(ctx, GetStarsString(plugin_name))
@@ -11799,6 +11806,10 @@ function ShowScreenshotWindow()
                                         end
                                     end
                                     r.ImGui_EndGroup(ctx)
+                                    if config.show_name_on_hover_only and r.ImGui_IsItemHovered(ctx) then
+                                        local stars = GetStarsString(plugin_name)
+                                        r.ImGui_SetTooltip(ctx, GetDisplayPluginName(plugin_name) .. (stars ~= "" and "\n" .. stars or ""))
+                                    end
                                     if not config.compact_screenshots and column == num_columns - 1 then
                                         r.ImGui_Dummy(ctx, 0, 5)
                                     end
@@ -12007,9 +12018,10 @@ function ShowScreenshotWindow()
                                                 end
                                             end
                                             ShowPluginContextMenu(plugin_name, "custom_win_" .. i)
-                                            if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
+                                            local display_name = GetDisplayPluginName(plugin_name)
+                                            local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only
+                                            if show_name_text then
                                                 r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + dw)
-                                                local display_name = GetDisplayPluginName(plugin_name)
                                                 r.ImGui_Text(ctx, display_name)
                                                 r.ImGui_PopTextWrapPos(ctx)
                                                 r.ImGui_Text(ctx, GetStarsString(plugin_name))
@@ -12017,6 +12029,10 @@ function ShowScreenshotWindow()
                                         end
                                     end
                                     r.ImGui_EndGroup(ctx)
+                                    if config.show_name_on_hover_only and r.ImGui_IsItemHovered(ctx) then
+                                        local stars = GetStarsString(plugin_name)
+                                        r.ImGui_SetTooltip(ctx, GetDisplayPluginName(plugin_name) .. (stars ~= "" and "\n" .. stars or ""))
+                                    end
                                     if not config.compact_screenshots and column == num_columns - 1 then
                                         r.ImGui_Dummy(ctx, 0, 5)
                                     end
@@ -12183,9 +12199,10 @@ function ShowScreenshotWindow()
                                                     track_number = plugin.track_number,
                                                     fx_index = plugin.fx_index,
                                                     is_master = plugin.is_master
-                                                }, "current_project_fx_" .. i)         
-                                                if config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] then
-                                                    local display_name = GetDisplayPluginName(plugin.fx_name)
+                                                }, "current_project_fx_" .. i)
+                                                local display_name = GetDisplayPluginName(plugin.fx_name)
+                                                local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin.fx_name] and not config.show_name_on_hover_only
+                                                if show_name_text then
                                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                                     r.ImGui_Text(ctx, display_name)
                                                     r.ImGui_PopTextWrapPos(ctx)
@@ -12197,6 +12214,10 @@ function ShowScreenshotWindow()
                                 end
                                 r.ImGui_PopItemWidth(ctx)
                                 r.ImGui_EndGroup(ctx)
+                                if config.show_name_on_hover_only and r.ImGui_IsItemHovered(ctx) then
+                                    local stars = GetStarsString(plugin.fx_name)
+                                    r.ImGui_SetTooltip(ctx, GetDisplayPluginName(plugin.fx_name) .. (stars ~= "" and "\n" .. stars or ""))
+                                end
                                 
                                 if not config.compact_screenshots then
                                     if column == num_columns - 1 then
@@ -12301,8 +12322,9 @@ function ShowScreenshotWindow()
                                         track_number = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER")
                                     }, "current_track_" .. i)
 
-                                    if config.show_name_in_screenshot_window and not config.hidden_names[fx.fx_name] then
-                                        local display_name = GetDisplayPluginName(fx.fx_name)
+                                    local display_name = GetDisplayPluginName(fx.fx_name)
+                                    local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[fx.fx_name] and not config.show_name_on_hover_only
+                                    if show_name_text then
                                         r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
                                         r.ImGui_Text(ctx, display_name)
                                         r.ImGui_PopTextWrapPos(ctx)
@@ -12312,6 +12334,10 @@ function ShowScreenshotWindow()
                             end
                         end
                         r.ImGui_EndGroup(ctx)
+                        if config.show_name_on_hover_only and r.ImGui_IsItemHovered(ctx) then
+                            local stars = GetStarsString(fx.fx_name)
+                            r.ImGui_SetTooltip(ctx, GetDisplayPluginName(fx.fx_name) .. (stars ~= "" and "\n" .. stars or ""))
+                        end
                         
                         if not config.compact_screenshots then
                             if column == num_columns - 1 then
@@ -12542,9 +12568,10 @@ function ShowScreenshotWindow()
                                                     end
                                                 end
                                                 ShowPluginContextMenu(plugin_name, "folder_" .. i)
-                                                if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
+                                                local display_name = GetDisplayPluginName(plugin_name)
+                                                local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only
+                                                if show_name_text then
                                                     r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                                    local display_name = GetDisplayPluginName(plugin_name)
                                                     r.ImGui_Text(ctx, display_name)
                                                     r.ImGui_PopTextWrapPos(ctx)
                                                     r.ImGui_Text(ctx, GetStarsString(plugin_name))
@@ -12552,6 +12579,10 @@ function ShowScreenshotWindow()
                                             end
                                         end
                                         r.ImGui_EndGroup(ctx)
+                                        if config.show_name_on_hover_only and r.ImGui_IsItemHovered(ctx) then
+                                            local stars = GetStarsString(plugin_name)
+                                            r.ImGui_SetTooltip(ctx, GetDisplayPluginName(plugin_name) .. (stars ~= "" and "\n" .. stars or ""))
+                                        end
                                         if not config.compact_screenshots and column == num_columns - 1 then
                                             r.ImGui_Dummy(ctx, 0, 5)
                                         end
@@ -12873,9 +12904,10 @@ function ShowScreenshotWindow()
                                         end
                                         
                                         ShowPluginContextMenu(plugin_name, "search_" .. i)
-                                        if config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] then
+                                        local display_name = GetDisplayPluginName(plugin_name)
+                                        local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only
+                                        if show_name_text then
                                             r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + display_width)
-                                            local display_name = GetDisplayPluginName(plugin_name)
                                             r.ImGui_Text(ctx, display_name)
                                             r.ImGui_PopTextWrapPos(ctx)
                                             r.ImGui_Text(ctx, GetStarsString(plugin_name))
@@ -12884,6 +12916,10 @@ function ShowScreenshotWindow()
                                 end
                             end
                             r.ImGui_EndGroup(ctx)
+                            if config.show_name_on_hover_only and r.ImGui_IsItemHovered(ctx) then
+                                local stars = GetStarsString(plugin_name)
+                                r.ImGui_SetTooltip(ctx, GetDisplayPluginName(plugin_name) .. (stars ~= "" and "\n" .. stars or ""))
+                            end
                             if column == num_columns - 1 and not config.compact_screenshots then
                                 r.ImGui_Dummy(ctx, 0, 5)
                             end
