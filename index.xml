@@ -607,8 +607,19 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.7.4" author="TouristKiller" time="2025-12-13T00:15:00Z">
+        <version name="1.8.0" author="TouristKiller" time="2025-12-19T17:15:00Z">
             <changelog><![CDATA[
+
+v1.8.0:
++ Icons tab: Added REAPER Track Icons folder as browse source with subfolder dropdown
++ Icons tab: Added "Use TCP Icons" option - TCP icons take priority and sync to overlay
++ Icons tab: Added "Sync TCP" button to synchronize overlay icons with TCP icons
++ Icons tab: Renamed browse modes to "Toolbar", "Track Icons", "Custom"
++ Fixed icon browser image caching to prevent excessive resource creation
++ Fixed icon grid last column going off-screen
++ Added Overlay Toggle button (O/X) next to Settings button for quick hide/show
++ Overlay can now be quickly disabled for external drag & drop operations 
+           
 v1.7.3:
 + corrected an oepsy ;o)
 

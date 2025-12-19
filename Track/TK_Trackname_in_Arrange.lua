@@ -1,8 +1,18 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.7.4
+-- @version 1.8.0
 -- @changelog 
 --[[
+v1.8.0:
++ Icons tab: Added REAPER Track Icons folder as browse source with subfolder dropdown
++ Icons tab: Added "Use TCP Icons" option - TCP icons take priority and sync to overlay
++ Icons tab: Added "Sync TCP" button to synchronize overlay icons with TCP icons
++ Icons tab: Renamed browse modes to "Toolbar", "Track Icons", "Custom"
++ Fixed icon browser image caching to prevent excessive resource creation
++ Fixed icon grid last column going off-screen
++ Added Overlay Toggle button (O/X) next to Settings button for quick hide/show
++ Overlay can now be quickly disabled for external drag & drop operations
+
 v1.7.2:
 + New Time Selection tab with integration for TK_time selection loop color script
 + Overlay Grid: Added Adaptive grid division mode (zooms with arrange view)
@@ -111,6 +121,7 @@ local folder_browser_open = false
 local folder_browser_path = ""
 local folder_browser_drives = {}
 local folder_browser_quick_paths = {}
+local overlay_btn_clicked = false
 
 local function GetQuickPaths()
     local paths = {}
@@ -584,6 +595,7 @@ local default_settings              = {
     icon_position                   = 1,  -- 1=left, 2=right
     icon_spacing                    = 8,
     icon_opacity                    = 1.0,
+    use_tcp_icons                   = false,
     exclude_hide_label             = true,
     exclude_hide_color              = true,
     exclude_hide_border             = true,
@@ -2042,19 +2054,37 @@ function ShowSettingsWindow()
         -- ═══════════════════════════════════════════════════════════════════
         local changed
         
-        -- Rij 1: Show Icons, Clear Icons
         if r.ImGui_RadioButton(ctx, "Show Icons", settings.show_track_icons) then
             settings.show_track_icons = not settings.show_track_icons
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, "Use TCP Icons", settings.use_tcp_icons) then
+            settings.use_tcp_icons = not settings.use_tcp_icons
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_BeginTooltip(ctx)
+            r.ImGui_Text(ctx, "TCP icons hebben voorrang en worden gesynchroniseerd")
+            r.ImGui_EndTooltip(ctx)
         end
         r.ImGui_SameLine(ctx, col3)
         if r.ImGui_Button(ctx, "Clear Icons", slider_width) then
             for i = 0, r.CountSelectedTracks(0) - 1 do
                 local track = r.GetSelectedTrack(0, i)
-                track_icon_manager.ClearTrackIcon(track)
+                track_icon_manager.ClearTrackIcon(track, settings.use_tcp_icons)
+            end
+        end
+        if settings.use_tcp_icons then
+            r.ImGui_SameLine(ctx, col4)
+            if r.ImGui_Button(ctx, "Sync TCP", slider_width) then
+                local synced, cleared = track_icon_manager.SyncFromTCP()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_BeginTooltip(ctx)
+                r.ImGui_Text(ctx, "Synchroniseer overlay icons met TCP icons")
+                r.ImGui_EndTooltip(ctx)
             end
         end
         
-        -- Rij 2: Size slider + label, Spacing slider + label
         r.ImGui_SetNextItemWidth(ctx, slider_width)
         changed, settings.icon_size = r.ImGui_SliderInt(ctx, "##IconSize", settings.icon_size, 12, 64)
         r.ImGui_SameLine(ctx, col2)
@@ -2065,7 +2095,6 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, col4)
         r.ImGui_Text(ctx, "Spacing")
         
-        -- Rij 3: Opacity slider + label, Position radio buttons + label
         r.ImGui_SetNextItemWidth(ctx, slider_width)
         changed, settings.icon_opacity = r.ImGui_SliderDouble(ctx, "##IconOpacity", settings.icon_opacity, 0.0, 1.0)
         r.ImGui_SameLine(ctx, col2)
@@ -2085,11 +2114,15 @@ function ShowSettingsWindow()
         r.ImGui_Separator(ctx)
         r.ImGui_Dummy(ctx, 0, 2)
         
-        -- Embedded Icon Browser
-        -- Mode selection row
-        if r.ImGui_RadioButton(ctx, "REAPER", track_icon_browser.browse_mode == "icons") then
+        if r.ImGui_RadioButton(ctx, "Toolbar", track_icon_browser.browse_mode == "icons") then
             if track_icon_browser.browse_mode ~= "icons" then
                 track_icon_browser.SetBrowseMode("icons")
+            end
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, "Track Icons", track_icon_browser.browse_mode == "track_icons") then
+            if track_icon_browser.browse_mode ~= "track_icons" then
+                track_icon_browser.SetBrowseMode("track_icons")
             end
         end
         r.ImGui_SameLine(ctx)
@@ -2106,7 +2139,6 @@ function ShowSettingsWindow()
             track_icon_browser.FilterIcons()
         end
         
-        -- Scale/Folder selection row
         if track_icon_browser.browse_mode == "icons" then
             if r.ImGui_RadioButton(ctx, "100%", track_icon_browser.icon_scale == 100) then
                 if track_icon_browser.icon_scale ~= 100 then
@@ -2130,6 +2162,23 @@ function ShowSettingsWindow()
             end
             r.ImGui_SameLine(ctx, col3)
             r.ImGui_Text(ctx, string.format("(%d icons)", #track_icon_browser.filtered_icons))
+        elseif track_icon_browser.browse_mode == "track_icons" then
+            if #track_icon_browser.track_icons_subfolders == 0 then
+                track_icon_browser.LoadTrackIconsSubfolders()
+            end
+            r.ImGui_SetNextItemWidth(ctx, slider_width)
+            if r.ImGui_BeginCombo(ctx, "##SubfolderCombo", track_icon_browser.track_icons_subfolder) then
+                for _, subfolder in ipairs(track_icon_browser.track_icons_subfolders) do
+                    if r.ImGui_Selectable(ctx, subfolder, track_icon_browser.track_icons_subfolder == subfolder) then
+                        track_icon_browser.SetTrackIconsSubfolder(subfolder)
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_SameLine(ctx, col2)
+            r.ImGui_Text(ctx, "Folder")
+            r.ImGui_SameLine(ctx, col3)
+            r.ImGui_Text(ctx, string.format("(%d icons)", #track_icon_browser.filtered_icons))
         else
             if r.ImGui_Button(ctx, "Select Folder", slider_width) then
                 folder_browser_path = track_icon_browser.custom_image_folder ~= "" and track_icon_browser.custom_image_folder or ""
@@ -2150,16 +2199,18 @@ function ShowSettingsWindow()
         
         r.ImGui_Dummy(ctx, 0, 2)
         
-        -- Load icons if not loaded
         if #track_icon_browser.icons == 0 then
             if track_icon_browser.browse_mode == "images" and track_icon_browser.custom_image_folder == "" then
                 track_icon_browser.LoadLastImageFolder()
+            elseif track_icon_browser.browse_mode == "track_icons" then
+                if #track_icon_browser.track_icons_subfolders == 0 then
+                    track_icon_browser.LoadTrackIconsSubfolders()
+                end
             end
             track_icon_browser.LoadIcons()
             track_icon_browser.FilterIcons()
         end
         
-        -- Icon grid (fills remaining space before footer)
         local footer_height = 32
         local _, avail_height = r.ImGui_GetContentRegionAvail(ctx)
         local available_height = avail_height - footer_height - 8
@@ -2167,9 +2218,12 @@ function ShowSettingsWindow()
         
         if r.ImGui_BeginChild(ctx, "EmbeddedIconGrid", 0, available_height, 1) then
             local child_width = r.ImGui_GetContentRegionAvail(ctx)
-            local icon_size = 32
+            local icon_display_size = 32
             local icon_spacing = 4
-            local columns = math.floor(child_width / (icon_size + icon_spacing))
+            local scrollbar_width = 16
+            local usable_width = child_width - scrollbar_width - icon_spacing
+            local cell_size = icon_display_size + icon_spacing
+            local columns = math.floor(usable_width / cell_size)
             if columns < 1 then columns = 1 end
             
             for idx, icon in ipairs(track_icon_browser.filtered_icons) do
@@ -2179,38 +2233,40 @@ function ShowSettingsWindow()
                     r.ImGui_SameLine(ctx, nil, icon_spacing)
                 end
                 
-                local has_image = track_icon_browser.image_cache[icon.name] and 
-                                r.ImGui_ValidatePtr(track_icon_browser.image_cache[icon.name], 'ImGui_Image*')
+                local cache_key = icon.path
+                local has_image = track_icon_browser.image_cache[cache_key] and 
+                                r.ImGui_ValidatePtr(track_icon_browser.image_cache[cache_key], 'ImGui_Image*')
                 
                 if has_image then
                     local uv_u2 = (track_icon_browser.browse_mode == "icons") and 0.33 or 1.0
                     
-                    if r.ImGui_ImageButton(ctx, "##embicon" .. idx, track_icon_browser.image_cache[icon.name],
-                        icon_size, icon_size, 0, 0, uv_u2, 1) then
-                        -- Assign icon to selected tracks
+                    if r.ImGui_ImageButton(ctx, "##embicon" .. idx, track_icon_browser.image_cache[cache_key],
+                        icon_display_size, icon_display_size, 0, 0, uv_u2, 1) then
                         for i = 0, r.CountSelectedTracks(0) - 1 do
                             local track = r.GetSelectedTrack(0, i)
                             if track then
-                                track_icon_manager.SetTrackIcon(track, icon.path)
+                                track_icon_manager.SetTrackIcon(track, icon.path, settings.use_tcp_icons)
                             end
                         end
                     end
                 else
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x404040FF)
-                    if r.ImGui_Button(ctx, "##embicon" .. idx, icon_size, icon_size) then
+                    if r.ImGui_Button(ctx, "##embicon" .. idx, icon_display_size, icon_display_size) then
                         for i = 0, r.CountSelectedTracks(0) - 1 do
                             local track = r.GetSelectedTrack(0, i)
                             if track then
-                                track_icon_manager.SetTrackIcon(track, icon.path)
+                                track_icon_manager.SetTrackIcon(track, icon.path, settings.use_tcp_icons)
                             end
                         end
                     end
                     r.ImGui_PopStyleColor(ctx)
                     
-                    if r.ImGui_IsItemVisible(ctx) then
+                    if r.ImGui_IsItemVisible(ctx) and not track_icon_browser.image_cache[cache_key] then
                         local ok, img = pcall(r.ImGui_CreateImage, icon.path)
                         if ok and img then
-                            track_icon_browser.image_cache[icon.name] = img
+                            track_icon_browser.image_cache[cache_key] = img
+                        else
+                            track_icon_browser.image_cache[cache_key] = false
                         end
                     end
                 end
@@ -3064,7 +3120,7 @@ end
 function RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height, keep_text_aligned)
     if not settings.show_track_icons then return text_x end
     
-    local icon_path = track_icon_manager.GetTrackIcon(track)
+    local icon_path = track_icon_manager.GetTrackIcon(track, settings.use_tcp_icons)
     if not icon_path then return text_x end
     
     local icon_img = track_icon_manager.GetIconImage(icon_path)
@@ -3743,9 +3799,64 @@ function loop()
     end
 
     settings_visible = r.GetExtState("TK_TRACKNAMES", "settings_visible") == "1"
+    local overlay_gui_visible = r.GetExtState("TK_TRACKNAMES", "overlay_visible") ~= "0"
+    
     if not (ctx and r.ImGui_ValidatePtr(ctx, 'ImGui_Context*')) then
         ctx = r.ImGui_CreateContext('Track Names')
         CreateFonts()
+    end
+
+    if settings.show_settings_button then
+        r.ImGui_SetNextWindowPos(ctx, settings.button_x, settings.button_y, r.ImGui_Cond_Once())
+        local button_flags = r.ImGui_WindowFlags_NoTitleBar() | 
+                            r.ImGui_WindowFlags_TopMost() |
+                            r.ImGui_WindowFlags_NoResize() |
+                            r.ImGui_WindowFlags_AlwaysAutoResize()
+        
+        local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, button_flags)
+        if button_visible then
+            settings.button_x, settings.button_y = r.ImGui_GetWindowPos(ctx)
+            
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
+            r.ImGui_PushFont(ctx, settings_font)
+            
+            if overlay_gui_visible then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x44AA44FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x55BB55FF)
+            else
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xAA4444FF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xBB5555FF)
+            end
+            
+            r.ImGui_Button(ctx, overlay_gui_visible and "O" or "X", 20, 20)
+            if r.ImGui_IsItemClicked(ctx, 0) then
+                overlay_gui_visible = not overlay_gui_visible
+                r.SetExtState("TK_TRACKNAMES", "overlay_visible", overlay_gui_visible and "1" or "0", false)
+                overlay_btn_clicked = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_BeginTooltip(ctx)
+                r.ImGui_Text(ctx, overlay_gui_visible and "Hide Overlay (for drag & drop)" or "Show Overlay")
+                r.ImGui_EndTooltip(ctx)
+            end
+            r.ImGui_PopStyleColor(ctx, 2)
+            
+            r.ImGui_SameLine(ctx)
+            
+            if r.ImGui_Button(ctx, "S", 20, 20) then
+                settings_visible = not settings_visible
+                r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_BeginTooltip(ctx)
+                r.ImGui_Text(ctx, "Settings")
+                r.ImGui_EndTooltip(ctx)
+            end
+            
+            r.ImGui_PopFont(ctx)
+            r.ImGui_PopStyleVar(ctx)
+            r.ImGui_End(ctx)
+        end
     end
 
     local current_project = reaper.EnumProjects(-1)
@@ -3800,7 +3911,12 @@ function loop()
             WX, WY = r.ImGui_GetWindowPos(ctx)
         end
     end
-    if visible then
+    
+    overlay_gui_visible = r.GetExtState("TK_TRACKNAMES", "overlay_visible") ~= "0"
+    local skip_overlay_this_frame = overlay_btn_clicked and not overlay_gui_visible
+    overlay_btn_clicked = false
+    
+    if visible and overlay_gui_visible and not skip_overlay_this_frame then
         local max_width = 0
 
         if not cached_bg_color then
@@ -4228,7 +4344,7 @@ function loop()
                                     end
                                     
                                     local icon_offset = 0
-                                    if settings.show_track_icons and track_icon_manager.GetTrackIcon(track) and settings.icon_position == 1 then
+                                    if settings.show_track_icons and track_icon_manager.GetTrackIcon(track, settings.use_tcp_icons) and settings.icon_position == 1 then
                                         icon_offset = settings.icon_size + settings.icon_spacing
                                     end
                                     
@@ -4255,7 +4371,7 @@ function loop()
                                         end
                                         
                                         local icon_offset = 0
-                                        if settings.show_track_icons and track_icon_manager.GetTrackIcon(track) and settings.icon_position == 2 then
+                                        if settings.show_track_icons and track_icon_manager.GetTrackIcon(track, settings.use_tcp_icons) and settings.icon_position == 2 then
                                             icon_offset = settings.icon_size + settings.icon_spacing
                                         end
                                         
@@ -4390,10 +4506,9 @@ function loop()
                                 local track_text_width = r.ImGui_CalcTextSize(ctx, modified_display_name)
                                 local info_text_x
                                 
-                                -- Calculate extra offset if icon is shown
                                 local icon_offset = 0
-                                if settings.show_track_icons and track_icon_manager.GetTrackIcon(track) then
-                                    if settings.icon_position == 2 then -- Icon right of text
+                                if settings.show_track_icons and track_icon_manager.GetTrackIcon(track, settings.use_tcp_icons) then
+                                    if settings.icon_position == 2 then
                                         icon_offset = settings.icon_size + settings.icon_spacing
                                     end
                                 end
@@ -4493,34 +4608,12 @@ function loop()
         end 
         
         r.ImGui_End(ctx)
+    elseif visible then
+        r.ImGui_End(ctx)
     end
     r.ImGui_PopStyleVar(ctx)
     r.ImGui_PopStyleColor(ctx, 2)
     r.ImGui_PopFont(ctx)
-
-
-    if settings.show_settings_button then
-        r.ImGui_SetNextWindowPos(ctx, settings.button_x, settings.button_y, r.ImGui_Cond_Once())
-        local button_flags = r.ImGui_WindowFlags_NoTitleBar() | 
-                            r.ImGui_WindowFlags_TopMost() |
-                            r.ImGui_WindowFlags_NoResize() |
-                            r.ImGui_WindowFlags_AlwaysAutoResize()
-        
-        local button_visible = r.ImGui_Begin(ctx, '##Settings Button', true, button_flags)
-        if button_visible then
-            settings.button_x, settings.button_y = r.ImGui_GetWindowPos(ctx)
-            
-             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4.0)
-            r.ImGui_PushFont(ctx, settings_font)
-            if r.ImGui_Button(ctx, "S") then
-                settings_visible = not settings_visible
-                r.SetExtState("TK_TRACKNAMES", "settings_visible", settings_visible and "1" or "0", false)
-            end
-            r.ImGui_PopFont(ctx)
-            r.ImGui_PopStyleVar(ctx)
-            r.ImGui_End(ctx)
-        end
-    end
 
     if settings_visible then
         ShowSettingsWindow()
@@ -4530,13 +4623,12 @@ function loop()
     if track_icon_browser.show_window then
         track_icon_browser.Show(ctx)
         
-        -- Als een icon is geselecteerd, apply to alle geselecteerde tracks
         if track_icon_browser.selected_icon then
             local sel_track_count = r.CountSelectedTracks(0)
             if sel_track_count > 0 then
                 for i = 0, sel_track_count - 1 do
                     local track = r.GetSelectedTrack(0, i)
-                    track_icon_manager.SetTrackIcon(track, track_icon_browser.selected_icon)
+                    track_icon_manager.SetTrackIcon(track, track_icon_browser.selected_icon, settings.use_tcp_icons)
                 end
             end
             track_icon_browser.selected_icon = nil
