@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.2.9
+-- @version 2.3.1
 -- @changelog:
 --[[     
     + Increased max font size from 14 to 18 for font settings

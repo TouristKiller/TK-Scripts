@@ -1,6 +1,8 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.0.5
+-- @version 2.1.0
+-- @changelog
+--   + Added support for startup mode via ExtState (for mode-specific launcher scripts)
 
 --------------------------------------------------------------------------------
 local r = reaper
@@ -4578,6 +4580,12 @@ local function Frame()
         SaveNotebook()
        
     end
+end
+
+local startup_mode = r.GetExtState(EXT_NAMESPACE, "startup_mode")
+if startup_mode and (startup_mode == "track" or startup_mode == "item" or startup_mode == "project" or startup_mode == "global") then
+    state.mode = startup_mode
+    r.DeleteExtState(EXT_NAMESPACE, "startup_mode", false)
 end
 
 ctx = r.ImGui_CreateContext(SCRIPT_NAME)
