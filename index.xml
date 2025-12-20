@@ -607,8 +607,12 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.8.1" author="TouristKiller" time="2025-12-20T01:00:00Z">
+        <version name="1.8.2" author="TouristKiller" time="2025-12-20T01:30:00Z">
             <changelog><![CDATA[
+
+v1.8.2:
++ Fixed standalone toggle script not working for turning overlay OFF
++ Overlay now properly clears when toggled off via external script
 
 v1.8.1:
 + Added TK_Trackname_Overlay_Toggle.lua script for toolbar/shortcut integration

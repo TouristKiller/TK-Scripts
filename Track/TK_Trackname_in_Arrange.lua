@@ -1,8 +1,12 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.1
+-- @version 1.8.2
 -- @changelog 
 --[[
+v1.8.2:
++ Fixed standalone toggle script not working for turning overlay OFF
++ Overlay now properly clears when toggled off via external script
+
 v1.8.1:
 + Added TK_Trackname_Overlay_Toggle.lua script for toolbar/shortcut integration
 + Fixed icon grid column calculation for better fitting in window
@@ -3893,6 +3897,31 @@ function loop()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x00000000)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0.0)
 
+    local overlay_gui_visible = r.GetExtState("TK_TRACKNAMES", "overlay_visible") ~= "0"
+    
+    if not overlay_gui_visible then
+        r.ImGui_PopStyleVar(ctx)
+        r.ImGui_PopStyleColor(ctx, 2)
+        r.ImGui_PopFont(ctx)
+        
+        r.ImGui_SetNextWindowPos(ctx, -1000, -1000)
+        r.ImGui_SetNextWindowSize(ctx, 1, 1)
+        local hidden_flags = r.ImGui_WindowFlags_NoTitleBar() | 
+                            r.ImGui_WindowFlags_NoResize() | 
+                            r.ImGui_WindowFlags_NoMove() | 
+                            r.ImGui_WindowFlags_NoScrollbar() |
+                            r.ImGui_WindowFlags_NoFocusOnAppearing()
+        local _, hidden_open = r.ImGui_Begin(ctx, 'TK Tracknames (Hidden)', true, hidden_flags)
+        r.ImGui_End(ctx)
+        
+        if hidden_open then
+            r.defer(loop)
+        else
+            SaveSettings()
+        end
+        return
+    end
+
     -- Pass-through overlay implementatie (Linux: off-screen micro host + ForegroundDrawList)
     local use_pass_through = settings.pass_through_overlay
     local draw_list, WX, WY
@@ -3920,11 +3949,7 @@ function loop()
         end
     end
     
-    overlay_gui_visible = r.GetExtState("TK_TRACKNAMES", "overlay_visible") ~= "0"
-    local skip_overlay_this_frame = overlay_btn_clicked and not overlay_gui_visible
-    overlay_btn_clicked = false
-    
-    if visible and overlay_gui_visible and not skip_overlay_this_frame then
+    if visible then
         local max_width = 0
 
         if not cached_bg_color then
