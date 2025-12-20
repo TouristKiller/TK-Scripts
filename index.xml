@@ -607,8 +607,13 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.8.0" author="TouristKiller" time="2025-12-19T17:15:00Z">
+        <version name="1.8.1" author="TouristKiller" time="2025-12-20T01:00:00Z">
             <changelog><![CDATA[
+
+v1.8.1:
++ Added TK_Trackname_Overlay_Toggle.lua script for toolbar/shortcut integration
++ Fixed icon grid column calculation for better fitting in window
++ Fixed nil error for track_icons_subfolders on first run
 
 v1.8.0:
 + Icons tab: Added REAPER Track Icons folder as browse source with subfolder dropdown
@@ -645,6 +650,7 @@ v1.7.0:
 ]]>
             </changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
+            <source main="main" file="TK_Trackname_Overlay_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Overlay_Toggle.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
             <source main="main" file="TK_Trackname_DarkParentToggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_DarkParentToggle.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/json.lua</source>

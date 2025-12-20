@@ -1,8 +1,13 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.0
+-- @version 1.8.1
 -- @changelog 
 --[[
+v1.8.1:
++ Added TK_Trackname_Overlay_Toggle.lua script for toolbar/shortcut integration
++ Fixed icon grid column calculation for better fitting in window
++ Fixed nil error for track_icons_subfolders on first run
+
 v1.8.0:
 + Icons tab: Added REAPER Track Icons folder as browse source with subfolder dropdown
 + Icons tab: Added "Use TCP Icons" option - TCP icons take priority and sync to overlay
@@ -2163,7 +2168,7 @@ function ShowSettingsWindow()
             r.ImGui_SameLine(ctx, col3)
             r.ImGui_Text(ctx, string.format("(%d icons)", #track_icon_browser.filtered_icons))
         elseif track_icon_browser.browse_mode == "track_icons" then
-            if #track_icon_browser.track_icons_subfolders == 0 then
+            if not track_icon_browser.track_icons_subfolders or #track_icon_browser.track_icons_subfolders == 0 then
                 track_icon_browser.LoadTrackIconsSubfolders()
             end
             r.ImGui_SetNextItemWidth(ctx, slider_width)
@@ -2220,9 +2225,12 @@ function ShowSettingsWindow()
             local child_width = r.ImGui_GetContentRegionAvail(ctx)
             local icon_display_size = 32
             local icon_spacing = 4
-            local scrollbar_width = 16
-            local usable_width = child_width - scrollbar_width - icon_spacing
-            local cell_size = icon_display_size + icon_spacing
+            local frame_padding = 4
+            local button_size = icon_display_size + (frame_padding * 2)
+            local cell_size = button_size + icon_spacing
+            local scrollbar_width = 20
+            local window_padding = 8
+            local usable_width = child_width - scrollbar_width - window_padding
             local columns = math.floor(usable_width / cell_size)
             if columns < 1 then columns = 1 end
             

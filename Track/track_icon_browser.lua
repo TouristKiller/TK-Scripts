@@ -17,7 +17,9 @@ local TrackIconBrowser = {
     browse_mode = "icons",
     custom_image_folder = "",
     selected_image_path = nil,
-    target_track = nil,  -- Track to assign icon to
+    target_track = nil,
+    track_icons_subfolders = {},
+    track_icons_subfolder = "(root)",
 }
 
 function TrackIconBrowser.LoadLastImageFolder()
@@ -55,6 +57,27 @@ function TrackIconBrowser.LoadIcons()
             end
             idx = idx + 1
             
+            if idx > 10000 then break end
+        end
+    elseif TrackIconBrowser.browse_mode == "track_icons" then
+        local resource_path = r.GetResourcePath() .. "/Data/track_icons"
+        
+        if TrackIconBrowser.track_icons_subfolder and TrackIconBrowser.track_icons_subfolder ~= "(root)" then
+            resource_path = resource_path .. "/" .. TrackIconBrowser.track_icons_subfolder
+        end
+        
+        local idx = 0
+        while true do
+            local file = r.EnumerateFiles(resource_path, idx)
+            if not file then break end
+            if file:match("%.png$") or file:match("%.jpg$") or file:match("%.jpeg$") or file:match("%.bmp$") then
+                local icon = {
+                    name = file,
+                    path = resource_path .. "/" .. file
+                }
+                table.insert(TrackIconBrowser.icons, icon)
+            end
+            idx = idx + 1
             if idx > 10000 then break end
         end
     else
@@ -120,6 +143,33 @@ function TrackIconBrowser.FilterIcons()
             end
         end
     end
+end
+
+function TrackIconBrowser.LoadTrackIconsSubfolders()
+    TrackIconBrowser.track_icons_subfolders = {"(root)"}
+    local track_icons_path = r.GetResourcePath() .. "/Data/track_icons"
+    
+    local idx = 0
+    while true do
+        local subdir = r.EnumerateSubdirectories(track_icons_path, idx)
+        if not subdir then break end
+        if subdir ~= "." and subdir ~= ".." then
+            table.insert(TrackIconBrowser.track_icons_subfolders, subdir)
+        end
+        idx = idx + 1
+        if idx > 1000 then break end
+    end
+    
+    table.sort(TrackIconBrowser.track_icons_subfolders, function(a, b)
+        if a == "(root)" then return true end
+        if b == "(root)" then return false end
+        return a:lower() < b:lower()
+    end)
+end
+
+function TrackIconBrowser.SetTrackIconsSubfolder(subfolder)
+    TrackIconBrowser.track_icons_subfolder = subfolder
+    TrackIconBrowser.ReloadIcons()
 end
 
 return TrackIconBrowser
