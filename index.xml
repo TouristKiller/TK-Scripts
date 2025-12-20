@@ -249,7 +249,7 @@
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.5.1" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-12T22:51:00Z">
+      <version name="2.5.2" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-20T03:30:00Z">
         <changelog><![CDATA[
 2.5.1
 + Absolute Chord Storage: Progressions now store chords by root note + chord type (not relative position)

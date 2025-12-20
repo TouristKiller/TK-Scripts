@@ -583,6 +583,28 @@ Data.progressionTemplates = {
     }
   },
   {
+    name = "Reggae / Dub",
+    minNotes = 5,
+    progressions = {
+      { name = "One Drop (I-IV)", chords = {1, 4, 1, 4, 1, 4, 1, 4} },
+      { name = "Roots Rock (I-V)", chords = {1, 5, 1, 5, 1, 5, 1, 5} },
+      { name = "Steppers (I-IV-V-IV)", chords = {1, 1, 4, 4, 5, 5, 4, 4} },
+      { name = "Ska Bounce (I-IV-V-IV)", chords = {1, 4, 5, 4, 1, 4, 5, 4} },
+      { name = "Dub Plate (i-iv)", chords = {1, 4, 1, 4, 1, 4, 1, 4} },
+      { name = "Rub-a-Dub (i-VII-VI-VII)", chords = {1, 7, 6, 7, 1, 7, 6, 7} },
+      { name = "Rockers (i-iv-V-iv)", chords = {1, 4, 5, 4, 1, 4, 5, 4} },
+      { name = "Black Uhuru Style (I-IV-I-IV)", chords = {1, 4, 1, 4} },
+      { name = "Sly & Robbie (i-iv-i-V)", chords = {1, 4, 1, 5, 1, 4, 1, 5} },
+      { name = "Roots Radics (i-VII-i-iv)", chords = {1, 7, 1, 4, 1, 7, 1, 4} },
+      { name = "King Tubby (I-IV-V-I)", chords = {1, 4, 5, 1, 1, 4, 5, 1} },
+      { name = "Lee Perry (i-III-iv-VII)", chords = {1, 3, 4, 7, 1, 3, 4, 7} },
+      { name = "Nyabinghi (I-IV-I-V-IV-I)", chords = {1, 4, 1, 5, 4, 1} },
+      { name = "Lover's Rock (I-vi-IV-V)", chords = {1, 6, 4, 5, 1, 6, 4, 5} },
+      { name = "Dancehall (i-iv-VII-III)", chords = {1, 4, 7, 3, 1, 4, 7, 3} },
+      { name = "Dub Siren (i-VII)", chords = {1, 7, 1, 7, 1, 7, 1, 7} }
+    }
+  },
+  {
     name = "IDM / Ambient",
     minNotes = 5,
     progressions = {
