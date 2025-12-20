@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.2
+-- @version 1.8.3
 -- @changelog 
 --[[
+v1.8.3:
++ Fixed tcp icon sync
+
 v1.8.2:
 + Fixed standalone toggle script not working for turning overlay OFF
 + Overlay now properly clears when toggled off via external script
