@@ -1,16 +1,18 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 1.3
+-- @version 1.4
 -- @changelog:
---   + Fixed: Auto-save no longer triggers on LFO/animation changes in plugins
---   + Fixed: Base64 plugin state data excluded from change detection
---   + Improved: Smarter chunk comparison that ignores volatile plugin data
---   + Changed: Default check interval increased to 1.0 sec (range 0.5-5.0 sec)
+--   + Added: Close warning dialog when track is still present
+--   + Added: Option to remove track from project when closing script
+--   + Added: Undo history list with clickable items to jump to any state
+--   + Added: Smart change detection with descriptions (volume, pan, items, FX, etc.)
+--   + Added: Window resizable in height (footer stays at bottom)
+--   + Improved: Undo descriptions show what changed (item moved, FX added, etc.)
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "1.3"
+local SCRIPT_VERSION = "1.4"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -59,6 +61,9 @@ local state = {
     undo_index = 0,
     is_monitoring = false,
     show_settings = false,
+    show_undo_list = false,
+    show_close_warning = false,
+    close_action = nil,
     status_message = "",
     status_time = 0
 }
@@ -86,7 +91,8 @@ local COLORS = {
 }
 
 local WINDOW_WIDTH = 280
-local WINDOW_HEIGHT = 290
+local WINDOW_HEIGHT = 350
+local MIN_WINDOW_HEIGHT = 350
 
 local function EnsureDirectories()
     r.RecursiveCreateDirectory(DATA_DIR, 0)
@@ -456,6 +462,148 @@ local function LoadTrackData()
     return data
 end
 
+local function DetectChangeType(old_chunk, new_chunk)
+    if not old_chunk then return "Initial state" end
+    if not new_chunk then return "Track modified" end
+    
+    local function ExtractItems(chunk)
+        local items = {}
+        for item_block in chunk:gmatch("<ITEM.-\n>") do
+            local pos = item_block:match("POSITION%s+([%d%.]+)")
+            local len = item_block:match("LENGTH%s+([%d%.]+)")
+            local name = item_block:match('NAME%s+"([^"]*)"')
+            local mute = item_block:match("MUTE%s+(%d+)")
+            local vol = item_block:match("VOLPAN%s+([%d%.%-]+)")
+            local fadein = item_block:match("FADEIN%s+%d+%s+([%d%.]+)")
+            local fadeout = item_block:match("FADEOUT%s+%d+%s+([%d%.]+)")
+            table.insert(items, {
+                pos = tonumber(pos) or 0,
+                len = tonumber(len) or 0,
+                name = name or "",
+                mute = tonumber(mute) or 0,
+                vol = tonumber(vol) or 1,
+                fadein = tonumber(fadein) or 0,
+                fadeout = tonumber(fadeout) or 0
+            })
+        end
+        return items
+    end
+    
+    local function CountFX(chunk)
+        local count = 0
+        for _ in chunk:gmatch("<VST") do count = count + 1 end
+        for _ in chunk:gmatch("<AU") do count = count + 1 end
+        for _ in chunk:gmatch("<CLAP") do count = count + 1 end
+        for _ in chunk:gmatch("<JS") do count = count + 1 end
+        return count
+    end
+    
+    local function GetVolPan(chunk)
+        local vol, pan = chunk:match("VOLPAN%s+([%d%.%-]+)%s+([%d%.%-]+)")
+        return tonumber(vol), tonumber(pan)
+    end
+    
+    local function GetMuteSolo(chunk)
+        local mute, solo = chunk:match("MUTESOLO%s+(%d+)%s+(%d+)")
+        return tonumber(mute), tonumber(solo)
+    end
+    
+    local function GetTrackName(chunk)
+        return chunk:match('NAME%s+"([^"]*)"')
+    end
+    
+    local function CountEnvelopes(chunk)
+        local count = 0
+        for _ in chunk:gmatch("<VOLENV") do count = count + 1 end
+        for _ in chunk:gmatch("<PANENV") do count = count + 1 end
+        for _ in chunk:gmatch("<PARMENV") do count = count + 1 end
+        return count
+    end
+    
+    local old_items = ExtractItems(old_chunk)
+    local new_items = ExtractItems(new_chunk)
+    
+    if #new_items > #old_items then
+        return "Item added (" .. #new_items .. " total)"
+    elseif #new_items < #old_items then
+        return "Item removed (" .. #new_items .. " total)"
+    end
+    
+    if #old_items > 0 and #new_items > 0 and #old_items == #new_items then
+        for i = 1, #new_items do
+            local o, n = old_items[i], new_items[i]
+            if o and n then
+                if math.abs(o.pos - n.pos) > 0.001 then
+                    return string.format("Item moved (%.2fs)", n.pos)
+                end
+                if math.abs(o.len - n.len) > 0.001 then
+                    return string.format("Item resized (%.2fs)", n.len)
+                end
+                if o.mute ~= n.mute then
+                    return n.mute == 1 and "Item muted" or "Item unmuted"
+                end
+                if math.abs(o.vol - n.vol) > 0.01 then
+                    local db = 20 * math.log(n.vol, 10)
+                    return string.format("Item volume: %.1f dB", db)
+                end
+                if math.abs(o.fadein - n.fadein) > 0.001 then
+                    return string.format("Fade in: %.2fs", n.fadein)
+                end
+                if math.abs(o.fadeout - n.fadeout) > 0.001 then
+                    return string.format("Fade out: %.2fs", n.fadeout)
+                end
+                if o.name ~= n.name and n.name ~= "" then
+                    return "Item renamed: " .. n.name
+                end
+            end
+        end
+    end
+    
+    local old_fx = CountFX(old_chunk)
+    local new_fx = CountFX(new_chunk)
+    if new_fx > old_fx then
+        return "FX added (" .. new_fx .. " total)"
+    elseif new_fx < old_fx then
+        return "FX removed (" .. new_fx .. " total)"
+    end
+    
+    local old_vol, old_pan = GetVolPan(old_chunk)
+    local new_vol, new_pan = GetVolPan(new_chunk)
+    if old_vol and new_vol and math.abs(old_vol - new_vol) > 0.001 then
+        local db = 20 * math.log(new_vol, 10)
+        return string.format("Volume: %.1f dB", db)
+    end
+    if old_pan and new_pan and math.abs(old_pan - new_pan) > 0.001 then
+        local pan_str = new_pan == 0 and "C" or (new_pan < 0 and string.format("%.0f%%L", -new_pan * 100) or string.format("%.0f%%R", new_pan * 100))
+        return "Pan: " .. pan_str
+    end
+    
+    local old_mute, old_solo = GetMuteSolo(old_chunk)
+    local new_mute, new_solo = GetMuteSolo(new_chunk)
+    if old_mute ~= new_mute then
+        return new_mute == 1 and "Track muted" or "Track unmuted"
+    end
+    if old_solo ~= new_solo then
+        return new_solo == 1 and "Track soloed" or "Track unsoloed"
+    end
+    
+    local old_name = GetTrackName(old_chunk)
+    local new_name = GetTrackName(new_chunk)
+    if old_name ~= new_name then
+        return "Renamed: " .. (new_name or "?")
+    end
+    
+    local old_env = CountEnvelopes(old_chunk)
+    local new_env = CountEnvelopes(new_chunk)
+    if new_env > old_env then
+        return "Envelope added"
+    elseif new_env < old_env then
+        return "Envelope removed"
+    end
+    
+    return "Track modified"
+end
+
 local function AddToUndoHistory(chunk)
     if state.undo_index < #state.undo_history then
         for i = #state.undo_history, state.undo_index + 1, -1 do
@@ -463,9 +611,13 @@ local function AddToUndoHistory(chunk)
         end
     end
     
+    local prev_chunk = state.undo_history[#state.undo_history] and state.undo_history[#state.undo_history].chunk or nil
+    local desc = DetectChangeType(prev_chunk, chunk)
+    
     table.insert(state.undo_history, {
         chunk = chunk,
-        timestamp = os.date("%H:%M:%S")
+        timestamp = os.date("%H:%M:%S"),
+        description = desc
     })
     
     while #state.undo_history > config.max_undo_history do
@@ -516,6 +668,31 @@ local function RedoTrack()
         r.PreventUIRefresh(-1)
         r.Undo_EndBlock("Indestructible Track - Redo", -1)
         SetStatus("Redo to state " .. state.undo_index .. "/" .. #state.undo_history)
+        return true
+    end
+    return false
+end
+
+local function JumpToUndoState(target_index)
+    if target_index < 1 or target_index > #state.undo_history then
+        return false
+    end
+    if target_index == state.undo_index then
+        return true
+    end
+    
+    state.undo_index = target_index
+    local history_entry = state.undo_history[state.undo_index]
+    
+    if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        r.Undo_BeginBlock()
+        r.PreventUIRefresh(1)
+        SetTrackChunk(state.track_ptr, history_entry.chunk)
+        state.last_chunk = history_entry.chunk
+        state.last_normalized_chunk = NormalizeChunkForComparison(history_entry.chunk)
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock("Indestructible Track - Jump to state", -1)
+        SetStatus("Jumped to state " .. state.undo_index .. "/" .. #state.undo_history)
         return true
     end
     return false
@@ -797,6 +974,10 @@ end
 local function DrawMainUI()
     LoadShieldImage()
     
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local footer_height = 55
+    local content_end_y = window_height - footer_height
+    
     if shield_image then
         r.ImGui_Image(ctx, shield_image, 48, 48)
         r.ImGui_SameLine(ctx)
@@ -826,48 +1007,102 @@ local function DrawMainUI()
     
     r.ImGui_Separator(ctx)
     
-    r.ImGui_Text(ctx, "Undo History: " .. state.undo_index .. " / " .. #state.undo_history)
+    local content_start_y = r.ImGui_GetCursorPosY(ctx)
+    local content_height = content_end_y - content_start_y - 10
+    if content_height < 50 then content_height = 50 end
     
-    local undo_disabled = state.undo_index <= 1
-    local redo_disabled = state.undo_index >= #state.undo_history
-    
-    local button_width = (WINDOW_WIDTH - 24) / 2
-    
-    if undo_disabled then r.ImGui_BeginDisabled(ctx) end
-    if r.ImGui_Button(ctx, "< Undo##track", button_width, 0) then
-        UndoTrack()
-    end
-    if undo_disabled then r.ImGui_EndDisabled(ctx) end
-    
-    r.ImGui_SameLine(ctx)
-    
-    if redo_disabled then r.ImGui_BeginDisabled(ctx) end
-    if r.ImGui_Button(ctx, "Redo >##track", button_width, 0) then
-        RedoTrack()
-    end
-    if redo_disabled then r.ImGui_EndDisabled(ctx) end
-    
-    r.ImGui_Separator(ctx)
-    
-    if r.ImGui_Button(ctx, "Settings", -1, 0) then
-        state.show_settings = not state.show_settings
-    end
-    
-    if r.ImGui_Button(ctx, "Save Now", -1, 0) then
-        if SaveTrackData() then
-            SetStatus("Manually saved!")
+    if state.show_undo_list then
+        r.ImGui_Text(ctx, "Undo History (" .. state.undo_index .. "/" .. #state.undo_history .. ")")
+        r.ImGui_Spacing(ctx)
+        
+        local list_height = content_height - 50
+        if list_height < 30 then list_height = 30 end
+        
+        if r.ImGui_BeginChild(ctx, "undo_list", -1, list_height, 1) then
+            for i = #state.undo_history, 1, -1 do
+                local entry = state.undo_history[i]
+                local is_current = (i == state.undo_index)
+                local desc = entry.description or "Track modified"
+                local label = string.format("%s  %s", entry.timestamp, desc)
+                
+                if is_current then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+                    label = "> " .. label
+                elseif i > state.undo_index then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
+                end
+                
+                r.ImGui_PushID(ctx, i)
+                if r.ImGui_Selectable(ctx, label, is_current) then
+                    JumpToUndoState(i)
+                end
+                r.ImGui_PopID(ctx)
+                
+                if is_current or i > state.undo_index then
+                    r.ImGui_PopStyleColor(ctx)
+                end
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        
+        if r.ImGui_Button(ctx, "< Back", -1, 0) then
+            state.show_undo_list = false
+        end
+    else
+        if r.ImGui_BeginChild(ctx, "main_content", -1, content_height, 0) then
+            local undo_disabled = state.undo_index <= 1
+            local redo_disabled = state.undo_index >= #state.undo_history
+            
+            local button_width = (WINDOW_WIDTH - 30) / 3
+            
+            if undo_disabled then r.ImGui_BeginDisabled(ctx) end
+            if r.ImGui_Button(ctx, "< Undo##track", button_width, 0) then
+                UndoTrack()
+            end
+            if undo_disabled then r.ImGui_EndDisabled(ctx) end
+            
+            r.ImGui_SameLine(ctx)
+            
+            if r.ImGui_Button(ctx, state.undo_index .. "/" .. #state.undo_history .. "##list", button_width, 0) then
+                state.show_undo_list = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show undo history list")
+            end
+            
+            r.ImGui_SameLine(ctx)
+            
+            if redo_disabled then r.ImGui_BeginDisabled(ctx) end
+            if r.ImGui_Button(ctx, "Redo >##track", button_width, 0) then
+                RedoTrack()
+            end
+            if redo_disabled then r.ImGui_EndDisabled(ctx) end
+            
+            r.ImGui_Separator(ctx)
+            
+            if r.ImGui_Button(ctx, "Settings", -1, 0) then
+                state.show_settings = not state.show_settings
+            end
+            
+            if r.ImGui_Button(ctx, "Save Now", -1, 0) then
+                if SaveTrackData() then
+                    SetStatus("Manually saved!")
+                end
+            end
+            
+            local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
+            if not has_track then r.ImGui_BeginDisabled(ctx) end
+            if r.ImGui_Button(ctx, "Copy to Project", -1, 0) then
+                CopyTrackToProject()
+            end
+            if not has_track then r.ImGui_EndDisabled(ctx) end
+            
+            r.ImGui_EndChild(ctx)
         end
     end
     
-    local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
-    if not has_track then r.ImGui_BeginDisabled(ctx) end
-    if r.ImGui_Button(ctx, "Copy to Project", -1, 0) then
-        CopyTrackToProject()
-    end
-    if not has_track then r.ImGui_EndDisabled(ctx) end
-    
+    r.ImGui_SetCursorPosY(ctx, window_height - footer_height)
     r.ImGui_Separator(ctx)
-    
     DrawStatusBar()
 end
 
@@ -931,13 +1166,60 @@ local function loop()
     ApplyTheme()
     r.ImGui_PushFont(ctx, main_font, 13)
     
-    local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoTitleBar()
-    r.ImGui_SetNextWindowSize(ctx, WINDOW_WIDTH, WINDOW_HEIGHT, r.ImGui_Cond_Always())
+    local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+    r.ImGui_SetNextWindowSizeConstraints(ctx, WINDOW_WIDTH, MIN_WINDOW_HEIGHT, WINDOW_WIDTH, 800)
     
     local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
     
     if visible then
-        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) and not state.show_close_warning then
+            if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+                state.show_close_warning = true
+            else
+                open = false
+            end
+        end
+        
+        if state.show_close_warning then
+            local center_x, center_y = r.ImGui_GetWindowPos(ctx)
+            center_x = center_x + WINDOW_WIDTH / 2
+            center_y = center_y + WINDOW_HEIGHT / 2
+            r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Appearing(), 0.5, 0.5)
+            r.ImGui_SetNextWindowSize(ctx, 320, 0, r.ImGui_Cond_Appearing())
+            
+            local popup_visible, popup_open = r.ImGui_Begin(ctx, "Close Script?###closepopup", true, r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize())
+            if popup_visible then
+                r.ImGui_Text(ctx, "The Indestructible Track is still")
+                r.ImGui_Text(ctx, "in this project.")
+                r.ImGui_Spacing(ctx)
+                r.ImGui_Text(ctx, "Track data is safely saved.")
+                r.ImGui_Spacing(ctx)
+                r.ImGui_Separator(ctx)
+                r.ImGui_Spacing(ctx)
+                
+                if r.ImGui_Button(ctx, "Keep Track", 90, 25) then
+                    state.close_action = "keep"
+                    state.show_close_warning = false
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Remove Track", 100, 25) then
+                    state.close_action = "remove"
+                    state.show_close_warning = false
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Cancel", 70, 25) then
+                    state.show_close_warning = false
+                    state.close_action = nil
+                end
+                r.ImGui_End(ctx)
+            end
+            if not popup_open then
+                state.show_close_warning = false
+                state.close_action = nil
+            end
+        end
+        
+        if state.close_action then
             open = false
         end
         
@@ -957,9 +1239,33 @@ local function loop()
     else
         if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
             SaveTrackData()
+            if state.close_action == "remove" then
+                local track_idx = r.GetMediaTrackInfo_Value(state.track_ptr, "IP_TRACKNUMBER") - 1
+                if track_idx >= 0 then
+                    r.DeleteTrack(state.track_ptr)
+                end
+            end
         end
         SaveConfig()
     end
+end
+
+local function OnExit()
+    if state.close_action then return end
+    
+    local track = FindIndestructibleTrack()
+    if track then
+        SaveTrackData()
+        local answer = r.MB(
+            "The Indestructible Track is still in this project.\nTrack data is safely saved.\n\nRemove track from project?",
+            SCRIPT_NAME,
+            4
+        )
+        if answer == 6 then
+            r.DeleteTrack(track)
+        end
+    end
+    SaveConfig()
 end
 
 local function Init()
@@ -972,6 +1278,7 @@ local function Init()
         state.last_project_state = r.GetProjectStateChangeCount(0)
     end
     
+    r.atexit(OnExit)
     r.defer(loop)
 end
 
