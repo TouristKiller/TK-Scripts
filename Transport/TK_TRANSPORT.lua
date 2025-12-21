@@ -1,8 +1,12 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.0
+-- @version 1.8.1
 -- @changelog 
 --[[
+  v1.8.1:
+  + Fixed: Time signature showing -1/-1 when loading old projects with "Bring FX online after load"
+  + Added: Option to remember mixer window state on startup (Mixer Settings)
+
   v1.8.0:
   + Added: Knob Style setting - choose from 5 visual styles (Classic, Modern, Vintage, LED, Minimal)
   + Added: Track color setting for knobs (background color for Classic/Minimal styles)
@@ -559,6 +563,7 @@ local default_settings = {
  -- Simple Mixer settings
  show_simple_mixer_button = false,
  simple_mixer_window_open = false,
+ simple_mixer_remember_state = true,
  simple_mixer_tracks = {},
  simple_mixer_current_preset = "",
  simple_mixer_window_width = 400,
@@ -2741,6 +2746,17 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
      r.ImGui_Text(ctx, "Height:")
      r.ImGui_SetNextItemWidth(ctx, -1)
      rv, settings.simple_mixer_slider_height = r.ImGui_SliderInt(ctx, "##SliderH", settings.simple_mixer_slider_height or 200, 100, 400, "%d px")
+    end
+    
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_remember_state = r.ImGui_Checkbox(ctx, "Remember Window State", settings.simple_mixer_remember_state ~= false)
+    if rv then
+     r.SetExtState("TK_TRANSPORT", "simple_mixer_remember_state", tostring(settings.simple_mixer_remember_state), true)
+    end
+    r.ImGui_TableNextColumn(ctx)
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "When enabled, the mixer window will reopen automatically if it was open when REAPER was closed.")
     end
     
     r.ImGui_TableNextRow(ctx)
@@ -6104,7 +6120,7 @@ end
 function SavePreset(name)
  local preset_data = {}
  for k, v in pairs(settings) do
- local dominated_by_mixer_json = k:find("^simple_mixer_") and not k:find("^simple_mixer_button")
+ local dominated_by_mixer_json = k:find("^simple_mixer_") and not k:find("^simple_mixer_button") and k ~= "simple_mixer_remember_state"
  local is_tab_setting = k:find("^tab_") or k:find("^tabs_") or k == "show_tabs" or k == "active_tab" or k == "tabs"
  if not dominated_by_mixer_json and not is_tab_setting then
      preset_data[k] = v
@@ -6144,6 +6160,8 @@ function LoadPreset(name)
  for vm_key, vm_value in pairs(value) do
  visual_metronome[vm_key] = vm_value
  end
+ elseif key == "simple_mixer_window_open" then
+ -- skip, handled separately via ExtState
  else
  settings[key] = value
  end
@@ -6161,11 +6179,6 @@ function LoadPreset(name)
 end
 
 LoadPreset(preset_name)
-
-if r.HasExtState("TK_TRANSPORT", "simple_mixer_window_open") then
- local mixer_state = r.GetExtState("TK_TRANSPORT", "simple_mixer_window_open")
- settings.simple_mixer_window_open = (mixer_state == "true")
-end
 
 function GetPresetList()
  local presets = {}
@@ -6191,10 +6204,17 @@ function LoadLastUsedPreset()
  if last_preset ~= "" then
  preset_name = last_preset
  LoadPreset(last_preset)
- if r.HasExtState("TK_TRANSPORT", "simple_mixer_window_open") then
- local mixer_state = r.GetExtState("TK_TRANSPORT", "simple_mixer_window_open")
- settings.simple_mixer_window_open = (mixer_state == "true")
  end
+ 
+ if r.HasExtState("TK_TRANSPORT", "simple_mixer_remember_state") then
+  settings.simple_mixer_remember_state = (r.GetExtState("TK_TRANSPORT", "simple_mixer_remember_state") == "true")
+ end
+ 
+ if settings.simple_mixer_remember_state ~= false then
+  if r.HasExtState("TK_TRANSPORT", "simple_mixer_window_open") then
+   local mixer_state = r.GetExtState("TK_TRANSPORT", "simple_mixer_window_open")
+   settings.simple_mixer_window_open = (mixer_state == "true")
+  end
  end
 end
 
@@ -6910,7 +6930,7 @@ local function LoadMixerSettings()
         local success, mixer_data = pcall(json.decode, content)
         if success and mixer_data then
             for key, value in pairs(mixer_data) do
-                if not key:find("^simple_mixer_button") and key ~= "show_simple_mixer_button" then
+                if not key:find("^simple_mixer_button") and key ~= "show_simple_mixer_button" and key ~= "simple_mixer_window_open" and key ~= "simple_mixer_remember_state" then
                     settings[key] = value
                 end
             end
@@ -19089,12 +19109,15 @@ function ShowTimeSignature(main_window_width, main_window_height)
  end
  
  if active_marker_idx == -1 then
-  local _, _, sig_num, sig_denom = r.GetProjectTimeSignature2(0)
-  if sig_num and sig_denom then
-   timesig_num = sig_num
-   timesig_denom = sig_denom
+  local retval, bpm, bpi = r.GetProjectTimeSignature2(0)
+  if retval and bpi and bpi > 0 then
+   timesig_num = math.floor(bpi)
+   timesig_denom = 4
   end
  end
+
+ if not timesig_num or timesig_num <= 0 then timesig_num = 4 end
+ if not timesig_denom or timesig_denom <= 0 then timesig_denom = 4 end
 
  if font_timesig then reaper.ImGui_PushFont(ctx, font_timesig, settings.timesig_font_size or settings.font_size) end
  local ts_text = string.format("%d/%d", timesig_num, timesig_denom)
