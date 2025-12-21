@@ -1,0 +1,20 @@
+desc:TK Trim [TouristKiller]
+//tags: utility gain trim
+//author: TouristKiller
+
+slider1:0<-24,24,0.1>Trim (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+gain = 1;
+
+@slider
+gain = 10^(slider1/20);
+
+@sample
+spl0 *= gain;
+spl1 *= gain;
