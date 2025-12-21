@@ -188,6 +188,21 @@
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_Hide%20Item%20Buttons.lua</source>
     </version>
     </reapack>
+
+    <reapack name="TK_IndestructibleTrack.lua" type="script" desc="TK Indestructible Track">
+    <version name="1.1" author="TouristKiller" time="2025-12-21T20:30:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack.lua</source>
+    <source file="ISHIELD.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/ISHIELD.png</source>
+    <changelog><![CDATA[
++ Initial release
++ Auto-save track on every change
++ Configurable undo history (separate from REAPER undo)
++ Persistent track with media items across projects
++ Media files copied to dedicated folder
++ ReaImGui settings interface
+]]></changelog>
+    </version>
+    </reapack>
  </category>
 
  <category name="Media">
