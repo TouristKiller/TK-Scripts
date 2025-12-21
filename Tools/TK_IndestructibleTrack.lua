@@ -1,18 +1,15 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 1.1
+-- @version 1.2
 -- @changelog:
---   + Initial release (for testing)
---   + Auto-save track on every change
---   + Configurable undo history
---   + Persistent track with media items
---   + ReaImGui settings interface
---   + Media files copied to dedicated folder
+--   + Fixed: Plugin/FX data now properly preserved and restored
+--   + Fixed: Improved JSON escaping for base64 encoded plugin data
+--   + Fixed: Better chunk parsing with escaped quotes handling
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "1.1"
+local SCRIPT_VERSION = "1.2"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -87,7 +84,7 @@ local COLORS = {
 }
 
 local WINDOW_WIDTH = 280
-local WINDOW_HEIGHT = 260
+local WINDOW_HEIGHT = 290
 
 local function EnsureDirectories()
     r.RecursiveCreateDirectory(DATA_DIR, 0)
@@ -303,11 +300,13 @@ local function SaveTrackData()
         end
     end
     
+    chunk = chunk:gsub("\n", "<<<NEWLINE>>>")
+    
     local data = {
         version = SCRIPT_VERSION,
         timestamp = os.date("%Y-%m-%d %H:%M:%S"),
         track_name = config.track_name,
-        chunk = chunk:gsub("\n", "<<<NEWLINE>>>"),
+        chunk = chunk,
         media_items = GetMediaItemsData(track)
     }
     
@@ -351,20 +350,40 @@ local function LoadTrackData()
     
     local data = {}
     
-    local chunk_start = content:find('"chunk":"')
+    local chunk_marker = '"chunk":"'
+    local chunk_start = content:find(chunk_marker, 1, true)
     if chunk_start then
-        chunk_start = chunk_start + 9
-        local chunk_end = content:find('","version":', chunk_start)
-        if not chunk_end then
-            chunk_end = content:find('","track_name":', chunk_start)
+        chunk_start = chunk_start + #chunk_marker
+        
+        local search_pos = chunk_start
+        local chunk_end = nil
+        
+        while true do
+            local quote_pos = content:find('"', search_pos, true)
+            if not quote_pos then break end
+            
+            local backslash_count = 0
+            local check_pos = quote_pos - 1
+            while check_pos >= 1 and content:sub(check_pos, check_pos) == '\\' do
+                backslash_count = backslash_count + 1
+                check_pos = check_pos - 1
+            end
+            
+            if backslash_count % 2 == 0 then
+                chunk_end = quote_pos
+                break
+            end
+            
+            search_pos = quote_pos + 1
         end
-        if not chunk_end then
-            chunk_end = content:find('","timestamp":', chunk_start)
-        end
+        
         if chunk_end then
             local chunk_raw = content:sub(chunk_start, chunk_end - 1)
-            data.chunk = chunk_raw:gsub("<<<NEWLINE>>>", "\n")
-            data.chunk = data.chunk:gsub('\\"', '"')
+            chunk_raw = chunk_raw:gsub("<<<NEWLINE>>>", "\n")
+            chunk_raw = chunk_raw:gsub('\\n', '\n')
+            chunk_raw = chunk_raw:gsub('\\"', '"')
+            chunk_raw = chunk_raw:gsub('\\\\', '\\')
+            data.chunk = chunk_raw
         end
     end
     
@@ -534,6 +553,84 @@ local function LoadOrCreateTrack()
     return track
 end
 
+local function GetProjectMediaPath()
+    local proj_path = r.GetProjectPath()
+    if proj_path and proj_path ~= "" then
+        return proj_path .. "/"
+    end
+    local rec_path = r.GetProjectPathEx(0, "")
+    if rec_path and rec_path ~= "" then
+        return rec_path .. "/"
+    end
+    return nil
+end
+
+local function CopyTrackToProject()
+    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        SetStatus("No track to copy", true)
+        return false
+    end
+    
+    local proj_path = GetProjectMediaPath()
+    if not proj_path then
+        r.ShowMessageBox("Please save the project first.\n\nThe track copy needs a project folder to store the media files.", SCRIPT_NAME, 0)
+        return false
+    end
+    
+    local chunk = GetTrackChunk(state.track_ptr)
+    if not chunk then
+        SetStatus("Could not get track data", true)
+        return false
+    end
+    
+    local media_dest = proj_path .. "IndestructibleCopy/"
+    r.RecursiveCreateDirectory(media_dest, 0)
+    
+    local updated_chunk = chunk
+    local copied_count = 0
+    
+    for file_path in chunk:gmatch('FILE%s+"([^"]+)"') do
+        if file_path ~= "" and not file_path:match("^%s*$") then
+            local filename = GetFileName(file_path)
+            local dest_path = media_dest .. filename
+            
+            if FileExists(file_path) then
+                if CopyFile(file_path, dest_path) then
+                    copied_count = copied_count + 1
+                    local escaped_path = file_path:gsub("([%-%.%+%[%]%(%)%$%^%%%?%*])", "%%%1")
+                    local escaped_dest = dest_path:gsub("\\", "/")
+                    updated_chunk = updated_chunk:gsub('FILE%s+"' .. escaped_path .. '"', 'FILE "' .. escaped_dest .. '"')
+                end
+            end
+        end
+    end
+    
+    updated_chunk = updated_chunk:gsub('NAME%s+"' .. config.track_name .. '"', 'NAME "' .. config.track_name .. ' (Copy)"')
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local track_count = r.CountTracks(0)
+    r.InsertTrackAtIndex(track_count, true)
+    local new_track = r.GetTrack(0, track_count)
+    
+    if new_track then
+        local success = SetTrackChunk(new_track, updated_chunk)
+        if success then
+            r.GetSetMediaTrackInfo_String(new_track, "P_NAME", config.track_name .. " (Copy)", true)
+            SetStatus("Track copied with " .. copied_count .. " media file(s)")
+        else
+            SetStatus("Failed to create copy", true)
+        end
+    end
+    
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Copy Indestructible Track to Project", -1)
+    r.TrackList_AdjustWindows(false)
+    
+    return true
+end
+
 local function CheckForChanges()
     if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
         state.track_ptr = FindIndestructibleTrack()
@@ -680,6 +777,13 @@ local function DrawMainUI()
             SetStatus("Manually saved!")
         end
     end
+    
+    local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
+    if not has_track then r.ImGui_BeginDisabled(ctx) end
+    if r.ImGui_Button(ctx, "Copy to Project", -1, 0) then
+        CopyTrackToProject()
+    end
+    if not has_track then r.ImGui_EndDisabled(ctx) end
     
     r.ImGui_Separator(ctx)
     
