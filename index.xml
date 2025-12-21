@@ -190,13 +190,14 @@
     </reapack>
 
     <reapack name="TK_IndestructibleTrack.lua" type="script" desc="TK Indestructible Track">
-    <version name="1.2" author="TouristKiller" time="2025-12-21T21:45:00Z">
+    <version name="1.3" author="TouristKiller" time="2025-12-21T22:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack.lua</source>
     <source file="ISHIELD.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/ISHIELD.png</source>
     <changelog><![CDATA[
-+ Fixed: Plugin/FX data now properly preserved and restored
-+ Fixed: Improved JSON escaping for base64 encoded plugin data
-+ Fixed: Better chunk parsing with escaped quotes handling
++ Fixed: Auto-save no longer triggers on LFO/animation changes in plugins
++ Fixed: Base64 plugin state data excluded from change detection
++ Improved: Smarter chunk comparison that ignores volatile plugin data
++ Changed: Default check interval increased to 1.0 sec (range 0.5-5.0 sec)
 ]]></changelog>
     </version>
     </reapack>

@@ -1,15 +1,16 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 1.2
+-- @version 1.3
 -- @changelog:
---   + Fixed: Plugin/FX data now properly preserved and restored
---   + Fixed: Improved JSON escaping for base64 encoded plugin data
---   + Fixed: Better chunk parsing with escaped quotes handling
+--   + Fixed: Auto-save no longer triggers on LFO/animation changes in plugins
+--   + Fixed: Base64 plugin state data excluded from change detection
+--   + Improved: Smarter chunk comparison that ignores volatile plugin data
+--   + Changed: Default check interval increased to 1.0 sec (range 0.5-5.0 sec)
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "1.2"
+local SCRIPT_VERSION = "1.3"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -38,7 +39,7 @@ local SCRIPT_PATH = debug.getinfo(1, "S").source:match("@?(.*)[/\\]") or "."
 
 local default_config = {
     track_name = "Indestructible",
-    check_interval = 0.5,
+    check_interval = 1.0,
     max_undo_history = 50,
     auto_backup_count = 5,
     show_notifications = true,
@@ -51,6 +52,7 @@ local state = {
     track_guid = nil,
     track_ptr = nil,
     last_chunk = nil,
+    last_normalized_chunk = nil,
     last_check_time = 0,
     last_project_state = 0,
     undo_history = {},
@@ -197,6 +199,61 @@ local function SetStatus(msg, is_error)
     end
 end
 
+local function NormalizeChunkForComparison(chunk)
+    if not chunk then return nil end
+    local lines = {}
+    local in_vst_block = false
+    local skip_binary = false
+    
+    for line in chunk:gmatch("[^\n]+") do
+        if line:match("^%s*<VST") or line:match("^%s*<AU") or line:match("^%s*<CLAP") or line:match("^%s*<JS") or line:match("^%s*<DX") then
+            in_vst_block = true
+            skip_binary = false
+            table.insert(lines, line)
+        elseif in_vst_block and line:match("^%s*>") then
+            in_vst_block = false
+            skip_binary = false
+            table.insert(lines, line)
+        elseif in_vst_block then
+            if line:match("^%s*[A-Za-z0-9+/=]+%s*$") and #line > 20 then
+                skip_binary = true
+            elseif skip_binary and line:match("^%s*[A-Za-z0-9+/=:?]+%s*$") then
+            else
+                skip_binary = false
+                if not line:match("^%s*SEL%s") and
+                   not line:match("^%s*FXCHAIN_SHOW%s") and
+                   not line:match("^%s*FLOATPOS%s") and
+                   not line:match("^%s*WNDPOS%s") and
+                   not line:match("^%s*SHOW%s") and
+                   not line:match("^%s*LASTSEL%s") and
+                   not line:match("^%s*CURPOS%s") and
+                   not line:match("^%s*SCROLL%s") and
+                   not line:match("^%s*ZOOM%s") and
+                   not line:match("^%s*VZOOM%s") and
+                   not line:match("^%s*CFGEDIT%s") then
+                    table.insert(lines, line)
+                end
+            end
+        else
+            if not line:match("^%s*SEL%s") and
+               not line:match("^%s*FXCHAIN_SHOW%s") and
+               not line:match("^%s*FLOATPOS%s") and
+               not line:match("^%s*WNDPOS%s") and
+               not line:match("^%s*SHOW%s") and
+               not line:match("^%s*LASTSEL%s") and
+               not line:match("^%s*CURPOS%s") and
+               not line:match("^%s*SCROLL%s") and
+               not line:match("^%s*ZOOM%s") and
+               not line:match("^%s*VZOOM%s") and
+               not line:match("^%s*CFGEDIT%s") then
+                table.insert(lines, line)
+            end
+        end
+    end
+    
+    return table.concat(lines, "\n")
+end
+
 local function GetTrackChunk(track)
     if not track or not r.ValidatePtr(track, "MediaTrack*") then return nil end
     local retval, chunk = r.GetTrackStateChunk(track, "", false)
@@ -205,7 +262,11 @@ end
 
 local function SetTrackChunk(track, chunk)
     if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
-    return r.SetTrackStateChunk(track, chunk, false)
+    local result = r.SetTrackStateChunk(track, chunk, false)
+    r.Main_OnCommand(40047, 0)
+    r.UpdateArrange()
+    r.TrackList_AdjustWindows(false)
+    return result
 end
 
 local function GetMediaItemsData(track)
@@ -428,6 +489,7 @@ local function UndoTrack()
         r.PreventUIRefresh(1)
         SetTrackChunk(state.track_ptr, history_entry.chunk)
         state.last_chunk = history_entry.chunk
+        state.last_normalized_chunk = NormalizeChunkForComparison(history_entry.chunk)
         r.PreventUIRefresh(-1)
         r.Undo_EndBlock("Indestructible Track - Undo", -1)
         SetStatus("Undo to state " .. state.undo_index .. "/" .. #state.undo_history)
@@ -450,6 +512,7 @@ local function RedoTrack()
         r.PreventUIRefresh(1)
         SetTrackChunk(state.track_ptr, history_entry.chunk)
         state.last_chunk = history_entry.chunk
+        state.last_normalized_chunk = NormalizeChunkForComparison(history_entry.chunk)
         r.PreventUIRefresh(-1)
         r.Undo_EndBlock("Indestructible Track - Redo", -1)
         SetStatus("Redo to state " .. state.undo_index .. "/" .. #state.undo_history)
@@ -490,6 +553,7 @@ local function CreateIndestructibleTrack()
         state.track_ptr = track
         state.track_guid = r.GetTrackGUID(track)
         state.last_chunk = GetTrackChunk(track)
+        state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
         
         if state.last_chunk then
             AddToUndoHistory(state.last_chunk)
@@ -510,6 +574,7 @@ local function LoadOrCreateTrack()
         state.track_ptr = existing_track
         state.track_guid = r.GetTrackGUID(existing_track)
         state.last_chunk = GetTrackChunk(existing_track)
+        state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
         if state.last_chunk then
             AddToUndoHistory(state.last_chunk)
         end
@@ -532,6 +597,7 @@ local function LoadOrCreateTrack()
                 state.track_ptr = track
                 state.track_guid = r.GetTrackGUID(track)
                 state.last_chunk = saved_data.chunk
+                state.last_normalized_chunk = NormalizeChunkForComparison(saved_data.chunk)
                 state.is_monitoring = true
                 AddToUndoHistory(state.last_chunk)
                 SetStatus("Track restored from saved data")
@@ -631,6 +697,8 @@ local function CopyTrackToProject()
     return true
 end
 
+local last_save_time = 0
+
 local function CheckForChanges()
     if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
         state.track_ptr = FindIndestructibleTrack()
@@ -643,9 +711,22 @@ local function CheckForChanges()
     local current_chunk = GetTrackChunk(state.track_ptr)
     if not current_chunk then return end
     
-    if current_chunk ~= state.last_chunk then
+    local normalized_current = NormalizeChunkForComparison(current_chunk)
+    
+    if not state.last_normalized_chunk then
+        state.last_normalized_chunk = normalized_current
+        state.last_chunk = current_chunk
+        return
+    end
+    
+    if normalized_current ~= state.last_normalized_chunk then
+        local now = r.time_precise()
+        if now - last_save_time < 1.0 then return end
+        last_save_time = now
+        
         AddToUndoHistory(current_chunk)
         state.last_chunk = current_chunk
+        state.last_normalized_chunk = normalized_current
         
         if SaveTrackData() then
             SetStatus("Auto-save: change saved (" .. os.date("%H:%M:%S") .. ")")
@@ -801,7 +882,7 @@ local function DrawSettingsUI()
     if changed then config.track_name = new_val end
     
     r.ImGui_Text(ctx, "Check interval (sec):")
-    changed, new_val = r.ImGui_SliderDouble(ctx, "##interval", config.check_interval, 0.1, 2.0, "%.1f")
+    changed, new_val = r.ImGui_SliderDouble(ctx, "##interval", config.check_interval, 0.5, 5.0, "%.1f")
     if changed then config.check_interval = new_val end
     
     r.ImGui_Text(ctx, "Max undo history:")
@@ -844,12 +925,7 @@ local function loop()
     local now = r.time_precise()
     if state.is_monitoring and now - state.last_check_time >= config.check_interval then
         state.last_check_time = now
-        
-        local project_state = r.GetProjectStateChangeCount(0)
-        if project_state ~= state.last_project_state then
-            state.last_project_state = project_state
-            CheckForChanges()
-        end
+        CheckForChanges()
     end
     
     ApplyTheme()
