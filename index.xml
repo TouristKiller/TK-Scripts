@@ -190,16 +190,20 @@
     </reapack>
 
     <reapack name="TK_IndestructibleTrack.lua" type="script" desc="TK Indestructible Track">
-    <version name="1.4" author="TouristKiller" time="2025-12-21T23:45:00Z">
+    <version name="1.5" author="TouristKiller" time="2025-12-22T03:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack.lua</source>
     <source file="ISHIELD.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/ISHIELD.png</source>
     <changelog><![CDATA[
-+ Added: Close warning dialog when track is still present
-+ Added: Option to remove track from project when closing script  
-+ Added: Undo history list with clickable items to jump to any state
-+ Added: Smart change detection with descriptions (volume, pan, items, FX, etc.)
-+ Added: Window resizable in height (footer stays at bottom)
-+ Improved: Undo descriptions show what changed (item moved, FX added, etc.)
++ Added: Multi-project sync - track syncs automatically between project tabs
++ Added: Tempo mismatch warning when syncing between projects with different tempos
++ Added: Setting to enable/disable tempo mismatch warning
++ Added: Debounce system to prevent partial saves during item resizing
++ Added: Load Backup function to restore from saved backups
++ Added: Clear History button to reset undo history
++ Fixed: ImGui context recovery after native dialogs
++ Fixed: Boolean settings persistence (tempo check enabled)
++ Fixed: Keep current track now properly saves current state
++ Improved: Project switch detection for reliable sync
 ]]></changelog>
     </version>
     </reapack>

@@ -1,18 +1,22 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 1.4
+-- @version 1.5
 -- @changelog:
---   + Added: Close warning dialog when track is still present
---   + Added: Option to remove track from project when closing script
---   + Added: Undo history list with clickable items to jump to any state
---   + Added: Smart change detection with descriptions (volume, pan, items, FX, etc.)
---   + Added: Window resizable in height (footer stays at bottom)
---   + Improved: Undo descriptions show what changed (item moved, FX added, etc.)
+--   + Added: Multi-project sync - track syncs automatically between project tabs
+--   + Added: Tempo mismatch warning when syncing between projects with different tempos
+--   + Added: Setting to enable/disable tempo mismatch warning
+--   + Added: Debounce system to prevent partial saves during item resizing
+--   + Added: Load Backup function to restore from saved backups
+--   + Added: Clear History button to reset undo history
+--   + Fixed: ImGui context recovery after native dialogs
+--   + Fixed: Boolean settings persistence (tempo check enabled)
+--   + Fixed: Keep current track now properly saves current state
+--   + Improved: Project switch detection for reliable sync
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "1.4"
+local SCRIPT_VERSION = "1.5"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -27,6 +31,7 @@ end
 local DATA_DIR = r.GetResourcePath() .. "/Data/TK_IndestructibleTrack/"
 local CONFIG_FILE = DATA_DIR .. "TK_IndestructibleTrack_config.json"
 local TRACK_FILE = DATA_DIR .. "TK_IndestructibleTrack_data.json"
+local LOCK_FILE = DATA_DIR .. "TK_IndestructibleTrack.lock"
 local HISTORY_DIR = DATA_DIR .. "history/"
 local MEDIA_DIR = DATA_DIR .. "media/"
 
@@ -46,7 +51,8 @@ local default_config = {
     auto_backup_count = 5,
     show_notifications = true,
     track_color = 0x1E5A8A,
-    auto_load_on_start = true
+    auto_load_on_start = true,
+    tempo_check_enabled = true
 }
 
 local config = {}
@@ -62,11 +68,14 @@ local state = {
     is_monitoring = false,
     show_settings = false,
     show_undo_list = false,
+    show_backup_list = false,
     show_close_warning = false,
     close_action = nil,
     status_message = "",
     status_time = 0
 }
+
+local available_backups = {}
 
 local COLORS = {
     bg = 0x141414FF,
@@ -153,19 +162,62 @@ local function JsonDecode(str)
         local tbl = {}
         str = str:match('^%s*{(.*)}%s*$')
         if not str then return nil end
-        for key, val in str:gmatch('"([^"]+)"%s*:%s*("?[^,}]+"?)') do
-            val = val:gsub('^"', ''):gsub('"$', '')
-            if val == "true" then val = true
-            elseif val == "false" then val = false
-            elseif tonumber(val) then val = tonumber(val)
-            else
+        for key, val in str:gmatch('"([^"]+)"%s*:%s*([^,}]+)') do
+            val = val:gsub('^%s+', ''):gsub('%s+$', '')
+            if val:match('^".*"$') then
+                val = val:sub(2, -2)
                 val = val:gsub('\\n', '\n'):gsub('\\r', '\r'):gsub('\\"', '"'):gsub('\\\\', '\\')
+            elseif val == "true" then 
+                val = true
+            elseif val == "false" then 
+                val = false
+            elseif tonumber(val) then 
+                val = tonumber(val)
             end
             tbl[key] = val
         end
         return tbl
     end)
     return success and result or nil
+end
+
+local function CreateLockFile()
+    local f = io.open(LOCK_FILE, "w")
+    if f then
+        local proj_name = r.GetProjectName(0, "")
+        if proj_name == "" then proj_name = "Untitled" end
+        f:write(JsonEncode({
+            pid = tostring(r.GetCurrentThreadId and r.GetCurrentThreadId() or os.time()),
+            project = proj_name,
+            time = os.date("%Y-%m-%d %H:%M:%S")
+        }))
+        f:close()
+        return true
+    end
+    return false
+end
+
+local function RemoveLockFile()
+    os.remove(LOCK_FILE)
+end
+
+local function CheckLockFile()
+    if not FileExists(LOCK_FILE) then return nil end
+    local f = io.open(LOCK_FILE, "r")
+    if not f then return nil end
+    local content = f:read("*all")
+    f:close()
+    return JsonDecode(content)
+end
+
+local function GetSavedDataTimestamp()
+    if not FileExists(TRACK_FILE) then return nil end
+    local f = io.open(TRACK_FILE, "r")
+    if not f then return nil end
+    local content = f:read("*all")
+    f:close()
+    local timestamp = content:match('"timestamp":"([^"]+)"')
+    return timestamp
 end
 
 local function SaveConfig()
@@ -185,7 +237,11 @@ local function LoadConfig()
         local loaded = JsonDecode(content)
         if loaded then
             for k, v in pairs(default_config) do
-                config[k] = loaded[k] ~= nil and loaded[k] or v
+                if loaded[k] ~= nil then
+                    config[k] = loaded[k]
+                else
+                    config[k] = v
+                end
             end
             return
         end
@@ -369,10 +425,13 @@ local function SaveTrackData()
     
     chunk = chunk:gsub("\n", "<<<NEWLINE>>>")
     
+    local tempo = r.Master_GetTempo()
+    
     local data = {
         version = SCRIPT_VERSION,
         timestamp = os.date("%Y-%m-%d %H:%M:%S"),
         track_name = config.track_name,
+        tempo = tempo,
         chunk = chunk,
         media_items = GetMediaItemsData(track)
     }
@@ -459,6 +518,11 @@ local function LoadTrackData()
         data.track_name = name_match
     end
     
+    local tempo_match = content:match('"tempo":([%d%.]+)')
+    if tempo_match then
+        data.tempo = tonumber(tempo_match)
+    end
+    
     return data
 end
 
@@ -468,6 +532,7 @@ local function DetectChangeType(old_chunk, new_chunk)
     
     local function ExtractItems(chunk)
         local items = {}
+        if not chunk then return items end
         for item_block in chunk:gmatch("<ITEM.-\n>") do
             local pos = item_block:match("POSITION%s+([%d%.]+)")
             local len = item_block:match("LENGTH%s+([%d%.]+)")
@@ -698,6 +763,110 @@ local function JumpToUndoState(target_index)
     return false
 end
 
+local function ScanBackups()
+    available_backups = {}
+    local idx = 0
+    while true do
+        local filename = r.EnumerateFiles(HISTORY_DIR, idx)
+        if not filename then break end
+        if filename:match("^backup_.*%.json$") then
+            local timestamp = filename:match("backup_(%d+_%d+)%.json")
+            if timestamp then
+                local year = timestamp:sub(1, 4)
+                local month = timestamp:sub(5, 6)
+                local day = timestamp:sub(7, 8)
+                local hour = timestamp:sub(10, 11)
+                local min = timestamp:sub(12, 13)
+                local sec = timestamp:sub(14, 15)
+                local display = string.format("%s-%s-%s %s:%s:%s", year, month, day, hour, min, sec)
+                table.insert(available_backups, {
+                    filename = filename,
+                    path = HISTORY_DIR .. filename,
+                    display = display,
+                    sort_key = timestamp
+                })
+            end
+        end
+        idx = idx + 1
+    end
+    table.sort(available_backups, function(a, b) return a.sort_key > b.sort_key end)
+end
+
+local function LoadBackup(backup)
+    local f = io.open(backup.path, "r")
+    if not f then
+        SetStatus("Could not open backup", true)
+        return false
+    end
+    local content = f:read("*all")
+    f:close()
+    
+    local chunk_marker = '"chunk":"'
+    local chunk_start = content:find(chunk_marker, 1, true)
+    if not chunk_start then
+        SetStatus("Invalid backup file", true)
+        return false
+    end
+    
+    chunk_start = chunk_start + #chunk_marker
+    local search_pos = chunk_start
+    local chunk_end = nil
+    
+    while true do
+        local quote_pos = content:find('"', search_pos, true)
+        if not quote_pos then break end
+        
+        local backslash_count = 0
+        local check_pos = quote_pos - 1
+        while check_pos >= 1 and content:sub(check_pos, check_pos) == '\\' do
+            backslash_count = backslash_count + 1
+            check_pos = check_pos - 1
+        end
+        
+        if backslash_count % 2 == 0 then
+            chunk_end = quote_pos
+            break
+        end
+        
+        search_pos = quote_pos + 1
+    end
+    
+    if not chunk_end then
+        SetStatus("Could not parse backup", true)
+        return false
+    end
+    
+    local chunk = content:sub(chunk_start, chunk_end - 1)
+    chunk = chunk:gsub("<<<NEWLINE>>>", "\n")
+    chunk = chunk:gsub('\\n', '\n')
+    chunk = chunk:gsub('\\"', '"')
+    chunk = chunk:gsub('\\\\', '\\')
+    
+    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        state.track_ptr = FindIndestructibleTrack()
+        if not state.track_ptr then
+            r.InsertTrackAtIndex(0, true)
+            state.track_ptr = r.GetTrack(0, 0)
+            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
+            state.track_guid = r.GetTrackGUID(state.track_ptr)
+        end
+    end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    SetTrackChunk(state.track_ptr, chunk)
+    state.last_chunk = chunk
+    state.last_normalized_chunk = NormalizeChunkForComparison(chunk)
+    AddToUndoHistory(chunk)
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Load Indestructible Track Backup", -1)
+    
+    SaveTrackData()
+    
+    SetStatus("Backup loaded: " .. backup.display)
+    return true
+end
+
 local function FindIndestructibleTrack()
     local track_count = r.CountTracks(0)
     for i = 0, track_count - 1 do
@@ -752,6 +921,40 @@ local function LoadOrCreateTrack()
         state.track_guid = r.GetTrackGUID(existing_track)
         state.last_chunk = GetTrackChunk(existing_track)
         state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
+        
+        local tf = io.open(TRACK_FILE, "r")
+        if tf then
+            local tc = tf:read("*all")
+            tf:close()
+            last_file_timestamp = tc:match('"timestamp":"([^"]+)"')
+        end
+        
+        local saved_data = LoadTrackData()
+        if saved_data and saved_data.chunk then
+            local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
+            if saved_normalized and state.last_normalized_chunk and saved_normalized ~= state.last_normalized_chunk then
+                local saved_time = GetSavedDataTimestamp() or "unknown"
+                local answer = r.MB(
+                    "A newer saved version exists (" .. saved_time .. ").\n\nDo you want to load the saved version?\n\nYes = Load saved version\nNo = Keep current track (will overwrite saved)",
+                    SCRIPT_NAME .. " - Sync Conflict",
+                    4
+                )
+                if answer == 6 then
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    SetTrackChunk(existing_track, saved_data.chunk)
+                    state.last_chunk = saved_data.chunk
+                    state.last_normalized_chunk = saved_normalized
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("Sync Indestructible Track", -1)
+                    SetStatus("Track synced from saved data")
+                else
+                    SaveTrackData()
+                    SetStatus("Current track saved (overwrote old)")
+                end
+            end
+        end
+        
         if state.last_chunk then
             AddToUndoHistory(state.last_chunk)
         end
@@ -776,6 +979,14 @@ local function LoadOrCreateTrack()
                 state.last_chunk = saved_data.chunk
                 state.last_normalized_chunk = NormalizeChunkForComparison(saved_data.chunk)
                 state.is_monitoring = true
+                
+                local tf = io.open(TRACK_FILE, "r")
+                if tf then
+                    local tc = tf:read("*all")
+                    tf:close()
+                    last_file_timestamp = tc:match('"timestamp":"([^"]+)"')
+                end
+                
                 AddToUndoHistory(state.last_chunk)
                 SetStatus("Track restored from saved data")
             end
@@ -875,8 +1086,161 @@ local function CopyTrackToProject()
 end
 
 local last_save_time = 0
+local last_file_timestamp = nil
+local last_project_path = nil
+local pending_change_time = nil
+local pending_change_chunk = nil
+local pending_tempo_sync = nil
+local DEBOUNCE_DELAY = 0.5
+
+local function CheckForExternalChanges()
+    if pending_change_time then return end
+    if not FileExists(TRACK_FILE) then return end
+    
+    local current_project_path = r.GetProjectPath() or ""
+    if current_project_path ~= last_project_path then
+        last_project_path = current_project_path
+        last_file_timestamp = nil
+    end
+    
+    local track = state.track_ptr
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then
+        track = FindIndestructibleTrack()
+        if not track then return end
+        state.track_ptr = track
+        state.track_guid = r.GetTrackGUID(track)
+    end
+    
+    local f = io.open(TRACK_FILE, "r")
+    if not f then return end
+    local content = f:read("*all")
+    f:close()
+    
+    local saved_timestamp = content:match('"timestamp":"([^"]+)"')
+    if not saved_timestamp then return end
+    
+    if last_file_timestamp == nil then
+        last_file_timestamp = saved_timestamp
+        
+        local saved_data = LoadTrackData()
+        if saved_data and saved_data.chunk then
+            local current_chunk = GetTrackChunk(track)
+            if not current_chunk then return end
+            
+            local current_normalized = NormalizeChunkForComparison(current_chunk)
+            local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
+            
+            local current_tempo = r.Master_GetTempo()
+            local saved_tempo = saved_data.tempo
+            
+            if config.tempo_check_enabled and saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
+                pending_tempo_sync = {
+                    saved_data = saved_data,
+                    saved_normalized = saved_normalized,
+                    current_tempo = current_tempo,
+                    saved_tempo = saved_tempo,
+                    track = track
+                }
+                SetStatus("Tempo differs - confirm sync")
+            elseif saved_normalized ~= current_normalized then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                SetTrackChunk(track, saved_data.chunk)
+                state.last_chunk = saved_data.chunk
+                state.last_normalized_chunk = saved_normalized
+                AddToUndoHistory(saved_data.chunk)
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Sync Indestructible Track", -1)
+                r.TrackList_AdjustWindows(false)
+                r.UpdateArrange()
+                SetStatus("Synced from another project")
+            else
+                state.last_chunk = current_chunk
+                state.last_normalized_chunk = current_normalized
+            end
+        end
+        return
+    end
+    
+    if saved_timestamp ~= last_file_timestamp then
+        last_file_timestamp = saved_timestamp
+        
+        local saved_data = LoadTrackData()
+        if saved_data and saved_data.chunk then
+            local current_chunk = GetTrackChunk(track)
+            if not current_chunk then return end
+            
+            local current_normalized = NormalizeChunkForComparison(current_chunk)
+            local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
+            
+            local current_tempo = r.Master_GetTempo()
+            local saved_tempo = saved_data.tempo
+            
+            if config.tempo_check_enabled and saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
+                pending_tempo_sync = {
+                    saved_data = saved_data,
+                    saved_normalized = saved_normalized,
+                    current_tempo = current_tempo,
+                    saved_tempo = saved_tempo,
+                    track = track
+                }
+                SetStatus("Tempo differs - confirm sync")
+            elseif saved_normalized ~= current_normalized then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                SetTrackChunk(track, saved_data.chunk)
+                state.last_chunk = saved_data.chunk
+                state.last_normalized_chunk = saved_normalized
+                
+                AddToUndoHistory(saved_data.chunk)
+                
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Sync Indestructible Track", -1)
+                r.TrackList_AdjustWindows(false)
+                r.UpdateArrange()
+                SetStatus("Synced from another project")
+            else
+                state.last_chunk = current_chunk
+                state.last_normalized_chunk = current_normalized
+            end
+        end
+    end
+end
+
+local function ProcessPendingChange()
+    if not pending_change_time then return end
+    
+    local now = r.time_precise()
+    if now - pending_change_time < DEBOUNCE_DELAY then return end
+    
+    local current_chunk = GetTrackChunk(state.track_ptr)
+    if not current_chunk then 
+        pending_change_time = nil
+        pending_change_chunk = nil
+        return 
+    end
+    
+    local normalized_current = NormalizeChunkForComparison(current_chunk)
+    
+    AddToUndoHistory(current_chunk)
+    state.last_chunk = current_chunk
+    state.last_normalized_chunk = normalized_current
+    last_file_timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    
+    if SaveTrackData() then
+        SetStatus("Auto-save: change saved (" .. os.date("%H:%M:%S") .. ")")
+    else
+        SetStatus("ERROR: Could not save change!", true)
+    end
+    
+    pending_change_time = nil
+    pending_change_chunk = nil
+end
 
 local function CheckForChanges()
+    CheckForExternalChanges()
+    ProcessPendingChange()
+    
     if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
         state.track_ptr = FindIndestructibleTrack()
         if not state.track_ptr then
@@ -897,19 +1261,10 @@ local function CheckForChanges()
     end
     
     if normalized_current ~= state.last_normalized_chunk then
-        local now = r.time_precise()
-        if now - last_save_time < 1.0 then return end
-        last_save_time = now
-        
-        AddToUndoHistory(current_chunk)
+        pending_change_time = r.time_precise()
+        pending_change_chunk = current_chunk
         state.last_chunk = current_chunk
         state.last_normalized_chunk = normalized_current
-        
-        if SaveTrackData() then
-            SetStatus("Auto-save: change saved (" .. os.date("%H:%M:%S") .. ")")
-        else
-            SetStatus("ERROR: Could not save change!", true)
-        end
     end
 end
 
@@ -1011,7 +1366,36 @@ local function DrawMainUI()
     local content_height = content_end_y - content_start_y - 10
     if content_height < 50 then content_height = 50 end
     
-    if state.show_undo_list then
+    if state.show_backup_list then
+        r.ImGui_Text(ctx, "Load Backup (" .. #available_backups .. " available)")
+        r.ImGui_Spacing(ctx)
+        
+        local list_height = content_height - 50
+        if list_height < 30 then list_height = 30 end
+        
+        if r.ImGui_BeginChild(ctx, "backup_list", -1, list_height, 1) then
+            if #available_backups == 0 then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
+                r.ImGui_Text(ctx, "No backups found")
+                r.ImGui_PopStyleColor(ctx)
+            else
+                for i, backup in ipairs(available_backups) do
+                    r.ImGui_PushID(ctx, i)
+                    if r.ImGui_Selectable(ctx, backup.display, false) then
+                        if LoadBackup(backup) then
+                            state.show_backup_list = false
+                        end
+                    end
+                    r.ImGui_PopID(ctx)
+                end
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        
+        if r.ImGui_Button(ctx, "< Back", -1, 0) then
+            state.show_backup_list = false
+        end
+    elseif state.show_undo_list then
         r.ImGui_Text(ctx, "Undo History (" .. state.undo_index .. "/" .. #state.undo_history .. ")")
         r.ImGui_Spacing(ctx)
         
@@ -1045,8 +1429,20 @@ local function DrawMainUI()
             r.ImGui_EndChild(ctx)
         end
         
-        if r.ImGui_Button(ctx, "< Back", -1, 0) then
+        local button_width = (WINDOW_WIDTH - 30) / 2
+        if r.ImGui_Button(ctx, "< Back", button_width, 0) then
             state.show_undo_list = false
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Clear History", button_width, 0) then
+            local current_entry = state.undo_history[state.undo_index]
+            local current_chunk = current_entry and current_entry.chunk or nil
+            state.undo_history = {}
+            state.undo_index = 0
+            if current_chunk then
+                AddToUndoHistory(current_chunk)
+            end
+            SetStatus("Undo history cleared")
         end
     else
         if r.ImGui_BeginChild(ctx, "main_content", -1, content_height, 0) then
@@ -1097,6 +1493,11 @@ local function DrawMainUI()
             end
             if not has_track then r.ImGui_EndDisabled(ctx) end
             
+            if r.ImGui_Button(ctx, "Load Backup", -1, 0) then
+                ScanBackups()
+                state.show_backup_list = true
+            end
+            
             r.ImGui_EndChild(ctx)
         end
     end
@@ -1134,6 +1535,9 @@ local function DrawSettingsUI()
     changed, new_val = r.ImGui_Checkbox(ctx, "Auto-load on start", config.auto_load_on_start)
     if changed then config.auto_load_on_start = new_val end
     
+    changed, new_val = r.ImGui_Checkbox(ctx, "Warn on tempo mismatch", config.tempo_check_enabled)
+    if changed then config.tempo_check_enabled = new_val end
+    
     r.ImGui_Separator(ctx)
     
     if r.ImGui_Button(ctx, "Save and Close", -1, 0) then
@@ -1149,6 +1553,11 @@ local function DrawSettingsUI()
 end
 
 local function loop()
+    if not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then
+        ctx = r.ImGui_CreateContext(SCRIPT_NAME)
+        font_loaded = false
+    end
+    
     if not font_loaded then
         main_font = r.ImGui_CreateFont("Segoe UI", 13)
         title_font = r.ImGui_CreateFont("Segoe UI", 18)
@@ -1219,6 +1628,58 @@ local function loop()
             end
         end
         
+        if pending_tempo_sync then
+            local center_x, center_y = r.ImGui_GetWindowPos(ctx)
+            center_x = center_x + WINDOW_WIDTH / 2
+            center_y = center_y + WINDOW_HEIGHT / 2
+            r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Appearing(), 0.5, 0.5)
+            r.ImGui_SetNextWindowSize(ctx, 340, 0, r.ImGui_Cond_Appearing())
+            
+            local tempo_popup_visible, tempo_popup_open = r.ImGui_Begin(ctx, "Tempo Mismatch###tempopopup", true, r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize())
+            if tempo_popup_visible then
+                r.ImGui_TextColored(ctx, COLORS.warning, "Warning: Project tempo differs!")
+                r.ImGui_Spacing(ctx)
+                r.ImGui_Text(ctx, string.format("Current project: %.2f BPM", pending_tempo_sync.current_tempo))
+                r.ImGui_Text(ctx, string.format("Saved track: %.2f BPM", pending_tempo_sync.saved_tempo))
+                r.ImGui_Spacing(ctx)
+                r.ImGui_TextWrapped(ctx, "Syncing may shift item positions.")
+                r.ImGui_Spacing(ctx)
+                r.ImGui_Separator(ctx)
+                r.ImGui_Spacing(ctx)
+                
+                if r.ImGui_Button(ctx, "Sync Anyway", 100, 25) then
+                    local pts = pending_tempo_sync
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    SetTrackChunk(pts.track, pts.saved_data.chunk)
+                    state.last_chunk = pts.saved_data.chunk
+                    state.last_normalized_chunk = pts.saved_normalized
+                    AddToUndoHistory(pts.saved_data.chunk)
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("Sync Indestructible Track", -1)
+                    r.TrackList_AdjustWindows(false)
+                    r.UpdateArrange()
+                    SetStatus("Synced (tempo differs)")
+                    pending_tempo_sync = nil
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Keep Current", 100, 25) then
+                    state.last_chunk = GetTrackChunk(pending_tempo_sync.track)
+                    state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
+                    pending_tempo_sync = nil
+                    SetStatus("Sync skipped (tempo mismatch)")
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Cancel", 70, 25) then
+                    pending_tempo_sync = nil
+                end
+                r.ImGui_End(ctx)
+            end
+            if not tempo_popup_open then
+                pending_tempo_sync = nil
+            end
+        end
+        
         if state.close_action then
             open = false
         end
@@ -1251,7 +1712,10 @@ local function loop()
 end
 
 local function OnExit()
-    if state.close_action then return end
+    if state.close_action then
+        RemoveLockFile()
+        return
+    end
     
     local track = FindIndestructibleTrack()
     if track then
@@ -1265,12 +1729,30 @@ local function OnExit()
             r.DeleteTrack(track)
         end
     end
+    RemoveLockFile()
     SaveConfig()
 end
 
 local function Init()
     EnsureDirectories()
     LoadConfig()
+    
+    local lock_info = CheckLockFile()
+    if lock_info then
+        local answer = r.MB(
+            "The Indestructible Track may be open in another project:\n\n" ..
+            "Project: " .. (lock_info.project or "Unknown") .. "\n" ..
+            "Since: " .. (lock_info.time or "Unknown") .. "\n\n" ..
+            "Continue anyway? (Changes may conflict)",
+            SCRIPT_NAME .. " - Already Running?",
+            4
+        )
+        if answer ~= 6 then
+            return
+        end
+    end
+    
+    CreateLockFile()
     
     local track = LoadOrCreateTrack()
     if track then
