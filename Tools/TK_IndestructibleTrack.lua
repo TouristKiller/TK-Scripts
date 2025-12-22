@@ -1,22 +1,20 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 1.5
+-- @version 1.7
 -- @changelog:
---   + Added: Multi-project sync - track syncs automatically between project tabs
---   + Added: Tempo mismatch warning when syncing between projects with different tempos
---   + Added: Setting to enable/disable tempo mismatch warning
---   + Added: Debounce system to prevent partial saves during item resizing
---   + Added: Load Backup function to restore from saved backups
---   + Added: Clear History button to reset undo history
---   + Fixed: ImGui context recovery after native dialogs
---   + Fixed: Boolean settings persistence (tempo check enabled)
---   + Fixed: Keep current track now properly saves current state
---   + Improved: Project switch detection for reliable sync
+--   + Added: Pin track setting now stored per-project (in project ExtState)
+--   + Added: Track position setting (Top/Bottom)
+--   + Added: Snapshots - manually save named versions to restore anytime
+--   + Added: "Remember choice" with Time/Beat/Skip options for tempo mismatch
+--   + Renamed: "Load Backup" to "Auto-Saves" for clarity
+--   + Improved: Settings UI with scrollable content and fixed buttons
+--   + Improved: UI labels and tooltips for better understanding
+--   + Fixed: Pin status now independent per project
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "1.5"
+local SCRIPT_VERSION = "1.7"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -33,6 +31,7 @@ local CONFIG_FILE = DATA_DIR .. "TK_IndestructibleTrack_config.json"
 local TRACK_FILE = DATA_DIR .. "TK_IndestructibleTrack_data.json"
 local LOCK_FILE = DATA_DIR .. "TK_IndestructibleTrack.lock"
 local HISTORY_DIR = DATA_DIR .. "history/"
+local SNAPSHOTS_DIR = DATA_DIR .. "snapshots/"
 local MEDIA_DIR = DATA_DIR .. "media/"
 
 local ctx = r.ImGui_CreateContext(SCRIPT_NAME)
@@ -52,7 +51,11 @@ local default_config = {
     show_notifications = true,
     track_color = 0x1E5A8A,
     auto_load_on_start = true,
-    tempo_check_enabled = true
+    tempo_check_enabled = true,
+    remember_tempo_choice = false,
+    tempo_choice = "time",
+    track_position = "top",
+    track_pinned = false
 }
 
 local config = {}
@@ -69,6 +72,9 @@ local state = {
     show_settings = false,
     show_undo_list = false,
     show_backup_list = false,
+    show_snapshot_list = false,
+    show_snapshot_save = false,
+    snapshot_name_input = "",
     show_close_warning = false,
     close_action = nil,
     status_message = "",
@@ -76,6 +82,7 @@ local state = {
 }
 
 local available_backups = {}
+local available_snapshots = {}
 
 local COLORS = {
     bg = 0x141414FF,
@@ -292,7 +299,8 @@ local function NormalizeChunkForComparison(chunk)
                    not line:match("^%s*SCROLL%s") and
                    not line:match("^%s*ZOOM%s") and
                    not line:match("^%s*VZOOM%s") and
-                   not line:match("^%s*CFGEDIT%s") then
+                   not line:match("^%s*CFGEDIT%s") and
+                   not line:match("^%s*TRACKHEIGHT%s") then
                     table.insert(lines, line)
                 end
             end
@@ -307,7 +315,9 @@ local function NormalizeChunkForComparison(chunk)
                not line:match("^%s*SCROLL%s") and
                not line:match("^%s*ZOOM%s") and
                not line:match("^%s*VZOOM%s") and
-               not line:match("^%s*CFGEDIT%s") then
+               not line:match("^%s*CFGEDIT%s") and
+               not line:match("^%s*PEAKCOL%s") and
+               not line:match("^%s*TRACKHEIGHT%s") then
                 table.insert(lines, line)
             end
         end
@@ -316,15 +326,68 @@ local function NormalizeChunkForComparison(chunk)
     return table.concat(lines, "\n")
 end
 
+local function AdjustChunkToTempo(chunk, old_tempo, new_tempo)
+    if not chunk or not old_tempo or not new_tempo then return chunk end
+    if old_tempo <= 0 or new_tempo <= 0 then return chunk end
+    
+    local ratio = old_tempo / new_tempo
+    
+    local adjusted = chunk:gsub("(POSITION%s+)([%d%.]+)", function(prefix, pos)
+        local new_pos = tonumber(pos) * ratio
+        return prefix .. string.format("%.10f", new_pos)
+    end)
+    
+    adjusted = adjusted:gsub("(LENGTH%s+)([%d%.]+)", function(prefix, len)
+        local new_len = tonumber(len) * ratio
+        return prefix .. string.format("%.10f", new_len)
+    end)
+    
+    adjusted = adjusted:gsub("(SOFFS%s+)([%d%.%-]+)", function(prefix, soffs)
+        local new_soffs = tonumber(soffs) * ratio
+        return prefix .. string.format("%.10f", new_soffs)
+    end)
+    
+    adjusted = adjusted:gsub("(FADEIN%s+%d+%s+)([%d%.]+)", function(prefix, fade)
+        local new_fade = tonumber(fade) * ratio
+        return prefix .. string.format("%.10f", new_fade)
+    end)
+    
+    adjusted = adjusted:gsub("(FADEOUT%s+%d+%s+)([%d%.]+)", function(prefix, fade)
+        local new_fade = tonumber(fade) * ratio
+        return prefix .. string.format("%.10f", new_fade)
+    end)
+    
+    return adjusted
+end
+
+local function GetProjectPinStatus(proj)
+    proj = proj or 0
+    local retval, val = r.GetProjExtState(proj, SCRIPT_NAME, "track_pinned")
+    return retval > 0 and val == "1"
+end
+
+local function SetProjectPinStatus(proj, pinned)
+    proj = proj or 0
+    r.SetProjExtState(proj, SCRIPT_NAME, "track_pinned", pinned and "1" or "0")
+    r.MarkProjectDirty(proj)
+end
+
 local function GetTrackChunk(track)
     if not track or not r.ValidatePtr(track, "MediaTrack*") then return nil end
     local retval, chunk = r.GetTrackStateChunk(track, "", false)
     return retval and chunk or nil
 end
 
-local function SetTrackChunk(track, chunk)
+local function SetTrackChunk(track, chunk, preserve_local)
     if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
+    
     local result = r.SetTrackStateChunk(track, chunk, false)
+    
+    if preserve_local ~= false then
+        local should_pin = GetProjectPinStatus(0)
+        r.SetMediaTrackInfo_Value(track, "B_TCPPIN", should_pin and 1 or 0)
+    end
+    
     r.Main_OnCommand(40047, 0)
     r.UpdateArrange()
     r.TrackList_AdjustWindows(false)
@@ -867,6 +930,159 @@ local function LoadBackup(backup)
     return true
 end
 
+local function ScanSnapshots()
+    available_snapshots = {}
+    r.RecursiveCreateDirectory(SNAPSHOTS_DIR, 0)
+    local idx = 0
+    while true do
+        local filename = r.EnumerateFiles(SNAPSHOTS_DIR, idx)
+        if not filename then break end
+        if filename:match("%.json$") then
+            local f = io.open(SNAPSHOTS_DIR .. filename, "r")
+            if f then
+                local content = f:read("*all")
+                f:close()
+                local name = content:match('"name":"([^"]*)"') or filename:gsub("%.json$", "")
+                local timestamp = content:match('"timestamp":"([^"]*)"') or ""
+                table.insert(available_snapshots, {
+                    filename = filename,
+                    path = SNAPSHOTS_DIR .. filename,
+                    name = name,
+                    timestamp = timestamp,
+                    display = name .. " (" .. timestamp .. ")"
+                })
+            end
+        end
+        idx = idx + 1
+    end
+    table.sort(available_snapshots, function(a, b) return a.timestamp > b.timestamp end)
+end
+
+local function SaveSnapshot(name)
+    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        SetStatus("No track to save", true)
+        return false
+    end
+    
+    local chunk = GetTrackChunk(state.track_ptr)
+    if not chunk then
+        SetStatus("Could not get track data", true)
+        return false
+    end
+    
+    r.RecursiveCreateDirectory(SNAPSHOTS_DIR, 0)
+    
+    local safe_name = name:gsub("[^%w%s%-_]", ""):gsub("%s+", "_")
+    if safe_name == "" then safe_name = "snapshot" end
+    
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local file_timestamp = os.date("%Y%m%d_%H%M%S")
+    local filename = safe_name .. "_" .. file_timestamp .. ".json"
+    
+    local escaped_chunk = chunk:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "<<<NEWLINE>>>")
+    local tempo = r.Master_GetTempo()
+    
+    local json = string.format(
+        '{"name":"%s","timestamp":"%s","tempo":%.6f,"chunk":"%s"}',
+        name:gsub('"', '\\"'),
+        timestamp,
+        tempo,
+        escaped_chunk
+    )
+    
+    local f = io.open(SNAPSHOTS_DIR .. filename, "w")
+    if not f then
+        SetStatus("Could not save snapshot", true)
+        return false
+    end
+    f:write(json)
+    f:close()
+    
+    SetStatus("Snapshot saved: " .. name)
+    return true
+end
+
+local function LoadSnapshot(snapshot)
+    local f = io.open(snapshot.path, "r")
+    if not f then
+        SetStatus("Could not open snapshot", true)
+        return false
+    end
+    local content = f:read("*all")
+    f:close()
+    
+    local chunk_marker = '"chunk":"'
+    local chunk_start = content:find(chunk_marker, 1, true)
+    if not chunk_start then
+        SetStatus("Invalid snapshot file", true)
+        return false
+    end
+    
+    chunk_start = chunk_start + #chunk_marker
+    local search_pos = chunk_start
+    local chunk_end = nil
+    
+    while true do
+        local quote_pos = content:find('"', search_pos, true)
+        if not quote_pos then break end
+        
+        local backslash_count = 0
+        local check_pos = quote_pos - 1
+        while check_pos >= 1 and content:sub(check_pos, check_pos) == '\\' do
+            backslash_count = backslash_count + 1
+            check_pos = check_pos - 1
+        end
+        
+        if backslash_count % 2 == 0 then
+            chunk_end = quote_pos
+            break
+        end
+        
+        search_pos = quote_pos + 1
+    end
+    
+    if not chunk_end then
+        SetStatus("Could not parse snapshot", true)
+        return false
+    end
+    
+    local chunk = content:sub(chunk_start, chunk_end - 1)
+    chunk = chunk:gsub("<<<NEWLINE>>>", "\n")
+    chunk = chunk:gsub('\\n', '\n')
+    chunk = chunk:gsub('\\"', '"')
+    chunk = chunk:gsub('\\\\', '\\')
+    
+    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        state.track_ptr = FindIndestructibleTrack()
+        if not state.track_ptr then
+            r.InsertTrackAtIndex(0, true)
+            state.track_ptr = r.GetTrack(0, 0)
+            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
+            state.track_guid = r.GetTrackGUID(state.track_ptr)
+        end
+    end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    SetTrackChunk(state.track_ptr, chunk)
+    state.last_chunk = chunk
+    state.last_normalized_chunk = NormalizeChunkForComparison(chunk)
+    AddToUndoHistory(chunk)
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Load Indestructible Track Snapshot", -1)
+    
+    SaveTrackData()
+    
+    SetStatus("Snapshot loaded: " .. snapshot.name)
+    return true
+end
+
+local function DeleteSnapshot(snapshot)
+    os.remove(snapshot.path)
+    ScanSnapshots()
+    SetStatus("Snapshot deleted: " .. snapshot.name)
+end
+
 local function FindIndestructibleTrack()
     local track_count = r.CountTracks(0)
     for i = 0, track_count - 1 do
@@ -883,8 +1099,14 @@ local function CreateIndestructibleTrack()
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     
-    r.InsertTrackAtIndex(0, true)
-    local track = r.GetTrack(0, 0)
+    local track_count = r.CountTracks(0)
+    local insert_index = 0
+    if config.track_position == "bottom" then
+        insert_index = track_count
+    end
+    
+    r.InsertTrackAtIndex(insert_index, true)
+    local track = r.GetTrack(0, insert_index)
     
     if track then
         r.GetSetMediaTrackInfo_String(track, "P_NAME", config.track_name, true)
@@ -895,6 +1117,11 @@ local function CreateIndestructibleTrack()
             config.track_color & 0xFF
         ) | 0x1000000
         r.SetTrackColor(track, color)
+        
+        local should_pin = GetProjectPinStatus(0)
+        if should_pin then
+            r.SetMediaTrackInfo_Value(track, "B_TCPPIN", 1)
+        end
         
         state.track_ptr = track
         state.track_guid = r.GetTrackGUID(track)
@@ -1134,14 +1361,49 @@ local function CheckForExternalChanges()
             local saved_tempo = saved_data.tempo
             
             if config.tempo_check_enabled and saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
-                pending_tempo_sync = {
-                    saved_data = saved_data,
-                    saved_normalized = saved_normalized,
-                    current_tempo = current_tempo,
-                    saved_tempo = saved_tempo,
-                    track = track
-                }
-                SetStatus("Tempo differs - confirm sync")
+                if config.remember_tempo_choice then
+                    if config.tempo_choice == "time" then
+                        r.Undo_BeginBlock()
+                        r.PreventUIRefresh(1)
+                        SetTrackChunk(track, saved_data.chunk)
+                        state.last_chunk = saved_data.chunk
+                        state.last_normalized_chunk = saved_normalized
+                        AddToUndoHistory(saved_data.chunk)
+                        r.PreventUIRefresh(-1)
+                        r.Undo_EndBlock("Sync Indestructible Track", -1)
+                        r.TrackList_AdjustWindows(false)
+                        r.UpdateArrange()
+                        SetStatus("Loaded (time-based)")
+                    elseif config.tempo_choice == "beat" then
+                        local adjusted_chunk = AdjustChunkToTempo(saved_data.chunk, saved_tempo, current_tempo)
+                        r.Undo_BeginBlock()
+                        r.PreventUIRefresh(1)
+                        SetTrackChunk(track, adjusted_chunk)
+                        state.last_chunk = adjusted_chunk
+                        state.last_normalized_chunk = NormalizeChunkForComparison(adjusted_chunk)
+                        AddToUndoHistory(adjusted_chunk)
+                        r.PreventUIRefresh(-1)
+                        r.Undo_EndBlock("Sync Indestructible Track (tempo adjusted)", -1)
+                        r.TrackList_AdjustWindows(false)
+                        r.UpdateArrange()
+                        SaveTrackData()
+                        SetStatus("Loaded (beat-based)")
+                    else
+                        state.last_chunk = current_chunk
+                        state.last_normalized_chunk = current_normalized
+                        SaveTrackData()
+                        SetStatus("Cancelled (using current)")
+                    end
+                else
+                    pending_tempo_sync = {
+                        saved_data = saved_data,
+                        saved_normalized = saved_normalized,
+                        current_tempo = current_tempo,
+                        saved_tempo = saved_tempo,
+                        track = track
+                    }
+                    SetStatus("Tempo differs - confirm sync")
+                end
             elseif saved_normalized ~= current_normalized then
                 r.Undo_BeginBlock()
                 r.PreventUIRefresh(1)
@@ -1177,14 +1439,49 @@ local function CheckForExternalChanges()
             local saved_tempo = saved_data.tempo
             
             if config.tempo_check_enabled and saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
-                pending_tempo_sync = {
-                    saved_data = saved_data,
-                    saved_normalized = saved_normalized,
-                    current_tempo = current_tempo,
-                    saved_tempo = saved_tempo,
-                    track = track
-                }
-                SetStatus("Tempo differs - confirm sync")
+                if config.remember_tempo_choice then
+                    if config.tempo_choice == "time" then
+                        r.Undo_BeginBlock()
+                        r.PreventUIRefresh(1)
+                        SetTrackChunk(track, saved_data.chunk)
+                        state.last_chunk = saved_data.chunk
+                        state.last_normalized_chunk = saved_normalized
+                        AddToUndoHistory(saved_data.chunk)
+                        r.PreventUIRefresh(-1)
+                        r.Undo_EndBlock("Sync Indestructible Track", -1)
+                        r.TrackList_AdjustWindows(false)
+                        r.UpdateArrange()
+                        SetStatus("Loaded (time-based)")
+                    elseif config.tempo_choice == "beat" then
+                        local adjusted_chunk = AdjustChunkToTempo(saved_data.chunk, saved_tempo, current_tempo)
+                        r.Undo_BeginBlock()
+                        r.PreventUIRefresh(1)
+                        SetTrackChunk(track, adjusted_chunk)
+                        state.last_chunk = adjusted_chunk
+                        state.last_normalized_chunk = NormalizeChunkForComparison(adjusted_chunk)
+                        AddToUndoHistory(adjusted_chunk)
+                        r.PreventUIRefresh(-1)
+                        r.Undo_EndBlock("Sync Indestructible Track (tempo adjusted)", -1)
+                        r.TrackList_AdjustWindows(false)
+                        r.UpdateArrange()
+                        SaveTrackData()
+                        SetStatus("Loaded (beat-based)")
+                    else
+                        state.last_chunk = current_chunk
+                        state.last_normalized_chunk = current_normalized
+                        SaveTrackData()
+                        SetStatus("Cancelled (using current)")
+                    end
+                else
+                    pending_tempo_sync = {
+                        saved_data = saved_data,
+                        saved_normalized = saved_normalized,
+                        current_tempo = current_tempo,
+                        saved_tempo = saved_tempo,
+                        track = track
+                    }
+                    SetStatus("Tempo differs - confirm sync")
+                end
             elseif saved_normalized ~= current_normalized then
                 r.Undo_BeginBlock()
                 r.PreventUIRefresh(1)
@@ -1367,7 +1664,10 @@ local function DrawMainUI()
     if content_height < 50 then content_height = 50 end
     
     if state.show_backup_list then
-        r.ImGui_Text(ctx, "Load Backup (" .. #available_backups .. " available)")
+        r.ImGui_Text(ctx, "Auto-Saves (" .. #available_backups .. " available)")
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Automatic backups of recent changes (rotates, keeps last " .. config.auto_backup_count .. ")")
+        end
         r.ImGui_Spacing(ctx)
         
         local list_height = content_height - 50
@@ -1376,7 +1676,7 @@ local function DrawMainUI()
         if r.ImGui_BeginChild(ctx, "backup_list", -1, list_height, 1) then
             if #available_backups == 0 then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
-                r.ImGui_Text(ctx, "No backups found")
+                r.ImGui_Text(ctx, "No auto-saves found")
                 r.ImGui_PopStyleColor(ctx)
             else
                 for i, backup in ipairs(available_backups) do
@@ -1386,6 +1686,9 @@ local function DrawMainUI()
                             state.show_backup_list = false
                         end
                     end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Click to restore this auto-save")
+                    end
                     r.ImGui_PopID(ctx)
                 end
             end
@@ -1394,6 +1697,104 @@ local function DrawMainUI()
         
         if r.ImGui_Button(ctx, "< Back", -1, 0) then
             state.show_backup_list = false
+        end
+    elseif state.show_snapshot_list then
+        r.ImGui_Text(ctx, "Snapshots (" .. #available_snapshots .. " saved)")
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Manually saved versions - kept until you delete them")
+        end
+        r.ImGui_Spacing(ctx)
+        
+        local list_height = content_height - 80
+        if list_height < 30 then list_height = 30 end
+        
+        if r.ImGui_BeginChild(ctx, "snapshot_list", -1, list_height, 1) then
+            if #available_snapshots == 0 then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
+                r.ImGui_Text(ctx, "No snapshots saved yet")
+                r.ImGui_Text(ctx, "Use 'Save Snapshot' to create one")
+                r.ImGui_PopStyleColor(ctx)
+            else
+                for i, snapshot in ipairs(available_snapshots) do
+                    r.ImGui_PushID(ctx, i)
+                    r.ImGui_Text(ctx, snapshot.name)
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
+                    r.ImGui_Text(ctx, "(" .. snapshot.timestamp .. ")")
+                    r.ImGui_PopStyleColor(ctx)
+                    
+                    if r.ImGui_Button(ctx, "Load##" .. i, 50, 0) then
+                        if LoadSnapshot(snapshot) then
+                            state.show_snapshot_list = false
+                        end
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Restore track to this saved state")
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Delete##" .. i, 50, 0) then
+                        DeleteSnapshot(snapshot)
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Permanently remove this snapshot")
+                    end
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_PopID(ctx)
+                end
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        
+        local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
+        if not has_track then r.ImGui_BeginDisabled(ctx) end
+        if r.ImGui_Button(ctx, "Save New Snapshot", -1, 0) then
+            state.show_snapshot_list = false
+            state.show_snapshot_save = true
+            state.snapshot_name_input = ""
+        end
+        if r.ImGui_IsItemHovered(ctx) and has_track then
+            r.ImGui_SetTooltip(ctx, "Save current track state with a name")
+        end
+        if not has_track then r.ImGui_EndDisabled(ctx) end
+        
+        if r.ImGui_Button(ctx, "< Back", -1, 0) then
+            state.show_snapshot_list = false
+        end
+    elseif state.show_snapshot_save then
+        r.ImGui_Text(ctx, "Save Snapshot")
+        r.ImGui_Spacing(ctx)
+        r.ImGui_TextWrapped(ctx, "Give your snapshot a descriptive name so you can recognize it later.")
+        r.ImGui_Spacing(ctx)
+        
+        r.ImGui_Text(ctx, "Name:")
+        r.ImGui_SetNextItemWidth(ctx, -1)
+        local changed, new_val = r.ImGui_InputText(ctx, "##snapshot_name", state.snapshot_name_input)
+        if changed then state.snapshot_name_input = new_val end
+        
+        if r.ImGui_IsItemFocused(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) and state.snapshot_name_input ~= "" then
+            if SaveSnapshot(state.snapshot_name_input) then
+                ScanSnapshots()
+                state.show_snapshot_save = false
+                state.show_snapshot_list = true
+            end
+        end
+        
+        r.ImGui_Spacing(ctx)
+        
+        local name_empty = state.snapshot_name_input == ""
+        if name_empty then r.ImGui_BeginDisabled(ctx) end
+        if r.ImGui_Button(ctx, "Save", -1, 0) then
+            if SaveSnapshot(state.snapshot_name_input) then
+                ScanSnapshots()
+                state.show_snapshot_save = false
+                state.show_snapshot_list = true
+            end
+        end
+        if name_empty then r.ImGui_EndDisabled(ctx) end
+        
+        if r.ImGui_Button(ctx, "Cancel", -1, 0) then
+            state.show_snapshot_save = false
+            state.show_snapshot_list = true
         end
     elseif state.show_undo_list then
         r.ImGui_Text(ctx, "Undo History (" .. state.undo_index .. "/" .. #state.undo_history .. ")")
@@ -1493,9 +1894,22 @@ local function DrawMainUI()
             end
             if not has_track then r.ImGui_EndDisabled(ctx) end
             
-            if r.ImGui_Button(ctx, "Load Backup", -1, 0) then
+            r.ImGui_Separator(ctx)
+            
+            if r.ImGui_Button(ctx, "Snapshots", -1, 0) then
+                ScanSnapshots()
+                state.show_snapshot_list = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Manually saved versions you can restore anytime")
+            end
+            
+            if r.ImGui_Button(ctx, "Auto-Saves", -1, 0) then
                 ScanBackups()
                 state.show_backup_list = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Automatic backups of recent changes")
             end
             
             r.ImGui_EndChild(ctx)
@@ -1511,32 +1925,149 @@ local function DrawSettingsUI()
     r.ImGui_Text(ctx, "SETTINGS")
     r.ImGui_Separator(ctx)
     
-    local changed, new_val
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local content_height = window_height - 100
+    if content_height < 50 then content_height = 50 end
     
-    r.ImGui_Text(ctx, "Track name:")
-    changed, new_val = r.ImGui_InputText(ctx, "##trackname", config.track_name)
-    if changed then config.track_name = new_val end
-    
-    r.ImGui_Text(ctx, "Check interval (sec):")
-    changed, new_val = r.ImGui_SliderDouble(ctx, "##interval", config.check_interval, 0.5, 5.0, "%.1f")
-    if changed then config.check_interval = new_val end
-    
-    r.ImGui_Text(ctx, "Max undo history:")
-    changed, new_val = r.ImGui_SliderInt(ctx, "##maxundo", config.max_undo_history, 10, 200)
-    if changed then config.max_undo_history = new_val end
-    
-    r.ImGui_Text(ctx, "Backups to keep:")
-    changed, new_val = r.ImGui_SliderInt(ctx, "##backups", config.auto_backup_count, 1, 20)
-    if changed then config.auto_backup_count = new_val end
-    
-    changed, new_val = r.ImGui_Checkbox(ctx, "Show notifications", config.show_notifications)
-    if changed then config.show_notifications = new_val end
-    
-    changed, new_val = r.ImGui_Checkbox(ctx, "Auto-load on start", config.auto_load_on_start)
-    if changed then config.auto_load_on_start = new_val end
-    
-    changed, new_val = r.ImGui_Checkbox(ctx, "Warn on tempo mismatch", config.tempo_check_enabled)
-    if changed then config.tempo_check_enabled = new_val end
+    if r.ImGui_BeginChild(ctx, "settings_content", -1, content_height, 0) then
+        local changed, new_val
+        
+        r.ImGui_Text(ctx, "Track name:")
+        changed, new_val = r.ImGui_InputText(ctx, "##trackname", config.track_name)
+        if changed then config.track_name = new_val end
+        
+        r.ImGui_Text(ctx, "Check interval (sec):")
+        changed, new_val = r.ImGui_SliderDouble(ctx, "##interval", config.check_interval, 0.5, 5.0, "%.1f")
+        if changed then config.check_interval = new_val end
+        
+        r.ImGui_Text(ctx, "Max undo history:")
+        changed, new_val = r.ImGui_SliderInt(ctx, "##maxundo", config.max_undo_history, 10, 200)
+        if changed then config.max_undo_history = new_val end
+        
+        r.ImGui_Text(ctx, "Auto-saves to keep:")
+        changed, new_val = r.ImGui_SliderInt(ctx, "##backups", config.auto_backup_count, 1, 20)
+        if changed then config.auto_backup_count = new_val end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Number of automatic backups to keep (oldest are deleted)")
+        end
+        
+        changed, new_val = r.ImGui_Checkbox(ctx, "Show notifications", config.show_notifications)
+        if changed then config.show_notifications = new_val end
+        
+        changed, new_val = r.ImGui_Checkbox(ctx, "Auto-load on start", config.auto_load_on_start)
+        if changed then config.auto_load_on_start = new_val end
+        
+        changed, new_val = r.ImGui_Checkbox(ctx, "Warn on tempo mismatch", config.tempo_check_enabled)
+        if changed then config.tempo_check_enabled = new_val end
+        
+        if config.tempo_check_enabled then
+            r.ImGui_Indent(ctx)
+            changed, new_val = r.ImGui_Checkbox(ctx, "Remember choice", config.remember_tempo_choice)
+            if changed then config.remember_tempo_choice = new_val end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Auto-apply chosen method without asking")
+            end
+            
+            if config.remember_tempo_choice then
+                if r.ImGui_RadioButton(ctx, "Time##tm", config.tempo_choice == "time") then
+                    config.tempo_choice = "time"
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Keep items at same time positions (seconds)")
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_RadioButton(ctx, "Beat##tm", config.tempo_choice == "beat") then
+                    config.tempo_choice = "beat"
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Adjust positions to keep items at same beats")
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_RadioButton(ctx, "Skip##tm", config.tempo_choice == "cancel") then
+                    config.tempo_choice = "cancel"
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Keep current track, ignore saved version")
+                end
+            end
+            r.ImGui_Unindent(ctx)
+        end
+        
+        r.ImGui_Spacing(ctx)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+        r.ImGui_Text(ctx, "Track placement:")
+        
+        local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
+        
+        if has_track then
+            local track_idx = math.floor(r.GetMediaTrackInfo_Value(state.track_ptr, "IP_TRACKNUMBER") - 1)
+            local track_count = r.CountTracks(0)
+            local is_at_top = (track_idx == 0)
+            local is_at_bottom = (track_idx == track_count - 1)
+            
+            local is_pinned = GetProjectPinStatus(0)
+            
+            r.ImGui_Text(ctx, "Position:")
+            r.ImGui_SameLine(ctx)
+            
+            local clicked_top = r.ImGui_RadioButton(ctx, "Top##pos", is_at_top)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Move track to top of track list")
+            end
+            r.ImGui_SameLine(ctx)
+            local clicked_bottom = r.ImGui_RadioButton(ctx, "Bottom##pos", is_at_bottom)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Move track to bottom of track list")
+            end
+            
+            if clicked_top and not is_at_top then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                r.SetOnlyTrackSelected(state.track_ptr)
+                r.ReorderSelectedTracks(0, 0)
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Move Indestructible Track to top", -1)
+                r.TrackList_AdjustWindows(false)
+                SetStatus("Track moved to top")
+            end
+            
+            if clicked_bottom and not is_at_bottom then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                r.SetOnlyTrackSelected(state.track_ptr)
+                r.ReorderSelectedTracks(track_count, 0)
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Move Indestructible Track to bottom", -1)
+                r.TrackList_AdjustWindows(false)
+                SetStatus("Track moved to bottom")
+            end
+            
+            local pin_changed, pin_val = r.ImGui_Checkbox(ctx, "Pin track (TCP only)", is_pinned)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Keep track pinned at its position in TCP when scrolling")
+            end
+            
+            if pin_changed then
+                local new_pin = not is_pinned
+                SetProjectPinStatus(0, new_pin)
+                r.SetMediaTrackInfo_Value(state.track_ptr, "B_TCPPIN", new_pin and 1 or 0)
+                r.TrackList_AdjustWindows(false)
+                r.UpdateArrange()
+                if new_pin then
+                    SetStatus("Track pinned")
+                else
+                    SetStatus("Track unpinned")
+                end
+            end
+        else
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
+            r.ImGui_Text(ctx, "No track available - create track first")
+            r.ImGui_PopStyleColor(ctx)
+        end
+        
+        r.ImGui_EndChild(ctx)
+    end
     
     r.ImGui_Separator(ctx)
     
@@ -1546,7 +2077,7 @@ local function DrawSettingsUI()
         SetStatus("Settings saved")
     end
     
-    if r.ImGui_Button(ctx, "Cancel", -1, 0) then
+    if r.ImGui_Button(ctx, "Cancel##settings", -1, 0) then
         LoadConfig()
         state.show_settings = false
     end
@@ -1633,21 +2164,27 @@ local function loop()
             center_x = center_x + WINDOW_WIDTH / 2
             center_y = center_y + WINDOW_HEIGHT / 2
             r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Appearing(), 0.5, 0.5)
-            r.ImGui_SetNextWindowSize(ctx, 340, 0, r.ImGui_Cond_Appearing())
+            r.ImGui_SetNextWindowSize(ctx, 360, 0, r.ImGui_Cond_Appearing())
             
             local tempo_popup_visible, tempo_popup_open = r.ImGui_Begin(ctx, "Tempo Mismatch###tempopopup", true, r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize())
             if tempo_popup_visible then
-                r.ImGui_TextColored(ctx, COLORS.warning, "Warning: Project tempo differs!")
+                r.ImGui_TextColored(ctx, COLORS.warning, "Tempo mismatch detected")
                 r.ImGui_Spacing(ctx)
                 r.ImGui_Text(ctx, string.format("Current project: %.2f BPM", pending_tempo_sync.current_tempo))
                 r.ImGui_Text(ctx, string.format("Saved track: %.2f BPM", pending_tempo_sync.saved_tempo))
                 r.ImGui_Spacing(ctx)
-                r.ImGui_TextWrapped(ctx, "Syncing may shift item positions.")
+                r.ImGui_TextWrapped(ctx, "How should item positions be handled?")
                 r.ImGui_Spacing(ctx)
                 r.ImGui_Separator(ctx)
                 r.ImGui_Spacing(ctx)
                 
-                if r.ImGui_Button(ctx, "Sync Anyway", 100, 25) then
+                local btn_width = 100
+                local spacing = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+                local total_width = btn_width * 3 + spacing * 2
+                local start_x = (360 - total_width) / 2
+                r.ImGui_SetCursorPosX(ctx, start_x)
+                
+                if r.ImGui_Button(ctx, "Time-based", btn_width, 25) then
                     local pts = pending_tempo_sync
                     r.Undo_BeginBlock()
                     r.PreventUIRefresh(1)
@@ -1659,19 +2196,43 @@ local function loop()
                     r.Undo_EndBlock("Sync Indestructible Track", -1)
                     r.TrackList_AdjustWindows(false)
                     r.UpdateArrange()
-                    SetStatus("Synced (tempo differs)")
+                    SetStatus("Loaded (time-based)")
                     pending_tempo_sync = nil
                 end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Keep items at same time positions (seconds)")
+                end
                 r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Keep Current", 100, 25) then
+                if r.ImGui_Button(ctx, "Beat-based", btn_width, 25) then
+                    local pts = pending_tempo_sync
+                    local adjusted_chunk = AdjustChunkToTempo(pts.saved_data.chunk, pts.saved_tempo, pts.current_tempo)
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    SetTrackChunk(pts.track, adjusted_chunk)
+                    state.last_chunk = adjusted_chunk
+                    state.last_normalized_chunk = NormalizeChunkForComparison(adjusted_chunk)
+                    AddToUndoHistory(adjusted_chunk)
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("Sync Indestructible Track (tempo adjusted)", -1)
+                    r.TrackList_AdjustWindows(false)
+                    r.UpdateArrange()
+                    SaveTrackData()
+                    SetStatus("Loaded (beat-based)")
+                    pending_tempo_sync = nil
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Adjust positions to keep items at same beats")
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Cancel", btn_width, 25) then
                     state.last_chunk = GetTrackChunk(pending_tempo_sync.track)
                     state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
+                    SaveTrackData()
                     pending_tempo_sync = nil
-                    SetStatus("Sync skipped (tempo mismatch)")
+                    SetStatus("Cancelled")
                 end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Cancel", 70, 25) then
-                    pending_tempo_sync = nil
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Keep current track, save as new state")
                 end
                 r.ImGui_End(ctx)
             end
