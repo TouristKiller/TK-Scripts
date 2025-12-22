@@ -190,17 +190,17 @@
     </reapack>
 
     <reapack name="TK_IndestructibleTrack.lua" type="script" desc="TK Indestructible Track">
-    <version name="1.7" author="TouristKiller" time="2025-12-22T23:45:00Z">
+    <version name="1.8" author="TouristKiller" time="2025-12-23T12:00:30Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack.lua</source>
     <source file="ISHIELD.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/ISHIELD.png</source>
     <changelog><![CDATA[
++ Fixed: Copy to Project now generates unique GUID (fixes TK Mixer visibility)
 + Added: Pin track setting now stored per-project (in project ExtState)
 + Added: Track position setting (Top/Bottom)
 + Added: Snapshots - manually save named versions to restore anytime
 + Added: "Remember choice" with Time/Beat/Skip options for tempo mismatch
 + Renamed: "Load Backup" to "Auto-Saves" for clarity
 + Improved: Settings UI with scrollable content and fixed buttons
-+ Improved: UI labels and tooltips for better understanding
 + Fixed: Pin status now independent per project
 ]]></changelog>
     </version>

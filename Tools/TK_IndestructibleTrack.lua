@@ -1,20 +1,20 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 1.7
+-- @version 1.8
 -- @changelog:
+--   + Fixed: Copy to Project now generates unique GUID (fixes TK Mixer visibility)
 --   + Added: Pin track setting now stored per-project (in project ExtState)
 --   + Added: Track position setting (Top/Bottom)
 --   + Added: Snapshots - manually save named versions to restore anytime
 --   + Added: "Remember choice" with Time/Beat/Skip options for tempo mismatch
 --   + Renamed: "Load Backup" to "Auto-Saves" for clarity
 --   + Improved: Settings UI with scrollable content and fixed buttons
---   + Improved: UI labels and tooltips for better understanding
 --   + Fixed: Pin status now independent per project
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "1.7"
+local SCRIPT_VERSION = "1.8"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -1296,7 +1296,14 @@ local function CopyTrackToProject()
     local new_track = r.GetTrack(0, track_count)
     
     if new_track then
-        local success = SetTrackChunk(new_track, updated_chunk)
+        local _, new_track_chunk = r.GetTrackStateChunk(new_track, "", false)
+        local new_guid = new_track_chunk:match("TRACKID ({[%x%-]+})")
+        
+        if new_guid then
+            updated_chunk = updated_chunk:gsub("TRACKID {[%x%-]+}", "TRACKID " .. new_guid)
+        end
+        
+        local success = SetTrackChunk(new_track, updated_chunk, false)
         if success then
             r.GetSetMediaTrackInfo_String(new_track, "P_NAME", config.track_name .. " (Copy)", true)
             SetStatus("Track copied with " .. copied_count .. " media file(s)")
