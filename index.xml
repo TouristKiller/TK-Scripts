@@ -123,7 +123,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.8.1" author="TouristKiller" time="2025-12-21T17:00:00Z">
+        <version name="1.8.2" author="TouristKiller" time="2025-12-23T14:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -134,6 +134,19 @@
             <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_VU_Meter.jsfx</source>
             <source type="effect" file="TK_ChannelStrip.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_ChannelStrip.jsfx</source>
             <source type="effect" file="TK_Trim.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Trim.jsfx</source>
+            <changelog><![CDATA[
++ Added: Right-click menu on track number and MASTER label
++ Added: Dynamic FX slot name truncation (adapts to track width)
++ Added: R/M/S buttons position option (Top or Bottom of fader)
++ Added: Track icon display mode (Overlay or separate Section) with background option
++ Added: 3 new fader handle styles (Glass, VU Needle, Cyberpunk with color picker)
++ Added: Quick Solo Mode - Shift+click for exclusive solo
++ Added: Gain Staging Indicator - HOT/Loud/Low warnings above fader
++ Added: A/B Compare - Store and switch between two fader positions
++ Added: Channel Linking - Link multiple faders to move together
++ Fixed: Consistent track name position regardless of active modules
++ Fixed: FX slots expand/collapse maintains track name position
+]]></changelog>
         </version>
     </reapack>
 </category>
