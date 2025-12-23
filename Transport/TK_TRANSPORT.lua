@@ -1,8 +1,11 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.2
+-- @version 1.8.3
 -- @changelog 
 --[[
+  v1.8.3:
+  + Added: Mixer Only Mode - New script TK_MIXER_ONLY.lua to run mixer without transport
+
   v1.8.2:
   + Added: Right-click menu on track number (same as fader context menu)
   + Added: Right-click menu on MASTER label (same as master fader context menu)
@@ -124,6 +127,11 @@
 ---------------------------------------------------------------------------------------------
 local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
+
+local mixer_only_mode = r.GetExtState("TK_TRANSPORT", "mixer_only_mode") == "1"
+if mixer_only_mode then
+    r.DeleteExtState("TK_TRANSPORT", "mixer_only_mode", false)
+end
 
 local script_version = "1.7.6"
 do
@@ -20448,6 +20456,10 @@ function Main()
  local font_pushed = false
  local visible, open
  
+ if mixer_only_mode then
+  settings.simple_mixer_window_open = true
+ end
+ 
  local needs_refresh = r.GetExtState("TK_TRANSPORT", "refresh_buttons")
  if needs_refresh == "1" then
  CustomButtons.LoadLastUsedPreset()
@@ -20467,6 +20479,7 @@ function Main()
   SetTransportStyle()
   styles_pushed = true
  
+  if not mixer_only_mode then
   if (settings.snap_to_reaper_transport or settings.snap_to_reaper_tcp) and window_state.window_name_suffix == "" then
    window_state.window_name_suffix = "_snap"
    window_state.force_snap_position = true
@@ -20759,6 +20772,7 @@ function Main()
  
  r.ImGui_End(ctx)
  end
+ end
  
  DrawSimpleMixerWindow()
  
@@ -20827,7 +20841,12 @@ function Main()
   r.ImGui_PopStyleColor(ctx, 13)
  end
  
- if open then
+ local should_continue = open
+ if mixer_only_mode then
+  should_continue = settings.simple_mixer_window_open
+ end
+ 
+ if should_continue then
  r.defer(Main)
  else
  SaveTabsToExtState()
