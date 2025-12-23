@@ -317,7 +317,7 @@ local function install_html_interface()
             </div>
         </div>
         
-        <div class="status" id="status">Ready (v3.1-beta Cross-Platform)</div>
+        <div class="status" id="status">Ready (v3.0 Final)</div>
         <div id="debug" style="font-size: 10px; color: #ffaaaa; margin-top: 10px; font-family: monospace; white-space: pre-wrap; display: none;"></div>
     </div>
 
@@ -333,7 +333,7 @@ local function install_html_interface()
                     }
                     setTimeout(() => {
                         if (document.getElementById('status').textContent.startsWith('Command')) {
-                            document.getElementById('status').textContent = 'Ready (v3.1-beta Cross-Platform)';
+                            document.getElementById('status').textContent = 'Ready (v3.0 Final)';
                         }
                     }, 1000);
                 })
@@ -345,7 +345,7 @@ local function install_html_interface()
             fetch(`/_/SET/EXTSTATE/TK_MediaExplorer/webcmd/${keyCmd}`, { method: 'GET' })
                 .then(() => {
                     document.getElementById('status').textContent = 'Arrow: ' + direction;
-                    setTimeout(() => document.getElementById('status').textContent = 'Ready (v3.1-beta Cross-Platform)', 1000);
+                    setTimeout(() => document.getElementById('status').textContent = 'Ready (v3.0 Final)', 1000);
                 })
                 .catch(e => document.getElementById('status').textContent = 'Error: ' + e.message);
         }
@@ -355,7 +355,7 @@ local function install_html_interface()
             fetch(`/_/SET/EXTSTATE/TK_MediaExplorer/webcmd/${keyCmd}`, { method: 'GET' })
                 .then(() => {
                     document.getElementById('status').textContent = 'Sidebar: ' + direction;
-                    setTimeout(() => document.getElementById('status').textContent = 'Ready (v3.1-beta Cross-Platform)', 1000);
+                    setTimeout(() => document.getElementById('status').textContent = 'Ready (v3.0 Final)', 1000);
                 })
                 .catch(e => document.getElementById('status').textContent = 'Error: ' + e.message);
         }
