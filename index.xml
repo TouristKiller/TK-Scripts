@@ -232,6 +232,17 @@
 + Requires js_ReaScriptAPI extension and REAPER web server enabled]]></changelog>
         </version>
     </reapack>
+    
+    <reapack name="TK_MediaExplorer_WebBridge_CrossPlatform.lua" type="script" desc="TK Media Explorer Web Controller - Cross-Platform Test">
+        <version name="3.1-beta" author="TouristKiller" time="2025-12-23T01:20:00Z">
+        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MediaExplorer_WebBridge_CrossPlatform.lua</source>
+        <changelog><![CDATA[v3.1-beta: Cross-platform compatibility test version
++ Flexible class name detection for ListView/TreeView (SWELL compatibility for macOS/Linux)
++ Added Unix/macOS path detection (paths starting with /)
++ OS info logged to console on startup
++ BETA: Testers on macOS/Linux needed to verify SWELL compatibility]]></changelog>
+        </version>
+    </reapack>
  </category>
 
   <category name="Midi">
