@@ -1,13 +1,13 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.0
+-- @version 2.1
 -- @changelog:
 --   + added: Compact mode
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "2.0"
+local SCRIPT_VERSION = "2.1"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -379,6 +379,16 @@ end
 
 local function SetTrackChunk(track, chunk, preserve_local)
     if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
+    
+    if preserve_local ~= false then
+        local current_chunk = GetTrackChunk(track)
+        if current_chunk then
+            local current_trackheight = current_chunk:match("(TRACKHEIGHT [^\n]+)")
+            if current_trackheight then
+                chunk = chunk:gsub("TRACKHEIGHT [^\n]+", current_trackheight)
+            end
+        end
+    end
     
     local result = r.SetTrackStateChunk(track, chunk, false)
     
