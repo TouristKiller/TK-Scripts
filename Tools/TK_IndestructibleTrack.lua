@@ -1,13 +1,20 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.2
+-- @version 2.3
 -- @changelog:
---   + added: Compact mode
+--   + added: Compact mode settings split into tabs (General / Display)
+--   + added: Icon size slider with proportional scaling
+--   + added: X/Y offset sliders with +/- buttons for precise positioning
+--   + added: Show preview checkbox for live positioning
+--   + added: Lock position option to lock widget position within TCP
+--   + added: Icon only mode
+--   + added: No background mode
+--   + improved: Full TCP width range for X offset
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "2.2"
+local SCRIPT_VERSION = "2.3"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -50,7 +57,14 @@ local default_config = {
     track_position = "top",
     track_pinned = false,
     compact_mode = false,
-    compact_offset_x = 2
+    compact_offset_x = 2,
+    compact_offset_y = 0,
+    compact_icon_only = false,
+    compact_no_bg = false,
+    compact_icon_size = 28,
+    compact_lock_position = false,
+    compact_locked_x = nil,
+    compact_locked_y = nil
 }
 
 local compact_ctx = nil
@@ -77,7 +91,8 @@ local state = {
     show_close_warning = false,
     close_action = nil,
     status_message = "",
-    status_time = 0
+    status_time = 0,
+    preview_compact = false
 }
 
 local available_backups = {}
@@ -1683,6 +1698,9 @@ local function GetTrackTCPBounds(track, use_ctx)
     
     if tcp_w <= 0 then tcp_w = 200 end
     
+    local _, main_left, _, _, _ = r.JS_Window_GetRect(main_hwnd)
+    local tcp_total_width = arr_left - main_left
+    
     local native_x = arr_left
     local native_y = arr_top + tcp_y
     
@@ -1692,6 +1710,13 @@ local function GetTrackTCPBounds(track, use_ctx)
     else
         conv_x = native_x / screen_scale
         conv_y = native_y / screen_scale
+    end
+    
+    local conv_main_x
+    if use_ctx and r.ImGui_PointConvertNative then
+        conv_main_x, _ = r.ImGui_PointConvertNative(use_ctx, main_left, 0)
+    else
+        conv_main_x = main_left / screen_scale
     end
     
     local conv_h
@@ -1712,11 +1737,22 @@ local function GetTrackTCPBounds(track, use_ctx)
         conv_w = tcp_w / screen_scale
     end
     
+    local conv_tcp_total
+    if use_ctx and r.ImGui_PointConvertNative then
+        local w_scaled, _ = r.ImGui_PointConvertNative(use_ctx, tcp_total_width, 0)
+        local zero_scaled, _ = r.ImGui_PointConvertNative(use_ctx, 0, 0)
+        conv_tcp_total = w_scaled - zero_scaled
+    else
+        conv_tcp_total = tcp_total_width / screen_scale
+    end
+    
     return {
         x = conv_x,
         y = conv_y,
         w = conv_w,
-        h = conv_h
+        h = conv_h,
+        tcp_x = conv_main_x,
+        tcp_w = conv_tcp_total
     }
 end
 
@@ -1730,20 +1766,29 @@ local function DrawCompactWidget()
         return true
     end
     
+    local icon_size = config.compact_icon_size or 28
+    local font_size = math.max(10, math.floor(icon_size * 0.6))
+    local menu_font_size = 13
+    local padding_x = math.max(2, math.floor(icon_size * 0.2))
+    local padding_y = math.max(1, math.floor(icon_size * 0.05))
+    local rounding = math.max(2, math.floor(icon_size * 0.15))
+    
     if not compact_ctx or not r.ImGui_ValidatePtr(compact_ctx, "ImGui_Context*") then
         compact_ctx = r.ImGui_CreateContext("TK_Indestructible_Compact")
         compact_font = nil
         compact_menu_font = nil
         compact_shield_image = nil
+        state.last_compact_font_size = nil
     end
     
-    if not compact_font or not r.ImGui_ValidatePtr(compact_font, "ImGui_Font*") then
-        compact_font = r.ImGui_CreateFont("Segoe UI", 18)
+    if not compact_font or not r.ImGui_ValidatePtr(compact_font, "ImGui_Font*") or state.last_compact_font_size ~= font_size then
+        compact_font = r.ImGui_CreateFont("Segoe UI", font_size)
         r.ImGui_Attach(compact_ctx, compact_font)
+        state.last_compact_font_size = font_size
     end
     
     if not compact_menu_font or not r.ImGui_ValidatePtr(compact_menu_font, "ImGui_Font*") then
-        compact_menu_font = r.ImGui_CreateFont("Segoe UI", 13)
+        compact_menu_font = r.ImGui_CreateFont("Segoe UI", menu_font_size)
         r.ImGui_Attach(compact_ctx, compact_menu_font)
     end
     
@@ -1760,36 +1805,55 @@ local function DrawCompactWidget()
         return true
     end
     
-    local widget_x = bounds.x + bounds.w + (config.compact_offset_x or 2)
-    local widget_y = bounds.y + (bounds.h - 24) / 2
+    local widget_x, widget_y
+    
+    if config.compact_lock_position and config.compact_locked_x and config.compact_locked_y then
+        widget_x = bounds.tcp_x + config.compact_locked_x
+        widget_y = bounds.y + config.compact_locked_y
+    else
+        widget_x = bounds.x + bounds.w + (config.compact_offset_x or 2)
+        widget_y = bounds.y + (bounds.h - icon_size) / 2 + (config.compact_offset_y or 0)
+    end
     
     r.ImGui_SetNextWindowPos(compact_ctx, widget_x, widget_y, r.ImGui_Cond_Always())
     
-    r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_WindowBg(), 0x000000DD)
-    r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Border(), 0xFFFFFFFF)
+    if not config.compact_no_bg then
+        r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_WindowBg(), 0x000000DD)
+        r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Border(), 0xFFFFFFFF)
+    end
     r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowRounding(), 4)
-    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
-    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowPadding(), 6, 1)
-    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 0)
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowRounding(), rounding)
+    if not config.compact_no_bg then
+        r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
+    else
+        r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 0)
+    end
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowPadding(), padding_x, padding_y)
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_ItemSpacing(), math.floor(icon_size * 0.15), 0)
     
-    r.ImGui_PushFont(compact_ctx, compact_font, 18)
+    r.ImGui_PushFont(compact_ctx, compact_font, font_size)
     
     local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | 
                   r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoCollapse() |
                   r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoMove() |
                   r.ImGui_WindowFlags_AlwaysAutoResize()
+    if config.compact_no_bg then
+        flags = flags | r.ImGui_WindowFlags_NoBackground()
+    end
     
     local visible, open = r.ImGui_Begin(compact_ctx, "##compact_widget", true, flags)
     
     if visible then
         if compact_shield_image then
-            r.ImGui_Image(compact_ctx, compact_shield_image, 28, 28)
-            r.ImGui_SameLine(compact_ctx)
-            r.ImGui_SetCursorPosY(compact_ctx, r.ImGui_GetCursorPosY(compact_ctx))
+            r.ImGui_Image(compact_ctx, compact_shield_image, icon_size, icon_size)
+            if not config.compact_icon_only then
+                r.ImGui_SameLine(compact_ctx)
+                local text_y = r.ImGui_GetCursorPosY(compact_ctx) + (icon_size - font_size) / 2 - padding_y
+                r.ImGui_SetCursorPosY(compact_ctx, text_y)
+                local display_name = config.track_name:gsub("🛡️%s*", ""):gsub("🛡%s*", "")
+                r.ImGui_Text(compact_ctx, display_name)
+            end
         end
-        local display_name = config.track_name:gsub("🛡️%s*", ""):gsub("🛡%s*", "")
-        r.ImGui_Text(compact_ctx, display_name)
         
         if r.ImGui_IsItemHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 1) then
             r.ImGui_OpenPopup(compact_ctx, "compact_menu")
@@ -1852,7 +1916,11 @@ local function DrawCompactWidget()
     
     r.ImGui_PopFont(compact_ctx)
     r.ImGui_PopStyleVar(compact_ctx, 4)
-    r.ImGui_PopStyleColor(compact_ctx, 3)
+    if not config.compact_no_bg then
+        r.ImGui_PopStyleColor(compact_ctx, 3)
+    else
+        r.ImGui_PopStyleColor(compact_ctx, 1)
+    end
     
     return open
 end
@@ -2204,178 +2272,282 @@ local function DrawSettingsUI()
     local content_height = window_height - 100
     if content_height < 50 then content_height = 50 end
     
-    if r.ImGui_BeginChild(ctx, "settings_content", -1, content_height, 0) then
-        local changed, new_val
-        
-        r.ImGui_Text(ctx, "Track name:")
-        local old_name = config.track_name
-        changed, new_val = r.ImGui_InputText(ctx, "##trackname", config.track_name)
-        if changed then 
-            config.track_name = new_val
-            if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-                r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", new_val, true)
+    if r.ImGui_BeginTabBar(ctx, "settings_tabs") then
+        if r.ImGui_BeginTabItem(ctx, "General") then
+            if r.ImGui_BeginChild(ctx, "general_content", -1, content_height - 30, 0) then
+                local changed, new_val
+                
+                r.ImGui_Text(ctx, "Track name:")
+                local old_name = config.track_name
+                changed, new_val = r.ImGui_InputText(ctx, "##trackname", config.track_name)
+                if changed then 
+                    config.track_name = new_val
+                    if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+                        r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", new_val, true)
+                    end
+                end
+                
+                r.ImGui_Text(ctx, "Check interval (sec):")
+                changed, new_val = r.ImGui_SliderDouble(ctx, "##interval", config.check_interval, 0.5, 5.0, "%.1f")
+                if changed then config.check_interval = new_val end
+                
+                r.ImGui_Text(ctx, "Max undo history:")
+                changed, new_val = r.ImGui_SliderInt(ctx, "##maxundo", config.max_undo_history, 10, 200)
+                if changed then config.max_undo_history = new_val end
+                
+                r.ImGui_Text(ctx, "Auto-saves to keep:")
+                changed, new_val = r.ImGui_SliderInt(ctx, "##backups", config.auto_backup_count, 1, 20)
+                if changed then config.auto_backup_count = new_val end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Number of automatic backups to keep (oldest are deleted)")
+                end
+                
+                changed, new_val = r.ImGui_Checkbox(ctx, "Show notifications", config.show_notifications)
+                if changed then config.show_notifications = new_val end
+                
+                changed, new_val = r.ImGui_Checkbox(ctx, "Auto-load on start", config.auto_load_on_start)
+                if changed then config.auto_load_on_start = new_val end
+                
+                changed, new_val = r.ImGui_Checkbox(ctx, "Warn on tempo mismatch", config.tempo_check_enabled)
+                if changed then config.tempo_check_enabled = new_val end
+                
+                if config.tempo_check_enabled then
+                    r.ImGui_Indent(ctx)
+                    changed, new_val = r.ImGui_Checkbox(ctx, "Remember choice", config.remember_tempo_choice)
+                    if changed then config.remember_tempo_choice = new_val end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Auto-apply chosen method without asking")
+                    end
+                    
+                    if config.remember_tempo_choice then
+                        if r.ImGui_RadioButton(ctx, "Time##tm", config.tempo_choice == "time") then
+                            config.tempo_choice = "time"
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Keep items at same time positions (seconds)")
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_RadioButton(ctx, "Beat##tm", config.tempo_choice == "beat") then
+                            config.tempo_choice = "beat"
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Adjust positions to keep items at same beats")
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_RadioButton(ctx, "Skip##tm", config.tempo_choice == "cancel") then
+                            config.tempo_choice = "cancel"
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Keep current track, ignore saved version")
+                        end
+                    end
+                    r.ImGui_Unindent(ctx)
+                end
+                
+                r.ImGui_EndChild(ctx)
             end
+            r.ImGui_EndTabItem(ctx)
         end
         
-        r.ImGui_Text(ctx, "Check interval (sec):")
-        changed, new_val = r.ImGui_SliderDouble(ctx, "##interval", config.check_interval, 0.5, 5.0, "%.1f")
-        if changed then config.check_interval = new_val end
-        
-        r.ImGui_Text(ctx, "Max undo history:")
-        changed, new_val = r.ImGui_SliderInt(ctx, "##maxundo", config.max_undo_history, 10, 200)
-        if changed then config.max_undo_history = new_val end
-        
-        r.ImGui_Text(ctx, "Auto-saves to keep:")
-        changed, new_val = r.ImGui_SliderInt(ctx, "##backups", config.auto_backup_count, 1, 20)
-        if changed then config.auto_backup_count = new_val end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Number of automatic backups to keep (oldest are deleted)")
-        end
-        
-        changed, new_val = r.ImGui_Checkbox(ctx, "Show notifications", config.show_notifications)
-        if changed then config.show_notifications = new_val end
-        
-        changed, new_val = r.ImGui_Checkbox(ctx, "Auto-load on start", config.auto_load_on_start)
-        if changed then config.auto_load_on_start = new_val end
-        
-        changed, new_val = r.ImGui_Checkbox(ctx, "Warn on tempo mismatch", config.tempo_check_enabled)
-        if changed then config.tempo_check_enabled = new_val end
-        
-        if config.tempo_check_enabled then
-            r.ImGui_Indent(ctx)
-            changed, new_val = r.ImGui_Checkbox(ctx, "Remember choice", config.remember_tempo_choice)
-            if changed then config.remember_tempo_choice = new_val end
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Auto-apply chosen method without asking")
-            end
-            
-            if config.remember_tempo_choice then
-                if r.ImGui_RadioButton(ctx, "Time##tm", config.tempo_choice == "time") then
-                    config.tempo_choice = "time"
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Keep items at same time positions (seconds)")
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_RadioButton(ctx, "Beat##tm", config.tempo_choice == "beat") then
-                    config.tempo_choice = "beat"
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Adjust positions to keep items at same beats")
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_RadioButton(ctx, "Skip##tm", config.tempo_choice == "cancel") then
-                    config.tempo_choice = "cancel"
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Keep current track, ignore saved version")
-                end
-            end
-            r.ImGui_Unindent(ctx)
-        end
-        
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Separator(ctx)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Text(ctx, "Track placement:")
-        
-        local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
-        
-        if has_track then
-            local track_idx = math.floor(r.GetMediaTrackInfo_Value(state.track_ptr, "IP_TRACKNUMBER") - 1)
-            local track_count = r.CountTracks(0)
-            local is_at_top = (track_idx == 0)
-            local is_at_bottom = (track_idx == track_count - 1)
-            
-            local is_pinned = GetProjectPinStatus(0)
-            
-            r.ImGui_Text(ctx, "Position:")
-            r.ImGui_SameLine(ctx)
-            
-            local clicked_top = r.ImGui_RadioButton(ctx, "Top##pos", is_at_top)
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Move track to top of track list")
-            end
-            r.ImGui_SameLine(ctx)
-            local clicked_bottom = r.ImGui_RadioButton(ctx, "Bottom##pos", is_at_bottom)
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Move track to bottom of track list")
-            end
-            
-            if clicked_top and not is_at_top then
-                r.Undo_BeginBlock()
-                r.PreventUIRefresh(1)
-                r.SetOnlyTrackSelected(state.track_ptr)
-                r.ReorderSelectedTracks(0, 0)
-                r.PreventUIRefresh(-1)
-                r.Undo_EndBlock("Move Indestructible Track to top", -1)
-                r.TrackList_AdjustWindows(false)
-                SetStatus("Track moved to top")
-            end
-            
-            if clicked_bottom and not is_at_bottom then
-                r.Undo_BeginBlock()
-                r.PreventUIRefresh(1)
-                r.SetOnlyTrackSelected(state.track_ptr)
-                r.ReorderSelectedTracks(track_count, 0)
-                r.PreventUIRefresh(-1)
-                r.Undo_EndBlock("Move Indestructible Track to bottom", -1)
-                r.TrackList_AdjustWindows(false)
-                SetStatus("Track moved to bottom")
-            end
-            
-            local pin_changed, pin_val = r.ImGui_Checkbox(ctx, "Pin track (TCP only)", is_pinned)
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Keep track pinned at its position in TCP when scrolling")
-            end
-            
-            if pin_changed then
-                local new_pin = not is_pinned
-                SetProjectPinStatus(0, new_pin)
-                r.SetMediaTrackInfo_Value(state.track_ptr, "B_TCPPIN", new_pin and 1 or 0)
-                r.TrackList_AdjustWindows(false)
-                r.UpdateArrange()
-                if new_pin then
-                    SetStatus("Track pinned")
+        if r.ImGui_BeginTabItem(ctx, "Display") then
+            if r.ImGui_BeginChild(ctx, "display_content", -1, content_height - 30, 0) then
+                local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
+                
+                if has_track then
+                    r.ImGui_Text(ctx, "Track placement:")
+                    local track_idx = math.floor(r.GetMediaTrackInfo_Value(state.track_ptr, "IP_TRACKNUMBER") - 1)
+                    local track_count = r.CountTracks(0)
+                    local is_at_top = (track_idx == 0)
+                    local is_at_bottom = (track_idx == track_count - 1)
+                    
+                    local is_pinned = GetProjectPinStatus(0)
+                    
+                    r.ImGui_Text(ctx, "Position:")
+                    r.ImGui_SameLine(ctx)
+                    
+                    local clicked_top = r.ImGui_RadioButton(ctx, "Top##pos", is_at_top)
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Move track to top of track list")
+                    end
+                    r.ImGui_SameLine(ctx)
+                    local clicked_bottom = r.ImGui_RadioButton(ctx, "Bottom##pos", is_at_bottom)
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Move track to bottom of track list")
+                    end
+                    
+                    if clicked_top and not is_at_top then
+                        r.Undo_BeginBlock()
+                        r.PreventUIRefresh(1)
+                        r.SetOnlyTrackSelected(state.track_ptr)
+                        r.ReorderSelectedTracks(0, 0)
+                        r.PreventUIRefresh(-1)
+                        r.Undo_EndBlock("Move Indestructible Track to top", -1)
+                        r.TrackList_AdjustWindows(false)
+                        SetStatus("Track moved to top")
+                    end
+                    
+                    if clicked_bottom and not is_at_bottom then
+                        r.Undo_BeginBlock()
+                        r.PreventUIRefresh(1)
+                        r.SetOnlyTrackSelected(state.track_ptr)
+                        r.ReorderSelectedTracks(track_count, 0)
+                        r.PreventUIRefresh(-1)
+                        r.Undo_EndBlock("Move Indestructible Track to bottom", -1)
+                        r.TrackList_AdjustWindows(false)
+                        SetStatus("Track moved to bottom")
+                    end
+                    
+                    local pin_changed, pin_val = r.ImGui_Checkbox(ctx, "Pin track (TCP only)", is_pinned)
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Keep track pinned at its position in TCP when scrolling")
+                    end
+                    
+                    if pin_changed then
+                        local new_pin = not is_pinned
+                        SetProjectPinStatus(0, new_pin)
+                        r.SetMediaTrackInfo_Value(state.track_ptr, "B_TCPPIN", new_pin and 1 or 0)
+                        r.TrackList_AdjustWindows(false)
+                        r.UpdateArrange()
+                        if new_pin then
+                            SetStatus("Track pinned")
+                        else
+                            SetStatus("Track unpinned")
+                        end
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Text(ctx, "Compact Mode:")
+                    local compact_changed, compact_val = r.ImGui_Checkbox(ctx, "Compact TCP overlay", config.compact_mode)
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Show minimal widget on track")
+                    end
+                    if compact_changed then
+                        config.compact_mode = compact_val
+                        SaveConfig()
+                    end
+                    
+                    r.ImGui_Indent(ctx)
+                    local changed_icon, new_icon = r.ImGui_Checkbox(ctx, "Icon only", config.compact_icon_only)
+                    if changed_icon then
+                        config.compact_icon_only = new_icon
+                        SaveConfig()
+                    end
+                    local changed_bg, new_bg = r.ImGui_Checkbox(ctx, "No background", config.compact_no_bg)
+                    if changed_bg then
+                        config.compact_no_bg = new_bg
+                        SaveConfig()
+                    end
+                    r.ImGui_Unindent(ctx)
+                    
+                    r.ImGui_Text(ctx, "Icon size:")
+                    local size_changed, size_val = r.ImGui_SliderInt(ctx, "##iconsize", config.compact_icon_size or 28, 16, 64)
+                    if size_changed then
+                        config.compact_icon_size = size_val
+                        SaveConfig()
+                    end
+                    
+                    r.ImGui_Text(ctx, "Overlay offset X:")
+                    local full_tcp_width = 0
+                    local icon_size = config.compact_icon_size or 28
+                    if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+                        local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
+                        if bounds then 
+                            full_tcp_width = bounds.w + (bounds.tcp_w or 0)
+                        end
+                    end
+                    local max_offset = GetArrangeWidth(ctx) - 150
+                    if max_offset < 100 then max_offset = 1000 end
+                    local min_offset = -(full_tcp_width + icon_size + 10)
+                    
+                    r.ImGui_SetNextItemWidth(ctx, -60)
+                    local offset_changed, offset_val = r.ImGui_SliderInt(ctx, "##compactoffset", config.compact_offset_x or 2, min_offset, max_offset)
+                    if offset_changed then 
+                        config.compact_offset_x = offset_val 
+                        SaveConfig()
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "-##xminus", 25, 0) then
+                        config.compact_offset_x = (config.compact_offset_x or 2) - 1
+                        SaveConfig()
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "+##xplus", 25, 0) then
+                        config.compact_offset_x = (config.compact_offset_x or 2) + 1
+                        SaveConfig()
+                    end
+                    
+                    r.ImGui_Text(ctx, "Overlay offset Y:")
+                    local track_height = 0
+                    if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+                        local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
+                        if bounds then track_height = bounds.h end
+                    end
+                    local y_range = math.max(50, math.floor((track_height - icon_size) / 2) + 20)
+                    
+                    r.ImGui_SetNextItemWidth(ctx, -60)
+                    local offset_y_changed, offset_y_val = r.ImGui_SliderInt(ctx, "##compactoffsety", config.compact_offset_y or 0, -y_range, y_range)
+                    if offset_y_changed then 
+                        config.compact_offset_y = offset_y_val 
+                        SaveConfig()
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "-##yminus", 25, 0) then
+                        config.compact_offset_y = (config.compact_offset_y or 0) - 1
+                        SaveConfig()
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "+##yplus", 25, 0) then
+                        config.compact_offset_y = (config.compact_offset_y or 0) + 1
+                        SaveConfig()
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    local lock_changed, lock_val = r.ImGui_Checkbox(ctx, "Lock position", config.compact_lock_position)
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Lock current position absolutely within TCP")
+                    end
+                    if lock_changed then
+                        config.compact_lock_position = lock_val
+                        if lock_val then
+                            local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
+                            if bounds then
+                                local current_x = bounds.x + bounds.w + (config.compact_offset_x or 2)
+                                local current_y = bounds.y + (bounds.h - (config.compact_icon_size or 28)) / 2 + (config.compact_offset_y or 0)
+                                config.compact_locked_x = current_x - bounds.tcp_x
+                                config.compact_locked_y = current_y - bounds.y
+                            end
+                        else
+                            config.compact_locked_x = nil
+                            config.compact_locked_y = nil
+                        end
+                        SaveConfig()
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    local preview_changed, preview_val = r.ImGui_Checkbox(ctx, "Show preview", state.preview_compact)
+                    if preview_changed then
+                        state.preview_compact = preview_val
+                    end
                 else
-                    SetStatus("Track unpinned")
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
+                    r.ImGui_Text(ctx, "No track found")
+                    r.ImGui_PopStyleColor(ctx)
+                    
+                    r.ImGui_Spacing(ctx)
+                    if r.ImGui_Button(ctx, "Create Indestructible Track", -1, 0) then
+                        LoadOrCreateTrack()
+                        state.is_monitoring = true
+                    end
                 end
+                
+                r.ImGui_EndChild(ctx)
             end
-            
-            r.ImGui_Spacing(ctx)
-            r.ImGui_Separator(ctx)
-            r.ImGui_Spacing(ctx)
-            r.ImGui_Text(ctx, "Display Mode:")
-            local compact_changed, compact_val = r.ImGui_Checkbox(ctx, "Compact TCP overlay", config.compact_mode)
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Show minimal widget on track (experimental)")
-            end
-            if compact_changed then
-                config.compact_mode = compact_val
-                SaveConfig()
-            end
-            
-            r.ImGui_Text(ctx, "Overlay offset:")
-            local max_offset = GetArrangeWidth(ctx) - 150
-            if max_offset < 100 then max_offset = 1000 end
-            local offset_changed, offset_val = r.ImGui_SliderInt(ctx, "##compactoffset", config.compact_offset_x or 2, -200, max_offset)
-            if offset_changed then 
-                config.compact_offset_x = offset_val 
-                SaveConfig()
-            end
-        else
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
-            r.ImGui_Text(ctx, "No track found")
-            r.ImGui_PopStyleColor(ctx)
-            
-            r.ImGui_Spacing(ctx)
-            if r.ImGui_Button(ctx, "Create Indestructible Track", -1, 0) then
-                LoadOrCreateTrack()
-                state.is_monitoring = true
-            end
+            r.ImGui_EndTabItem(ctx)
         end
         
-        r.ImGui_EndChild(ctx)
+        r.ImGui_EndTabBar(ctx)
     end
     
     r.ImGui_Separator(ctx)
@@ -2422,6 +2594,10 @@ local function loop()
             RemoveLockFile()
         end
         return
+    end
+    
+    if state.preview_compact then
+        DrawCompactWidget()
     end
     
     ApplyTheme()
