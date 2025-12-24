@@ -1,8 +1,8 @@
 -- @description TK_time selection loop color
--- @version 2.3
+-- @version 2.4
 -- @author TouristKiller
 -- @changelog
---   + Bugfixes
+--   + Performance optimizations: state caching, throttled updates
 
 local r = reaper
 local original_bgsel = r.ColorToNative(0, 0, 0)
@@ -10,8 +10,15 @@ local original_bgsel2 = r.ColorToNative(0, 0, 0)
 local original_midi_sel = r.ColorToNative(0, 0, 0)
 local disco_mode = false
 local disco_hue = 0
-local DISCO_SPEED = 0.005
+local DISCO_SPEED = 0.02
 local last_loop_state = -1
+
+local last_applied_bgsel = nil
+local last_applied_bgsel2 = nil
+local last_applied_midi = nil
+local last_update_time = 0
+local UPDATE_INTERVAL = 0.033
+local DISCO_UPDATE_INTERVAL = 0.05
 
 -- Initialize original colors
 function InitColors()
@@ -120,45 +127,77 @@ end
 function ChangeTimeSelectionColor()
     local is_loop_enabled = r.GetSetRepeat(-1)
     local loop_color, default_color, midi_color, only_loop, only_arrange, enable_midi = GetSettings()
+    
+    local current_time = r.time_precise()
+    local is_disco_frame = disco_mode and (current_time - last_update_time >= DISCO_UPDATE_INTERVAL)
+    local state_changed = is_loop_enabled ~= last_loop_state
+    
+    if not state_changed and not is_disco_frame and last_applied_bgsel then
+        return
+    end
+    
+    if is_disco_frame then
+        last_update_time = current_time
+    end
+
+    local new_bgsel, new_bgsel2, new_midi
 
     if is_loop_enabled == 0 then
         if only_loop then
-            r.SetThemeColor("col_tl_bgsel2", default_color, 0)
-            r.SetThemeColor("col_tl_bgsel", original_bgsel, 0)
+            new_bgsel2 = default_color
+            new_bgsel = original_bgsel
         elseif only_arrange then
-            r.SetThemeColor("col_tl_bgsel", default_color, 0)
-            r.SetThemeColor("col_tl_bgsel2", original_bgsel2, 0)
+            new_bgsel = default_color
+            new_bgsel2 = original_bgsel2
         else
-            r.SetThemeColor("col_tl_bgsel", default_color, 0)
-            r.SetThemeColor("col_tl_bgsel2", default_color, 0)
+            new_bgsel = default_color
+            new_bgsel2 = default_color
         end
     else
         local active_color = disco_mode and GetDiscoColor() or loop_color
         
         if only_loop then
-            r.SetThemeColor("col_tl_bgsel2", active_color, 0)
-            r.SetThemeColor("col_tl_bgsel", original_bgsel, 0)
+            new_bgsel2 = active_color
+            new_bgsel = original_bgsel
         elseif only_arrange then
-            r.SetThemeColor("col_tl_bgsel", active_color, 0)
-            r.SetThemeColor("col_tl_bgsel2", original_bgsel2, 0)
+            new_bgsel = active_color
+            new_bgsel2 = original_bgsel2
         else
-            r.SetThemeColor("col_tl_bgsel", active_color, 0)
-            r.SetThemeColor("col_tl_bgsel2", active_color, 0)
+            new_bgsel = active_color
+            new_bgsel2 = active_color
         end
     end
 
     if enable_midi then
-        if is_loop_enabled == 1 then
-            r.SetThemeColor("midi_selbg", midi_color, 0)
-        else
-            r.SetThemeColor("midi_selbg", default_color, 0)
-        end
+        new_midi = is_loop_enabled == 1 and midi_color or default_color
     else
-        r.SetThemeColor("midi_selbg", original_midi_sel, 0)
+        new_midi = original_midi_sel
     end
     
-    r.UpdateArrange()
-    r.UpdateTimeline()
+    local needs_update = false
+    
+    if new_bgsel ~= last_applied_bgsel then
+        r.SetThemeColor("col_tl_bgsel", new_bgsel, 0)
+        last_applied_bgsel = new_bgsel
+        needs_update = true
+    end
+    
+    if new_bgsel2 ~= last_applied_bgsel2 then
+        r.SetThemeColor("col_tl_bgsel2", new_bgsel2, 0)
+        last_applied_bgsel2 = new_bgsel2
+        needs_update = true
+    end
+    
+    if new_midi ~= last_applied_midi then
+        r.SetThemeColor("midi_selbg", new_midi, 0)
+        last_applied_midi = new_midi
+        needs_update = true
+    end
+    
+    if needs_update then
+        r.UpdateArrange()
+        r.UpdateTimeline()
+    end
     
     last_loop_state = is_loop_enabled
 end

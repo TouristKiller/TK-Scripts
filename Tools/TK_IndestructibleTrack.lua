@@ -1,20 +1,13 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 1.8
+-- @version 2.0
 -- @changelog:
---   + Fixed: Copy to Project now generates unique GUID (fixes TK Mixer visibility)
---   + Added: Pin track setting now stored per-project (in project ExtState)
---   + Added: Track position setting (Top/Bottom)
---   + Added: Snapshots - manually save named versions to restore anytime
---   + Added: "Remember choice" with Time/Beat/Skip options for tempo mismatch
---   + Renamed: "Load Backup" to "Auto-Saves" for clarity
---   + Improved: Settings UI with scrollable content and fixed buttons
---   + Fixed: Pin status now independent per project
+--   + added: Compact mode
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "1.8"
+local SCRIPT_VERSION = "2.0"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -55,8 +48,14 @@ local default_config = {
     remember_tempo_choice = false,
     tempo_choice = "time",
     track_position = "top",
-    track_pinned = false
+    track_pinned = false,
+    compact_mode = false,
+    compact_offset_x = 2
 }
+
+local compact_ctx = nil
+local COMPACT_WIDTH = 180
+local COMPACT_HEIGHT = 28
 
 local config = {}
 local state = {
@@ -905,12 +904,15 @@ local function LoadBackup(backup)
     chunk = chunk:gsub('\\"', '"')
     chunk = chunk:gsub('\\\\', '\\')
     
+    chunk = chunk:gsub('NAME ".-"', 'NAME "' .. config.track_name .. '"', 1)
+    
     if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
         state.track_ptr = FindIndestructibleTrack()
         if not state.track_ptr then
             r.InsertTrackAtIndex(0, true)
             state.track_ptr = r.GetTrack(0, 0)
             r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
+            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
             state.track_guid = r.GetTrackGUID(state.track_ptr)
         end
     end
@@ -918,6 +920,8 @@ local function LoadBackup(backup)
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     SetTrackChunk(state.track_ptr, chunk)
+    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
+    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
     state.last_chunk = chunk
     state.last_normalized_chunk = NormalizeChunkForComparison(chunk)
     AddToUndoHistory(chunk)
@@ -1052,12 +1056,15 @@ local function LoadSnapshot(snapshot)
     chunk = chunk:gsub('\\"', '"')
     chunk = chunk:gsub('\\\\', '\\')
     
+    chunk = chunk:gsub('NAME ".-"', 'NAME "' .. config.track_name .. '"', 1)
+    
     if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
         state.track_ptr = FindIndestructibleTrack()
         if not state.track_ptr then
             r.InsertTrackAtIndex(0, true)
             state.track_ptr = r.GetTrack(0, 0)
             r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
+            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
             state.track_guid = r.GetTrackGUID(state.track_ptr)
         end
     end
@@ -1065,6 +1072,8 @@ local function LoadSnapshot(snapshot)
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     SetTrackChunk(state.track_ptr, chunk)
+    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
+    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
     state.last_chunk = chunk
     state.last_normalized_chunk = NormalizeChunkForComparison(chunk)
     AddToUndoHistory(chunk)
@@ -1085,10 +1094,20 @@ end
 
 local function FindIndestructibleTrack()
     local track_count = r.CountTracks(0)
+    
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local retval, marker = r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "", false)
+        if retval and marker == "1" then
+            return track, r.BR_GetMediaItemGUID and r.GetTrackGUID(track) or nil
+        end
+    end
+    
     for i = 0, track_count - 1 do
         local track = r.GetTrack(0, i)
         local retval, name = r.GetTrackName(track)
         if name == config.track_name then
+            r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
             return track, r.BR_GetMediaItemGUID and r.GetTrackGUID(track) or nil
         end
     end
@@ -1110,6 +1129,7 @@ local function CreateIndestructibleTrack()
     
     if track then
         r.GetSetMediaTrackInfo_String(track, "P_NAME", config.track_name, true)
+        r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
         
         local color = r.ColorToNative(
             (config.track_color >> 16) & 0xFF,
@@ -1599,8 +1619,234 @@ local function PopTheme()
     r.ImGui_PopStyleColor(ctx, 13)
 end
 
+local main_hwnd = r.GetMainHwnd()
+local arrange_hwnd = r.JS_Window_FindChildByID(main_hwnd, 0x3E8)
+
+local function GetScreenScale()
+    local OS = r.GetOS()
+    if OS:find("Win") then
+        local _, dpi = r.get_config_var_string("uiscale")
+        return tonumber(dpi) or 1
+    end
+    return 1
+end
+
+local function GetArrangeWidth(use_ctx)
+    if not arrange_hwnd then 
+        arrange_hwnd = r.JS_Window_FindChildByID(main_hwnd, 0x3E8)
+        if not arrange_hwnd then return 1000 end
+    end
+    local _, arr_left, arr_top, arr_right, arr_bottom = r.JS_Window_GetRect(arrange_hwnd)
+    local native_width = arr_right - arr_left
+    if use_ctx and r.ImGui_PointConvertNative then
+        local conv_left = r.ImGui_PointConvertNative(use_ctx, arr_left, 0)
+        local conv_right = r.ImGui_PointConvertNative(use_ctx, arr_right, 0)
+        return math.floor(conv_right - conv_left)
+    end
+    return math.floor(native_width / GetScreenScale())
+end
+
+local function GetTrackTCPBounds(track, use_ctx)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then
+        return nil
+    end
+    
+    if not arrange_hwnd then 
+        arrange_hwnd = r.JS_Window_FindChildByID(main_hwnd, 0x3E8)
+        if not arrange_hwnd then return nil end
+    end
+    
+    local screen_scale = GetScreenScale()
+    
+    local tcp_y = r.GetMediaTrackInfo_Value(track, "I_TCPY")
+    local tcp_h = r.GetMediaTrackInfo_Value(track, "I_TCPH")
+    local tcp_w = r.GetMediaTrackInfo_Value(track, "I_WNDW")
+    
+    if tcp_h < 10 then return nil end
+    
+    local _, arr_left, arr_top, arr_right, arr_bottom = r.JS_Window_GetRect(arrange_hwnd)
+    local arr_height = arr_bottom - arr_top
+    
+    if tcp_y + tcp_h < 0 or tcp_y > arr_height then
+        return nil
+    end
+    
+    if tcp_w <= 0 then tcp_w = 200 end
+    
+    local native_x = arr_left
+    local native_y = arr_top + tcp_y
+    
+    local conv_x, conv_y
+    if use_ctx and r.ImGui_PointConvertNative then
+        conv_x, conv_y = r.ImGui_PointConvertNative(use_ctx, native_x, native_y)
+    else
+        conv_x = native_x / screen_scale
+        conv_y = native_y / screen_scale
+    end
+    
+    local conv_h
+    if use_ctx and r.ImGui_PointConvertNative then
+        local _, h_scaled = r.ImGui_PointConvertNative(use_ctx, 0, tcp_h)
+        local _, zero_scaled = r.ImGui_PointConvertNative(use_ctx, 0, 0)
+        conv_h = h_scaled - zero_scaled
+    else
+        conv_h = tcp_h / screen_scale
+    end
+    
+    local conv_w
+    if use_ctx and r.ImGui_PointConvertNative then
+        local w_scaled, _ = r.ImGui_PointConvertNative(use_ctx, tcp_w, 0)
+        local zero_scaled, _ = r.ImGui_PointConvertNative(use_ctx, 0, 0)
+        conv_w = w_scaled - zero_scaled
+    else
+        conv_w = tcp_w / screen_scale
+    end
+    
+    return {
+        x = conv_x,
+        y = conv_y,
+        w = conv_w,
+        h = conv_h
+    }
+end
+
+local compact_font = nil
+local compact_menu_font = nil
+local compact_shield_image = nil
+
+local function DrawCompactWidget()
+    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        return true
+    end
+    
+    if not compact_ctx or not r.ImGui_ValidatePtr(compact_ctx, "ImGui_Context*") then
+        compact_ctx = r.ImGui_CreateContext("TK_Indestructible_Compact")
+        compact_font = nil
+        compact_shield_image = nil
+    end
+    
+    if not compact_font or not r.ImGui_ValidatePtr(compact_font, "ImGui_Font*") then
+        compact_font = r.ImGui_CreateFont("Segoe UI", 18)
+        r.ImGui_Attach(compact_ctx, compact_font)
+    end
+    
+    if not compact_menu_font or not r.ImGui_ValidatePtr(compact_menu_font, "ImGui_Font*") then
+        compact_menu_font = r.ImGui_CreateFont("Segoe UI", 13)
+        r.ImGui_Attach(compact_ctx, compact_menu_font)
+    end
+    
+    if not compact_shield_image or not r.ImGui_ValidatePtr(compact_shield_image, "ImGui_Image*") then
+        local img_path = SCRIPT_PATH .. "/ISHIELD.png"
+        compact_shield_image = r.ImGui_CreateImage(img_path)
+        if compact_shield_image then
+            r.ImGui_Attach(compact_ctx, compact_shield_image)
+        end
+    end
+    
+    local bounds = GetTrackTCPBounds(state.track_ptr, compact_ctx)
+    if not bounds then
+        return true
+    end
+    
+    local widget_x = bounds.x + bounds.w + (config.compact_offset_x or 2)
+    local widget_y = bounds.y + (bounds.h - 24) / 2
+    
+    r.ImGui_SetNextWindowPos(compact_ctx, widget_x, widget_y, r.ImGui_Cond_Always())
+    
+    r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_WindowBg(), 0x000000DD)
+    r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Border(), 0xFFFFFFFF)
+    r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowRounding(), 4)
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowPadding(), 6, 1)
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 0)
+    
+    r.ImGui_PushFont(compact_ctx, compact_font, 18)
+    
+    local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | 
+                  r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoCollapse() |
+                  r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoMove() |
+                  r.ImGui_WindowFlags_AlwaysAutoResize()
+    
+    local visible, open = r.ImGui_Begin(compact_ctx, "##compact_widget", true, flags)
+    
+    if visible then
+        if compact_shield_image then
+            r.ImGui_Image(compact_ctx, compact_shield_image, 28, 28)
+            r.ImGui_SameLine(compact_ctx)
+            r.ImGui_SetCursorPosY(compact_ctx, r.ImGui_GetCursorPosY(compact_ctx))
+        end
+        local display_name = config.track_name:gsub("🛡️%s*", ""):gsub("🛡%s*", "")
+        r.ImGui_Text(compact_ctx, display_name)
+        
+        if r.ImGui_IsItemHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 1) then
+            r.ImGui_OpenPopup(compact_ctx, "compact_menu")
+        end
+        
+        if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 1) then
+            r.ImGui_OpenPopup(compact_ctx, "compact_menu")
+        end
+        
+        if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseDoubleClicked(compact_ctx, 0) then
+            config.compact_mode = false
+            SaveConfig()
+        end
+        
+        if r.ImGui_BeginPopup(compact_ctx, "compact_menu") then
+            r.ImGui_PushFont(compact_ctx, compact_menu_font, 13)
+            if r.ImGui_MenuItem(compact_ctx, "Save Now") then
+                SaveTrackData()
+                SetStatus("Saved manually")
+            end
+            if r.ImGui_MenuItem(compact_ctx, "Save Snapshot...") then
+                state.show_snapshot_save = true
+                config.compact_mode = false
+                SaveConfig()
+            end
+            if r.ImGui_MenuItem(compact_ctx, "Copy to Project") then
+                CopyTrackToProject()
+            end
+            r.ImGui_Separator(compact_ctx)
+            if r.ImGui_MenuItem(compact_ctx, "Snapshots") then
+                ScanSnapshots()
+                state.show_snapshot_list = true
+                config.compact_mode = false
+                SaveConfig()
+            end
+            if r.ImGui_MenuItem(compact_ctx, "Auto-Saves") then
+                ScanBackups()
+                state.show_backup_list = true
+                config.compact_mode = false
+                SaveConfig()
+            end
+            r.ImGui_Separator(compact_ctx)
+            if r.ImGui_MenuItem(compact_ctx, "Undo", nil, false, state.undo_index > 1) then
+                UndoTrack()
+            end
+            if r.ImGui_MenuItem(compact_ctx, "Redo", nil, false, state.undo_index < #state.undo_history) then
+                RedoTrack()
+            end
+            r.ImGui_Separator(compact_ctx)
+            if r.ImGui_MenuItem(compact_ctx, "Full UI") then
+                config.compact_mode = false
+                SaveConfig()
+            end
+            r.ImGui_PopFont(compact_ctx)
+            r.ImGui_EndPopup(compact_ctx)
+        end
+        
+        r.ImGui_End(compact_ctx)
+    end
+    
+    r.ImGui_PopFont(compact_ctx)
+    r.ImGui_PopStyleVar(compact_ctx, 4)
+    r.ImGui_PopStyleColor(compact_ctx, 3)
+    
+    return open
+end
+
 local function LoadShieldImage()
-    if shield_loaded then return end
+    if shield_image and r.ImGui_ValidatePtr(shield_image, "ImGui_Image*") then return end
     shield_loaded = true
     local img_path = SCRIPT_PATH .. "/ISHIELD.png"
     shield_image = r.ImGui_CreateImage(img_path)
@@ -1919,6 +2165,16 @@ local function DrawMainUI()
                 r.ImGui_SetTooltip(ctx, "Automatic backups of recent changes")
             end
             
+            r.ImGui_Separator(ctx)
+            
+            if r.ImGui_Button(ctx, "Compact Mode", -1, 0) then
+                config.compact_mode = true
+                SaveConfig()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show minimal overlay on track (experimental)")
+            end
+            
             r.ImGui_EndChild(ctx)
         end
     end
@@ -1940,8 +2196,14 @@ local function DrawSettingsUI()
         local changed, new_val
         
         r.ImGui_Text(ctx, "Track name:")
+        local old_name = config.track_name
         changed, new_val = r.ImGui_InputText(ctx, "##trackname", config.track_name)
-        if changed then config.track_name = new_val end
+        if changed then 
+            config.track_name = new_val
+            if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+                r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", new_val, true)
+            end
+        end
         
         r.ImGui_Text(ctx, "Check interval (sec):")
         changed, new_val = r.ImGui_SliderDouble(ctx, "##interval", config.check_interval, 0.5, 5.0, "%.1f")
@@ -2067,10 +2329,38 @@ local function DrawSettingsUI()
                     SetStatus("Track unpinned")
                 end
             end
+            
+            r.ImGui_Spacing(ctx)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Spacing(ctx)
+            r.ImGui_Text(ctx, "Display Mode:")
+            local compact_changed, compact_val = r.ImGui_Checkbox(ctx, "Compact TCP overlay", config.compact_mode)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show minimal widget on track (experimental)")
+            end
+            if compact_changed then
+                config.compact_mode = compact_val
+                SaveConfig()
+            end
+            
+            r.ImGui_Text(ctx, "Overlay offset:")
+            local max_offset = GetArrangeWidth(ctx) - 150
+            if max_offset < 100 then max_offset = 1000 end
+            local offset_changed, offset_val = r.ImGui_SliderInt(ctx, "##compactoffset", config.compact_offset_x or 2, -200, max_offset)
+            if offset_changed then 
+                config.compact_offset_x = offset_val 
+                SaveConfig()
+            end
         else
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
-            r.ImGui_Text(ctx, "No track available - create track first")
+            r.ImGui_Text(ctx, "No track found")
             r.ImGui_PopStyleColor(ctx)
+            
+            r.ImGui_Spacing(ctx)
+            if r.ImGui_Button(ctx, "Create Indestructible Track", -1, 0) then
+                LoadOrCreateTrack()
+                state.is_monitoring = true
+            end
         end
         
         r.ImGui_EndChild(ctx)
@@ -2094,6 +2384,7 @@ local function loop()
     if not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then
         ctx = r.ImGui_CreateContext(SCRIPT_NAME)
         font_loaded = false
+        shield_image = nil
     end
     
     if not font_loaded then
@@ -2108,6 +2399,17 @@ local function loop()
     if state.is_monitoring and now - state.last_check_time >= config.check_interval then
         state.last_check_time = now
         CheckForChanges()
+    end
+    
+    if config.compact_mode then
+        local keep_running = DrawCompactWidget()
+        if keep_running then
+            r.defer(loop)
+        else
+            SaveConfig()
+            RemoveLockFile()
+        end
+        return
     end
     
     ApplyTheme()
