@@ -1,13 +1,13 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.1
+-- @version 2.2
 -- @changelog:
 --   + added: Compact mode
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "2.1"
+local SCRIPT_VERSION = "2.2"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -1723,6 +1723,7 @@ end
 local compact_font = nil
 local compact_menu_font = nil
 local compact_shield_image = nil
+local compact_ctx = nil
 
 local function DrawCompactWidget()
     if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
@@ -1732,6 +1733,7 @@ local function DrawCompactWidget()
     if not compact_ctx or not r.ImGui_ValidatePtr(compact_ctx, "ImGui_Context*") then
         compact_ctx = r.ImGui_CreateContext("TK_Indestructible_Compact")
         compact_font = nil
+        compact_menu_font = nil
         compact_shield_image = nil
     end
     
