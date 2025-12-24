@@ -1,6 +1,6 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.3
+-- @version 2.4
 -- @changelog:
 --   + added: Compact mode settings split into tabs (General / Display)
 --   + added: Icon size slider with proportional scaling
