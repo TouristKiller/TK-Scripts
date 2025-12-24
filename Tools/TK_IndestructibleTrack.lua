@@ -1,6 +1,6 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.4
+-- @version 2.5
 -- @changelog:
 --   + added: Compact mode settings split into tabs (General / Display)
 --   + added: Icon size slider with proportional scaling
@@ -185,7 +185,9 @@ local function JsonDecode(str)
         if not str then return nil end
         for key, val in str:gmatch('"([^"]+)"%s*:%s*([^,}]+)') do
             val = val:gsub('^%s+', ''):gsub('%s+$', '')
-            if val:match('^".*"$') then
+            if val == "null" then
+                val = nil
+            elseif val:match('^".*"$') then
                 val = val:sub(2, -2)
                 val = val:gsub('\\n', '\n'):gsub('\\r', '\r'):gsub('\\"', '"'):gsub('\\\\', '\\')
             elseif val == "true" then 
@@ -251,24 +253,21 @@ local function SaveConfig()
 end
 
 local function LoadConfig()
+    for k, v in pairs(default_config) do
+        config[k] = v
+    end
+    
     local f = io.open(CONFIG_FILE, "r")
     if f then
         local content = f:read("*all")
         f:close()
         local loaded = JsonDecode(content)
         if loaded then
-            for k, v in pairs(default_config) do
-                if loaded[k] ~= nil then
-                    config[k] = loaded[k]
-                else
-                    config[k] = v
-                end
+            for k, v in pairs(loaded) do
+                config[k] = v
             end
             return
         end
-    end
-    for k, v in pairs(default_config) do
-        config[k] = v
     end
 end
 
