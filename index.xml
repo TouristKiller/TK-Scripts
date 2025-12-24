@@ -123,7 +123,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.8.3" author="TouristKiller" time="2025-12-23T14:30:00Z">
+        <version name="1.8.4" author="TouristKiller" time="2025-12-24T02:10:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -135,8 +135,13 @@
             <source type="effect" file="TK_ChannelStrip.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_ChannelStrip.jsfx</source>
             <source type="effect" file="TK_Trim.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Trim.jsfx</source>
             <source main="main" file="TK_MIXER_ONLY.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_MIXER_ONLY.lua</source>
+            <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/Images/knob01.png</source>
             <changelog><![CDATA[
-+ Added: Mixer Only Mode - New script TK_MIXER_ONLY.lua to run mixer without transport
++ Added: Image knob style - Uses knob01.png from Images folder with color-coded indicator dot
++ Added: Bipolar knob support for EQ gain (color based on deviation from center)
++ Added: Strip indicator now always shows EQ/Comp/Limit with status colors (white=hidden, green=active, orange=bypassed)
++ Fixed: Knob style persistence - Now saves immediately when changed
++ Fixed: Image knob recovery - Auto-reloads image if pointer becomes invalid
 ]]></changelog>
         </version>
     </reapack>

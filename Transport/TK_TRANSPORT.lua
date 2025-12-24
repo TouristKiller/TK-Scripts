@@ -1,8 +1,15 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.3
+-- @version 1.8.4
 -- @changelog 
 --[[
+  v1.8.4:
+  + Added: Image knob style - Uses knob01.png from Images folder with color-coded indicator dot
+  + Added: Bipolar knob support for EQ gain (color based on deviation from center)
+  + Added: Strip indicator now always shows EQ/Comp/Limit with status colors (white=hidden, green=active, orange=bypassed)
+  + Fixed: Knob style persistence - Now saves immediately when changed
+  + Fixed: Image knob recovery - Auto-reloads image if pointer becomes invalid
+
   v1.8.3:
   + Added: Mixer Only Mode - New script TK_MIXER_ONLY.lua to run mixer without transport
 
@@ -201,6 +208,8 @@ local mixer_state = {
     settings_tab = 0,
     icon_target_track = nil,
     select_settings_tab = nil,
+    knob_image = nil,
+    knob_image_loaded = false,
 }
 
 local COMMANDS = {
@@ -3212,7 +3221,7 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
    r.ImGui_Spacing(ctx)
    
    r.ImGui_Text(ctx, "Knob Style:")
-   local knob_styles = {"Classic", "Modern", "Vintage", "LED", "Minimal"}
+   local knob_styles = {"Classic", "Modern", "Vintage", "LED", "Minimal", "Image"}
    local current_style = settings.simple_mixer_knob_style or 0
    r.ImGui_SetNextItemWidth(ctx, 150)
    if r.ImGui_BeginCombo(ctx, "##KnobStyle", knob_styles[current_style + 1] or "Classic") then
@@ -3221,6 +3230,7 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
      if r.ImGui_Selectable(ctx, style_name, is_selected) then
       settings.simple_mixer_knob_style = i - 1
       MarkTransportPresetChanged()
+      if SaveMixerSettings then SaveMixerSettings() end
      end
      if is_selected then
       r.ImGui_SetItemDefaultFocus(ctx)
@@ -7001,7 +7011,7 @@ local function GetMixerSettingsFilename()
     return mixer_settings_path .. "mixer_" .. instance_name .. ".json"
 end
 
-local function SaveMixerSettings()
+function SaveMixerSettings()
     EnsureMixerSettingsFolder()
     
     local mixer_data = {}
@@ -11806,6 +11816,90 @@ local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_v
         r.ImGui_DrawList_AddCircleFilled(draw_list, dot_x, dot_y, dot_size, knob_color, 16)
         
         r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, math.max(2, radius * 0.2), track_color, 16)
+    
+    elseif style == 5 then
+        if not mixer_state.knob_image_loaded then
+            local knob_image_path = script_path .. "Images" .. os_separator .. "knob01.png"
+            local ok, img = pcall(r.ImGui_CreateImage, knob_image_path)
+            if ok and img then
+                mixer_state.knob_image = img
+                mixer_state.knob_image_loaded = true
+            else
+                mixer_state.knob_image_loaded = true
+            end
+        end
+        
+        if mixer_state.knob_image and r.ImGui_ValidatePtr(mixer_state.knob_image, 'ImGui_Image*') then
+            local scale = 5.0
+            local target_size = radius * scale
+            
+            local img_w, img_h = r.ImGui_Image_GetSize(mixer_state.knob_image)
+            local aspect = img_w / img_h
+            local draw_w, draw_h
+            if aspect >= 1 then
+                draw_w = target_size
+                draw_h = target_size / aspect
+            else
+                draw_w = target_size * aspect
+                draw_h = target_size
+            end
+            
+            local img_x = center_x - draw_w / 2
+            local img_y = center_y - draw_h / 2
+            r.ImGui_DrawList_AddImage(draw_list, mixer_state.knob_image, img_x, img_y, img_x + draw_w, img_y + draw_h, 0, 0, 1, 1, 0xFFFFFFFF)
+            
+            local border_radius = math.min(draw_w, draw_h) / 2 * 0.6
+            r.ImGui_DrawList_AddCircle(draw_list, center_x, center_y, border_radius, 0x000000FF, 32, 1)
+            
+            local knob_visual_radius = math.min(draw_w, draw_h) / 2 * 0.55
+            local dot_dist = knob_visual_radius * 0.65
+            local dot_x = center_x + math.cos(value_angle) * dot_dist
+            local dot_y = center_y + math.sin(value_angle) * dot_dist
+            local dot_size = math.max(1.5, knob_visual_radius * 0.08)
+            
+            local dot_color
+            if is_bipolar then
+                local deviation = math.abs(norm_val - 0.5) * 2
+                if deviation < 0.3 then
+                    local t = deviation / 0.3
+                    local r_val = math.floor(t * 255)
+                    local g_val = 255
+                    dot_color = (r_val * 0x1000000) + (g_val * 0x10000) + 0x00FF
+                elseif deviation < 0.7 then
+                    local t = (deviation - 0.3) / 0.4
+                    local r_val = 255
+                    local g_val = math.floor((1 - t * 0.5) * 255)
+                    dot_color = (r_val * 0x1000000) + (g_val * 0x10000) + 0x00FF
+                else
+                    local t = (deviation - 0.7) / 0.3
+                    local r_val = 255
+                    local g_val = math.floor((1 - t) * 128)
+                    dot_color = (r_val * 0x1000000) + (g_val * 0x10000) + 0x00FF
+                end
+            else
+                if norm_val < 0.5 then
+                    local t = norm_val * 2
+                    local r_val = math.floor(t * 255)
+                    local g_val = 255
+                    dot_color = (r_val * 0x1000000) + (g_val * 0x10000) + 0x00FF
+                elseif norm_val < 0.8 then
+                    local t = (norm_val - 0.5) / 0.3
+                    local r_val = 255
+                    local g_val = math.floor((1 - t * 0.5) * 255)
+                    dot_color = (r_val * 0x1000000) + (g_val * 0x10000) + 0x00FF
+                else
+                    local t = (norm_val - 0.8) / 0.2
+                    local r_val = 255
+                    local g_val = math.floor((1 - t) * 128)
+                    dot_color = (r_val * 0x1000000) + (g_val * 0x10000) + 0x00FF
+                end
+            end
+            
+            r.ImGui_DrawList_AddCircleFilled(draw_list, dot_x, dot_y, dot_size, dot_color, 12)
+        else
+            mixer_state.knob_image_loaded = false
+            mixer_state.knob_image = nil
+        end
     end
 end
 
@@ -13195,6 +13289,19 @@ local function DrawRoutingIndicator(ctx, draw_list, x, y, width, track, track_gu
  
  if not (show_eq or show_comp or show_lim) then return 0 end
  
+ local eq_bypassed = false
+ local comp_bypassed = false
+ local lim_bypassed = false
+ 
+ if track then
+  local fx_index = FindChannelStripFX(track, track_guid)
+  if fx_index and fx_index >= 0 then
+   eq_bypassed = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ_BYPASS) < 0.5
+   comp_bypassed = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP_BYPASS) < 0.5
+   lim_bypassed = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM_BYPASS) < 0.5
+  end
+ end
+ 
  local routing_labels = {
   [0] = {"EQ", "Comp", "Limit"},
   [1] = {"Comp", "EQ", "Limit"},
@@ -13205,18 +13312,8 @@ local function DrawRoutingIndicator(ctx, draw_list, x, y, width, track, track_gu
  }
  
  local labels = routing_labels[routing_order] or routing_labels[0]
- local active_labels = {}
- 
- for _, lbl in ipairs(labels) do
-  if (lbl == "EQ" and show_eq) or (lbl == "Comp" and show_comp) or (lbl == "Limit" and show_lim) then
-   table.insert(active_labels, lbl)
-  end
- end
- 
- if #active_labels == 0 then return 0 end
  
  local indicator_height = 18
- local text_color = 0x888888FF
  local font_size = 7
  local title_font_size = 6
  
@@ -13228,14 +13325,42 @@ local function DrawRoutingIndicator(ctx, draw_list, x, y, width, track, track_gu
  local title_y = y + 1
  r.ImGui_DrawList_AddTextEx(draw_list, nil, title_font_size, title_x, title_y, 0x666666FF, title_str)
  
- local display_str = table.concat(active_labels, " > ")
- local base_text_w = r.ImGui_CalcTextSize(ctx, display_str)
  local scale = font_size / r.ImGui_GetFontSize(ctx)
- local text_w = base_text_w * scale
- local text_x = x + (width - text_w) / 2
+ local separator = " > "
+ local sep_w = r.ImGui_CalcTextSize(ctx, separator) * scale
+ 
+ local total_w = 0
+ for i, lbl in ipairs(labels) do
+  total_w = total_w + r.ImGui_CalcTextSize(ctx, lbl) * scale
+  if i < #labels then
+   total_w = total_w + sep_w
+  end
+ end
+ 
+ local text_x = x + (width - total_w) / 2
  local text_y = y + 9
  
- r.ImGui_DrawList_AddTextEx(draw_list, nil, font_size, text_x, text_y, text_color, display_str)
+ for i, lbl in ipairs(labels) do
+  local is_visible = (lbl == "EQ" and show_eq) or (lbl == "Comp" and show_comp) or (lbl == "Limit" and show_lim)
+  local is_bypassed = (lbl == "EQ" and eq_bypassed) or (lbl == "Comp" and comp_bypassed) or (lbl == "Limit" and lim_bypassed)
+  
+  local label_color
+  if not is_visible then
+   label_color = 0xFFFFFFFF
+  elseif is_bypassed then
+   label_color = 0xFF8800FF
+  else
+   label_color = 0x00FF00FF
+  end
+  
+  local lbl_w = r.ImGui_CalcTextSize(ctx, lbl) * scale
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, font_size, text_x, text_y, label_color, lbl)
+  text_x = text_x + lbl_w
+  if i < #labels then
+   r.ImGui_DrawList_AddTextEx(draw_list, nil, font_size, text_x, text_y, 0x666666FF, separator)
+   text_x = text_x + sep_w
+  end
+ end
  
  return indicator_height
 end
