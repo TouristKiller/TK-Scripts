@@ -1,8 +1,12 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.4
+-- @version 1.8.5
 -- @changelog 
 --[[
+  v1.8.5:
+  + Added: VU Meter styles - 4 different visual styles (Analog, Analog Light, LED Bars, Digital)
+  + Added: VU style selector in mixer settings with immediate save
+
   v1.8.4:
   + Added: Image knob style - Uses knob01.png from Images folder with color-coded indicator dot
   + Added: Bipolar knob support for EQ gain (color based on deviation from center)
@@ -772,6 +776,7 @@ local default_settings = {
  simple_mixer_strip_routing_order = 0,
 
  simple_mixer_knob_style = 0,
+ simple_mixer_vu_style = 0,
 
  -- Custom Transport Button settings
  use_custom_play_image = false,
@@ -3256,6 +3261,31 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
    
    if settings.simple_mixer_show_vu_meter then
     r.ImGui_Indent(ctx, 10)
+    
+    r.ImGui_Text(ctx, "Style:")
+    r.ImGui_SameLine(ctx)
+    local vu_styles = {"Analog", "Analog Light", "LED Bars", "Digital"}
+    local current_vu_style = settings.simple_mixer_vu_style or 0
+    r.ImGui_SetNextItemWidth(ctx, 110)
+    if r.ImGui_BeginCombo(ctx, "##VUStyle", vu_styles[current_vu_style + 1] or "Analog") then
+     for i, style_name in ipairs(vu_styles) do
+      local is_selected = (current_vu_style == i - 1)
+      if r.ImGui_Selectable(ctx, style_name, is_selected) then
+       settings.simple_mixer_vu_style = i - 1
+       MarkTransportPresetChanged()
+       if SaveMixerSettings then SaveMixerSettings() end
+      end
+      if is_selected then
+       r.ImGui_SetItemDefaultFocus(ctx)
+      end
+     end
+     r.ImGui_EndCombo(ctx)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Visual style for VU meters.\nAnalog: Classic needle meter\nLED Bars: Retro LED segment display\nDigital: Modern gradient bars")
+    end
+    
+    r.ImGui_Spacing(ctx)
     
     local old_pre_fader = settings.simple_mixer_vu_pre_fader
     rv, settings.simple_mixer_vu_pre_fader = r.ImGui_Checkbox(ctx, "Pre-Fader (Gain Staging)", settings.simple_mixer_vu_pre_fader or false)
@@ -11400,110 +11430,12 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
     local data = UpdateVUData(track_guid, track)
     if not data then return 0 end
     
+    local vu_style = settings.simple_mixer_vu_style or 0
     local vu_height = 45
     
     local bg_color = 0x000000FF
     local scale_color = 0xAAAAAAFF
     local red_color = 0xFF4444FF
-    local needle_color = 0xFFFFFFFF
-    
-    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + vu_height, bg_color, 4)
-    
-    r.ImGui_DrawList_PushClipRect(draw_list, x, y, x + width, y + vu_height, true)
-    
-    local center_x = x + width / 2
-    local max_radius = vu_height * 0.85
-    local radius = math.min(width * 0.55, max_radius)
-    local pivot_y = y + vu_height + radius * 0.15
-    local inner_radius = radius * 0.90
-    
-    local glow_layers = 7
-    for i = glow_layers, 1, -1 do
-        local glow_radius = radius * (0.25 + i * 0.13)
-        local alpha = math.floor(20 - i * 2)
-        local glow_color = (0xFFAA40 * 256) + alpha
-        r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, pivot_y, glow_radius, glow_color, 32)
-    end
-    
-    local start_angle = math.pi * 0.68
-    local end_angle = math.pi * 0.32
-    local angle_range = start_angle - end_angle
-    
-    local segments = 40
-    for i = 0, segments - 1 do
-        local t1 = i / segments
-        local t2 = (i + 1) / segments
-        local a1 = start_angle - t1 * angle_range
-        local a2 = start_angle - t2 * angle_range
-        
-        local x1 = center_x + math.cos(a1) * radius
-        local y1 = pivot_y - math.sin(a1) * radius
-        local x2 = center_x + math.cos(a2) * radius
-        local y2 = pivot_y - math.sin(a2) * radius
-        
-        local db_at_t = -20 + t1 * 23
-        local arc_color = db_at_t >= 0 and red_color or scale_color
-        r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, arc_color, 1.5)
-    end
-    
-    local tick_db_values = {-20, -10, -7, -5, -3, 0, 3}
-    for _, db in ipairs(tick_db_values) do
-        local t = (db - (-20)) / 23
-        local angle = start_angle - t * angle_range
-        
-        local tick_outer = radius
-        local tick_inner = inner_radius
-        
-        local x_outer = center_x + math.cos(angle) * tick_outer
-        local y_outer = pivot_y - math.sin(angle) * tick_outer
-        local x_inner = center_x + math.cos(angle) * tick_inner
-        local y_inner = pivot_y - math.sin(angle) * tick_inner
-        
-        local tick_color = db >= 0 and red_color or scale_color
-        r.ImGui_DrawList_AddLine(draw_list, x_inner, y_inner, x_outer, y_outer, tick_color, 1)
-        
-        local label = tostring(math.abs(db))
-        local vu_font_size = 7
-        local base_text_w, base_text_h = r.ImGui_CalcTextSize(ctx, label)
-        local font_scale = vu_font_size / r.ImGui_GetFontSize(ctx)
-        local text_w, text_h = base_text_w * font_scale, base_text_h * font_scale
-        local label_radius = radius + 5
-        local label_x = center_x + math.cos(angle) * label_radius - text_w / 2
-        local label_y = pivot_y - math.sin(angle) * label_radius - text_h / 2
-        local label_color = db >= 0 and red_color or 0x888888FF
-        r.ImGui_DrawList_AddTextEx(draw_list, nil, vu_font_size, label_x, label_y, label_color, label)
-    end
-    
-    local needle_length = radius * 0.88
-    local vu_needle_color = 0x4A90D9FF
-    local peak_needle_color = 0xAAAAAAFF
-    
-    local peak_vu = data.smoothed_peak_vu or (data.smoothed_peak_db + 18)
-    peak_vu = math.max(-20, math.min(3, peak_vu))
-    local peak_t = (peak_vu - (-20)) / 23
-    local peak_angle = start_angle - peak_t * angle_range
-    local peak_tip_x = center_x + math.cos(peak_angle) * needle_length
-    local peak_tip_y = pivot_y - math.sin(peak_angle) * needle_length
-    r.ImGui_DrawList_AddLine(draw_list, center_x, pivot_y, peak_tip_x, peak_tip_y, peak_needle_color, 1.5)
-    
-    local needle_vu = data.smoothed_vu or (data.smoothed_db + 18)
-    needle_vu = math.max(-20, math.min(3, needle_vu))
-    local needle_t = (needle_vu - (-20)) / 23
-    local needle_angle = start_angle - needle_t * angle_range
-    local needle_tip_x = center_x + math.cos(needle_angle) * needle_length
-    local needle_tip_y = pivot_y - math.sin(needle_angle) * needle_length
-    r.ImGui_DrawList_AddLine(draw_list, center_x, pivot_y, needle_tip_x, needle_tip_y, vu_needle_color, 1.5)
-    
-    local vu_text = "VU"
-    local vu_text_font_size = 10
-    local base_vu_text_w = r.ImGui_CalcTextSize(ctx, vu_text)
-    local vu_text_scale = vu_text_font_size / r.ImGui_GetFontSize(ctx)
-    local vu_text_w = base_vu_text_w * vu_text_scale
-    local vu_text_x = center_x - vu_text_w / 2
-    local vu_text_y = y + vu_height * 0.55
-    r.ImGui_DrawList_AddTextEx(draw_list, nil, vu_text_font_size, vu_text_x, vu_text_y, 0x666666FF, vu_text)
-    
-    r.ImGui_DrawList_PopClipRect(draw_list)
     
     local is_clipping
     if data.is_pre_fader then
@@ -11511,28 +11443,367 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
     else
         is_clipping = (data.raw_db or -60) >= 0
     end
-    local led_radius = 4
-    local led_x = x + width - led_radius - 4
-    local led_y = y + vu_height - led_radius - 4
-    local led_color = is_clipping and 0xFF0000FF or 0x440000FF
-    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, led_radius, led_color)
     
-    local pivot_radius = 8
-    local pivot_center_y = y + vu_height
-    local pivot_color = 0x000000FF
-    local pivot_segments = 16
-    for i = 0, pivot_segments - 1 do
-        local a1 = (i / pivot_segments) * math.pi
-        local a2 = ((i + 1) / pivot_segments) * math.pi
-        local px1 = center_x + math.cos(a1) * pivot_radius
-        local py1 = pivot_center_y - math.sin(a1) * pivot_radius
-        local px2 = center_x + math.cos(a2) * pivot_radius
-        local py2 = pivot_center_y - math.sin(a2) * pivot_radius
-        r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, pivot_center_y, px1, py1, px2, py2, pivot_color)
+    if vu_style == 2 then
+        local padding = 4
+        local bar_width = width - padding * 2
+        local bar_height = vu_height - padding * 2
+        
+        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + vu_height, 0x1A1A1AFF, 3)
+        
+        local num_segments = 20
+        local segment_gap = 2
+        local segment_width = (bar_width - (num_segments - 1) * segment_gap) / num_segments
+        
+        local needle_vu = data.smoothed_vu or (data.smoothed_db + 18)
+        needle_vu = math.max(-20, math.min(3, needle_vu))
+        local level = (needle_vu + 20) / 23
+        
+        local peak_vu = data.smoothed_peak_vu or (data.smoothed_peak_db + 18)
+        peak_vu = math.max(-20, math.min(3, peak_vu))
+        local peak_level = (peak_vu + 20) / 23
+        local peak_segment = math.floor(peak_level * num_segments)
+        
+        for i = 0, num_segments - 1 do
+            local seg_x = x + padding + i * (segment_width + segment_gap)
+            local seg_y = y + padding
+            local seg_progress = (i + 1) / num_segments
+            
+            local seg_color
+            if seg_progress <= 0.6 then
+                seg_color = 0x00FF00FF
+            elseif seg_progress <= 0.85 then
+                seg_color = 0xFFFF00FF
+            else
+                seg_color = 0xFF0000FF
+            end
+            
+            local is_lit = seg_progress <= level
+            local is_peak = (i == peak_segment)
+            
+            if is_lit then
+                r.ImGui_DrawList_AddRectFilled(draw_list, seg_x, seg_y, seg_x + segment_width, seg_y + bar_height, seg_color, 1)
+                local highlight = (seg_color & 0xFFFFFF00) | 0x40
+                r.ImGui_DrawList_AddRectFilled(draw_list, seg_x, seg_y, seg_x + segment_width, seg_y + bar_height * 0.3, highlight, 1)
+            elseif is_peak then
+                local dim_color = (seg_color & 0xFFFFFF00) | 0xCC
+                r.ImGui_DrawList_AddRectFilled(draw_list, seg_x, seg_y, seg_x + segment_width, seg_y + bar_height, dim_color, 1)
+            else
+                local off_color = (seg_color & 0xFFFFFF00) | 0x20
+                r.ImGui_DrawList_AddRectFilled(draw_list, seg_x, seg_y, seg_x + segment_width, seg_y + bar_height, off_color, 1)
+            end
+        end
+        
+        local led_radius = 3
+        local led_x = x + width - led_radius - 3
+        local led_y = y + vu_height - led_radius - 3
+        local led_color = is_clipping and 0xFF0000FF or 0x440000FF
+        r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, led_radius, led_color)
+        
+        r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, 0x333333FF, 3, 0, 1)
+        
+    elseif vu_style == 3 then
+        local padding = 4
+        local bar_area_width = width - padding * 2
+        local bar_height = (vu_height - padding * 2 - 4) / 2
+        
+        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + vu_height, 0x0D0D12FF, 4)
+        
+        local needle_vu = data.smoothed_vu or (data.smoothed_db + 18)
+        needle_vu = math.max(-20, math.min(3, needle_vu))
+        local level = (needle_vu + 20) / 23
+        
+        local peak_vu = data.smoothed_peak_vu or (data.smoothed_peak_db + 18)
+        peak_vu = math.max(-20, math.min(3, peak_vu))
+        local peak_level = (peak_vu + 20) / 23
+        
+        for ch = 0, 1 do
+            local bar_y = y + padding + ch * (bar_height + 2)
+            local bar_x = x + padding
+            
+            r.ImGui_DrawList_AddRectFilled(draw_list, bar_x, bar_y, bar_x + bar_area_width, bar_y + bar_height, 0x1A1A20FF, 2)
+            
+            local level_width = bar_area_width * level
+            if level_width > 0 then
+                local green_end = bar_area_width * 0.65
+                local yellow_end = bar_area_width * 0.85
+                
+                if level_width <= green_end then
+                    local grad_start = 0x00AA44FF
+                    local grad_end = 0x44FF88FF
+                    r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, bar_x, bar_y, bar_x + level_width, bar_y + bar_height, grad_start, grad_end, grad_end, grad_start)
+                elseif level_width <= yellow_end then
+                    r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, bar_x, bar_y, bar_x + green_end, bar_y + bar_height, 0x00AA44FF, 0x44FF88FF, 0x44FF88FF, 0x00AA44FF)
+                    r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, bar_x + green_end, bar_y, bar_x + level_width, bar_y + bar_height, 0xCCCC00FF, 0xFFFF44FF, 0xFFFF44FF, 0xCCCC00FF)
+                else
+                    r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, bar_x, bar_y, bar_x + green_end, bar_y + bar_height, 0x00AA44FF, 0x44FF88FF, 0x44FF88FF, 0x00AA44FF)
+                    r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, bar_x + green_end, bar_y, bar_x + yellow_end, bar_y + bar_height, 0xCCCC00FF, 0xFFFF44FF, 0xFFFF44FF, 0xCCCC00FF)
+                    r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, bar_x + yellow_end, bar_y, bar_x + level_width, bar_y + bar_height, 0xCC2200FF, 0xFF4444FF, 0xFF4444FF, 0xCC2200FF)
+                end
+            end
+            
+            local peak_x = bar_x + bar_area_width * peak_level
+            if peak_x > bar_x + 2 then
+                local peak_color = peak_level > 0.87 and 0xFF4444FF or 0xFFFFFFFF
+                r.ImGui_DrawList_AddLine(draw_list, peak_x, bar_y, peak_x, bar_y + bar_height, peak_color, 2)
+            end
+        end
+        
+        local db_text
+        if needle_vu < -18 then
+            db_text = "-∞"
+        else
+            db_text = string.format("%.0f", needle_vu - 3)
+        end
+        local text_w = r.ImGui_CalcTextSize(ctx, db_text)
+        local text_color = is_clipping and 0xFF4444FF or 0x888888FF
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, 9, x + width - text_w - 4, y + vu_height - 11, text_color, db_text)
+        
+        r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, 0x2A2A35FF, 4, 0, 1)
+        
+    elseif vu_style == 1 then
+        local light_bg = 0xE8E4DCFF
+        local light_scale = 0x444444FF
+        local light_red = 0xCC2222FF
+        local needle_color = 0x222222FF
+        
+        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + vu_height, light_bg, 4)
+        
+        r.ImGui_DrawList_PushClipRect(draw_list, x, y, x + width, y + vu_height, true)
+        
+        local center_x = x + width / 2
+        local max_radius = vu_height * 0.85
+        local radius = math.min(width * 0.55, max_radius)
+        local pivot_y = y + vu_height + radius * 0.15
+        local inner_radius = radius * 0.90
+        
+        local start_angle = math.pi * 0.68
+        local end_angle = math.pi * 0.32
+        local angle_range = start_angle - end_angle
+        
+        local segments = 40
+        for i = 0, segments - 1 do
+            local t1 = i / segments
+            local t2 = (i + 1) / segments
+            local a1 = start_angle - t1 * angle_range
+            local a2 = start_angle - t2 * angle_range
+            
+            local x1 = center_x + math.cos(a1) * radius
+            local y1 = pivot_y - math.sin(a1) * radius
+            local x2 = center_x + math.cos(a2) * radius
+            local y2 = pivot_y - math.sin(a2) * radius
+            
+            local db_at_t = -20 + t1 * 23
+            local arc_color = db_at_t >= 0 and light_red or light_scale
+            r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, arc_color, 1.5)
+        end
+        
+        local tick_db_values = {-20, -10, -7, -5, -3, 0, 3}
+        for _, db in ipairs(tick_db_values) do
+            local t = (db - (-20)) / 23
+            local angle = start_angle - t * angle_range
+            
+            local tick_outer = radius
+            local tick_inner = inner_radius
+            
+            local x_outer = center_x + math.cos(angle) * tick_outer
+            local y_outer = pivot_y - math.sin(angle) * tick_outer
+            local x_inner = center_x + math.cos(angle) * tick_inner
+            local y_inner = pivot_y - math.sin(angle) * tick_inner
+            
+            local tick_color = db >= 0 and light_red or light_scale
+            r.ImGui_DrawList_AddLine(draw_list, x_inner, y_inner, x_outer, y_outer, tick_color, 1)
+            
+            local label = tostring(math.abs(db))
+            local vu_font_size = 7
+            local base_text_w, base_text_h = r.ImGui_CalcTextSize(ctx, label)
+            local font_scale = vu_font_size / r.ImGui_GetFontSize(ctx)
+            local text_w, text_h = base_text_w * font_scale, base_text_h * font_scale
+            local label_radius = radius + 5
+            local label_x = center_x + math.cos(angle) * label_radius - text_w / 2
+            local label_y = pivot_y - math.sin(angle) * label_radius - text_h / 2
+            local label_color = db >= 0 and light_red or 0x666666FF
+            r.ImGui_DrawList_AddTextEx(draw_list, nil, vu_font_size, label_x, label_y, label_color, label)
+        end
+        
+        local needle_length = radius * 0.88
+        local vu_needle_color = 0x2266AAFF
+        local peak_needle_color = 0x888888FF
+        
+        local peak_vu = data.smoothed_peak_vu or (data.smoothed_peak_db + 18)
+        peak_vu = math.max(-20, math.min(3, peak_vu))
+        local peak_t = (peak_vu - (-20)) / 23
+        local peak_angle = start_angle - peak_t * angle_range
+        local peak_tip_x = center_x + math.cos(peak_angle) * needle_length
+        local peak_tip_y = pivot_y - math.sin(peak_angle) * needle_length
+        r.ImGui_DrawList_AddLine(draw_list, center_x, pivot_y, peak_tip_x, peak_tip_y, peak_needle_color, 1.5)
+        
+        local needle_vu = data.smoothed_vu or (data.smoothed_db + 18)
+        needle_vu = math.max(-20, math.min(3, needle_vu))
+        local needle_t = (needle_vu - (-20)) / 23
+        local needle_angle = start_angle - needle_t * angle_range
+        local needle_tip_x = center_x + math.cos(needle_angle) * needle_length
+        local needle_tip_y = pivot_y - math.sin(needle_angle) * needle_length
+        r.ImGui_DrawList_AddLine(draw_list, center_x, pivot_y, needle_tip_x, needle_tip_y, vu_needle_color, 2)
+        
+        local vu_text = "VU"
+        local vu_text_font_size = 10
+        local base_vu_text_w = r.ImGui_CalcTextSize(ctx, vu_text)
+        local vu_text_scale = vu_text_font_size / r.ImGui_GetFontSize(ctx)
+        local vu_text_w = base_vu_text_w * vu_text_scale
+        local vu_text_x = center_x - vu_text_w / 2
+        local vu_text_y = y + vu_height * 0.55
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, vu_text_font_size, vu_text_x, vu_text_y, 0x888888FF, vu_text)
+        
+        r.ImGui_DrawList_PopClipRect(draw_list)
+        
+        local led_radius = 4
+        local led_x = x + width - led_radius - 4
+        local led_y = y + vu_height - led_radius - 4
+        local led_color = is_clipping and 0xDD0000FF or 0xFFCCCCFF
+        r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, led_radius, led_color)
+        
+        local pivot_radius = 8
+        local pivot_center_y = y + vu_height
+        local pivot_color = 0xBBB8B0FF
+        local pivot_segments = 16
+        for i = 0, pivot_segments - 1 do
+            local a1 = (i / pivot_segments) * math.pi
+            local a2 = ((i + 1) / pivot_segments) * math.pi
+            local px1 = center_x + math.cos(a1) * pivot_radius
+            local py1 = pivot_center_y - math.sin(a1) * pivot_radius
+            local px2 = center_x + math.cos(a2) * pivot_radius
+            local py2 = pivot_center_y - math.sin(a2) * pivot_radius
+            r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, pivot_center_y, px1, py1, px2, py2, pivot_color)
+        end
+        
+        local border_color = 0xAAAAAFFF
+        r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, border_color, 4, 0, 1)
+        
+    else
+        local needle_color = 0xFFFFFFFF
+        
+        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + vu_height, bg_color, 4)
+        
+        r.ImGui_DrawList_PushClipRect(draw_list, x, y, x + width, y + vu_height, true)
+        
+        local center_x = x + width / 2
+        local max_radius = vu_height * 0.85
+        local radius = math.min(width * 0.55, max_radius)
+        local pivot_y = y + vu_height + radius * 0.15
+        local inner_radius = radius * 0.90
+        
+        local glow_layers = 7
+        for i = glow_layers, 1, -1 do
+            local glow_radius = radius * (0.25 + i * 0.13)
+            local alpha = math.floor(20 - i * 2)
+            local glow_color = (0xFFAA40 * 256) + alpha
+            r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, pivot_y, glow_radius, glow_color, 32)
+        end
+        
+        local start_angle = math.pi * 0.68
+        local end_angle = math.pi * 0.32
+        local angle_range = start_angle - end_angle
+        
+        local segments = 40
+        for i = 0, segments - 1 do
+            local t1 = i / segments
+            local t2 = (i + 1) / segments
+            local a1 = start_angle - t1 * angle_range
+            local a2 = start_angle - t2 * angle_range
+            
+            local x1 = center_x + math.cos(a1) * radius
+            local y1 = pivot_y - math.sin(a1) * radius
+            local x2 = center_x + math.cos(a2) * radius
+            local y2 = pivot_y - math.sin(a2) * radius
+            
+            local db_at_t = -20 + t1 * 23
+            local arc_color = db_at_t >= 0 and red_color or scale_color
+            r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, arc_color, 1.5)
+        end
+        
+        local tick_db_values = {-20, -10, -7, -5, -3, 0, 3}
+        for _, db in ipairs(tick_db_values) do
+            local t = (db - (-20)) / 23
+            local angle = start_angle - t * angle_range
+            
+            local tick_outer = radius
+            local tick_inner = inner_radius
+            
+            local x_outer = center_x + math.cos(angle) * tick_outer
+            local y_outer = pivot_y - math.sin(angle) * tick_outer
+            local x_inner = center_x + math.cos(angle) * tick_inner
+            local y_inner = pivot_y - math.sin(angle) * tick_inner
+            
+            local tick_color = db >= 0 and red_color or scale_color
+            r.ImGui_DrawList_AddLine(draw_list, x_inner, y_inner, x_outer, y_outer, tick_color, 1)
+            
+            local label = tostring(math.abs(db))
+            local vu_font_size = 7
+            local base_text_w, base_text_h = r.ImGui_CalcTextSize(ctx, label)
+            local font_scale = vu_font_size / r.ImGui_GetFontSize(ctx)
+            local text_w, text_h = base_text_w * font_scale, base_text_h * font_scale
+            local label_radius = radius + 5
+            local label_x = center_x + math.cos(angle) * label_radius - text_w / 2
+            local label_y = pivot_y - math.sin(angle) * label_radius - text_h / 2
+            local label_color = db >= 0 and red_color or 0x888888FF
+            r.ImGui_DrawList_AddTextEx(draw_list, nil, vu_font_size, label_x, label_y, label_color, label)
+        end
+        
+        local needle_length = radius * 0.88
+        local vu_needle_color = 0x4A90D9FF
+        local peak_needle_color = 0xAAAAAAFF
+        
+        local peak_vu = data.smoothed_peak_vu or (data.smoothed_peak_db + 18)
+        peak_vu = math.max(-20, math.min(3, peak_vu))
+        local peak_t = (peak_vu - (-20)) / 23
+        local peak_angle = start_angle - peak_t * angle_range
+        local peak_tip_x = center_x + math.cos(peak_angle) * needle_length
+        local peak_tip_y = pivot_y - math.sin(peak_angle) * needle_length
+        r.ImGui_DrawList_AddLine(draw_list, center_x, pivot_y, peak_tip_x, peak_tip_y, peak_needle_color, 1.5)
+        
+        local needle_vu = data.smoothed_vu or (data.smoothed_db + 18)
+        needle_vu = math.max(-20, math.min(3, needle_vu))
+        local needle_t = (needle_vu - (-20)) / 23
+        local needle_angle = start_angle - needle_t * angle_range
+        local needle_tip_x = center_x + math.cos(needle_angle) * needle_length
+        local needle_tip_y = pivot_y - math.sin(needle_angle) * needle_length
+        r.ImGui_DrawList_AddLine(draw_list, center_x, pivot_y, needle_tip_x, needle_tip_y, vu_needle_color, 1.5)
+        
+        local vu_text = "VU"
+        local vu_text_font_size = 10
+        local base_vu_text_w = r.ImGui_CalcTextSize(ctx, vu_text)
+        local vu_text_scale = vu_text_font_size / r.ImGui_GetFontSize(ctx)
+        local vu_text_w = base_vu_text_w * vu_text_scale
+        local vu_text_x = center_x - vu_text_w / 2
+        local vu_text_y = y + vu_height * 0.55
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, vu_text_font_size, vu_text_x, vu_text_y, 0x666666FF, vu_text)
+        
+        r.ImGui_DrawList_PopClipRect(draw_list)
+        
+        local led_radius = 4
+        local led_x = x + width - led_radius - 4
+        local led_y = y + vu_height - led_radius - 4
+        local led_color = is_clipping and 0xFF0000FF or 0x440000FF
+        r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, led_radius, led_color)
+        
+        local pivot_radius = 8
+        local pivot_center_y = y + vu_height
+        local pivot_color = 0x000000FF
+        local pivot_segments = 16
+        for i = 0, pivot_segments - 1 do
+            local a1 = (i / pivot_segments) * math.pi
+            local a2 = ((i + 1) / pivot_segments) * math.pi
+            local px1 = center_x + math.cos(a1) * pivot_radius
+            local py1 = pivot_center_y - math.sin(a1) * pivot_radius
+            local px2 = center_x + math.cos(a2) * pivot_radius
+            local py2 = pivot_center_y - math.sin(a2) * pivot_radius
+            r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, pivot_center_y, px1, py1, px2, py2, pivot_color)
+        end
+        
+        local border_color = 0x333333FF
+        r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, border_color, 4, 0, 1)
     end
-    
-    local border_color = 0x333333FF
-    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, border_color, 4, 0, 1)
     
     return vu_height + 4
 end
