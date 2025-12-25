@@ -123,7 +123,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.8.5" author="TouristKiller" time="2025-12-24T13:30:00Z">
+        <version name="1.8.6" author="TouristKiller" time="2025-12-25T22:20:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -137,8 +137,18 @@
             <source main="main" file="TK_MIXER_ONLY.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_MIXER_ONLY.lua</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/Images/knob01.png</source>
             <changelog><![CDATA[
-+ Added: VU Meter styles - 4 different visual styles (Analog, Analog Light, LED Bars, Digital)
-+ Added: VU style selector in mixer settings with immediate save
+  + Added: Fader Background Styles - 11 visual styles for fader backgrounds
+  + Added: Track color integration - All fader background styles work with track colors
+  + Added: Gradient styles (Vertical, Horizontal, Center) with 3-color option
+  + Added: VU Zones style - Green/Yellow/Red zones based on dB levels
+  + Added: LED Segments style - Retro mixer look
+  + Added: Brushed Metal style - Subtle horizontal lines texture
+  + Added: Carbon Fiber style - Weave pattern texture
+  + Added: Noise/Grain style - Analog film grain texture
+  + Added: Grid/Mesh style - Vintage mixer grid pattern
+  + Added: dB Scale style - Hardware mixer scale markings with color zones
+  + Added: Inset shadow effect for depth
+  + Added: Edge glow effect with customizable color
 ]]></changelog>
         </version>
     </reapack>

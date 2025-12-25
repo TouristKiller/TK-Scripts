@@ -1,8 +1,22 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.5
+-- @version 1.8.6
 -- @changelog 
 --[[
+  v1.8.6:
+  + Added: Fader Background Styles - 11 visual styles for fader backgrounds
+  + Added: Track color integration - All fader background styles work with track colors
+  + Added: Gradient styles (Vertical, Horizontal, Center) with 3-color option
+  + Added: VU Zones style - Green/Yellow/Red zones based on dB levels
+  + Added: LED Segments style - Retro mixer look
+  + Added: Brushed Metal style - Subtle horizontal lines texture
+  + Added: Carbon Fiber style - Weave pattern texture
+  + Added: Noise/Grain style - Analog film grain texture
+  + Added: Grid/Mesh style - Vintage mixer grid pattern
+  + Added: dB Scale style - Hardware mixer scale markings with color zones
+  + Added: Inset shadow effect for depth
+  + Added: Edge glow effect with customizable color
+
   v1.8.5:
   + Added: VU Meter styles - 4 different visual styles (Analog, Analog Light, LED Bars, Digital)
   + Added: VU style selector in mixer settings with immediate save
@@ -646,6 +660,14 @@ local default_settings = {
  simple_mixer_rms_button_off_color = 0x404040FF,
  simple_mixer_rms_text_color = 0xFFFFFFFF,
  simple_mixer_fader_bg_color = 0x404040FF,
+ simple_mixer_fader_bg_style = 0,
+ simple_mixer_fader_bg_gradient_top = 0x606060FF,
+ simple_mixer_fader_bg_gradient_bottom = 0x202020FF,
+ simple_mixer_fader_bg_gradient_middle = 0x404040FF,
+ simple_mixer_fader_bg_use_three_color = false,
+ simple_mixer_fader_bg_inset = false,
+ simple_mixer_fader_bg_glow = false,
+ simple_mixer_fader_bg_glow_color = 0x00FFFF40,
  simple_mixer_fader_style = 0,
  simple_mixer_fader_cyberpunk_color = 0x00FFFFFF,
  simple_mixer_master_fader_color = 0x4A90D9FF,
@@ -3164,19 +3186,78 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
    
    r.ImGui_Separator(ctx)
    r.ImGui_Spacing(ctx)
+   r.ImGui_Text(ctx, "Fader Background:")
+   local fader_bg_styles = {"Solid", "Gradient V", "Gradient H", "Gradient Center", "VU Zones", "LED Segments", "Brushed Metal", "Carbon Fiber", "Noise/Grain", "Grid/Mesh", "dB Scale"}
+   local current_fader_bg_style = settings.simple_mixer_fader_bg_style or 0
+   r.ImGui_SetNextItemWidth(ctx, 120)
+   if r.ImGui_BeginCombo(ctx, "##FaderBGStyle", fader_bg_styles[current_fader_bg_style + 1] or "Solid") then
+    for i, style_name in ipairs(fader_bg_styles) do
+     if r.ImGui_Selectable(ctx, style_name, current_fader_bg_style == i - 1) then
+      settings.simple_mixer_fader_bg_style = i - 1
+      SaveMixerSettings()
+     end
+    end
+    r.ImGui_EndCombo(ctx)
+   end
+   
+   if current_fader_bg_style == 0 then
+    r.ImGui_SameLine(ctx)
+    rv, settings.simple_mixer_fader_bg_color = r.ImGui_ColorEdit4(ctx, "##FdrBGSolid", settings.simple_mixer_fader_bg_color or 0x404040FF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then SaveMixerSettings() end
+   elseif current_fader_bg_style >= 1 and current_fader_bg_style <= 3 then
+    rv, settings.simple_mixer_fader_bg_gradient_top = r.ImGui_ColorEdit4(ctx, "Top##GradTop", settings.simple_mixer_fader_bg_gradient_top or 0x606060FF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then SaveMixerSettings() end
+    r.ImGui_SameLine(ctx)
+    rv, settings.simple_mixer_fader_bg_gradient_bottom = r.ImGui_ColorEdit4(ctx, "Bottom##GradBot", settings.simple_mixer_fader_bg_gradient_bottom or 0x202020FF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then SaveMixerSettings() end
+    rv, settings.simple_mixer_fader_bg_use_three_color = r.ImGui_Checkbox(ctx, "3-Color##3Col", settings.simple_mixer_fader_bg_use_three_color or false)
+    if rv then SaveMixerSettings() end
+    if settings.simple_mixer_fader_bg_use_three_color then
+     r.ImGui_SameLine(ctx)
+     rv, settings.simple_mixer_fader_bg_gradient_middle = r.ImGui_ColorEdit4(ctx, "Mid##GradMid", settings.simple_mixer_fader_bg_gradient_middle or 0x404040FF, r.ImGui_ColorEditFlags_NoInputs())
+     if rv then SaveMixerSettings() end
+    end
+   elseif current_fader_bg_style == 4 then
+    r.ImGui_TextDisabled(ctx, "Green/Yellow/Red zones based on dB")
+   elseif current_fader_bg_style == 5 then
+    r.ImGui_TextDisabled(ctx, "LED-style segments")
+   elseif current_fader_bg_style == 6 then
+    r.ImGui_TextDisabled(ctx, "Brushed metal with horizontal lines")
+   elseif current_fader_bg_style == 7 then
+    r.ImGui_TextDisabled(ctx, "Carbon fiber weave pattern")
+   elseif current_fader_bg_style == 8 then
+    r.ImGui_TextDisabled(ctx, "Analog noise/grain texture")
+   elseif current_fader_bg_style == 9 then
+    r.ImGui_TextDisabled(ctx, "Vintage mixer grid pattern")
+   elseif current_fader_bg_style == 10 then
+    r.ImGui_TextDisabled(ctx, "Hardware mixer dB scale")
+   end
+   
+   rv, settings.simple_mixer_fader_bg_inset = r.ImGui_Checkbox(ctx, "Inset Shadow##Inset", settings.simple_mixer_fader_bg_inset or false)
+   if rv then SaveMixerSettings() end
+   r.ImGui_SameLine(ctx)
+   rv, settings.simple_mixer_fader_bg_glow = r.ImGui_Checkbox(ctx, "Edge Glow##Glow", settings.simple_mixer_fader_bg_glow or false)
+   if rv then SaveMixerSettings() end
+   if settings.simple_mixer_fader_bg_glow then
+    r.ImGui_SameLine(ctx)
+    rv, settings.simple_mixer_fader_bg_glow_color = r.ImGui_ColorEdit4(ctx, "##GlowCol", settings.simple_mixer_fader_bg_glow_color or 0x00FFFF40, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then SaveMixerSettings() end
+   end
+   
+   r.ImGui_Separator(ctx)
+   r.ImGui_Spacing(ctx)
    r.ImGui_Text(ctx, "Colors:")
    if r.ImGui_BeginTable(ctx, "ChannelColorsTable", 2, r.ImGui_TableFlags_None()) then
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
     rv, settings.simple_mixer_control_bg_color = r.ImGui_ColorEdit4(ctx, "Controls##CtrlBG", settings.simple_mixer_control_bg_color or 0x333333FF, r.ImGui_ColorEditFlags_NoInputs())
     r.ImGui_TableNextColumn(ctx)
-    rv, settings.simple_mixer_fader_bg_color = r.ImGui_ColorEdit4(ctx, "Fader BG##FdrBG", settings.simple_mixer_fader_bg_color or 0x404040FF, r.ImGui_ColorEditFlags_NoInputs())
+    rv, settings.simple_mixer_slider_handle_color = r.ImGui_ColorEdit4(ctx, "Handle##SldrH", settings.simple_mixer_slider_handle_color or 0x888888FF, r.ImGui_ColorEditFlags_NoInputs())
     
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
-    rv, settings.simple_mixer_slider_handle_color = r.ImGui_ColorEdit4(ctx, "Handle##SldrH", settings.simple_mixer_slider_handle_color or 0x888888FF, r.ImGui_ColorEditFlags_NoInputs())
-    r.ImGui_TableNextColumn(ctx)
     rv, settings.simple_mixer_icon_color = r.ImGui_ColorEdit4(ctx, "Icons##IcnClr", settings.simple_mixer_icon_color or 0xAAAAAAFF, r.ImGui_ColorEditFlags_NoInputs())
+    r.ImGui_TableNextColumn(ctx)
     
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
@@ -13340,7 +13421,7 @@ end
 
 local function DbToNormalized(db, min_db, max_db)
     min_db = min_db or -60
-    max_db = max_db or 6
+    max_db = max_db or 12
     if db <= min_db then return 0 end
     if db >= max_db then return 1 end
     return (db - min_db) / (max_db - min_db)
@@ -13352,7 +13433,7 @@ local function GetMeterColor(normalized_value)
     local color_mid = settings.simple_mixer_meter_color_mid or 0xCCFF00FF
     local color_normal = settings.simple_mixer_meter_color_normal or 0x00CC00FF
     
-    local zero_db = 60 / 66
+    local zero_db = 60 / 72
     if normalized_value >= zero_db then
         return color_clip
     elseif normalized_value > 0.75 then
@@ -13364,7 +13445,8 @@ local function GetMeterColor(normalized_value)
     end
 end
 
-local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid)
+local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_margin)
+    fader_margin = fader_margin or 0
     local data = mixer_state.meter_data[track_guid]
     if not data then
         data = { peak_L = 0, peak_R = 0, peak_L_decay = 0, peak_R_decay = 0, peak_L_hold = 0, peak_R_hold = 0, max_peak = 0 }
@@ -13377,7 +13459,7 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid)
     local segment_gap = settings.simple_mixer_meter_segment_gap or 1
     local show_ticks = settings.simple_mixer_meter_show_ticks ~= false
     
-    local peak_display_height = 14
+    local peak_display_height = fader_margin > 0 and fader_margin or 14
     local max_peak_db = PeakToDb(data.max_peak or 0)
     local is_clipping = max_peak_db >= 0
     
@@ -13401,8 +13483,8 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid)
         end
     end
     
-    local meter_y = y + peak_display_height + 2
-    local meter_height = height - peak_display_height - 2
+    local meter_y = y + peak_display_height
+    local meter_height = height - peak_display_height - fader_margin
     
     local tick_db_values = {0, -6, -12, -24, -48}
     local meter_width = math.floor(width / 2 - 1)
@@ -13502,6 +13584,278 @@ local function GetTrackIcon(ctx, track)
  end
  
  return nil
+end
+
+local function DrawFaderBackground(ctx, draw_list, x, y, width, height, rounding, track_color_rgb, fader_margin)
+ local style = settings.simple_mixer_fader_bg_style or 0
+ local inset = settings.simple_mixer_fader_bg_inset or false
+ local glow = settings.simple_mixer_fader_bg_glow or false
+ fader_margin = fader_margin or 0
+ 
+ local fader_top = y + fader_margin
+ local fader_bottom = y + height - fader_margin
+ local fader_height = height - (fader_margin * 2)
+ 
+ local top_color, bottom_color, mid_color
+ if track_color_rgb then
+  local tr, tg, tb = track_color_rgb[1], track_color_rgb[2], track_color_rgb[3]
+  local light_r = math.min(1, tr * 1.4 + 0.1)
+  local light_g = math.min(1, tg * 1.4 + 0.1)
+  local light_b = math.min(1, tb * 1.4 + 0.1)
+  local dark_r = tr * 0.3
+  local dark_g = tg * 0.3
+  local dark_b = tb * 0.3
+  top_color = r.ImGui_ColorConvertDouble4ToU32(light_r, light_g, light_b, 1.0)
+  bottom_color = r.ImGui_ColorConvertDouble4ToU32(dark_r, dark_g, dark_b, 1.0)
+  mid_color = r.ImGui_ColorConvertDouble4ToU32(tr * 0.7, tg * 0.7, tb * 0.7, 1.0)
+ else
+  top_color = settings.simple_mixer_fader_bg_gradient_top or 0x606060FF
+  bottom_color = settings.simple_mixer_fader_bg_gradient_bottom or 0x202020FF
+  mid_color = settings.simple_mixer_fader_bg_gradient_middle or 0x404040FF
+ end
+ 
+ if style == 0 then
+  if track_color_rgb then
+   local tr, tg, tb = track_color_rgb[1], track_color_rgb[2], track_color_rgb[3]
+   local bg_color = r.ImGui_ColorConvertDouble4ToU32(tr * 0.25, tg * 0.25, tb * 0.25, 1.0)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg_color, rounding)
+  else
+   local bg_color = settings.simple_mixer_fader_bg_color or 0x404040FF
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg_color, rounding)
+  end
+ elseif style == 1 then
+  if settings.simple_mixer_fader_bg_use_three_color and not track_color_rgb then
+   local mid_y = y + height * 0.5
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, y, x + width, mid_y, top_color, top_color, mid_color, mid_color)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, mid_y, x + width, y + height, mid_color, mid_color, bottom_color, bottom_color)
+  else
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, y, x + width, y + height, top_color, top_color, bottom_color, bottom_color)
+  end
+ elseif style == 2 then
+  local left_color, right_color = top_color, bottom_color
+  if settings.simple_mixer_fader_bg_use_three_color and not track_color_rgb then
+   local mid_x = x + width * 0.5
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, y, mid_x, y + height, left_color, mid_color, mid_color, left_color)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, mid_x, y, x + width, y + height, mid_color, right_color, right_color, mid_color)
+  else
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, y, x + width, y + height, left_color, right_color, right_color, left_color)
+  end
+ elseif style == 3 then
+  local outer_color, center_color = bottom_color, top_color
+  local mid_y = y + height * 0.5
+  r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, y, x + width, mid_y, outer_color, outer_color, center_color, center_color)
+  r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, mid_y, x + width, y + height, center_color, center_color, outer_color, outer_color)
+ elseif style == 4 then
+  local base_color = r.ImGui_ColorConvertDouble4ToU32(0.1, 0.1, 0.12, 1.0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, base_color, rounding)
+  if track_color_rgb then
+   local tr, tg, tb = track_color_rgb[1], track_color_rgb[2], track_color_rgb[3]
+   local red_zone = r.ImGui_ColorConvertDouble4ToU32(tr * 0.8 + 0.2, tg * 0.3, tb * 0.3, 0.7)
+   local yellow_zone = r.ImGui_ColorConvertDouble4ToU32(tr * 0.6 + 0.3, tg * 0.6 + 0.2, tb * 0.2, 0.7)
+   local orange_zone = r.ImGui_ColorConvertDouble4ToU32(tr * 0.7 + 0.2, tg * 0.4 + 0.1, tb * 0.2, 0.7)
+   local green_zone = r.ImGui_ColorConvertDouble4ToU32(tr * 0.3, tg * 0.5 + 0.2, tb * 0.3, 0.3)
+   local db_0_pos = fader_top + fader_height * (1 - (0 + 60) / 72)
+   local db_minus6_pos = fader_top + fader_height * (1 - (-6 + 60) / 72)
+   local db_minus12_pos = fader_top + fader_height * (1 - (-12 + 60) / 72)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, fader_top, x + width, db_0_pos, red_zone, 0)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, db_0_pos, x + width, db_minus6_pos, orange_zone, 0)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, db_minus6_pos, x + width, db_minus12_pos, yellow_zone, 0)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, db_minus12_pos, x + width, fader_bottom, green_zone, 0)
+  else
+   local green_zone = 0x00660040
+   local yellow_zone = 0x666600AA
+   local orange_zone = 0x664400AA
+   local red_zone = 0x660000AA
+   local db_0_pos = fader_top + fader_height * (1 - (0 + 60) / 72)
+   local db_minus6_pos = fader_top + fader_height * (1 - (-6 + 60) / 72)
+   local db_minus12_pos = fader_top + fader_height * (1 - (-12 + 60) / 72)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, fader_top, x + width, db_0_pos, red_zone, 0)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, db_0_pos, x + width, db_minus6_pos, orange_zone, 0)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, db_minus6_pos, x + width, db_minus12_pos, yellow_zone, 0)
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, db_minus12_pos, x + width, fader_bottom, green_zone, 0)
+  end
+ elseif style == 5 then
+  local segment_count = 24
+  local segment_height = height / segment_count
+  local gap = 1
+  for i = 0, segment_count - 1 do
+   local seg_y = y + i * segment_height
+   local seg_h = segment_height - gap
+   local seg_color
+   if track_color_rgb then
+    local tr, tg, tb = track_color_rgb[1], track_color_rgb[2], track_color_rgb[3]
+    local brightness = 0.15 + (segment_count - 1 - i) * 0.02
+    seg_color = r.ImGui_ColorConvertDouble4ToU32(tr * brightness, tg * brightness, tb * brightness, 1.0)
+    if i < 3 then
+     seg_color = r.ImGui_ColorConvertDouble4ToU32(tr * 0.5 + 0.3, tg * 0.2, tb * 0.2, 1.0)
+    elseif i < 8 then
+     seg_color = r.ImGui_ColorConvertDouble4ToU32(tr * 0.5 + 0.2, tg * 0.4 + 0.1, tb * 0.2, 1.0)
+    end
+   else
+    local brightness = 0.15 + (segment_count - 1 - i) * 0.01
+    seg_color = r.ImGui_ColorConvertDouble4ToU32(brightness * 0.3, brightness * 0.3, brightness * 0.3, 1.0)
+    if i < 3 then
+     seg_color = r.ImGui_ColorConvertDouble4ToU32(0.3, 0.05, 0.05, 1.0)
+    elseif i < 8 then
+     seg_color = r.ImGui_ColorConvertDouble4ToU32(0.3, 0.2, 0.05, 1.0)
+    end
+   end
+   r.ImGui_DrawList_AddRectFilled(draw_list, x, seg_y, x + width, seg_y + seg_h, seg_color, 0)
+  end
+ elseif style == 6 then
+  local base_r, base_g, base_b = 0.35, 0.37, 0.4
+  if track_color_rgb then
+   base_r, base_g, base_b = track_color_rgb[1] * 0.5, track_color_rgb[2] * 0.5, track_color_rgb[3] * 0.5
+  end
+  local base_color = r.ImGui_ColorConvertDouble4ToU32(base_r, base_g, base_b, 1.0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, base_color, rounding)
+  local line_spacing = 2
+  for ly = y, y + height, line_spacing do
+   local line_offset = ((ly - y) % 4) / 4
+   local light = r.ImGui_ColorConvertDouble4ToU32(base_r + 0.08, base_g + 0.08, base_b + 0.08, 0.6 - line_offset * 0.3)
+   local dark = r.ImGui_ColorConvertDouble4ToU32(base_r - 0.05, base_g - 0.05, base_b - 0.05, 0.4 + line_offset * 0.2)
+   r.ImGui_DrawList_AddLine(draw_list, x, ly, x + width, ly, light, 1)
+   if ly + 1 < y + height then
+    r.ImGui_DrawList_AddLine(draw_list, x, ly + 1, x + width, ly + 1, dark, 1)
+   end
+  end
+  r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, y, x + width, y + 8, 0xFFFFFF18, 0xFFFFFF18, 0x00000000, 0x00000000)
+  r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, y + height - 8, x + width, y + height, 0x00000000, 0x00000000, 0x00000018, 0x00000018)
+ elseif style == 7 then
+  local base_r, base_g, base_b = 0.12, 0.12, 0.14
+  if track_color_rgb then
+   base_r = 0.08 + track_color_rgb[1] * 0.15
+   base_g = 0.08 + track_color_rgb[2] * 0.15
+   base_b = 0.08 + track_color_rgb[3] * 0.15
+  end
+  local base_color = r.ImGui_ColorConvertDouble4ToU32(base_r, base_g, base_b, 1.0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, base_color, rounding)
+  local weave_size = 4
+  for wy = 0, height, weave_size * 2 do
+   for wx = 0, width, weave_size * 2 do
+    local px, py = x + wx, y + wy
+    local highlight = r.ImGui_ColorConvertDouble4ToU32(base_r + 0.06, base_g + 0.06, base_b + 0.08, 0.8)
+    local shadow = r.ImGui_ColorConvertDouble4ToU32(base_r - 0.03, base_g - 0.03, base_b - 0.02, 0.6)
+    if px + weave_size <= x + width and py + weave_size <= y + height then
+     r.ImGui_DrawList_AddRectFilled(draw_list, px, py, px + weave_size, py + weave_size, highlight, 0)
+    end
+    if px + weave_size * 2 <= x + width and py + weave_size <= y + height then
+     r.ImGui_DrawList_AddRectFilled(draw_list, px + weave_size, py, px + weave_size * 2, py + weave_size, shadow, 0)
+    end
+    if px + weave_size <= x + width and py + weave_size * 2 <= y + height then
+     r.ImGui_DrawList_AddRectFilled(draw_list, px, py + weave_size, px + weave_size, py + weave_size * 2, shadow, 0)
+    end
+    if px + weave_size * 2 <= x + width and py + weave_size * 2 <= y + height then
+     r.ImGui_DrawList_AddRectFilled(draw_list, px + weave_size, py + weave_size, px + weave_size * 2, py + weave_size * 2, highlight, 0)
+    end
+   end
+  end
+ elseif style == 8 then
+  local base_r, base_g, base_b = 0.22, 0.20, 0.18
+  if track_color_rgb then
+   base_r = track_color_rgb[1] * 0.4 + 0.1
+   base_g = track_color_rgb[2] * 0.4 + 0.1
+   base_b = track_color_rgb[3] * 0.4 + 0.1
+  end
+  local base_color = r.ImGui_ColorConvertDouble4ToU32(base_r, base_g, base_b, 1.0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, base_color, rounding)
+  local seed = math.floor(x * 100 + y * 10)
+  for i = 0, math.floor(width * height / 8) do
+   local px = x + ((seed + i * 7) % math.floor(width))
+   local py = y + ((seed + i * 13) % math.floor(height))
+   local noise_val = ((seed + i * 17) % 100) / 100
+   local noise_color
+   if noise_val > 0.5 then
+    noise_color = r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, (noise_val - 0.5) * 0.15)
+   else
+    noise_color = r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, (0.5 - noise_val) * 0.2)
+   end
+   r.ImGui_DrawList_AddRectFilled(draw_list, px, py, px + 1, py + 1, noise_color, 0)
+  end
+  r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, x, y, x + width, y + height * 0.3, 0xFFFFFF08, 0xFFFFFF08, 0x00000000, 0x00000000)
+ elseif style == 9 then
+  local base_r, base_g, base_b = 0.15, 0.15, 0.17
+  if track_color_rgb then
+   base_r = track_color_rgb[1] * 0.3 + 0.08
+   base_g = track_color_rgb[2] * 0.3 + 0.08
+   base_b = track_color_rgb[3] * 0.3 + 0.08
+  end
+  local base_color = r.ImGui_ColorConvertDouble4ToU32(base_r, base_g, base_b, 1.0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, base_color, rounding)
+  local grid_size = 6
+  local grid_color = r.ImGui_ColorConvertDouble4ToU32(base_r + 0.08, base_g + 0.08, base_b + 0.1, 0.5)
+  local grid_highlight = r.ImGui_ColorConvertDouble4ToU32(base_r + 0.15, base_g + 0.15, base_b + 0.18, 0.3)
+  for gx = x, x + width, grid_size do
+   r.ImGui_DrawList_AddLine(draw_list, gx, y, gx, y + height, grid_color, 1)
+  end
+  for gy = y, y + height, grid_size do
+   r.ImGui_DrawList_AddLine(draw_list, x, gy, x + width, gy, grid_color, 1)
+  end
+  for gy = y, y + height, grid_size * 4 do
+   r.ImGui_DrawList_AddLine(draw_list, x, gy, x + width, gy, grid_highlight, 1)
+  end
+ elseif style == 10 then
+  local base_r, base_g, base_b = 0.08, 0.08, 0.10
+  if track_color_rgb then
+   base_r = track_color_rgb[1] * 0.15 + 0.05
+   base_g = track_color_rgb[2] * 0.15 + 0.05
+   base_b = track_color_rgb[3] * 0.15 + 0.05
+  end
+  local base_color = r.ImGui_ColorConvertDouble4ToU32(base_r, base_g, base_b, 1.0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, base_color, rounding)
+  local db_marks = {12, 6, 3, 0, -3, -6, -9, -12, -18, -24, -30, -40, -50, -60}
+  local major_marks = {12, 0, -12, -24, -60}
+  local text_color = 0xAAAAAAFF
+  local tick_color = 0x666666FF
+  local major_tick_color = 0x888888FF
+  if track_color_rgb then
+   local tr, tg, tb = track_color_rgb[1], track_color_rgb[2], track_color_rgb[3]
+   text_color = r.ImGui_ColorConvertDouble4ToU32(tr * 0.6 + 0.4, tg * 0.6 + 0.4, tb * 0.6 + 0.4, 0.9)
+   tick_color = r.ImGui_ColorConvertDouble4ToU32(tr * 0.4 + 0.2, tg * 0.4 + 0.2, tb * 0.4 + 0.2, 0.8)
+   major_tick_color = r.ImGui_ColorConvertDouble4ToU32(tr * 0.5 + 0.3, tg * 0.5 + 0.3, tb * 0.5 + 0.3, 1.0)
+  end
+  for _, db in ipairs(db_marks) do
+   local normalized = (db + 60) / 72
+   local mark_y = fader_bottom - (fader_height * normalized)
+   local is_major = false
+   for _, major in ipairs(major_marks) do
+    if db == major then is_major = true break end
+   end
+   if is_major then
+    r.ImGui_DrawList_AddLine(draw_list, x, mark_y, x + width * 0.4, mark_y, major_tick_color, 1)
+    r.ImGui_DrawList_AddLine(draw_list, x + width * 0.6, mark_y, x + width, mark_y, major_tick_color, 1)
+   else
+    r.ImGui_DrawList_AddLine(draw_list, x, mark_y, x + width * 0.25, mark_y, tick_color, 1)
+    r.ImGui_DrawList_AddLine(draw_list, x + width * 0.75, mark_y, x + width, mark_y, tick_color, 1)
+   end
+  end
+  local zone_0db = fader_bottom - (fader_height * (60 / 72))
+  local zone_minus12 = fader_bottom - (fader_height * (48 / 72))
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, fader_top, x + 2, zone_0db, 0xFF000030, 0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, zone_0db, x + 2, zone_minus12, 0xFFFF0020, 0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, zone_minus12, x + 2, fader_bottom, 0x00FF0015, 0)
+ end
+ 
+ if inset then
+  local shadow_color = 0x00000088
+  local highlight_color = 0xFFFFFF22
+  r.ImGui_DrawList_AddLine(draw_list, x, y, x + width, y, shadow_color, 2)
+  r.ImGui_DrawList_AddLine(draw_list, x, y, x, y + height, shadow_color, 2)
+  r.ImGui_DrawList_AddLine(draw_list, x + width, y, x + width, y + height, highlight_color, 1)
+  r.ImGui_DrawList_AddLine(draw_list, x, y + height, x + width, y + height, highlight_color, 1)
+ end
+ 
+ if glow then
+  local glow_color = settings.simple_mixer_fader_bg_glow_color or 0x00FFFF40
+  if track_color_rgb then
+   local tr, tg, tb = track_color_rgb[1], track_color_rgb[2], track_color_rgb[3]
+   glow_color = r.ImGui_ColorConvertDouble4ToU32(tr, tg, tb, 0.4)
+  end
+  r.ImGui_DrawList_AddRect(draw_list, x - 1, y - 1, x + width + 1, y + height + 1, glow_color, rounding, 0, 2)
+  local glow_r, glow_g, glow_b, _ = r.ImGui_ColorConvertU32ToDouble4(glow_color)
+  local outer_glow = r.ImGui_ColorConvertDouble4ToU32(glow_r, glow_g, glow_b, 0.15)
+  r.ImGui_DrawList_AddRect(draw_list, x - 2, y - 2, x + width + 2, y + height + 2, outer_glow, rounding, 0, 1)
+ end
 end
 
 local function DrawTrackIcon(ctx, draw_list, track, x, y, width, height, opacity)
@@ -14536,10 +14890,11 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     b_val = math.min(255, b_val + (255 - b_val) * 0.5)
    end
    
+   local fader_bg_style = settings.simple_mixer_fader_bg_style or 0
    local imgui_color_full = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
-   local imgui_color_bg = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.25)
-   local imgui_color_hover = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.38)
-   local imgui_color_active = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.5)
+   local imgui_color_bg = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.25)
+   local imgui_color_hover = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.38)
+   local imgui_color_active = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.5)
    local imgui_color_grab_active = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.87)
    
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), imgui_color_bg)
@@ -14556,7 +14911,8 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x8AD0FFFF)
    slider_color_pushed = true
   else
-   local fader_bg = settings.simple_mixer_fader_bg_color or 0x404040FF
+   local fader_bg_style = settings.simple_mixer_fader_bg_style or 0
+   local fader_bg = (fader_bg_style > 0) and 0x00000000 or (settings.simple_mixer_fader_bg_color or 0x404040FF)
    local handle_col = settings.simple_mixer_slider_handle_color or 0x888888FF
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), fader_bg)
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), fader_bg)
@@ -14573,7 +14929,8 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x8AD0FFFF)
   slider_color_pushed = true
  else
-  local fader_bg = settings.simple_mixer_fader_bg_color or 0x404040FF
+  local fader_bg_style = settings.simple_mixer_fader_bg_style or 0
+  local fader_bg = (fader_bg_style > 0) and 0x00000000 or (settings.simple_mixer_fader_bg_color or 0x404040FF)
   local handle_col = settings.simple_mixer_slider_handle_color or 0x888888FF
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), fader_bg)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), fader_bg)
@@ -14590,6 +14947,21 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  local slider_actual_width = show_meters and (track_width - fixed_meter_width - 2) or track_width
  local meter_width = show_meters and fixed_meter_width or 0
  local fader_margin = 20
+ 
+ local fader_bg_style = settings.simple_mixer_fader_bg_style or 0
+ local track_color_native = r.GetTrackColor(track)
+ local track_has_color = track_color_native ~= 0
+ local use_custom_fader_bg = fader_bg_style > 0 and not is_master
+ if use_custom_fader_bg then
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local rounding = settings.simple_mixer_channel_rounding or 0
+  local track_color_rgb = nil
+  if settings.simple_mixer_use_track_color and track_has_color then
+   local r_val, g_val, b_val = r.ColorFromNative(track_color_native)
+   track_color_rgb = {r_val/255, g_val/255, b_val/255}
+  end
+  DrawFaderBackground(ctx, draw_list, slider_start_x, slider_start_y, slider_actual_width, slider_height, rounding, track_color_rgb, fader_margin)
+ end
  
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.simple_mixer_channel_text_color or 0xFFFFFFFF)
  r.ImGui_PushItemWidth(ctx, slider_actual_width)
@@ -14827,7 +15199,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local meter_x = slider_start_x + slider_actual_width + 2
   local meter_y = slider_start_y
   local meter_height = slider_height
-  local meter_data = DrawMeter(ctx, draw_list, meter_x, meter_y, meter_width, meter_height, track_guid_for_fx)
+  local meter_data = DrawMeter(ctx, draw_list, meter_x, meter_y, meter_width, meter_height, track_guid_for_fx, fader_margin)
   
   local peak_L_db = PeakToDb(meter_data.peak_L_decay)
   local peak_R_db = PeakToDb(meter_data.peak_R_decay)
