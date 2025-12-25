@@ -1,6 +1,6 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.5
+-- @version 2.6
 -- @changelog:
 --   + added: Compact mode settings split into tabs (General / Display)
 --   + added: Icon size slider with proportional scaling
@@ -14,7 +14,7 @@
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "2.3"
+local SCRIPT_VERSION = "2.6"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -1751,7 +1751,8 @@ local function GetTrackTCPBounds(track, use_ctx)
         w = conv_w,
         h = conv_h,
         tcp_x = conv_main_x,
-        tcp_w = conv_tcp_total
+        tcp_w = conv_tcp_total,
+        tcp_left = conv_x - conv_tcp_total
     }
 end
 
@@ -1807,11 +1808,11 @@ local function DrawCompactWidget()
     local widget_x, widget_y
     
     if config.compact_lock_position and config.compact_locked_x and config.compact_locked_y then
-        widget_x = bounds.tcp_x + config.compact_locked_x
+        widget_x = bounds.x + bounds.w + config.compact_locked_x
         widget_y = bounds.y + config.compact_locked_y
     else
         widget_x = bounds.x + bounds.w + (config.compact_offset_x or 2)
-        widget_y = bounds.y + (bounds.h - icon_size) / 2 + (config.compact_offset_y or 0)
+        widget_y = bounds.y + (config.compact_offset_y or 2)
     end
     
     r.ImGui_SetNextWindowPos(compact_ctx, widget_x, widget_y, r.ImGui_Cond_Always())
@@ -2512,10 +2513,8 @@ local function DrawSettingsUI()
                         if lock_val then
                             local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
                             if bounds then
-                                local current_x = bounds.x + bounds.w + (config.compact_offset_x or 2)
-                                local current_y = bounds.y + (bounds.h - (config.compact_icon_size or 28)) / 2 + (config.compact_offset_y or 0)
-                                config.compact_locked_x = current_x - bounds.tcp_x
-                                config.compact_locked_y = current_y - bounds.y
+                                config.compact_locked_x = config.compact_offset_x or 2
+                                config.compact_locked_y = config.compact_offset_y or 2
                             end
                         else
                             config.compact_locked_x = nil
