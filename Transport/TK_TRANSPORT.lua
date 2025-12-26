@@ -1,8 +1,12 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.6
+-- @version 1.8.7
 -- @changelog 
 --[[
+  v1.8.7:
+  + Added: Option to hide TCP icons while keeping TK mixer icons visible (sync restores when re-enabled)
+  + Added: Divider menu option to toggle tracks until the next divider
+
   v1.8.6:
   + Added: Fader Background Styles - 11 visual styles for fader backgrounds
   + Added: Track color integration - All fader background styles work with track colors
@@ -185,6 +189,7 @@ local preset_path = script_path .. "tk_transport_presets" .. os_separator
 local mixer_settings_path = script_path .. "tk_transport_mixer" .. os_separator
 local preset_name = ""
 local transport_preset_has_unsaved_changes = false
+local ApplyTcpIconVisibility
 
 
 local CustomButtons = require('custom_buttons')
@@ -197,6 +202,7 @@ local mixer_state = {
     editing_track_name = "",
     collapsed_folders = {},
     hidden_dividers = {},
+    hidden_track_guids = {},
     fx_handle_clicked = false,
     track_fx_heights = {},
     fx_sync_resize = false,
@@ -699,8 +705,9 @@ local default_settings = {
  simple_mixer_channel_rounding = 0,
  simple_mixer_show_folder_groups = false,
  simple_mixer_show_pinned_first = false,
- simple_mixer_show_track_icons = true,
- simple_mixer_track_icon_position = "overlay",
+  simple_mixer_show_track_icons = true,
+  simple_mixer_hide_tcp_icons = false,
+  simple_mixer_track_icon_position = "overlay",
  simple_mixer_track_icon_section_height = 40,
  simple_mixer_track_icon_section_bg = true,
  simple_mixer_track_icon_opacity = 0.3,
@@ -2867,11 +2874,22 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
     rv, settings.simple_mixer_show_track_icons = r.ImGui_Checkbox(ctx, "Show Track Icons", settings.simple_mixer_show_track_icons)
     if settings.simple_mixer_show_track_icons == nil then settings.simple_mixer_show_track_icons = true end
     r.ImGui_TableNextColumn(ctx)
-    if r.ImGui_IsItemHovered(ctx) then
-     r.ImGui_SetTooltip(ctx, "Display track icons as background in the volume slider. Set icons via right-click menu.")
-    end
-    
-    if settings.simple_mixer_show_track_icons then
+      if r.ImGui_IsItemHovered(ctx) then
+       r.ImGui_SetTooltip(ctx, "Display track icons as background in the volume slider. Set icons via right-click menu.")
+      end
+
+      r.ImGui_TableNextRow(ctx)
+      r.ImGui_TableNextColumn(ctx)
+      rv, settings.simple_mixer_hide_tcp_icons = r.ImGui_Checkbox(ctx, "Hide TCP Icons", settings.simple_mixer_hide_tcp_icons or false)
+      if rv then
+       ApplyTcpIconVisibility()
+      end
+      r.ImGui_TableNextColumn(ctx)
+      if r.ImGui_IsItemHovered(ctx) then
+       r.ImGui_SetTooltip(ctx, "Hide REAPER TCP icons but keep them visible in the TK mixer.")
+      end
+      
+      if settings.simple_mixer_show_track_icons then
      r.ImGui_TableNextRow(ctx)
      r.ImGui_TableNextColumn(ctx)
      r.ImGui_Text(ctx, "Icon Display:")
@@ -10689,6 +10707,43 @@ function SaveProjectMixerTracks(tracks)
  r.SetExtState("TK_TRANSPORT", key, tracks_json, true)
 end
 
+function GetProjectMixerHiddenTracks()
+ local project_file = r.GetProjectPath("")
+ if project_file == "" then return {} end
+ 
+ local key = "simple_mixer_hidden_tracks_" .. project_file
+ local hidden_json = r.GetExtState("TK_TRANSPORT", key)
+ 
+ local hidden = {}
+ if hidden_json and hidden_json ~= "" then
+  local success, list = pcall(function() return json.decode(hidden_json) end)
+  if success and type(list) == "table" then
+   for _, guid in ipairs(list) do
+    if type(guid) == "string" then
+     hidden[guid] = true
+    end
+   end
+  end
+ end
+ 
+ return hidden
+end
+
+function SaveProjectMixerHiddenTracks(hidden)
+ local project_file = r.GetProjectPath("")
+ if project_file == "" then return end
+ 
+ local key = "simple_mixer_hidden_tracks_" .. project_file
+ local list = {}
+ for guid, is_hidden in pairs(hidden or {}) do
+  if is_hidden and type(guid) == "string" then
+   list[#list + 1] = guid
+  end
+ end
+ table.sort(list)
+ r.SetExtState("TK_TRANSPORT", key, json.encode(list), true)
+end
+
 function GetProjectMixerPresets()
  local project_file = r.GetProjectPath("")
  if project_file == "" then return {} end
@@ -13548,18 +13603,89 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
     return data
 end
 
-local function GetTrackIcon(ctx, track)
- local track_guid = r.GetTrackGUID(track)
- 
- local _, icon_path = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
- 
- if not icon_path or icon_path == "" then
-  if mixer_state.track_icon_cache[track_guid] then
-   mixer_state.track_icon_cache[track_guid] = nil
-   mixer_state.track_icon_paths[track_guid] = nil
+  local TCP_ICON_EXT_KEY = "TK_TCP_ICON_HIDDEN"
+  
+  local function ClearTrackIconCache(track)
+   local track_guid = r.GetTrackGUID(track)
+   if track_guid and mixer_state.track_icon_cache[track_guid] then
+    mixer_state.track_icon_cache[track_guid] = nil
+    mixer_state.track_icon_paths[track_guid] = nil
+   end
   end
-  return nil
- end
+  
+  ApplyTcpIconVisibility = function()
+   local function process_track(track)
+    local _, icon_path = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
+    if settings.simple_mixer_hide_tcp_icons then
+     if icon_path and icon_path ~= "" then
+      r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, icon_path, true)
+      r.GetSetMediaTrackInfo_String(track, "P_ICON", "", true)
+     end
+    else
+     local _, stored = r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", false)
+     if stored and stored ~= "" then
+      r.GetSetMediaTrackInfo_String(track, "P_ICON", stored, true)
+      r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", true)
+     end
+    end
+    ClearTrackIconCache(track)
+   end
+   
+   local track_count = r.CountTracks(0)
+   for i = 0, track_count - 1 do
+    process_track(r.GetTrack(0, i))
+   end
+   local master = r.GetMasterTrack(0)
+   if master then
+    process_track(master)
+   end
+   
+   r.TrackList_AdjustWindows(false)
+   r.UpdateArrange()
+  end
+  
+  local function GetMixerIconPath(track)
+   local _, icon_path = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
+   
+   if settings.simple_mixer_hide_tcp_icons then
+    if icon_path and icon_path ~= "" then
+     r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, icon_path, true)
+     r.GetSetMediaTrackInfo_String(track, "P_ICON", "", true)
+     icon_path = ""
+    end
+    
+    local _, stored = r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", false)
+    if stored and stored ~= "" then
+     return stored
+    end
+    return nil
+   end
+   
+   if icon_path == "" then
+    local _, stored = r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", false)
+    if stored and stored ~= "" then
+     r.GetSetMediaTrackInfo_String(track, "P_ICON", stored, true)
+     r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", true)
+     icon_path = stored
+    end
+   else
+    local _, stored = r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", false)
+    if stored and stored ~= "" then
+     r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", true)
+    end
+   end
+   
+   return icon_path ~= "" and icon_path or nil
+  end
+  
+  local function GetTrackIcon(ctx, track)
+   local track_guid = r.GetTrackGUID(track)
+   local icon_path = GetMixerIconPath(track)
+   
+   if not icon_path then
+    ClearTrackIconCache(track)
+    return nil
+   end
  
  if mixer_state.track_icon_paths[track_guid] == icon_path and mixer_state.track_icon_cache[track_guid] then
   if r.ImGui_ValidatePtr(mixer_state.track_icon_cache[track_guid], 'ImGui_Image*') then
@@ -15521,9 +15647,9 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     r.SetMediaTrackInfo_Value(track, "B_MCPPIN", new_val)
    end
    
-   if r.ImGui_BeginMenu(ctx, "Track Icon") then
-    local _, current_icon = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
-    local has_icon = current_icon and current_icon ~= ""
+     if r.ImGui_BeginMenu(ctx, "Track Icon") then
+      local current_icon = GetMixerIconPath(track)
+      local has_icon = current_icon ~= nil and current_icon ~= ""
     
     if r.ImGui_MenuItem(ctx, "Track Icons...") then
      mixer_state.icon_target_track = track
@@ -15543,19 +15669,20 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
      IconBrowser.show_window = true
     end
     
-    if has_icon then
-     r.ImGui_Separator(ctx)
-     if r.ImGui_MenuItem(ctx, "Remove Icon") then
-      r.GetSetMediaTrackInfo_String(track, "P_ICON", "", true)
-      local track_guid = r.GetTrackGUID(track)
-      if mixer_state.track_icon_cache[track_guid] then
-       mixer_state.track_icon_cache[track_guid] = nil
-       mixer_state.track_icon_paths[track_guid] = nil
+      if has_icon then
+       r.ImGui_Separator(ctx)
+       if r.ImGui_MenuItem(ctx, "Remove Icon") then
+        if settings.simple_mixer_hide_tcp_icons then
+         r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", true)
+         r.GetSetMediaTrackInfo_String(track, "P_ICON", "", true)
+        else
+         r.GetSetMediaTrackInfo_String(track, "P_ICON", "", true)
+        end
+        ClearTrackIconCache(track)
+       end
       end
+      r.ImGui_EndMenu(ctx)
      end
-    end
-    r.ImGui_EndMenu(ctx)
-   end
   end
   
   r.ImGui_EndPopup(ctx)
@@ -16712,6 +16839,8 @@ function DrawSimpleMixerWindow()
  local mixer_ctx = ctx
  
  local project_mixer_tracks = GetProjectMixerTracks()
+
+ mixer_state.hidden_track_guids = GetProjectMixerHiddenTracks()
  
  if settings.simple_mixer_auto_all then
   local visible_guids = {}
@@ -16721,7 +16850,10 @@ function DrawSimpleMixerWindow()
    local is_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
    if is_visible then
     local guid = r.GetTrackGUID(track)
-    visible_guids[guid] = i
+    local spacer = r.GetMediaTrackInfo_Value(track, "I_SPACER")
+    if not mixer_state.hidden_track_guids[guid] or spacer > 0 then
+     visible_guids[guid] = i
+    end
    end
   end
   
@@ -16942,6 +17074,96 @@ function DrawSimpleMixerWindow()
  
  local track_positions = {}
  local child_start_x, child_start_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
+  local function ToggleTracksAfterDivider(divider_track, project_mixer_tracks)
+   if not divider_track then return end
+     mixer_state.hidden_track_guids = mixer_state.hidden_track_guids or GetProjectMixerHiddenTracks()
+   
+    local divider_num = r.GetMediaTrackInfo_Value(divider_track, "IP_TRACKNUMBER")
+   if not divider_num or divider_num < 1 then return end
+    local divider_guid = r.GetTrackGUID(divider_track)
+   
+   local num_tracks = r.CountTracks(0)
+   local range_guids = {}
+    if divider_guid and divider_guid ~= "" then
+     table.insert(range_guids, divider_guid)
+    end
+   for i = divider_num, num_tracks - 1 do
+    local tr = r.GetTrack(0, i)
+    if not tr then break end
+    if r.GetMediaTrackInfo_Value(tr, "I_SPACER") > 0 then break end
+    table.insert(range_guids, r.GetTrackGUID(tr))
+   end
+   
+   if #range_guids == 0 then return end
+   
+   local visible = {}
+   for _, guid in ipairs(project_mixer_tracks) do
+        if not mixer_state.hidden_track_guids[guid] then
+         visible[guid] = true
+        end
+   end
+   
+   local any_visible = false
+   for _, guid in ipairs(range_guids) do
+    if visible[guid] then
+     any_visible = true
+     break
+    end
+   end
+   
+   if any_visible then
+    for _, guid in ipairs(range_guids) do
+     visible[guid] = nil
+         mixer_state.hidden_track_guids[guid] = true
+    end
+   else
+    for _, guid in ipairs(range_guids) do
+     visible[guid] = true
+         mixer_state.hidden_track_guids[guid] = nil
+    end
+   end
+
+     SaveProjectMixerHiddenTracks(mixer_state.hidden_track_guids)
+
+    if settings.simple_mixer_auto_all then
+     if any_visible then
+      for i = #project_mixer_tracks, 1, -1 do
+        local guid = project_mixer_tracks[i]
+        if mixer_state.hidden_track_guids[guid] then
+         local tr = r.BR_GetMediaTrackByGUID(0, guid)
+         local spacer = tr and r.GetMediaTrackInfo_Value(tr, "I_SPACER") or 0
+         if spacer <= 0 then
+          table.remove(project_mixer_tracks, i)
+         end
+        end
+      end
+      SaveProjectMixerTracks(project_mixer_tracks)
+     end
+     return
+    end
+   
+   local new_list = {}
+   for i = 0, num_tracks - 1 do
+    local tr = r.GetTrack(0, i)
+    if tr then
+     local guid = r.GetTrackGUID(tr)
+         local spacer = r.GetMediaTrackInfo_Value(tr, "I_SPACER")
+         if visible[guid] or (mixer_state.hidden_track_guids[guid] and spacer > 0) then
+      table.insert(new_list, guid)
+     end
+    end
+   end
+   
+   for i = #project_mixer_tracks, 1, -1 do
+    table.remove(project_mixer_tracks, i)
+   end
+   for _, guid in ipairs(new_list) do
+    table.insert(project_mixer_tracks, guid)
+   end
+   
+   SaveProjectMixerTracks(project_mixer_tracks)
+  end
+
 
  local sorted_tracks = {}
  for idx, track_guid in ipairs(project_mixer_tracks) do
@@ -17182,6 +17404,9 @@ function DrawSimpleMixerWindow()
      mixer_state.editing_divider_guid = track_guid
      mixer_state.editing_divider_name = divider_text
     end
+    if r.ImGui_MenuItem(mixer_ctx, "Toggle Tracks After Divider") then
+     ToggleTracksAfterDivider(track, project_mixer_tracks)
+    end
     if r.ImGui_MenuItem(mixer_ctx, "Hide Divider") then
      mixer_state.hidden_dividers[track_guid] = true
     end
@@ -17212,6 +17437,9 @@ function DrawSimpleMixerWindow()
     end
    end
    if r.ImGui_BeginPopup(mixer_ctx, "DividerLineContextMenu##" .. track_guid) then
+    if r.ImGui_MenuItem(mixer_ctx, "Toggle Tracks After Divider") then
+     ToggleTracksAfterDivider(track, project_mixer_tracks)
+    end
     if r.ImGui_MenuItem(mixer_ctx, "Hide Divider") then
      mixer_state.hidden_dividers[track_guid] = true
     end
@@ -17226,6 +17454,13 @@ function DrawSimpleMixerWindow()
    end
   end
   r.ImGui_SameLine(mixer_ctx)
+
+    if mixer_state.hidden_track_guids and mixer_state.hidden_track_guids[track_guid] and track_spacer > 0 then
+     local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
+     track_positions[idx] = {x = cursor_x, y = cursor_y}
+     r.ImGui_SameLine(mixer_ctx)
+     goto continue_track_loop
+    end
  end
  
  local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
@@ -17533,14 +17768,16 @@ function DrawSimpleMixerWindow()
     icon_path = selected_icon
    end
    
-   if icon_path and r.ValidatePtr(mixer_state.icon_target_track, "MediaTrack*") then
-    r.GetSetMediaTrackInfo_String(mixer_state.icon_target_track, "P_ICON", icon_path, true)
-    local track_guid = r.GetTrackGUID(mixer_state.icon_target_track)
-    if mixer_state.track_icon_cache[track_guid] then
-     mixer_state.track_icon_cache[track_guid] = nil
-     mixer_state.track_icon_paths[track_guid] = nil
-    end
-   end
+     if icon_path and r.ValidatePtr(mixer_state.icon_target_track, "MediaTrack*") then
+      if settings.simple_mixer_hide_tcp_icons then
+       r.GetSetMediaTrackInfo_String(mixer_state.icon_target_track, "P_EXT:" .. TCP_ICON_EXT_KEY, icon_path, true)
+       r.GetSetMediaTrackInfo_String(mixer_state.icon_target_track, "P_ICON", "", true)
+      else
+       r.GetSetMediaTrackInfo_String(mixer_state.icon_target_track, "P_ICON", icon_path, true)
+       r.GetSetMediaTrackInfo_String(mixer_state.icon_target_track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", true)
+      end
+      ClearTrackIconCache(mixer_state.icon_target_track)
+     end
    
    IconBrowser.selected_icon = nil
    IconBrowser.selected_image_path = nil
@@ -21629,6 +21866,4 @@ function Main()
 end
 
 r.defer(Main)
-
-
 
