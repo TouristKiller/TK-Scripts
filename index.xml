@@ -206,7 +206,7 @@
     </reapack>
 
     <reapack name="TK_IndestructibleTrack.lua" type="script" desc="TK Indestructible Track">
-    <version name="2.6" author="TouristKiller" time="2025-12-25T23:20:00Z">
+    <version name="2.7" author="TouristKiller" time="2025-12-27T00:20:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack.lua</source>
     <source file="ISHIELD.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/ISHIELD.png</source>
     <changelog><![CDATA[

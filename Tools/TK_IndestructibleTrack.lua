@@ -1,20 +1,14 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.6
+-- @version 2.7
 -- @changelog:
---   + added: Compact mode settings split into tabs (General / Display)
---   + added: Icon size slider with proportional scaling
---   + added: X/Y offset sliders with +/- buttons for precise positioning
---   + added: Show preview checkbox for live positioning
---   + added: Lock position option to lock widget position within TCP
---   + added: Icon only mode
---   + added: No background mode
---   + improved: Full TCP width range for X offset
+--   + fixed: X position now stays fixed when widening/resizing track
+--   + X offset is now relative to TCP left edge instead of track width
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "2.6"
+local SCRIPT_VERSION = "2.7"
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -1752,7 +1746,7 @@ local function GetTrackTCPBounds(track, use_ctx)
         h = conv_h,
         tcp_x = conv_main_x,
         tcp_w = conv_tcp_total,
-        tcp_left = conv_x - conv_tcp_total
+        tcp_left = conv_main_x
     }
 end
 
@@ -1807,13 +1801,16 @@ local function DrawCompactWidget()
     
     local widget_x, widget_y
     
-    if config.compact_lock_position and config.compact_locked_x and config.compact_locked_y then
-        widget_x = bounds.x + bounds.w + config.compact_locked_x
-        widget_y = bounds.y + config.compact_locked_y
+    if config.compact_lock_position and config.compact_locked_x then
+        widget_x = config.compact_locked_x
+        widget_y = bounds.y + (config.compact_locked_y or 0)
     else
-        widget_x = bounds.x + bounds.w + (config.compact_offset_x or 2)
+        widget_x = bounds.x + (config.compact_offset_x or 2)
         widget_y = bounds.y + (config.compact_offset_y or 2)
     end
+    
+    if widget_x < 0 then widget_x = 0 end
+    if widget_y < 0 then widget_y = 0 end
     
     r.ImGui_SetNextWindowPos(compact_ctx, widget_x, widget_y, r.ImGui_Cond_Always())
     
@@ -2454,7 +2451,7 @@ local function DrawSettingsUI()
                     if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
                         local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
                         if bounds then 
-                            full_tcp_width = bounds.w + (bounds.tcp_w or 0)
+                            full_tcp_width = bounds.tcp_w or 200
                         end
                     end
                     local max_offset = GetArrangeWidth(ctx) - 150
@@ -2506,15 +2503,15 @@ local function DrawSettingsUI()
                     r.ImGui_Spacing(ctx)
                     local lock_changed, lock_val = r.ImGui_Checkbox(ctx, "Lock position", config.compact_lock_position)
                     if r.ImGui_IsItemHovered(ctx) then
-                        r.ImGui_SetTooltip(ctx, "Lock current position absolutely within TCP")
+                        r.ImGui_SetTooltip(ctx, "Lock current X position (won't move when resizing TCP)")
                     end
                     if lock_changed then
                         config.compact_lock_position = lock_val
                         if lock_val then
                             local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
                             if bounds then
-                                config.compact_locked_x = config.compact_offset_x or 2
-                                config.compact_locked_y = config.compact_offset_y or 2
+                                config.compact_locked_x = bounds.x + (config.compact_offset_x or 2)
+                                config.compact_locked_y = config.compact_offset_y or 0
                             end
                         else
                             config.compact_locked_x = nil
