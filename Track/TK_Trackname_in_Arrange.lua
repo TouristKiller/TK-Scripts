@@ -1,8 +1,13 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.3
+-- @version 1.8.4
 -- @changelog 
 --[[
+v1.8.4:
++ Added Freeze Icon feature - displays freeze icon on frozen tracks
++ Setting to enable/disable freeze icon in Icons tab
++ Freeze icon correctly positions next to parent label and info line
+
 v1.8.3:
 + Fixed tcp icon sync
 
@@ -98,6 +103,8 @@ local OS                 = r.GetOS()
 local IS_LINUX           = OS:lower():find("linux") ~= nil
 local script_path        = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
 local preset_path        = script_path .. "TK_Trackname_Presets/"
+local freeze_icon_path   = script_path .. "FREEZE.png"
+local freeze_icon_image  = nil
 local json               = dofile(script_path .. "json.lua")
 local track_icon_browser = dofile(script_path .. "track_icon_browser.lua")
 local track_icon_manager = dofile(script_path .. "track_icon_manager.lua")
@@ -630,6 +637,7 @@ local default_settings              = {
     overlay_grid_horizontal         = false,
     overlay_grid_division           = 1,
     overlay_grid_avoid_items        = false,
+    show_freeze_icon                = true,
 }
 
 local settings = {}
@@ -2122,6 +2130,15 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, col4)
         r.ImGui_Text(ctx, "Position")
         
+        if r.ImGui_RadioButton(ctx, "Show Freeze Icon", settings.show_freeze_icon) then
+            settings.show_freeze_icon = not settings.show_freeze_icon
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_BeginTooltip(ctx)
+            r.ImGui_Text(ctx, "Toon een freeze icon op gefreezde tracks")
+            r.ImGui_EndTooltip(ctx)
+        end
+        
         r.ImGui_Dummy(ctx, 0, 4)
         r.ImGui_Separator(ctx)
         r.ImGui_Dummy(ctx, 0, 2)
@@ -3179,6 +3196,55 @@ function RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_w
     )
     
     return adjusted_text_x
+end
+
+function IsTrackFrozen(track)
+    local freeze_count = r.GetMediaTrackInfo_Value(track, "I_FREEZECOUNT")
+    return freeze_count > 0
+end
+
+function RenderFreezeIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height, additional_offset)
+    if not settings.show_freeze_icon then return end
+    if not IsTrackFrozen(track) then return end
+    
+    if not freeze_icon_image or not r.ImGui_ValidatePtr(freeze_icon_image, 'ImGui_Image*') then
+        if r.file_exists(freeze_icon_path) then
+            freeze_icon_image = r.ImGui_CreateImage(freeze_icon_path)
+            if freeze_icon_image then
+                r.ImGui_Attach(ctx, freeze_icon_image)
+            end
+        end
+    end
+    
+    if not freeze_icon_image or not r.ImGui_ValidatePtr(freeze_icon_image, 'ImGui_Image*') then
+        return
+    end
+    
+    local icon_size = settings.icon_size
+    local icon_y = WY + track_y + (track_height * 0.5) - (icon_size * 0.5) + vertical_offset
+    
+    if not is_pinned and icon_y < WY + pinned_tracks_height then 
+        return
+    end
+    
+    additional_offset = additional_offset or 0
+    
+    local icon_x
+    if settings.icon_position == 1 then
+        icon_x = text_x + text_width + settings.icon_spacing + 10 + additional_offset
+    else
+        icon_x = text_x - icon_size - settings.icon_spacing - 10 - additional_offset
+    end
+    
+    local tint_col = r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.icon_opacity)
+    
+    r.ImGui_DrawList_AddImage(
+        draw_list, freeze_icon_image,
+        icon_x, icon_y,
+        icon_x + icon_size, icon_y + icon_size,
+        0, 0, 1, 1,
+        tint_col
+    )
 end
 
 function DrawTrackIcon(track, x, y)
@@ -4595,6 +4661,32 @@ function loop()
                                     dot_size/2,
                                     0xFF8C00FF
                                 )
+                            end
+                            
+                            if is_pinned or text_y >= WY + pinned_tracks_height then
+                                local freeze_offset = 0
+                                
+                                if is_child and settings.show_parent_label then
+                                    local parents = GetAllParentTracks(track)
+                                    if #parents > 0 then
+                                        local combined_name = ""
+                                        for i = #parents, 1, -1 do
+                                            local _, parent_name = r.GetTrackName(parents[i])
+                                            parent_name = TruncateTrackName(parent_name, settings.track_name_length)
+                                            combined_name = combined_name .. parent_name .. " / "
+                                        end
+                                        local parent_text_width = r.ImGui_CalcTextSize(ctx, combined_name)
+                                        freeze_offset = freeze_offset + parent_text_width + 40
+                                    end
+                                end
+                                
+                                if settings.show_info_line and not r.GetParentTrack(track) then
+                                    local info_text = GetFolderInfo(track)
+                                    local info_text_width = r.ImGui_CalcTextSize(ctx, info_text)
+                                    freeze_offset = freeze_offset + info_text_width + 30
+                                end
+                                
+                                RenderFreezeIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height, freeze_offset)
                             end
                         end
                     end
