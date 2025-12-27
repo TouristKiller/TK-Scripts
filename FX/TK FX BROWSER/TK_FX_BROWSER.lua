@@ -1,9 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.3.5
+-- @version 2.3.6
 -- @changelog:
 --[[     
-    + Added: "Move to Folder..." option in folder context menu to move folders into other folders
+    + Added: Submenu Width and FX List Width settings in GUI tab
+    + Added: Subfolders can now coexist with plugins in custom folders
+    + Fixed: Custom folder popup width now matches developer folders
 
 ]]--        
 --------------------------------------------------------------------------
@@ -907,6 +909,8 @@ function SetDefaultConfig()
         pinned_custom_subfolders = {},
         show_custom_folders = true,
         hide_custom_dropdown = false,
+        submenu_width = 160,
+        fx_list_width = 280,
         show_screenshot_search = true,
         show_browser_search = true, 
         enable_drag_add_fx = true, 
@@ -3360,6 +3364,25 @@ function ShowConfigWindow()
             r.ImGui_PushItemWidth(ctx, slider_width)
             _, config.dropdown_menu_length = r.ImGui_SliderInt(ctx, "##Dropdown Length", config.dropdown_menu_length, 5, 75)
             r.ImGui_PopItemWidth(ctx)
+            
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Submenu Width")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_submenu, new_submenu = r.ImGui_SliderInt(ctx, "##SubmenuWidth", config.submenu_width or 160, 100, 300)
+            if changed_submenu then config.submenu_width = new_submenu end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "FX List Width")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_fxlist, new_fxlist = r.ImGui_SliderInt(ctx, "##FXListWidth", config.fx_list_width or 280, 150, 500)
+            if changed_fxlist then config.fx_list_width = new_fxlist end
+            r.ImGui_PopItemWidth(ctx)
+            
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Tab Color")
             r.ImGui_SameLine(ctx)
@@ -7944,8 +7967,7 @@ function DrawFxChains(tbl, path, show_hover_preview)
     while i <= #tbl do
         local item = tbl[i]
         if type(item) == "table" and item.dir then
-            -- SUBMAPPEN HANDELEN
-            r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)  
+            r.ImGui_SetNextWindowSize(ctx, config.submenu_width or 160, 0)  
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), config.background_color) 
             if r.ImGui_BeginMenu(ctx, item.dir) then               
@@ -13704,7 +13726,7 @@ function DrawItems(tbl, main_cat_name)
         r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), 3)      
         r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), config.background_color)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
-        r.ImGui_SetNextWindowSize(ctx, FX_LIST_WIDTH, 0)
+        r.ImGui_SetNextWindowSize(ctx, config.fx_list_width or 280, 0)
        
         if r.ImGui_BeginMenu(ctx, tbl[i].name) then
             if main_cat_name == "FOLDERS" then
@@ -14756,7 +14778,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
         
         if IsPluginArray(folder_content) then
-            r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+            r.ImGui_SetNextWindowSize(ctx, config.fx_list_width or 280, 0)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
@@ -14847,7 +14869,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PopStyleColor(ctx, 2)
             
         elseif IsSubfolderStructure(folder_content) then
-            r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+            r.ImGui_SetNextWindowSize(ctx, config.submenu_width or 160, 0)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
@@ -14881,7 +14903,7 @@ function Frame()
     -- Initial rough estimate (not used directly for final child size; we recompute later to avoid negative heights)
     local initial_available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_section_height - menu_items_height + 10
     if config.show_favorites and #favorite_plugins > 0 then
-        r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+        r.ImGui_SetNextWindowSize(ctx, config.submenu_width or 160, 0)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
@@ -14901,8 +14923,8 @@ function Frame()
         r.ImGui_PopStyleColor(ctx, 2)
     end
     -- CUSTOM FOLDERS SECTIE
-if config.show_custom_folders and next(config.custom_folders) then  -- VOEG show_custom_folders CHECK TOE
-    r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+if config.show_custom_folders and next(config.custom_folders) then
+    r.ImGui_SetNextWindowSize(ctx, config.submenu_width or 160, 0)
     r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
@@ -14932,7 +14954,7 @@ end
            (category_name == "FX CHAINS" and config.show_fx_chains) or
            (category_name == "TRACK TEMPLATES" and config.show_track_templates) or
            (category_name == "CATEGORY" and config.show_category) then
-            r.ImGui_SetNextWindowSize(ctx, MAX_SUBMENU_WIDTH, 0)
+            r.ImGui_SetNextWindowSize(ctx, config.submenu_width or 160, 0)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 7)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
@@ -16819,60 +16841,12 @@ if visible then
     -- ADD SUBFOLDER POPUP
     if show_add_subfolder_popup then
         r.ImGui_OpenPopup(ctx, "Add Subfolder")
-        show_add_subfolder_popup = false  -- Reset flag after opening
-        
-        -- Check if parent folder has plugins
-        parent_folder_has_plugins = false
-        if selected_folder_for_subfolder then
-            local parts = {}
-            for part in selected_folder_for_subfolder:gmatch("[^/]+") do
-                table.insert(parts, part)
-            end
-            
-            local current = config.custom_folders
-            for i = 1, #parts do
-                if current[parts[i]] then
-                    current = current[parts[i]]
-                end
-            end
-            
-            parent_folder_has_plugins = HasPlugins(current)
-            
-            local plugin_count = 0
-            for k, v in pairs(current) do
-                if type(k) == "number" then
-                    plugin_count = plugin_count + 1
-                end
-            end
-        end
+        show_add_subfolder_popup = false
     end
     
     if r.ImGui_BeginPopupModal(ctx, "Add Subfolder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
         r.ImGui_Text(ctx, "Add subfolder to: " .. (selected_folder_for_subfolder or ""))
-        
-        -- Warning if parent has plugins
-        if parent_folder_has_plugins then
-            r.ImGui_Spacing(ctx)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4444FF)
-            r.ImGui_TextWrapped(ctx, "This folder currently contains plugins.")
-            r.ImGui_TextWrapped(ctx, "Folders with subfolders cannot contain plugins.")
-            r.ImGui_TextWrapped(ctx, "What do you want to do with them?")
-            r.ImGui_PopStyleColor(ctx)
-            r.ImGui_Spacing(ctx)
-            
-            -- Radio buttons for choice (0=move, 1=remove)
-            subfolder_plugin_action = subfolder_plugin_action or 0
-            
-            local changed, new_action = r.ImGui_RadioButtonEx(ctx, "Move plugins to new subfolder", subfolder_plugin_action, 0)
-            if changed then subfolder_plugin_action = new_action end
-            
-            changed, new_action = r.ImGui_RadioButtonEx(ctx, "Remove all plugins", subfolder_plugin_action, 1)
-            if changed then subfolder_plugin_action = new_action end
-            
-            r.ImGui_Spacing(ctx)
-        end
-        
-        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
         
         r.ImGui_PushItemWidth(ctx, 300)
         local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##NewSubfolder", "Enter subfolder name", new_subfolder_name or "")
@@ -16889,7 +16863,6 @@ if visible then
                     table.insert(parts, part)
                 end
                 
-                -- Navigate to the parent folder
                 local current = config.custom_folders
                 for i = 1, #parts do
                     if not current[parts[i]] then
@@ -16898,53 +16871,17 @@ if visible then
                     current = current[parts[i]]
                 end
                 
-                -- Handle existing plugins based on user choice
-                if parent_folder_has_plugins then
-                    local action = subfolder_plugin_action or 0 -- 0=move, 1=remove
-                    
-                    if action == 0 then -- move
-                        -- Move plugins to new subfolder
-                        local plugins = GetFolderPlugins(current)
-                        -- Remove plugins from parent
-                        for k in pairs(current) do
-                            if type(k) == "number" then
-                                current[k] = nil
-                            end
-                        end
-                        -- Create new subfolder with plugins
-                        current[new_subfolder_name] = {}
-                        for i, plugin in ipairs(plugins) do
-                            current[new_subfolder_name][i] = plugin
-                        end
-                    else -- 1 = remove
-                        -- Remove all plugins from parent
-                        for k in pairs(current) do
-                            if type(k) == "number" then
-                                current[k] = nil
-                            end
-                        end
-                        -- Create empty subfolder
-                        current[new_subfolder_name] = {}
-                    end
-                else
-                    -- No plugins, just create empty subfolder
-                    current[new_subfolder_name] = {}
-                end
-                
+                current[new_subfolder_name] = {}
                 SaveCustomFolders()
             end
             new_subfolder_name = ""
             selected_folder_for_subfolder = nil
-            subfolder_plugin_action = 0
-            parent_folder_has_plugins = false
             r.ImGui_CloseCurrentPopup(ctx)
         end
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "Cancel", 100, 0) then
             new_subfolder_name = ""
             selected_folder_for_subfolder = nil
-            subfolder_plugin_action = 0
-            parent_folder_has_plugins = false
             r.ImGui_CloseCurrentPopup(ctx)
         end
         

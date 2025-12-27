@@ -12777,53 +12777,12 @@ function ShowScreenshotWindow()
     -- Add Subfolder popup (outside main window, always available)
     if show_add_subfolder_popup then
         r.ImGui_OpenPopup(ctx, "Add Subfolder")
-        show_add_subfolder_popup = false  -- Reset flag after opening
-        
-        -- Check if parent folder has plugins
-        parent_folder_has_plugins = false
-        if selected_folder_for_subfolder then
-            local parts = {}
-            for part in selected_folder_for_subfolder:gmatch("[^/]+") do
-                table.insert(parts, part)
-            end
-            
-            local current = config.custom_folders
-            for i = 1, #parts do
-                if current[parts[i]] then
-                    current = current[parts[i]]
-                end
-            end
-            
-            parent_folder_has_plugins = HasPlugins(current)
-        end
+        show_add_subfolder_popup = false
     end
     
     if r.ImGui_BeginPopupModal(ctx, "Add Subfolder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
         r.ImGui_Text(ctx, "Add subfolder to: " .. (selected_folder_for_subfolder or ""))
-        
-        -- Warning if parent has plugins
-        if parent_folder_has_plugins then
-            r.ImGui_Spacing(ctx)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4444FF)
-            r.ImGui_TextWrapped(ctx, "This folder currently contains plugins.")
-            r.ImGui_TextWrapped(ctx, "Folders with subfolders cannot contain plugins.")
-            r.ImGui_TextWrapped(ctx, "What do you want to do with them?")
-            r.ImGui_PopStyleColor(ctx)
-            r.ImGui_Spacing(ctx)
-            
-            -- Radio buttons for choice (0=move, 1=remove)
-            subfolder_plugin_action = subfolder_plugin_action or 0
-            
-            local changed, new_action = r.ImGui_RadioButtonEx(ctx, "Move plugins to new subfolder", subfolder_plugin_action, 0)
-            if changed then subfolder_plugin_action = new_action end
-            
-            changed, new_action = r.ImGui_RadioButtonEx(ctx, "Remove all plugins", subfolder_plugin_action, 1)
-            if changed then subfolder_plugin_action = new_action end
-            
-            r.ImGui_Spacing(ctx)
-        end
-        
-        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
         
         r.ImGui_PushItemWidth(ctx, 300)
         local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##NewSubfolder", "Enter subfolder name", new_subfolder_name or "")
@@ -12840,7 +12799,6 @@ function ShowScreenshotWindow()
                     table.insert(parts, part)
                 end
                 
-                -- Navigate to the parent folder
                 local current = config.custom_folders
                 for i = 1, #parts do
                     if not current[parts[i]] then
@@ -12849,53 +12807,17 @@ function ShowScreenshotWindow()
                     current = current[parts[i]]
                 end
                 
-                -- Handle existing plugins based on user choice
-                if parent_folder_has_plugins then
-                    local action = subfolder_plugin_action or 0 -- 0=move, 1=remove
-                    
-                    if action == 0 then -- move
-                        -- Move plugins to new subfolder
-                        local plugins = GetFolderPlugins(current)
-                        -- Remove plugins from parent
-                        for k in pairs(current) do
-                            if type(k) == "number" then
-                                current[k] = nil
-                            end
-                        end
-                        -- Create new subfolder with plugins
-                        current[new_subfolder_name] = {}
-                        for i, plugin in ipairs(plugins) do
-                            current[new_subfolder_name][i] = plugin
-                        end
-                    else -- 1 = remove
-                        -- Remove all plugins from parent
-                        for k in pairs(current) do
-                            if type(k) == "number" then
-                                current[k] = nil
-                            end
-                        end
-                        -- Create empty subfolder
-                        current[new_subfolder_name] = {}
-                    end
-                else
-                    -- No plugins, just create empty subfolder
-                    current[new_subfolder_name] = {}
-                end
-                
+                current[new_subfolder_name] = {}
                 SaveCustomFolders()
             end
             new_subfolder_name = ""
             selected_folder_for_subfolder = nil
-            subfolder_plugin_action = 0
-            parent_folder_has_plugins = false
             r.ImGui_CloseCurrentPopup(ctx)
         end
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "Cancel", 100, 0) then
             new_subfolder_name = ""
             selected_folder_for_subfolder = nil
-            subfolder_plugin_action = 0
-            parent_folder_has_plugins = false
             r.ImGui_CloseCurrentPopup(ctx)
         end
         
