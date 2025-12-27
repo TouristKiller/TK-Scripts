@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.3.4
+-- @version 2.3.5
 -- @changelog:
 --[[     
     + Added: "Move to Folder..." option in folder context menu to move folders into other folders
