@@ -1,9 +1,9 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.4
+-- @version 1.8.5
 -- @changelog 
 --[[
-v1.8.4:
+v1.8.5:
 + Added Freeze Icon feature - displays freeze icon on frozen tracks
 + Setting to enable/disable freeze icon in Icons tab
 + Freeze icon correctly positions next to parent label and info line
@@ -3220,7 +3220,8 @@ function RenderFreezeIcon(draw_list, track, track_y, track_height, text_x, text_
         return
     end
     
-    local icon_size = settings.icon_size
+    local freeze_icon_scale = 0.65
+    local icon_size = settings.icon_size * freeze_icon_scale
     local icon_y = WY + track_y + (track_height * 0.5) - (icon_size * 0.5) + vertical_offset
     
     if not is_pinned and icon_y < WY + pinned_tracks_height then 

@@ -656,9 +656,9 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.8.4" author="TouristKiller" time="2025-12-28T00:01:00Z">
+        <version name="1.8.5" author="TouristKiller" time="2025-12-28T00:11:00Z">
             <changelog><![CDATA[
-v1.8.4:
+v1.8.5:
 + Added Freeze Icon feature - displays freeze icon on frozen tracks
 + Setting to enable/disable freeze icon in Icons tab
 + Freeze icon correctly positions next to parent label and info line
