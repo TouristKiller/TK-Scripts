@@ -153,4 +153,25 @@ function TrackIconManager.CopyIcon(source_track, target_track)
     return false
 end
 
+function TrackIconManager.SyncFromTCP()
+    local track_count = r.CountTracks(0)
+    local synced_count = 0
+    
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if track then
+            local _, tcp_icon = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
+            if tcp_icon and tcp_icon ~= "" then
+                local current_icon = TrackIconManager.GetTrackIcon(track)
+                if current_icon ~= tcp_icon then
+                    TrackIconManager.SetTrackIcon(track, tcp_icon)
+                    synced_count = synced_count + 1
+                end
+            end
+        end
+    end
+    
+    return synced_count
+end
+
 return TrackIconManager
