@@ -1,9 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.3.3
+-- @version 2.3.4
 -- @changelog:
 --[[     
-    + Added: Option to only show names on hover in screenshot view
+    + Added: "Move to Folder..." option in folder context menu to move folders into other folders
 
 ]]--        
 --------------------------------------------------------------------------
@@ -562,6 +562,10 @@ show_rename_folder_popup = show_rename_folder_popup or false
 folder_to_rename = folder_to_rename or nil
 folder_to_rename_path = folder_to_rename_path or ""
 new_folder_name_for_rename = new_folder_name_for_rename or ""
+show_move_folder_popup = show_move_folder_popup or false
+folder_to_move_path = folder_to_move_path or nil
+folder_to_move_name = folder_to_move_name or nil
+move_folder_target = move_folder_target or nil
 
 -- Debug logging cache (to prevent logging every frame)
 local debug_last_fx_chains_state = nil
@@ -1470,8 +1474,77 @@ end
 -- Legacy compatibility aliases
 IsSubfolderStructure = HasSubfolders
 IsPluginArray = function(folder_content)
-    -- Old logic: pure plugin array (only numeric keys, no subfolders)
     return not HasSubfolders(folder_content) and HasPlugins(folder_content)
+end
+
+function CollectAllFolderPaths(folders, prefix, exclude_path, result)
+    result = result or {}
+    prefix = prefix or ""
+    if type(folders) ~= "table" then return result end
+    for folder_name, folder_content in pairs(folders) do
+        if type(folder_name) == "string" and type(folder_content) == "table" then
+            local full_path = prefix == "" and folder_name or (prefix .. "/" .. folder_name)
+            local dominated = false
+            if exclude_path and exclude_path ~= "" then
+                local escaped = exclude_path:gsub("([%%%^%$%(%)%.%[%]%*%+%-%?])", "%%%1")
+                if full_path == exclude_path or full_path:find("^" .. escaped .. "/") then
+                    dominated = true
+                end
+            end
+            if not dominated then
+                table.insert(result, full_path)
+                CollectAllFolderPaths(folder_content, full_path, exclude_path, result)
+            end
+        end
+    end
+    table.sort(result)
+    return result
+end
+
+function MoveFolderTo(source_path, target_path)
+    if not source_path or source_path == "" then return false end
+    
+    local source_parts = {}
+    for part in source_path:gmatch("[^/]+") do
+        table.insert(source_parts, part)
+    end
+    if #source_parts == 0 then return false end
+    
+    local folder_name = source_parts[#source_parts]
+    
+    local source_parent = config.custom_folders
+    for i = 1, #source_parts - 1 do
+        source_parent = source_parent[source_parts[i]]
+        if not source_parent then return false end
+    end
+    
+    local folder_content = source_parent[folder_name]
+    if not folder_content then return false end
+    
+    local target_parent
+    if not target_path or target_path == "" then
+        target_parent = config.custom_folders
+    else
+        target_parent = config.custom_folders
+        for part in target_path:gmatch("[^/]+") do
+            if not target_parent[part] then
+                target_parent[part] = {}
+            end
+            target_parent = target_parent[part]
+            if not target_parent then return false end
+        end
+    end
+    
+    if target_parent[folder_name] then
+        r.ShowMessageBox("A folder with name '" .. folder_name .. "' already exists in the target location!", "Error", 0)
+        return false
+    end
+    
+    target_parent[folder_name] = folder_content
+    source_parent[folder_name] = nil
+    
+    SaveCustomFolders()
+    return true
 end
 
 function CleanPluginName(name)
@@ -1940,11 +2013,15 @@ function GetPluginsFromCustomFolder(folder_path)
         end
     end
     
-    if IsPluginArray(current) then
-        return current
-    else
-        return {}
+    local plugins = {}
+    if type(current) == "table" then
+        for k, v in pairs(current) do
+            if type(k) == "number" and type(v) == "string" then
+                plugins[#plugins + 1] = v
+            end
+        end
     end
+    return plugins
 end
 
 function CreateNestedFolder(folder_path, is_subfolder_of)
@@ -2010,34 +2087,33 @@ end
 function SaveCustomFolders()
     
     local function convertForJSON(folders)
+        if type(folders) ~= "table" then return {} end
         local result = {}
         for folder_name, folder_content in pairs(folders) do
-            -- Skip internal marker keys
-            if folder_name == "__folder_marker__" then
-                -- do nothing, skip this key
-            elseif IsSubfolderStructure(folder_content) then
-                -- Folder WITH subfolders - recurse
-                local subfolders = convertForJSON(folder_content)
-                -- Ensure empty folders save as object {} not array []
-                if next(subfolders) == nil then
-                    subfolders = {["_empty"] = true}
-                end
-                result[folder_name] = {
-                    _type = "folder",
-                    subfolders = subfolders
-                }
-            else
-                -- Folder WITHOUT subfolders - extract plugins (skip __folder_marker__)
+            if type(folder_name) == "string" and type(folder_content) == "table" then
                 local plugins = {}
                 for k, v in pairs(folder_content) do
                     if type(k) == "number" and type(v) == "string" then
                         plugins[#plugins + 1] = v
                     end
                 end
-                result[folder_name] = {
-                    _type = "plugins",
-                    plugins = plugins
-                }
+                
+                if IsSubfolderStructure(folder_content) then
+                    local subfolders = convertForJSON(folder_content)
+                    if next(subfolders) == nil then
+                        subfolders = {["_empty"] = true}
+                    end
+                    result[folder_name] = {
+                        _type = "folder",
+                        subfolders = subfolders,
+                        plugins = #plugins > 0 and plugins or nil
+                    }
+                else
+                    result[folder_name] = {
+                        _type = "plugins",
+                        plugins = plugins
+                    }
+                end
             end
         end
         return result
@@ -3080,10 +3156,16 @@ function GetPluginsForFolder(folder_name)
     end
 
     if folder_name:find("/") then
-    return DedupeByTypePriority(GetPluginsFromCustomFolder(folder_name))
+        return DedupeByTypePriority(GetPluginsFromCustomFolder(folder_name))
     elseif config.custom_folders and config.custom_folders[folder_name] then
         local folder_content = config.custom_folders[folder_name]
-    if IsPluginArray(folder_content) then return DedupeByTypePriority(folder_content) else return {} end
+        local plugins = {}
+        for k, v in pairs(folder_content) do
+            if type(k) == "number" and type(v) == "string" then
+                plugins[#plugins + 1] = v
+            end
+        end
+        return DedupeByTypePriority(plugins)
     end
 
     if folders_category and #folders_category > 0 then
@@ -6271,7 +6353,7 @@ function ShowPluginContextMenuContent(plugin_name)
                 -- SORTEER DE FOLDER NAMEN ALFABETISCH
                 local sorted_folder_names = {}
                 for folder_name, _ in pairs(folders) do
-                    if folder_name ~= "__folder_marker__" then
+                    if type(folder_name) == "string" and folder_name ~= "__folder_marker__" then
                         table.insert(sorted_folder_names, folder_name)
                     end
                 end
@@ -6296,8 +6378,50 @@ function ShowPluginContextMenuContent(plugin_name)
                     end
                     
                     if has_subfolders then
-                        -- Has subfolders - show as submenu (cannot add plugins here)
                         if r.ImGui_BeginMenu(ctx, folder_name) then
+                            local plugin_count = 0
+                            if type(folder_content) == "table" then
+                                for k, v in pairs(folder_content) do
+                                    if type(k) == "number" and type(v) == "string" then
+                                        plugin_count = plugin_count + 1
+                                    end
+                                end
+                            end
+                            if r.ImGui_MenuItem(ctx, "[Add here] (" .. plugin_count .. ")") then
+                                local already_exists = false
+                                if type(folder_content) == "table" then
+                                    for k, v in pairs(folder_content) do
+                                        if type(v) == "string" and v == plugin_name then
+                                            already_exists = true
+                                            break
+                                        end
+                                    end
+                                end
+                                if not already_exists then
+                                    local target = config.custom_folders
+                                    if path_prefix ~= "" then
+                                        for folder in path_prefix:gmatch("[^/]+") do
+                                            target = target[folder]
+                                            if not target then break end
+                                        end
+                                    end
+                                    if target and target[folder_name] then
+                                        local target_folder = target[folder_name]
+                                        local max_index = 0
+                                        for k, v in pairs(target_folder) do
+                                            if type(k) == "number" and k > max_index then
+                                                max_index = k
+                                            end
+                                        end
+                                        target_folder[max_index + 1] = plugin_name
+                                        SaveCustomFolders()
+                                        r.ShowMessageBox("Plugin added to " .. folder_name, "Success", 0)
+                                    end
+                                else
+                                    r.ShowMessageBox("Plugin already exists in " .. folder_name, "Info", 0)
+                                end
+                            end
+                            r.ImGui_Separator(ctx)
                             ShowCustomFolderMenu(folder_content, full_path)
                             r.ImGui_EndMenu(ctx)
                         end
@@ -8508,12 +8632,12 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             -- TreeNode for folders WITH subfolders (container folders)
             
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemInnerSpacing(), 0, 0)
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)  -- Smaller padding for less vertical space
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 1, 1)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
-            local tree_is_selected = (selected_folder == full_path) or (selected_folder and selected_folder:sub(1, #full_path) == full_path and selected_folder:find("/", #full_path+1))
-            local tree_flags = r.ImGui_TreeNodeFlags_Framed() | r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_FramePadding()
+            local tree_is_selected = (selected_folder == full_path)
+            local tree_flags = r.ImGui_TreeNodeFlags_Framed() | r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_FramePadding() | r.ImGui_TreeNodeFlags_OpenOnArrow() | r.ImGui_TreeNodeFlags_OpenOnDoubleClick()
             if tree_is_selected then
                 tree_flags = tree_flags | r.ImGui_TreeNodeFlags_Selected()
                 local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -8529,15 +8653,16 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             end
             local tree_id = full_path .. "##customTree"
             local open = r.ImGui_TreeNodeEx(ctx, tree_id, "", tree_flags)
+            local tree_clicked = r.ImGui_IsItemClicked(ctx, 0)
+            local tree_toggled = r.ImGui_IsItemToggledOpen(ctx)
+            local tree_right_clicked = r.ImGui_IsItemClicked(ctx, 1)
             local item_min_x, item_min_y = r.ImGui_GetItemRectMin(ctx)
             local line_h = r.ImGui_GetTextLineHeight(ctx)
             local text_w, text_h = r.ImGui_CalcTextSize(ctx, display_label)
             local spacing = r.ImGui_GetTreeNodeToLabelSpacing(ctx)
-            local text_x = item_min_x + spacing  -- Use normal spacing for more distance from arrow
+            local text_x = item_min_x + spacing
             local text_y = item_min_y + (line_h - text_h) * 0.5 + 3
-            -- Draw folder label using the custom-folder font (or global font)
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
-            -- Save original screen cursor and use absolute positioning for the text
             local orig_sx, orig_sy = r.ImGui_GetCursorScreenPos(ctx)
             local font_to_use = CustomFolderFont or NormalFont
             r.ImGui_PushFont(ctx, font_to_use, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
@@ -8546,11 +8671,35 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             r.ImGui_Text(ctx, display_label)
             r.ImGui_PopStyleColor(ctx)
             r.ImGui_PopFont(ctx)
-            -- Restore cursor screen pos
             r.ImGui_SetCursorScreenPos(ctx, orig_sx, orig_sy)
             
-            -- Context menu for tree node (subfolder structure)
-            if r.ImGui_IsItemClicked(ctx, 1) then
+            if tree_clicked and not tree_toggled then
+                browser_panel_selected = nil
+                selected_folder = full_path
+                UpdateLastViewedFolder(full_path)
+                show_media_browser = false
+                show_sends_window = false
+                show_action_browser = false
+                screenshot_search_results = {}
+                local term_l = browser_search_term:lower()
+                local matches = {}
+                for k, plugin in pairs(folder_content) do
+                    if type(k) == "number" and type(plugin) == "string" then
+                        if plugin:lower():find(term_l, 1, true) then
+                            matches[#matches+1] = plugin
+                        end
+                    end
+                end
+                if config.apply_type_priority then
+                    matches = DedupeByTypePriority(matches)
+                end
+                for i = 1, #matches do
+                    screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
+                end
+                ClearScreenshotCache()
+            end
+            
+            if tree_right_clicked then
                 r.ImGui_OpenPopup(ctx, "TreeContextMenu_" .. full_path)
             end
             if r.ImGui_BeginPopup(ctx, "TreeContextMenu_" .. full_path) then
@@ -8581,8 +8730,31 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                     folder_to_rename_path = path_prefix
                     new_folder_name_for_rename = folder_name
                 end
+                if r.ImGui_BeginMenu(ctx, "Move to Folder...") then
+                    if r.ImGui_MenuItem(ctx, "[Root Level]") then
+                        if MoveFolderTo(full_path, "") then
+                            if selected_folder == full_path then
+                                selected_folder = folder_name
+                            end
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    local available_targets = CollectAllFolderPaths(config.custom_folders, "", full_path, {})
+                    for _, target_path in ipairs(available_targets) do
+                        if r.ImGui_MenuItem(ctx, target_path) then
+                            if MoveFolderTo(full_path, target_path) then
+                                if selected_folder == full_path then
+                                    selected_folder = target_path .. "/" .. folder_name
+                                end
+                            end
+                        end
+                    end
+                    if #available_targets == 0 then
+                        r.ImGui_TextDisabled(ctx, "No other folders available")
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
                 if r.ImGui_MenuItem(ctx, "Delete Folder") then
-                    -- Confirm deletion
                     local result = r.MB("Are you sure you want to delete '" .. folder_name .. "' and all its contents?", "Confirm Delete", 4)
                     if result == 6 then -- Yes
                         -- Navigate to parent and remove this folder
@@ -8726,8 +8898,31 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                     folder_to_rename_path = path_prefix
                     new_folder_name_for_rename = folder_name
                 end
+                if r.ImGui_BeginMenu(ctx, "Move to Folder...") then
+                    if r.ImGui_MenuItem(ctx, "[Root Level]") then
+                        if MoveFolderTo(full_path, "") then
+                            if selected_folder == full_path then
+                                selected_folder = folder_name
+                            end
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    local available_targets = CollectAllFolderPaths(config.custom_folders, "", full_path, {})
+                    for _, target_path in ipairs(available_targets) do
+                        if r.ImGui_MenuItem(ctx, target_path) then
+                            if MoveFolderTo(full_path, target_path) then
+                                if selected_folder == full_path then
+                                    selected_folder = target_path .. "/" .. folder_name
+                                end
+                            end
+                        end
+                    end
+                    if #available_targets == 0 then
+                        r.ImGui_TextDisabled(ctx, "No other folders available")
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
                 if r.ImGui_MenuItem(ctx, "Delete Folder") then
-                    -- Confirm deletion
                     local result = r.MB("Are you sure you want to delete '" .. folder_name .. "' and all its plugins?", "Confirm Delete", 4)
                     if result == 6 then -- Yes
                         -- Navigate to parent and remove this folder
