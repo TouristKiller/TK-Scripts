@@ -183,9 +183,10 @@ end
 -- MODIFIED by TK: Added timing tolerance for chord detection
 -- WHY: After humanize or live recording, chord notes don't start at exactly the same tick.
 -- The old code required exact timing match, breaking chord detection after humanize.
--- HOW: Notes starting within CHORD_THRESHOLD ticks are grouped as one chord.
+-- HOW: Notes starting within settings.hum_time_str * 2 ticks are grouped as one chord.
+-- (Doubled because humanize can shift notes both earlier AND later)
 local function GetSelectedChords(take)
-    local CHORD_THRESHOLD = 20
+    local CHORD_THRESHOLD = settings.hum_time_str * 2
     
     local _, cnt = r.MIDI_CountEvts(take)
     local all_sel = {}
@@ -205,9 +206,9 @@ local function GetSelectedChords(take)
     
     for i = 2, #all_sel do
         local note = all_sel[i]
-        local first_start = current_chord[1].start
+        local prev_start = current_chord[#current_chord].start
         
-        if note.start - first_start <= CHORD_THRESHOLD then
+        if note.start - prev_start <= CHORD_THRESHOLD then
             table.insert(current_chord, note)
         else
             table.sort(current_chord, function(a,b) return a.pitch < b.pitch end)
@@ -330,11 +331,9 @@ local function Action_FilterSelection(take, hwnd)
     local function get_role_exact(note_pitch, root_pitch)
         local interval = (note_pitch - root_pitch) % 12
         if interval == 0 then return "root" end
-        if interval == 3 or interval == 4 then return "third" end     -- minor/major 3rd
-        if interval == 6 or interval == 7 or interval == 8 then return "fifth" end  -- dim5/perfect5/aug5
-        if interval == 9 or interval == 10 or interval == 11 then return "seventh" end  -- 6th/min7/maj7
-        if interval == 1 or interval == 2 then return "second" end    -- b9/9
-        if interval == 5 then return "fourth" end                      -- 11th
+        if interval == 3 or interval == 4 then return "third" end
+        if interval == 7 or interval == 8 then return "fifth" end
+        if interval == 9 or interval == 10 or interval == 11 then return "seventh" end
         return "extension"
     end
     local chords = GetSelectedChords(take)
