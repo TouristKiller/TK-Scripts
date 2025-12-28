@@ -1,5 +1,5 @@
--- @description Chord Voicing Editor v23.1 (TK Edition)
--- @version 23.1
+-- @description Chord Voicing Editor v23.2 (TK Edition)
+-- @version 23.2
 -- @author SBP & Gemini (modified by TouristKiller)
 -- @about
 --   UI OVERHAUL & HUMANIZE 2.0
@@ -28,10 +28,13 @@
 --     - Helps resolve ambiguous chords like C6 vs Am7 based on musical context
 --   + Bass note bonus: in ambiguous cases, the lowest note is preferred as root
 --   + Improved get_role_exact function with clearer interval-to-role mapping
+--   + FIX: GetSelectedChords now uses timing tolerance (20 ticks)
+--     - Chords still work correctly after humanize/live recording
+--     - Notes starting within 20 ticks of each other are grouped as one chord
 
 
 local r = reaper
-local ctx = r.ImGui_CreateContext('Chord Voicing Editor v23.1 TK')
+local ctx = r.ImGui_CreateContext('Chord Voicing Editor v23.2 TK')
 
 -- === CONFIG & PERSISTENCE ===
 local ACCENT_COLOR    = 0x217763FF
@@ -177,33 +180,45 @@ local function GetDiatonicPitch(start, map, steps, dir)
     return curr
 end
 
+-- MODIFIED by TK: Added timing tolerance for chord detection
+-- WHY: After humanize or live recording, chord notes don't start at exactly the same tick.
+-- The old code required exact timing match, breaking chord detection after humanize.
+-- HOW: Notes starting within CHORD_THRESHOLD ticks are grouped as one chord.
 local function GetSelectedChords(take)
+    local CHORD_THRESHOLD = 20
+    
     local _, cnt = r.MIDI_CountEvts(take)
     local all_sel = {}
-    local distinct_starts = {}
     for i = 0, cnt - 1 do
         local _, sel, muted, start, endp, chan, pitch, vel = r.MIDI_GetNote(take, i)
         if sel then
             table.insert(all_sel, {idx=i, muted=muted, start=start, endp=endp, pitch=pitch, vel=vel, chan=chan})
-            distinct_starts[start] = true
         end
     end
-    local time_points = {}
-    for t, _ in pairs(distinct_starts) do table.insert(time_points, t) end
-    table.sort(time_points)
+    
+    if #all_sel == 0 then return {} end
+    
+    table.sort(all_sel, function(a,b) return a.start < b.start end)
+    
     local chords = {}
-    for _, t in ipairs(time_points) do
-        local chord_notes = {}
-        for _, n in ipairs(all_sel) do
-            if n.start <= t and n.endp > t then
-                if n.start == t then table.insert(chord_notes, n) end
-            end
-        end
-        if #chord_notes > 0 then
-            table.sort(chord_notes, function(a,b) return a.pitch < b.pitch end)
-            table.insert(chords, chord_notes)
+    local current_chord = {all_sel[1]}
+    
+    for i = 2, #all_sel do
+        local note = all_sel[i]
+        local first_start = current_chord[1].start
+        
+        if note.start - first_start <= CHORD_THRESHOLD then
+            table.insert(current_chord, note)
+        else
+            table.sort(current_chord, function(a,b) return a.pitch < b.pitch end)
+            table.insert(chords, current_chord)
+            current_chord = {note}
         end
     end
+    
+    table.sort(current_chord, function(a,b) return a.pitch < b.pitch end)
+    table.insert(chords, current_chord)
+    
     return chords
 end
 
@@ -524,7 +539,7 @@ local function loop()
     SafePushStyleColor(r.ImGui_Col_SliderGrabActive(), ACCENT_ACTIVE)
     SafePushStyleColor(r.ImGui_Col_FrameBg(), 0x444444FF)
 
-    local visible, open = r.ImGui_Begin(ctx, 'Chord Editor v23.1 TK', true, r.ImGui_WindowFlags_AlwaysAutoResize())
+    local visible, open = r.ImGui_Begin(ctx, 'Chord Editor v23.2 TK', true, r.ImGui_WindowFlags_AlwaysAutoResize())
     if visible then
         
         -- Header
