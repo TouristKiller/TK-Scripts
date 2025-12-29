@@ -1,14 +1,40 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.7
+-- @version 2.8
 -- @changelog:
---   + fixed: X position now stays fixed when widening/resizing track
---   + X offset is now relative to TCP left edge instead of track width
+--   + preview_compact now saved in config (default: true)
+--   + show_settings and settings_tab now remembered between sessions
+--   + added close button (red circle) to main and settings UI
+--   + added "Close Script" option to compact widget context menu
+--   + toolbar button now shows toggle state (lights up when running)
+--   + script auto-closes when track is manually removed
+--   + compact widget is now drag-to-move (when not locked)
+--   + added Lock/Unlock Position option to compact context menu
 -------------------------------------------------------------------
 local r = reaper
 
 local SCRIPT_NAME = "TK Indestructible Track"
-local SCRIPT_VERSION = "2.7"
+local COMMAND_ID = nil
+
+local function GetScriptVersion()
+    local file = io.open(debug.getinfo(1, "S").source:match("@?(.*)") or "", "r")
+    if file then
+        for i = 1, 10 do
+            local line = file:read("*l")
+            if line then
+                local version = line:match("@version%s+(.+)")
+                if version then
+                    file:close()
+                    return version
+                end
+            end
+        end
+        file:close()
+    end
+    return "?"
+end
+
+local SCRIPT_VERSION = GetScriptVersion()
 
 if not r.ImGui_CreateContext then
     r.ShowMessageBox("ReaImGui is required for this script.\nInstall via ReaPack.", SCRIPT_NAME, 0)
@@ -58,7 +84,10 @@ local default_config = {
     compact_icon_size = 28,
     compact_lock_position = false,
     compact_locked_x = nil,
-    compact_locked_y = nil
+    compact_locked_y = nil,
+    preview_compact = true,
+    show_settings = false,
+    settings_tab = "General"
 }
 
 local compact_ctx = nil
@@ -76,7 +105,6 @@ local state = {
     undo_history = {},
     undo_index = 0,
     is_monitoring = false,
-    show_settings = false,
     show_undo_list = false,
     show_backup_list = false,
     show_snapshot_list = false,
@@ -86,7 +114,12 @@ local state = {
     close_action = nil,
     status_message = "",
     status_time = 0,
-    preview_compact = false
+    settings_tab_initialized = false,
+    compact_dragging = false,
+    compact_drag_start_x = 0,
+    compact_drag_start_y = 0,
+    compact_drag_offset_x = 0,
+    compact_drag_offset_y = 0
 }
 
 local available_backups = {}
@@ -1865,6 +1898,30 @@ local function DrawCompactWidget()
             SaveConfig()
         end
         
+        if not config.compact_lock_position then
+            if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 0) then
+                state.compact_dragging = true
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(compact_ctx)
+                state.compact_drag_start_x = mouse_x
+                state.compact_drag_start_y = mouse_y
+                state.compact_drag_offset_x = config.compact_offset_x or 2
+                state.compact_drag_offset_y = config.compact_offset_y or 0
+            end
+        end
+        
+        if state.compact_dragging then
+            if r.ImGui_IsMouseDown(compact_ctx, 0) then
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(compact_ctx)
+                local delta_x = mouse_x - state.compact_drag_start_x
+                local delta_y = mouse_y - state.compact_drag_start_y
+                config.compact_offset_x = state.compact_drag_offset_x + delta_x
+                config.compact_offset_y = state.compact_drag_offset_y + delta_y
+            else
+                state.compact_dragging = false
+                SaveConfig()
+            end
+        end
+        
         if r.ImGui_BeginPopup(compact_ctx, "compact_menu") then
             r.ImGui_PushFont(compact_ctx, compact_menu_font, 13)
             if r.ImGui_MenuItem(compact_ctx, "Save Now") then
@@ -1900,10 +1957,26 @@ local function DrawCompactWidget()
                 RedoTrack()
             end
             r.ImGui_Separator(compact_ctx)
+            local lock_label = config.compact_lock_position and "Unlock Position" or "Lock Position"
+            if r.ImGui_MenuItem(compact_ctx, lock_label) then
+                config.compact_lock_position = not config.compact_lock_position
+                if config.compact_lock_position then
+                    config.compact_locked_x = bounds.x + (config.compact_offset_x or 2)
+                    config.compact_locked_y = config.compact_offset_y or 0
+                end
+                SaveConfig()
+            end
+            r.ImGui_Separator(compact_ctx)
             if r.ImGui_MenuItem(compact_ctx, "Full UI") then
                 config.compact_mode = false
                 SaveConfig()
             end
+            r.ImGui_Separator(compact_ctx)
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Text(), 0xCC6666FF)
+            if r.ImGui_MenuItem(compact_ctx, "Close Script") then
+                state.close_action = "exit"
+            end
+            r.ImGui_PopStyleColor(compact_ctx)
             r.ImGui_PopFont(compact_ctx)
             r.ImGui_EndPopup(compact_ctx)
         end
@@ -1932,6 +2005,23 @@ local function LoadShieldImage()
     end
 end
 
+local function DrawCloseButton()
+    local window_width = r.ImGui_GetWindowWidth(ctx)
+    local close_size = 12
+    local saved_cursor_y = r.ImGui_GetCursorPosY(ctx)
+    r.ImGui_SetCursorPos(ctx, window_width - close_size - 10, 8)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xCC4444FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xDD5555FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xBB3333FF)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), close_size / 2)
+    if r.ImGui_Button(ctx, "##close_script", close_size, close_size) then
+        state.close_action = "exit"
+    end
+    r.ImGui_PopStyleVar(ctx)
+    r.ImGui_PopStyleColor(ctx, 3)
+    r.ImGui_SetCursorPosY(ctx, saved_cursor_y)
+end
+
 local function DrawStatusBar()
     local elapsed = r.time_precise() - state.status_time
     if elapsed < 5 and state.status_message ~= "" then
@@ -1954,6 +2044,7 @@ local function DrawStatusBar()
 end
 
 local function DrawMainUI()
+    DrawCloseButton()
     LoadShieldImage()
     
     local window_height = r.ImGui_GetWindowHeight(ctx)
@@ -2208,7 +2299,8 @@ local function DrawMainUI()
             r.ImGui_Separator(ctx)
             
             if r.ImGui_Button(ctx, "Settings", -1, 0) then
-                state.show_settings = not state.show_settings
+                config.show_settings = not config.show_settings
+                SaveConfig()
             end
             
             if r.ImGui_Button(ctx, "Save Now", -1, 0) then
@@ -2262,6 +2354,8 @@ local function DrawMainUI()
 end
 
 local function DrawSettingsUI()
+    DrawCloseButton()
+    
     r.ImGui_Text(ctx, "SETTINGS")
     r.ImGui_Separator(ctx)
     
@@ -2270,7 +2364,17 @@ local function DrawSettingsUI()
     if content_height < 50 then content_height = 50 end
     
     if r.ImGui_BeginTabBar(ctx, "settings_tabs") then
-        if r.ImGui_BeginTabItem(ctx, "General") then
+        local general_flags = 0
+        local display_flags = 0
+        if not state.settings_tab_initialized then
+            if config.settings_tab == "Display" then
+                display_flags = r.ImGui_TabItemFlags_SetSelected()
+            end
+            state.settings_tab_initialized = true
+        end
+        
+        if r.ImGui_BeginTabItem(ctx, "General", nil, general_flags) then
+            config.settings_tab = "General"
             if r.ImGui_BeginChild(ctx, "general_content", -1, content_height - 30, 0) then
                 local changed, new_val
                 
@@ -2346,7 +2450,8 @@ local function DrawSettingsUI()
             r.ImGui_EndTabItem(ctx)
         end
         
-        if r.ImGui_BeginTabItem(ctx, "Display") then
+        if r.ImGui_BeginTabItem(ctx, "Display", nil, display_flags) then
+            config.settings_tab = "Display"
             if r.ImGui_BeginChild(ctx, "display_content", -1, content_height - 30, 0) then
                 local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
                 
@@ -2521,9 +2626,10 @@ local function DrawSettingsUI()
                     end
                     
                     r.ImGui_Spacing(ctx)
-                    local preview_changed, preview_val = r.ImGui_Checkbox(ctx, "Show preview", state.preview_compact)
+                    local preview_changed, preview_val = r.ImGui_Checkbox(ctx, "Show preview", config.preview_compact)
                     if preview_changed then
-                        state.preview_compact = preview_val
+                        config.preview_compact = preview_val
+                        SaveConfig()
                     end
                 else
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
@@ -2548,18 +2654,33 @@ local function DrawSettingsUI()
     r.ImGui_Separator(ctx)
     
     if r.ImGui_Button(ctx, "Save and Close", -1, 0) then
+        config.show_settings = false
+        state.settings_tab_initialized = false
         SaveConfig()
-        state.show_settings = false
         SetStatus("Settings saved")
     end
     
     if r.ImGui_Button(ctx, "Cancel##settings", -1, 0) then
         LoadConfig()
-        state.show_settings = false
+        config.show_settings = false
+        state.settings_tab_initialized = false
     end
 end
 
 local function loop()
+    if state.track_ptr and not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        local found_track = FindIndestructibleTrack()
+        if not found_track then
+            SaveConfig()
+            RemoveLockFile()
+            if COMMAND_ID then
+                r.SetToggleCommandState(0, COMMAND_ID, 0)
+                r.RefreshToolbar2(0, COMMAND_ID)
+            end
+            return
+        end
+    end
+    
     if not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then
         ctx = r.ImGui_CreateContext(SCRIPT_NAME)
         font_loaded = false
@@ -2591,7 +2712,7 @@ local function loop()
         return
     end
     
-    if state.preview_compact then
+    if config.preview_compact then
         DrawCompactWidget()
     end
     
@@ -2733,11 +2854,20 @@ local function loop()
             end
         end
         
-        if state.close_action then
+        if state.close_action == "exit" then
+            if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+                state.show_close_warning = true
+                state.close_action = nil
+            else
+                open = false
+            end
+        end
+        
+        if state.close_action == "keep" or state.close_action == "remove" then
             open = false
         end
         
-        if state.show_settings then
+        if config.show_settings then
             DrawSettingsUI()
         else
             DrawMainUI()
@@ -2765,6 +2895,11 @@ local function loop()
 end
 
 local function OnExit()
+    if COMMAND_ID then
+        r.SetToggleCommandState(0, COMMAND_ID, 0)
+        r.RefreshToolbar2(0, COMMAND_ID)
+    end
+    
     if state.close_action then
         RemoveLockFile()
         return
@@ -2789,6 +2924,13 @@ end
 local function Init()
     EnsureDirectories()
     LoadConfig()
+    
+    local _, _, section_id, cmd_id = r.get_action_context()
+    if cmd_id and cmd_id ~= 0 then
+        COMMAND_ID = cmd_id
+        r.SetToggleCommandState(section_id, cmd_id, 1)
+        r.RefreshToolbar2(section_id, cmd_id)
+    end
     
     local lock_info = CheckLockFile()
     if lock_info then
