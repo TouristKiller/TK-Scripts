@@ -1,15 +1,13 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 2.8
+-- @version 3.0
 -- @changelog:
---   + preview_compact now saved in config (default: true)
---   + show_settings and settings_tab now remembered between sessions
---   + added close button (red circle) to main and settings UI
---   + added "Close Script" option to compact widget context menu
---   + toolbar button now shows toggle state (lights up when running)
---   + script auto-closes when track is manually removed
---   + compact widget is now drag-to-move (when not locked)
---   + added Lock/Unlock Position option to compact context menu
+--   + Multi-profile support with 4 fixed profiles (each with own track, color, data)
+--   + Per-profile undo/redo history, snapshots, and auto-saves
+--   + Compact icon mode with right-click menu (Undo/Redo buttons, Save, Snapshot, Copy to Project)
+--   + Settings-only UI with tab-based interface per profile
+--   + Hide Settings option to keep monitoring while hiding window
+
 -------------------------------------------------------------------
 local r = reaper
 
@@ -49,7 +47,6 @@ end
 local DATA_DIR = r.GetResourcePath() .. "/Data/TK_IndestructibleTrack/"
 local CONFIG_FILE = DATA_DIR .. "TK_IndestructibleTrack_config.json"
 local TRACK_FILE = DATA_DIR .. "TK_IndestructibleTrack_data.json"
-local LOCK_FILE = DATA_DIR .. "TK_IndestructibleTrack.lock"
 local HISTORY_DIR = DATA_DIR .. "history/"
 local SNAPSHOTS_DIR = DATA_DIR .. "snapshots/"
 local MEDIA_DIR = DATA_DIR .. "media/"
@@ -64,21 +61,42 @@ local shield_loaded = false
 local SCRIPT_PATH = debug.getinfo(1, "S").source:match("@?(.*)[/\\]") or "."
 
 local default_config = {
-    track_name = "Indestructible",
-    check_interval = 1.0,
+    active_profile = 1,
+    profiles = {
+        {
+            name = "Indestructible 1",
+            track_color = 0x1E5A8A,
+            data_file = "TK_IT_Profile1.json",
+            enabled = true
+        },
+        {
+            name = "Indestructible 2",
+            track_color = 0x8A5A1E,
+            data_file = "TK_IT_Profile2.json",
+            enabled = false
+        },
+        {
+            name = "Indestructible 3",
+            track_color = 0x5A8A1E,
+            data_file = "TK_IT_Profile3.json",
+            enabled = false
+        },
+        {
+            name = "Indestructible 4",
+            track_color = 0x8A1E5A,
+            data_file = "TK_IT_Profile4.json",
+            enabled = false
+        }
+    },
     max_undo_history = 50,
     auto_backup_count = 5,
-    show_notifications = true,
-    track_color = 0x1E5A8A,
     auto_load_on_start = true,
-    tempo_check_enabled = true,
-    remember_tempo_choice = false,
-    tempo_choice = "time",
+    tempo_mode = "beat",
     track_position = "top",
     track_pinned = false,
     compact_mode = false,
-    compact_offset_x = 2,
-    compact_offset_y = 0,
+    compact_offset_x = -40,
+    compact_offset_y = 2,
     compact_icon_only = false,
     compact_no_bg = false,
     compact_icon_size = 28,
@@ -87,6 +105,7 @@ local default_config = {
     compact_locked_y = nil,
     preview_compact = true,
     show_settings = false,
+    hide_window = false,
     settings_tab = "General"
 }
 
@@ -110,10 +129,11 @@ local state = {
     show_snapshot_list = false,
     show_snapshot_save = false,
     snapshot_name_input = "",
-    show_close_warning = false,
     close_action = nil,
     status_message = "",
     status_time = 0,
+    settings_tab = 0,
+    force_tab_select = false,
     settings_tab_initialized = false,
     compact_dragging = false,
     compact_drag_start_x = 0,
@@ -121,6 +141,8 @@ local state = {
     compact_drag_offset_x = 0,
     compact_drag_offset_y = 0
 }
+
+local profile_states = {}
 
 local available_backups = {}
 local available_snapshots = {}
@@ -180,94 +202,203 @@ local function FileExists(path)
     return false
 end
 
-local function JsonEncode(tbl)
-    local json = "{"
-    local first = true
-    for k, v in pairs(tbl) do
-        if not first then json = json .. "," end
-        first = false
-        json = json .. '"' .. tostring(k) .. '":'
-        if type(v) == "string" then
-            v = v:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r')
-            json = json .. '"' .. v .. '"'
-        elseif type(v) == "number" then
-            json = json .. tostring(v)
-        elseif type(v) == "boolean" then
-            json = json .. (v and "true" or "false")
-        elseif type(v) == "table" then
-            json = json .. JsonEncode(v)
-        else
-            json = json .. "null"
+local function JsonEncode(tbl, indent)
+    indent = indent or 0
+    local spaces = string.rep("  ", indent)
+    local inner_spaces = string.rep("  ", indent + 1)
+    
+    local is_array = false
+    local n = 0
+    for k, _ in pairs(tbl) do
+        n = n + 1
+        if type(k) ~= "number" or k ~= n then
+            is_array = false
+            break
         end
+        is_array = true
     end
-    return json .. "}"
+    
+    if is_array then
+        local json = "[\n"
+        local first = true
+        for i, v in ipairs(tbl) do
+            if not first then json = json .. ",\n" end
+            first = false
+            json = json .. inner_spaces
+            if type(v) == "string" then
+                v = v:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r')
+                json = json .. '"' .. v .. '"'
+            elseif type(v) == "number" then
+                json = json .. tostring(v)
+            elseif type(v) == "boolean" then
+                json = json .. (v and "true" or "false")
+            elseif type(v) == "table" then
+                json = json .. JsonEncode(v, indent + 1)
+            else
+                json = json .. "null"
+            end
+        end
+        return json .. "\n" .. spaces .. "]"
+    else
+        local json = "{\n"
+        local first = true
+        for k, v in pairs(tbl) do
+            if not first then json = json .. ",\n" end
+            first = false
+            json = json .. inner_spaces .. '"' .. tostring(k) .. '": '
+            if type(v) == "string" then
+                v = v:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r')
+                json = json .. '"' .. v .. '"'
+            elseif type(v) == "number" then
+                json = json .. tostring(v)
+            elseif type(v) == "boolean" then
+                json = json .. (v and "true" or "false")
+            elseif type(v) == "table" then
+                json = json .. JsonEncode(v, indent + 1)
+            else
+                json = json .. "null"
+            end
+        end
+        return json .. "\n" .. spaces .. "}"
+    end
 end
 
 local function JsonDecode(str)
     if not str or str == "" then return nil end
-    local success, result = pcall(function()
-        str = str:gsub('%s*\n%s*', '')
-        local tbl = {}
-        str = str:match('^%s*{(.*)}%s*$')
-        if not str then return nil end
-        for key, val in str:gmatch('"([^"]+)"%s*:%s*([^,}]+)') do
-            val = val:gsub('^%s+', ''):gsub('%s+$', '')
-            if val == "null" then
-                val = nil
-            elseif val:match('^".*"$') then
-                val = val:sub(2, -2)
-                val = val:gsub('\\n', '\n'):gsub('\\r', '\r'):gsub('\\"', '"'):gsub('\\\\', '\\')
-            elseif val == "true" then 
-                val = true
-            elseif val == "false" then 
-                val = false
-            elseif tonumber(val) then 
-                val = tonumber(val)
-            end
-            tbl[key] = val
+    
+    local pos = 1
+    local len = #str
+    
+    local function skip_whitespace()
+        while pos <= len and str:sub(pos, pos):match("%s") do
+            pos = pos + 1
         end
-        return tbl
-    end)
-    return success and result or nil
-end
-
-local function CreateLockFile()
-    local f = io.open(LOCK_FILE, "w")
-    if f then
-        local proj_name = r.GetProjectName(0, "")
-        if proj_name == "" then proj_name = "Untitled" end
-        f:write(JsonEncode({
-            pid = tostring(r.GetCurrentThreadId and r.GetCurrentThreadId() or os.time()),
-            project = proj_name,
-            time = os.date("%Y-%m-%d %H:%M:%S")
-        }))
-        f:close()
-        return true
     end
-    return false
-end
-
-local function RemoveLockFile()
-    os.remove(LOCK_FILE)
-end
-
-local function CheckLockFile()
-    if not FileExists(LOCK_FILE) then return nil end
-    local f = io.open(LOCK_FILE, "r")
-    if not f then return nil end
-    local content = f:read("*all")
-    f:close()
-    return JsonDecode(content)
-end
-
-local function GetSavedDataTimestamp()
-    if not FileExists(TRACK_FILE) then return nil end
-    local f = io.open(TRACK_FILE, "r")
-    if not f then return nil end
-    local content = f:read("*all")
-    f:close()
-    local timestamp = content:match('"timestamp":"([^"]+)"')
-    return timestamp
+    
+    local function parse_string()
+        if str:sub(pos, pos) ~= '"' then return nil end
+        pos = pos + 1
+        local start = pos
+        local result = ""
+        while pos <= len do
+            local c = str:sub(pos, pos)
+            if c == '\\' and pos < len then
+                local nc = str:sub(pos + 1, pos + 1)
+                if nc == 'n' then result = result .. "\n"
+                elseif nc == 'r' then result = result .. "\r"
+                elseif nc == 't' then result = result .. "\t"
+                elseif nc == '"' then result = result .. '"'
+                elseif nc == '\\' then result = result .. '\\'
+                else result = result .. nc
+                end
+                pos = pos + 2
+            elseif c == '"' then
+                pos = pos + 1
+                return result
+            else
+                result = result .. c
+                pos = pos + 1
+            end
+        end
+        return result
+    end
+    
+    local parse_value
+    
+    local function parse_array()
+        if str:sub(pos, pos) ~= '[' then return nil end
+        pos = pos + 1
+        local arr = {}
+        skip_whitespace()
+        if str:sub(pos, pos) == ']' then
+            pos = pos + 1
+            return arr
+        end
+        while pos <= len do
+            skip_whitespace()
+            local val = parse_value()
+            table.insert(arr, val)
+            skip_whitespace()
+            local c = str:sub(pos, pos)
+            if c == ']' then
+                pos = pos + 1
+                return arr
+            elseif c == ',' then
+                pos = pos + 1
+            else
+                break
+            end
+        end
+        return arr
+    end
+    
+    local function parse_object()
+        if str:sub(pos, pos) ~= '{' then return nil end
+        pos = pos + 1
+        local obj = {}
+        skip_whitespace()
+        if str:sub(pos, pos) == '}' then
+            pos = pos + 1
+            return obj
+        end
+        while pos <= len do
+            skip_whitespace()
+            local key = parse_string()
+            if not key then break end
+            skip_whitespace()
+            if str:sub(pos, pos) ~= ':' then break end
+            pos = pos + 1
+            skip_whitespace()
+            local val = parse_value()
+            obj[key] = val
+            skip_whitespace()
+            local c = str:sub(pos, pos)
+            if c == '}' then
+                pos = pos + 1
+                return obj
+            elseif c == ',' then
+                pos = pos + 1
+            else
+                break
+            end
+        end
+        return obj
+    end
+    
+    parse_value = function()
+        skip_whitespace()
+        local c = str:sub(pos, pos)
+        if c == '"' then
+            return parse_string()
+        elseif c == '{' then
+            return parse_object()
+        elseif c == '[' then
+            return parse_array()
+        elseif str:sub(pos, pos + 3) == "true" then
+            pos = pos + 4
+            return true
+        elseif str:sub(pos, pos + 4) == "false" then
+            pos = pos + 5
+            return false
+        elseif str:sub(pos, pos + 3) == "null" then
+            pos = pos + 4
+            return nil
+        else
+            local num_str = str:match("^%-?%d+%.?%d*[eE]?[%+%-]?%d*", pos)
+            if num_str then
+                pos = pos + #num_str
+                return tonumber(num_str)
+            end
+        end
+        return nil
+    end
+    
+    local success, result = pcall(function()
+        skip_whitespace()
+        return parse_value()
+    end)
+    
+    return success and result or nil
 end
 
 local function SaveConfig()
@@ -281,7 +412,17 @@ end
 
 local function LoadConfig()
     for k, v in pairs(default_config) do
-        config[k] = v
+        if k == "profiles" then
+            config.profiles = {}
+            for i, p in ipairs(v) do
+                config.profiles[i] = {}
+                for pk, pv in pairs(p) do
+                    config.profiles[i][pk] = pv
+                end
+            end
+        else
+            config[k] = v
+        end
     end
     
     local f = io.open(CONFIG_FILE, "r")
@@ -291,21 +432,190 @@ local function LoadConfig()
         local loaded = JsonDecode(content)
         if loaded then
             for k, v in pairs(loaded) do
-                config[k] = v
+                if k ~= "profiles" then
+                    config[k] = v
+                end
             end
+            
+            if loaded.profiles and type(loaded.profiles) == "table" then
+                for i = 1, 4 do
+                    if loaded.profiles[i] then
+                        config.profiles[i].name = loaded.profiles[i].track_name or loaded.profiles[i].name or config.profiles[i].name
+                        config.profiles[i].track_color = loaded.profiles[i].track_color or config.profiles[i].track_color
+                        config.profiles[i].enabled = loaded.profiles[i].enabled
+                        if config.profiles[i].enabled == nil then
+                            config.profiles[i].enabled = (i == 1)
+                        end
+                    end
+                end
+            end
+            
+            if config.compact_offset_x and (config.compact_offset_x < -500 or config.compact_offset_x > 50) then
+                config.compact_offset_x = -40
+            end
+            if config.compact_offset_y and (config.compact_offset_y < -50 or config.compact_offset_y > 200) then
+                config.compact_offset_y = 2
+            end
+            
             return
         end
     end
 end
 
+local function GetActiveProfile()
+    if not config.profiles or type(config.profiles) ~= "table" or #config.profiles == 0 then
+        config.profiles = {{
+            name = "Default",
+            track_name = "Indestructible",
+            track_color = 0x1E5A8A,
+            data_file = "TK_IndestructibleTrack_data.json"
+        }}
+        config.active_profile = 1
+    end
+    local idx = config.active_profile or 1
+    if idx < 1 or idx > #config.profiles then idx = 1 end
+    config.active_profile = idx
+    local profile = config.profiles[idx]
+    if not profile then
+        profile = {
+            name = "Default",
+            track_name = "Indestructible",
+            track_color = 0x1E5A8A,
+            data_file = "TK_IndestructibleTrack_data.json"
+        }
+        config.profiles[idx] = profile
+    end
+    return profile, idx
+end
+
+local function GetProfileTrackFile(profile)
+    if not profile then profile = GetActiveProfile() end
+    if not profile then
+        return DATA_DIR .. "TK_IndestructibleTrack_data.json"
+    end
+    return DATA_DIR .. (profile.data_file or "TK_IndestructibleTrack_data.json")
+end
+
+local function GetProfileHistoryDir(profile)
+    if not profile then profile = GetActiveProfile() end
+    if not profile then return HISTORY_DIR .. "default/" end
+    local safe_name = (profile.name or "default"):gsub("[^%w%-_]", "_"):lower()
+    local dir = HISTORY_DIR .. safe_name .. "/"
+    r.RecursiveCreateDirectory(dir, 0)
+    return dir
+end
+
+local function GetProfilePExtKey(profile)
+    if not profile then profile = GetActiveProfile() end
+    if not profile then return "P_EXT:TK_IT_DEFAULT" end
+    local idx = 1
+    for i, p in ipairs(config.profiles) do
+        if p == profile then
+            idx = i
+            break
+        end
+    end
+    return "P_EXT:TK_IT_PROFILE_" .. idx
+end
+
+local function GetProfileStateKey(profile)
+    if not profile then profile = GetActiveProfile() end
+    if not profile then return "profile_1" end
+    for i, p in ipairs(config.profiles) do
+        if p == profile then
+            return "profile_" .. i
+        end
+    end
+    return "profile_1"
+end
+
+local IT_PREFIX = "IT: "
+
+local function GetFullTrackName(profile)
+    if not profile then profile = GetActiveProfile() end
+    if not profile then return IT_PREFIX .. "Track" end
+    return IT_PREFIX .. (profile.name or "Track")
+end
+local function IsProfileEnabled(profile)
+    return profile and profile.enabled == true
+end
+
+local function GetEnabledProfiles()
+    local enabled = {}
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            table.insert(enabled, profile)
+        end
+    end
+    return enabled
+end
+
+local RemoveTrackForProfile
+
+local function GetOrCreateProfileState(profile)
+    local key = GetProfileStateKey(profile)
+    if not profile_states[key] then
+        profile_states[key] = {
+            track_ptr = nil,
+            track_guid = nil,
+            last_chunk = nil,
+            last_normalized_chunk = nil,
+            undo_history = {},
+            undo_index = 0,
+            cached_chunk_for_switch = nil,
+            cached_normalized_for_switch = nil,
+            last_file_timestamp = nil
+        }
+    end
+    return profile_states[key]
+end
+
+local function FindTrackForProfile(profile)
+    local track_count = r.CountTracks(0)
+    if track_count == 0 then return nil end
+    
+    local pext_key = GetProfilePExtKey(profile)
+    
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local retval, marker = r.GetSetMediaTrackInfo_String(track, pext_key, "", false)
+        if retval and marker == "1" then
+            return track
+        end
+    end
+    
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local retval, name = r.GetTrackName(track)
+        if name == GetFullTrackName(profile) or name == profile.name then
+            r.GetSetMediaTrackInfo_String(track, pext_key, "1", true)
+            r.GetSetMediaTrackInfo_String(track, "P_NAME", GetFullTrackName(profile), true)
+            return track
+        end
+    end
+    
+    return nil
+end
+
+local function GetProfileTrackFileForProfile(profile)
+    local filename = profile.data_file or "TK_IT_default_data.json"
+    return DATA_DIR .. filename
+end
+
+local function GetSavedDataTimestamp()
+    local track_file = GetProfileTrackFile()
+    if not FileExists(track_file) then return nil end
+    local f = io.open(track_file, "r")
+    if not f then return nil end
+    local content = f:read("*all")
+    f:close()
+    local timestamp = content:match('"timestamp":"([^"]+)"')
+    return timestamp
+end
+
 local function SetStatus(msg, is_error)
     state.status_message = msg
     state.status_time = r.time_precise()
-    if config.show_notifications then
-        if is_error then
-            r.ShowConsoleMsg("[" .. SCRIPT_NAME .. "] ERROR: " .. msg .. "\n")
-        end
-    end
 end
 
 local function NormalizeChunkForComparison(chunk)
@@ -436,6 +746,7 @@ local function SetTrackChunk(track, chunk, preserve_local)
     if preserve_local ~= false then
         local should_pin = GetProjectPinStatus(0)
         r.SetMediaTrackInfo_Value(track, "B_TCPPIN", should_pin and 1 or 0)
+        r.SetMediaTrackInfo_Value(track, "C_TCPPIN", should_pin and 1 or 0)
     end
     
     r.Main_OnCommand(40047, 0)
@@ -510,46 +821,52 @@ local function CopyMediaAndUpdateChunk(chunk)
     return updated_chunk
 end
 
-local function SaveTrackData()
-    local track = state.track_ptr
+local function SaveTrackDataForProfile(profile, track, chunk, tempo_override)
     if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
-    
-    local chunk = GetTrackChunk(track)
+    if not chunk then
+        chunk = GetTrackChunk(track)
+    end
     if not chunk then return false end
+    
+    if not profile then profile = GetActiveProfile() end
     
     chunk = CopyMediaAndUpdateChunk(chunk)
     
     EnsureDirectories()
     
-    local f = io.open(TRACK_FILE, "r")
+    local track_file = GetProfileTrackFile(profile)
+    local history_dir = GetProfileHistoryDir(profile)
+    
+    local f = io.open(track_file, "r")
     if f then
         local old_content = f:read("*all")
         f:close()
         if old_content and old_content ~= "" then
-            local backup_name = HISTORY_DIR .. "backup_" .. os.date("%Y%m%d_%H%M%S") .. ".json"
+            local backup_name = history_dir .. "backup_" .. os.date("%Y%m%d_%H%M%S") .. ".json"
             local bf = io.open(backup_name, "w")
             if bf then
                 bf:write(old_content)
                 bf:close()
             end
-            CleanupOldBackups()
+            CleanupOldBackups(profile)
         end
     end
     
     chunk = chunk:gsub("\n", "<<<NEWLINE>>>")
     
-    local tempo = r.Master_GetTempo()
+    local tempo = tempo_override or r.Master_GetTempo()
     
     local data = {
         version = SCRIPT_VERSION,
         timestamp = os.date("%Y-%m-%d %H:%M:%S"),
-        track_name = config.track_name,
+        track_name = profile.name,
+        profile_name = profile.name,
         tempo = tempo,
         chunk = chunk,
         media_items = GetMediaItemsData(track)
     }
     
-    local f = io.open(TRACK_FILE, "w")
+    local f = io.open(track_file, "w")
     if f then
         f:write(JsonEncode(data))
         f:close()
@@ -558,12 +875,17 @@ local function SaveTrackData()
     return false
 end
 
-function CleanupOldBackups()
+local function SaveTrackData()
+    return SaveTrackDataForProfile(GetActiveProfile(), state.track_ptr, state.last_chunk)
+end
+
+function CleanupOldBackups(profile)
+    local history_dir = GetProfileHistoryDir(profile)
     local files = {}
     local idx = 0
     
     while true do
-        local filename = r.EnumerateFiles(HISTORY_DIR, idx)
+        local filename = r.EnumerateFiles(history_dir, idx)
         if not filename then break end
         if filename:match("^backup_.*%.json$") then
             table.insert(files, filename)
@@ -575,12 +897,13 @@ function CleanupOldBackups()
     
     while #files > config.auto_backup_count do
         local to_delete = table.remove(files)
-        os.remove(HISTORY_DIR .. to_delete)
+        os.remove(history_dir .. to_delete)
     end
 end
 
 local function LoadTrackData()
-    local f = io.open(TRACK_FILE, "r")
+    local track_file = GetProfileTrackFile()
+    local f = io.open(track_file, "r")
     if not f then return nil end
     local content = f:read("*all")
     f:close()
@@ -589,49 +912,51 @@ local function LoadTrackData()
     
     local data = {}
     
-    local chunk_marker = '"chunk":"'
-    local chunk_start = content:find(chunk_marker, 1, true)
+    local chunk_start = content:find('"chunk":%s*"', 1)
     if chunk_start then
-        chunk_start = chunk_start + #chunk_marker
+        chunk_start = content:find('"', chunk_start + 7, true)
+        if chunk_start then
+            chunk_start = chunk_start + 1
         
-        local search_pos = chunk_start
-        local chunk_end = nil
-        
-        while true do
-            local quote_pos = content:find('"', search_pos, true)
-            if not quote_pos then break end
+            local search_pos = chunk_start
+            local chunk_end = nil
             
-            local backslash_count = 0
-            local check_pos = quote_pos - 1
-            while check_pos >= 1 and content:sub(check_pos, check_pos) == '\\' do
-                backslash_count = backslash_count + 1
-                check_pos = check_pos - 1
+            while true do
+                local quote_pos = content:find('"', search_pos, true)
+                if not quote_pos then break end
+                
+                local backslash_count = 0
+                local check_pos = quote_pos - 1
+                while check_pos >= 1 and content:sub(check_pos, check_pos) == '\\' do
+                    backslash_count = backslash_count + 1
+                    check_pos = check_pos - 1
+                end
+                
+                if backslash_count % 2 == 0 then
+                    chunk_end = quote_pos
+                    break
+                end
+                
+                search_pos = quote_pos + 1
             end
             
-            if backslash_count % 2 == 0 then
-                chunk_end = quote_pos
-                break
+            if chunk_end then
+                local chunk_raw = content:sub(chunk_start, chunk_end - 1)
+                chunk_raw = chunk_raw:gsub("<<<NEWLINE>>>", "\n")
+                chunk_raw = chunk_raw:gsub('\\n', '\n')
+                chunk_raw = chunk_raw:gsub('\\"', '"')
+                chunk_raw = chunk_raw:gsub('\\\\', '\\')
+                data.chunk = chunk_raw
             end
-            
-            search_pos = quote_pos + 1
-        end
-        
-        if chunk_end then
-            local chunk_raw = content:sub(chunk_start, chunk_end - 1)
-            chunk_raw = chunk_raw:gsub("<<<NEWLINE>>>", "\n")
-            chunk_raw = chunk_raw:gsub('\\n', '\n')
-            chunk_raw = chunk_raw:gsub('\\"', '"')
-            chunk_raw = chunk_raw:gsub('\\\\', '\\')
-            data.chunk = chunk_raw
         end
     end
     
-    local name_match = content:match('"track_name":"([^"]*)"')
+    local name_match = content:match('"track_name":%s*"([^"]*)"')
     if name_match then
         data.track_name = name_match
     end
     
-    local tempo_match = content:match('"tempo":([%d%.]+)')
+    local tempo_match = content:match('"tempo":%s*([%d%.]+)')
     if tempo_match then
         data.tempo = tonumber(tempo_match)
     end
@@ -782,6 +1107,31 @@ local function DetectChangeType(old_chunk, new_chunk)
     return "Track modified"
 end
 
+local function AddToUndoHistoryForProfile(profile, chunk)
+    local pstate = GetOrCreateProfileState(profile)
+    
+    if pstate.undo_index < #pstate.undo_history then
+        for i = #pstate.undo_history, pstate.undo_index + 1, -1 do
+            table.remove(pstate.undo_history, i)
+        end
+    end
+    
+    local prev_chunk = pstate.undo_history[#pstate.undo_history] and pstate.undo_history[#pstate.undo_history].chunk or nil
+    local desc = DetectChangeType(prev_chunk, chunk)
+    
+    table.insert(pstate.undo_history, {
+        chunk = chunk,
+        timestamp = os.date("%H:%M:%S"),
+        description = desc
+    })
+    
+    while #pstate.undo_history > config.max_undo_history do
+        table.remove(pstate.undo_history, 1)
+    end
+    
+    pstate.undo_index = #pstate.undo_history
+end
+
 local function AddToUndoHistory(chunk)
     if state.undo_index < #state.undo_history then
         for i = #state.undo_history, state.undo_index + 1, -1 do
@@ -805,6 +1155,31 @@ local function AddToUndoHistory(chunk)
     state.undo_index = #state.undo_history
 end
 
+local function UndoTrackForProfile(profile)
+    local pstate = GetOrCreateProfileState(profile)
+    
+    if pstate.undo_index <= 1 then
+        SetStatus("No earlier states for " .. profile.name)
+        return false
+    end
+    
+    pstate.undo_index = pstate.undo_index - 1
+    local history_entry = pstate.undo_history[pstate.undo_index]
+    
+    if pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        r.Undo_BeginBlock()
+        r.PreventUIRefresh(1)
+        SetTrackChunk(pstate.track_ptr, history_entry.chunk)
+        pstate.last_chunk = history_entry.chunk
+        pstate.last_normalized_chunk = NormalizeChunkForComparison(history_entry.chunk)
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock(profile.name .. " - Undo", -1)
+        SetStatus(profile.name .. ": Undo " .. pstate.undo_index .. "/" .. #pstate.undo_history)
+        return true
+    end
+    return false
+end
+
 local function UndoTrack()
     if state.undo_index <= 1 then
         SetStatus("No earlier states available")
@@ -823,6 +1198,58 @@ local function UndoTrack()
         r.PreventUIRefresh(-1)
         r.Undo_EndBlock("Indestructible Track - Undo", -1)
         SetStatus("Undo to state " .. state.undo_index .. "/" .. #state.undo_history)
+        return true
+    end
+    return false
+end
+
+local function RedoTrackForProfile(profile)
+    local pstate = GetOrCreateProfileState(profile)
+    
+    if pstate.undo_index >= #pstate.undo_history then
+        SetStatus("No later states for " .. profile.name)
+        return false
+    end
+    
+    pstate.undo_index = pstate.undo_index + 1
+    local history_entry = pstate.undo_history[pstate.undo_index]
+    
+    if pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        r.Undo_BeginBlock()
+        r.PreventUIRefresh(1)
+        SetTrackChunk(pstate.track_ptr, history_entry.chunk)
+        pstate.last_chunk = history_entry.chunk
+        pstate.last_normalized_chunk = NormalizeChunkForComparison(history_entry.chunk)
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock(profile.name .. " - Redo", -1)
+        SetStatus(profile.name .. ": Redo " .. pstate.undo_index .. "/" .. #pstate.undo_history)
+        return true
+    end
+    return false
+end
+
+local function JumpToHistoryForProfile(profile, target_index)
+    local pstate = GetOrCreateProfileState(profile)
+    
+    if target_index < 1 or target_index > #pstate.undo_history then
+        return false
+    end
+    if target_index == pstate.undo_index then
+        return true
+    end
+    
+    pstate.undo_index = target_index
+    local history_entry = pstate.undo_history[pstate.undo_index]
+    
+    if pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        r.Undo_BeginBlock()
+        r.PreventUIRefresh(1)
+        SetTrackChunk(pstate.track_ptr, history_entry.chunk)
+        pstate.last_chunk = history_entry.chunk
+        pstate.last_normalized_chunk = NormalizeChunkForComparison(history_entry.chunk)
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock(profile.name .. " - Jump to state", -1)
+        SetStatus(profile.name .. ": Jump to " .. pstate.undo_index .. "/" .. #pstate.undo_history)
         return true
     end
     return false
@@ -878,9 +1305,10 @@ end
 
 local function ScanBackups()
     available_backups = {}
+    local history_dir = GetProfileHistoryDir()
     local idx = 0
     while true do
-        local filename = r.EnumerateFiles(HISTORY_DIR, idx)
+        local filename = r.EnumerateFiles(history_dir, idx)
         if not filename then break end
         if filename:match("^backup_.*%.json$") then
             local timestamp = filename:match("backup_(%d+_%d+)%.json")
@@ -894,7 +1322,7 @@ local function ScanBackups()
                 local display = string.format("%s-%s-%s %s:%s:%s", year, month, day, hour, min, sec)
                 table.insert(available_backups, {
                     filename = filename,
-                    path = HISTORY_DIR .. filename,
+                    path = history_dir .. filename,
                     display = display,
                     sort_key = timestamp
                 })
@@ -955,15 +1383,18 @@ local function LoadBackup(backup)
     chunk = chunk:gsub('\\"', '"')
     chunk = chunk:gsub('\\\\', '\\')
     
-    chunk = chunk:gsub('NAME ".-"', 'NAME "' .. config.track_name .. '"', 1)
+    local profile = GetActiveProfile()
+    local pext_key = GetProfilePExtKey(profile)
+    
+    chunk = chunk:gsub('NAME ".-"', 'NAME "' .. GetFullTrackName(profile) .. '"', 1)
     
     if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
         state.track_ptr = FindIndestructibleTrack()
         if not state.track_ptr then
             r.InsertTrackAtIndex(0, true)
             state.track_ptr = r.GetTrack(0, 0)
-            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
-            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
+            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", GetFullTrackName(profile), true)
+            r.GetSetMediaTrackInfo_String(state.track_ptr, pext_key, "1", true)
             state.track_guid = r.GetTrackGUID(state.track_ptr)
         end
     end
@@ -971,8 +1402,8 @@ local function LoadBackup(backup)
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     SetTrackChunk(state.track_ptr, chunk)
-    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
-    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
+    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", GetFullTrackName(profile), true)
+    r.GetSetMediaTrackInfo_String(state.track_ptr, pext_key, "1", true)
     state.last_chunk = chunk
     state.last_normalized_chunk = NormalizeChunkForComparison(chunk)
     AddToUndoHistory(chunk)
@@ -985,23 +1416,136 @@ local function LoadBackup(backup)
     return true
 end
 
-local function ScanSnapshots()
-    available_snapshots = {}
-    r.RecursiveCreateDirectory(SNAPSHOTS_DIR, 0)
+local function ScanBackupsForProfile(profile)
+    if not profile then return {} end
+    local backups = {}
+    local history_dir = GetProfileHistoryDir(profile)
     local idx = 0
     while true do
-        local filename = r.EnumerateFiles(SNAPSHOTS_DIR, idx)
+        local filename = r.EnumerateFiles(history_dir, idx)
+        if not filename then break end
+        if filename:match("^backup_.*%.json$") then
+            local timestamp = filename:match("backup_(%d+_%d+)%.json")
+            if timestamp then
+                local year = timestamp:sub(1, 4)
+                local month = timestamp:sub(5, 6)
+                local day = timestamp:sub(7, 8)
+                local hour = timestamp:sub(10, 11)
+                local min = timestamp:sub(12, 13)
+                local sec = timestamp:sub(14, 15)
+                local display = string.format("%s-%s-%s %s:%s:%s", year, month, day, hour, min, sec)
+                table.insert(backups, {
+                    filename = filename,
+                    path = history_dir .. filename,
+                    timestamp = display,
+                    sort_key = timestamp
+                })
+            end
+        end
+        idx = idx + 1
+    end
+    table.sort(backups, function(a, b) return a.sort_key > b.sort_key end)
+    return backups
+end
+
+local function LoadBackupForProfile(profile, backup)
+    local f = io.open(backup.path, "r")
+    if not f then
+        SetStatus("Could not open backup", true)
+        return false
+    end
+    local content = f:read("*all")
+    f:close()
+    
+    local chunk_marker = '"chunk":"'
+    local chunk_start = content:find(chunk_marker, 1, true)
+    if not chunk_start then
+        SetStatus("Invalid backup file", true)
+        return false
+    end
+    
+    chunk_start = chunk_start + #chunk_marker
+    local search_pos = chunk_start
+    local chunk_end = nil
+    while true do
+        local quote_pos = content:find('"', search_pos, true)
+        if not quote_pos then break end
+        local backslash_count = 0
+        local check_pos = quote_pos - 1
+        while check_pos >= 1 and content:sub(check_pos, check_pos) == '\\' do
+            backslash_count = backslash_count + 1
+            check_pos = check_pos - 1
+        end
+        if backslash_count % 2 == 0 then
+            chunk_end = quote_pos - 1
+            break
+        end
+        search_pos = quote_pos + 1
+    end
+    
+    if not chunk_end then
+        SetStatus("Could not parse backup", true)
+        return false
+    end
+    
+    local chunk = content:sub(chunk_start, chunk_end)
+    chunk = chunk:gsub("<<<NEWLINE>>>", "\n")
+    chunk = chunk:gsub('\\"', '"')
+    chunk = chunk:gsub('\\\\', '\\')
+    
+    local pext_key = GetProfilePExtKey(profile)
+    chunk = chunk:gsub('NAME ".-"', 'NAME "' .. GetFullTrackName(profile) .. '"', 1)
+    
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = profile_states[profile_key]
+    
+    if not pstate or not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        SetStatus("Track not found for profile", true)
+        return false
+    end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    SetTrackChunk(pstate.track_ptr, chunk)
+    r.GetSetMediaTrackInfo_String(pstate.track_ptr, "P_NAME", GetFullTrackName(profile), true)
+    r.GetSetMediaTrackInfo_String(pstate.track_ptr, pext_key, "1", true)
+    pstate.last_chunk = chunk
+    pstate.last_normalized_chunk = NormalizeChunkForComparison(chunk)
+    AddToUndoHistoryForProfile(profile, chunk)
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Load " .. profile.name .. " Backup", -1)
+    
+    SaveTrackDataForProfile(profile, pstate.track_ptr, chunk)
+    
+    SetStatus("Backup loaded: " .. backup.timestamp)
+    return true
+end
+
+local function GetProfileSnapshotsDir(profile)
+    if not profile then profile = GetActiveProfile() end
+    local profile_key = GetProfileStateKey(profile)
+    return DATA_DIR .. "snapshots/" .. profile_key .. "/"
+end
+
+local function ScanSnapshotsForProfile(profile)
+    if not profile then return {} end
+    local snapshots = {}
+    local snapshots_dir = GetProfileSnapshotsDir(profile)
+    r.RecursiveCreateDirectory(snapshots_dir, 0)
+    local idx = 0
+    while true do
+        local filename = r.EnumerateFiles(snapshots_dir, idx)
         if not filename then break end
         if filename:match("%.json$") then
-            local f = io.open(SNAPSHOTS_DIR .. filename, "r")
+            local f = io.open(snapshots_dir .. filename, "r")
             if f then
                 local content = f:read("*all")
                 f:close()
                 local name = content:match('"name":"([^"]*)"') or filename:gsub("%.json$", "")
                 local timestamp = content:match('"timestamp":"([^"]*)"') or ""
-                table.insert(available_snapshots, {
+                table.insert(snapshots, {
                     filename = filename,
-                    path = SNAPSHOTS_DIR .. filename,
+                    path = snapshots_dir .. filename,
                     name = name,
                     timestamp = timestamp,
                     display = name .. " (" .. timestamp .. ")"
@@ -1010,22 +1554,32 @@ local function ScanSnapshots()
         end
         idx = idx + 1
     end
-    table.sort(available_snapshots, function(a, b) return a.timestamp > b.timestamp end)
+    table.sort(snapshots, function(a, b) return a.timestamp > b.timestamp end)
+    return snapshots
 end
 
-local function SaveSnapshot(name)
-    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+local function ScanSnapshots()
+    available_snapshots = ScanSnapshotsForProfile(GetActiveProfile())
+end
+
+local function SaveSnapshotForProfile(profile, name)
+    if not profile then return false end
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = profile_states[profile_key]
+    
+    if not pstate or not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
         SetStatus("No track to save", true)
         return false
     end
     
-    local chunk = GetTrackChunk(state.track_ptr)
+    local chunk = GetTrackChunk(pstate.track_ptr)
     if not chunk then
         SetStatus("Could not get track data", true)
         return false
     end
     
-    r.RecursiveCreateDirectory(SNAPSHOTS_DIR, 0)
+    local snapshots_dir = GetProfileSnapshotsDir(profile)
+    r.RecursiveCreateDirectory(snapshots_dir, 0)
     
     local safe_name = name:gsub("[^%w%s%-_]", ""):gsub("%s+", "_")
     if safe_name == "" then safe_name = "snapshot" end
@@ -1045,7 +1599,7 @@ local function SaveSnapshot(name)
         escaped_chunk
     )
     
-    local f = io.open(SNAPSHOTS_DIR .. filename, "w")
+    local f = io.open(snapshots_dir .. filename, "w")
     if not f then
         SetStatus("Could not save snapshot", true)
         return false
@@ -1057,7 +1611,11 @@ local function SaveSnapshot(name)
     return true
 end
 
-local function LoadSnapshot(snapshot)
+local function SaveSnapshot(name)
+    return SaveSnapshotForProfile(GetActiveProfile(), name)
+end
+
+local function LoadSnapshotForProfile(profile, snapshot)
     local f = io.open(snapshot.path, "r")
     if not f then
         SetStatus("Could not open snapshot", true)
@@ -1107,48 +1665,61 @@ local function LoadSnapshot(snapshot)
     chunk = chunk:gsub('\\"', '"')
     chunk = chunk:gsub('\\\\', '\\')
     
-    chunk = chunk:gsub('NAME ".-"', 'NAME "' .. config.track_name .. '"', 1)
+    local pext_key = GetProfilePExtKey(profile)
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = GetOrCreateProfileState(profile)
     
-    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-        state.track_ptr = FindIndestructibleTrack()
-        if not state.track_ptr then
+    chunk = chunk:gsub('NAME ".-"', 'NAME "' .. GetFullTrackName(profile) .. '"', 1)
+    
+    if not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        pstate.track_ptr = FindTrackForProfile(profile)
+        if not pstate.track_ptr then
             r.InsertTrackAtIndex(0, true)
-            state.track_ptr = r.GetTrack(0, 0)
-            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
-            r.GetSetMediaTrackInfo_String(state.track_ptr, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
-            state.track_guid = r.GetTrackGUID(state.track_ptr)
+            pstate.track_ptr = r.GetTrack(0, 0)
+            r.GetSetMediaTrackInfo_String(pstate.track_ptr, "P_NAME", GetFullTrackName(profile), true)
+            r.GetSetMediaTrackInfo_String(pstate.track_ptr, pext_key, "1", true)
+            pstate.track_guid = r.GetTrackGUID(pstate.track_ptr)
         end
     end
     
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
-    SetTrackChunk(state.track_ptr, chunk)
-    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", config.track_name, true)
-    r.GetSetMediaTrackInfo_String(state.track_ptr, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
-    state.last_chunk = chunk
-    state.last_normalized_chunk = NormalizeChunkForComparison(chunk)
-    AddToUndoHistory(chunk)
+    SetTrackChunk(pstate.track_ptr, chunk)
+    r.GetSetMediaTrackInfo_String(pstate.track_ptr, "P_NAME", GetFullTrackName(profile), true)
+    r.GetSetMediaTrackInfo_String(pstate.track_ptr, pext_key, "1", true)
+    pstate.last_chunk = chunk
+    pstate.last_normalized_chunk = NormalizeChunkForComparison(chunk)
+    AddToUndoHistoryForProfile(profile, chunk)
     r.PreventUIRefresh(-1)
-    r.Undo_EndBlock("Load Indestructible Track Snapshot", -1)
+    r.Undo_EndBlock("Load " .. profile.name .. " Snapshot", -1)
     
-    SaveTrackData()
+    SaveTrackDataForProfile(profile, pstate.track_ptr, chunk)
     
     SetStatus("Snapshot loaded: " .. snapshot.name)
     return true
 end
 
-local function DeleteSnapshot(snapshot)
+local function LoadSnapshot(snapshot)
+    return LoadSnapshotForProfile(GetActiveProfile(), snapshot)
+end
+
+local function DeleteSnapshotForProfile(profile, snapshot)
     os.remove(snapshot.path)
-    ScanSnapshots()
     SetStatus("Snapshot deleted: " .. snapshot.name)
+end
+
+local function DeleteSnapshot(snapshot)
+    DeleteSnapshotForProfile(GetActiveProfile(), snapshot)
 end
 
 local function FindIndestructibleTrack()
     local track_count = r.CountTracks(0)
+    local profile = GetActiveProfile()
+    local pext_key = GetProfilePExtKey(profile)
     
     for i = 0, track_count - 1 do
         local track = r.GetTrack(0, i)
-        local retval, marker = r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "", false)
+        local retval, marker = r.GetSetMediaTrackInfo_String(track, pext_key, "", false)
         if retval and marker == "1" then
             return track, r.BR_GetMediaItemGUID and r.GetTrackGUID(track) or nil
         end
@@ -1156,18 +1727,139 @@ local function FindIndestructibleTrack()
     
     for i = 0, track_count - 1 do
         local track = r.GetTrack(0, i)
+        local retval, marker = r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "", false)
+        if retval and marker == "1" then
+            r.GetSetMediaTrackInfo_String(track, pext_key, "1", true)
+            return track, r.BR_GetMediaItemGUID and r.GetTrackGUID(track) or nil
+        end
+    end
+    
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
         local retval, name = r.GetTrackName(track)
-        if name == config.track_name then
-            r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
+        if name == GetFullTrackName(profile) or name == profile.name then
+            r.GetSetMediaTrackInfo_String(track, pext_key, "1", true)
+            r.GetSetMediaTrackInfo_String(track, "P_NAME", GetFullTrackName(profile), true)
             return track, r.BR_GetMediaItemGUID and r.GetTrackGUID(track) or nil
         end
     end
     return nil, nil
 end
 
+local function CountITTracksInAllProjects()
+    local count = 0
+    local projects = {}
+    local profile = GetActiveProfile()
+    local pext_key = GetProfilePExtKey(profile)
+    local idx = 0
+    while true do
+        local proj = r.EnumProjects(idx)
+        if not proj then break end
+        local track_count = r.CountTracks(proj)
+        for i = 0, track_count - 1 do
+            local track = r.GetTrack(proj, i)
+            local retval, marker = r.GetSetMediaTrackInfo_String(track, pext_key, "", false)
+            if retval and marker == "1" then
+                count = count + 1
+                table.insert(projects, {proj = proj, track = track})
+                break
+            end
+            local retval2, marker2 = r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "", false)
+            if retval2 and marker2 == "1" then
+                count = count + 1
+                table.insert(projects, {proj = proj, track = track})
+                break
+            end
+            local retval3, name = r.GetTrackName(track)
+            if name == GetFullTrackName(profile) or name == profile.name then
+                count = count + 1
+                table.insert(projects, {proj = proj, track = track})
+                break
+            end
+        end
+        idx = idx + 1
+    end
+    return count, projects
+end
+
+local function RemoveITTracksFromAllProjects()
+    local current_proj = r.EnumProjects(-1)
+    
+    local idx = 0
+    while true do
+        local proj = r.EnumProjects(idx)
+        if not proj then break end
+        
+        r.SelectProjectInstance(proj)
+        
+        local tracks_to_delete = {}
+        local track_count = r.CountTracks(0)
+        
+        for i = 0, track_count - 1 do
+            local track = r.GetTrack(0, i)
+            if track then
+                local should_delete = false
+                
+                for _, profile in ipairs(config.profiles) do
+                    local pext_key = GetProfilePExtKey(profile)
+                    local retval, marker = r.GetSetMediaTrackInfo_String(track, pext_key, "", false)
+                    if retval and marker == "1" then
+                        should_delete = true
+                        break
+                    end
+                    
+                    local retval3, name = r.GetTrackName(track)
+                    if name == GetFullTrackName(profile) or name == profile.name then
+                        should_delete = true
+                        break
+                    end
+                end
+                
+                if not should_delete then
+                    local retval2, marker2 = r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "", false)
+                    if retval2 and marker2 == "1" then
+                        should_delete = true
+                    end
+                end
+                
+                if should_delete then
+                    table.insert(tracks_to_delete, track)
+                end
+            end
+        end
+        
+        for i = #tracks_to_delete, 1, -1 do
+            if r.ValidatePtr(tracks_to_delete[i], "MediaTrack*") then
+                r.DeleteTrack(tracks_to_delete[i])
+            end
+        end
+        
+        idx = idx + 1
+    end
+    
+    for _, profile in ipairs(config.profiles) do
+        local profile_key = GetProfileStateKey(profile)
+        if profile_states[profile_key] then
+            profile_states[profile_key].track_ptr = nil
+            profile_states[profile_key].track_guid = nil
+        end
+    end
+    
+    state.track_ptr = nil
+    state.track_guid = nil
+    state.is_monitoring = false
+    
+    if current_proj then
+        r.SelectProjectInstance(current_proj)
+    end
+end
+
 local function CreateIndestructibleTrack()
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
+    
+    local profile = GetActiveProfile()
+    local pext_key = GetProfilePExtKey(profile)
     
     local track_count = r.CountTracks(0)
     local insert_index = 0
@@ -1179,19 +1871,17 @@ local function CreateIndestructibleTrack()
     local track = r.GetTrack(0, insert_index)
     
     if track then
-        r.GetSetMediaTrackInfo_String(track, "P_NAME", config.track_name, true)
-        r.GetSetMediaTrackInfo_String(track, "P_EXT:TK_INDESTRUCTIBLE", "1", true)
+        r.GetSetMediaTrackInfo_String(track, "P_NAME", GetFullTrackName(profile), true)
+        r.GetSetMediaTrackInfo_String(track, pext_key, "1", true)
         
-        local color = r.ColorToNative(
-            (config.track_color >> 16) & 0xFF,
-            (config.track_color >> 8) & 0xFF,
-            config.track_color & 0xFF
-        ) | 0x1000000
-        r.SetTrackColor(track, color)
+        local color_rgb = profile.track_color or 0x1E5A8A
+        local native_color = r.ImGui_ColorConvertNative(color_rgb)
+        r.SetTrackColor(track, native_color | 0x1000000)
         
         local should_pin = GetProjectPinStatus(0)
         if should_pin then
             r.SetMediaTrackInfo_Value(track, "B_TCPPIN", 1)
+            r.SetMediaTrackInfo_Value(track, "C_TCPPIN", 1)
         end
         
         state.track_ptr = track
@@ -1211,7 +1901,100 @@ local function CreateIndestructibleTrack()
     return track
 end
 
+local function CountDuplicateITTracks()
+    local count = 0
+    local tracks = {}
+    local track_count = r.CountTracks(0)
+    local profile = GetActiveProfile()
+    local pext_key = GetProfilePExtKey(profile)
+    
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        local retval, marker = r.GetSetMediaTrackInfo_String(track, pext_key, "", false)
+        if retval and marker == "1" then
+            count = count + 1
+            table.insert(tracks, {track = track, index = i})
+        end
+    end
+    
+    if count <= 1 then
+        for i = 0, track_count - 1 do
+            local track = r.GetTrack(0, i)
+            local already_counted = false
+            for _, t in ipairs(tracks) do
+                if t.track == track then already_counted = true break end
+            end
+            if not already_counted then
+                local retval, name = r.GetTrackName(track)
+                if name == GetFullTrackName(profile) or name == profile.name then
+                    count = count + 1
+                    table.insert(tracks, {track = track, index = i})
+                end
+            end
+        end
+    end
+    
+    return count, tracks
+end
+
+local function CleanupDuplicateITTracks()
+    local count, tracks = CountDuplicateITTracks()
+    if count <= 1 then return nil end
+    
+    local profile = GetActiveProfile()
+    local pext_key = GetProfilePExtKey(profile)
+    
+    local answer = r.MB(
+        string.format("Found %d '%s' tracks in this project!\n\n" ..
+            "This can happen if the script was closed improperly.\n\n" ..
+            "Keep the first one and remove the duplicates?",
+            count, profile.name),
+        SCRIPT_NAME .. " - Duplicate Tracks Found",
+        4
+    )
+    
+    if answer == 6 then
+        r.Undo_BeginBlock()
+        r.PreventUIRefresh(1)
+        
+        local keep_track = tracks[1].track
+        r.GetSetMediaTrackInfo_String(keep_track, pext_key, "1", true)
+        
+        for i = #tracks, 2, -1 do
+            if r.ValidatePtr(tracks[i].track, "MediaTrack*") then
+                r.DeleteTrack(tracks[i].track)
+            end
+        end
+        
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock("Remove duplicate Indestructible Tracks", -1)
+        r.TrackList_AdjustWindows(false)
+        
+        SetStatus(string.format("Removed %d duplicate track(s)", count - 1))
+        return keep_track
+    end
+    
+    return tracks[1].track
+end
+
+local LoadOrCreateTrackForProfile
+local LoadOrCreateAllProfileTracks
+local ToggleProfile
+
 local function LoadOrCreateTrack()
+    local duplicate_cleaned = CleanupDuplicateITTracks()
+    if duplicate_cleaned then
+        state.track_ptr = duplicate_cleaned
+        state.track_guid = r.GetTrackGUID(duplicate_cleaned)
+        state.last_chunk = GetTrackChunk(duplicate_cleaned)
+        state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
+        state.is_monitoring = true
+        if state.last_chunk then
+            AddToUndoHistory(state.last_chunk)
+        end
+        return duplicate_cleaned
+    end
+    
     local existing_track = FindIndestructibleTrack()
     
     if existing_track then
@@ -1220,7 +2003,8 @@ local function LoadOrCreateTrack()
         state.last_chunk = GetTrackChunk(existing_track)
         state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
         
-        local tf = io.open(TRACK_FILE, "r")
+        local track_file = GetProfileTrackFile()
+        local tf = io.open(track_file, "r")
         if tf then
             local tc = tf:read("*all")
             tf:close()
@@ -1256,12 +2040,16 @@ local function LoadOrCreateTrack()
         if state.last_chunk then
             AddToUndoHistory(state.last_chunk)
         end
+        state.is_monitoring = true
         SetStatus("Existing track found and monitored")
         return existing_track
     end
     
     local saved_data = LoadTrackData()
     if saved_data and saved_data.chunk and config.auto_load_on_start then
+        local profile = GetActiveProfile()
+        local track_file = GetProfileTrackFile(profile)
+        
         r.Undo_BeginBlock()
         r.PreventUIRefresh(1)
         
@@ -1271,14 +2059,14 @@ local function LoadOrCreateTrack()
         if track then
             local success = SetTrackChunk(track, saved_data.chunk)
             if success then
-                r.GetSetMediaTrackInfo_String(track, "P_NAME", config.track_name, true)
+                r.GetSetMediaTrackInfo_String(track, "P_NAME", GetFullTrackName(profile), true)
                 state.track_ptr = track
                 state.track_guid = r.GetTrackGUID(track)
                 state.last_chunk = saved_data.chunk
                 state.last_normalized_chunk = NormalizeChunkForComparison(saved_data.chunk)
                 state.is_monitoring = true
                 
-                local tf = io.open(TRACK_FILE, "r")
+                local tf = io.open(track_file, "r")
                 if tf then
                     local tc = tf:read("*all")
                     tf:close()
@@ -1317,11 +2105,18 @@ local function GetProjectMediaPath()
     return nil
 end
 
-local function CopyTrackToProject()
-    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+local function CopyTrackToProject(profile)
+    if not profile then profile = GetActiveProfile() end
+    
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = profile_states[profile_key]
+    
+    if not pstate or not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
         SetStatus("No track to copy", true)
         return false
     end
+    
+    local track_ptr = pstate.track_ptr
     
     local proj_path = GetProjectMediaPath()
     if not proj_path then
@@ -1329,7 +2124,7 @@ local function CopyTrackToProject()
         return false
     end
     
-    local chunk = GetTrackChunk(state.track_ptr)
+    local chunk = GetTrackChunk(track_ptr)
     if not chunk then
         SetStatus("Could not get track data", true)
         return false
@@ -1357,7 +2152,7 @@ local function CopyTrackToProject()
         end
     end
     
-    updated_chunk = updated_chunk:gsub('NAME%s+"' .. config.track_name .. '"', 'NAME "' .. config.track_name .. ' (Copy)"')
+    updated_chunk = updated_chunk:gsub('NAME%s+"' .. profile.name .. '"', 'NAME "' .. profile.name .. ' (Copy)"')
     
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
@@ -1376,7 +2171,7 @@ local function CopyTrackToProject()
         
         local success = SetTrackChunk(new_track, updated_chunk, false)
         if success then
-            r.GetSetMediaTrackInfo_String(new_track, "P_NAME", config.track_name .. " (Copy)", true)
+            r.GetSetMediaTrackInfo_String(new_track, "P_NAME", GetFullTrackName(profile) .. " (Copy)", true)
             SetStatus("Track copied with " .. copied_count .. " media file(s)")
         else
             SetStatus("Failed to create copy", true)
@@ -1392,201 +2187,30 @@ end
 
 local last_save_time = 0
 local last_file_timestamp = nil
-local last_project_path = nil
+local last_project_ptr = nil
 local pending_change_time = nil
 local pending_change_chunk = nil
-local pending_tempo_sync = nil
 local DEBOUNCE_DELAY = 0.5
 
-local function CheckForExternalChanges()
-    if pending_change_time then return end
-    if not FileExists(TRACK_FILE) then return end
-    
-    local current_project_path = r.GetProjectPath() or ""
-    if current_project_path ~= last_project_path then
-        last_project_path = current_project_path
-        last_file_timestamp = nil
+local pending_changes_per_profile = {}
+
+local function GetOrCreatePendingState(profile_key)
+    if not pending_changes_per_profile[profile_key] then
+        pending_changes_per_profile[profile_key] = {
+            pending_time = nil,
+            pending_chunk = nil
+        }
     end
-    
-    local track = state.track_ptr
-    if not track or not r.ValidatePtr(track, "MediaTrack*") then
-        track = FindIndestructibleTrack()
-        if not track then return end
-        state.track_ptr = track
-        state.track_guid = r.GetTrackGUID(track)
-    end
-    
-    local f = io.open(TRACK_FILE, "r")
-    if not f then return end
-    local content = f:read("*all")
-    f:close()
-    
-    local saved_timestamp = content:match('"timestamp":"([^"]+)"')
-    if not saved_timestamp then return end
-    
-    if last_file_timestamp == nil then
-        last_file_timestamp = saved_timestamp
-        
-        local saved_data = LoadTrackData()
-        if saved_data and saved_data.chunk then
-            local current_chunk = GetTrackChunk(track)
-            if not current_chunk then return end
-            
-            local current_normalized = NormalizeChunkForComparison(current_chunk)
-            local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
-            
-            local current_tempo = r.Master_GetTempo()
-            local saved_tempo = saved_data.tempo
-            
-            if config.tempo_check_enabled and saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
-                if config.remember_tempo_choice then
-                    if config.tempo_choice == "time" then
-                        r.Undo_BeginBlock()
-                        r.PreventUIRefresh(1)
-                        SetTrackChunk(track, saved_data.chunk)
-                        state.last_chunk = saved_data.chunk
-                        state.last_normalized_chunk = saved_normalized
-                        AddToUndoHistory(saved_data.chunk)
-                        r.PreventUIRefresh(-1)
-                        r.Undo_EndBlock("Sync Indestructible Track", -1)
-                        r.TrackList_AdjustWindows(false)
-                        r.UpdateArrange()
-                        SetStatus("Loaded (time-based)")
-                    elseif config.tempo_choice == "beat" then
-                        local adjusted_chunk = AdjustChunkToTempo(saved_data.chunk, saved_tempo, current_tempo)
-                        r.Undo_BeginBlock()
-                        r.PreventUIRefresh(1)
-                        SetTrackChunk(track, adjusted_chunk)
-                        state.last_chunk = adjusted_chunk
-                        state.last_normalized_chunk = NormalizeChunkForComparison(adjusted_chunk)
-                        AddToUndoHistory(adjusted_chunk)
-                        r.PreventUIRefresh(-1)
-                        r.Undo_EndBlock("Sync Indestructible Track (tempo adjusted)", -1)
-                        r.TrackList_AdjustWindows(false)
-                        r.UpdateArrange()
-                        SaveTrackData()
-                        SetStatus("Loaded (beat-based)")
-                    else
-                        state.last_chunk = current_chunk
-                        state.last_normalized_chunk = current_normalized
-                        SaveTrackData()
-                        SetStatus("Cancelled (using current)")
-                    end
-                else
-                    pending_tempo_sync = {
-                        saved_data = saved_data,
-                        saved_normalized = saved_normalized,
-                        current_tempo = current_tempo,
-                        saved_tempo = saved_tempo,
-                        track = track
-                    }
-                    SetStatus("Tempo differs - confirm sync")
-                end
-            elseif saved_normalized ~= current_normalized then
-                r.Undo_BeginBlock()
-                r.PreventUIRefresh(1)
-                SetTrackChunk(track, saved_data.chunk)
-                state.last_chunk = saved_data.chunk
-                state.last_normalized_chunk = saved_normalized
-                AddToUndoHistory(saved_data.chunk)
-                r.PreventUIRefresh(-1)
-                r.Undo_EndBlock("Sync Indestructible Track", -1)
-                r.TrackList_AdjustWindows(false)
-                r.UpdateArrange()
-                SetStatus("Synced from another project")
-            else
-                state.last_chunk = current_chunk
-                state.last_normalized_chunk = current_normalized
-            end
-        end
-        return
-    end
-    
-    if saved_timestamp ~= last_file_timestamp then
-        last_file_timestamp = saved_timestamp
-        
-        local saved_data = LoadTrackData()
-        if saved_data and saved_data.chunk then
-            local current_chunk = GetTrackChunk(track)
-            if not current_chunk then return end
-            
-            local current_normalized = NormalizeChunkForComparison(current_chunk)
-            local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
-            
-            local current_tempo = r.Master_GetTempo()
-            local saved_tempo = saved_data.tempo
-            
-            if config.tempo_check_enabled and saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
-                if config.remember_tempo_choice then
-                    if config.tempo_choice == "time" then
-                        r.Undo_BeginBlock()
-                        r.PreventUIRefresh(1)
-                        SetTrackChunk(track, saved_data.chunk)
-                        state.last_chunk = saved_data.chunk
-                        state.last_normalized_chunk = saved_normalized
-                        AddToUndoHistory(saved_data.chunk)
-                        r.PreventUIRefresh(-1)
-                        r.Undo_EndBlock("Sync Indestructible Track", -1)
-                        r.TrackList_AdjustWindows(false)
-                        r.UpdateArrange()
-                        SetStatus("Loaded (time-based)")
-                    elseif config.tempo_choice == "beat" then
-                        local adjusted_chunk = AdjustChunkToTempo(saved_data.chunk, saved_tempo, current_tempo)
-                        r.Undo_BeginBlock()
-                        r.PreventUIRefresh(1)
-                        SetTrackChunk(track, adjusted_chunk)
-                        state.last_chunk = adjusted_chunk
-                        state.last_normalized_chunk = NormalizeChunkForComparison(adjusted_chunk)
-                        AddToUndoHistory(adjusted_chunk)
-                        r.PreventUIRefresh(-1)
-                        r.Undo_EndBlock("Sync Indestructible Track (tempo adjusted)", -1)
-                        r.TrackList_AdjustWindows(false)
-                        r.UpdateArrange()
-                        SaveTrackData()
-                        SetStatus("Loaded (beat-based)")
-                    else
-                        state.last_chunk = current_chunk
-                        state.last_normalized_chunk = current_normalized
-                        SaveTrackData()
-                        SetStatus("Cancelled (using current)")
-                    end
-                else
-                    pending_tempo_sync = {
-                        saved_data = saved_data,
-                        saved_normalized = saved_normalized,
-                        current_tempo = current_tempo,
-                        saved_tempo = saved_tempo,
-                        track = track
-                    }
-                    SetStatus("Tempo differs - confirm sync")
-                end
-            elseif saved_normalized ~= current_normalized then
-                r.Undo_BeginBlock()
-                r.PreventUIRefresh(1)
-                SetTrackChunk(track, saved_data.chunk)
-                state.last_chunk = saved_data.chunk
-                state.last_normalized_chunk = saved_normalized
-                
-                AddToUndoHistory(saved_data.chunk)
-                
-                r.PreventUIRefresh(-1)
-                r.Undo_EndBlock("Sync Indestructible Track", -1)
-                r.TrackList_AdjustWindows(false)
-                r.UpdateArrange()
-                SetStatus("Synced from another project")
-            else
-                state.last_chunk = current_chunk
-                state.last_normalized_chunk = current_normalized
-            end
-        end
-    end
+    return pending_changes_per_profile[profile_key]
 end
 
-local function ProcessPendingChange()
+local function FlushPendingChange()
     if not pending_change_time then return end
-    
-    local now = r.time_precise()
-    if now - pending_change_time < DEBOUNCE_DELAY then return end
+    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        pending_change_time = nil
+        pending_change_chunk = nil
+        return
+    end
     
     local current_chunk = GetTrackChunk(state.track_ptr)
     if not current_chunk then 
@@ -1604,12 +2228,562 @@ local function ProcessPendingChange()
     
     if SaveTrackData() then
         SetStatus("Auto-save: change saved (" .. os.date("%H:%M:%S") .. ")")
-    else
-        SetStatus("ERROR: Could not save change!", true)
     end
     
     pending_change_time = nil
     pending_change_chunk = nil
+end
+
+local cached_chunk_for_switch = nil
+local cached_normalized_for_switch = nil
+local cached_project_ptr = nil
+local cached_chunks_per_profile = {}
+
+local function LoadTrackDataForProfile(profile)
+    local track_file = GetProfileTrackFileForProfile(profile)
+    if not FileExists(track_file) then return nil end
+    
+    local f = io.open(track_file, "r")
+    if not f then return nil end
+    local content = f:read("*all")
+    f:close()
+    
+    if not content or content == "" then return nil end
+    
+    local data = {}
+    
+    local chunk_start = content:find('"chunk":%s*"', 1)
+    if chunk_start then
+        chunk_start = content:find('"', chunk_start + 7, true)
+        if chunk_start then
+            chunk_start = chunk_start + 1
+        
+            local search_pos = chunk_start
+            local chunk_end = nil
+            
+            while true do
+                local quote_pos = content:find('"', search_pos, true)
+                if not quote_pos then break end
+                
+                local backslash_count = 0
+                local check_pos = quote_pos - 1
+                while check_pos >= 1 and content:sub(check_pos, check_pos) == '\\' do
+                    backslash_count = backslash_count + 1
+                    check_pos = check_pos - 1
+                end
+                
+                if backslash_count % 2 == 0 then
+                    chunk_end = quote_pos
+                    break
+                end
+                
+                search_pos = quote_pos + 1
+            end
+            
+            if chunk_end then
+                local chunk_raw = content:sub(chunk_start, chunk_end - 1)
+                chunk_raw = chunk_raw:gsub("<<<NEWLINE>>>", "\n")
+                chunk_raw = chunk_raw:gsub('\\n', '\n')
+                chunk_raw = chunk_raw:gsub('\\"', '"')
+                chunk_raw = chunk_raw:gsub('\\\\', '\\')
+                data.chunk = chunk_raw
+            end
+        end
+    end
+    
+    local name_match = content:match('"track_name":%s*"([^"]*)"')
+    if name_match then
+        data.track_name = name_match
+    end
+    
+    local tempo_match = content:match('"tempo":%s*([%d%.]+)')
+    if tempo_match then
+        data.tempo = tonumber(tempo_match)
+    end
+    
+    data.version = content:match('"version"%s*:%s*"([^"]+)"')
+    data.timestamp = content:match('"timestamp"%s*:%s*"([^"]+)"')
+    data.profile_name = content:match('"profile_name"%s*:%s*"([^"]+)"')
+    
+    return data
+end
+
+local function GetInsertIndexForProfile(profile)
+    local track_count = r.CountTracks(0)
+    
+    if config.track_position == "bottom" then
+        return track_count
+    end
+    
+    local profile_index = 1
+    for i, p in ipairs(config.profiles) do
+        if p.data_file == profile.data_file then
+            profile_index = i
+            break
+        end
+    end
+    
+    local it_tracks_before = 0
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if track then
+            for j, p in ipairs(config.profiles) do
+                if j < profile_index and IsProfileEnabled(p) then
+                    local pext_key = GetProfilePExtKey(p)
+                    local _, val = r.GetSetMediaTrackInfo_String(track, pext_key, "", false)
+                    if val == "1" then
+                        it_tracks_before = it_tracks_before + 1
+                        break
+                    end
+                end
+            end
+        end
+    end
+    
+    return it_tracks_before
+end
+
+LoadOrCreateTrackForProfile = function(profile)
+    local pext_key = GetProfilePExtKey(profile)
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = GetOrCreateProfileState(profile)
+    
+    local existing_track = FindTrackForProfile(profile)
+    if existing_track then
+        pstate.track_ptr = existing_track
+        pstate.track_guid = r.GetTrackGUID(existing_track)
+        pstate.last_chunk = GetTrackChunk(existing_track)
+        pstate.last_normalized_chunk = NormalizeChunkForComparison(pstate.last_chunk)
+        pstate.is_monitoring = true
+        if pstate.last_chunk and #pstate.undo_history == 0 then
+            AddToUndoHistoryForProfile(profile, pstate.last_chunk)
+        end
+        return existing_track
+    end
+    
+    local saved_data = LoadTrackDataForProfile(profile)
+    if saved_data and saved_data.chunk and config.auto_load_on_start then
+        local chunk_to_load = saved_data.chunk
+        
+        local current_tempo = r.Master_GetTempo()
+        local saved_tempo = saved_data.tempo
+        if saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
+            if config.tempo_mode == "beat" then
+                chunk_to_load = AdjustChunkToTempo(saved_data.chunk, saved_tempo, current_tempo)
+            end
+        end
+        
+        r.Undo_BeginBlock()
+        r.PreventUIRefresh(1)
+        
+        local insert_index = GetInsertIndexForProfile(profile)
+        
+        r.InsertTrackAtIndex(insert_index, true)
+        local track = r.GetTrack(0, insert_index)
+        
+        if track then
+            local success = SetTrackChunk(track, chunk_to_load)
+            if success then
+                r.GetSetMediaTrackInfo_String(track, "P_NAME", GetFullTrackName(profile), true)
+                r.GetSetMediaTrackInfo_String(track, pext_key, "1", true)
+                
+                pstate.track_ptr = track
+                pstate.track_guid = r.GetTrackGUID(track)
+                pstate.last_chunk = GetTrackChunk(track)
+                pstate.last_normalized_chunk = NormalizeChunkForComparison(pstate.last_chunk)
+                pstate.is_monitoring = true
+                AddToUndoHistoryForProfile(profile, pstate.last_chunk)
+                
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Load " .. profile.name .. " Track", -1)
+                return track
+            end
+        end
+        
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock("Load " .. profile.name .. " Track", -1)
+    end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local insert_index = GetInsertIndexForProfile(profile)
+    
+    r.InsertTrackAtIndex(insert_index, true)
+    local track = r.GetTrack(0, insert_index)
+    
+    if track then
+        r.GetSetMediaTrackInfo_String(track, "P_NAME", GetFullTrackName(profile), true)
+        r.GetSetMediaTrackInfo_String(track, pext_key, "1", true)
+        
+        local color_rgb = profile.track_color or 0x1E5A8A
+        local native_color = r.ImGui_ColorConvertNative(color_rgb)
+        r.SetTrackColor(track, native_color | 0x1000000)
+        
+        local should_pin = GetProjectPinStatus(0)
+        if should_pin then
+            r.SetMediaTrackInfo_Value(track, "B_TCPPIN", 1)
+            r.SetMediaTrackInfo_Value(track, "C_TCPPIN", 1)
+        end
+        
+        pstate.track_ptr = track
+        pstate.track_guid = r.GetTrackGUID(track)
+        pstate.last_chunk = GetTrackChunk(track)
+        pstate.last_normalized_chunk = NormalizeChunkForComparison(pstate.last_chunk)
+        pstate.is_monitoring = true
+        AddToUndoHistoryForProfile(profile, pstate.last_chunk)
+    end
+    
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Create " .. profile.name .. " Track", -1)
+    
+    return track
+end
+
+LoadOrCreateAllProfileTracks = function()
+    local created_any = false
+    
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            local track = LoadOrCreateTrackForProfile(profile)
+            if track then
+                created_any = true
+            end
+        end
+    end
+    
+    r.TrackList_AdjustWindows(false)
+    
+    return created_any
+end
+
+RemoveTrackForProfile = function(profile)
+    local pext_key = GetProfilePExtKey(profile)
+    local track_count = r.CountTracks(0)
+    
+    for i = track_count - 1, 0, -1 do
+        local track = r.GetTrack(0, i)
+        if track then
+            local retval, marker = r.GetSetMediaTrackInfo_String(track, pext_key, "", false)
+            local retval3, name = r.GetTrackName(track)
+            
+            if (retval and marker == "1") or name == GetFullTrackName(profile) or name == profile.name then
+                r.DeleteTrack(track)
+            end
+        end
+    end
+    
+    local profile_key = GetProfileStateKey(profile)
+    if profile_states[profile_key] then
+        profile_states[profile_key].track_ptr = nil
+        profile_states[profile_key].track_guid = nil
+    end
+end
+
+ToggleProfile = function(profile_index, enabled)
+    if profile_index < 1 or profile_index > 4 then return end
+    
+    local profile = config.profiles[profile_index]
+    if not profile then return end
+    
+    local was_enabled = profile.enabled
+    profile.enabled = enabled
+    
+    if enabled and not was_enabled then
+        LoadOrCreateTrackForProfile(profile)
+        r.TrackList_AdjustWindows(false)
+    elseif not enabled and was_enabled then
+        RemoveTrackForProfile(profile)
+        r.TrackList_AdjustWindows(false)
+    end
+    
+    SaveConfig()
+end
+
+local function SyncProfileOnProjectSwitch(profile)
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = GetOrCreateProfileState(profile)
+    
+    local cached = cached_chunks_per_profile[profile_key]
+    if cached and cached.chunk then
+        local saved_data = LoadTrackDataForProfile(profile)
+        local needs_save = true
+        if saved_data and saved_data.chunk then
+            local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
+            needs_save = cached.normalized ~= saved_normalized
+        end
+        if needs_save then
+            pstate.last_chunk = cached.chunk
+            pstate.last_normalized_chunk = cached.normalized
+            pstate.last_file_timestamp = os.date("%Y-%m-%d %H:%M:%S")
+            
+            local track = FindTrackForProfile(profile)
+            if track then
+                SaveTrackDataForProfile(profile, track, cached.chunk, cached.tempo)
+            end
+        end
+    end
+    
+    cached_chunks_per_profile[profile_key] = nil
+    
+    local track = FindTrackForProfile(profile)
+    if track then
+        pstate.track_ptr = track
+        pstate.track_guid = r.GetTrackGUID(track)
+        
+        local saved_data = LoadTrackDataForProfile(profile)
+        if saved_data and saved_data.chunk then
+            local current_chunk = GetTrackChunk(track)
+            if current_chunk then
+                local current_normalized = NormalizeChunkForComparison(current_chunk)
+                local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
+                
+                if current_normalized ~= saved_normalized then
+                    local chunk_to_load = saved_data.chunk
+                    
+                    local current_tempo = r.Master_GetTempo()
+                    local saved_tempo = saved_data.tempo
+                    if saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
+                        if config.tempo_mode == "beat" then
+                            chunk_to_load = AdjustChunkToTempo(saved_data.chunk, saved_tempo, current_tempo)
+                        end
+                    end
+                    
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    SetTrackChunk(track, chunk_to_load)
+                    
+                    r.GetSetMediaTrackInfo_String(track, "P_NAME", GetFullTrackName(profile), true)
+                    local pext_key = GetProfilePExtKey(profile)
+                    r.GetSetMediaTrackInfo_String(track, pext_key, "1", true)
+                    
+                    pstate.last_chunk = GetTrackChunk(track)
+                    pstate.last_normalized_chunk = NormalizeChunkForComparison(pstate.last_chunk)
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("Sync " .. profile.name, -1)
+                else
+                    pstate.last_chunk = current_chunk
+                    pstate.last_normalized_chunk = current_normalized
+                end
+            end
+        end
+        
+        if profile == GetActiveProfile() then
+            state.track_ptr = track
+            state.track_guid = pstate.track_guid
+            state.last_chunk = pstate.last_chunk
+            state.last_normalized_chunk = pstate.last_normalized_chunk
+            state.is_monitoring = true
+        end
+    else
+        pstate.track_ptr = nil
+        pstate.track_guid = nil
+        if profile == GetActiveProfile() then
+            state.track_ptr = nil
+            state.is_monitoring = false
+        end
+    end
+end
+
+local function SyncAllProfilesOnProjectSwitch()
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            local track = FindTrackForProfile(profile)
+            if track then
+                SyncProfileOnProjectSwitch(profile)
+            else
+                LoadOrCreateTrackForProfile(profile)
+            end
+        else
+            local track = FindTrackForProfile(profile)
+            if track then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                RemoveTrackForProfile(profile)
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Remove disabled " .. profile.name, -1)
+            end
+        end
+    end
+    
+    r.TrackList_AdjustWindows(false)
+    
+    for key, _ in pairs(pending_changes_per_profile) do
+        pending_changes_per_profile[key] = nil
+    end
+    
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+end
+
+local function UpdateCachedChunk()
+    local current_project = r.EnumProjects(-1)
+    if current_project ~= cached_project_ptr then
+        return
+    end
+    
+    local current_tempo = r.Master_GetTempo()
+    
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            local profile_key = GetProfileStateKey(profile)
+            local pstate = profile_states[profile_key]
+            if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+                local chunk = GetTrackChunk(pstate.track_ptr)
+                if chunk then
+                    cached_chunks_per_profile[profile_key] = {
+                        chunk = chunk,
+                        normalized = NormalizeChunkForComparison(chunk),
+                        tempo = current_tempo
+                    }
+                end
+            end
+        end
+    end
+    
+    if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+        local chunk = GetTrackChunk(state.track_ptr)
+        if chunk then
+            cached_chunk_for_switch = chunk
+            cached_normalized_for_switch = NormalizeChunkForComparison(chunk)
+        end
+    end
+end
+
+local function CheckForExternalChanges()
+    local current_project = r.EnumProjects(-1)
+    local project_changed = current_project ~= last_project_ptr
+    
+    if project_changed then
+        last_project_ptr = current_project
+        cached_project_ptr = current_project
+        state.declined_create = nil
+        
+        SyncAllProfilesOnProjectSwitch()
+        
+        cached_chunk_for_switch = nil
+        cached_normalized_for_switch = nil
+        pending_change_time = nil
+        pending_change_chunk = nil
+        return
+    end
+end
+
+local function ProcessPendingChange()
+    if not pending_change_time then return end
+    
+    local now = r.time_precise()
+    if now - pending_change_time < DEBOUNCE_DELAY then return end
+    
+    FlushPendingChange()
+end
+
+local function FlushPendingChangeForProfile(profile)
+    local profile_key = GetProfileStateKey(profile)
+    local pending = pending_changes_per_profile[profile_key]
+    if not pending or not pending.pending_time then return end
+    
+    local pstate = GetOrCreateProfileState(profile)
+    if not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        pending.pending_time = nil
+        pending.pending_chunk = nil
+        return
+    end
+    
+    local current_chunk = GetTrackChunk(pstate.track_ptr)
+    if not current_chunk then
+        pending.pending_time = nil
+        pending.pending_chunk = nil
+        return
+    end
+    
+    local normalized_current = NormalizeChunkForComparison(current_chunk)
+    
+    AddToUndoHistoryForProfile(profile, current_chunk)
+    
+    pstate.last_chunk = current_chunk
+    pstate.last_normalized_chunk = normalized_current
+    pstate.last_file_timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    
+    if SaveTrackDataForProfile(profile, pstate.track_ptr, current_chunk) then
+        if profile == GetActiveProfile() then
+            SetStatus("Auto-save: " .. profile.name .. " saved (" .. os.date("%H:%M:%S") .. ")")
+        end
+    end
+    
+    pending.pending_time = nil
+    pending.pending_chunk = nil
+end
+
+local function ProcessPendingChangesAllProfiles()
+    local now = r.time_precise()
+    for _, profile in ipairs(config.profiles) do
+        local profile_key = GetProfileStateKey(profile)
+        local pending = pending_changes_per_profile[profile_key]
+        if pending and pending.pending_time then
+            if now - pending.pending_time >= DEBOUNCE_DELAY then
+                FlushPendingChangeForProfile(profile)
+            end
+        end
+    end
+end
+
+local function CheckForChangesForProfile(profile)
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = GetOrCreateProfileState(profile)
+    local pending = GetOrCreatePendingState(profile_key)
+    
+    if not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        local track = FindTrackForProfile(profile)
+        if track then
+            pstate.track_ptr = track
+            pstate.track_guid = r.GetTrackGUID(track)
+            pstate.last_chunk = GetTrackChunk(track)
+            pstate.last_normalized_chunk = NormalizeChunkForComparison(pstate.last_chunk)
+            
+            if profile == GetActiveProfile() then
+                state.track_ptr = track
+                state.track_guid = pstate.track_guid
+                state.last_chunk = pstate.last_chunk
+                state.last_normalized_chunk = pstate.last_normalized_chunk
+                state.is_monitoring = true
+            end
+        else
+            return
+        end
+    end
+    
+    local current_chunk = GetTrackChunk(pstate.track_ptr)
+    if not current_chunk then return end
+    
+    local normalized_current = NormalizeChunkForComparison(current_chunk)
+    
+    if not pstate.last_normalized_chunk then
+        pstate.last_normalized_chunk = normalized_current
+        pstate.last_chunk = current_chunk
+        return
+    end
+    
+    if normalized_current ~= pstate.last_normalized_chunk then
+        pending.pending_time = r.time_precise()
+        pending.pending_chunk = current_chunk
+        pstate.last_chunk = current_chunk
+        pstate.last_normalized_chunk = normalized_current
+        
+        if profile == GetActiveProfile() then
+            cached_chunk_for_switch = current_chunk
+            cached_normalized_for_switch = normalized_current
+        end
+    end
+end
+
+local function CheckAllProfilesForChanges()
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            CheckForChangesForProfile(profile)
+        end
+    end
+    ProcessPendingChangesAllProfiles()
 end
 
 local function CheckForChanges()
@@ -1617,8 +2791,15 @@ local function CheckForChanges()
     ProcessPendingChange()
     
     if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-        state.track_ptr = FindIndestructibleTrack()
-        if not state.track_ptr then
+        local found_track = FindIndestructibleTrack()
+        if found_track then
+            state.track_ptr = found_track
+            state.track_guid = r.GetTrackGUID(found_track)
+            state.last_chunk = GetTrackChunk(found_track)
+            state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
+            state.is_monitoring = true
+            SetStatus("Track found in project")
+        else
             state.is_monitoring = false
             return
         end
@@ -1632,6 +2813,8 @@ local function CheckForChanges()
     if not state.last_normalized_chunk then
         state.last_normalized_chunk = normalized_current
         state.last_chunk = current_chunk
+        cached_chunk_for_switch = current_chunk
+        cached_normalized_for_switch = normalized_current
         return
     end
     
@@ -1640,6 +2823,8 @@ local function CheckForChanges()
         pending_change_chunk = current_chunk
         state.last_chunk = current_chunk
         state.last_normalized_chunk = normalized_current
+        cached_chunk_for_switch = current_chunk
+        cached_normalized_for_switch = normalized_current
     end
 end
 
@@ -1724,7 +2909,7 @@ local function GetTrackTCPBounds(track, use_ctx)
     
     if tcp_w <= 0 then tcp_w = 200 end
     
-    local _, main_left, _, _, _ = r.JS_Window_GetRect(main_hwnd)
+    local _, main_left, main_top, _, _ = r.JS_Window_GetRect(main_hwnd)
     local tcp_total_width = arr_left - main_left
     
     local native_x = arr_left
@@ -1787,18 +2972,325 @@ local compact_font = nil
 local compact_menu_font = nil
 local compact_shield_image = nil
 local compact_ctx = nil
+local compact_popup_profile = nil
+local settings_shield_image = nil
+local settings_header_font = nil
+
+local function DrawSingleCompactIcon(profile, pstate, widget_index)
+    if not pstate or not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        return
+    end
+    
+    local icon_size = config.compact_icon_size or 28
+    local font_size = math.max(10, math.floor(icon_size * 0.6))
+    local padding_x = math.max(2, math.floor(icon_size * 0.2))
+    local padding_y = math.max(1, math.floor(icon_size * 0.05))
+    local rounding = math.max(2, math.floor(icon_size * 0.15))
+    
+    local bounds = GetTrackTCPBounds(pstate.track_ptr, compact_ctx)
+    if not bounds then return end
+    
+    local widget_x, widget_y
+    
+    if config.compact_lock_position and config.compact_locked_x then
+        widget_x = config.compact_locked_x
+        widget_y = bounds.y + (config.compact_locked_y or 0)
+    else
+        widget_x = bounds.x + (config.compact_offset_x or -40)
+        widget_y = bounds.y + (config.compact_offset_y or 2)
+    end
+    
+    local window_name = "##compact_widget_" .. (profile.name or tostring(widget_index))
+    
+    r.ImGui_SetNextWindowPos(compact_ctx, widget_x, widget_y, r.ImGui_Cond_Always())
+    
+    if not config.compact_no_bg then
+        r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_WindowBg(), 0x000000DD)
+        r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Border(), 0xFFFFFFFF)
+    end
+    r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowRounding(), rounding)
+    if not config.compact_no_bg then
+        r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
+    else
+        r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 0)
+    end
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowPadding(), padding_x, padding_y)
+    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_ItemSpacing(), math.floor(icon_size * 0.15), 0)
+    
+    r.ImGui_PushFont(compact_ctx, compact_font, font_size)
+    
+    local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | 
+                  r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoCollapse() |
+                  r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoMove() |
+                  r.ImGui_WindowFlags_AlwaysAutoResize()
+    if config.compact_no_bg then
+        flags = flags | r.ImGui_WindowFlags_NoBackground()
+    end
+    
+    local visible = r.ImGui_Begin(compact_ctx, window_name, true, flags)
+    
+    if visible then
+        if compact_shield_image then
+            r.ImGui_Image(compact_ctx, compact_shield_image, icon_size, icon_size)
+        end
+        
+        if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 1) then
+            r.ImGui_OpenPopup(compact_ctx, "compact_menu_" .. profile.name)
+        end
+        
+        if r.ImGui_BeginPopup(compact_ctx, "compact_menu_" .. profile.name) then
+            local profile_key = GetProfileStateKey(profile)
+            local pstate = profile_states[profile_key] or {undo_history = {}, undo_index = 0}
+            
+            r.ImGui_PushFont(compact_ctx, compact_menu_font, 13)
+            
+            r.ImGui_TextColored(compact_ctx, 0xAAAAAAFF, profile.name)
+            r.ImGui_Separator(compact_ctx)
+            
+            local can_undo = pstate.undo_index > 1
+            local can_redo = pstate.undo_index < #pstate.undo_history
+            local btn_w = 60
+            
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Button(), 0x404040FF)
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_ButtonHovered(), 0x505050FF)
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_ButtonActive(), 0x606060FF)
+            
+            if not can_undo then
+                r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_Alpha(), 0.4)
+            end
+            if r.ImGui_Button(compact_ctx, "< Undo", btn_w, 0) and can_undo then
+                UndoTrackForProfile(profile)
+            end
+            if not can_undo then
+                r.ImGui_PopStyleVar(compact_ctx)
+            end
+            
+            r.ImGui_SameLine(compact_ctx)
+            
+            if not can_redo then
+                r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_Alpha(), 0.4)
+            end
+            if r.ImGui_Button(compact_ctx, "Redo >", btn_w, 0) and can_redo then
+                RedoTrackForProfile(profile)
+            end
+            if not can_redo then
+                r.ImGui_PopStyleVar(compact_ctx)
+            end
+            
+            r.ImGui_PopStyleColor(compact_ctx, 3)
+            
+            r.ImGui_Separator(compact_ctx)
+            
+            if r.ImGui_MenuItem(compact_ctx, "Save Now") then
+                if pstate and pstate.track_ptr then
+                    SaveTrackDataForProfile(profile, pstate.track_ptr, pstate.last_chunk)
+                    SetStatus("Saved " .. profile.name)
+                end
+            end
+            
+            if r.ImGui_MenuItem(compact_ctx, "Save Snapshot") then
+                local snap_name = profile.name .. " " .. os.date("%H:%M:%S")
+                if SaveSnapshotForProfile(profile, snap_name) then
+                    SetStatus("Snapshot saved: " .. snap_name)
+                end
+            end
+            
+            if r.ImGui_MenuItem(compact_ctx, "Copy to Project") then
+                CopyTrackToProject(profile)
+            end
+            
+            local lock_label = config.compact_lock_position and "Unlock Position" or "Lock Position"
+            if r.ImGui_MenuItem(compact_ctx, lock_label) then
+                config.compact_lock_position = not config.compact_lock_position
+                if config.compact_lock_position then
+                    local bounds = GetTrackTCPBounds(pstate.track_ptr, compact_ctx)
+                    if bounds then
+                        config.compact_locked_x = bounds.x + (config.compact_offset_x or -40)
+                        config.compact_locked_y = config.compact_offset_y or 2
+                    end
+                end
+                SaveConfig()
+            end
+            
+            if r.ImGui_MenuItem(compact_ctx, "Show Settings") then
+                config.hide_window = false
+                SaveConfig()
+            end
+            
+            r.ImGui_Separator(compact_ctx)
+            
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Text(), 0xCC6666FF)
+            if r.ImGui_MenuItem(compact_ctx, "Close Script") then
+                state.close_action = "exit"
+            end
+            r.ImGui_PopStyleColor(compact_ctx)
+            
+            r.ImGui_PopFont(compact_ctx)
+            r.ImGui_EndPopup(compact_ctx)
+        end
+        
+        if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseDoubleClicked(compact_ctx, 0) then
+            config.compact_mode = false
+            config.hide_window = false
+            SaveConfig()
+        end
+        
+        if not config.compact_lock_position then
+            if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 0) then
+                state.compact_dragging = true
+                state.compact_drag_profile = profile.name
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(compact_ctx)
+                state.compact_drag_start_x = mouse_x
+                state.compact_drag_start_y = mouse_y
+                state.compact_drag_offset_x = config.compact_offset_x or -40
+                state.compact_drag_offset_y = config.compact_offset_y or 2
+            end
+        end
+        
+        if state.compact_dragging and state.compact_drag_profile == profile.name then
+            if r.ImGui_IsMouseDown(compact_ctx, 0) then
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(compact_ctx)
+                local delta_x = mouse_x - state.compact_drag_start_x
+                local delta_y = mouse_y - state.compact_drag_start_y
+                config.compact_offset_x = state.compact_drag_offset_x + delta_x
+                config.compact_offset_y = state.compact_drag_offset_y + delta_y
+            else
+                state.compact_dragging = false
+                state.compact_drag_profile = nil
+                SaveConfig()
+            end
+        end
+        
+        r.ImGui_End(compact_ctx)
+    end
+    
+    r.ImGui_PopFont(compact_ctx)
+    r.ImGui_PopStyleVar(compact_ctx, 4)
+    if not config.compact_no_bg then
+        r.ImGui_PopStyleColor(compact_ctx, 3)
+    else
+        r.ImGui_PopStyleColor(compact_ctx, 1)
+    end
+end
 
 local function DrawCompactWidget()
-    if not state.track_ptr or not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+    local any_track_found = false
+    local any_enabled = false
+    
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            any_enabled = true
+            local profile_key = GetProfileStateKey(profile)
+            local pstate = profile_states[profile_key]
+            if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+                any_track_found = true
+                break
+            end
+        end
+    end
+    
+    if not any_enabled then
         return true
+    end
+    
+    if not any_track_found then
+        local found_track = FindIndestructibleTrack()
+        if found_track then
+            state.track_ptr = found_track
+            state.track_guid = r.GetTrackGUID(found_track)
+            state.last_chunk = GetTrackChunk(found_track)
+            state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
+            state.is_monitoring = true
+            state.declined_create = nil
+            any_track_found = true
+        else
+            state.track_ptr = nil
+            state.track_guid = nil
+            state.is_monitoring = false
+            
+            if state.declined_create then
+                return true
+            end
+            
+            if not compact_ctx or not r.ImGui_ValidatePtr(compact_ctx, "ImGui_Context*") then
+                compact_ctx = r.ImGui_CreateContext("TK_IT_Compact_Add")
+            end
+            
+            local win_w, win_h = 280, 80
+            local first_track = r.GetTrack(0, 0)
+            local pos_x, pos_y
+            if first_track then
+                local bounds = GetTrackTCPBounds(first_track)
+                pos_x = bounds and (bounds.x + config.compact_offset_x) or 100
+                pos_y = bounds and (bounds.y + config.compact_offset_y) or 100
+            else
+                local mx, my = r.GetMousePosition()
+                pos_x = mx - win_w / 2
+                pos_y = my - win_h / 2
+            end
+            
+            r.ImGui_SetNextWindowPos(compact_ctx, pos_x, pos_y, r.ImGui_Cond_Once())
+            r.ImGui_SetNextWindowSize(compact_ctx, win_w, win_h, r.ImGui_Cond_Always())
+            
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_WindowBg(), 0x1E1E1EFF)
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Border(), 0x4A8A5AFF)
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Button(), 0x2A5A3AFF)
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_ButtonHovered(), 0x3A7A4AFF)
+            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_ButtonActive(), 0x4A9A5AFF)
+            r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowRounding(), 6)
+            r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowPadding(), 12, 10)
+            r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
+            r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_FrameRounding(), 4)
+            
+            local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | 
+                          r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoMove()
+            
+            local visible = r.ImGui_Begin(compact_ctx, "IT_Create###it_create", true, flags)
+            if visible then
+                r.ImGui_TextColored(compact_ctx, 0xAAAAAAFF, "Create Indestructible Tracks in this project?")
+                
+                r.ImGui_Spacing(compact_ctx)
+                r.ImGui_Separator(compact_ctx)
+                r.ImGui_Spacing(compact_ctx)
+                
+                local btn_w = 80
+                local spacing = 10
+                local total_w = btn_w * 2 + spacing
+                local avail_w = r.ImGui_GetContentRegionAvail(compact_ctx)
+                r.ImGui_SetCursorPosX(compact_ctx, (avail_w - total_w) / 2)
+                
+                if r.ImGui_Button(compact_ctx, "Yes", btn_w, 24) then
+                    LoadOrCreateAllProfileTracks()
+                end
+                
+                r.ImGui_SameLine(compact_ctx)
+                
+                r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Button(), 0x5A2A2AFF)
+                r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_ButtonHovered(), 0x7A3A3AFF)
+                r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_ButtonActive(), 0x9A4A4AFF)
+                if r.ImGui_Button(compact_ctx, "No", btn_w, 24) then
+                    state.declined_create = true
+                end
+                r.ImGui_PopStyleColor(compact_ctx, 3)
+                
+                r.ImGui_End(compact_ctx)
+            end
+            
+            r.ImGui_PopStyleVar(compact_ctx, 4)
+            r.ImGui_PopStyleColor(compact_ctx, 5)
+            
+            return true
+        end
+    end
+    
+    if state.declined_create then
+        state.declined_create = nil
     end
     
     local icon_size = config.compact_icon_size or 28
     local font_size = math.max(10, math.floor(icon_size * 0.6))
     local menu_font_size = 13
-    local padding_x = math.max(2, math.floor(icon_size * 0.2))
-    local padding_y = math.max(1, math.floor(icon_size * 0.05))
-    local rounding = math.max(2, math.floor(icon_size * 0.15))
     
     if not compact_ctx or not r.ImGui_ValidatePtr(compact_ctx, "ImGui_Context*") then
         compact_ctx = r.ImGui_CreateContext("TK_Indestructible_Compact")
@@ -1827,172 +3319,20 @@ local function DrawCompactWidget()
         end
     end
     
-    local bounds = GetTrackTCPBounds(state.track_ptr, compact_ctx)
-    if not bounds then
-        return true
-    end
+    local widget_index = 0
     
-    local widget_x, widget_y
-    
-    if config.compact_lock_position and config.compact_locked_x then
-        widget_x = config.compact_locked_x
-        widget_y = bounds.y + (config.compact_locked_y or 0)
-    else
-        widget_x = bounds.x + (config.compact_offset_x or 2)
-        widget_y = bounds.y + (config.compact_offset_y or 2)
-    end
-    
-    if widget_x < 0 then widget_x = 0 end
-    if widget_y < 0 then widget_y = 0 end
-    
-    r.ImGui_SetNextWindowPos(compact_ctx, widget_x, widget_y, r.ImGui_Cond_Always())
-    
-    if not config.compact_no_bg then
-        r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_WindowBg(), 0x000000DD)
-        r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Border(), 0xFFFFFFFF)
-    end
-    r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowRounding(), rounding)
-    if not config.compact_no_bg then
-        r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
-    else
-        r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowBorderSize(), 0)
-    end
-    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_WindowPadding(), padding_x, padding_y)
-    r.ImGui_PushStyleVar(compact_ctx, r.ImGui_StyleVar_ItemSpacing(), math.floor(icon_size * 0.15), 0)
-    
-    r.ImGui_PushFont(compact_ctx, compact_font, font_size)
-    
-    local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | 
-                  r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoCollapse() |
-                  r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoMove() |
-                  r.ImGui_WindowFlags_AlwaysAutoResize()
-    if config.compact_no_bg then
-        flags = flags | r.ImGui_WindowFlags_NoBackground()
-    end
-    
-    local visible, open = r.ImGui_Begin(compact_ctx, "##compact_widget", true, flags)
-    
-    if visible then
-        if compact_shield_image then
-            r.ImGui_Image(compact_ctx, compact_shield_image, icon_size, icon_size)
-            if not config.compact_icon_only then
-                r.ImGui_SameLine(compact_ctx)
-                local text_y = r.ImGui_GetCursorPosY(compact_ctx) + (icon_size - font_size) / 2 - padding_y
-                r.ImGui_SetCursorPosY(compact_ctx, text_y)
-                local display_name = config.track_name:gsub("🛡️%s*", ""):gsub("🛡%s*", "")
-                r.ImGui_Text(compact_ctx, display_name)
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            local profile_key = GetProfileStateKey(profile)
+            local pstate = profile_states[profile_key]
+            if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+                DrawSingleCompactIcon(profile, pstate, widget_index)
+                widget_index = widget_index + 1
             end
         end
-        
-        if r.ImGui_IsItemHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 1) then
-            r.ImGui_OpenPopup(compact_ctx, "compact_menu")
-        end
-        
-        if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 1) then
-            r.ImGui_OpenPopup(compact_ctx, "compact_menu")
-        end
-        
-        if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseDoubleClicked(compact_ctx, 0) then
-            config.compact_mode = false
-            SaveConfig()
-        end
-        
-        if not config.compact_lock_position then
-            if r.ImGui_IsWindowHovered(compact_ctx) and r.ImGui_IsMouseClicked(compact_ctx, 0) then
-                state.compact_dragging = true
-                local mouse_x, mouse_y = r.ImGui_GetMousePos(compact_ctx)
-                state.compact_drag_start_x = mouse_x
-                state.compact_drag_start_y = mouse_y
-                state.compact_drag_offset_x = config.compact_offset_x or 2
-                state.compact_drag_offset_y = config.compact_offset_y or 0
-            end
-        end
-        
-        if state.compact_dragging then
-            if r.ImGui_IsMouseDown(compact_ctx, 0) then
-                local mouse_x, mouse_y = r.ImGui_GetMousePos(compact_ctx)
-                local delta_x = mouse_x - state.compact_drag_start_x
-                local delta_y = mouse_y - state.compact_drag_start_y
-                config.compact_offset_x = state.compact_drag_offset_x + delta_x
-                config.compact_offset_y = state.compact_drag_offset_y + delta_y
-            else
-                state.compact_dragging = false
-                SaveConfig()
-            end
-        end
-        
-        if r.ImGui_BeginPopup(compact_ctx, "compact_menu") then
-            r.ImGui_PushFont(compact_ctx, compact_menu_font, 13)
-            if r.ImGui_MenuItem(compact_ctx, "Save Now") then
-                SaveTrackData()
-                SetStatus("Saved manually")
-            end
-            if r.ImGui_MenuItem(compact_ctx, "Save Snapshot...") then
-                state.show_snapshot_save = true
-                config.compact_mode = false
-                SaveConfig()
-            end
-            if r.ImGui_MenuItem(compact_ctx, "Copy to Project") then
-                CopyTrackToProject()
-            end
-            r.ImGui_Separator(compact_ctx)
-            if r.ImGui_MenuItem(compact_ctx, "Snapshots") then
-                ScanSnapshots()
-                state.show_snapshot_list = true
-                config.compact_mode = false
-                SaveConfig()
-            end
-            if r.ImGui_MenuItem(compact_ctx, "Auto-Saves") then
-                ScanBackups()
-                state.show_backup_list = true
-                config.compact_mode = false
-                SaveConfig()
-            end
-            r.ImGui_Separator(compact_ctx)
-            if r.ImGui_MenuItem(compact_ctx, "Undo", nil, false, state.undo_index > 1) then
-                UndoTrack()
-            end
-            if r.ImGui_MenuItem(compact_ctx, "Redo", nil, false, state.undo_index < #state.undo_history) then
-                RedoTrack()
-            end
-            r.ImGui_Separator(compact_ctx)
-            local lock_label = config.compact_lock_position and "Unlock Position" or "Lock Position"
-            if r.ImGui_MenuItem(compact_ctx, lock_label) then
-                config.compact_lock_position = not config.compact_lock_position
-                if config.compact_lock_position then
-                    config.compact_locked_x = bounds.x + (config.compact_offset_x or 2)
-                    config.compact_locked_y = config.compact_offset_y or 0
-                end
-                SaveConfig()
-            end
-            r.ImGui_Separator(compact_ctx)
-            if r.ImGui_MenuItem(compact_ctx, "Full UI") then
-                config.compact_mode = false
-                SaveConfig()
-            end
-            r.ImGui_Separator(compact_ctx)
-            r.ImGui_PushStyleColor(compact_ctx, r.ImGui_Col_Text(), 0xCC6666FF)
-            if r.ImGui_MenuItem(compact_ctx, "Close Script") then
-                state.close_action = "exit"
-            end
-            r.ImGui_PopStyleColor(compact_ctx)
-            r.ImGui_PopFont(compact_ctx)
-            r.ImGui_EndPopup(compact_ctx)
-        end
-        
-        r.ImGui_End(compact_ctx)
     end
     
-    r.ImGui_PopFont(compact_ctx)
-    r.ImGui_PopStyleVar(compact_ctx, 4)
-    if not config.compact_no_bg then
-        r.ImGui_PopStyleColor(compact_ctx, 3)
-    else
-        r.ImGui_PopStyleColor(compact_ctx, 1)
-    end
-    
-    return open
+    return true
 end
 
 local function LoadShieldImage()
@@ -2059,6 +3399,49 @@ local function DrawMainUI()
     r.ImGui_PushFont(ctx, title_font, 18)
     r.ImGui_Text(ctx, "INDESTRUCTIBLE TRACK")
     r.ImGui_PopFont(ctx)
+    
+    if #config.profiles > 1 then
+        local profile, idx = GetActiveProfile()
+        r.ImGui_SetNextItemWidth(ctx, -1)
+        if r.ImGui_BeginCombo(ctx, "##main_profile", "Profile: " .. profile.name) then
+            for i, p in ipairs(config.profiles) do
+                local is_selected = (i == idx)
+                if r.ImGui_Selectable(ctx, p.name, is_selected) then
+                    if i ~= idx then
+                        if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
+                            local current_chunk = GetTrackChunk(state.track_ptr)
+                            if current_chunk then
+                                local current_normalized = NormalizeChunkForComparison(current_chunk)
+                                if current_normalized ~= state.last_normalized_chunk then
+                                    AddToUndoHistory(current_chunk)
+                                    state.last_chunk = current_chunk
+                                    state.last_normalized_chunk = current_normalized
+                                    SaveTrackData()
+                                end
+                            end
+                        end
+                        
+                        config.active_profile = i
+                        SaveConfig()
+                        state.track_ptr = nil
+                        state.track_guid = nil
+                        state.is_monitoring = false
+                        state.undo_history = {}
+                        state.undo_index = 0
+                        state.last_chunk = nil
+                        state.last_normalized_chunk = nil
+                        last_file_timestamp = nil
+                        LoadOrCreateTrack()
+                        SetStatus("Switched to profile: " .. p.name)
+                    end
+                end
+                if is_selected then
+                    r.ImGui_SetItemDefaultFocus(ctx)
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+    end
     r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + 8)
     
     r.ImGui_Separator(ctx)
@@ -2353,331 +3736,505 @@ local function DrawMainUI()
     DrawStatusBar()
 end
 
+local function DrawSettingsGeneralTab()
+    local changed, new_val
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+    r.ImGui_Text(ctx, "GENERAL SETTINGS")
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_Separator(ctx)
+    
+    r.ImGui_Text(ctx, "Max undo history:")
+    r.ImGui_SameLine(ctx, 140)
+    r.ImGui_SetNextItemWidth(ctx, -1)
+    changed, new_val = r.ImGui_SliderInt(ctx, "##maxundo", config.max_undo_history, 10, 200)
+    if changed then config.max_undo_history = new_val; SaveConfig() end
+    
+    r.ImGui_Text(ctx, "Auto-saves to keep:")
+    r.ImGui_SameLine(ctx, 140)
+    r.ImGui_SetNextItemWidth(ctx, -1)
+    changed, new_val = r.ImGui_SliderInt(ctx, "##backups", config.auto_backup_count, 1, 20)
+    if changed then config.auto_backup_count = new_val; SaveConfig() end
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+    r.ImGui_Text(ctx, "TEMPO")
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_Separator(ctx)
+    
+    r.ImGui_Text(ctx, "On tempo mismatch, preserve:")
+    r.ImGui_SameLine(ctx, 200)
+    if r.ImGui_RadioButton(ctx, "Time", config.tempo_mode == "time") then
+        config.tempo_mode = "time"; SaveConfig()
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_RadioButton(ctx, "Beat", config.tempo_mode == "beat") then
+        config.tempo_mode = "beat"; SaveConfig()
+    end
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+    r.ImGui_Text(ctx, "DISPLAY")
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_Separator(ctx)
+    
+    local icon_size = config.compact_icon_size or 28
+    r.ImGui_Text(ctx, "Icon size:")
+    r.ImGui_SameLine(ctx, 80)
+    r.ImGui_SetNextItemWidth(ctx, -1)
+    local size_changed, size_val = r.ImGui_SliderInt(ctx, "##iconsize", icon_size, 16, 64)
+    if size_changed then config.compact_icon_size = size_val; SaveConfig() end
+    
+    local is_locked = config.compact_lock_position
+    if is_locked then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_Alpha(), 0.4)
+    end
+    
+    r.ImGui_Text(ctx, "Offset X:")
+    r.ImGui_SameLine(ctx, 80)
+    r.ImGui_SetNextItemWidth(ctx, -70)
+    local offset_changed, offset_val = r.ImGui_SliderInt(ctx, "##offsetx", config.compact_offset_x or -40, -300, 100)
+    if offset_changed and not is_locked then config.compact_offset_x = offset_val; SaveConfig() end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "-##xm", 30, 0) and not is_locked then config.compact_offset_x = (config.compact_offset_x or -40) - 1; SaveConfig() end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "+##xp", 30, 0) and not is_locked then config.compact_offset_x = (config.compact_offset_x or -40) + 1; SaveConfig() end
+    
+    r.ImGui_Text(ctx, "Offset Y:")
+    r.ImGui_SameLine(ctx, 80)
+    r.ImGui_SetNextItemWidth(ctx, -70)
+    local offset_y_changed, offset_y_val = r.ImGui_SliderInt(ctx, "##offsety", config.compact_offset_y or 2, -50, 50)
+    if offset_y_changed and not is_locked then config.compact_offset_y = offset_y_val; SaveConfig() end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "-##ym", 30, 0) and not is_locked then config.compact_offset_y = (config.compact_offset_y or 2) - 1; SaveConfig() end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "+##yp", 30, 0) and not is_locked then config.compact_offset_y = (config.compact_offset_y or 2) + 1; SaveConfig() end
+    
+    if is_locked then
+        r.ImGui_PopStyleVar(ctx)
+    end
+    
+    changed, new_val = r.ImGui_Checkbox(ctx, "Lock position", config.compact_lock_position)
+    if changed then 
+        config.compact_lock_position = new_val
+        if new_val then
+            local active_profile = GetActiveProfile()
+            local pstate = profile_states[GetProfileStateKey(active_profile)]
+            if pstate and pstate.track_ptr then
+                local bounds = GetTrackTCPBounds(pstate.track_ptr, ctx)
+                if bounds then
+                    config.compact_locked_x = bounds.x + (config.compact_offset_x or -40)
+                    config.compact_locked_y = config.compact_offset_y or 2
+                end
+            end
+        end
+        SaveConfig() 
+    end
+    
+    r.ImGui_SameLine(ctx)
+    changed, new_val = r.ImGui_Checkbox(ctx, "No background", config.compact_no_bg)
+    if changed then config.compact_no_bg = new_val; SaveConfig() end
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+    
+    local btn_w = r.ImGui_GetContentRegionAvail(ctx)
+    if r.ImGui_Button(ctx, "Hide Settings (show icons only)", btn_w, 28) then
+        config.hide_window = true
+        SaveConfig()
+    end
+end
+
+local function DrawSettingsTrackTab(profile_index)
+    local profile = config.profiles[profile_index]
+    if not profile then return end
+    
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = profile_states[profile_key]
+    local changed, new_val
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+    r.ImGui_Text(ctx, "TRACK SETTINGS")
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_Separator(ctx)
+    
+    local enabled = profile.enabled or false
+    local checkbox_changed, new_enabled = r.ImGui_Checkbox(ctx, "##enabled", enabled)
+    if checkbox_changed then
+        ToggleProfile(profile_index, new_enabled)
+        state.force_tab_select = true
+    end
+    
+    r.ImGui_SameLine(ctx)
+    local checkbox_end_x = r.ImGui_GetCursorPosX(ctx)
+    local color_picker_width = 30
+    local avail_for_name = r.ImGui_GetContentRegionAvail(ctx) - color_picker_width - 8
+    r.ImGui_SetNextItemWidth(ctx, avail_for_name)
+    local name_changed, new_name = r.ImGui_InputText(ctx, "##trackname", profile.name, r.ImGui_InputTextFlags_EnterReturnsTrue())
+    if name_changed and new_name ~= "" then
+        profile.name = new_name
+        if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+            r.GetSetMediaTrackInfo_String(pstate.track_ptr, "P_NAME", GetFullTrackName(profile), true)
+        end
+        SaveConfig()
+        state.force_tab_select = true
+    end
+    
+    r.ImGui_SameLine(ctx)
+    local color_stored = profile.track_color or 0x1E5A8A
+    local color_changed, new_color = r.ImGui_ColorEdit3(ctx, "##trackcolor", color_stored, r.ImGui_ColorEditFlags_NoInputs())
+    if color_changed then
+        profile.track_color = new_color
+        if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+            local native_color = r.ImGui_ColorConvertNative(new_color)
+            r.SetTrackColor(pstate.track_ptr, native_color | 0x1000000)
+        end
+        SaveConfig()
+    end
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+    r.ImGui_Text(ctx, "UNDO / REDO")
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_Separator(ctx)
+    
+    local total_history = pstate and pstate.undo_history and #pstate.undo_history or 0
+    local undo_idx = pstate and pstate.undo_index or total_history
+    local undo_count = undo_idx - 1
+    local redo_count = total_history - undo_idx
+    local can_undo = profile.enabled and undo_count > 0
+    local can_redo = profile.enabled and redo_count > 0
+    
+    r.ImGui_Text(ctx, string.format("Position: %d / %d  |  Undo: %d  |  Redo: %d", undo_idx, total_history, undo_count, redo_count))
+    
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local half_w = (avail_w - 8) / 2
+    
+    if not can_undo then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_Alpha(), 0.3)
+    end
+    if r.ImGui_Button(ctx, "<< Undo", half_w, 26) and can_undo then
+        UndoTrackForProfile(profile)
+    end
+    if not can_undo then
+        r.ImGui_PopStyleVar(ctx)
+    end
+    
+    r.ImGui_SameLine(ctx)
+    
+    if not can_redo then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_Alpha(), 0.3)
+    end
+    if r.ImGui_Button(ctx, "Redo >>", half_w, 26) and can_redo then
+        RedoTrackForProfile(profile)
+    end
+    if not can_redo then
+        r.ImGui_PopStyleVar(ctx)
+    end
+    
+    r.ImGui_Spacing(ctx)
+    
+    if total_history > 0 then
+        local list_open = state.history_list_open == profile_index
+        local btn_width = r.ImGui_GetContentRegionAvail(ctx) - 70
+        if r.ImGui_Button(ctx, list_open and "Hide History ▲" or "Show History ▼ (" .. total_history .. ")", btn_width, 0) then
+            if list_open then
+                state.history_list_open = nil
+            else
+                state.history_list_open = profile_index
+            end
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x882222FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xAA3333FF)
+        if r.ImGui_Button(ctx, "Clear##history", 65, 0) then
+            if pstate then
+                pstate.undo_history = {}
+                pstate.undo_index = 0
+                state.history_list_open = nil
+                SetStatus("History cleared: " .. profile.name)
+            end
+        end
+        r.ImGui_PopStyleColor(ctx, 2)
+        
+        if list_open and pstate and pstate.undo_history then
+            local history = pstate.undo_history
+            local current_idx = pstate.undo_index or 0
+            
+            if r.ImGui_BeginChild(ctx, "##historylist", -1, 100, 1) then
+                for i = #history, 1, -1 do
+                    local entry = history[i]
+                    local is_current = (i == current_idx)
+                    local is_redo = (i > current_idx)
+                    
+                    local desc = entry.description or "Track modified"
+                    local time = entry.timestamp or ""
+                    
+                    local marker = "  "
+                    if is_current then
+                        marker = "> "
+                    end
+                    
+                    local label = string.format("%s%d. %s  [%s]", marker, i, desc, time)
+                    
+                    if is_current then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+                    elseif is_redo then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                    end
+                    
+                    if r.ImGui_Selectable(ctx, label, is_current) then
+                        if i ~= current_idx then
+                            JumpToHistoryForProfile(profile, i)
+                        end
+                    end
+                    
+                    if is_current or is_redo then
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+                end
+                r.ImGui_EndChild(ctx)
+            end
+        end
+    else
+        r.ImGui_TextDisabled(ctx, "No history yet")
+    end
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+    r.ImGui_Text(ctx, "SAVE / LOAD")
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_Separator(ctx)
+    
+    local save_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local save_half_w = (save_avail_w - 8) / 2
+    
+    if not profile.enabled then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_Alpha(), 0.3)
+    end
+    
+    if r.ImGui_Button(ctx, "Save Now", save_half_w, 26) and profile.enabled then
+        if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+            local chunk = GetTrackChunk(pstate.track_ptr)
+            if chunk then
+                SaveTrackDataForProfile(profile, pstate.track_ptr, chunk)
+                SetStatus("Track saved: " .. profile.name)
+            end
+        end
+    end
+    
+    r.ImGui_SameLine(ctx)
+    
+    if r.ImGui_Button(ctx, "Load Track", save_half_w, 26) and profile.enabled then
+        local data = LoadTrackDataForProfile(profile)
+        if data and data.chunk and pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+            r.SetTrackStateChunk(pstate.track_ptr, data.chunk, false)
+            SetStatus("Track reloaded: " .. profile.name)
+        end
+    end
+    
+    if not profile.enabled then
+        r.ImGui_PopStyleVar(ctx)
+    end
+    
+    r.ImGui_Spacing(ctx)
+    
+    local profile_backups = ScanBackupsForProfile(profile)
+    if #profile_backups > 0 then
+        local list_open = state.autosave_list_open == profile_index
+        local btn_width = r.ImGui_GetContentRegionAvail(ctx) - 70
+        if r.ImGui_Button(ctx, list_open and "Hide Auto-Saves ▲" or "Show Auto-Saves ▼ (" .. #profile_backups .. ")", btn_width, 0) then
+            if list_open then
+                state.autosave_list_open = nil
+            else
+                state.autosave_list_open = profile_index
+            end
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x882222FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xAA3333FF)
+        if r.ImGui_Button(ctx, "Clear##autosaves", 65, 0) then
+            for _, backup in ipairs(profile_backups) do
+                os.remove(backup.path)
+            end
+            state.autosave_list_open = nil
+            SetStatus("Auto-saves cleared: " .. profile.name)
+        end
+        r.ImGui_PopStyleColor(ctx, 2)
+        
+        if list_open then
+            if r.ImGui_BeginChild(ctx, "##autosavelist", -1, 100, 1) then
+                for _, backup in ipairs(profile_backups) do
+                    r.ImGui_PushID(ctx, backup.path)
+                    if r.ImGui_Selectable(ctx, backup.timestamp) and profile.enabled then
+                        LoadBackupForProfile(profile, backup)
+                    end
+                    r.ImGui_PopID(ctx)
+                end
+                r.ImGui_EndChild(ctx)
+            end
+        end
+    else
+        r.ImGui_TextDisabled(ctx, "No auto-saves yet")
+    end
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+    r.ImGui_Text(ctx, "SNAPSHOTS")
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_Separator(ctx)
+    
+    local snap_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local snap_half_w = (snap_avail_w - 8) / 2
+    
+    if not profile.enabled then
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_Alpha(), 0.3)
+    end
+    
+    r.ImGui_SetNextItemWidth(ctx, snap_half_w)
+    local name_input_changed
+    name_input_changed, state.snapshot_name_input = r.ImGui_InputTextWithHint(ctx, "##snapname", "Snapshot name...", state.snapshot_name_input or "")
+    
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Save Snapshot", snap_half_w, 0) and profile.enabled then
+        local snap_name = state.snapshot_name_input ~= "" and state.snapshot_name_input or (profile.name .. " Snapshot")
+        if SaveSnapshotForProfile(profile, snap_name) then
+            state.snapshot_name_input = ""
+        end
+    end
+    
+    if not profile.enabled then
+        r.ImGui_PopStyleVar(ctx)
+    end
+    
+    local profile_snapshots = ScanSnapshotsForProfile(profile)
+    if #profile_snapshots > 0 then
+        for _, snap in ipairs(profile_snapshots) do
+            r.ImGui_PushID(ctx, snap.path)
+            if r.ImGui_Selectable(ctx, snap.name .. " (" .. snap.timestamp .. ")") and profile.enabled then
+                LoadSnapshotForProfile(profile, snap)
+            end
+            if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
+                DeleteSnapshotForProfile(profile, snap)
+            end
+            r.ImGui_PopID(ctx)
+        end
+    else
+        r.ImGui_TextDisabled(ctx, "No snapshots saved yet")
+    end
+end
+
 local function DrawSettingsUI()
     DrawCloseButton()
     
-    r.ImGui_Text(ctx, "SETTINGS")
-    r.ImGui_Separator(ctx)
+    if not settings_shield_image or not r.ImGui_ValidatePtr(settings_shield_image, "ImGui_Image*") then
+        local img_path = SCRIPT_PATH .. "/ISHIELD.png"
+        settings_shield_image = r.ImGui_CreateImage(img_path)
+        if settings_shield_image then
+            r.ImGui_Attach(ctx, settings_shield_image)
+        end
+    end
     
-    local window_height = r.ImGui_GetWindowHeight(ctx)
-    local content_height = window_height - 100
-    if content_height < 50 then content_height = 50 end
+    if not settings_header_font or not r.ImGui_ValidatePtr(settings_header_font, "ImGui_Font*") then
+        settings_header_font = r.ImGui_CreateFont("Segoe UI Bold", 22)
+        r.ImGui_Attach(ctx, settings_header_font)
+    end
     
-    if r.ImGui_BeginTabBar(ctx, "settings_tabs") then
-        local general_flags = 0
-        local display_flags = 0
-        if not state.settings_tab_initialized then
-            if config.settings_tab == "Display" then
-                display_flags = r.ImGui_TabItemFlags_SetSelected()
-            end
-            state.settings_tab_initialized = true
+    local shield_size = 48
+    local font_size = 22
+    
+    local total_width = shield_size + 10 + 220
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local start_x = (avail_w - total_width) / 2
+    
+    local start_y = r.ImGui_GetCursorPosY(ctx)
+    r.ImGui_SetCursorPosX(ctx, start_x)
+    
+    if settings_shield_image then
+        r.ImGui_Image(ctx, settings_shield_image, shield_size, shield_size)
+        r.ImGui_SameLine(ctx)
+    end
+    
+    r.ImGui_PushFont(ctx, settings_header_font, font_size)
+    local text_y = start_y + (shield_size - font_size) / 2 - 5
+    r.ImGui_SetCursorPosY(ctx, text_y)
+    r.ImGui_Text(ctx, "Indestructible Track(s)")
+    r.ImGui_PopFont(ctx)
+    
+    r.ImGui_SetCursorPosY(ctx, start_y + shield_size)
+    
+    local general_tab_color = 0x3A3A3AFF
+    local use_force_select = state.force_tab_select
+    state.force_tab_select = false
+    
+    if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Tab(), general_tab_color)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabHovered(), 0x4A4A4AFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabSelected(), 0x5A5A5AFF)
+        
+        local general_flags = (use_force_select and state.settings_tab == 0) and r.ImGui_TabItemFlags_SetSelected() or r.ImGui_TabItemFlags_None()
+        if r.ImGui_BeginTabItem(ctx, "  General  ##tab0", nil, general_flags) then
+            state.settings_tab = 0
+            r.ImGui_PopStyleColor(ctx, 3)
+            DrawSettingsGeneralTab()
+            r.ImGui_EndTabItem(ctx)
+        else
+            r.ImGui_PopStyleColor(ctx, 3)
         end
         
-        if r.ImGui_BeginTabItem(ctx, "General", nil, general_flags) then
-            config.settings_tab = "General"
-            if r.ImGui_BeginChild(ctx, "general_content", -1, content_height - 30, 0) then
-                local changed, new_val
-                
-                r.ImGui_Text(ctx, "Track name:")
-                local old_name = config.track_name
-                changed, new_val = r.ImGui_InputText(ctx, "##trackname", config.track_name)
-                if changed then 
-                    config.track_name = new_val
-                    if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-                        r.GetSetMediaTrackInfo_String(state.track_ptr, "P_NAME", new_val, true)
-                    end
-                end
-                
-                r.ImGui_Text(ctx, "Check interval (sec):")
-                changed, new_val = r.ImGui_SliderDouble(ctx, "##interval", config.check_interval, 0.5, 5.0, "%.1f")
-                if changed then config.check_interval = new_val end
-                
-                r.ImGui_Text(ctx, "Max undo history:")
-                changed, new_val = r.ImGui_SliderInt(ctx, "##maxundo", config.max_undo_history, 10, 200)
-                if changed then config.max_undo_history = new_val end
-                
-                r.ImGui_Text(ctx, "Auto-saves to keep:")
-                changed, new_val = r.ImGui_SliderInt(ctx, "##backups", config.auto_backup_count, 1, 20)
-                if changed then config.auto_backup_count = new_val end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Number of automatic backups to keep (oldest are deleted)")
-                end
-                
-                changed, new_val = r.ImGui_Checkbox(ctx, "Show notifications", config.show_notifications)
-                if changed then config.show_notifications = new_val end
-                
-                changed, new_val = r.ImGui_Checkbox(ctx, "Auto-load on start", config.auto_load_on_start)
-                if changed then config.auto_load_on_start = new_val end
-                
-                changed, new_val = r.ImGui_Checkbox(ctx, "Warn on tempo mismatch", config.tempo_check_enabled)
-                if changed then config.tempo_check_enabled = new_val end
-                
-                if config.tempo_check_enabled then
-                    r.ImGui_Indent(ctx)
-                    changed, new_val = r.ImGui_Checkbox(ctx, "Remember choice", config.remember_tempo_choice)
-                    if changed then config.remember_tempo_choice = new_val end
-                    if r.ImGui_IsItemHovered(ctx) then
-                        r.ImGui_SetTooltip(ctx, "Auto-apply chosen method without asking")
-                    end
-                    
-                    if config.remember_tempo_choice then
-                        if r.ImGui_RadioButton(ctx, "Time##tm", config.tempo_choice == "time") then
-                            config.tempo_choice = "time"
-                        end
-                        if r.ImGui_IsItemHovered(ctx) then
-                            r.ImGui_SetTooltip(ctx, "Keep items at same time positions (seconds)")
-                        end
-                        r.ImGui_SameLine(ctx)
-                        if r.ImGui_RadioButton(ctx, "Beat##tm", config.tempo_choice == "beat") then
-                            config.tempo_choice = "beat"
-                        end
-                        if r.ImGui_IsItemHovered(ctx) then
-                            r.ImGui_SetTooltip(ctx, "Adjust positions to keep items at same beats")
-                        end
-                        r.ImGui_SameLine(ctx)
-                        if r.ImGui_RadioButton(ctx, "Skip##tm", config.tempo_choice == "cancel") then
-                            config.tempo_choice = "cancel"
-                        end
-                        if r.ImGui_IsItemHovered(ctx) then
-                            r.ImGui_SetTooltip(ctx, "Keep current track, ignore saved version")
-                        end
-                    end
-                    r.ImGui_Unindent(ctx)
-                end
-                
-                r.ImGui_EndChild(ctx)
+        for i, profile in ipairs(config.profiles) do
+            local enabled = profile.enabled or false
+            local track_color = profile.track_color or 0x1E5A8A
+            local tab_color, tab_hover, tab_active
+            
+            if enabled then
+                tab_color = ((track_color & 0xFFFFFF) << 8) | 0x80
+                tab_hover = ((track_color & 0xFFFFFF) << 8) | 0xC0
+                tab_active = ((track_color & 0xFFFFFF) << 8) | 0xFF
+            else
+                tab_color = 0x2A2A2AFF
+                tab_hover = 0x3A3A3AFF
+                tab_active = 0x4A4A4AFF
             end
-            r.ImGui_EndTabItem(ctx)
-        end
-        
-        if r.ImGui_BeginTabItem(ctx, "Display", nil, display_flags) then
-            config.settings_tab = "Display"
-            if r.ImGui_BeginChild(ctx, "display_content", -1, content_height - 30, 0) then
-                local has_track = state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*")
-                
-                if has_track then
-                    r.ImGui_Text(ctx, "Track placement:")
-                    local track_idx = math.floor(r.GetMediaTrackInfo_Value(state.track_ptr, "IP_TRACKNUMBER") - 1)
-                    local track_count = r.CountTracks(0)
-                    local is_at_top = (track_idx == 0)
-                    local is_at_bottom = (track_idx == track_count - 1)
-                    
-                    local is_pinned = GetProjectPinStatus(0)
-                    
-                    r.ImGui_Text(ctx, "Position:")
-                    r.ImGui_SameLine(ctx)
-                    
-                    local clicked_top = r.ImGui_RadioButton(ctx, "Top##pos", is_at_top)
-                    if r.ImGui_IsItemHovered(ctx) then
-                        r.ImGui_SetTooltip(ctx, "Move track to top of track list")
-                    end
-                    r.ImGui_SameLine(ctx)
-                    local clicked_bottom = r.ImGui_RadioButton(ctx, "Bottom##pos", is_at_bottom)
-                    if r.ImGui_IsItemHovered(ctx) then
-                        r.ImGui_SetTooltip(ctx, "Move track to bottom of track list")
-                    end
-                    
-                    if clicked_top and not is_at_top then
-                        r.Undo_BeginBlock()
-                        r.PreventUIRefresh(1)
-                        r.SetOnlyTrackSelected(state.track_ptr)
-                        r.ReorderSelectedTracks(0, 0)
-                        r.PreventUIRefresh(-1)
-                        r.Undo_EndBlock("Move Indestructible Track to top", -1)
-                        r.TrackList_AdjustWindows(false)
-                        SetStatus("Track moved to top")
-                    end
-                    
-                    if clicked_bottom and not is_at_bottom then
-                        r.Undo_BeginBlock()
-                        r.PreventUIRefresh(1)
-                        r.SetOnlyTrackSelected(state.track_ptr)
-                        r.ReorderSelectedTracks(track_count, 0)
-                        r.PreventUIRefresh(-1)
-                        r.Undo_EndBlock("Move Indestructible Track to bottom", -1)
-                        r.TrackList_AdjustWindows(false)
-                        SetStatus("Track moved to bottom")
-                    end
-                    
-                    local pin_changed, pin_val = r.ImGui_Checkbox(ctx, "Pin track (TCP only)", is_pinned)
-                    if r.ImGui_IsItemHovered(ctx) then
-                        r.ImGui_SetTooltip(ctx, "Keep track pinned at its position in TCP when scrolling")
-                    end
-                    
-                    if pin_changed then
-                        local new_pin = not is_pinned
-                        SetProjectPinStatus(0, new_pin)
-                        r.SetMediaTrackInfo_Value(state.track_ptr, "B_TCPPIN", new_pin and 1 or 0)
-                        r.TrackList_AdjustWindows(false)
-                        r.UpdateArrange()
-                        if new_pin then
-                            SetStatus("Track pinned")
-                        else
-                            SetStatus("Track unpinned")
-                        end
-                    end
-                    
-                    r.ImGui_Spacing(ctx)
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_Spacing(ctx)
-                    r.ImGui_Text(ctx, "Compact Mode:")
-                    local compact_changed, compact_val = r.ImGui_Checkbox(ctx, "Compact TCP overlay", config.compact_mode)
-                    if r.ImGui_IsItemHovered(ctx) then
-                        r.ImGui_SetTooltip(ctx, "Show minimal widget on track")
-                    end
-                    if compact_changed then
-                        config.compact_mode = compact_val
-                        SaveConfig()
-                    end
-                    
-                    r.ImGui_Indent(ctx)
-                    local changed_icon, new_icon = r.ImGui_Checkbox(ctx, "Icon only", config.compact_icon_only)
-                    if changed_icon then
-                        config.compact_icon_only = new_icon
-                        SaveConfig()
-                    end
-                    local changed_bg, new_bg = r.ImGui_Checkbox(ctx, "No background", config.compact_no_bg)
-                    if changed_bg then
-                        config.compact_no_bg = new_bg
-                        SaveConfig()
-                    end
-                    r.ImGui_Unindent(ctx)
-                    
-                    r.ImGui_Text(ctx, "Icon size:")
-                    local size_changed, size_val = r.ImGui_SliderInt(ctx, "##iconsize", config.compact_icon_size or 28, 16, 64)
-                    if size_changed then
-                        config.compact_icon_size = size_val
-                        SaveConfig()
-                    end
-                    
-                    r.ImGui_Text(ctx, "Overlay offset X:")
-                    local full_tcp_width = 0
-                    local icon_size = config.compact_icon_size or 28
-                    if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-                        local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
-                        if bounds then 
-                            full_tcp_width = bounds.tcp_w or 200
-                        end
-                    end
-                    local max_offset = GetArrangeWidth(ctx) - 150
-                    if max_offset < 100 then max_offset = 1000 end
-                    local min_offset = -(full_tcp_width + icon_size + 10)
-                    
-                    r.ImGui_SetNextItemWidth(ctx, -60)
-                    local offset_changed, offset_val = r.ImGui_SliderInt(ctx, "##compactoffset", config.compact_offset_x or 2, min_offset, max_offset)
-                    if offset_changed then 
-                        config.compact_offset_x = offset_val 
-                        SaveConfig()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "-##xminus", 25, 0) then
-                        config.compact_offset_x = (config.compact_offset_x or 2) - 1
-                        SaveConfig()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "+##xplus", 25, 0) then
-                        config.compact_offset_x = (config.compact_offset_x or 2) + 1
-                        SaveConfig()
-                    end
-                    
-                    r.ImGui_Text(ctx, "Overlay offset Y:")
-                    local track_height = 0
-                    if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-                        local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
-                        if bounds then track_height = bounds.h end
-                    end
-                    local y_range = math.max(50, math.floor((track_height - icon_size) / 2) + 20)
-                    
-                    r.ImGui_SetNextItemWidth(ctx, -60)
-                    local offset_y_changed, offset_y_val = r.ImGui_SliderInt(ctx, "##compactoffsety", config.compact_offset_y or 0, -y_range, y_range)
-                    if offset_y_changed then 
-                        config.compact_offset_y = offset_y_val 
-                        SaveConfig()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "-##yminus", 25, 0) then
-                        config.compact_offset_y = (config.compact_offset_y or 0) - 1
-                        SaveConfig()
-                    end
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "+##yplus", 25, 0) then
-                        config.compact_offset_y = (config.compact_offset_y or 0) + 1
-                        SaveConfig()
-                    end
-                    
-                    r.ImGui_Spacing(ctx)
-                    local lock_changed, lock_val = r.ImGui_Checkbox(ctx, "Lock position", config.compact_lock_position)
-                    if r.ImGui_IsItemHovered(ctx) then
-                        r.ImGui_SetTooltip(ctx, "Lock current X position (won't move when resizing TCP)")
-                    end
-                    if lock_changed then
-                        config.compact_lock_position = lock_val
-                        if lock_val then
-                            local bounds = GetTrackTCPBounds(state.track_ptr, ctx)
-                            if bounds then
-                                config.compact_locked_x = bounds.x + (config.compact_offset_x or 2)
-                                config.compact_locked_y = config.compact_offset_y or 0
-                            end
-                        else
-                            config.compact_locked_x = nil
-                            config.compact_locked_y = nil
-                        end
-                        SaveConfig()
-                    end
-                    
-                    r.ImGui_Spacing(ctx)
-                    local preview_changed, preview_val = r.ImGui_Checkbox(ctx, "Show preview", config.preview_compact)
-                    if preview_changed then
-                        config.preview_compact = preview_val
-                        SaveConfig()
-                    end
-                else
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text_dim)
-                    r.ImGui_Text(ctx, "No track found")
-                    r.ImGui_PopStyleColor(ctx)
-                    
-                    r.ImGui_Spacing(ctx)
-                    if r.ImGui_Button(ctx, "Create Indestructible Track", -1, 0) then
-                        LoadOrCreateTrack()
-                        state.is_monitoring = true
-                    end
-                end
-                
-                r.ImGui_EndChild(ctx)
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Tab(), tab_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabHovered(), tab_hover)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabSelected(), tab_active)
+            
+            local tab_label = "  " .. profile.name .. "  ##tab" .. i
+            local tab_flags = (use_force_select and state.settings_tab == i) and r.ImGui_TabItemFlags_SetSelected() or r.ImGui_TabItemFlags_None()
+            
+            if r.ImGui_BeginTabItem(ctx, tab_label, nil, tab_flags) then
+                state.settings_tab = i
+                r.ImGui_PopStyleColor(ctx, 3)
+                DrawSettingsTrackTab(i)
+                r.ImGui_EndTabItem(ctx)
+            else
+                r.ImGui_PopStyleColor(ctx, 3)
             end
-            r.ImGui_EndTabItem(ctx)
         end
         
         r.ImGui_EndTabBar(ctx)
     end
-    
-    r.ImGui_Separator(ctx)
-    
-    if r.ImGui_Button(ctx, "Save and Close", -1, 0) then
-        config.show_settings = false
-        state.settings_tab_initialized = false
-        SaveConfig()
-        SetStatus("Settings saved")
-    end
-    
-    if r.ImGui_Button(ctx, "Cancel##settings", -1, 0) then
-        LoadConfig()
-        config.show_settings = false
-        state.settings_tab_initialized = false
-    end
 end
 
 local function loop()
+    UpdateCachedChunk()
+    
     if state.track_ptr and not r.ValidatePtr(state.track_ptr, "MediaTrack*") then
         local found_track = FindIndestructibleTrack()
-        if not found_track then
-            SaveConfig()
-            RemoveLockFile()
-            if COMMAND_ID then
-                r.SetToggleCommandState(0, COMMAND_ID, 0)
-                r.RefreshToolbar2(0, COMMAND_ID)
-            end
-            return
+        if found_track then
+            state.track_ptr = found_track
+            state.track_guid = r.GetTrackGUID(found_track)
+            state.last_chunk = GetTrackChunk(found_track)
+            state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
+        else
+            state.track_ptr = nil
+            state.track_guid = nil
+            state.is_monitoring = false
         end
     end
     
@@ -2696,9 +4253,10 @@ local function loop()
     end
     
     local now = r.time_precise()
-    if state.is_monitoring and now - state.last_check_time >= config.check_interval then
+    if now - state.last_check_time >= 0.1 then
         state.last_check_time = now
-        CheckForChanges()
+        CheckForExternalChanges()
+        CheckAllProfilesForChanges()
     end
     
     if config.compact_mode then
@@ -2707,7 +4265,6 @@ local function loop()
             r.defer(loop)
         else
             SaveConfig()
-            RemoveLockFile()
         end
         return
     end
@@ -2716,180 +4273,50 @@ local function loop()
         DrawCompactWidget()
     end
     
+    if config.hide_window then
+        r.defer(loop)
+        return
+    end
+    
     ApplyTheme()
     r.ImGui_PushFont(ctx, main_font, 13)
     
-    local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
-    r.ImGui_SetNextWindowSizeConstraints(ctx, WINDOW_WIDTH, MIN_WINDOW_HEIGHT, WINDOW_WIDTH, 800)
+    local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_AlwaysAutoResize()
+    
+    local win_w = 380
+    r.ImGui_SetNextWindowSizeConstraints(ctx, win_w, 0, win_w, 800)
+    
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x505050FF)
     
     local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
     
+    if not open then
+        state.close_action = "exit"
+    end
+    
     if visible then
-        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) and not state.show_close_warning then
-            if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-                state.show_close_warning = true
-            else
-                open = false
-            end
-        end
-        
-        if state.show_close_warning then
-            local center_x, center_y = r.ImGui_GetWindowPos(ctx)
-            center_x = center_x + WINDOW_WIDTH / 2
-            center_y = center_y + WINDOW_HEIGHT / 2
-            r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Appearing(), 0.5, 0.5)
-            r.ImGui_SetNextWindowSize(ctx, 320, 0, r.ImGui_Cond_Appearing())
-            
-            local popup_visible, popup_open = r.ImGui_Begin(ctx, "Close Script?###closepopup", true, r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize())
-            if popup_visible then
-                r.ImGui_Text(ctx, "The Indestructible Track is still")
-                r.ImGui_Text(ctx, "in this project.")
-                r.ImGui_Spacing(ctx)
-                r.ImGui_Text(ctx, "Track data is safely saved.")
-                r.ImGui_Spacing(ctx)
-                r.ImGui_Separator(ctx)
-                r.ImGui_Spacing(ctx)
-                
-                if r.ImGui_Button(ctx, "Keep Track", 90, 25) then
-                    state.close_action = "keep"
-                    state.show_close_warning = false
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Remove Track", 100, 25) then
-                    state.close_action = "remove"
-                    state.show_close_warning = false
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Cancel", 70, 25) then
-                    state.show_close_warning = false
-                    state.close_action = nil
-                end
-                r.ImGui_End(ctx)
-            end
-            if not popup_open then
-                state.show_close_warning = false
-                state.close_action = nil
-            end
-        end
-        
-        if pending_tempo_sync then
-            local center_x, center_y = r.ImGui_GetWindowPos(ctx)
-            center_x = center_x + WINDOW_WIDTH / 2
-            center_y = center_y + WINDOW_HEIGHT / 2
-            r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Appearing(), 0.5, 0.5)
-            r.ImGui_SetNextWindowSize(ctx, 360, 0, r.ImGui_Cond_Appearing())
-            
-            local tempo_popup_visible, tempo_popup_open = r.ImGui_Begin(ctx, "Tempo Mismatch###tempopopup", true, r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize())
-            if tempo_popup_visible then
-                r.ImGui_TextColored(ctx, COLORS.warning, "Tempo mismatch detected")
-                r.ImGui_Spacing(ctx)
-                r.ImGui_Text(ctx, string.format("Current project: %.2f BPM", pending_tempo_sync.current_tempo))
-                r.ImGui_Text(ctx, string.format("Saved track: %.2f BPM", pending_tempo_sync.saved_tempo))
-                r.ImGui_Spacing(ctx)
-                r.ImGui_TextWrapped(ctx, "How should item positions be handled?")
-                r.ImGui_Spacing(ctx)
-                r.ImGui_Separator(ctx)
-                r.ImGui_Spacing(ctx)
-                
-                local btn_width = 100
-                local spacing = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
-                local total_width = btn_width * 3 + spacing * 2
-                local start_x = (360 - total_width) / 2
-                r.ImGui_SetCursorPosX(ctx, start_x)
-                
-                if r.ImGui_Button(ctx, "Time-based", btn_width, 25) then
-                    local pts = pending_tempo_sync
-                    r.Undo_BeginBlock()
-                    r.PreventUIRefresh(1)
-                    SetTrackChunk(pts.track, pts.saved_data.chunk)
-                    state.last_chunk = pts.saved_data.chunk
-                    state.last_normalized_chunk = pts.saved_normalized
-                    AddToUndoHistory(pts.saved_data.chunk)
-                    r.PreventUIRefresh(-1)
-                    r.Undo_EndBlock("Sync Indestructible Track", -1)
-                    r.TrackList_AdjustWindows(false)
-                    r.UpdateArrange()
-                    SetStatus("Loaded (time-based)")
-                    pending_tempo_sync = nil
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Keep items at same time positions (seconds)")
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Beat-based", btn_width, 25) then
-                    local pts = pending_tempo_sync
-                    local adjusted_chunk = AdjustChunkToTempo(pts.saved_data.chunk, pts.saved_tempo, pts.current_tempo)
-                    r.Undo_BeginBlock()
-                    r.PreventUIRefresh(1)
-                    SetTrackChunk(pts.track, adjusted_chunk)
-                    state.last_chunk = adjusted_chunk
-                    state.last_normalized_chunk = NormalizeChunkForComparison(adjusted_chunk)
-                    AddToUndoHistory(adjusted_chunk)
-                    r.PreventUIRefresh(-1)
-                    r.Undo_EndBlock("Sync Indestructible Track (tempo adjusted)", -1)
-                    r.TrackList_AdjustWindows(false)
-                    r.UpdateArrange()
-                    SaveTrackData()
-                    SetStatus("Loaded (beat-based)")
-                    pending_tempo_sync = nil
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Adjust positions to keep items at same beats")
-                end
-                r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "Cancel", btn_width, 25) then
-                    state.last_chunk = GetTrackChunk(pending_tempo_sync.track)
-                    state.last_normalized_chunk = NormalizeChunkForComparison(state.last_chunk)
-                    SaveTrackData()
-                    pending_tempo_sync = nil
-                    SetStatus("Cancelled")
-                end
-                if r.ImGui_IsItemHovered(ctx) then
-                    r.ImGui_SetTooltip(ctx, "Keep current track, save as new state")
-                end
-                r.ImGui_End(ctx)
-            end
-            if not tempo_popup_open then
-                pending_tempo_sync = nil
-            end
+        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+            open = false
+            state.close_action = "exit"
         end
         
         if state.close_action == "exit" then
-            if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-                state.show_close_warning = true
-                state.close_action = nil
-            else
-                open = false
-            end
-        end
-        
-        if state.close_action == "keep" or state.close_action == "remove" then
             open = false
         end
         
-        if config.show_settings then
-            DrawSettingsUI()
-        else
-            DrawMainUI()
-        end
+        DrawSettingsUI()
         r.ImGui_End(ctx)
     end
     
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_PopStyleVar(ctx)
     r.ImGui_PopFont(ctx)
     PopTheme()
     
     if open then
         r.defer(loop)
     else
-        if state.track_ptr and r.ValidatePtr(state.track_ptr, "MediaTrack*") then
-            SaveTrackData()
-            if state.close_action == "remove" then
-                local track_idx = r.GetMediaTrackInfo_Value(state.track_ptr, "IP_TRACKNUMBER") - 1
-                if track_idx >= 0 then
-                    r.DeleteTrack(state.track_ptr)
-                end
-            end
-        end
         SaveConfig()
     end
 end
@@ -2900,24 +4327,24 @@ local function OnExit()
         r.RefreshToolbar2(0, COMMAND_ID)
     end
     
-    if state.close_action then
-        RemoveLockFile()
-        return
-    end
-    
-    local track = FindIndestructibleTrack()
-    if track then
-        SaveTrackData()
-        local answer = r.MB(
-            "The Indestructible Track is still in this project.\nTrack data is safely saved.\n\nRemove track from project?",
-            SCRIPT_NAME,
-            4
-        )
-        if answer == 6 then
-            r.DeleteTrack(track)
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            local profile_key = GetProfileStateKey(profile)
+            local pstate = profile_states[profile_key]
+            if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+                local chunk = GetTrackChunk(pstate.track_ptr)
+                if chunk then
+                    SaveTrackDataForProfile(profile, pstate.track_ptr, chunk)
+                end
+            end
         end
     end
-    RemoveLockFile()
+    
+    r.PreventUIRefresh(1)
+    RemoveITTracksFromAllProjects()
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    
     SaveConfig()
 end
 
@@ -2932,27 +4359,60 @@ local function Init()
         r.RefreshToolbar2(section_id, cmd_id)
     end
     
-    local lock_info = CheckLockFile()
-    if lock_info then
-        local answer = r.MB(
-            "The Indestructible Track may be open in another project:\n\n" ..
-            "Project: " .. (lock_info.project or "Unknown") .. "\n" ..
-            "Since: " .. (lock_info.time or "Unknown") .. "\n\n" ..
-            "Continue anyway? (Changes may conflict)",
-            SCRIPT_NAME .. " - Already Running?",
-            4
-        )
-        if answer ~= 6 then
-            return
+    last_project_ptr = r.EnumProjects(-1)
+    cached_project_ptr = last_project_ptr
+    
+    local active_profile = GetActiveProfile()
+    local active_profile_key = GetProfileStateKey(active_profile)
+    
+    r.PreventUIRefresh(1)
+    for _, profile in ipairs(config.profiles) do
+        if IsProfileEnabled(profile) then
+            local profile_key = GetProfileStateKey(profile)
+            local pstate = GetOrCreateProfileState(profile)
+            
+            local track = FindTrackForProfile(profile)
+            if not track then
+                track = LoadOrCreateTrackForProfile(profile)
+            end
+            
+            if track then
+                pstate.track_ptr = track
+                pstate.track_guid = r.GetTrackGUID(track)
+                local chunk = GetTrackChunk(track)
+                if chunk then
+                    pstate.last_chunk = chunk
+                    pstate.last_normalized_chunk = NormalizeChunkForComparison(chunk)
+                    cached_chunks_per_profile[profile_key] = {
+                        chunk = chunk,
+                        normalized = pstate.last_normalized_chunk,
+                        tempo = r.Master_GetTempo()
+                    }
+                    if #pstate.undo_history == 0 then
+                        AddToUndoHistoryForProfile(profile, chunk)
+                    end
+                end
+                
+                if profile_key == active_profile_key then
+                    state.track_ptr = track
+                    state.track_guid = pstate.track_guid
+                    state.last_chunk = pstate.last_chunk
+                    state.last_normalized_chunk = pstate.last_normalized_chunk
+                    state.is_monitoring = true
+                end
+            end
         end
     end
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
     
-    CreateLockFile()
-    
-    local track = LoadOrCreateTrack()
-    if track then
-        state.is_monitoring = true
+    if state.track_ptr then
         state.last_project_state = r.GetProjectStateChangeCount(0)
+        local chunk = GetTrackChunk(state.track_ptr)
+        if chunk then
+            cached_chunk_for_switch = chunk
+            cached_normalized_for_switch = NormalizeChunkForComparison(chunk)
+        end
     end
     
     r.atexit(OnExit)

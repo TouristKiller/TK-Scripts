@@ -209,26 +209,15 @@
     </reapack>
 
     <reapack name="TK_IndestructibleTrack.lua" type="script" desc="TK Indestructible Track">
-    <version name="2.8" author="TouristKiller" time="2025-12-29T02:00:00Z">
+    <version name="3.0" author="TouristKiller" time="2025-12-31T01:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack.lua</source>
     <source file="ISHIELD.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/ISHIELD.png</source>
     <changelog><![CDATA[
-+ preview_compact now saved in config (default: true)
-+ show_settings and settings_tab now remembered between sessions
-+ added close button (red circle) to main and settings UI
-+ added "Close Script" option to compact widget context menu
-+ toolbar button now shows toggle state (lights up when running)
-+ script auto-closes when track is manually removed
-+ compact widget is now drag-to-move (when not locked)
-+ added Lock/Unlock Position option to compact context menu
-+ added: Compact mode settings split into tabs (General / Display)
-+ added: Icon size slider with proportional scaling
-+ added: X/Y offset sliders with +/- buttons for precise positioning
-+ added: Show preview checkbox for live positioning
-+ added: Lock position option to lock widget position within TCP
-+ added: Icon only mode
-+ added: No background mode
-+ improved: Full TCP width range for X offset
++ Multi-profile support with 4 fixed profiles (each with own track, color, data)
++ Per-profile undo/redo history, snapshots, and auto-saves
++ Compact icon mode with right-click menu (Undo/Redo buttons, Save, Snapshot, Copy to Project)
++ Settings-only UI with tab-based interface per profile
++ Hide Settings option to keep monitoring while hiding window
 ]]></changelog>
     </version>
     </reapack>
