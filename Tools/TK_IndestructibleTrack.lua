@@ -1,6 +1,6 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 3.2
+-- @version 3.3
 -- @changelog:
 --   + Multi-profile support with 4 fixed profiles (each with own track, color, data)
 --   + Per-profile undo/redo history, snapshots, and auto-saves
@@ -1460,6 +1460,10 @@ local function LoadBackupForProfile(profile, backup)
     local chunk_marker = '"chunk":"'
     local chunk_start = content:find(chunk_marker, 1, true)
     if not chunk_start then
+        chunk_marker = '"chunk": "'
+        chunk_start = content:find(chunk_marker, 1, true)
+    end
+    if not chunk_start then
         SetStatus("Invalid backup file", true)
         return false
     end
@@ -1490,18 +1494,25 @@ local function LoadBackupForProfile(profile, backup)
     
     local chunk = content:sub(chunk_start, chunk_end)
     chunk = chunk:gsub("<<<NEWLINE>>>", "\n")
+    chunk = chunk:gsub('\\n', '\n')
     chunk = chunk:gsub('\\"', '"')
     chunk = chunk:gsub('\\\\', '\\')
     
     local pext_key = GetProfilePExtKey(profile)
+    local profile_key = GetProfileStateKey(profile)
+    local pstate = GetOrCreateProfileState(profile)
+    
     chunk = chunk:gsub('NAME ".-"', 'NAME "' .. GetFullTrackName(profile) .. '"', 1)
     
-    local profile_key = GetProfileStateKey(profile)
-    local pstate = profile_states[profile_key]
-    
-    if not pstate or not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
-        SetStatus("Track not found for profile", true)
-        return false
+    if not pstate.track_ptr or not r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+        pstate.track_ptr = FindTrackForProfile(profile)
+        if not pstate.track_ptr then
+            r.InsertTrackAtIndex(0, true)
+            pstate.track_ptr = r.GetTrack(0, 0)
+            r.GetSetMediaTrackInfo_String(pstate.track_ptr, "P_NAME", GetFullTrackName(profile), true)
+            r.GetSetMediaTrackInfo_String(pstate.track_ptr, pext_key, "1", true)
+            pstate.track_guid = r.GetTrackGUID(pstate.track_ptr)
+        end
     end
     
     r.Undo_BeginBlock()
@@ -4168,11 +4179,13 @@ local function DrawSettingsTrackTab(profile_index)
         r.ImGui_PopStyleColor(ctx, 2)
         
         if list_open then
-            if r.ImGui_BeginChild(ctx, "##autosavelist", -1, 100, 1) then
+            if r.ImGui_BeginChild(ctx, "##autosavelist" .. profile_index, -1, 100, 1) then
                 for _, backup in ipairs(profile_backups) do
                     r.ImGui_PushID(ctx, backup.path)
-                    if r.ImGui_Selectable(ctx, backup.timestamp) and profile.enabled then
-                        LoadBackupForProfile(profile, backup)
+                    if r.ImGui_Selectable(ctx, backup.timestamp, false) then
+                        if profile.enabled then
+                            LoadBackupForProfile(profile, backup)
+                        end
                     end
                     r.ImGui_PopID(ctx)
                 end
