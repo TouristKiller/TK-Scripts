@@ -209,15 +209,17 @@
     </reapack>
 
     <reapack name="TK_IndestructibleTrack.lua" type="script" desc="TK Indestructible Track">
-    <version name="3.3" author="TouristKiller" time="2025-12-31T02:42:00Z">
+    <version name="3.4" author="TouristKiller" time="2025-12-31T16:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack.lua</source>
     <source file="ISHIELD.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/ISHIELD.png</source>
+    <source main="main" file="TK_IndestructibleTrack_Toggle_Profile1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack_Toggle_Profile1.lua</source>
+    <source main="main" file="TK_IndestructibleTrack_Toggle_Profile2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack_Toggle_Profile2.lua</source>
+    <source main="main" file="TK_IndestructibleTrack_Toggle_Profile3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack_Toggle_Profile3.lua</source>
+    <source main="main" file="TK_IndestructibleTrack_Toggle_Profile4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Tools/TK_IndestructibleTrack_Toggle_Profile4.lua</source>
     <changelog><![CDATA[
-+ Multi-profile support with 4 fixed profiles (each with own track, color, data)
-+ Per-profile undo/redo history, snapshots, and auto-saves
-+ Compact icon mode with right-click menu (Undo/Redo buttons, Save, Snapshot, Copy to Project)
-+ Settings-only UI with tab-based interface per profile
-+ Hide Settings option to keep monitoring while hiding window
++ Configurable track name prefix (enable/disable and custom text)
++ External toggle scripts for toolbar buttons with sync support
++ Toolbar buttons reflect current state when toggled via checkbox or script
 ]]></changelog>
     </version>
     </reapack>

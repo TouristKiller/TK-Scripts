@@ -1,12 +1,10 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 3.3
+-- @version 3.4
 -- @changelog:
---   + Multi-profile support with 4 fixed profiles (each with own track, color, data)
---   + Per-profile undo/redo history, snapshots, and auto-saves
---   + Compact icon mode with right-click menu (Undo/Redo buttons, Save, Snapshot, Copy to Project)
---   + Settings-only UI with tab-based interface per profile
---   + Hide Settings option to keep monitoring while hiding window
+--   + Configurable track name prefix (enable/disable and custom text)
+--   + External toggle scripts for toolbar buttons with sync support
+--   + Toolbar buttons reflect current state when toggled via checkbox or script
 
 -------------------------------------------------------------------
 local r = reaper
@@ -94,6 +92,8 @@ local default_config = {
     tempo_mode = "beat",
     track_position = "top",
     track_pinned = false,
+    track_prefix = "IT: ",
+    track_prefix_enabled = true,
     compact_mode = false,
     compact_offset_x = -40,
     compact_offset_y = 2,
@@ -529,12 +529,18 @@ local function GetProfileStateKey(profile)
     return "profile_1"
 end
 
-local IT_PREFIX = "IT: "
+local function GetTrackPrefix()
+    if config.track_prefix_enabled then
+        return config.track_prefix or "IT: "
+    end
+    return ""
+end
 
 local function GetFullTrackName(profile)
     if not profile then profile = GetActiveProfile() end
-    if not profile then return IT_PREFIX .. "Track" end
-    return IT_PREFIX .. (profile.name or "Track")
+    local prefix = GetTrackPrefix()
+    if not profile then return prefix .. "Track" end
+    return prefix .. (profile.name or "Track")
 end
 local function IsProfileEnabled(profile)
     return profile and profile.enabled == true
@@ -2528,6 +2534,17 @@ RemoveTrackForProfile = function(profile)
     end
 end
 
+local function RefreshToggleToolbar(profile_index, enabled)
+    local cmd_str = r.GetExtState("TK_IndestructibleTrack", "cmd_profile_" .. profile_index)
+    if cmd_str ~= "" then
+        local cmd_id = tonumber(cmd_str)
+        if cmd_id and cmd_id ~= 0 then
+            r.SetToggleCommandState(0, cmd_id, enabled and 1 or 0)
+            r.RefreshToolbar2(0, cmd_id)
+        end
+    end
+end
+
 ToggleProfile = function(profile_index, enabled)
     if profile_index < 1 or profile_index > 4 then return end
     
@@ -2545,6 +2562,8 @@ ToggleProfile = function(profile_index, enabled)
         r.TrackList_AdjustWindows(false)
     end
     
+    r.SetExtState("TK_IndestructibleTrack", "state_profile_" .. profile_index, enabled and "1" or "0", false)
+    RefreshToggleToolbar(profile_index, enabled)
     SaveConfig()
 end
 
@@ -2878,6 +2897,20 @@ local function CheckAllProfilesForChanges()
         end
     end
     ProcessPendingChangesAllProfiles()
+end
+
+local function CheckExternalToggleRequests()
+    for i = 1, 4 do
+        local toggle_val = r.GetExtState("TK_IndestructibleTrack", "toggle_profile_" .. i)
+        if toggle_val ~= "" then
+            r.DeleteExtState("TK_IndestructibleTrack", "toggle_profile_" .. i, false)
+            if config.profiles and config.profiles[i] then
+                local new_state = not config.profiles[i].enabled
+                ToggleProfile(i, new_state)
+                r.SetExtState("TK_IndestructibleTrack", "state_profile_" .. i, new_state and "1" or "0", false)
+            end
+        end
+    end
 end
 
 local function CheckForChanges()
@@ -3872,6 +3905,23 @@ local function DrawSettingsGeneralTab()
     
     r.ImGui_Spacing(ctx)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
+    r.ImGui_Text(ctx, "TRACK PREFIX")
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_Separator(ctx)
+    
+    changed, new_val = r.ImGui_Checkbox(ctx, "Enable prefix", config.track_prefix_enabled)
+    if changed then config.track_prefix_enabled = new_val; SaveConfig() end
+    
+    if config.track_prefix_enabled then
+        r.ImGui_Text(ctx, "Prefix:")
+        r.ImGui_SameLine(ctx, 80)
+        r.ImGui_SetNextItemWidth(ctx, -1)
+        changed, new_val = r.ImGui_InputText(ctx, "##prefix", config.track_prefix or "IT: ")
+        if changed then config.track_prefix = new_val; SaveConfig() end
+    end
+    
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.accent)
     r.ImGui_Text(ctx, "TEMPO")
     r.ImGui_PopStyleColor(ctx)
     r.ImGui_Separator(ctx)
@@ -4372,6 +4422,7 @@ local function loop()
         state.last_check_time = now
         CheckForExternalChanges()
         CheckAllProfilesForChanges()
+        CheckExternalToggleRequests()
     end
     
     if config.compact_mode then
@@ -4466,6 +4517,12 @@ end
 local function Init()
     EnsureDirectories()
     LoadConfig()
+    
+    for i = 1, 4 do
+        if config.profiles and config.profiles[i] then
+            r.SetExtState("TK_IndestructibleTrack", "state_profile_" .. i, config.profiles[i].enabled and "1" or "0", false)
+        end
+    end
     
     local _, _, section_id, cmd_id = r.get_action_context()
     if cmd_id and cmd_id ~= 0 then
