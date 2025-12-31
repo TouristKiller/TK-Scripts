@@ -1,6 +1,6 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 3.1
+-- @version 3.2
 -- @changelog:
 --   + Multi-profile support with 4 fixed profiles (each with own track, color, data)
 --   + Per-profile undo/redo history, snapshots, and auto-saves
@@ -3181,6 +3181,25 @@ local function DrawSingleCompactIcon(profile, pstate, widget_index)
             
             if r.ImGui_MenuItem(compact_ctx, "Copy to Project") then
                 CopyTrackToProject(profile)
+            end
+            
+            local items_locked = false
+            if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+                local item_count = r.CountTrackMediaItems(pstate.track_ptr)
+                if item_count > 0 then
+                    local first_item = r.GetTrackMediaItem(pstate.track_ptr, 0)
+                    if first_item then
+                        items_locked = r.GetMediaItemInfo_Value(first_item, "C_LOCK") == 1
+                    end
+                end
+            end
+            local lock_items_label = items_locked and "Unlock Items" or "Lock Items"
+            if r.ImGui_MenuItem(compact_ctx, lock_items_label) then
+                if pstate and pstate.track_ptr and r.ValidatePtr(pstate.track_ptr, "MediaTrack*") then
+                    r.SetOnlyTrackSelected(pstate.track_ptr)
+                    r.Main_OnCommand(40289, 0)
+                    r.Main_OnCommand(43696, 0)
+                end
             end
             
             local lock_label = config.compact_lock_position and "Unlock Position" or "Lock Position"
