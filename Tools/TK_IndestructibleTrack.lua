@@ -1,6 +1,6 @@
 -- @description TK Indestructible Track
 -- @author TouristKiller
--- @version 3.0
+-- @version 3.1
 -- @changelog:
 --   + Multi-profile support with 4 fixed profiles (each with own track, color, data)
 --   + Per-profile undo/redo history, snapshots, and auto-saves
@@ -2350,10 +2350,47 @@ LoadOrCreateTrackForProfile = function(profile)
     
     local existing_track = FindTrackForProfile(profile)
     if existing_track then
+        local current_chunk = GetTrackChunk(existing_track)
+        local current_normalized = NormalizeChunkForComparison(current_chunk)
+        
+        local saved_data = LoadTrackDataForProfile(profile)
+        if saved_data and saved_data.chunk then
+            local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
+            
+            if saved_normalized and current_normalized and saved_normalized ~= current_normalized then
+                local saved_time = saved_data.timestamp or "unknown"
+                local answer = r.MB(
+                    profile.name .. ":\n\nThe saved version (" .. saved_time .. ") differs from the track in this project.\n\nLoad the saved version?\n\nYes = Load saved version\nNo = Keep project track (overwrites saved)",
+                    SCRIPT_NAME .. " - Sync Conflict",
+                    4
+                )
+                if answer == 6 then
+                    local chunk_to_load = saved_data.chunk
+                    local current_tempo = r.Master_GetTempo()
+                    local saved_tempo = saved_data.tempo
+                    if saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
+                        if config.tempo_mode == "beat" then
+                            chunk_to_load = AdjustChunkToTempo(saved_data.chunk, saved_tempo, current_tempo)
+                        end
+                    end
+                    
+                    r.PreventUIRefresh(1)
+                    SetTrackChunk(existing_track, chunk_to_load)
+                    r.GetSetMediaTrackInfo_String(existing_track, "P_NAME", GetFullTrackName(profile), true)
+                    r.PreventUIRefresh(-1)
+                    
+                    current_chunk = GetTrackChunk(existing_track)
+                    current_normalized = NormalizeChunkForComparison(current_chunk)
+                else
+                    SaveTrackDataForProfile(profile, existing_track, current_chunk)
+                end
+            end
+        end
+        
         pstate.track_ptr = existing_track
         pstate.track_guid = r.GetTrackGUID(existing_track)
-        pstate.last_chunk = GetTrackChunk(existing_track)
-        pstate.last_normalized_chunk = NormalizeChunkForComparison(pstate.last_chunk)
+        pstate.last_chunk = current_chunk
+        pstate.last_normalized_chunk = current_normalized
         pstate.is_monitoring = true
         if pstate.last_chunk and #pstate.undo_history == 0 then
             AddToUndoHistoryForProfile(profile, pstate.last_chunk)
@@ -2498,6 +2535,52 @@ ToggleProfile = function(profile_index, enabled)
     end
     
     SaveConfig()
+end
+
+local function CheckInitialConflictForProfile(profile)
+    local track = FindTrackForProfile(profile)
+    if not track then return nil end
+    
+    local saved_data = LoadTrackDataForProfile(profile)
+    if not saved_data or not saved_data.chunk then return track end
+    
+    local current_chunk = GetTrackChunk(track)
+    if not current_chunk then return track end
+    
+    local current_normalized = NormalizeChunkForComparison(current_chunk)
+    local saved_normalized = NormalizeChunkForComparison(saved_data.chunk)
+    
+    if current_normalized ~= saved_normalized then
+        local saved_time = saved_data.timestamp or "unknown"
+        local answer = r.MB(
+            profile.name .. ":\n\nThe saved version (" .. saved_time .. ") differs from the track in this project.\n\nLoad the saved version?\n\nYes = Load saved version\nNo = Keep project track (overwrites saved)",
+            SCRIPT_NAME .. " - Sync Conflict",
+            4
+        )
+        
+        if answer == 6 then
+            local chunk_to_load = saved_data.chunk
+            
+            local current_tempo = r.Master_GetTempo()
+            local saved_tempo = saved_data.tempo
+            if saved_tempo and math.abs(current_tempo - saved_tempo) > 0.01 then
+                if config.tempo_mode == "beat" then
+                    chunk_to_load = AdjustChunkToTempo(saved_data.chunk, saved_tempo, current_tempo)
+                end
+            end
+            
+            r.PreventUIRefresh(1)
+            SetTrackChunk(track, chunk_to_load)
+            r.GetSetMediaTrackInfo_String(track, "P_NAME", GetFullTrackName(profile), true)
+            local pext_key = GetProfilePExtKey(profile)
+            r.GetSetMediaTrackInfo_String(track, pext_key, "1", true)
+            r.PreventUIRefresh(-1)
+        else
+            SaveTrackDataForProfile(profile, track, current_chunk)
+        end
+    end
+    
+    return track
 end
 
 local function SyncProfileOnProjectSwitch(profile)
@@ -4365,13 +4448,12 @@ local function Init()
     local active_profile = GetActiveProfile()
     local active_profile_key = GetProfileStateKey(active_profile)
     
-    r.PreventUIRefresh(1)
     for _, profile in ipairs(config.profiles) do
         if IsProfileEnabled(profile) then
             local profile_key = GetProfileStateKey(profile)
             local pstate = GetOrCreateProfileState(profile)
             
-            local track = FindTrackForProfile(profile)
+            local track = CheckInitialConflictForProfile(profile)
             if not track then
                 track = LoadOrCreateTrackForProfile(profile)
             end
@@ -4403,7 +4485,6 @@ local function Init()
             end
         end
     end
-    r.PreventUIRefresh(-1)
     r.TrackList_AdjustWindows(false)
     
     if state.track_ptr then
