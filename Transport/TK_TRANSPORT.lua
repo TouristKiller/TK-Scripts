@@ -1,6 +1,6 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.7
+-- @version 1.8.8
 -- @changelog 
 --[[
   v1.8.7:
@@ -9017,10 +9017,11 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  if mixer_tab_open then
  mixer_tab_active = true
  local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
- if r.ImGui_BeginChild(ctx, "MixerSettingsChild", avail_w, avail_h - 30, r.ImGui_ChildFlags_None()) then
+ local child_visible = r.ImGui_BeginChild(ctx, "MixerSettingsChild", avail_w, avail_h - 30, r.ImGui_ChildFlags_None())
+ if child_visible then
   ShowSimpleMixerSettings(ctx, 0, 0)
-  r.ImGui_EndChild(ctx)
  end
+ r.ImGui_EndChild(ctx)
  r.ImGui_EndTabItem(ctx)
  end
  
