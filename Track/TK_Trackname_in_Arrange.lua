@@ -1,8 +1,14 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.6
+-- @version 1.8.7
 -- @changelog 
 --[[
+v1.8.7:
++ Freeze Icon: Added optional free positioning mode
++ Freeze Icon: Can now be dragged freely over the entire track including TCP area
++ Freeze Icon: Lock/Unlock button to fix position after dragging
++ Freeze Icon: Reset button to return to default position
+
 v1.8.5:
 + Added Freeze Icon feature - displays freeze icon on frozen tracks
 + Setting to enable/disable freeze icon in Icons tab
@@ -141,6 +147,12 @@ local folder_browser_path = ""
 local folder_browser_drives = {}
 local folder_browser_quick_paths = {}
 local overlay_btn_clicked = false
+
+local freeze_icon_dragging = false
+local freeze_icon_drag_start_x = 0
+local freeze_icon_drag_start_y = 0
+local freeze_icon_drag_offset_x = 0
+local freeze_icon_drag_offset_y = 0
 
 local function GetQuickPaths()
     local paths = {}
@@ -357,13 +369,16 @@ local flags              = r.ImGui_WindowFlags_NoTitleBar() |
                            r.ImGui_WindowFlags_NoDocking() | 
                            r.ImGui_WindowFlags_NoBackground()
 
-local window_flags       = flags | 
-                           r.ImGui_WindowFlags_NoInputs() |
-                           r.ImGui_WindowFlags_NoMove() |
-                           r.ImGui_WindowFlags_NoSavedSettings() |
-                           r.ImGui_WindowFlags_NoMouseInputs() |
-                           r.ImGui_WindowFlags_NoFocusOnAppearing() 
-                          
+local function GetOverlayWindowFlags()
+    local wflags = flags | 
+                   r.ImGui_WindowFlags_NoMove() |
+                   r.ImGui_WindowFlags_NoSavedSettings() |
+                   r.ImGui_WindowFlags_NoFocusOnAppearing() |
+                   r.ImGui_WindowFlags_NoInputs() | 
+                   r.ImGui_WindowFlags_NoMouseInputs()
+    
+    return wflags
+end
 
 local settings_flags     = r.ImGui_WindowFlags_NoTitleBar() | 
                            r.ImGui_WindowFlags_TopMost() |
@@ -638,6 +653,12 @@ local default_settings              = {
     overlay_grid_division           = 1,
     overlay_grid_avoid_items        = false,
     show_freeze_icon                = true,
+    freeze_icon_free_position       = false,
+    freeze_icon_lock_position       = false,
+    freeze_icon_offset_x            = 0,
+    freeze_icon_offset_y            = 0,
+    freeze_icon_locked_x            = nil,
+    freeze_icon_locked_y            = nil,
 }
 
 local settings = {}
@@ -2139,6 +2160,67 @@ function ShowSettingsWindow()
             r.ImGui_EndTooltip(ctx)
         end
         
+        if settings.show_freeze_icon then
+            r.ImGui_SameLine(ctx, col2)
+            if r.ImGui_RadioButton(ctx, "Free Position", settings.freeze_icon_free_position) then
+                settings.freeze_icon_free_position = not settings.freeze_icon_free_position
+                if not settings.freeze_icon_free_position then
+                    settings.freeze_icon_lock_position = false
+                    settings.freeze_icon_offset_x = 0
+                    settings.freeze_icon_offset_y = 0
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_BeginTooltip(ctx)
+                r.ImGui_Text(ctx, "Sleep de freeze icon vrij over de track")
+                r.ImGui_EndTooltip(ctx)
+            end
+            
+            if settings.freeze_icon_free_position then
+                r.ImGui_SameLine(ctx, col3)
+                local lock_label = settings.freeze_icon_lock_position and "Unlock" or "Lock"
+                if r.ImGui_Button(ctx, lock_label, 50) then
+                    settings.freeze_icon_lock_position = not settings.freeze_icon_lock_position
+                    if settings.freeze_icon_lock_position then
+                        settings.freeze_icon_locked_x = LEFT + 50 + settings.freeze_icon_offset_x
+                        local freeze_icon_scale = 0.65
+                        local icon_size = settings.icon_size * freeze_icon_scale
+                        local track_count = r.CountTracks(0)
+                        for i = 0, track_count - 1 do
+                            local track = r.GetTrack(0, i)
+                            if IsTrackFrozen(track) then
+                                local track_h = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+                                local center_offset = (track_h * 0.5) - (icon_size * 0.5)
+                                settings.freeze_icon_locked_y = center_offset + settings.freeze_icon_offset_y
+                                break
+                            end
+                        end
+                    end
+                    SaveSettings()
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_BeginTooltip(ctx)
+                    r.ImGui_Text(ctx, settings.freeze_icon_lock_position and "Ontgrendel positie om te slepen" or "Vergrendel huidige positie")
+                    r.ImGui_EndTooltip(ctx)
+                end
+                
+                r.ImGui_SameLine(ctx, col4)
+                if r.ImGui_Button(ctx, "Reset", 50) then
+                    settings.freeze_icon_offset_x = 0
+                    settings.freeze_icon_offset_y = 0
+                    settings.freeze_icon_lock_position = false
+                    settings.freeze_icon_locked_x = nil
+                    settings.freeze_icon_locked_y = nil
+                    SaveSettings()
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_BeginTooltip(ctx)
+                    r.ImGui_Text(ctx, "Reset positie naar standaard")
+                    r.ImGui_EndTooltip(ctx)
+                end
+            end
+        end
+        
         r.ImGui_Dummy(ctx, 0, 4)
         r.ImGui_Separator(ctx)
         r.ImGui_Dummy(ctx, 0, 2)
@@ -3203,6 +3285,9 @@ function IsTrackFrozen(track)
     return freeze_count > 0
 end
 
+local freeze_icon_bounds = nil
+local pending_free_freeze_icons = {}
+
 function RenderFreezeIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height, additional_offset)
     if not settings.show_freeze_icon then return end
     if not IsTrackFrozen(track) then return end
@@ -3222,19 +3307,44 @@ function RenderFreezeIcon(draw_list, track, track_y, track_height, text_x, text_
     
     local freeze_icon_scale = 0.65
     local icon_size = settings.icon_size * freeze_icon_scale
-    local icon_y = WY + track_y + (track_height * 0.5) - (icon_size * 0.5) + vertical_offset
     
-    if not is_pinned and icon_y < WY + pinned_tracks_height then 
+    local icon_x, icon_y
+    
+    if settings.freeze_icon_free_position then
+        local tcp_y_rel = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
+        local track_h = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+        local track_top_y = TOP + tcp_y_rel
+        local center_y = track_top_y + (track_h * 0.5) - (icon_size * 0.5)
+        
+        if settings.freeze_icon_lock_position and settings.freeze_icon_locked_x then
+            icon_x = settings.freeze_icon_locked_x
+            icon_y = track_top_y + (settings.freeze_icon_locked_y or 0)
+        else
+            icon_x = LEFT + 50 + settings.freeze_icon_offset_x
+            icon_y = center_y + settings.freeze_icon_offset_y
+        end
+        
+        table.insert(pending_free_freeze_icons, {
+            x = icon_x, 
+            y = icon_y, 
+            size = icon_size, 
+            track = track
+        })
         return
-    end
-    
-    additional_offset = additional_offset or 0
-    
-    local icon_x
-    if settings.icon_position == 1 then
-        icon_x = text_x + text_width + settings.icon_spacing + 10 + additional_offset
     else
-        icon_x = text_x - icon_size - settings.icon_spacing - 10 - additional_offset
+        icon_y = WY + track_y + (track_height * 0.5) - (icon_size * 0.5) + vertical_offset
+        
+        if not is_pinned and icon_y < WY + pinned_tracks_height then 
+            return
+        end
+        
+        additional_offset = additional_offset or 0
+        
+        if settings.icon_position == 1 then
+            icon_x = text_x + text_width + settings.icon_spacing + 10 + additional_offset
+        else
+            icon_x = text_x - icon_size - settings.icon_spacing - 10 - additional_offset
+        end
     end
     
     local tint_col = r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.icon_opacity)
@@ -3246,6 +3356,103 @@ function RenderFreezeIcon(draw_list, track, track_y, track_height, text_x, text_
         0, 0, 1, 1,
         tint_col
     )
+end
+
+function RenderFreeFreezeIcons()
+    freeze_icon_bounds = nil
+    
+    if not settings.freeze_icon_free_position then 
+        pending_free_freeze_icons = {}
+        return 
+    end
+    if #pending_free_freeze_icons == 0 then return end
+    if not freeze_icon_image or not r.ImGui_ValidatePtr(freeze_icon_image, 'ImGui_Image*') then return end
+    
+    local tint_col = r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, settings.icon_opacity)
+    
+    for idx, icon_data in ipairs(pending_free_freeze_icons) do
+        local win_flags = r.ImGui_WindowFlags_NoTitleBar() |
+                          r.ImGui_WindowFlags_NoResize() |
+                          r.ImGui_WindowFlags_NoMove() |
+                          r.ImGui_WindowFlags_NoScrollbar() |
+                          r.ImGui_WindowFlags_NoSavedSettings() |
+                          r.ImGui_WindowFlags_NoFocusOnAppearing() |
+                          r.ImGui_WindowFlags_NoDocking() |
+                          r.ImGui_WindowFlags_NoBackground() |
+                          r.ImGui_WindowFlags_NoNav() |
+                          r.ImGui_WindowFlags_NoInputs()
+        
+        r.ImGui_SetNextWindowPos(ctx, icon_data.x, icon_data.y)
+        r.ImGui_SetNextWindowSize(ctx, icon_data.size, icon_data.size)
+        
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0)
+        
+        local visible = r.ImGui_Begin(ctx, "##FreezeIcon" .. idx, true, win_flags)
+        if visible then
+            local dl = r.ImGui_GetWindowDrawList(ctx)
+            r.ImGui_DrawList_AddImage(
+                dl, freeze_icon_image,
+                icon_data.x, icon_data.y,
+                icon_data.x + icon_data.size, icon_data.y + icon_data.size,
+                0, 0, 1, 1,
+                tint_col
+            )
+            r.ImGui_End(ctx)
+        end
+        
+        r.ImGui_PopStyleVar(ctx, 2)
+        
+        if not freeze_icon_bounds then
+            freeze_icon_bounds = icon_data
+        end
+    end
+    
+    pending_free_freeze_icons = {}
+end
+
+function HandleFreezeIconDrag()
+    if not settings.freeze_icon_free_position then return end
+    if settings.freeze_icon_lock_position then return end
+    if not freeze_icon_bounds then return end
+    
+    local bounds = freeze_icon_bounds
+    local mouse_x, mouse_y = r.GetMousePosition()
+    mouse_x, mouse_y = r.ImGui_PointConvertNative(ctx, mouse_x, mouse_y)
+    
+    local is_hovered = mouse_x >= bounds.x and mouse_x <= bounds.x + bounds.size and
+                       mouse_y >= bounds.y and mouse_y <= bounds.y + bounds.size
+    
+    local mouse_down = r.JS_Mouse_GetState(1) == 1
+    
+    if is_hovered or freeze_icon_dragging then
+        local hand_cursor = r.JS_Mouse_LoadCursor(32649)
+        if hand_cursor then
+            r.JS_Mouse_SetCursor(hand_cursor)
+        end
+    end
+    
+    if is_hovered and mouse_down and not freeze_icon_dragging then
+        freeze_icon_dragging = true
+        freeze_icon_drag_start_x = mouse_x
+        freeze_icon_drag_start_y = mouse_y
+        freeze_icon_drag_offset_x = settings.freeze_icon_offset_x
+        freeze_icon_drag_offset_y = settings.freeze_icon_offset_y
+    end
+    
+    if freeze_icon_dragging then
+        if mouse_down then
+            local delta_x = mouse_x - freeze_icon_drag_start_x
+            local delta_y = mouse_y - freeze_icon_drag_start_y
+            settings.freeze_icon_offset_x = freeze_icon_drag_offset_x + delta_x
+            settings.freeze_icon_offset_y = freeze_icon_drag_offset_y + delta_y
+        else
+            freeze_icon_dragging = false
+            SaveSettings()
+        end
+    end
+    
+    freeze_icon_bounds = nil
 end
 
 function DrawTrackIcon(track, x, y)
@@ -4012,7 +4219,7 @@ function loop()
         WX, WY = 0, 0
         visible = true 
     else
-        visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, window_flags)
+        visible, open = r.ImGui_Begin(ctx, 'Track Names Display', true, GetOverlayWindowFlags())
         if visible then
             draw_list = r.ImGui_GetWindowDrawList(ctx)
             WX, WY = r.ImGui_GetWindowPos(ctx)
@@ -4740,6 +4947,10 @@ function loop()
     elseif visible then
         r.ImGui_End(ctx)
     end
+    
+    RenderFreeFreezeIcons()
+    HandleFreezeIconDrag()
+    
     r.ImGui_PopStyleVar(ctx)
     r.ImGui_PopStyleColor(ctx, 2)
     r.ImGui_PopFont(ctx)
