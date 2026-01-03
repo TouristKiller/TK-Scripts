@@ -1,0 +1,61 @@
+╔══════════════════════════════════════════════════════════════════╗
+║            TK SAMPLE ANALYZER - QUICK START GUIDE                ║
+╚══════════════════════════════════════════════════════════════════╝
+
+STEP 1: ONE-TIME INSTALLATION
+─────────────────────────────
+Open Command Prompt or PowerShell and type:
+
+    python -m pip install librosa numpy
+
+(Don't have Python? Download from python.org - check "Add to PATH")
+
+
+STEP 2: ANALYZE YOUR SAMPLES
+────────────────────────────
+1. Open TK Media Browser in REAPER
+2. Click on the "Auto" tab
+3. Click the "Open Analyzer" button
+4. Click "Browse..." and select your sample folder
+5. Click "Add Folder"
+6. Done!
+
+Features:
+• Only new samples are analyzed (existing ones are skipped)
+• Add multiple folders over time
+• View all indexed folders with sample counts
+• Use "Clear Database" to start fresh
+
+
+STEP 3: BROWSE YOUR SAMPLES
+───────────────────────────
+After analysis, your samples appear in the "Auto" tab.
+Browse, filter, sort, and drag & drop!
+
+
+FEATURES
+────────
+• Auto-categorizes: Kick, Snare, HiHat, Bass, Synth, Pad, FX, Vocal, etc.
+• Detects loops vs one-shots
+• Estimates BPM and musical key
+• Click column headers to sort (Name, Category, Key, BPM, Duration)
+• Filter by category, loops/one-shots, or search text
+• Drag & drop directly to REAPER
+
+
+SUPPORTED FORMATS
+─────────────────
+WAV, MP3, AIF, AIFF, FLAC, OGG, M4A
+
+
+TROUBLESHOOTING
+───────────────
+• "pip not found"    → Install Python from python.org (check "Add to PATH")
+• Empty list         → Run the analyzer first, then restart TK Media Browser
+• Wrong category     → Descriptive file names help (e.g., "kick_808.wav")
+
+
+─────────────────────────────────────────────────────────────────────
+                    TK Sample Analyzer v1.1
+                  Part of TK Media Browser
+─────────────────────────────────────────────────────────────────────

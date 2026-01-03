@@ -1,9 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.6
+-- @version 0.6.7
 -- @changelog:
 --[[       
-+ REAL-TIME PITCH TRACKING: Autocorrelation-based pitch detection during playback
++ AUTO SAMPLES: Sortable by column headers (Name, Category, Key, BPM, Duration)
++ MPL RS5K MANAGER: Added Delete RS5K Pad submenu
++ MPL RS5K MANAGER: Occupied notes are now correctly hidden in all views
 
 ]]--        
 --------------------------------------------------------------------------
@@ -13,6 +15,16 @@ local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local peakfiles_path = script_path .. "" .. sep
 local json_path = script_path .. "json_tkmb.lua"
 local json = dofile(json_path)
+local ai_module_path = script_path .. "ai_sample_module.lua"
+local ai_module = nil
+local ai_module_available = false
+local ai_module_file = io.open(ai_module_path, "r")
+if ai_module_file then
+    ai_module_file:close()
+    ai_module = dofile(ai_module_path)
+    ai_module.init(script_path)
+    ai_module_available = true
+end
 local cache_dir = script_path .. "CACHE" .. sep
 local collections_dir = script_path .. "COLLECTIONS" .. sep
 local presets_dir = script_path .. "PRESETS" .. sep
@@ -64,7 +76,8 @@ local playback = {
     is_video_playback = false,
     is_midi_playback = false,
     saved_solo_states = {},
-    use_exclusive_solo = true  
+    use_exclusive_solo = true,
+    sync_wait_for_next_measure = false
 }
 
 -- File & Location Management
@@ -1958,6 +1971,7 @@ local function save_options()
             link_start_from_editcursor = playback.link_start_from_editcursor,
             use_exclusive_solo = playback.use_exclusive_solo,
             preview_volume = playback.preview_volume,
+            sync_wait_for_next_measure = playback.sync_wait_for_next_measure,
             current_db = current_db,
             remember_last_location = file_location.remember_last_location,
             last_location_index = file_location.selected_location_index,
@@ -2016,6 +2030,7 @@ local function get_settings_table()
         link_start_from_editcursor = playback.link_start_from_editcursor,
         use_exclusive_solo = playback.use_exclusive_solo,
         preview_volume = playback.preview_volume,
+        sync_wait_for_next_measure = playback.sync_wait_for_next_measure,
         show_oscilloscope = ui.show_oscilloscope,
         waveform_grid_overlay = ui.waveform_grid_overlay,
         flat_view = file_location.flat_view,
@@ -2053,6 +2068,7 @@ local function apply_settings_from_table(settings)
     playback.link_start_from_editcursor = settings.link_start_from_editcursor or false
     playback.use_exclusive_solo = settings.use_exclusive_solo ~= nil and settings.use_exclusive_solo or true
     playback.preview_volume = settings.preview_volume
+    playback.sync_wait_for_next_measure = settings.sync_wait_for_next_measure or false
     ui.show_oscilloscope = settings.show_oscilloscope
     ui.waveform_grid_overlay = settings.waveform_grid_overlay or false
     waveform.show_spectral_view = settings.show_spectral_view or false
@@ -2841,6 +2857,21 @@ local function get_reference_file_path()
     return nil
 end
 
+local function get_next_measure_position()
+    local current_pos = r.GetPlayPosition()
+    if not current_pos or current_pos < 0 then current_pos = 0 end
+    local tempo = r.Master_GetTempo()
+    if not tempo or tempo <= 0 then tempo = 120 end
+    local measure_length = 4 * (60 / tempo)  -- fallback to 4/4
+    local success, retval, beats, den = pcall(r.TimeMap_GetTimeSigAtTime, current_pos)
+    if success and retval and beats and den then
+        measure_length = (beats * (60 / tempo)) / (den / 4)
+    end
+    local measure_start = current_pos - (current_pos % measure_length)
+    local next_measure = measure_start + measure_length
+    return next_measure
+end
+
 local function get_sync_base_rate(reference_path)
     if playback.playing_source then
         local _, rate = r.GetTempoMatchPlayRate(playback.playing_source, 1, 0, 1)
@@ -3248,8 +3279,19 @@ local function start_playback(file_path)
     end
     update_monitor_positions()
     
+    -- Calculate next measure position if needed
+    local next_measure_pos = nil
+    if not is_video and not is_midi and playback.sync_wait_for_next_measure and not playback.use_original_speed then
+        local reaper_state = r.GetPlayState()
+        if reaper_state & 1 == 1 or playback.link_transport then
+            next_measure_pos = get_next_measure_position()
+        end
+    end
+    
     local start_pos = 0
-    if resuming_paused then
+    if next_measure_pos then
+        start_pos = next_measure_pos * playback.effective_playrate
+    elseif resuming_paused then
         start_pos = saved_paused_pos
     elseif has_selection then
         start_pos = waveform.monitor_sel_start
@@ -3270,7 +3312,7 @@ local function start_playback(file_path)
         if playback.link_start_from_editcursor then
             project_start_pos = r.GetCursorPosition()
         else
-            project_start_pos = start_pos
+            project_start_pos = next_measure_pos or (start_pos / playback.effective_playrate)
             r.SetEditCurPos(project_start_pos, false, false)
         end
         
@@ -3649,6 +3691,678 @@ local function replace_reasamplomatic_sample(file_path)
     r.Undo_EndBlock("Replace ReaSamplomatic5000 sample", -1)
 end
 
+local NOTE_NAMES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+
+local RS5K_PAD_RANGES = {
+    {start_note = 20, end_note = 35, label = "G#0 - B1", is_standard = false},
+    {start_note = 36, end_note = 51, label = "C2 - D#3 ★", is_standard = true},
+    {start_note = 52, end_note = 67, label = "E3 - G4", is_standard = false},
+    {start_note = 68, end_note = 83, label = "G#4 - B5", is_standard = false},
+    {start_note = 84, end_note = 99, label = "C6 - D#7", is_standard = false},
+}
+
+local function midi_note_to_name(note)
+    local octave = math.floor(note / 12) - 1
+    local note_idx = (note % 12) + 1
+    return NOTE_NAMES[note_idx] .. octave
+end
+
+local function get_rs5k_instances_on_track(track)
+    if not track then return {} end
+    
+    local instances = {}
+    local fx_count = r.TrackFX_GetCount(track)
+    
+    for i = 0, fx_count - 1 do
+        local _, fx_name = r.TrackFX_GetFXName(track, i, "")
+        if fx_name:match("ReaSamplO") or fx_name:match("RS5K") then
+            local note_start = math.floor(r.TrackFX_GetParamNormalized(track, i, 3) * 127 + 0.5)
+            local note_end = math.floor(r.TrackFX_GetParamNormalized(track, i, 4) * 127 + 0.5)
+            
+            local _, sample_file = r.TrackFX_GetNamedConfigParm(track, i, "FILE0")
+            local sample_name = ""
+            if sample_file and sample_file ~= "" then
+                sample_name = sample_file:match("([^/\\]+)$") or sample_file
+            end
+            
+            table.insert(instances, {
+                fx_idx = i,
+                fx_name = fx_name,
+                note_start = note_start,
+                note_end = note_end,
+                note_name = midi_note_to_name(note_start),
+                sample_file = sample_file,
+                sample_name = sample_name
+            })
+        end
+    end
+    
+    table.sort(instances, function(a, b) return a.note_start < b.note_start end)
+    
+    return instances
+end
+
+local function load_sample_to_rs5k_pad(file_path, track, fx_idx, note)
+    if not file_path or not track then return false end
+    
+    local ext = file_path:match("%.([^%.]+)$")
+    if ext then
+        ext = ext:lower()
+        if ext == "mid" or ext == "midi" then
+            return false
+        end
+    end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local target_fx_idx = fx_idx
+    
+    if target_fx_idx == nil then
+        target_fx_idx = r.TrackFX_AddByName(track, "ReaSamploMatic5000", false, -1000)
+        if target_fx_idx < 0 then
+            r.PreventUIRefresh(-1)
+            r.Undo_EndBlock("Load sample to RS5K pad", -1)
+            return false
+        end
+        
+        if note then
+            r.TrackFX_SetParamNormalized(track, target_fx_idx, 3, note / 127)
+            r.TrackFX_SetParamNormalized(track, target_fx_idx, 4, note / 127)
+        end
+    end
+    
+    r.TrackFX_SetNamedConfigParm(track, target_fx_idx, "FILE0", file_path)
+    r.TrackFX_SetNamedConfigParm(track, target_fx_idx, "DONE", "")
+    
+    local sample_name = file_path:match("([^/\\]+)$") or "Sample"
+    local name_without_ext = sample_name:match("(.+)%..+$") or sample_name
+    r.GetSetMediaTrackInfo_String(track, "P_NAME", name_without_ext, true)
+    
+    local src = r.PCM_Source_CreateFromFileEx(file_path, true)
+    if src then
+        local sample_len = r.GetMediaSourceLength(src)
+        r.PCM_Source_Destroy(src)
+        if sample_len > 0 then
+            r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_SAMPLELEN", tostring(sample_len), true)
+        end
+    end
+    
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Load sample to RS5K pad", -1)
+    return true
+end
+
+local mpl_rs5k_cmd_id = nil
+
+local function get_mpl_rs5k_cmd_id()
+    if mpl_rs5k_cmd_id and mpl_rs5k_cmd_id > 0 then
+        return mpl_rs5k_cmd_id
+    end
+    
+    local script_path = r.GetResourcePath() .. sep .. "Scripts" .. sep .. "MPL Scripts" .. sep .. "FX specific" .. sep .. "mpl_RS5k manager (background).lua"
+    
+    local file = io.open(script_path, "r")
+    if not file then
+        return nil
+    end
+    file:close()
+    
+    mpl_rs5k_cmd_id = r.AddRemoveReaScript(true, 0, script_path, true)
+    return mpl_rs5k_cmd_id
+end
+
+local function toggle_mpl_rs5k_manager()
+    local cmd_id = get_mpl_rs5k_cmd_id()
+    if cmd_id and cmd_id > 0 then
+        r.Main_OnCommand(cmd_id, 0)
+        return true
+    end
+    return false
+end
+
+local function is_mpl_rs5k_parent_track(track)
+    if not track then return false end
+    
+    local _, parent_guid = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_GUIDINTERNAL", "", false)
+    if parent_guid and parent_guid ~= "" then return true end
+    
+    local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+    if folder_depth == 1 then
+        local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
+        local next_track = r.GetTrack(0, track_idx + 1)
+        if next_track then
+            local _, child_parent = r.GetSetMediaTrackInfo_String(next_track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", "", false)
+            if child_parent and child_parent ~= "" then return true end
+        end
+    end
+    
+    return false
+end
+
+local function get_mpl_parent_track_from_child(track)
+    if not track then return nil end
+    
+    local _, child_parent_guid = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", "", false)
+    if child_parent_guid and child_parent_guid ~= "" then
+        local track_count = r.CountTracks(0)
+        for i = 0, track_count - 1 do
+            local t = r.GetTrack(0, i)
+            if t then
+                local _, t_guid = r.GetSetMediaTrackInfo_String(t, "GUID", "", false)
+                if t_guid == child_parent_guid then
+                    return t
+                end
+            end
+        end
+    end
+    
+    return nil
+end
+
+local function get_mpl_rs5k_track_and_parent(track)
+    if is_mpl_rs5k_parent_track(track) then
+        return track, true
+    end
+    
+    local parent = get_mpl_parent_track_from_child(track)
+    if parent then
+        return parent, true
+    end
+    
+    return track, false
+end
+
+local function get_mpl_rs5k_used_notes(parent_track)
+    if not parent_track then return {} end
+    
+    local used_notes = {}
+    local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
+    local _, parent_guid = r.GetSetMediaTrackInfo_String(parent_track, "GUID", "", false)
+    
+    local track_count = r.CountTracks(0)
+    for i = parent_idx + 1, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if not track then break end
+        
+        local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+        
+        local _, is_midibus = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_MIDIBUS", "", false)
+        if is_midibus ~= "1" then
+            local _, child_parent = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", "", false)
+            if child_parent == parent_guid then
+                local fx_count = r.TrackFX_GetCount(track)
+                local has_rs5k = false
+                for fx = 0, fx_count - 1 do
+                    local _, fx_name = r.TrackFX_GetFXName(track, fx, "")
+                    if fx_name:lower():find("reasamplomatic") then
+                        has_rs5k = true
+                        break
+                    end
+                end
+                
+                if has_rs5k then
+                    local _, note_str = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_NOTE", "", false)
+                    local note = tonumber(note_str)
+                    if note then
+                        used_notes[note] = true
+                    end
+                end
+            end
+        end
+        
+        if folder_depth < 0 then break end
+    end
+    
+    return used_notes
+end
+
+local function find_next_available_note(used_notes, start_note)
+    start_note = start_note or 36
+    for note = start_note, 127 do
+        if not used_notes[note] then
+            return note
+        end
+    end
+    for note = start_note - 1, 0, -1 do
+        if not used_notes[note] then
+            return note
+        end
+    end
+    return nil
+end
+
+local function find_mpl_midi_bus_track(parent_track, parent_guid)
+    local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
+    local track_count = r.CountTracks(0)
+    
+    for i = parent_idx + 1, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if not track then break end
+        
+        local _, is_midibus = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_MIDIBUS", "", false)
+        if is_midibus == "1" then
+            local _, bus_parent = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", "", false)
+            if bus_parent == parent_guid then
+                return track, i
+            end
+        end
+        
+        local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+        if folder_depth < 0 then break end
+    end
+    
+    return nil, nil
+end
+
+local function create_mpl_midi_bus_track(parent_track, parent_guid, parent_idx)
+    local insert_idx = parent_idx + 1
+    r.InsertTrackAtIndex(insert_idx, false)
+    local midi_bus = r.GetTrack(0, insert_idx)
+    if not midi_bus then return nil, nil end
+    
+    r.GetSetMediaTrackInfo_String(midi_bus, "P_NAME", "MIDI bus", true)
+    r.SetMediaTrackInfo_Value(midi_bus, "I_RECMON", 1)
+    r.SetMediaTrackInfo_Value(midi_bus, "I_RECARM", 1)
+    r.SetMediaTrackInfo_Value(midi_bus, "I_RECMODE", 0)
+    r.SetMediaTrackInfo_Value(midi_bus, "I_RECINPUT", 4096 + 0 + (63 << 5))
+    
+    r.GetSetMediaTrackInfo_String(midi_bus, "P_EXT:MPLRS5KMAN_MIDIBUS", "1", true)
+    r.GetSetMediaTrackInfo_String(midi_bus, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", parent_guid, true)
+    
+    local parent_folder_depth = r.GetMediaTrackInfo_Value(parent_track, "I_FOLDERDEPTH")
+    if parent_folder_depth ~= 1 then
+        r.SetMediaTrackInfo_Value(parent_track, "I_FOLDERDEPTH", 1)
+        r.SetMediaTrackInfo_Value(midi_bus, "I_FOLDERDEPTH", -1)
+    else
+        r.SetMediaTrackInfo_Value(midi_bus, "I_FOLDERDEPTH", 0)
+    end
+    
+    return midi_bus, insert_idx
+end
+
+local function create_midi_send_to_child(midi_bus, child_track)
+    if not midi_bus or not child_track then return end
+    
+    local send_count = r.GetTrackNumSends(midi_bus, 0)
+    for i = 0, send_count - 1 do
+        local dest = r.GetTrackSendInfo_Value(midi_bus, 0, i, "P_DESTTRACK")
+        if dest == child_track then
+            return
+        end
+    end
+    
+    local send_idx = r.CreateTrackSend(midi_bus, child_track)
+    if send_idx >= 0 then
+        r.SetTrackSendInfo_Value(midi_bus, 0, send_idx, "I_SRCCHAN", -1)
+        r.SetTrackSendInfo_Value(midi_bus, 0, send_idx, "I_MIDIFLAGS", 0)
+    end
+end
+
+local function get_mpl_available_pads(parent_track)
+    if not parent_track then return {} end
+    
+    local available_pads = {}
+    local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
+    local _, parent_guid = r.GetSetMediaTrackInfo_String(parent_track, "GUID", "", false)
+    
+    local track_count = r.CountTracks(0)
+    for i = parent_idx + 1, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if not track then break end
+        
+        local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+        
+        local _, is_midibus = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_MIDIBUS", "", false)
+        if is_midibus ~= "1" then
+            local _, child_parent = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", "", false)
+            if child_parent == parent_guid then
+                local _, note_str = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_NOTE", "", false)
+                local note = tonumber(note_str)
+                if note then
+                    local fx_count = r.TrackFX_GetCount(track)
+                    local has_rs5k = false
+                    for fx = 0, fx_count - 1 do
+                        local _, fx_name = r.TrackFX_GetFXName(track, fx, "")
+                        if fx_name:lower():find("reasamplomatic") then
+                            has_rs5k = true
+                            break
+                        end
+                    end
+                    if not has_rs5k then
+                        table.insert(available_pads, {note = note, track = track})
+                    end
+                end
+            end
+        end
+        
+        if folder_depth < 0 then break end
+    end
+    
+    table.sort(available_pads, function(a, b) return a.note < b.note end)
+    return available_pads
+end
+
+local function get_mpl_filled_pads(parent_track)
+    if not parent_track then return {} end
+    
+    local filled_pads = {}
+    local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
+    local _, parent_guid_internal = r.GetSetMediaTrackInfo_String(parent_track, "P_EXT:MPLRS5KMAN_GUIDINTERNAL", "", false)
+    local _, parent_guid = r.GetSetMediaTrackInfo_String(parent_track, "GUID", "", false)
+    
+    local track_count = r.CountTracks(0)
+    local folder_depth_counter = 0
+    
+    for i = parent_idx + 1, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if not track then break end
+        
+        local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+        folder_depth_counter = folder_depth_counter + folder_depth
+        
+        local _, is_midibus = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_MIDIBUS", "", false)
+        if is_midibus ~= "1" then
+            local _, child_parent = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", "", false)
+            local is_child = (child_parent ~= "" and (child_parent == parent_guid_internal or child_parent == parent_guid))
+            
+            if not is_child then
+                local parent_of_track = r.GetParentTrack(track)
+                if parent_of_track == parent_track then
+                    is_child = true
+                end
+            end
+            
+            if is_child then
+                local fx_count = r.TrackFX_GetCount(track)
+                for fx = 0, fx_count - 1 do
+                    local _, fx_name = r.TrackFX_GetFXName(track, fx, "")
+                    if fx_name:lower():find("reasamplomatic") or fx_name:lower():find("rs5k") then
+                        local note = nil
+                        local _, note_str = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_NOTE", "", false)
+                        if note_str and note_str ~= "" then
+                            note = tonumber(note_str)
+                        end
+                        if not note then
+                            local note_start = r.TrackFX_GetParamNormalized(track, fx, 3)
+                            note = math.floor(note_start * 127 + 0.5)
+                        end
+                        
+                        local sample_name = ""
+                        local _, file_path = r.TrackFX_GetNamedConfigParm(track, fx, "FILE0")
+                        if file_path and file_path ~= "" then
+                            sample_name = file_path:match("([^/\\]+)$") or ""
+                            sample_name = sample_name:match("(.+)%..+$") or sample_name
+                        end
+                        table.insert(filled_pads, {
+                            note = note,
+                            track = track,
+                            fx_idx = fx,
+                            sample_name = sample_name
+                        })
+                        break
+                    end
+                end
+            end
+        end
+        
+        if folder_depth_counter < 0 then break end
+    end
+    
+    table.sort(filled_pads, function(a, b) return a.note < b.note end)
+    return filled_pads
+end
+
+local function delete_rs5k_pad(pad)
+    if not pad or not pad.track then return false end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    r.DeleteTrack(pad.track)
+    
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Delete RS5K pad", -1)
+    return true
+end
+
+local function find_pad_by_note(filled_pads, note)
+    for _, pad in ipairs(filled_pads) do
+        if pad.note == note then
+            return pad
+        end
+    end
+    return nil
+end
+
+local function find_empty_child_track_for_note(parent_track, parent_guid, note)
+    local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
+    local track_count = r.CountTracks(0)
+    
+    for i = parent_idx + 1, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if not track then break end
+        
+        local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+        
+        local _, is_midibus = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_MIDIBUS", "", false)
+        if is_midibus ~= "1" then
+            local _, child_parent = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", "", false)
+            if child_parent == parent_guid then
+                local _, note_str = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_NOTE", "", false)
+                local track_note = tonumber(note_str)
+                if track_note == note then
+                    local fx_count = r.TrackFX_GetCount(track)
+                    local has_rs5k = false
+                    for fx = 0, fx_count - 1 do
+                        local _, fx_name = r.TrackFX_GetFXName(track, fx, "")
+                        if fx_name:lower():find("reasamplomatic") then
+                            has_rs5k = true
+                            break
+                        end
+                    end
+                    if not has_rs5k then
+                        return track
+                    end
+                end
+            end
+        end
+        
+        if folder_depth < 0 then break end
+    end
+    
+    return nil
+end
+
+local function get_last_child_in_folder(parent_track, parent_guid)
+    local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
+    local track_count = r.CountTracks(0)
+    local last_child_idx = parent_idx
+    local midi_bus_idx = nil
+    
+    for i = parent_idx + 1, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if not track then break end
+        
+        local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+        
+        local _, is_midibus = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_MIDIBUS", "", false)
+        if is_midibus == "1" then
+            midi_bus_idx = i
+        else
+            last_child_idx = i
+        end
+        
+        if folder_depth < 0 then break end
+    end
+    
+    return last_child_idx, midi_bus_idx
+end
+
+local function create_rs5k_pad_track(file_path, parent_track, note)
+    if not file_path or not parent_track then return false end
+    
+    local ext = file_path:match("%.([^%.]+)$")
+    if ext then
+        ext = ext:lower()
+        if ext == "mid" or ext == "midi" then
+            return false
+        end
+    end
+    
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local _, parent_guid = r.GetSetMediaTrackInfo_String(parent_track, "GUID", "", false)
+    local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
+    
+    local parent_folder_depth = r.GetMediaTrackInfo_Value(parent_track, "I_FOLDERDEPTH")
+    if parent_folder_depth ~= 1 then
+        r.SetMediaTrackInfo_Value(parent_track, "I_FOLDERDEPTH", 1)
+    end
+    
+    r.GetSetMediaTrackInfo_String(parent_track, "P_EXT:MPLRS5KMAN_GUIDINTERNAL", parent_guid, true)
+    
+    local midi_bus, midi_bus_idx = find_mpl_midi_bus_track(parent_track, parent_guid)
+    local created_midi_bus = false
+    if not midi_bus then
+        midi_bus, midi_bus_idx = create_mpl_midi_bus_track(parent_track, parent_guid, parent_idx)
+        created_midi_bus = true
+    end
+    
+    if created_midi_bus then
+        midi_bus, midi_bus_idx = find_mpl_midi_bus_track(parent_track, parent_guid)
+    end
+    
+    local existing_track = find_empty_child_track_for_note(parent_track, parent_guid, note)
+    local new_track
+    
+    if existing_track then
+        new_track = existing_track
+        midi_bus, midi_bus_idx = find_mpl_midi_bus_track(parent_track, parent_guid)
+        if midi_bus then
+            create_midi_send_to_child(midi_bus, new_track)
+        end
+    else
+        local insert_idx
+        if midi_bus_idx then
+            insert_idx = midi_bus_idx
+        else
+            insert_idx = parent_idx + 1
+        end
+        
+        r.InsertTrackAtIndex(insert_idx, false)
+        new_track = r.GetTrack(0, insert_idx)
+        if not new_track then
+            r.PreventUIRefresh(-1)
+            r.Undo_EndBlock("Create RS5K pad", -1)
+            return false
+        end
+        
+        r.GetSetMediaTrackInfo_String(new_track, "P_EXT:MPLRS5KMAN_VERSION", "4.14", true)
+        r.GetSetMediaTrackInfo_String(new_track, "P_EXT:MPLRS5KMAN_NOTE", tostring(note), true)
+        r.GetSetMediaTrackInfo_String(new_track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", parent_guid, true)
+        r.GetSetMediaTrackInfo_String(new_track, "P_EXT:MPLRS5KMAN_TYPE_REGCHILD", "1", true)
+        r.GetSetMediaTrackInfo_String(new_track, "P_EXT:MPLRS5KMAN_TSADD", tostring(os.time()), true)
+        
+        r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", 0)
+        
+        midi_bus, midi_bus_idx = find_mpl_midi_bus_track(parent_track, parent_guid)
+        if midi_bus then
+            create_midi_send_to_child(midi_bus, new_track)
+        end
+    end
+    
+    local sample_name = file_path:match("([^/\\]+)$") or "Sample"
+    local name_without_ext = sample_name:match("(.+)%..+$") or sample_name
+    r.GetSetMediaTrackInfo_String(new_track, "P_NAME", name_without_ext, true)
+    
+    local src = r.PCM_Source_CreateFromFileEx(file_path, true)
+    local sample_len = 0
+    if src then
+        sample_len = r.GetMediaSourceLength(src)
+        r.PCM_Source_Destroy(src)
+    end
+    if sample_len > 0 then
+        r.GetSetMediaTrackInfo_String(new_track, "P_EXT:MPLRS5KMAN_SAMPLELEN", tostring(sample_len), true)
+    end
+    
+    local rs5k_idx = r.TrackFX_AddByName(new_track, "ReaSamploMatic5000", false, -1000)
+    if rs5k_idx >= 0 then
+        r.TrackFX_SetNamedConfigParm(new_track, rs5k_idx, "FILE0", file_path)
+        r.TrackFX_SetNamedConfigParm(new_track, rs5k_idx, "DONE", "")
+        r.TrackFX_SetNamedConfigParm(new_track, rs5k_idx, "MODE", "1")
+        
+        r.TrackFX_SetParamNormalized(new_track, rs5k_idx, 3, note / 127)
+        r.TrackFX_SetParamNormalized(new_track, rs5k_idx, 4, note / 127)
+        
+        r.TrackFX_SetParamNormalized(new_track, rs5k_idx, 2, 0)
+        r.TrackFX_SetParamNormalized(new_track, rs5k_idx, 11, 1)
+        r.TrackFX_SetParamNormalized(new_track, rs5k_idx, 8, 0)
+        
+        r.TrackFX_SetOpen(new_track, rs5k_idx, false)
+        
+        local rs5k_guid = r.TrackFX_GetFXGUID(new_track, rs5k_idx)
+        if rs5k_guid then
+            r.GetSetMediaTrackInfo_String(new_track, "P_EXT:MPLRS5KMAN_CHILD_INSTR_FXGUID", rs5k_guid, true)
+        end
+        r.GetSetMediaTrackInfo_String(new_track, "P_EXT:MPLRS5KMAN_CHILD_ISRS5K", "1", true)
+    end
+    
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Create RS5K pad: " .. midi_note_to_name(note), -1)
+    return true
+end
+
+local function create_empty_rs5k_rack()
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    
+    local track_idx = r.CountTracks(0)
+    r.InsertTrackAtIndex(track_idx, true)
+    local parent_track = r.GetTrack(0, track_idx)
+    if not parent_track then
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock("Create RS5K Rack", -1)
+        return false
+    end
+    
+    r.GetSetMediaTrackInfo_String(parent_track, "P_NAME", "RS5K Rack", true)
+    r.SetMediaTrackInfo_Value(parent_track, "I_FOLDERDEPTH", 1)
+    
+    local _, parent_guid = r.GetSetMediaTrackInfo_String(parent_track, "GUID", "", false)
+    r.GetSetMediaTrackInfo_String(parent_track, "P_EXT:MPLRS5KMAN_GUIDINTERNAL", parent_guid, true)
+    r.GetSetMediaTrackInfo_String(parent_track, "P_EXT:MPLRS5KMAN_DRRACKSHIFT", "36", true)
+    
+    local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
+    
+    local midi_bus_idx = parent_idx + 1
+    r.InsertTrackAtIndex(midi_bus_idx, false)
+    local midi_bus = r.GetTrack(0, midi_bus_idx)
+    if midi_bus then
+        r.GetSetMediaTrackInfo_String(midi_bus, "P_NAME", "MIDI bus", true)
+        r.SetMediaTrackInfo_Value(midi_bus, "I_RECMON", 1)
+        r.SetMediaTrackInfo_Value(midi_bus, "I_RECARM", 1)
+        r.SetMediaTrackInfo_Value(midi_bus, "I_RECMODE", 0)
+        r.SetMediaTrackInfo_Value(midi_bus, "I_RECINPUT", 4096 + 0 + (63 << 5))
+        r.GetSetMediaTrackInfo_String(midi_bus, "P_EXT:MPLRS5KMAN_VERSION", "4.14", true)
+        r.GetSetMediaTrackInfo_String(midi_bus, "P_EXT:MPLRS5KMAN_MIDIBUS", "1", true)
+        r.GetSetMediaTrackInfo_String(midi_bus, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", parent_guid, true)
+        r.SetMediaTrackInfo_Value(midi_bus, "I_FOLDERDEPTH", -1)
+    end
+    
+    r.SetOnlyTrackSelected(parent_track)
+    
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Create RS5K Rack", -1)
+    return true
+end
+
 local function get_audio_file_info(file_path)
     local source = r.PCM_Source_CreateFromFile(file_path)
     if not source then return nil end
@@ -3885,6 +4599,90 @@ local function draw_file_list()
                                             end
                                             if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
                                                 replace_reasamplomatic_sample(file_path)
+                                            end
+                                            
+                                            local track = r.GetSelectedTrack(0, 0)
+                                            if track then
+                                                local actual_track, is_mpl_parent = get_mpl_rs5k_track_and_parent(track)
+                                                
+                                                if is_mpl_parent then
+                                                    local filled_pads = get_mpl_filled_pads(actual_track)
+                                                    if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
+                                                        if #filled_pads > 0 then
+                                                            for _, pad in ipairs(filled_pads) do
+                                                                local pad_label = midi_note_to_name(pad.note)
+                                                                if pad.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. pad.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    load_sample_to_rs5k_pad(file_path, pad.track, pad.fx_idx, nil)
+                                                                end
+                                                            end
+                                                            r.ImGui_Separator(ctx)
+                                                        end
+                                                        for _, range in ipairs(RS5K_PAD_RANGES) do
+                                                            local range_label = range.label
+                                                            if r.ImGui_BeginMenu(ctx, range_label) then
+                                                                for note = range.start_note, range.end_note do
+                                                                    local existing_pad = find_pad_by_note(filled_pads, note)
+                                                                    if not existing_pad then
+                                                                        if r.ImGui_MenuItem(ctx, midi_note_to_name(note)) then
+                                                                            create_rs5k_pad_track(file_path, actual_track, note)
+                                                                        end
+                                                                    end
+                                                                end
+                                                                r.ImGui_EndMenu(ctx)
+                                                            end
+                                                        end
+                                                        r.ImGui_EndMenu(ctx)
+                                                    end
+                                                    if #filled_pads > 0 then
+                                                        if r.ImGui_BeginMenu(ctx, "Delete RS5K Pad...") then
+                                                            for _, pad in ipairs(filled_pads) do
+                                                                local pad_label = midi_note_to_name(pad.note)
+                                                                if pad.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. pad.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    delete_rs5k_pad(pad)
+                                                                end
+                                                            end
+                                                            r.ImGui_EndMenu(ctx)
+                                                        end
+                                                    end
+                                                else
+                                                    local rs5k_instances = get_rs5k_instances_on_track(track)
+                                                    if #rs5k_instances > 0 then
+                                                        if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
+                                                            for _, inst in ipairs(rs5k_instances) do
+                                                                local pad_label = inst.note_name
+                                                                if inst.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. inst.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    load_sample_to_rs5k_pad(file_path, track, inst.fx_idx, nil)
+                                                                end
+                                                            end
+                                                            r.ImGui_Separator(ctx)
+                                                            if r.ImGui_MenuItem(ctx, "+ Add new RS5K instance") then
+                                                                local next_note = 36
+                                                                if #rs5k_instances > 0 then
+                                                                    next_note = rs5k_instances[#rs5k_instances].note_start + 1
+                                                                    if next_note > 127 then next_note = 127 end
+                                                                end
+                                                                load_sample_to_rs5k_pad(file_path, track, nil, next_note)
+                                                            end
+                                                            r.ImGui_EndMenu(ctx)
+                                                        end
+                                                    else
+                                                        if r.ImGui_MenuItem(ctx, "Create RS5K pad (C2)") then
+                                                            create_rs5k_pad_track(file_path, actual_track, 36)
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Create empty RS5K Rack") then
+                                                create_empty_rs5k_rack()
                                             end
                                             r.ImGui_Separator(ctx)
                                         end
@@ -4394,6 +5192,90 @@ local function draw_file_list()
                                             end
                                             if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
                                                 replace_reasamplomatic_sample(file.full_path)
+                                            end
+                                            
+                                            local track = r.GetSelectedTrack(0, 0)
+                                            if track then
+                                                local actual_track, is_mpl_parent = get_mpl_rs5k_track_and_parent(track)
+                                                
+                                                if is_mpl_parent then
+                                                    local filled_pads = get_mpl_filled_pads(actual_track)
+                                                    if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
+                                                        if #filled_pads > 0 then
+                                                            for _, pad in ipairs(filled_pads) do
+                                                                local pad_label = midi_note_to_name(pad.note)
+                                                                if pad.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. pad.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    load_sample_to_rs5k_pad(file.full_path, pad.track, pad.fx_idx, nil)
+                                                                end
+                                                            end
+                                                            r.ImGui_Separator(ctx)
+                                                        end
+                                                        for _, range in ipairs(RS5K_PAD_RANGES) do
+                                                            local range_label = range.label
+                                                            if r.ImGui_BeginMenu(ctx, range_label) then
+                                                                for note = range.start_note, range.end_note do
+                                                                    local existing_pad = find_pad_by_note(filled_pads, note)
+                                                                    if not existing_pad then
+                                                                        if r.ImGui_MenuItem(ctx, midi_note_to_name(note)) then
+                                                                            create_rs5k_pad_track(file.full_path, actual_track, note)
+                                                                        end
+                                                                    end
+                                                                end
+                                                                r.ImGui_EndMenu(ctx)
+                                                            end
+                                                        end
+                                                        r.ImGui_EndMenu(ctx)
+                                                    end
+                                                    if #filled_pads > 0 then
+                                                        if r.ImGui_BeginMenu(ctx, "Delete RS5K Pad...") then
+                                                            for _, pad in ipairs(filled_pads) do
+                                                                local pad_label = midi_note_to_name(pad.note)
+                                                                if pad.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. pad.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    delete_rs5k_pad(pad)
+                                                                end
+                                                            end
+                                                            r.ImGui_EndMenu(ctx)
+                                                        end
+                                                    end
+                                                else
+                                                    local rs5k_instances = get_rs5k_instances_on_track(track)
+                                                    if #rs5k_instances > 0 then
+                                                        if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
+                                                            for _, inst in ipairs(rs5k_instances) do
+                                                                local pad_label = inst.note_name
+                                                                if inst.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. inst.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    load_sample_to_rs5k_pad(file.full_path, track, inst.fx_idx, nil)
+                                                                end
+                                                            end
+                                                            r.ImGui_Separator(ctx)
+                                                            if r.ImGui_MenuItem(ctx, "+ Add new RS5K instance") then
+                                                                local next_note = 36
+                                                                if #rs5k_instances > 0 then
+                                                                    next_note = rs5k_instances[#rs5k_instances].note_start + 1
+                                                                    if next_note > 127 then next_note = 127 end
+                                                                end
+                                                                load_sample_to_rs5k_pad(file.full_path, track, nil, next_note)
+                                                            end
+                                                            r.ImGui_EndMenu(ctx)
+                                                        end
+                                                    else
+                                                        if r.ImGui_MenuItem(ctx, "Create RS5K pad (C2)") then
+                                                            create_rs5k_pad_track(file.full_path, actual_track, 36)
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Create empty RS5K Rack") then
+                                                create_empty_rs5k_rack()
                                             end
                                             r.ImGui_Separator(ctx)
                                         end
@@ -5211,7 +6093,8 @@ local function loop()
         if r.ImGui_BeginChild(ctx, "LeftControlPanel", left_panel_width, 0, r.ImGui_WindowFlags_None()) then
             local LEFT_FOOTER_H = ui.show_oscilloscope and 228 or 100  
             local LEFT_HEADER_H = 0  
-            local header_button_width = (left_panel_width - 6) / 2 
+            local num_view_buttons = ai_module_available and 3 or 2
+            local header_button_width = (left_panel_width - (num_view_buttons * 2)) / num_view_buttons 
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
             
             local button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
@@ -5261,7 +6144,7 @@ local function loop()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_color)
                 ui_settings.pushed_color = 1
             end
-            if r.ImGui_Button(ctx, "collections", header_button_width, LEFT_HEADER_H) then
+            if r.ImGui_Button(ctx, "Favs", header_button_width, LEFT_HEADER_H) then
                 if ui.current_view_mode == "folders" and file_location.current_location ~= "" then
                     file_location.last_folder_location = file_location.current_location
                     file_location.last_folder_index = file_location.selected_location_index
@@ -5305,9 +6188,92 @@ local function loop()
                 ui_settings.pushed_color = 0
             end
             
+            if ai_module_available then
+                r.ImGui_SameLine(ctx, 0, 2)
+                
+                if ui.current_view_mode == "ai_samples" then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_color)
+                    ui_settings.pushed_color = 1
+                end
+                if r.ImGui_Button(ctx, "Auto", header_button_width, LEFT_HEADER_H) then
+                    if ui.current_view_mode == "folders" and file_location.current_location ~= "" then
+                        file_location.last_folder_location = file_location.current_location
+                        file_location.last_folder_index = file_location.selected_location_index
+                        file_location.saved_folder_flat_view = file_location.flat_view
+                    end
+                    if ui.current_view_mode == "collections" and file_location.selected_collection then
+                        file_location.last_collection_name = file_location.selected_collection
+                    end
+                    
+                    clear_sort_cache()
+                    ui.current_view_mode = "ai_samples"
+                    ui.show_collection_section = false
+                    clear_file_selection()
+                    
+                    if ai_module and not ai_module.is_loaded() then
+                        ai_module.load_database(json)
+                    end
+                    
+                    save_options()
+                end
+                if ui_settings.pushed_color > 0 then
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    ui_settings.pushed_color = 0
+                end
+            end
+            
             r.ImGui_PopStyleColor(ctx, 4)  
             r.ImGui_PopStyleVar(ctx, 1)
             r.ImGui_Separator(ctx)
+            
+            if ui.current_view_mode == "ai_samples" and ai_module_available then
+                local total_width = reaper.ImGui_GetContentRegionAvail(ctx)
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+                
+                local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
+                local accent_hover = hsv_to_color(ui_settings.accent_hue, 0.8, 1.0)
+                local accent_active = hsv_to_color(ui_settings.accent_hue, 1.0, 0.8)
+                local button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
+                local button_hover = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, 1.0)
+                local button_text = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_text_brightness, ui_settings.button_text_brightness, ui_settings.button_text_brightness, 1.0)
+                
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_color)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), accent_hover)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), accent_active)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), button_text)
+                
+                local half_width = math.floor((total_width - 4) / 2)
+                if r.ImGui_Button(ctx, "Reload", half_width, ui_settings.button_height) then
+                    ai_module.reload_database(json)
+                end
+                r.ImGui_SameLine(ctx, 0, 4)
+                if r.ImGui_Button(ctx, "Analyzer", half_width, ui_settings.button_height) then
+                    local analyzer_script = script_path .. "SAMPLE_ANALYZER" .. sep .. "TK_Sample_Analyzer_GUI.pyw"
+                    local vbs_launcher = script_path .. "SAMPLE_ANALYZER" .. sep .. "Start Sample Analyzer.vbs"
+                    if r.CF_ShellExecute then
+                        if r.file_exists and r.file_exists(vbs_launcher) then
+                            r.CF_ShellExecute(vbs_launcher)
+                        elseif reaper.file_exists and reaper.file_exists(vbs_launcher) then
+                            r.CF_ShellExecute(vbs_launcher)
+                        else
+                            local file = io.open(vbs_launcher, "r")
+                            if file then
+                                file:close()
+                                r.CF_ShellExecute(vbs_launcher)
+                            elseif io.open(analyzer_script, "r") then
+                                io.open(analyzer_script, "r"):close()
+                                r.CF_ShellExecute(analyzer_script)
+                            else
+                                r.CF_ShellExecute(script_path .. "SAMPLE_ANALYZER")
+                            end
+                        end
+                    end
+                end
+                
+                r.ImGui_PopStyleColor(ctx, 4)
+                r.ImGui_PopStyleVar(ctx, 1)
+                r.ImGui_Separator(ctx)
+            end
             
             if ui_settings.hide_scrollbar then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
@@ -5751,6 +6717,20 @@ local function loop()
                 circle_color, 1.5)
             
             r.ImGui_PopStyleColor(ctx, 3)  
+            r.ImGui_PopStyleVar(ctx, 1)
+        end
+        
+        if ui.current_view_mode == "ai_samples" and ai_module_available then
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+            
+            if ai_module.load_database(json) then
+                ai_module.draw_category_buttons_vertical(ctx, hsv_to_color, ui_settings.accent_hue, ui_settings.button_height)
+            else
+                r.ImGui_TextWrapped(ctx, "No AI database found.")
+                r.ImGui_Spacing(ctx)
+                r.ImGui_TextWrapped(ctx, "Click 'Analyzer' to create one.")
+            end
+            
             r.ImGui_PopStyleVar(ctx, 1)
         end
         
@@ -6534,6 +7514,22 @@ local function loop()
             update_playrate(target_effective, base_rate_override)
             save_options()
         end
+        
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Sync playback speed\nRight-click for options")
+        end
+        
+        if r.ImGui_BeginPopupContextItem(ctx, "##SyncOptions") then
+            if r.ImGui_Checkbox(ctx, "Start at next measure", playback.sync_wait_for_next_measure) then
+                playback.sync_wait_for_next_measure = not playback.sync_wait_for_next_measure
+                save_options()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "When enabled: Audio playback waits for the next measure when project is playing and sync is enabled")
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+        
         r.ImGui_PopStyleColor(ctx, 4)
         r.ImGui_PopStyleVar(ctx, 1)
         r.ImGui_PopFont(ctx)
@@ -6837,12 +7833,14 @@ local function loop()
             local FOOTER_H = 100
             local topbar_start_x = r.ImGui_GetCursorPosX(ctx)
             local quit_button_size = 20
+            local shortcuts_button_size = 20
             local settings_button_size = 20
             local video_button_size = 20
+            local rs5k_button_size = 20
             local refresh_button_size = 20
             local spacing = 3
             if ui.current_view_mode == "settings" then
-                local icons_width = refresh_button_size + video_button_size + settings_button_size + quit_button_size + (spacing * 4) + 10
+                local icons_width = refresh_button_size + rs5k_button_size + video_button_size + settings_button_size + shortcuts_button_size + quit_button_size + (spacing * 6) + 10
                 local dropdown_width = 20
                 local title_width = r.ImGui_GetContentRegionAvail(ctx) - icons_width - dropdown_width - 3
                 
@@ -6852,8 +7850,35 @@ local function loop()
                 r.ImGui_SetNextItemWidth(ctx, title_width)
                 r.ImGui_InputText(ctx, "##SettingsTitle", "SETTINGS", r.ImGui_InputTextFlags_ReadOnly())
                 r.ImGui_PopStyleColor(ctx, 2)
+            elseif ui.current_view_mode == "ai_samples" and ai_module_available then
+                local ai_title_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 1.0)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), ai_title_color)
+                
+                local active_cat = ai_module.ai_samples.active_category or "all"
+                r.ImGui_Text(ctx, "AUTO MODE")
+                
+                r.ImGui_SameLine(ctx, 0, 4)
+                local version_text = "v" .. script_version
+                r.ImGui_PushFont(ctx, small_font, small_font_size)
+                local version_y = r.ImGui_GetCursorPosY(ctx)
+                r.ImGui_SetCursorPosY(ctx, version_y + 2)
+                local version_brightness = ui_settings.text_brightness * 0.6
+                local version_color = r.ImGui_ColorConvertDouble4ToU32(version_brightness, version_brightness, version_brightness, 1.0)
+                r.ImGui_TextColored(ctx, version_color, version_text)
+                r.ImGui_PopFont(ctx)
+                
+                local window_width = r.ImGui_GetWindowWidth(ctx)
+                local cat_text = active_cat:upper()
+                local text_w = r.ImGui_CalcTextSize(ctx, cat_text)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, (window_width - text_w) / 2)
+                r.ImGui_SetCursorPosY(ctx, version_y)
+                r.ImGui_Text(ctx, cat_text)
+                
+                r.ImGui_PopStyleColor(ctx, 1)
+                r.ImGui_SameLine(ctx)
             else
-                local icons_width = refresh_button_size + video_button_size + settings_button_size + quit_button_size + (spacing * 4) + 10
+                local icons_width = refresh_button_size + rs5k_button_size + video_button_size + settings_button_size + shortcuts_button_size + quit_button_size + (spacing * 6) + 10
                 local dropdown_width = 20
                 local available_width = r.ImGui_GetContentRegionAvail(ctx) - icons_width - dropdown_width - 3
                 
@@ -7028,22 +8053,25 @@ local function loop()
             end  
             r.ImGui_SameLine(ctx)
             
-            -- Display version
-            local version_text = "v" .. script_version
-            r.ImGui_PushFont(ctx, small_font, small_font_size)
-            local version_width = r.ImGui_CalcTextSize(ctx, version_text)
-            local version_y = r.ImGui_GetCursorPosY(ctx)
-            r.ImGui_SetCursorPosY(ctx, version_y + 2)  -- Slight vertical offset for alignment
-            local version_brightness = ui_settings.text_brightness * 0.6
-            local version_color = r.ImGui_ColorConvertDouble4ToU32(version_brightness, version_brightness, version_brightness, 1.0)
-            r.ImGui_TextColored(ctx, version_color, version_text)
-            r.ImGui_PopFont(ctx)
-            r.ImGui_SameLine(ctx, 0, 8)  -- 8px spacing after version
+            if ui.current_view_mode ~= "ai_samples" then
+                local version_text = "v" .. script_version
+                r.ImGui_PushFont(ctx, small_font, small_font_size)
+                local version_width = r.ImGui_CalcTextSize(ctx, version_text)
+                local version_y = r.ImGui_GetCursorPosY(ctx)
+                r.ImGui_SetCursorPosY(ctx, version_y + 2)
+                local version_brightness = ui_settings.text_brightness * 0.6
+                local version_color = r.ImGui_ColorConvertDouble4ToU32(version_brightness, version_brightness, version_brightness, 1.0)
+                r.ImGui_TextColored(ctx, version_color, version_text)
+                r.ImGui_PopFont(ctx)
+                r.ImGui_SameLine(ctx, 0, 8)
+            end
             
             local avail_width = r.ImGui_GetContentRegionAvail(ctx)
             local quit_button_size = 10
+            local shortcuts_button_size = 20
             local settings_button_size = 20
             local video_button_size = 20
+            local rs5k_button_size = 20
             local refresh_button_size = 20
             local spacing = 3
             local offset_left = 5
@@ -7053,8 +8081,8 @@ local function loop()
             local is_folder_view = ui.current_view_mode == "folders"
             local refresh_enabled = is_folder_view and file_location.current_location ~= ""
             
-            local button_count = refresh_enabled and 4 or 3
-            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - (refresh_enabled and refresh_button_size or 0) - video_button_size - settings_button_size - settings_button_size - quit_button_size - offset_left - (spacing * button_count) - 1)
+            local button_count = refresh_enabled and 6 or 5
+            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - (refresh_enabled and refresh_button_size or 0) - rs5k_button_size - video_button_size - settings_button_size - shortcuts_button_size - quit_button_size - offset_left - (spacing * button_count) - 1)
             r.ImGui_SetCursorPosY(ctx, buttons_y)
             
             local drawList = r.ImGui_GetWindowDrawList(ctx)
@@ -7095,11 +8123,41 @@ local function loop()
                 r.ImGui_SameLine(ctx, 0, spacing - 1)
             end
             r.ImGui_SetCursorPosY(ctx, buttons_y)
+            local rs5k_pos_x, rs5k_pos_y = r.ImGui_GetCursorScreenPos(ctx)
+            if r.ImGui_InvisibleButton(ctx, "##rs5k_manager", rs5k_button_size, rs5k_button_size) then
+                toggle_mpl_rs5k_manager()
+            end
+            local drawList = r.ImGui_GetWindowDrawList(ctx)
+            local rs5k_color = r.ImGui_IsItemHovered(ctx) and hover_color or base_color
+            local rs5k_cx = rs5k_pos_x + rs5k_button_size / 2
+            local rs5k_cy = rs5k_pos_y + rs5k_button_size / 2
+            local key_w = rs5k_button_size * 0.12
+            local key_h = rs5k_button_size * 0.45
+            local total_w = key_w * 5
+            local start_x = rs5k_cx - total_w / 2
+            for i = 0, 4 do
+                r.ImGui_DrawList_AddRectFilled(drawList,
+                    start_x + i * key_w, rs5k_cy - key_h/2,
+                    start_x + i * key_w + key_w - 1, rs5k_cy + key_h/2,
+                    rs5k_color, 1)
+            end
+            for i = 0, 3 do
+                if i ~= 2 then
+                    r.ImGui_DrawList_AddRectFilled(drawList,
+                        start_x + i * key_w + key_w * 0.6, rs5k_cy - key_h/2,
+                        start_x + i * key_w + key_w * 1.4, rs5k_cy,
+                        0x000000FF, 1)
+                end
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "RS5K Manager (Toggle)")
+            end
+            r.ImGui_SameLine(ctx, 0, spacing - 1)
+            r.ImGui_SetCursorPosY(ctx, buttons_y)
             local video_pos_x, video_pos_y = r.ImGui_GetCursorScreenPos(ctx)
             if r.ImGui_InvisibleButton(ctx, "##video", video_button_size, video_button_size) then
                 r.Main_OnCommand(50125, 0) 
             end
-            local drawList = r.ImGui_GetWindowDrawList(ctx)
             local video_is_open = is_video_window_open()
             local accent_color = hsv_to_color(ui_settings.accent_hue)
             local icon_color = video_is_open and accent_color or (r.ImGui_IsItemHovered(ctx) and hover_color or base_color)
@@ -7198,7 +8256,9 @@ local function loop()
                 quit_center_x - cross_size, quit_center_y + cross_size,
                 quit_color, 2)
             
-            r.ImGui_Separator(ctx)
+            if ui.current_view_mode ~= "ai_samples" then
+                r.ImGui_Separator(ctx)
+            end
             
             if ui.current_view_mode == "collections" and file_location.selected_collection then
                 local db = load_collection(file_location.selected_collection)
@@ -7276,7 +8336,7 @@ local function loop()
             end
         end
         
-        if ui.current_view_mode ~= "settings" and ui.current_view_mode ~= "shortcuts" then
+        if ui.current_view_mode ~= "settings" and ui.current_view_mode ~= "shortcuts" and ui.current_view_mode ~= "ai_samples" then
             if (file_location.flat_view and file_location.current_location ~= "") or ui.current_view_mode == "collections" then
                 if ui.current_view_mode ~= "collections" then
                     r.ImGui_Dummy(ctx, 0, 3)
@@ -7306,7 +8366,72 @@ local function loop()
             end
         end
         
-        if ui.current_view_mode ~= "settings" and ui.current_view_mode ~= "shortcuts" then
+        if ui.current_view_mode ~= "settings" and ui.current_view_mode ~= "shortcuts" and ui.current_view_mode ~= "ai_samples" then
+            r.ImGui_Separator(ctx)
+        end
+        
+        if ui.current_view_mode == "ai_samples" and ai_module_available then
+            r.ImGui_Separator(ctx)
+            
+            local total_width = r.ImGui_GetContentRegionAvail(ctx)
+            
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+            
+            local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
+            local frame_bg = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
+            local frame_hover = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, 1.0)
+            
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), frame_bg)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), frame_hover)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), frame_hover)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), accent_color)
+            
+            local search_width = total_width * 0.25
+            r.ImGui_PushItemWidth(ctx, search_width)
+            local search_changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ai_search", "Search...", ai_module.ai_samples.search_term)
+            if search_changed then
+                ai_module.filter(new_search)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            
+            r.ImGui_SameLine(ctx, 0, 10)
+            
+            local changed, drums_val
+            changed, drums_val = r.ImGui_Checkbox(ctx, "Drums", ai_module.ai_samples.drums_only)
+            if changed then
+                ai_module.set_drums_only(drums_val)
+            end
+            
+            r.ImGui_SameLine(ctx, 0, 10)
+            
+            local loop_val
+            changed, loop_val = r.ImGui_Checkbox(ctx, "Loops", ai_module.ai_samples.show_loops_only)
+            if changed then
+                if loop_val then ai_module.ai_samples.show_oneshots_only = false end
+                ai_module.set_loops_filter(loop_val, ai_module.ai_samples.show_oneshots_only)
+            end
+            
+            r.ImGui_SameLine(ctx, 0, 10)
+            
+            local oneshot_val
+            changed, oneshot_val = r.ImGui_Checkbox(ctx, "1-Shot", ai_module.ai_samples.show_oneshots_only)
+            if changed then
+                if oneshot_val then ai_module.ai_samples.show_loops_only = false end
+                ai_module.set_loops_filter(ai_module.ai_samples.show_loops_only, oneshot_val)
+            end
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_TextDisabled(ctx, string.format("(%d)", #ai_module.ai_samples.filtered_samples))
+            
+            r.ImGui_PopStyleColor(ctx, 4)
+            
+            r.ImGui_Spacing(ctx)
+            r.ImGui_TextDisabled(ctx, "Character:")
+            r.ImGui_SameLine(ctx, 0, 8)
+            ai_module.draw_character_tags(ctx, ui_settings.accent_hue, hsv_to_color)
+            
+            r.ImGui_PopStyleVar(ctx, 1)
+            
             r.ImGui_Separator(ctx)
         end
         
@@ -7836,6 +8961,326 @@ local function loop()
                     
                 elseif ui.current_view_mode == "folders" or ui.current_view_mode == "collections" then
                     draw_file_list()
+                elseif ui.current_view_mode == "ai_samples" and ai_module_available then
+                    if ai_module.load_database(json) and #ai_module.ai_samples.filtered_samples > 0 then
+                        local table_flags = r.ImGui_TableFlags_RowBg() | r.ImGui_TableFlags_ScrollY() | 
+                                           r.ImGui_TableFlags_Resizable() | r.ImGui_TableFlags_SizingStretchProp()
+                        
+                        if r.ImGui_BeginTable(ctx, "ai_samples_table", 5, table_flags) then
+                            r.ImGui_TableSetupColumn(ctx, "Name", r.ImGui_TableColumnFlags_WidthStretch(), 1.0)
+                            r.ImGui_TableSetupColumn(ctx, "Cat", r.ImGui_TableColumnFlags_WidthFixed(), 50)
+                            r.ImGui_TableSetupColumn(ctx, "Key", r.ImGui_TableColumnFlags_WidthFixed(), 35)
+                            r.ImGui_TableSetupColumn(ctx, "BPM", r.ImGui_TableColumnFlags_WidthFixed(), 45)
+                            r.ImGui_TableSetupColumn(ctx, "Dur", r.ImGui_TableColumnFlags_WidthFixed(), 40)
+                            r.ImGui_TableSetupScrollFreeze(ctx, 0, 1)
+                            
+                            r.ImGui_TableNextRow(ctx, r.ImGui_TableRowFlags_Headers())
+                            local header_cols = {
+                                {id = "name", label = "Name"},
+                                {id = "category", label = "Cat"},
+                                {id = "key", label = "Key"},
+                                {id = "bpm", label = "BPM"},
+                                {id = "length", label = "Dur"}
+                            }
+                            for col_idx, col in ipairs(header_cols) do
+                                r.ImGui_TableSetColumnIndex(ctx, col_idx - 1)
+                                local is_sorted = ai_module.ai_samples.sort_by == col.id
+                                local arrow = ""
+                                if is_sorted then
+                                    arrow = ai_module.ai_samples.sort_ascending and " ▲" or " ▼"
+                                end
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x40FFFFFF)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x60FFFFFF)
+                                if r.ImGui_SmallButton(ctx, col.label .. arrow .. "##sort_" .. col.id) then
+                                    ai_module.set_sort(col.id)
+                                end
+                                r.ImGui_PopStyleColor(ctx, 3)
+                            end
+                            
+                            for i, sample in ipairs(ai_module.ai_samples.filtered_samples) do
+                                r.ImGui_TableNextRow(ctx)
+                                
+                                local is_single_selected = (playback.current_playing_file == sample.path)
+                                local is_multi_selected = false
+                                for _, sel_path in ipairs(file_location.selected_files) do
+                                    if sel_path == sample.path then
+                                        is_multi_selected = true
+                                        break
+                                    end
+                                end
+                                
+                                r.ImGui_TableNextColumn(ctx)
+                                local label = sample.name
+                                
+                                if r.ImGui_Selectable(ctx, label .. "##ai_" .. i, is_single_selected or is_multi_selected, r.ImGui_SelectableFlags_SpanAllColumns()) then
+                                    local ctrl_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+                                    local shift_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+                                    
+                                    if shift_pressed and file_location.last_selected_index then
+                                        clear_file_selection()
+                                        local start_idx = math.min(file_location.last_selected_index, i)
+                                        local end_idx = math.max(file_location.last_selected_index, i)
+                                        for j = start_idx, end_idx do
+                                            local s = ai_module.ai_samples.filtered_samples[j]
+                                            if s then
+                                                table.insert(file_location.selected_files, s.path)
+                                            end
+                                        end
+                                    elseif ctrl_pressed then
+                                        local found = false
+                                        for idx, sel_path in ipairs(file_location.selected_files) do
+                                            if sel_path == sample.path then
+                                                table.remove(file_location.selected_files, idx)
+                                                found = true
+                                                break
+                                            end
+                                        end
+                                        if not found then
+                                            table.insert(file_location.selected_files, sample.path)
+                                        end
+                                        file_location.last_selected_index = i
+                                    else
+                                        clear_file_selection()
+                                        playback.selected_file = sample.name
+                                        playback.current_playing_file = sample.path
+                                        file_location.last_selected_index = i
+                                        
+                                        if playback.auto_play and play_media then
+                                            play_media(sample.path)
+                                        end
+                                    end
+                                end
+                                
+                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                                    local track = r.GetSelectedTrack(0, 0)
+                                    if track then
+                                        insert_media_on_track(sample.path, track, playback.use_original_speed, playback.current_playrate, playback.current_pitch)
+                                    end
+                                end
+                                
+                                if r.ImGui_BeginPopupContextItem(ctx, "ai_file_context_" .. tostring(i)) then
+                                    local files_to_process = {}
+                                    if #file_location.selected_files > 0 then
+                                        files_to_process = file_location.selected_files
+                                    else
+                                        table.insert(files_to_process, sample.path)
+                                    end
+                                    
+                                    if #file_location.selected_files > 1 then
+                                        r.ImGui_Text(ctx, string.format("%d files selected", #file_location.selected_files))
+                                        r.ImGui_Separator(ctx)
+                                    end
+                                    
+                                    if r.ImGui_MenuItem(ctx, "Insert on selected track") then
+                                        local track = r.GetSelectedTrack(0, 0)
+                                        if track then
+                                            for _, fpath in ipairs(files_to_process) do
+                                                insert_media_on_track(fpath, track, playback.use_original_speed, playback.current_playrate, playback.current_pitch)
+                                            end
+                                        end
+                                    end
+                                    
+                                    local ext = sample.path:match("%.([^%.]+)$")
+                                    if ext then
+                                        ext = ext:lower()
+                                        if ext ~= "mid" and ext ~= "midi" then
+                                            r.ImGui_Separator(ctx)
+                                            if r.ImGui_MenuItem(ctx, "Add to new track with ReaSamplomatic5000") then
+                                                insert_with_reasamplomatic(sample.path)
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
+                                                replace_reasamplomatic_sample(sample.path)
+                                            end
+                                            
+                                            local track = r.GetSelectedTrack(0, 0)
+                                            if track then
+                                                local actual_track, is_mpl_parent = get_mpl_rs5k_track_and_parent(track)
+                                                
+                                                if is_mpl_parent then
+                                                    local filled_pads = get_mpl_filled_pads(actual_track)
+                                                    if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
+                                                        if #filled_pads > 0 then
+                                                            for _, pad in ipairs(filled_pads) do
+                                                                local pad_label = midi_note_to_name(pad.note)
+                                                                if pad.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. pad.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    load_sample_to_rs5k_pad(sample.path, pad.track, pad.fx_idx, nil)
+                                                                end
+                                                            end
+                                                            r.ImGui_Separator(ctx)
+                                                        end
+                                                        for _, range in ipairs(RS5K_PAD_RANGES) do
+                                                            local range_label = range.label
+                                                            if r.ImGui_BeginMenu(ctx, range_label) then
+                                                                for note = range.start_note, range.end_note do
+                                                                    local existing_pad = find_pad_by_note(filled_pads, note)
+                                                                    if not existing_pad then
+                                                                        if r.ImGui_MenuItem(ctx, midi_note_to_name(note)) then
+                                                                            create_rs5k_pad_track(sample.path, actual_track, note)
+                                                                        end
+                                                                    end
+                                                                end
+                                                                r.ImGui_EndMenu(ctx)
+                                                            end
+                                                        end
+                                                        r.ImGui_EndMenu(ctx)
+                                                    end
+                                                    if #filled_pads > 0 then
+                                                        if r.ImGui_BeginMenu(ctx, "Delete RS5K Pad...") then
+                                                            for _, pad in ipairs(filled_pads) do
+                                                                local pad_label = midi_note_to_name(pad.note)
+                                                                if pad.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. pad.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    delete_rs5k_pad(pad)
+                                                                end
+                                                            end
+                                                            r.ImGui_EndMenu(ctx)
+                                                        end
+                                                    end
+                                                else
+                                                    local rs5k_instances = get_rs5k_instances_on_track(track)
+                                                    if #rs5k_instances > 0 then
+                                                        if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
+                                                            for _, inst in ipairs(rs5k_instances) do
+                                                                local pad_label = inst.note_name
+                                                                if inst.sample_name ~= "" then
+                                                                    pad_label = pad_label .. " - " .. inst.sample_name
+                                                                end
+                                                                if r.ImGui_MenuItem(ctx, pad_label) then
+                                                                    load_sample_to_rs5k_pad(sample.path, track, inst.fx_idx, nil)
+                                                                end
+                                                            end
+                                                            r.ImGui_Separator(ctx)
+                                                            if r.ImGui_MenuItem(ctx, "+ Add new RS5K instance") then
+                                                                local next_note = 36
+                                                                if #rs5k_instances > 0 then
+                                                                    next_note = rs5k_instances[#rs5k_instances].note_start + 1
+                                                                    if next_note > 127 then next_note = 127 end
+                                                                end
+                                                                load_sample_to_rs5k_pad(sample.path, track, nil, next_note)
+                                                            end
+                                                            r.ImGui_EndMenu(ctx)
+                                                        end
+                                                    else
+                                                        if r.ImGui_MenuItem(ctx, "Create RS5K pad (C2)") then
+                                                            create_rs5k_pad_track(sample.path, actual_track, 36)
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Create empty RS5K Rack") then
+                                                create_empty_rs5k_rack()
+                                            end
+                                        end
+                                    end
+                                    
+                                    if #file_location.collections == 0 then
+                                        load_collections()
+                                    end
+                                    
+                                    if #file_location.collections > 0 then
+                                        r.ImGui_Separator(ctx)
+                                        r.ImGui_Text(ctx, "Add to Collection:")
+                                        for _, db_name in ipairs(file_location.collections) do
+                                            if r.ImGui_MenuItem(ctx, db_name) then
+                                                for _, fpath in ipairs(files_to_process) do
+                                                    add_file_to_collection(db_name, fpath)
+                                                end
+                                            end
+                                        end
+                                    end
+                                    
+                                    r.ImGui_Separator(ctx)
+                                    if r.ImGui_MenuItem(ctx, "Show in Explorer") then
+                                        local folder = sample.path:match("(.+)[/\\]")
+                                        if folder then
+                                            r.CF_ShellExecute(folder)
+                                        end
+                                    end
+                                    
+                                    r.ImGui_EndPopup(ctx)
+                                end
+                                
+                                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_SourceAllowNullID()) then
+                                    insert_state.drop_file = sample.path
+                                    local ext = sample.path:match("%.([^%.]+)$")
+                                    if ext then
+                                        ext = ext:lower()
+                                        insert_state.is_midi = (ext == "mid" or ext == "midi")
+                                    else
+                                        insert_state.is_midi = false
+                                    end
+                                    r.ImGui_SetDragDropPayload(ctx, "REAPER_MEDIAFOLDER", sample.path)
+                                    if #file_location.selected_files > 1 then
+                                        r.ImGui_Text(ctx, string.format("Drag %d files to Track", #file_location.selected_files))
+                                    else
+                                        r.ImGui_Text(ctx, "Drag to Track: " .. sample.name)
+                                    end
+                                    r.ImGui_EndDragDropSource(ctx)
+                                end
+                                
+                                if r.ImGui_IsItemHovered(ctx) then
+                                    r.ImGui_BeginTooltip(ctx)
+                                    r.ImGui_Text(ctx, "Category: " .. sample.category)
+                                    if sample.secondary_categories and #sample.secondary_categories > 0 then
+                                        r.ImGui_Text(ctx, "Also: " .. table.concat(sample.secondary_categories, ", "))
+                                    end
+                                    if sample.folder and sample.folder ~= "" then
+                                        r.ImGui_Text(ctx, "Folder: " .. sample.folder)
+                                    end
+                                    if sample.tags and #sample.tags > 0 then
+                                        r.ImGui_Text(ctx, "Tags: " .. table.concat(sample.tags, ", "))
+                                    end
+                                    r.ImGui_EndTooltip(ctx)
+                                end
+                                
+                                r.ImGui_TableNextColumn(ctx)
+                                local all_cats = {sample.category}
+                                if sample.secondary_categories then
+                                    for _, sec_cat in ipairs(sample.secondary_categories) do
+                                        table.insert(all_cats, sec_cat)
+                                    end
+                                end
+                                local draw_list = r.ImGui_GetWindowDrawList(ctx)
+                                local dot_x, dot_y = r.ImGui_GetCursorScreenPos(ctx)
+                                dot_y = dot_y + 6
+                                local dot_radius = 4
+                                local dot_spacing = 10
+                                for _, cat in ipairs(all_cats) do
+                                    local cat_color = ai_module.get_category_color(cat)
+                                    r.ImGui_DrawList_AddCircleFilled(draw_list, dot_x + dot_radius, dot_y, dot_radius, cat_color)
+                                    dot_x = dot_x + dot_spacing
+                                end
+                                
+                                r.ImGui_TableNextColumn(ctx)
+                                if sample.pitch_note then
+                                    r.ImGui_TextDisabled(ctx, sample.pitch_note)
+                                end
+                                
+                                r.ImGui_TableNextColumn(ctx)
+                                if sample.bpm then
+                                    r.ImGui_TextDisabled(ctx, tostring(sample.bpm))
+                                end
+                                
+                                r.ImGui_TableNextColumn(ctx)
+                                if sample.duration then
+                                    r.ImGui_TextDisabled(ctx, string.format("%.1fs", sample.duration))
+                                end
+                            end
+                            r.ImGui_EndTable(ctx)
+                        end
+                    elseif ai_module.load_database(json) then
+                        r.ImGui_TextDisabled(ctx, "No samples match current filters")
+                    else
+                        r.ImGui_TextWrapped(ctx, "No AI sample database found.")
+                        r.ImGui_Spacing(ctx)
+                        r.ImGui_TextWrapped(ctx, "Use the Sample Analyzer to create one.")
+                    end
                 end
             end
             r.ImGui_EndChild(ctx)

@@ -1,0 +1,5 @@
+# TK Sample Analyzer - Requirements
+# Install with: pip install -r requirements.txt
+
+numpy>=1.20.0
+librosa>=0.10.0

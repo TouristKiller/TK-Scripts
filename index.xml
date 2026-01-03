@@ -227,11 +227,21 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.6.6" author="TouristKiller" time="2025-10-25T19:25:00Z">
+        <version name="0.6.7" author="TouristKiller" time="2026-01-03T19:30:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
+        <source file="ai_sample_module.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/ai_sample_module.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
-        <changelog><![CDATA[ 
+        <source file="SAMPLE_ANALYZER/TK_Sample_Analyzer_GUI.pyw">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/SAMPLE_ANALYZER/TK_Sample_Analyzer_GUI.pyw</source>
+        <source file="SAMPLE_ANALYZER/analyze_samples.py">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/SAMPLE_ANALYZER/analyze_samples.py</source>
+        <source file="SAMPLE_ANALYZER/requirements.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/SAMPLE_ANALYZER/requirements.txt</source>
+        <source file="SAMPLE_ANALYZER/QUICKSTART.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/SAMPLE_ANALYZER/QUICKSTART.txt</source>
+        <source file="SAMPLE_ANALYZER/Start Sample Analyzer.vbs">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/SAMPLE_ANALYZER/Start%20Sample%20Analyzer.vbs</source>
+        <changelog><![CDATA[
++ AUTO SAMPLES: Sortable by column headers (Name, Category, Key, BPM, Duration)
++ MPL RS5K MANAGER: Added Delete RS5K Pad submenu
++ MPL RS5K MANAGER: Occupied notes are now correctly hidden in all views
++ SAMPLE ANALYZER: Now included - analyze and categorize your sample library
      ]]></changelog>
         </version>
     </reapack>
