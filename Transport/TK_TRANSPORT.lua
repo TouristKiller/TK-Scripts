@@ -1,8 +1,15 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.8
+-- @version 1.8.9
 -- @changelog 
 --[[
+  v1.8.9:
+  + Added: "Always visible" option for tabs - keeps tab bar expanded when reopening the script
+  + Changed: Toggle button is hidden when "Always visible" is enabled
+
+  v1.8.8:
+  + (previous changes)
+
   v1.8.7:
   + Added: Option to hide TCP icons while keeping TK mixer icons visible (sync restores when re-enabled)
   + Added: Divider menu option to toggle tracks until the next divider
@@ -495,6 +502,7 @@ local default_settings = {
  show_tabs = false,
  tabs_collapsed = true,
  tabs_expand_window = false,
+ tabs_always_expanded = false,
  tabs = { { name = "Main", id = 1 } },
  active_tab = 1,
  tab_bar_height = 22,
@@ -7084,6 +7092,7 @@ local function SaveTabsToExtState()
         show_tabs = settings.show_tabs or false,
         tabs_collapsed = settings.tabs_collapsed or true,
         tabs_expand_window = settings.tabs_expand_window or false,
+        tabs_always_expanded = settings.tabs_always_expanded or false,
         tab_bar_height = settings.tab_bar_height or 22,
         tab_toggle_size = settings.tab_toggle_size or 16,
         tab_bar_color = settings.tab_bar_color or 0x2A2A2AFF,
@@ -7111,6 +7120,10 @@ local function LoadTabsFromExtState()
             settings.tabs_collapsed = tabs_data.tabs_collapsed
             if settings.tabs_collapsed == nil then settings.tabs_collapsed = true end
             settings.tabs_expand_window = tabs_data.tabs_expand_window or false
+            settings.tabs_always_expanded = tabs_data.tabs_always_expanded or false
+            if settings.tabs_always_expanded and settings.show_tabs then
+                settings.tabs_collapsed = false
+            end
             settings.tab_bar_height = tabs_data.tab_bar_height or 22
             settings.tab_toggle_size = tabs_data.tab_toggle_size or 16
             settings.tab_bar_color = tabs_data.tab_bar_color or 0x2A2A2AFF
@@ -7297,32 +7310,39 @@ local function RenderTabBar()
     
     r.ImGui_DrawList_AddRectFilled(draw_list, win_x, win_y, win_x + win_w, win_y + tab_height, settings.tab_bar_color or 0x2A2A2AFF)
     
-    r.ImGui_SetCursorPos(ctx, 4, 2)
+    local hide_toggle = settings.tabs_always_expanded
+    local start_x = hide_toggle and 4 or 4
     
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.tab_hover_color or 0x5A5A5AFF)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.tab_active_color or 0x4A4A4AFF)
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
-    
-    if r.ImGui_Button(ctx, "^##tabtoggle", toggle_size, tab_height - 4) then
-        settings.tabs_collapsed = true
-        local current_h = select(2, r.ImGui_GetWindowSize(ctx))
-        if settings.tabs_expand_window and window_state.last_base_window_height then
-            r.ImGui_SetWindowSize(ctx, win_w, window_state.last_base_window_height)
-        else
-            r.ImGui_SetWindowSize(ctx, win_w, current_h - tab_height)
+    if not hide_toggle then
+        r.ImGui_SetCursorPos(ctx, 4, 2)
+        
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.tab_hover_color or 0x5A5A5AFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.tab_active_color or 0x4A4A4AFF)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
+        
+        if r.ImGui_Button(ctx, "^##tabtoggle", toggle_size, tab_height - 4) then
+            settings.tabs_collapsed = true
+            local current_h = select(2, r.ImGui_GetWindowSize(ctx))
+            if settings.tabs_expand_window and window_state.last_base_window_height then
+                r.ImGui_SetWindowSize(ctx, win_w, window_state.last_base_window_height)
+            else
+                r.ImGui_SetWindowSize(ctx, win_w, current_h - tab_height)
+            end
+            SaveTabsToExtState()
         end
-        SaveTabsToExtState()
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Hide tabs")
+        end
+        
+        r.ImGui_PopStyleVar(ctx, 2)
+        r.ImGui_PopStyleColor(ctx, 3)
+        
+        r.ImGui_SameLine(ctx, 0, 4)
+    else
+        r.ImGui_SetCursorPos(ctx, 4, 2)
     end
-    if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Hide tabs")
-    end
-    
-    r.ImGui_PopStyleVar(ctx, 2)
-    r.ImGui_PopStyleColor(ctx, 3)
-    
-    r.ImGui_SameLine(ctx, 0, 4)
     
     local tabs = settings.tabs or { { name = "Main", id = 1 } }
     local active_tab = settings.active_tab or 1
@@ -9048,6 +9068,18 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  end
  if r.ImGui_IsItemHovered(ctx) then
      r.ImGui_SetTooltip(ctx, "When enabled, window height increases to show tabs.\nWhen disabled, content shifts down (overlay mode).")
+ end
+ 
+ r.ImGui_SameLine(ctx)
+ rv, settings.tabs_always_expanded = r.ImGui_Checkbox(ctx, "Always visible", settings.tabs_always_expanded or false)
+ if rv then
+     if settings.tabs_always_expanded then
+         settings.tabs_collapsed = false
+     end
+     SaveTabsToExtState()
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "When enabled, the tab bar will always be visible\nwhen reopening the script (not collapsed).")
  end
  
  if settings.show_tabs then
@@ -21540,7 +21572,7 @@ function Main()
   local tabs_visible = settings.show_tabs and not settings.tabs_collapsed
   local tab_bar_h = tabs_visible and (settings.tab_bar_height or 22) or 0
   
-  if settings.tabs_expand_window and tabs_visible and window_state.last_base_window_height and window_state.last_base_window_width then
+  if settings.tabs_expand_window and tabs_visible and not settings.tabs_always_expanded and window_state.last_base_window_height and window_state.last_base_window_width then
    local target_height = window_state.last_base_window_height + tab_bar_h
    local current_w, current_h = r.ImGui_GetWindowSize(ctx)
    if current_h ~= target_height then
@@ -21561,7 +21593,7 @@ function Main()
    
    if not window_state.startup_resize_done then
        window_state.startup_resize_done = true
-       if settings.tabs_expand_window and settings.show_tabs and settings.tabs_collapsed then
+       if settings.tabs_expand_window and settings.show_tabs and settings.tabs_collapsed and not settings.tabs_always_expanded then
            local corrected_height = our_window_height - tab_h
            if corrected_height > 20 then
                r.ImGui_SetWindowSize(ctx, our_window_width, corrected_height)
@@ -21570,7 +21602,10 @@ function Main()
        end
    end
    
-   if settings.tabs_expand_window then
+   if settings.tabs_always_expanded then
+       window_state.last_base_window_height = our_window_height
+       window_state.last_base_window_width = our_window_width
+   elseif settings.tabs_expand_window then
        if tabs_are_visible then
            if not window_state.last_base_window_height then
                window_state.last_base_window_height = our_window_height - tab_h
