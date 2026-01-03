@@ -120,9 +120,25 @@
     </version>
     </reapack> 
 
-</category>
+    <reapack name="TK_Add_ReVue_to_Tracks.lua" type="script" desc="TK Add ReVue VU Meter to Selected Tracks (MCP Embedded)">
+    <version name="1.0" author="TouristKiller" time="2026-01-03T23:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Add_ReVue_to_Tracks.lua</source>
+                <changelog><![CDATA[           
++ Initial release
+]]></changelog>
+    </version>
+    </reapack>
 
- 
+    <reapack name="TK_Create_Tracks_with_ReVue.lua" type="script" desc="TK Create New Track(s) with ReVue VU Meter (MCP Embedded)">
+    <version name="1.0" author="TouristKiller" time="2026-01-03T23:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Create_Tracks_with_ReVue.lua</source>
+                <changelog><![CDATA[           
++ Initial release
+]]></changelog>
+    </version>
+    </reapack>
+
+</category>
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
