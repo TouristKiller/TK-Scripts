@@ -1,8 +1,14 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.8.9
+-- @version 1.9.0
 -- @changelog 
 --[[
+  v1.9.0:
+  + Added: Center Name option for mixer track names
+  + Added: Double-click in empty mixer area to create new track (Was previously not possible when there was not at least one track)
+  + Added: Delete Selected Tracks option in context menu when multiple tracks selected
+  + Added: Right-click context menu on track name (same as fader/track number)
+
   v1.8.9:
   + Added: "Always visible" option for tabs - keeps tab bar expanded when reopening the script
   + Changed: Toggle button is hidden when "Always visible" is enabled
@@ -645,6 +651,7 @@ local default_settings = {
  simple_mixer_use_track_color = true,
  simple_mixer_track_name_use_color = false,
  simple_mixer_track_name_bg_use_color = false,
+ simple_mixer_track_name_centered = false,
  simple_mixer_auto_height = true,
  simple_mixer_show_rms = true,
  simple_mixer_rms_position = "top",
@@ -3134,6 +3141,8 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
    rv, settings.simple_mixer_track_name_use_color = r.ImGui_Checkbox(ctx, "Color Name", settings.simple_mixer_track_name_use_color or false)
    r.ImGui_SameLine(ctx)
    rv, settings.simple_mixer_track_name_bg_use_color = r.ImGui_Checkbox(ctx, "Color Name BG", settings.simple_mixer_track_name_bg_use_color or false)
+   r.ImGui_SameLine(ctx)
+   rv, settings.simple_mixer_track_name_centered = r.ImGui_Checkbox(ctx, "Center Name", settings.simple_mixer_track_name_centered or false)
    
    r.ImGui_Separator(ctx)
    r.ImGui_Spacing(ctx)
@@ -14152,6 +14161,7 @@ end
 local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_slider_height, is_master, show_remove_button, show_fx_handle, folder_info)
  local should_remove = false
  local should_delete = false
+ local should_delete_selected = false
  folder_info = folder_info or {}
  local is_folder = folder_info.is_folder or false
  local is_child = folder_info.is_child or false
@@ -15532,6 +15542,12 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     if r.ImGui_MenuItem(ctx, "Hide from Mixer") then
      should_remove = true
     end
+    local num_selected = r.CountSelectedTracks(0)
+    if num_selected > 1 and r.IsTrackSelected(track) then
+     if r.ImGui_MenuItem(ctx, "Delete Selected Tracks (" .. num_selected .. ")") then
+      should_delete_selected = true
+     end
+    end
     if r.ImGui_MenuItem(ctx, "Delete Track") then
      should_delete = true
     end
@@ -15970,6 +15986,11 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
      r.Main_OnCommand(40917, 0)
     end
    else
+    if settings.simple_mixer_track_name_centered and display_name ~= "" then
+     local name_w = r.ImGui_CalcTextSize(ctx, display_name)
+     local centered_x = cursor_x + (track_width - name_w) / 2
+     r.ImGui_SetCursorScreenPos(ctx, centered_x, cursor_y)
+    end
     r.ImGui_Text(ctx, display_name)
     r.ImGui_SetCursorScreenPos(ctx, cursor_x, cursor_y)
     r.ImGui_InvisibleButton(ctx, "##name_area", track_width, text_h)
@@ -16008,6 +16029,9 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
       r.SetOnlyTrackSelected(track)
      end
     end
+    if r.ImGui_IsMouseClicked(ctx, r.ImGui_MouseButton_Right()) then
+     r.ImGui_OpenPopup(ctx, "FaderContextMenu##" .. idx)
+    end
    end
   end
  end
@@ -16020,7 +16044,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  r.ImGui_PopID(ctx)
  r.ImGui_EndGroup(ctx)
  r.ImGui_PopStyleVar(ctx)
- return should_remove or false, should_delete or false
+ return should_remove or false, should_delete or false, should_delete_selected or false
 end
 
 local function DrawSectionHeader(ctx, label, setting_key, sidebar_width)
@@ -17524,12 +17548,28 @@ function DrawSimpleMixerWindow()
   end
  end
  
- local should_remove, should_delete = DrawMixerChannel(mixer_ctx, track, track_name, idx, track_width, base_slider_height, false, true, show_handle, folder_info)
+ local should_remove, should_delete, should_delete_selected = DrawMixerChannel(mixer_ctx, track, track_name, idx, track_width, base_slider_height, false, true, show_handle, folder_info)
  if should_remove then
   table.insert(tracks_to_remove, track_guid)
  end
  if should_delete then
   table.insert(tracks_to_delete, {idx = idx, track = track, guid = track_guid})
+ end
+ if should_delete_selected then
+  local num_sel = r.CountSelectedTracks(0)
+  for i = 0, num_sel - 1 do
+   local sel_track = r.GetSelectedTrack(0, i)
+   if sel_track then
+    local sel_guid = r.GetTrackGUID(sel_track)
+    local already_in_list = false
+    for _, del_info in ipairs(tracks_to_delete) do
+     if del_info.guid == sel_guid then already_in_list = true break end
+    end
+    if not already_in_list then
+     table.insert(tracks_to_delete, {idx = -1, track = sel_track, guid = sel_guid})
+    end
+   end
+  end
  end
  ::continue_track_loop::
  end
@@ -17683,7 +17723,12 @@ function DrawSimpleMixerWindow()
    if del_info.track and r.ValidatePtr(del_info.track, "MediaTrack*") then
     r.DeleteTrack(del_info.track)
    end
-   table.remove(project_mixer_tracks, del_info.idx)
+   for j = #project_mixer_tracks, 1, -1 do
+    if project_mixer_tracks[j] == del_info.guid then
+     table.remove(project_mixer_tracks, j)
+     break
+    end
+   end
   end
   SaveProjectMixerTracks(project_mixer_tracks)
   r.PreventUIRefresh(-1)
@@ -17753,41 +17798,70 @@ function DrawSimpleMixerWindow()
   r.ImGui_PopStyleColor(mixer_ctx, 1)
  end
  else
- r.ImGui_Text(mixer_ctx, "No tracks added.")
- r.ImGui_TextWrapped(mixer_ctx, "Use the sidebar menu or right-click here to add tracks.")
- r.ImGui_Spacing(mixer_ctx)
- if r.ImGui_Button(mixer_ctx, "+ Add Selected Tracks", -1, 30) then
-  local num_sel_tracks = r.CountSelectedTracks(0)
-  if num_sel_tracks > 0 then
-   for i = 0, num_sel_tracks - 1 do
-    local track = r.GetSelectedTrack(0, i)
-    local guid = r.GetTrackGUID(track)
-    local already_added = false
-    for _, existing_guid in ipairs(project_mixer_tracks) do
-     if existing_guid == guid then
-      already_added = true
-      break
+ local avail_w, avail_h = r.ImGui_GetContentRegionAvail(mixer_ctx)
+ if avail_w < 50 then avail_w = 200 end
+ if avail_h < 50 then avail_h = 200 end
+ 
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
+ if r.ImGui_BeginChild(mixer_ctx, "EmptyMixerArea", avail_w, avail_h, 0, 0) then
+  local child_w, child_h = r.ImGui_GetContentRegionAvail(mixer_ctx)
+  local content_start_y = r.ImGui_GetCursorPosY(mixer_ctx)
+  
+  r.ImGui_Text(mixer_ctx, "No tracks added.")
+  r.ImGui_TextWrapped(mixer_ctx, "Double-click to create a new track, or use the buttons below.")
+  r.ImGui_Spacing(mixer_ctx)
+  if r.ImGui_Button(mixer_ctx, "+ Add Selected Tracks", -1, 30) then
+   local num_sel_tracks = r.CountSelectedTracks(0)
+   if num_sel_tracks > 0 then
+    for i = 0, num_sel_tracks - 1 do
+     local track = r.GetSelectedTrack(0, i)
+     local guid = r.GetTrackGUID(track)
+     local already_added = false
+     for _, existing_guid in ipairs(project_mixer_tracks) do
+      if existing_guid == guid then
+       already_added = true
+       break
+      end
+     end
+     if not already_added then
+      table.insert(project_mixer_tracks, guid)
      end
     end
-    if not already_added then
-     table.insert(project_mixer_tracks, guid)
-    end
+    SaveProjectMixerTracks(project_mixer_tracks)
    end
-   SaveProjectMixerTracks(project_mixer_tracks)
   end
- end
- r.ImGui_Spacing(mixer_ctx)
- if r.ImGui_Button(mixer_ctx, "+ Create New Track", -1, 30) then
-  r.Undo_BeginBlock()
-  r.InsertTrackAtIndex(r.CountTracks(0), true)
-  local new_track = r.GetTrack(0, r.CountTracks(0) - 1)
-  if new_track then
-   local new_guid = r.GetTrackGUID(new_track)
-   table.insert(project_mixer_tracks, new_guid)
-   SaveProjectMixerTracks(project_mixer_tracks)
+  r.ImGui_Spacing(mixer_ctx)
+  if r.ImGui_Button(mixer_ctx, "+ Create New Track", -1, 30) then
+   r.Undo_BeginBlock()
+   r.InsertTrackAtIndex(r.CountTracks(0), true)
+   local new_track = r.GetTrack(0, r.CountTracks(0) - 1)
+   if new_track then
+    local new_guid = r.GetTrackGUID(new_track)
+    table.insert(project_mixer_tracks, new_guid)
+    SaveProjectMixerTracks(project_mixer_tracks)
+   end
+   r.Undo_EndBlock("Insert new track for mixer", -1)
   end
-  r.Undo_EndBlock("Insert new track for mixer", -1)
+  
+  local remaining_h = child_h - (r.ImGui_GetCursorPosY(mixer_ctx) - content_start_y)
+  if remaining_h > 10 then
+   r.ImGui_InvisibleButton(mixer_ctx, "##empty_mixer_dblclick", child_w, remaining_h)
+   if r.ImGui_IsItemHovered(mixer_ctx) and r.ImGui_IsMouseDoubleClicked(mixer_ctx, r.ImGui_MouseButton_Left()) then
+    r.Undo_BeginBlock()
+    r.InsertTrackAtIndex(r.CountTracks(0), true)
+    local new_track = r.GetTrack(0, r.CountTracks(0) - 1)
+    if new_track then
+     local new_guid = r.GetTrackGUID(new_track)
+     table.insert(project_mixer_tracks, new_guid)
+     SaveProjectMixerTracks(project_mixer_tracks)
+    end
+    r.Undo_EndBlock("Insert new track for mixer", -1)
+   end
+  end
+  
+  r.ImGui_EndChild(mixer_ctx)
  end
+ r.ImGui_PopStyleColor(mixer_ctx, 1)
  end
  
  if IconBrowser.show_window and mixer_state.icon_target_track then
