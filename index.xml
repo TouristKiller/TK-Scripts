@@ -121,19 +121,39 @@
     </reapack> 
 
     <reapack name="TK_Add_ReVue_to_Tracks.lua" type="script" desc="TK Add ReVue VU Meter to Selected Tracks (MCP Embedded)">
-    <version name="1.0" author="TouristKiller" time="2026-01-03T23:00:00Z">
+    <version name="1.1" author="TouristKiller" time="2026-01-04T16:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Add_ReVue_to_Tracks.lua</source>
                 <changelog><![CDATA[           
++ v1.1: Improved timing with extra defer cycles and verification for reliable MCP embedding
 + Initial release
 ]]></changelog>
     </version>
     </reapack>
 
+    <reapack name="TK_Add_ReVue_to_Tracks_Chunk.lua" type="script" desc="TK Add ReVue VU Meter to Selected Tracks (MCP Embedded) - Chunk Version">
+    <version name="1.0" author="TouristKiller" time="2026-01-04T16:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Add_ReVue_to_Tracks_Chunk.lua</source>
+                <changelog><![CDATA[           
++ Initial release - Chunk-based embedding (faster and more reliable)
+]]></changelog>
+    </version>
+    </reapack>
+
     <reapack name="TK_Create_Tracks_with_ReVue.lua" type="script" desc="TK Create New Track(s) with ReVue VU Meter (MCP Embedded)">
-    <version name="1.0" author="TouristKiller" time="2026-01-03T23:00:00Z">
+    <version name="1.1" author="TouristKiller" time="2026-01-04T16:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Create_Tracks_with_ReVue.lua</source>
                 <changelog><![CDATA[           
++ v1.1: Improved timing with extra defer cycles and verification for reliable MCP embedding
 + Initial release
+]]></changelog>
+    </version>
+    </reapack>
+
+    <reapack name="TK_Create_Tracks_with_ReVue_Chunk.lua" type="script" desc="TK Create New Track(s) with ReVue VU Meter (MCP Embedded) - Chunk Version">
+    <version name="1.0" author="TouristKiller" time="2026-01-04T16:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Create_Tracks_with_ReVue_Chunk.lua</source>
+                <changelog><![CDATA[           
++ Initial release - Chunk-based embedding (faster and more reliable)
 ]]></changelog>
     </version>
     </reapack>
