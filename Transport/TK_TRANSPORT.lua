@@ -1,9 +1,9 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.9.1
+-- @version 1.9.2
 -- @changelog 
 --[[
-  v1.9.1:
+  v1.9.2:
   + Added: Text hover/active colors for transport widgets (Tempo, TapTempo, TimeSig, TimeSelection, CursorPos, Env, WindowSetPicker)
   + Added: Text hover/active colors for custom buttons
   + Added: Text hover/active colors for tabs
