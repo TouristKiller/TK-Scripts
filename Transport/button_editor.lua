@@ -729,6 +729,8 @@ local function CopyButtonStyle(button)
     end
     if settings.color_text then
         style_clipboard.data.text_color = button.text_color
+        style_clipboard.data.text_color_hover = button.text_color_hover
+        style_clipboard.data.text_color_active = button.text_color_active
     end
     if settings.color_border then
         style_clipboard.data.border_color = button.border_color
@@ -1718,7 +1720,27 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                         changed = true
                     end
                     r.ImGui_SameLine(ctx)
-                    r.ImGui_Text(ctx, "Color")
+                    r.ImGui_Text(ctx, "Text")
+                    
+                    r.ImGui_SetCursorPosX(ctx, col1)
+                    local text_color_hover = button.text_color_hover or button.text_color or 0xFFFFFFFF
+                    local rv_col_h, new_text_color_hover = r.ImGui_ColorEdit4(ctx, "##TextColorHover", text_color_hover, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel())
+                    if rv_col_h then
+                        button.text_color_hover = new_text_color_hover
+                        changed = true
+                    end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Text Hover")
+                    
+                    r.ImGui_SameLine(ctx, 0, 16)
+                    local text_color_active = button.text_color_active or button.text_color or 0xFFFFFFFF
+                    local rv_col_a, new_text_color_active = r.ImGui_ColorEdit4(ctx, "##TextColorActive", text_color_active, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel())
+                    if rv_col_a then
+                        button.text_color_active = new_text_color_active
+                        changed = true
+                    end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, "Text Active")
                 end
                 
                 if button.use_system_fonts == nil then

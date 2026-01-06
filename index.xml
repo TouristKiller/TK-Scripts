@@ -162,7 +162,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.9.0" author="TouristKiller" time="2026-01-04TT17:20:00Z">
+        <version name="1.9.1" author="TouristKiller" time="2026-01-06T19:40:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -176,18 +176,11 @@
             <source main="main" file="TK_MIXER_ONLY.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_MIXER_ONLY.lua</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/Images/knob01.png</source>
             <changelog><![CDATA[
-  + Added: Fader Background Styles - 11 visual styles for fader backgrounds
-  + Added: Track color integration - All fader background styles work with track colors
-  + Added: Gradient styles (Vertical, Horizontal, Center) with 3-color option
-  + Added: VU Zones style - Green/Yellow/Red zones based on dB levels
-  + Added: LED Segments style - Retro mixer look
-  + Added: Brushed Metal style - Subtle horizontal lines texture
-  + Added: Carbon Fiber style - Weave pattern texture
-  + Added: Noise/Grain style - Analog film grain texture
-  + Added: Grid/Mesh style - Vintage mixer grid pattern
-  + Added: dB Scale style - Hardware mixer scale markings with color zones
-  + Added: Inset shadow effect for depth
-  + Added: Edge glow effect with customizable color
+  + Added: Text hover/active colors for transport widgets (Tempo, TapTempo, TimeSig, TimeSelection, CursorPos, Env, WindowSetPicker)
+  + Added: Text hover/active colors for custom buttons
+  + Added: Text hover/active colors for tabs
+  + Added: Text hover/active colors for mixer button
+  + Added: Double-click on fader to reset volume to 0 dB
 ]]></changelog>
         </version>
     </reapack>

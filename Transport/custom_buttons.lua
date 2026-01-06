@@ -45,6 +45,8 @@ function CustomButtons.CreateNewButton(options)
         hover_color = 0x444444FF,
         active_color = 0x555555FF,
         text_color = 0xFFFFFFFF,
+        text_color_hover = nil,
+        text_color_active = nil,
         show_toggle_state = false,
         toggle_on_color = 0x00FF00FF,
         toggle_off_color = nil,
@@ -75,6 +77,8 @@ function CustomButtons.CreateNewButton(options)
         new_button.hover_color = source_button.hover_color or 0x444444FF
         new_button.active_color = source_button.active_color or 0x555555FF
         new_button.text_color = source_button.text_color or 0xFFFFFFFF
+        new_button.text_color_hover = source_button.text_color_hover
+        new_button.text_color_active = source_button.text_color_active
         new_button.rounding = source_button.rounding
         new_button.border_thickness = source_button.border_thickness
         new_button.border_color = source_button.border_color

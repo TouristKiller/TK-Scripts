@@ -1,8 +1,15 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.9.0
+-- @version 1.9.1
 -- @changelog 
 --[[
+  v1.9.1:
+  + Added: Text hover/active colors for transport widgets (Tempo, TapTempo, TimeSig, TimeSelection, CursorPos, Env, WindowSetPicker)
+  + Added: Text hover/active colors for custom buttons
+  + Added: Text hover/active colors for tabs
+  + Added: Text hover/active colors for mixer button
+  + Added: Double-click on fader to reset volume to 0 dB
+
   v1.9.0:
   + Added: Center Name option for mixer track names
   + Added: Double-click in empty mixer area to create new track (Was previously not possible when there was not at least one track)
@@ -247,6 +254,7 @@ local mixer_state = {
     select_settings_tab = nil,
     knob_image = nil,
     knob_image_loaded = false,
+    fader_reset_track = nil,
 }
 
 local COMMANDS = {
@@ -430,6 +438,174 @@ local function GetFontFlags(style_index)
  return font_styles[style_index].flags
 end
 
+local cached_system_fonts = nil
+local font_search_text = ""
+
+local function LoadCachedFonts()
+    local cached = r.GetExtState("TK_Transport", "cached_system_fonts")
+    if cached and cached ~= "" then
+        local fonts_list = {}
+        for font in cached:gmatch("[^|]+") do
+            table.insert(fonts_list, font)
+        end
+        if #fonts_list > 0 then
+            cached_system_fonts = fonts_list
+            return true
+        end
+    end
+    return false
+end
+
+local function SaveCachedFonts(fonts_list)
+    local str = table.concat(fonts_list, "|")
+    r.SetExtState("TK_Transport", "cached_system_fonts", str, true)
+end
+
+local function ScanSystemFonts()
+    local fonts_list = {}
+    local seen = {}
+    
+    local function add_font(name)
+        name = name:gsub("%s*%(TrueType%)%s*$", "")
+        name = name:gsub("%s*%(OpenType%)%s*$", "")
+        name = name:gsub("%s*Bold%s*Italic%s*$", "")
+        name = name:gsub("%s*Bold%s*$", "")
+        name = name:gsub("%s*Italic%s*$", "")
+        name = name:gsub("%s*Light%s*$", "")
+        name = name:gsub("%s*Medium%s*$", "")
+        name = name:gsub("%s*Semibold%s*$", "")
+        name = name:gsub("%s*Black%s*$", "")
+        name = name:gsub("%s*Thin%s*$", "")
+        name = name:gsub("%s*Regular%s*$", "")
+        name = name:gsub("%s+$", "")
+        
+        if name ~= "" and #name > 1 and not seen[name:lower()] then
+            seen[name:lower()] = true
+            table.insert(fonts_list, name)
+        end
+    end
+    
+    local os_name = r.GetOS()
+    
+    if os_name:match("Win") then
+        local p = io.popen('reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" 2>nul')
+        if p then
+            for line in p:lines() do
+                local font_name = line:match("^%s+(.-)%s+REG_SZ")
+                if font_name then
+                    add_font(font_name)
+                end
+            end
+            p:close()
+        end
+        
+    elseif os_name:match("OSX") or os_name:match("macOS") then
+        local p = io.popen('system_profiler SPFontsDataType 2>/dev/null | grep "Full Name:" | cut -d: -f2')
+        if p then
+            for line in p:lines() do
+                local name = line:match("^%s*(.-)%s*$")
+                if name then add_font(name) end
+            end
+            p:close()
+        end
+        
+        if #fonts_list == 0 then
+            local p2 = io.popen('fc-list : family 2>/dev/null | sort -u')
+            if p2 then
+                for line in p2:lines() do
+                    local name = line:match("^%s*(.-)%s*$")
+                    if name then add_font(name) end
+                end
+                p2:close()
+            end
+        end
+        
+    else
+        local p = io.popen('fc-list : family 2>/dev/null | sort -u')
+        if p then
+            for line in p:lines() do
+                local name = line:match("^%s*(.-)%s*$")
+                if name and name ~= "" then
+                    for part in name:gmatch("[^,]+") do
+                        part = part:match("^%s*(.-)%s*$")
+                        if part then add_font(part) end
+                    end
+                end
+            end
+            p:close()
+        end
+    end
+    
+    if #fonts_list > 0 then
+        table.sort(fonts_list, function(a, b) return a:lower() < b:lower() end)
+        cached_system_fonts = fonts_list
+        SaveCachedFonts(fonts_list)
+        return fonts_list, #fonts_list
+    end
+    
+    return nil, 0
+end
+
+local function GetFontList(use_system_fonts)
+    if not use_system_fonts then
+        return fonts
+    end
+    
+    if cached_system_fonts then
+        return cached_system_fonts
+    end
+    
+    LoadCachedFonts()
+    if cached_system_fonts then
+        return cached_system_fonts
+    end
+    
+    return fonts
+end
+
+local function HasCachedSystemFonts()
+    if cached_system_fonts then return true end
+    return LoadCachedFonts()
+end
+
+local function DrawFontComboWithSystemFonts(ctx, label, current_font, use_system, on_font_change, on_system_toggle)
+    local font_list = GetFontList(use_system)
+    local current_index = 0
+    for i, font_name in ipairs(font_list) do
+        if font_name == current_font then
+            current_index = i - 1
+            break
+        end
+    end
+    
+    local rv, new_index = r.ImGui_Combo(ctx, label, current_index, table.concat(font_list, '\0') .. '\0')
+    local font_changed = false
+    local new_font = current_font
+    if rv then
+        new_font = font_list[new_index + 1]
+        font_changed = true
+        if on_font_change then on_font_change(new_font) end
+    end
+    
+    r.ImGui_SameLine(ctx)
+    local sys_rv, new_use_system = r.ImGui_Checkbox(ctx, "Sys##" .. label, use_system or false)
+    if sys_rv then
+        if new_use_system and not HasCachedSystemFonts() then
+            ScanSystemFonts()
+        end
+        if on_system_toggle then on_system_toggle(new_use_system) end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        local status = ""
+        if HasCachedSystemFonts() then
+            status = string.format("\n(%d system fonts loaded)", #(cached_system_fonts or {}))
+        end
+        r.ImGui_SetTooltip(ctx, "Use System Fonts" .. status)
+    end
+    
+    return font_changed, new_font, sys_rv, new_use_system
+end
+
 local default_settings = {
 
  -- Style settings
@@ -451,6 +627,7 @@ local default_settings = {
  snap_offset_y = 0,
 
  font_style = 1,
+ use_system_fonts = false,
  transport_font_name = "Arial",
  transport_font_size = 12,
  transport_font_style = 1,
@@ -472,7 +649,9 @@ local default_settings = {
  battery_font_style = 1,
  master_volume_font_style = 1,
  monitor_volume_font_style = 1,
+ simple_mixer_font_name = "Arial",
  simple_mixer_font_style = 1,
+ simple_mixer_button_font_name = "Arial",
  simple_mixer_button_font_style = 1,
  window_set_picker_font_style = 1,
  transport_popup_font_style = 1,
@@ -518,6 +697,12 @@ local default_settings = {
  tab_active_color = 0x4A4A4AFF,
  tab_hover_color = 0x5A5A5AFF,
  tab_text_color = 0xFFFFFFFF,
+ tab_text_hover_color = nil,
+ tab_text_active_color = nil,
+ tab_font_name = "Arial",
+ tab_font_size = 13,
+ tab_font_style = 1,
+ tab_use_system_fonts = false,
  
  -- Edit mode & grid for custom buttons
  edit_mode = false,
@@ -675,6 +860,8 @@ local default_settings = {
  simple_mixer_button_border_size = 0,
  simple_mixer_button_border_color = 0xFFFFFFFF,
  simple_mixer_button_text_color = 0xFFFFFFFF,
+ simple_mixer_button_text_hover_color = nil,
+ simple_mixer_button_text_active_color = nil,
  simple_mixer_channel_text_color = 0xFFFFFFFF,
  simple_mixer_control_bg_color = 0x333333FF,
  simple_mixer_slider_handle_color = 0x888888FF,
@@ -1622,20 +1809,17 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
  local current_font = settings.transport_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##Font", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.transport_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ local font_changed, new_font, sys_changed, new_sys = DrawFontComboWithSystemFonts(
+  ctx, "##Font", current_font, settings.use_system_fonts,
+  function(new_value)
+   settings.transport_font_name = new_value
+   RebuildSectionFonts()
+  end,
+  function(new_value)
+   settings.use_system_fonts = new_value
+  end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -1967,20 +2151,17 @@ function ShowTimeDisplaySettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
  local current_font = settings.local_time_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##LocalTimeFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.local_time_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##LocalTimeFont", current_font, settings.use_system_fonts,
+  function(new_value)
+   settings.local_time_font_name = new_value
+   RebuildSectionFonts()
+  end,
+  function(new_value)
+   settings.use_system_fonts = new_value
+  end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -2210,20 +2391,17 @@ function ShowBatteryStatusSettings(ctx, main_window_width, main_window_height)
  r.ImGui_Text(ctx, "Font:")
  
  local current_font = settings.battery_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##BatteryFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.battery_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##BatteryFont", current_font, settings.use_system_fonts,
+  function(new_value)
+   settings.battery_font_name = new_value
+   RebuildSectionFonts()
+  end,
+  function(new_value)
+   settings.use_system_fonts = new_value
+  end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -2418,21 +2596,14 @@ function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
- local current_font = settings.master_volume_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##MasterVolumeFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.master_volume_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##MasterVolumeFont",
+  settings.master_volume_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.master_volume_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -2581,21 +2752,14 @@ function ShowMonitorVolumeSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
- local current_font = settings.monitor_volume_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##MonitorVolumeFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.monitor_volume_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##MonitorVolumeFont",
+  settings.monitor_volume_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.monitor_volume_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -2726,20 +2890,28 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
     r.ImGui_Text(ctx, "Font:")
-    r.ImGui_SetNextItemWidth(ctx, -1)
-    if r.ImGui_BeginCombo(ctx, "##SimpleMixerButtonFont", fonts[settings.simple_mixer_button_font or 1]) then
-     for i, font in ipairs(fonts) do
-      local is_selected = (settings.simple_mixer_button_font == i)
-      if r.ImGui_Selectable(ctx, font, is_selected) then
-       settings.simple_mixer_button_font = i
-       RebuildSectionFonts()
-      end
-     end
-     r.ImGui_EndCombo(ctx)
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetNextItemWidth(ctx, -30)
+    local btn_font_list = GetFontList(settings.use_system_fonts)
+    local current_btn_font = settings.simple_mixer_button_font_name or fonts[settings.simple_mixer_button_font or 1] or fonts[1]
+    local current_btn_idx = 0
+    for i, f in ipairs(btn_font_list) do
+     if f == current_btn_font then current_btn_idx = i - 1; break end
     end
+    local rv_btn_font, new_btn_idx = r.ImGui_Combo(ctx, "##SimpleMixerButtonFont", current_btn_idx, table.concat(btn_font_list, '\0') .. '\0')
+    if rv_btn_font then
+     settings.simple_mixer_button_font_name = btn_font_list[new_btn_idx + 1]
+     settings.simple_mixer_button_font = nil
+     RebuildSectionFonts()
+    end
+    r.ImGui_SameLine(ctx)
+    local rv_btn_sys, new_btn_sys = r.ImGui_Checkbox(ctx, "##MixerBtnSys", settings.use_system_fonts or false)
+    if rv_btn_sys then settings.use_system_fonts = new_btn_sys end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Use System Fonts") end
     
     r.ImGui_TableNextColumn(ctx)
     r.ImGui_Text(ctx, "Size:")
+    r.ImGui_SameLine(ctx)
     r.ImGui_SetNextItemWidth(ctx, -1)
     rv, settings.simple_mixer_button_font_size = r.ImGui_SliderInt(ctx, "##SimpleMixerButtonFontSize", settings.simple_mixer_button_font_size or 14, 10, 20, "%d")
     if rv then RebuildSectionFonts() end
@@ -2819,6 +2991,12 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
     rv, settings.simple_mixer_button_text_color = r.ImGui_ColorEdit4(ctx, "Text##BtnText", settings.simple_mixer_button_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs())
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_button_text_hover_color = r.ImGui_ColorEdit4(ctx, "Text Hover##BtnTextH", settings.simple_mixer_button_text_hover_color or settings.simple_mixer_button_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs())
+    
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_button_text_active_color = r.ImGui_ColorEdit4(ctx, "Text Active##BtnTextA", settings.simple_mixer_button_text_active_color or settings.simple_mixer_button_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs())
     
     r.ImGui_EndTable(ctx)
    end
@@ -2988,16 +3166,25 @@ function ShowSimpleMixerSettings(ctx, main_window_width, main_window_height)
     
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
-    r.ImGui_SetNextItemWidth(ctx, -1)
-    if r.ImGui_BeginCombo(ctx, "##MixerFont", fonts[settings.simple_mixer_font or 1]) then
-     for i, font in ipairs(fonts) do
-      if r.ImGui_Selectable(ctx, font, settings.simple_mixer_font == i) then
-       settings.simple_mixer_font = i
-       RebuildSectionFonts()
-      end
-     end
-     r.ImGui_EndCombo(ctx)
+    r.ImGui_Text(ctx, "Font:")
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetNextItemWidth(ctx, -30)
+    local font_list = GetFontList(settings.use_system_fonts)
+    local current_font = settings.simple_mixer_font_name or fonts[settings.simple_mixer_font or 1] or fonts[1]
+    local current_idx = 0
+    for i, f in ipairs(font_list) do
+     if f == current_font then current_idx = i - 1; break end
     end
+    local rv_font, new_idx = r.ImGui_Combo(ctx, "##MixerFont", current_idx, table.concat(font_list, '\0') .. '\0')
+    if rv_font then
+     settings.simple_mixer_font_name = font_list[new_idx + 1]
+     settings.simple_mixer_font = nil
+     RebuildSectionFonts()
+    end
+    r.ImGui_SameLine(ctx)
+    local rv_sys, new_sys = r.ImGui_Checkbox(ctx, "##MixerSys", settings.use_system_fonts or false)
+    if rv_sys then settings.use_system_fonts = new_sys end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Use System Fonts") end
     
     r.ImGui_TableNextColumn(ctx)
     r.ImGui_Text(ctx, "Size:")
@@ -4021,21 +4208,14 @@ function ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
- local current_font = settings.env_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##EnvFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.env_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##EnvFont",
+  settings.env_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.env_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -4071,7 +4251,7 @@ function ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
  
- if r.ImGui_BeginTable(ctx, "EnvelopeColors", 4, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "EnvelopeColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
@@ -4083,8 +4263,16 @@ function ShowEnvelopeSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableSetColumnIndex(ctx, 2)
  rv, settings.env_button_color_active = r.ImGui_ColorEdit4(ctx, "Active", settings.env_button_color_active or 0x555555FF, color_flags)
  
- r.ImGui_TableSetColumnIndex(ctx, 3)
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.env_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.env_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.env_text_color_hover = r.ImGui_ColorEdit4(ctx, "Text Hover", settings.env_text_color_hover or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.env_text_color_active = r.ImGui_ColorEdit4(ctx, "Text Active", settings.env_text_color_active or 0xFFFFFFFF, color_flags)
  
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
@@ -4122,21 +4310,14 @@ function ShowTempoBPMSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
- local current_font = settings.tempo_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##TempoFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.tempo_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##TempoFont",
+  settings.tempo_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.tempo_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -4183,7 +4364,18 @@ function ShowTempoBPMSettings(ctx, main_window_width, main_window_height)
  rv, settings.tempo_button_color_hover = r.ImGui_ColorEdit4(ctx, "Hover", settings.tempo_button_color_hover or 0x444444FF, color_flags)
  
  r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.tempo_button_color_active = r.ImGui_ColorEdit4(ctx, "Active", settings.tempo_button_color_active or 0x555555FF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.tempo_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.tempo_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.tempo_text_color_hover = r.ImGui_ColorEdit4(ctx, "Text Hover", settings.tempo_text_color_hover or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.tempo_text_color_active = r.ImGui_ColorEdit4(ctx, "Text Active", settings.tempo_text_color_active or 0xFFFFFFFF, color_flags)
  
  r.ImGui_EndTable(ctx)
  end
@@ -4217,21 +4409,14 @@ function ShowTimeSignatureSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
- local current_font = settings.timesig_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##TimeSigFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.timesig_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##TimeSigFont",
+  settings.timesig_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.timesig_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -4267,7 +4452,7 @@ function ShowTimeSignatureSettings(ctx, main_window_width, main_window_height)
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
  
- if r.ImGui_BeginTable(ctx, "TimeSigColors", 4, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "TimeSigColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
@@ -4279,8 +4464,16 @@ function ShowTimeSignatureSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableSetColumnIndex(ctx, 2)
  rv, settings.timesig_button_color_active = r.ImGui_ColorEdit4(ctx, "Active", settings.timesig_button_color_active or 0x555555FF, color_flags)
  
- r.ImGui_TableSetColumnIndex(ctx, 3)
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.timesig_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.timesig_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.timesig_text_color_hover = r.ImGui_ColorEdit4(ctx, "Text Hover", settings.timesig_text_color_hover or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.timesig_text_color_active = r.ImGui_ColorEdit4(ctx, "Text Active", settings.timesig_text_color_active or 0xFFFFFFFF, color_flags)
  
  r.ImGui_EndTable(ctx)
  end
@@ -4314,21 +4507,14 @@ function ShowTimeSelectionSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
- local current_font = settings.timesel_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##TimeSelFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.timesel_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##TimeSelFont",
+  settings.timesel_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.timesel_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -4364,14 +4550,28 @@ function ShowTimeSelectionSettings(ctx, main_window_width, main_window_height)
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
  
- if r.ImGui_BeginTable(ctx, "TimeSelColors", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "TimeSelColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.timesel_color = r.ImGui_ColorEdit4(ctx, "Normal", settings.timesel_color or 0x333333FF, color_flags)
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.timesel_color_hover = r.ImGui_ColorEdit4(ctx, "Hover", settings.timesel_color_hover or 0x444444FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.timesel_color_active = r.ImGui_ColorEdit4(ctx, "Active", settings.timesel_color_active or 0x555555FF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.timesel_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.timesel_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.timesel_text_color_hover = r.ImGui_ColorEdit4(ctx, "Text Hover", settings.timesel_text_color_hover or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.timesel_text_color_active = r.ImGui_ColorEdit4(ctx, "Text Active", settings.timesel_text_color_active or 0xFFFFFFFF, color_flags)
  
  r.ImGui_EndTable(ctx)
  end
@@ -4412,21 +4612,14 @@ function ShowCursorPositionSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
- local current_font = settings.cursorpos_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##CursorPosFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.cursorpos_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##CursorPosFont",
+  settings.cursorpos_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.cursorpos_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -4462,14 +4655,28 @@ function ShowCursorPositionSettings(ctx, main_window_width, main_window_height)
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
  
- if r.ImGui_BeginTable(ctx, "CursorPosColors", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "CursorPosColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.cursorpos_button_color = r.ImGui_ColorEdit4(ctx, "Normal", settings.cursorpos_button_color or 0x333333FF, color_flags)
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.cursorpos_button_color_hover = r.ImGui_ColorEdit4(ctx, "Hover", settings.cursorpos_button_color_hover or 0x444444FF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.cursorpos_button_color_active = r.ImGui_ColorEdit4(ctx, "Active", settings.cursorpos_button_color_active or 0x555555FF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.cursorpos_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.cursorpos_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.cursorpos_text_color_hover = r.ImGui_ColorEdit4(ctx, "Text Hover", settings.cursorpos_text_color_hover or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.cursorpos_text_color_active = r.ImGui_ColorEdit4(ctx, "Text Active", settings.cursorpos_text_color_active or 0xFFFFFFFF, color_flags)
  
  r.ImGui_EndTable(ctx)
  end
@@ -4743,30 +4950,14 @@ function ShowWindowSetPickerSettings(ctx, main_window_width, main_window_height)
  
  r.ImGui_Text(ctx, "Font:")
  
- -- Font type selector
- local current_font = settings.window_set_picker_font_name or "Arial"
- local current_font_index = 1
- for i, font_name in ipairs(fonts) do
-  if font_name == current_font then
-   current_font_index = i
-   break
-  end
- end
- 
  r.ImGui_SetNextItemWidth(ctx, 150)
- if r.ImGui_BeginCombo(ctx, "Font Type##windowsetpicker", current_font) then
-  for i, font_name in ipairs(fonts) do
-   local is_selected = (i == current_font_index)
-   if r.ImGui_Selectable(ctx, font_name, is_selected) then
-    settings.window_set_picker_font_name = font_name
-    RebuildSectionFonts()
-   end
-   if is_selected then
-    r.ImGui_SetItemDefaultFocus(ctx)
-   end
-  end
-  r.ImGui_EndCombo(ctx)
- end
+ DrawFontComboWithSystemFonts(
+  ctx, "##WindowSetPickerFont",
+  settings.window_set_picker_font_name or "Arial",
+  settings.use_system_fonts,
+  function(new_font) settings.window_set_picker_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_SameLine(ctx)
  rv, settings.window_set_picker_font_size = r.ImGui_SliderInt(ctx, "Font Size##windowsetpicker", settings.window_set_picker_font_size or 12, 8, 24, "%d")
@@ -4814,6 +5005,14 @@ function ShowWindowSetPickerSettings(ctx, main_window_width, main_window_height)
  rv, settings.window_set_picker_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.window_set_picker_text_color or 0xFFFFFFFF, color_flags)
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.window_set_picker_text_color_hover = r.ImGui_ColorEdit4(ctx, "Text Hover", settings.window_set_picker_text_color_hover or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.window_set_picker_text_color_active = r.ImGui_ColorEdit4(ctx, "Text Active", settings.window_set_picker_text_color_active or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.window_set_picker_border_color = r.ImGui_ColorEdit4(ctx, "Border", settings.window_set_picker_border_color or 0x888888FF, color_flags)
  
  r.ImGui_EndTable(ctx)
@@ -5465,20 +5664,14 @@ function ShowQuickFXSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
  
- local current_font = settings.quick_fx_font_name or "Arial"
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##QuickFXFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.quick_fx_font_name = fonts[current_font_index + 1]
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##QuickFXFont",
+  settings.quick_fx_font_name or "Arial",
+  settings.use_system_fonts,
+  function(new_font) settings.quick_fx_font_name = new_font end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -5593,21 +5786,14 @@ function ShowTapTempoSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Font:")
- local current_font = settings.taptempo_font_name or settings.current_font
- local current_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_font then
- current_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1)
- rv, current_font_index = r.ImGui_Combo(ctx, "##TapTempoFont", current_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.taptempo_font_name = fonts[current_font_index + 1]
- RebuildSectionFonts()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##TapTempoFont",
+  settings.taptempo_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.taptempo_font_name = new_font; RebuildSectionFonts() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Size:")
@@ -5642,7 +5828,7 @@ function ShowTapTempoSettings(ctx, main_window_width, main_window_height)
  r.ImGui_Text(ctx, "Colors:")
  
  local color_flags = r.ImGui_ColorEditFlags_NoInputs()
- if r.ImGui_BeginTable(ctx, "TapTempoColors", 4, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "TapTempoColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
@@ -5654,8 +5840,16 @@ function ShowTapTempoSettings(ctx, main_window_width, main_window_height)
  r.ImGui_TableSetColumnIndex(ctx, 2)
  rv, settings.taptempo_button_color_active = r.ImGui_ColorEdit4(ctx, "Active", settings.taptempo_button_color_active or 0x555555FF, color_flags)
  
- r.ImGui_TableSetColumnIndex(ctx, 3)
+ r.ImGui_TableNextRow(ctx)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.taptempo_text_color = r.ImGui_ColorEdit4(ctx, "Text", settings.taptempo_text_color or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.taptempo_text_color_hover = r.ImGui_ColorEdit4(ctx, "Text Hover", settings.taptempo_text_color_hover or 0xFFFFFFFF, color_flags)
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.taptempo_text_color_active = r.ImGui_ColorEdit4(ctx, "Text Active", settings.taptempo_text_color_active or 0xFFFFFFFF, color_flags)
  
  r.ImGui_EndTable(ctx)
  end
@@ -5825,8 +6019,8 @@ local font_transport = r.ImGui_CreateFont(settings.transport_font_name or settin
 local font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, GetFontFlags(settings.env_font_style))
 local font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, GetFontFlags(settings.master_volume_font_style))
 local font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, GetFontFlags(settings.monitor_volume_font_style))
-local font_simple_mixer = r.ImGui_CreateFont(fonts[settings.simple_mixer_font or 1], GetFontFlags(settings.simple_mixer_font_style))
-local font_simple_mixer_button = r.ImGui_CreateFont(fonts[settings.simple_mixer_button_font or 1], GetFontFlags(settings.simple_mixer_button_font_style))
+local font_simple_mixer = r.ImGui_CreateFont(settings.simple_mixer_font_name or fonts[settings.simple_mixer_font or 1] or "Arial", GetFontFlags(settings.simple_mixer_font_style))
+local font_simple_mixer_button = r.ImGui_CreateFont(settings.simple_mixer_button_font_name or fonts[settings.simple_mixer_button_font or 1] or "Arial", GetFontFlags(settings.simple_mixer_button_font_style))
 local font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, GetFontFlags(settings.tempo_font_style))
 local font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, GetFontFlags(settings.timesig_font_style))
 local font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, GetFontFlags(settings.timesel_font_style))
@@ -5836,6 +6030,7 @@ local font_battery = r.ImGui_CreateFont(settings.battery_font_name or settings.c
 local font_windowset_picker = r.ImGui_CreateFont(settings.window_set_picker_font_name or "Arial", GetFontFlags(settings.window_set_picker_font_style))
 local font_taptempo = r.ImGui_CreateFont(settings.taptempo_font_name or settings.current_font, GetFontFlags(settings.taptempo_font_style))
 local font_popup = r.ImGui_CreateFont(settings.transport_popup_font_name or settings.current_font, GetFontFlags(settings.transport_popup_font_style))
+local font_tab = r.ImGui_CreateFont(settings.tab_font_name or "Arial", GetFontFlags(settings.tab_font_style))
 local SETTINGS_UI_FONT_NAME = 'Segoe UI'
 local SETTINGS_UI_FONT_SIZE = 13
 local settings_ui_font = r.ImGui_CreateFont(SETTINGS_UI_FONT_NAME, 0)
@@ -5857,6 +6052,7 @@ r.ImGui_Attach(ctx, font_battery)
 r.ImGui_Attach(ctx, font_windowset_picker)
 r.ImGui_Attach(ctx, font_taptempo)
 r.ImGui_Attach(ctx, font_popup)
+r.ImGui_Attach(ctx, font_tab)
 r.ImGui_Attach(ctx, settings_ui_font)
 r.ImGui_Attach(ctx, settings_ui_font_small)
 local font_needs_update = false
@@ -5996,13 +6192,14 @@ function RebuildSectionFonts()
  if font_windowset_picker then pcall(r.ImGui_Detach, ctx, font_windowset_picker) end
  if font_popup then pcall(r.ImGui_Detach, ctx, font_popup) end
  if font_taptempo then pcall(r.ImGui_Detach, ctx, font_taptempo) end
+ if font_tab then pcall(r.ImGui_Detach, ctx, font_tab) end
 
  local new_font_transport = r.ImGui_CreateFont(settings.transport_font_name or settings.current_font, GetFontFlags(settings.transport_font_style))
  local new_font_env = r.ImGui_CreateFont(settings.env_font_name or settings.current_font, GetFontFlags(settings.env_font_style))
  local new_font_master_volume = r.ImGui_CreateFont(settings.master_volume_font_name or settings.current_font, GetFontFlags(settings.master_volume_font_style))
  local new_font_monitor_volume = r.ImGui_CreateFont(settings.monitor_volume_font_name or settings.current_font, GetFontFlags(settings.monitor_volume_font_style))
- local new_font_simple_mixer = r.ImGui_CreateFont(fonts[settings.simple_mixer_font or 1], GetFontFlags(settings.simple_mixer_font_style))
- local new_font_simple_mixer_button = r.ImGui_CreateFont(fonts[settings.simple_mixer_button_font or 1], GetFontFlags(settings.simple_mixer_button_font_style))
+ local new_font_simple_mixer = r.ImGui_CreateFont(settings.simple_mixer_font_name or fonts[settings.simple_mixer_font or 1] or "Arial", GetFontFlags(settings.simple_mixer_font_style))
+ local new_font_simple_mixer_button = r.ImGui_CreateFont(settings.simple_mixer_button_font_name or fonts[settings.simple_mixer_button_font or 1] or "Arial", GetFontFlags(settings.simple_mixer_button_font_style))
  local new_font_tempo = r.ImGui_CreateFont(settings.tempo_font_name or settings.current_font, GetFontFlags(settings.tempo_font_style))
  local new_font_timesig = r.ImGui_CreateFont(settings.timesig_font_name or settings.current_font, GetFontFlags(settings.timesig_font_style))
  local new_font_timesel = r.ImGui_CreateFont(settings.timesel_font_name or settings.current_font, GetFontFlags(settings.timesel_font_style))
@@ -6012,6 +6209,7 @@ function RebuildSectionFonts()
  local new_font_windowset_picker = r.ImGui_CreateFont(settings.window_set_picker_font_name or "Arial", GetFontFlags(settings.window_set_picker_font_style))
  local new_font_popup = r.ImGui_CreateFont(settings.transport_popup_font_name or settings.current_font, GetFontFlags(settings.transport_popup_font_style))
  local new_font_taptempo = r.ImGui_CreateFont(settings.taptempo_font_name or settings.current_font, GetFontFlags(settings.taptempo_font_style))
+ local new_font_tab = r.ImGui_CreateFont(settings.tab_font_name or "Arial", GetFontFlags(settings.tab_font_style))
  
  r.ImGui_Attach(ctx, new_font_transport)
  r.ImGui_Attach(ctx, new_font_env)
@@ -6028,6 +6226,7 @@ function RebuildSectionFonts()
  r.ImGui_Attach(ctx, new_font_windowset_picker)
  r.ImGui_Attach(ctx, new_font_popup)
  r.ImGui_Attach(ctx, new_font_taptempo)
+ r.ImGui_Attach(ctx, new_font_tab)
  
  font_transport = new_font_transport
  font_env = new_font_env
@@ -6044,6 +6243,7 @@ function RebuildSectionFonts()
  font_windowset_picker = new_font_windowset_picker
  font_popup = new_font_popup
  font_taptempo = new_font_taptempo
+ font_tab = new_font_tab
 end
 
 function UpdateCustomImages()
@@ -7109,7 +7309,11 @@ local function SaveTabsToExtState()
         tab_active_color = settings.tab_active_color or 0x4A4A4AFF,
         tab_hover_color = settings.tab_hover_color or 0x5A5A5AFF,
         tab_text_color = settings.tab_text_color or 0xFFFFFFFF,
+        tab_text_hover_color = settings.tab_text_hover_color,
+        tab_text_active_color = settings.tab_text_active_color,
+        tab_font_name = settings.tab_font_name or "Arial",
         tab_font_size = settings.tab_font_size or 13,
+        tab_font_style = settings.tab_font_style or 1,
         tab_rounding = settings.tab_rounding or 4,
         tab_border_size = settings.tab_border_size or 0,
         tab_border_color = settings.tab_border_color or 0x555555FF,
@@ -7140,7 +7344,11 @@ local function LoadTabsFromExtState()
             settings.tab_active_color = tabs_data.tab_active_color or 0x4A4A4AFF
             settings.tab_hover_color = tabs_data.tab_hover_color or 0x5A5A5AFF
             settings.tab_text_color = tabs_data.tab_text_color or 0xFFFFFFFF
+            settings.tab_text_hover_color = tabs_data.tab_text_hover_color
+            settings.tab_text_active_color = tabs_data.tab_text_active_color
+            settings.tab_font_name = tabs_data.tab_font_name or "Arial"
             settings.tab_font_size = tabs_data.tab_font_size or 13
+            settings.tab_font_style = tabs_data.tab_font_style or 1
             settings.tab_rounding = tabs_data.tab_rounding or 4
             settings.tab_border_size = tabs_data.tab_border_size or 0
             settings.tab_border_color = tabs_data.tab_border_color or 0x555555FF
@@ -7223,6 +7431,8 @@ local function SwitchToTab(tab_id)
         tab_active_color = settings.tab_active_color,
         tab_hover_color = settings.tab_hover_color,
         tab_text_color = settings.tab_text_color,
+        tab_text_hover_color = settings.tab_text_hover_color,
+        tab_text_active_color = settings.tab_text_active_color,
         tab_border_color = settings.tab_border_color,
         tab_font_size = settings.tab_font_size,
         tab_rounding = settings.tab_rounding,
@@ -7366,7 +7576,7 @@ local function RenderTabBar()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), tab_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), settings.tab_hover_color or 0x5A5A5AFF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), settings.tab_active_color or 0x4A4A4AFF)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.tab_text_color or 0xFFFFFFFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00000000)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.tab_border_color or 0x555555FF)
         
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.tab_rounding or 4)
@@ -7374,31 +7584,35 @@ local function RenderTabBar()
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), settings.tab_border_size or 0)
         
         local tab_font_size = settings.tab_font_size or 13
-        r.ImGui_PushFont(ctx, nil, tab_font_size)
+        r.ImGui_PushFont(ctx, font_tab, tab_font_size)
         
+        local btn_x, btn_y = r.ImGui_GetCursorScreenPos(ctx)
         if r.ImGui_Button(ctx, tab.name .. "##tab" .. tab.id, 0, tab_height - 4) then
             if tab.id ~= active_tab then
                 SwitchToTab(tab.id)
                 tab_changed = true
             end
         end
+        local btn_w, btn_h = r.ImGui_GetItemRectSize(ctx)
+        local tab_hovered = r.ImGui_IsItemHovered(ctx)
+        local tab_clicked = r.ImGui_IsItemActive(ctx)
+        
+        local tab_text_col = settings.tab_text_color or 0xFFFFFFFF
+        if tab_clicked then
+            tab_text_col = settings.tab_text_active_color or settings.tab_text_color or 0xFFFFFFFF
+        elseif tab_hovered then
+            tab_text_col = settings.tab_text_hover_color or settings.tab_text_color or 0xFFFFFFFF
+        elseif is_active then
+            tab_text_col = settings.tab_text_active_color or settings.tab_text_color or 0xFFFFFFFF
+        end
+        
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local text_w, text_h = r.ImGui_CalcTextSize(ctx, tab.name)
+        local text_x = btn_x + (btn_w - text_w) / 2
+        local text_y = btn_y + (btn_h - text_h) / 2
+        r.ImGui_DrawList_AddTextEx(draw_list, font_tab, tab_font_size, text_x, text_y, tab_text_col, tab.name)
         
         r.ImGui_PopFont(ctx)
-        
-        if r.ImGui_IsItemHovered(ctx) then
-            local tooltip = tab.name
-            if tab.transport_preset and tab.transport_preset ~= "" then
-                tooltip = tooltip .. "\nTransport: " .. tab.transport_preset
-            else
-                tooltip = tooltip .. "\nTransport: (current)"
-            end
-            if tab.button_preset and tab.button_preset ~= "" then
-                tooltip = tooltip .. "\nButtons: " .. tab.button_preset
-            else
-                tooltip = tooltip .. "\nButtons: (current)"
-            end
-            r.ImGui_SetTooltip(ctx, tooltip)
-        end
         
         if r.ImGui_IsItemClicked(ctx, 1) then
             r.ImGui_OpenPopup(ctx, "TabContextMenu##" .. tab.id)
@@ -7812,22 +8026,14 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Popup Font")
- local current_popup_font = settings.transport_popup_font_name or settings.current_font
- local current_popup_font_index = 0
- for i, font_name in ipairs(fonts) do
- if font_name == current_popup_font then
- current_popup_font_index = i - 1
- break
- end
- end
- 
- r.ImGui_SetNextItemWidth(ctx, -1) 
- rv, current_popup_font_index = r.ImGui_Combo(ctx, "##PopupFont", current_popup_font_index, table.concat(fonts, '\0') .. '\0')
- if rv then
- settings.transport_popup_font_name = fonts[current_popup_font_index + 1]
- RebuildSectionFonts()
- MarkTransportPresetChanged()
- end
+ r.ImGui_SetNextItemWidth(ctx, -60)
+ DrawFontComboWithSystemFonts(
+  ctx, "##PopupFont",
+  settings.transport_popup_font_name or settings.current_font,
+  settings.use_system_fonts,
+  function(new_font) settings.transport_popup_font_name = new_font; RebuildSectionFonts(); MarkTransportPresetChanged() end,
+  function(new_val) settings.use_system_fonts = new_val end
+ )
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Popup Font Size")
@@ -9126,58 +9332,116 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  r.ImGui_Text(ctx, "Bar BG")
  
  r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.tab_border_color = r.ImGui_ColorEdit4(ctx, "##tabbordercolor", settings.tab_border_color or 0x555555FF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Border")
+ 
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  rv, settings.tab_color = r.ImGui_ColorEdit4(ctx, "##tabcolor", settings.tab_color or 0x3A3A3AFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
  if rv then SaveTabsToExtState() end
  r.ImGui_SameLine(ctx)
- r.ImGui_Text(ctx, "Normal")
+ r.ImGui_Text(ctx, "Tab")
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.tab_hover_color = r.ImGui_ColorEdit4(ctx, "##tabhovercolor", settings.tab_hover_color or 0x5A5A5AFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Tab Hover")
  
  r.ImGui_TableSetColumnIndex(ctx, 2)
  rv, settings.tab_active_color = r.ImGui_ColorEdit4(ctx, "##tabactivecolor", settings.tab_active_color or 0x4A4A4AFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
  if rv then SaveTabsToExtState() end
  r.ImGui_SameLine(ctx)
- r.ImGui_Text(ctx, "Active")
+ r.ImGui_Text(ctx, "Tab Active")
  
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
- rv, settings.tab_hover_color = r.ImGui_ColorEdit4(ctx, "##tabhovercolor", settings.tab_hover_color or 0x5A5A5AFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
- if rv then SaveTabsToExtState() end
- r.ImGui_SameLine(ctx)
- r.ImGui_Text(ctx, "Hover")
- 
- r.ImGui_TableSetColumnIndex(ctx, 1)
  rv, settings.tab_text_color = r.ImGui_ColorEdit4(ctx, "##tabtextcolor", settings.tab_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
  if rv then SaveTabsToExtState() end
  r.ImGui_SameLine(ctx)
  r.ImGui_Text(ctx, "Text")
  
- r.ImGui_TableSetColumnIndex(ctx, 2)
- rv, settings.tab_border_color = r.ImGui_ColorEdit4(ctx, "##tabbordercolor", settings.tab_border_color or 0x555555FF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ rv, settings.tab_text_hover_color = r.ImGui_ColorEdit4(ctx, "##tabtexthovercolor", settings.tab_text_hover_color or settings.tab_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
  if rv then SaveTabsToExtState() end
  r.ImGui_SameLine(ctx)
- r.ImGui_Text(ctx, "Border")
+ r.ImGui_Text(ctx, "Text Hover")
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ rv, settings.tab_text_active_color = r.ImGui_ColorEdit4(ctx, "##tabtextactivecolor", settings.tab_text_active_color or settings.tab_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar())
+ if rv then SaveTabsToExtState() end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Text Active")
  
  r.ImGui_EndTable(ctx)
  end
  
  r.ImGui_Spacing(ctx)
  
- if r.ImGui_BeginTable(ctx, "TabStyleLayout", 3, r.ImGui_TableFlags_SizingStretchSame()) then
+ if r.ImGui_BeginTable(ctx, "TabFontLayout", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
  r.ImGui_TableSetColumnIndex(ctx, 0)
- r.ImGui_Text(ctx, "Font Size")
+ r.ImGui_Text(ctx, "Font:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -30)
+ local font_list = GetFontList(settings.use_system_fonts)
+ local current_font = settings.tab_font_name or "Arial"
+ local current_idx = 0
+ for i, f in ipairs(font_list) do
+  if f == current_font then current_idx = i - 1; break end
+ end
+ local rv_font, new_idx = r.ImGui_Combo(ctx, "##TabFont", current_idx, table.concat(font_list, '\0') .. '\0')
+ if rv_font then
+  settings.tab_font_name = font_list[new_idx + 1]
+  RebuildSectionFonts()
+  SaveTabsToExtState()
+ end
+ r.ImGui_SameLine(ctx)
+ local rv_sys, new_sys = r.ImGui_Checkbox(ctx, "##TabSys", settings.use_system_fonts or false)
+ if rv_sys then settings.use_system_fonts = new_sys end
+ if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Use System Fonts") end
+ 
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Size:")
  r.ImGui_SameLine(ctx)
  r.ImGui_SetNextItemWidth(ctx, -1)
  rv, settings.tab_font_size = r.ImGui_SliderInt(ctx, "##tabfontsize", settings.tab_font_size or 13, 8, 24)
- if rv then SaveTabsToExtState() end
+ if rv then RebuildSectionFonts(); SaveTabsToExtState() end
  
- r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ r.ImGui_Text(ctx, "Style:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local current_style = settings.tab_font_style or 1
+ local current_style_name = font_styles[current_style] and font_styles[current_style].name or "Regular"
+ if r.ImGui_BeginCombo(ctx, "##TabFontStyle", current_style_name) then
+  for i, style in ipairs(font_styles) do
+   if r.ImGui_Selectable(ctx, style.name, i == current_style) then
+    settings.tab_font_style = i
+    RebuildSectionFonts()
+    SaveTabsToExtState()
+   end
+  end
+  r.ImGui_EndCombo(ctx)
+ end
+ 
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Spacing(ctx)
+ 
+ if r.ImGui_BeginTable(ctx, "TabStyleLayout", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Rounding")
  r.ImGui_SameLine(ctx)
  r.ImGui_SetNextItemWidth(ctx, -1)
  rv, settings.tab_rounding = r.ImGui_SliderInt(ctx, "##tabrounding", settings.tab_rounding or 4, 0, 12)
  if rv then SaveTabsToExtState() end
  
- r.ImGui_TableSetColumnIndex(ctx, 2)
+ r.ImGui_TableSetColumnIndex(ctx, 1)
  r.ImGui_Text(ctx, "Border")
  r.ImGui_SameLine(ctx)
  r.ImGui_SetNextItemWidth(ctx, -1)
@@ -9678,12 +9942,33 @@ function EnvelopeOverride(main_window_width, main_window_height)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.env_button_rounding or 0)
 
  if font_env then r.ImGui_PushFont(ctx, font_env, settings.env_font_size or settings.font_size) end
- if settings.env_text_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.env_text_color) end
- if r.ImGui_Button(ctx, "ENV") or r.ImGui_IsItemClicked(ctx, 1) then
+ local env_text_col = settings.env_text_color or 0xFFFFFFFF
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), env_text_col)
+ local env_btn_text = "ENV"
+ if r.ImGui_Button(ctx, env_btn_text) or r.ImGui_IsItemClicked(ctx, 1) then
  r.ImGui_OpenPopup(ctx, "AutomationMenu")
  end
- if settings.env_text_color then r.ImGui_PopStyleColor(ctx) end
+ local env_hovered = r.ImGui_IsItemHovered(ctx)
+ local env_active = r.ImGui_IsItemActive(ctx)
+ r.ImGui_PopStyleColor(ctx)
  if font_env then r.ImGui_PopFont(ctx) end
+ 
+ if (env_hovered or env_active) then
+  local overlay_text_col = env_active and (settings.env_text_color_active or env_text_col) or (settings.env_text_color_hover or env_text_col)
+  if overlay_text_col ~= env_text_col then
+   local dl = r.ImGui_GetWindowDrawList(ctx)
+   local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+   local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+   if font_env then r.ImGui_PushFont(ctx, font_env, settings.env_font_size or settings.font_size) end
+   local text_w, text_h = r.ImGui_CalcTextSize(ctx, env_btn_text)
+   local text_x = min_x + ((max_x - min_x) - text_w) / 2
+   local text_y = min_y + ((max_y - min_y) - text_h) / 2
+   local bg_col = env_active and (settings.env_button_color_active or 0x555555FF) or (settings.env_button_color_hover or 0x444444FF)
+   r.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, GetButtonColorWithTransparency(bg_col), settings.env_button_rounding or 0)
+   r.ImGui_DrawList_AddTextEx(dl, font_env or r.ImGui_GetFont(ctx), settings.env_font_size or settings.font_size, text_x, text_y, overlay_text_col, env_btn_text)
+   if font_env then r.ImGui_PopFont(ctx) end
+  end
+ end
  
  if settings.env_show_border then
  local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -10649,7 +10934,7 @@ function SimpleMixerButton(main_window_width, main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_color)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), hover_color)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button_color | 0x88000000)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00000000)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), rounding)
  
  if not use_icon and font_simple_mixer_button then
@@ -10661,9 +10946,28 @@ function SimpleMixerButton(main_window_width, main_window_height)
  button_label = "##SimpleMixerIcon"  
  end
  
+ local btn_x, btn_y = r.ImGui_GetCursorScreenPos(ctx)
  if r.ImGui_Button(ctx, button_label, button_width, button_height) and allow_input then
  settings.simple_mixer_window_open = not settings.simple_mixer_window_open
  r.SetExtState("TK_TRANSPORT", "simple_mixer_window_open", tostring(settings.simple_mixer_window_open), true)
+ end
+ local btn_hovered = r.ImGui_IsItemHovered(ctx)
+ local btn_active = r.ImGui_IsItemActive(ctx)
+ 
+ local final_text_color = text_color
+ if btn_active then
+ final_text_color = settings.simple_mixer_button_text_active_color or text_color
+ elseif btn_hovered then
+ final_text_color = settings.simple_mixer_button_text_hover_color or text_color
+ end
+ 
+ if not use_icon then
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local text_w, text_h = r.ImGui_CalcTextSize(ctx, "MIXER")
+ local text_x = btn_x + (button_width - text_w) / 2
+ local text_y = btn_y + (button_height - text_h) / 2
+ local font_size = settings.simple_mixer_button_font_size or 14
+ r.ImGui_DrawList_AddTextEx(draw_list, font_simple_mixer_button, font_size, text_x, text_y, final_text_color, "MIXER")
  end
  
  if use_icon then
@@ -10681,8 +10985,8 @@ function SimpleMixerButton(main_window_width, main_window_height)
  local fader_bottom = center_y + icon_size / 3
  local fader_knob_y = center_y - (icon_size / 6) + (i * icon_size / 9)  
  
- r.ImGui_DrawList_AddLine(dl, fader_x, fader_top, fader_x, fader_bottom, text_color, 2)
- r.ImGui_DrawList_AddRectFilled(dl, fader_x - 2, fader_knob_y - 1.5, fader_x + 2, fader_knob_y + 1.5, text_color, 0.5)
+ r.ImGui_DrawList_AddLine(dl, fader_x, fader_top, fader_x, fader_bottom, final_text_color, 2)
+ r.ImGui_DrawList_AddRectFilled(dl, fader_x - 2, fader_knob_y - 1.5, fader_x + 2, fader_knob_y + 1.5, final_text_color, 0.5)
  end
  end
  
@@ -15145,8 +15449,27 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  end
  
  local slider_format = custom_fader and "" or "%.1f"
+ 
+ local current_track_id = is_master and "master" or r.GetTrackGUID(track)
+ 
+ if r.ImGui_IsMouseDoubleClicked(ctx, r.ImGui_MouseButton_Left()) then
+  local mx, my = r.ImGui_GetMousePos(ctx)
+  if mx >= slider_start_x and mx <= slider_start_x + slider_actual_width and
+     my >= slider_start_y and my <= slider_start_y + slider_height then
+   r.SetMediaTrackInfo_Value(track, "D_VOL", 1.0)
+   mixer_state.fader_reset_track = current_track_id
+  end
+ end
+ 
+ if mixer_state.fader_reset_track == current_track_id then
+  if not r.ImGui_IsMouseDown(ctx, r.ImGui_MouseButton_Left()) then
+   mixer_state.fader_reset_track = nil
+  end
+ end
+ 
  local rv, new_vol_db = r.ImGui_VSliderDouble(ctx, "##vol", slider_actual_width, slider_height, volume_db, -60.0, 12.0, slider_format)
- if rv then
+ 
+ if rv and mixer_state.fader_reset_track ~= current_track_id then
   local new_volume = 10.0 ^ (new_vol_db / 20.0)
   local delta_db = new_vol_db - volume_db
   r.SetMediaTrackInfo_Value(track, "D_VOL", new_volume)
@@ -19572,14 +19895,15 @@ function ShowCursorPosition(main_window_width, main_window_height)
  else
  label = mbt_str .. " | " .. time_str
  end
+ local cursorpos_text_col = settings.cursorpos_text_color or 0xFFFFFFFF
  if settings.cursorpos_toggle_invisible then
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.cursorpos_text_color or 0xFFFFFFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), cursorpos_text_col)
  else
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), settings.cursorpos_button_color or 0x333333FF)
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.cursorpos_text_color or 0xFFFFFFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), cursorpos_text_col)
  end
  
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
@@ -19588,7 +19912,28 @@ function ShowCursorPosition(main_window_width, main_window_height)
  if font_cursorpos then r.ImGui_PushFont(ctx, font_cursorpos, settings.cursorpos_font_size or settings.font_size) end
  if r.ImGui_Button(ctx, label) and r.ImGui_IsItemClicked(ctx, 1) then
  end
+ local cursorpos_hovered = r.ImGui_IsItemHovered(ctx)
+ local cursorpos_active = r.ImGui_IsItemActive(ctx)
  if font_cursorpos then r.ImGui_PopFont(ctx) end
+ 
+ if (cursorpos_hovered or cursorpos_active) then
+  local overlay_text_col = cursorpos_active and (settings.cursorpos_text_color_active or cursorpos_text_col) or (settings.cursorpos_text_color_hover or cursorpos_text_col)
+  if overlay_text_col ~= cursorpos_text_col then
+   local dl = r.ImGui_GetWindowDrawList(ctx)
+   local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+   local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+   if font_cursorpos then r.ImGui_PushFont(ctx, font_cursorpos, settings.cursorpos_font_size or settings.font_size) end
+   local text_w, text_h = r.ImGui_CalcTextSize(ctx, label)
+   local text_x = min_x + ((max_x - min_x) - text_w) / 2
+   local text_y = min_y + ((max_y - min_y) - text_h) / 2
+   if not settings.cursorpos_toggle_invisible then
+    local bg_col = cursorpos_active and (settings.cursorpos_button_color_active or 0x555555FF) or (settings.cursorpos_button_color_hover or 0x444444FF)
+    r.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, GetButtonColorWithTransparency(bg_col), settings.cursorpos_button_rounding or 0)
+   end
+   r.ImGui_DrawList_AddTextEx(dl, font_cursorpos or r.ImGui_GetFont(ctx), settings.cursorpos_font_size or settings.font_size, text_x, text_y, overlay_text_col, label)
+   if font_cursorpos then r.ImGui_PopFont(ctx) end
+  end
+ end
  
  if settings.cursorpos_show_border then
  local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -20319,9 +20664,28 @@ function ShowTempo(main_window_width, main_window_height)
  local mbt_str = string.format("%d.%d.%02d", math.floor(measures+1), math.floor(beatsInMeasure+1), ticks)
  local combined_mbt = mbt_str
  if font_tempo then reaper.ImGui_PushFont(ctx, font_tempo, settings.tempo_font_size or settings.font_size) end
- if settings.tempo_text_color then reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), settings.tempo_text_color) end
+ 
+ local tempo_text_col = settings.tempo_text_color or 0xFFFFFFFF
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), tempo_text_col)
  reaper.ImGui_Button(ctx, tempo_text)
- if settings.tempo_text_color then reaper.ImGui_PopStyleColor(ctx) end
+ local tempo_hovered = reaper.ImGui_IsItemHovered(ctx)
+ local tempo_active = reaper.ImGui_IsItemActive(ctx)
+ reaper.ImGui_PopStyleColor(ctx)
+ 
+ if tempo_hovered or tempo_active then
+  local overlay_text_col = tempo_active and (settings.tempo_text_color_active or tempo_text_col) or (settings.tempo_text_color_hover or tempo_text_col)
+  if overlay_text_col ~= tempo_text_col then
+   local dl = reaper.ImGui_GetWindowDrawList(ctx)
+   local min_x, min_y = reaper.ImGui_GetItemRectMin(ctx)
+   local max_x, max_y = reaper.ImGui_GetItemRectMax(ctx)
+   local text_w, text_h = reaper.ImGui_CalcTextSize(ctx, tempo_text)
+   local text_x = min_x + ((max_x - min_x) - text_w) / 2
+   local text_y = min_y + ((max_y - min_y) - text_h) / 2
+   local bg_col = tempo_active and (settings.tempo_button_color_active or 0x555555FF) or (settings.tempo_button_color_hover or 0x444444FF)
+   reaper.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, GetButtonColorWithTransparency(bg_col), settings.tempo_button_rounding or 0)
+   reaper.ImGui_DrawList_AddTextEx(dl, font_tempo or reaper.ImGui_GetFont(ctx), settings.tempo_font_size or settings.font_size, text_x, text_y, overlay_text_col, tempo_text)
+  end
+ end
  
  if settings.tempo_show_border then
  local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -20542,17 +20906,15 @@ function ShowWindowSetPicker(main_window_width, main_window_height)
  reaper.ImGui_SetCursorPosX(ctx, pos_x)
  reaper.ImGui_SetCursorPosY(ctx, pos_y)
  
- -- Push button styles
  local button_color = settings.window_set_picker_button_color or 0x444444FF
  local hover_color = settings.window_set_picker_button_hover_color or 0x666666FF
  local active_color = settings.window_set_picker_button_active_color or 0x888888FF
- local text_color = settings.window_set_picker_text_color or 0xFFFFFFFF
  local rounding = settings.window_set_picker_rounding or 4
- 
+ local wsp_text_col = settings.window_set_picker_text_color or 0xFFFFFFFF
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), GetButtonColorWithTransparency(button_color))
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(hover_color))
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(active_color))
- reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), text_color)
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), wsp_text_col)
  
  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameBorderSize(), 0)
  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), rounding)
@@ -20563,13 +20925,11 @@ function ShowWindowSetPicker(main_window_width, main_window_height)
   font_pushed = true
  end
  
- -- Draw buttons
  for i = 1, button_count do
   if i > 1 then
    reaper.ImGui_SameLine(ctx, 0, spacing)
   end
   
-  -- Get button label - use custom name if show_names is enabled and name exists
   local custom_name = settings.window_set_picker_names[i]
   local button_label = tostring(i)
   if show_names and custom_name and custom_name ~= "" then
@@ -20577,8 +20937,24 @@ function ShowWindowSetPicker(main_window_width, main_window_height)
   end
   
   local clicked = reaper.ImGui_Button(ctx, button_label, button_width, button_height)
+  local wsp_hovered = reaper.ImGui_IsItemHovered(ctx)
+  local wsp_active = reaper.ImGui_IsItemActive(ctx)
   
-  -- Draw border if enabled
+  if (wsp_hovered or wsp_active) then
+   local overlay_text_col = wsp_active and (settings.window_set_picker_text_color_active or wsp_text_col) or (settings.window_set_picker_text_color_hover or wsp_text_col)
+   if overlay_text_col ~= wsp_text_col then
+    local dl = reaper.ImGui_GetWindowDrawList(ctx)
+    local min_x, min_y = reaper.ImGui_GetItemRectMin(ctx)
+    local max_x, max_y = reaper.ImGui_GetItemRectMax(ctx)
+    local text_w, text_h = reaper.ImGui_CalcTextSize(ctx, button_label)
+    local text_x = min_x + ((max_x - min_x) - text_w) / 2
+    local text_y = min_y + ((max_y - min_y) - text_h) / 2
+    local bg_col = wsp_active and active_color or hover_color
+    reaper.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, GetButtonColorWithTransparency(bg_col), rounding)
+    reaper.ImGui_DrawList_AddTextEx(dl, font_windowset_picker or reaper.ImGui_GetFont(ctx), font_size, text_x, text_y, overlay_text_col, button_label)
+   end
+  end
+  
   if settings.window_set_picker_show_border then
    local dl = r.ImGui_GetWindowDrawList(ctx)
    local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
@@ -20588,18 +20964,15 @@ function ShowWindowSetPicker(main_window_width, main_window_height)
    r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, border_col, rounding, nil, border_thickness)
   end
   
-  -- Handle left click - load window set
   if clicked and not settings.edit_mode then
-   local command_id = 40454 + (i - 1)  -- 40454 to 40463
+   local command_id = 40454 + (i - 1)
    reaper.Main_OnCommand(command_id, 0)
   end
   
-  -- Handle right click - show context menu
   if reaper.ImGui_IsItemClicked(ctx, 1) and not settings.edit_mode then
    reaper.ImGui_OpenPopup(ctx, "WindowSetMenu" .. i)
   end
   
-  -- Context menu for saving window set
   if reaper.ImGui_BeginPopup(ctx, "WindowSetMenu" .. i) then
    local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
    
@@ -20609,7 +20982,7 @@ function ShowWindowSetPicker(main_window_width, main_window_height)
    end
    
    if reaper.ImGui_MenuItem(ctx, menu_label) then
-    local save_command_id = 40474 + (i - 1)  -- 40474 to 40483
+    local save_command_id = 40474 + (i - 1)
     reaper.Main_OnCommand(save_command_id, 0)
    end
    
@@ -20693,14 +21066,31 @@ function ShowTimeSignature(main_window_width, main_window_height)
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Button(), GetButtonColorWithTransparency(settings.timesig_button_color or settings.button_normal))
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(settings.timesig_button_color_hover or settings.button_hovered))
  reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(settings.timesig_button_color_active or settings.button_active))
- if settings.timesig_text_color then reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), settings.timesig_text_color) end
+ local timesig_text_col = settings.timesig_text_color or 0xFFFFFFFF
+ reaper.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Text(), timesig_text_col)
  
  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameBorderSize(), 0)
  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_FrameRounding(), settings.timesig_button_rounding or 0)
  
  local clicked_ts = reaper.ImGui_Button(ctx, ts_text)
- if settings.timesig_text_color then reaper.ImGui_PopStyleColor(ctx) end
- reaper.ImGui_PopStyleColor(ctx, 3)
+ local timesig_hovered = reaper.ImGui_IsItemHovered(ctx)
+ local timesig_active = reaper.ImGui_IsItemActive(ctx)
+ reaper.ImGui_PopStyleColor(ctx, 4)
+ 
+ if (timesig_hovered or timesig_active) then
+  local overlay_text_col = timesig_active and (settings.timesig_text_color_active or timesig_text_col) or (settings.timesig_text_color_hover or timesig_text_col)
+  if overlay_text_col ~= timesig_text_col then
+   local dl = reaper.ImGui_GetWindowDrawList(ctx)
+   local min_x, min_y = reaper.ImGui_GetItemRectMin(ctx)
+   local max_x, max_y = reaper.ImGui_GetItemRectMax(ctx)
+   local text_w, text_h = reaper.ImGui_CalcTextSize(ctx, ts_text)
+   local text_x = min_x + ((max_x - min_x) - text_w) / 2
+   local text_y = min_y + ((max_y - min_y) - text_h) / 2
+   local bg_col = timesig_active and (settings.timesig_button_color_active or 0x555555FF) or (settings.timesig_button_color_hover or 0x444444FF)
+   reaper.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, GetButtonColorWithTransparency(bg_col), settings.timesig_button_rounding or 0)
+   reaper.ImGui_DrawList_AddTextEx(dl, font_timesig or reaper.ImGui_GetFont(ctx), settings.timesig_font_size or settings.font_size, text_x, text_y, overlay_text_col, ts_text)
+  end
+ end
  
  if settings.timesig_show_border then
  local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -20864,11 +21254,33 @@ function ShowTimeSelection(main_window_width, main_window_height)
  if settings.timesel_text_color then r.ImGui_PopStyleColor(ctx) end
  if font_timesel then r.ImGui_PopFont(ctx) end
  else
+ local timesel_text_col = settings.timesel_text_color or 0xFFFFFFFF
  if font_timesel then r.ImGui_PushFont(ctx, font_timesel, settings.timesel_font_size or settings.font_size) end
- if settings.timesel_text_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.timesel_text_color) end
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), timesel_text_col)
  r.ImGui_Button(ctx, display_text)
- if settings.timesel_text_color then r.ImGui_PopStyleColor(ctx) end
+ local timesel_hovered = r.ImGui_IsItemHovered(ctx)
+ local timesel_active = r.ImGui_IsItemActive(ctx)
+ r.ImGui_PopStyleColor(ctx)
  if font_timesel then r.ImGui_PopFont(ctx) end
+ 
+ if (timesel_hovered or timesel_active) then
+  local overlay_text_col = timesel_active and (settings.timesel_text_color_active or timesel_text_col) or (settings.timesel_text_color_hover or timesel_text_col)
+  if overlay_text_col ~= timesel_text_col then
+   local dl = r.ImGui_GetWindowDrawList(ctx)
+   local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+   local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+   if font_timesel then r.ImGui_PushFont(ctx, font_timesel, settings.timesel_font_size or settings.font_size) end
+   local text_w, text_h = r.ImGui_CalcTextSize(ctx, display_text)
+   local text_x = min_x + ((max_x - min_x) - text_w) / 2
+   local text_y = min_y + ((max_y - min_y) - text_h) / 2
+   if not settings.timesel_toggle_invisible then
+    local bg_col = timesel_active and (settings.timesel_button_color_active or 0x555555FF) or (settings.timesel_button_color_hover or 0x444444FF)
+    r.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, GetButtonColorWithTransparency(bg_col), settings.timesel_button_rounding or 0)
+   end
+   r.ImGui_DrawList_AddTextEx(dl, font_timesel or r.ImGui_GetFont(ctx), settings.timesel_font_size or settings.font_size, text_x, text_y, overlay_text_col, display_text)
+   if font_timesel then r.ImGui_PopFont(ctx) end
+  end
+ end
  end
  
  if settings.timesel_show_border then
@@ -21289,16 +21701,38 @@ function TapTempo(main_window_width, main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), GetButtonColorWithTransparency(settings.taptempo_button_color or settings.button_normal))
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), GetButtonColorWithTransparency(settings.taptempo_button_color_hover or settings.button_hovered))
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), GetButtonColorWithTransparency(settings.taptempo_button_color_active or settings.button_active))
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.taptempo_text_color or 0xFFFFFFFF)
+ 
+ local taptempo_text_col = settings.taptempo_text_color or 0xFFFFFFFF
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), taptempo_text_col)
  
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.taptempo_button_rounding or 0)
  
  if font_taptempo then r.ImGui_PushFont(ctx, font_taptempo, settings.taptempo_font_size or settings.font_size) end
  
- local tapped = r.ImGui_Button(ctx, settings.tap_button_text)
+ local tap_btn_text = settings.tap_button_text or "TAP"
+ local tapped = r.ImGui_Button(ctx, tap_btn_text)
+ local taptempo_hovered = r.ImGui_IsItemHovered(ctx)
+ local taptempo_active = r.ImGui_IsItemActive(ctx)
  
  if font_taptempo then r.ImGui_PopFont(ctx) end
+ 
+ if (taptempo_hovered or taptempo_active) then
+  local overlay_text_col = taptempo_active and (settings.taptempo_text_color_active or taptempo_text_col) or (settings.taptempo_text_color_hover or taptempo_text_col)
+  if overlay_text_col ~= taptempo_text_col then
+   local dl = r.ImGui_GetWindowDrawList(ctx)
+   local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+   local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+   if font_taptempo then r.ImGui_PushFont(ctx, font_taptempo, settings.taptempo_font_size or settings.font_size) end
+   local text_w, text_h = r.ImGui_CalcTextSize(ctx, tap_btn_text)
+   local text_x = min_x + ((max_x - min_x) - text_w) / 2
+   local text_y = min_y + ((max_y - min_y) - text_h) / 2
+   local bg_col = taptempo_active and (settings.taptempo_button_color_active or 0x555555FF) or (settings.taptempo_button_color_hover or 0x444444FF)
+   r.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, GetButtonColorWithTransparency(bg_col), settings.taptempo_button_rounding or 0)
+   r.ImGui_DrawList_AddTextEx(dl, font_taptempo or r.ImGui_GetFont(ctx), settings.taptempo_font_size or settings.font_size, text_x, text_y, overlay_text_col, tap_btn_text)
+   if font_taptempo then r.ImGui_PopFont(ctx) end
+  end
+ end
  
  if settings.taptempo_show_border then
  local dl = r.ImGui_GetWindowDrawList(ctx)

@@ -36,6 +36,26 @@ local function GetImageTintColor(button, is_hovered, is_active, toggle_state)
     return result
 end
 
+local function GetTextColor(button, is_hovered, is_active, toggle_state)
+    local base_color = button.text_color or 0xFFFFFFFF
+    
+    if toggle_state ~= nil and button.show_toggle_state then
+        if toggle_state == 1 then
+            return button.text_color_on or base_color
+        else
+            return button.text_color_off or base_color
+        end
+    end
+    
+    if is_active then
+        return button.text_color_active or base_color
+    elseif is_hovered then
+        return button.text_color_hover or base_color
+    end
+    
+    return base_color
+end
+
 local function GetStateText(button, is_hovered, is_active, toggle_state)
     if toggle_state ~= nil and button.show_toggle_state then
         if toggle_state == 1 then
@@ -1125,7 +1145,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                                 text_y = button_min_y + 5
                             end
                             
-                            DrawTextWithVertical(dl, ctx, text_x, text_y, button.text_color or 0xFFFFFFFF, display_text, vertical, text_w_actual, text_h_actual)
+                            DrawTextWithVertical(dl, ctx, text_x, text_y, GetTextColor(button, is_hovered, is_active, toggle_state), display_text, vertical, text_w_actual, text_h_actual)
                             
                             r.ImGui_PopStyleVar(ctx)
                             r.ImGui_PopStyleColor(ctx, 3)
@@ -1546,7 +1566,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         end
                         
                         r.ImGui_DrawList_AddImage(dl, button.icon, icon_x, icon_y, icon_x + icon_size, icon_y + icon_size, uv_x, 0, uv_x + uv_w, 1, tint_col)
-                        DrawTextWithVertical(dl, ctx, text_x, text_y, button.text_color or 0xFFFFFFFF, display_text, vertical, text_w, text_h)
+                        DrawTextWithVertical(dl, ctx, text_x, text_y, GetTextColor(button, is_hovered, is_active, toggle_state), display_text, vertical, text_w, text_h)
                         
                         if clicked and not edit_mode and not button.click_through then
                             ExecuteButtonAction(ctx, button)
@@ -2047,7 +2067,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                             text_y = button_min_y + (actual_h - text_h) * 0.5
                         end
                         
-                        DrawTextWithVertical(dl, ctx, text_x, text_y, button.text_color or 0xFFFFFFFF, display_text, vertical, text_w, text_h)
+                        DrawTextWithVertical(dl, ctx, text_x, text_y, GetTextColor(button, is_hovered, is_active, toggle_state), display_text, vertical, text_w, text_h)
                         end
                     end
                     
@@ -2121,7 +2141,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                     end
                     
                     local dl = r.ImGui_GetWindowDrawList(ctx)
-                    DrawTextWithVertical(dl, ctx, text_x, text_y, button.text_color or 0xFFFFFFFF, display_text, is_vertical, text_w, text_h)
+                    DrawTextWithVertical(dl, ctx, text_x, text_y, GetTextColor(button, is_hovered, is_active, toggle_state), display_text, is_vertical, text_w, text_h)
                     
                     if clicked and not edit_mode and not button.click_through then
                         ExecuteButtonAction(ctx, button)
@@ -2174,7 +2194,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
                         local text_y = button_min_y + (actual_h - text_h) * 0.5
                         
                         local dl = r.ImGui_GetWindowDrawList(ctx)
-                        DrawTextWithVertical(dl, ctx, text_x, text_y, button.text_color or 0xFFFFFFFF, display_text, is_vertical, text_w, text_h)
+                        DrawTextWithVertical(dl, ctx, text_x, text_y, GetTextColor(button, is_hovered, is_active, toggle_state), display_text, is_vertical, text_w, text_h)
                     end
                     
                     if clicked and not edit_mode and not button.click_through then
