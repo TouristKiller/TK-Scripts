@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.3.7
+-- @version 2.3.8
 -- @changelog:
 --[[     
     + Added: Submenu Width and FX List Width settings in GUI tab

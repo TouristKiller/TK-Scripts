@@ -102,6 +102,7 @@ local status_msg = ""
 local status_type = ""
 local last_track = nil
 local show_delay_slider = false
+local use_screen_capture = false
 
 local function HasScreenshot(fx_name)
     local safe_name = fx_name:gsub("[^%w%s-]", "_")
@@ -119,7 +120,23 @@ local function IsOSX()
     return reaper.GetOS():match("OSX") or reaper.GetOS():match("macOS")
 end
 
-local function CaptureWindow(hwnd, fx_name)
+local function ScaleBitmap(srcBmp, w, h)
+    local destBmp
+    if config.screenshot_size_option == 1 then
+        destBmp = r.JS_LICE_CreateBitmap(true, 128, 128)
+        r.JS_LICE_ScaledBlit(destBmp, 0, 0, 128, 128, srcBmp, 0, 0, w, h, 1, "FAST")
+    elseif config.screenshot_size_option == 2 then
+        local scale = 500 / w
+        local newW, newH = 500, math.floor(h * scale)
+        destBmp = r.JS_LICE_CreateBitmap(true, newW, newH)
+        r.JS_LICE_ScaledBlit(destBmp, 0, 0, newW, newH, srcBmp, 0, 0, w, h, 1, "FAST")
+    else
+        destBmp = srcBmp
+    end
+    return destBmp
+end
+
+local function CaptureWindowGDI(hwnd, fx_name)
     local safe_name = fx_name:gsub("[^%w%s-]", "_")
     local filename = screenshot_path .. safe_name .. ".png"
 
@@ -134,19 +151,7 @@ local function CaptureWindow(hwnd, fx_name)
         local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
         r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, config.srcx, config.srcy, w, h)
 
-        local destBmp
-        if config.screenshot_size_option == 1 then
-            destBmp = r.JS_LICE_CreateBitmap(true, 128, 128)
-            r.JS_LICE_ScaledBlit(destBmp, 0, 0, 128, 128, srcBmp, 0, 0, w, h, 1, "FAST")
-        elseif config.screenshot_size_option == 2 then
-            local scale = 500 / w
-            local newW, newH = 500, math.floor(h * scale)
-            destBmp = r.JS_LICE_CreateBitmap(true, newW, newH)
-            r.JS_LICE_ScaledBlit(destBmp, 0, 0, newW, newH, srcBmp, 0, 0, w, h, 1, "FAST")
-        else
-            destBmp = srcBmp
-        end
-
+        local destBmp = ScaleBitmap(srcBmp, w, h)
         r.JS_LICE_WritePNG(filename, destBmp, false)
         if destBmp ~= srcBmp then r.JS_LICE_DestroyBitmap(destBmp) end
         r.JS_GDI_ReleaseDC(hwnd, srcDC)
@@ -158,6 +163,54 @@ local function CaptureWindow(hwnd, fx_name)
     end
 
     return filename
+end
+
+local function CaptureWindowScreen(hwnd, fx_name)
+    local safe_name = fx_name:gsub("[^%w%s-]", "_")
+    local filename = screenshot_path .. safe_name .. ".png"
+
+    if IsOSX() then
+        local _, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+        local w, h = right - left, top - bottom
+        local command = 'screencapture -x -R %d,%d,%d,%d -t png "%s"'
+        os.execute(command:format(left, top, w, h, filename))
+        return filename
+    end
+
+    local _, wl, wt, wr, wb = r.JS_Window_GetRect(hwnd)
+    local _, cl, ct, cr, cb = r.JS_Window_GetClientRect(hwnd)
+    local border_l = cl - wl
+    local border_t = ct - wt
+    local border_r = wr - cr
+    local border_b = wb - cb
+    local x = wl + border_l
+    local y = wt + border_t
+    local w = (wr - wl) - border_l - border_r
+    local h = (wb - wt) - border_t - border_b
+    local offset = fx_name:match("^JS") and 0 or config.capture_height_offset
+    h = h - offset - config.srcy
+    if w <= 0 or h <= 0 then return nil end
+
+    local screenDC = r.JS_GDI_GetScreenDC()
+    local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
+    local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
+    r.JS_GDI_Blit(srcDC_LICE, 0, 0, screenDC, x, y + config.srcy, w, h)
+
+    local destBmp = ScaleBitmap(srcBmp, w, h)
+    r.JS_LICE_WritePNG(filename, destBmp, false)
+    if destBmp ~= srcBmp then r.JS_LICE_DestroyBitmap(destBmp) end
+    r.JS_GDI_ReleaseDC(nil, screenDC)
+    r.JS_LICE_DestroyBitmap(srcBmp)
+
+    return filename
+end
+
+local function CaptureWindow(hwnd, fx_name)
+    if use_screen_capture then
+        return CaptureWindowScreen(hwnd, fx_name)
+    else
+        return CaptureWindowGDI(hwnd, fx_name)
+    end
 end
 
 local function RefreshFXList(force)
@@ -375,7 +428,7 @@ local function Loop()
             r.ImGui_Separator(ctx)
             r.ImGui_Spacing(ctx)
 
-            local bottom_h = r.ImGui_GetFrameHeightWithSpacing(ctx) * 2 + 16
+            local bottom_h = r.ImGui_GetFrameHeightWithSpacing(ctx) * 3 + 20
             if status_msg ~= "" then
                 bottom_h = bottom_h + r.ImGui_GetFrameHeightWithSpacing(ctx)
             end
@@ -421,6 +474,9 @@ local function Loop()
         local changed_slider
         r.ImGui_SetNextItemWidth(ctx, -1)
         changed_slider, config.screenshot_delay = r.ImGui_SliderDouble(ctx, "##delay", config.screenshot_delay, 0.1, 3.0, "Delay: %.1fs")
+
+        local changed_mode
+        changed_mode, use_screen_capture = r.ImGui_Checkbox(ctx, "Screen capture (for OpenGL/DX plugins)", use_screen_capture)
 
         r.ImGui_End(ctx)
     end
