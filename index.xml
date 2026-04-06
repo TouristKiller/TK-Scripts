@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.3.6" author="TouristKiller" time="2025-12-27T23:00:00Z">
+    <version name="2.3.7" author="TouristKiller" time="2025-12-27T23:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -44,11 +44,89 @@
     <source main="main" file="TK_NOTES_OpenItemMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenItemMode.lua</source>
     <source main="main" file="TK_NOTES_OpenProjectMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenProjectMode.lua</source>
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
-                <changelog><![CDATA[           
-+ Added: Move to Folder - Move existing folders into other parent folders via context menu
-+ Added: Add plugins to parent folders that have subfolders via [Add here] option
-+ Fixed: Plugins no longer disappear when adding subfolders to folders with plugins
-+ Fixed: TreeNode click behavior - clicking folder name now shows plugins instead of expanding
+    <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
+                <changelog><![CDATA[      
+    + ++ MAJOR UPDATE TO TK FX BROWSER MINI (TK FX BROWSER STAYS THE SAME FOR NOW) ++    
+    + FX Chain Builder: Random chain generator (🎲) - 1 instrument + 3 FX in musical signal order (Tone → Dynamics → Modulation/Time)
+    + FX Chain Builder: 10 Chain Templates via right-click on 🎲 (Clean Channel, Lo-Fi, Ambient Pad, Aggressive, Wet & Wide, Vocal Chain, Guitar Rig, Drum Bus, Synth Stack, FX Mangler)
+    + FX Chain Builder: Smart FX categorization by keywords (EQ/filter/saturation, compressor/limiter/gate, chorus/phaser/delay/reverb, etc.)
+    + FX Chain Builder: Drag-and-drop FX onto the chain builder strip to compose a custom FX chain
+    + FX Chain Builder: Visual thumbnails with numbered badges (1, 2, 3...) showing chain order
+    + FX Chain Builder: Drag-and-drop reordering of FX within the strip
+    + FX Chain Builder: Right-click to remove individual FX from the chain
+    + FX Chain Builder: Commit button adds entire chain to all selected tracks
+    + FX Chain Builder: Save button exports chain as valid .RfxChain file (via temp track chunk extraction)
+    + FX Chain Builder: Load button imports existing .RfxChain files into the builder (additive)
+    + FX Chain Builder: Clear button to empty the chain
+    + FX Chain Builder: Chain persists across script restarts (saved in config.json)
+    + FX Chain Builder: Green highlight overlay when dragging FX over the strip
+    + FX Chain Builder: Cross-platform Load dialog (JS_ReaScriptAPI with native REAPER fallback)
+    + FX Chains: Fixed PathExists failing on Windows directories (now uses REAPER EnumerateFiles/EnumerateSubdirectories as primary check)
+    + Info Panel: Track header with colored background, left/right navigation arrows and cyclical track browsing (Master ↔ Track 1 ↔ ... ↔ Last Track)
+    + Info Panel: Track type indicator (Audio/MIDI/Mixed/Empty) between Items and Tags sections
+    + Info Panel: Custom Volume/Pan/Width sliders with track-colored rail and handle (inspired by TK RAW editor)
+    + Info Panel: Slider labels always visible, value shown as tooltip on hover, double-click to reset defaults
+    + Info Panel: FX drag-and-drop reordering for both Track FX and Item FX lists
+    + Info Panel: FX right-click context menu (Enable/Bypass, Online/Offline, Show in FX Chain, Float Window, Move Up/Down, Delete)
+    + Info Panel: Visual color coding for bypassed (yellow/orange) and offline (red/dimmed) FX in Track FX and Item FX lists
+    + Info Panel: "Track FX" and "Project FX" buttons below FX list (full width, toggle to switch browser view without leaving info panel)
+    + Info Panel: Toggle behavior on Track FX / Project FX buttons (second click returns to previous screenshot view)
+    + Info Panel: Track header mouse wheel scrolling to switch tracks
+    + Info Panel: Rename Track option in track header right-click menu
+    + Screenshots: Name and rating overlay now also displayed in Current Track FX and Current Project FX views
+    + FX Chains: Fixed case-sensitive extension stripping (files with .rfxchain lowercase were shown with extension and not deletable/renamable)
+    + Context Menu: "Add to Selected Items" option in FX Context Menu (Current Track FX / Current Project FX screenshots)
+    + Context Menu: "Add to New Track" option for plugin screenshots (creates track, names it, adds FX)
+    + Context Menu: "Make Screenshot (OpenGL/DX)" option using screen capture with 3 sec delay for GPU-rendered plugins
+    + Screenshots: "Show Name on Screenshot" overlay (name + star rating on semi-transparent bar, toggle in Visibility menu)
+    + Screenshots: Manufacturer name in parentheses stripped from overlay display (e.g. "Kontakt 8" instead of "Kontakt 8 (Native Instruments)")
+    + Visibility Menu: Removed obsolete "Show/Hide Info Box" option
+    + Projects: Added sortable table columns (Size, Length, Files, Date, Path) with ☰ toggle menu
+    + Projects: Preview indicator column (● / ○) with green/grey coloring
+    + Projects: Column visibility and sort state saved in config
+    + Projects: Redesigned info panel (compact metadata line, styled play/stop/volume)
+    + Projects: Volume slider widened to 120px
+    + Projects: Info panel open/closed state persisted across restarts
+    + Projects: Project cover image support (set/remove via right-click, displayed right-aligned in info panel)
+    + Projects: Cover image toggle in columns menu
+    + Projects: Cover image L/R alignment toggle
+    + Projects: Image column (Yes/No) with sorting
+    + Projects: File browser fix (JS_Dialog_BrowseForOpenFiles with proper filter)
+    + Projects: BPM validation fix (was reading time signature instead of tempo)
+    + Projects: BPM, Sample Rate and Tracks columns (sortable, from RPP header with cache)
+    + Projects: BPM, Sample Rate and Track count displayed in info footer
+    + Projects: Comment column with inline editable InputText (stored in project_comments.json)
+    + Projects: Date and Comment columns moved to last position
+    + Projects: AllowOverlap on row Selectable so Comment field is directly clickable
+    + Scripts: Thumbnail size slider (60-300px, saved in config)
+    + Scripts: Delete button in edit panel
+    + Scripts: Capture Window screenshot for script thumbnails (saved in ScriptThumbnails folder)
+    + Scripts: Paste button for Action ID (clipboard paste with auto name lookup)
+    + Scripts: Label system with grouping (alphabetical, "No Label" at bottom)
+    + Scripts: Label dropdown to pick existing labels
+    + Scripts: Labels toggle button (on: grouped by label, off: alphabetical flat list)
+    + Fix: Duplicate project names no longer cause flickering rows (PushID + stable sort)
+    + Fix: Actions right-click context menu not appearing in category mode (ID-stack scope mismatch)
+    + Actions: "Add to Scripts Launcher" option in right-click context menu (with duplicate check)
+    + Tags: Full right-click context menu on assigned and available tags (replaces simple remove-on-click)
+    + Tags: Select / Unselect tracks by tag
+    + Tags: Hide / Show / Hide All Except / Show All track visibility controls per tag
+    + Tags: Mute / Unmute / Solo / Unsolo tracks by tag
+    + Tags: Rename all tagged tracks to tag name, current track, or first plugin name
+    + Tags: Rename All Tracks (numbered) option (e.g. SYNTH 01, SYNTH 02, ...)
+    + Tags: Move tagged tracks into new folder track
+    + Tags: Set Color submenu with color picker, Apply Tag Color to Tracks, Remove Color
+    + Tags: Rename Tag submenu with inline input field
+    + Tags: Add / Remove tag to/from selected tracks
+    + Tags: Delete tag globally (removes from all tracks and available tags)
+    + Tags: Same context menu shared between assigned tags (info panel) and available tags (+ popup)
+    + Info Panel: "Bypass All" button (toggles all FX enabled/disabled, orange highlight when all bypassed)
+    + Info Panel: "Make Chain" button (exports current track's FX chain as .RfxChain file)
+    + Info Panel: Track header right-click context menu (Color Picker, Duplicate/Delete/Add Track, Show/Hide Envelope, Envelope Lanes, Move Up/Down, Go to First/Last Track)
+    + Tags: Left-click toggle (select/deselect tracks by tag)
+    + Current Track FX: Drag-and-drop screenshot reordering (reorders FX chain on the track)
+    + Current Project FX: Drag-and-drop screenshot reordering within same track
+    + Added: TK_FX_BROWSER_SnapshotFX standalone action for batch FX screenshots
 ]]></changelog>
     </version>
     </reapack>

@@ -1,10 +1,88 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.2.7
+-- @version 0.2.8
 -- @changelog:
 --[[     
-    + Cosmetic changes (divider, window border, modern cards view, collaps headers)
-    + Fix: button for Info view for better stability 
+    + FX Chain Builder: Random chain generator (🎲) - 1 instrument + 3 FX in musical signal order (Tone → Dynamics → Modulation/Time)
+    + FX Chain Builder: 10 Chain Templates via right-click on 🎲 (Clean Channel, Lo-Fi, Ambient Pad, Aggressive, Wet & Wide, Vocal Chain, Guitar Rig, Drum Bus, Synth Stack, FX Mangler)
+    + FX Chain Builder: Smart FX categorization by keywords (EQ/filter/saturation, compressor/limiter/gate, chorus/phaser/delay/reverb, etc.)
+    + FX Chain Builder: Drag-and-drop FX onto the chain builder strip to compose a custom FX chain
+    + FX Chain Builder: Visual thumbnails with numbered badges (1, 2, 3...) showing chain order
+    + FX Chain Builder: Drag-and-drop reordering of FX within the strip
+    + FX Chain Builder: Right-click to remove individual FX from the chain
+    + FX Chain Builder: Commit button adds entire chain to all selected tracks
+    + FX Chain Builder: Save button exports chain as valid .RfxChain file (via temp track chunk extraction)
+    + FX Chain Builder: Load button imports existing .RfxChain files into the builder (additive)
+    + FX Chain Builder: Clear button to empty the chain
+    + FX Chain Builder: Chain persists across script restarts (saved in config.json)
+    + FX Chain Builder: Green highlight overlay when dragging FX over the strip
+    + FX Chain Builder: Cross-platform Load dialog (JS_ReaScriptAPI with native REAPER fallback)
+    + FX Chains: Fixed PathExists failing on Windows directories (now uses REAPER EnumerateFiles/EnumerateSubdirectories as primary check)
+    + Info Panel: Track header with colored background, left/right navigation arrows and cyclical track browsing (Master ↔ Track 1 ↔ ... ↔ Last Track)
+    + Info Panel: Track type indicator (Audio/MIDI/Mixed/Empty) between Items and Tags sections
+    + Info Panel: Custom Volume/Pan/Width sliders with track-colored rail and handle (inspired by TK RAW editor)
+    + Info Panel: Slider labels always visible, value shown as tooltip on hover, double-click to reset defaults
+    + Info Panel: FX drag-and-drop reordering for both Track FX and Item FX lists
+    + Info Panel: FX right-click context menu (Enable/Bypass, Online/Offline, Show in FX Chain, Float Window, Move Up/Down, Delete)
+    + Info Panel: Visual color coding for bypassed (yellow/orange) and offline (red/dimmed) FX in Track FX and Item FX lists
+    + Info Panel: "Track FX" and "Project FX" buttons below FX list (full width, toggle to switch browser view without leaving info panel)
+    + Info Panel: Toggle behavior on Track FX / Project FX buttons (second click returns to previous screenshot view)
+    + Info Panel: Track header mouse wheel scrolling to switch tracks
+    + Info Panel: Rename Track option in track header right-click menu
+    + Screenshots: Name and rating overlay now also displayed in Current Track FX and Current Project FX views
+    + FX Chains: Fixed case-sensitive extension stripping (files with .rfxchain lowercase were shown with extension and not deletable/renamable)
+    + Context Menu: "Add to Selected Items" option in FX Context Menu (Current Track FX / Current Project FX screenshots)
+    + Context Menu: "Add to New Track" option for plugin screenshots (creates track, names it, adds FX)
+    + Context Menu: "Make Screenshot (OpenGL/DX)" option using screen capture with 3 sec delay for GPU-rendered plugins
+    + Screenshots: "Show Name on Screenshot" overlay (name + star rating on semi-transparent bar, toggle in Visibility menu)
+    + Screenshots: Manufacturer name in parentheses stripped from overlay display (e.g. "Kontakt 8" instead of "Kontakt 8 (Native Instruments)")
+    + Visibility Menu: Removed obsolete "Show/Hide Info Box" option
+    + Projects: Added sortable table columns (Size, Length, Files, Date, Path) with ☰ toggle menu
+    + Projects: Preview indicator column (● / ○) with green/grey coloring
+    + Projects: Column visibility and sort state saved in config
+    + Projects: Redesigned info panel (compact metadata line, styled play/stop/volume)
+    + Projects: Volume slider widened to 120px
+    + Projects: Info panel open/closed state persisted across restarts
+    + Projects: Project cover image support (set/remove via right-click, displayed right-aligned in info panel)
+    + Projects: Cover image toggle in columns menu
+    + Projects: Cover image L/R alignment toggle
+    + Projects: Image column (Yes/No) with sorting
+    + Projects: File browser fix (JS_Dialog_BrowseForOpenFiles with proper filter)
+    + Projects: BPM validation fix (was reading time signature instead of tempo)
+    + Projects: BPM, Sample Rate and Tracks columns (sortable, from RPP header with cache)
+    + Projects: BPM, Sample Rate and Track count displayed in info footer
+    + Projects: Comment column with inline editable InputText (stored in project_comments.json)
+    + Projects: Date and Comment columns moved to last position
+    + Projects: AllowOverlap on row Selectable so Comment field is directly clickable
+    + Scripts: Thumbnail size slider (60-300px, saved in config)
+    + Scripts: Delete button in edit panel
+    + Scripts: Capture Window screenshot for script thumbnails (saved in ScriptThumbnails folder)
+    + Scripts: Paste button for Action ID (clipboard paste with auto name lookup)
+    + Scripts: Label system with grouping (alphabetical, "No Label" at bottom)
+    + Scripts: Label dropdown to pick existing labels
+    + Scripts: Labels toggle button (on: grouped by label, off: alphabetical flat list)
+    + Fix: Duplicate project names no longer cause flickering rows (PushID + stable sort)
+    + Fix: Actions right-click context menu not appearing in category mode (ID-stack scope mismatch)
+    + Actions: "Add to Scripts Launcher" option in right-click context menu (with duplicate check)
+    + Tags: Full right-click context menu on assigned and available tags (replaces simple remove-on-click)
+    + Tags: Select / Unselect tracks by tag
+    + Tags: Hide / Show / Hide All Except / Show All track visibility controls per tag
+    + Tags: Mute / Unmute / Solo / Unsolo tracks by tag
+    + Tags: Rename all tagged tracks to tag name, current track, or first plugin name
+    + Tags: Rename All Tracks (numbered) option (e.g. SYNTH 01, SYNTH 02, ...)
+    + Tags: Move tagged tracks into new folder track
+    + Tags: Set Color submenu with color picker, Apply Tag Color to Tracks, Remove Color
+    + Tags: Rename Tag submenu with inline input field
+    + Tags: Add / Remove tag to/from selected tracks
+    + Tags: Delete tag globally (removes from all tracks and available tags)
+    + Tags: Same context menu shared between assigned tags (info panel) and available tags (+ popup)
+    + Info Panel: "Bypass All" button (toggles all FX enabled/disabled, orange highlight when all bypassed)
+    + Info Panel: "Make Chain" button (exports current track's FX chain as .RfxChain file)
+    + Info Panel: Track header right-click context menu (Color Picker, Duplicate/Delete/Add Track, Show/Hide Envelope, Envelope Lanes, Move Up/Down, Go to First/Last Track)
+    + Tags: Left-click toggle (select/deselect tracks by tag)
+    + Current Track FX: Drag-and-drop screenshot reordering (reorders FX chain on the track)
+    + Current Project FX: Drag-and-drop screenshot reordering within same track
+
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -30,6 +108,9 @@ if not r.APIExists or not r.APIExists("JS_Dialog_BrowseForFolder") then
     return
 end
 local screenshot_path       = script_path .. "Screenshots" .. os_separator
+local project_covers_path   = script_path .. "ProjectCovers" .. os_separator
+local project_comments_path = script_path .. "project_comments.json"
+local script_thumbs_path    = script_path .. "ScriptThumbnails" .. os_separator
 StartBulkScreenshot         = function() end
 local DrawMeterModule       = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars             = dofile(script_path .. "TKFXBVariables.lua")
@@ -146,6 +227,7 @@ end
 -- ACTION BROWSER
 local allActions = {}
 local action_search_term = ""
+local shortcut_map = {}
 local categories = {
     ["Appearance and Themes"] = {},
     ["Automation"] = {},
@@ -385,16 +467,29 @@ function RenderActionsSection()
             last_show_only_active = show_only_active
         end
 
+        local should_open_action_ctx = false
+
         if show_categories then
             for _, cat in ipairs(cached_actions_list) do
                 if r.ImGui_TreeNode(ctx, string.format("%s (%d)", cat.name, #cat.actions)) then
                     for _, action in ipairs(cat.actions) do
                         if action.state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF) end
                         local prefix = action.state == 1 and "[ON] " or ""
-                        if r.ImGui_Selectable(ctx, prefix .. action.name) then
+                        if r.ImGui_Selectable(ctx, prefix .. action.name .. "##cat" .. tostring(action.id), false, r.ImGui_SelectableFlags_AllowOverlap()) then
                             r.Main_OnCommand(action.id, 0)
                         elseif r.ImGui_IsItemClicked(ctx, 1) then
-                            CreateSmartMarker(action.id)
+                            action_ctx_menu_id = action.id
+                            action_ctx_menu_name = action.name
+                            should_open_action_ctx = true
+                        end
+                        if action.shortcut then
+                            local sc_text = "[" .. action.shortcut .. "]"
+                            local text_w = r.ImGui_CalcTextSize(ctx, sc_text)
+                            local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                            r.ImGui_SameLine(ctx, avail_w - text_w)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                            r.ImGui_Text(ctx, sc_text)
+                            r.ImGui_PopStyleColor(ctx)
                         end
                         if action.state == 1 then r.ImGui_PopStyleColor(ctx) end
                     end
@@ -407,18 +502,55 @@ function RenderActionsSection()
                 local state = r.GetToggleCommandState(action.id)
                 if state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4000FF) end
                 local prefix = state == 1 and "[ON] " or ""
-                if r.ImGui_Selectable(ctx, prefix .. action.name) then
+                if r.ImGui_Selectable(ctx, prefix .. action.name .. "##flat" .. tostring(action.id), false, r.ImGui_SelectableFlags_AllowOverlap()) then
                     r.Main_OnCommand(action.id, 0)
                 elseif r.ImGui_IsItemClicked(ctx, 1) then
-                    CreateSmartMarker(action.id)
+                    action_ctx_menu_id = action.id
+                    action_ctx_menu_name = action.name
+                    should_open_action_ctx = true
+                end
+                if action.shortcut then
+                    local sc_text = "[" .. action.shortcut .. "]"
+                    local text_w = r.ImGui_CalcTextSize(ctx, sc_text)
+                    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                    r.ImGui_SameLine(ctx, avail_w - text_w)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                    r.ImGui_Text(ctx, sc_text)
+                    r.ImGui_PopStyleColor(ctx)
                 end
                 if state == 1 then r.ImGui_PopStyleColor(ctx) end
             end
         end
+
+        if should_open_action_ctx then
+            r.ImGui_OpenPopup(ctx, "##ActionContextMenu")
+        end
+
+        if r.ImGui_BeginPopup(ctx, "##ActionContextMenu") then
+            if r.ImGui_MenuItem(ctx, "Action Marker") then
+                CreateSmartMarker(action_ctx_menu_id)
+            end
+            if r.ImGui_MenuItem(ctx, "Copy Command ID") then
+                if r.CF_SetClipboard then
+                    r.CF_SetClipboard(tostring(action_ctx_menu_id))
+                end
+            end
+            if r.ImGui_MenuItem(ctx, "Add to Scripts Launcher") then
+                local already = false
+                for _, entry in ipairs(scripts_launcher) do
+                    if tostring(entry.cmd) == tostring(action_ctx_menu_id) then already = true; break end
+                end
+                if not already then
+                    table.insert(scripts_launcher, {name = action_ctx_menu_name or tostring(action_ctx_menu_id), cmd = tostring(action_ctx_menu_id)})
+                    SaveScriptsLauncher()
+                end
+            end
+            r.ImGui_EndPopup(ctx)
+        end
     end
     r.ImGui_EndChild(ctx)
     r.ImGui_Separator(ctx)
-    r.ImGui_TextWrapped(ctx, "Left-click: Execute action. Right-click: Create smart marker.")
+    r.ImGui_TextWrapped(ctx, "Left-click: Execute. Right-click: Context menu.")
 end
 
 _last_screenshot_signature = nil
@@ -535,6 +667,8 @@ if not BuildScreenshotIndex then function BuildScreenshotIndex() end end
 dragging_fx_name = dragging_fx_name or nil
 potential_drag_fx_name = potential_drag_fx_name or nil
 drag_start_x, drag_start_y = drag_start_x or 0, drag_start_y or 0
+chain_builder_plugins = chain_builder_plugins or {}
+chain_builder_hovered = false
 
 -- Window state variables
 was_hidden = was_hidden or false
@@ -597,6 +731,9 @@ function SelectBrowserPanelItem(name)
     browser_panel_selected = name
     if name ~= nil then selected_folder = nil end
 
+    current_fx_chain_path = nil
+    current_fx_chain_relative_path = nil
+    current_fx_chain_name = nil
     show_media_browser = false
     show_sends_window = false
     show_action_browser = false
@@ -803,6 +940,8 @@ function SetDefaultConfig()
         browser_segment_custom_folders_visible = true,
         browser_segment_main_categories_visible = true,
         browser_segment_utilities_visible = true,
+        show_chain_builder = false,
+        chain_builder_plugins = {},
         bulk_screenshot_vst = true,
         bulk_screenshot_vst3 = true,
         bulk_screenshot_js = true,
@@ -829,6 +968,7 @@ function SetDefaultConfig()
         add_instruments_on_top = false, 
         show_name_in_screenshot_window = true,
         show_name_on_hover_only = false,
+        show_name_on_screenshot = false,
         show_name_in_main_window = true,
         clean_plugin_names = false, 
         remove_manufacturer_names = false, 
@@ -868,12 +1008,26 @@ function SetDefaultConfig()
             
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
         show_project_info = show_project_info or true,
+        show_project_col_dates = false,
+        show_project_col_sizes = false,
+        show_project_col_lengths = false,
+        show_project_col_media = false,
+        show_project_col_paths = false,
+        show_project_col_comment = false,
+        show_project_col_bpm = false,
+        show_project_col_samplerate = false,
+        show_project_col_tracks = false,
+        project_sort_column = "name",
+        project_sort_ascending = true,
+        show_project_cover = true,
+        project_cover_align = "right",
         hide_main_window = true,  -- Mini version: always hide main window
         show_browser_panel = true,
         show_browser_panel_main = true,
         show_browser_panel_mini = true,
         browser_panel_width = browser_panel_width or 200,
         screenshot_section_width = screenshot_section_width or 600, 
+        script_thumb_size = 120,
         use_pagination = true,
         use_masonry_layout = false,
         use_modern_cards = false,
@@ -1206,6 +1360,10 @@ function LoadConfig()
 end
 LoadConfig()
 
+if config and type(config.chain_builder_plugins) == 'table' and #config.chain_builder_plugins > 0 then
+    chain_builder_plugins = config.chain_builder_plugins
+end
+
 if config and config.last_viewed_folder_mini then
     last_viewed_folder = config.last_viewed_folder_mini
 elseif config and config.last_viewed_folder then
@@ -1216,6 +1374,10 @@ PROJECTS_DIR = config.last_used_project_location
 
 local function PathExists(path)
     if not path or path == '' then return false end
+    local first_file = r.EnumerateFiles(path, 0)
+    if first_file then return true end
+    local first_sub = r.EnumerateSubdirectories(path, 0)
+    if first_sub then return true end
     local ok, _, code = os.rename(path, path)
     if ok then return true end
     if code == 13 then return true end
@@ -1262,7 +1424,7 @@ local function BuildTreeFromFS(base_dir, ext)
             local file = r.EnumerateFiles(dir, i)
             if not file or file == "" then break end
             if not ext or file:sub(-#ext):lower() == ext:lower() then
-                node[#node + 1] = file:gsub(ext .. "$", "")
+                node[#node + 1] = ext and file:sub(1, #file - #ext) or file
             end
         end
         return node
@@ -1279,7 +1441,7 @@ local function BuildTreeFromFS(base_dir, ext)
         local file = r.EnumerateFiles(base_dir, i)
         if not file or file == "" then break end
         if not ext or file:sub(-#ext):lower() == ext:lower() then
-            root[#root + 1] = file:gsub(ext .. "$", "")
+            root[#root + 1] = ext and file:sub(1, #file - #ext) or file
         end
     end
     return root
@@ -1380,7 +1542,7 @@ do
 end
 
 local scripts_launcher_path = script_path .. "scripts_launcher.json"
-local scripts_launcher = {}
+scripts_launcher = {}
 
 function LoadScriptsLauncher()
     local f = io.open(scripts_launcher_path, "r")
@@ -1404,6 +1566,54 @@ function SaveScriptsLauncher()
 end
 
 LoadScriptsLauncher()
+
+local capture_window_list = {}
+local capture_window_mode = nil
+local capture_target_index = nil
+
+function GetVisibleWindows()
+    local windows = {}
+    local count, list = r.JS_Window_ListAllTop()
+    if not list or list == "" then return windows end
+    local main_hwnd = r.GetMainHwnd()
+    for addr_str in list:gmatch("[^,]+") do
+        local hwnd = r.JS_Window_HandleFromAddress(tonumber(addr_str))
+        if hwnd and hwnd ~= main_hwnd then
+            local is_visible = r.JS_Window_IsVisible(hwnd)
+            if is_visible then
+                local title = r.JS_Window_GetTitle(hwnd)
+                if title and title ~= "" and not title:match("^TK FX BROWSER") then
+                    table.insert(windows, {hwnd = hwnd, title = title})
+                end
+            end
+        end
+    end
+    table.sort(windows, function(a, b) return a.title:lower() < b.title:lower() end)
+    return windows
+end
+
+function CaptureWindowScreenshot(hwnd, save_name)
+    local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+    if not retval then return nil end
+    local w, h = right - left, bottom - top
+    if w <= 0 or h <= 0 then return nil end
+    local safe_name = save_name:gsub("[^%w%s-]", "_")
+    local filename = script_thumbs_path .. safe_name .. ".png"
+    local srcDC = r.JS_GDI_GetClientDC(hwnd)
+    local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
+    local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
+    r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, 0, 0, w, h)
+    r.JS_LICE_WritePNG(filename, srcBmp, false)
+    r.JS_GDI_ReleaseDC(hwnd, srcDC)
+    r.JS_LICE_DestroyBitmap(srcBmp)
+    local f = io.open(filename, "rb")
+    if f then
+        local size = f:seek("end")
+        f:close()
+        if size and size > 0 then return filename end
+    end
+    return nil
+end
 
 function ResetConfig()
     config = SetDefaultConfig()
@@ -2399,6 +2609,9 @@ function DrawDragOverlay()
                 r.ImGui_Text(ctx, 'Add to Item (SHIFT)')
             else
                 r.ImGui_Text(ctx, 'Track: ' .. track_name)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFF88)
+                r.ImGui_Text(ctx, 'Hold SHIFT = Add to Item')
+                r.ImGui_PopStyleColor(ctx)
             end
             r.ImGui_Text(ctx, 'Release to add')
             r.ImGui_End(ctx)
@@ -4237,7 +4450,18 @@ function EnsureScreenshotFolderExists()
 end
 EnsureScreenshotFolderExists()
 
-function check_esc_key() 
+if not r.file_exists(project_covers_path) then
+    r.RecursiveCreateDirectory(project_covers_path, 0)
+end
+if not r.file_exists(script_thumbs_path) then
+    r.RecursiveCreateDirectory(script_thumbs_path, 0)
+end
+
+local project_cover_texture = nil
+local project_cover_loaded_for = nil
+local show_project_cover = config.show_project_cover ~= false
+
+function check_esc_key()
     if reaper.ImGui_IsKeyPressed(ctx, reaper.ImGui_Key_Escape()) then
         return true
     end
@@ -4629,6 +4853,67 @@ function GetTrackColorAndTextColor(track)
     end
 end
 
+local info_slider_block_drag = {}
+
+local function DrawInfoSlider(id, value, min_val, max_val, label, value_text, rail_color)
+    rail_color = rail_color or 0x808080FF
+    local label_offset = 42
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local height = 20
+    local grab_radius = 8.0
+    local pad = 10.0
+    local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local center_y = cy + height * 0.5
+
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    r.ImGui_DrawList_AddText(dl, cx, cy + (height - text_h) * 0.5, 0xFFFFFFFF, label)
+
+    local slider_x = cx + label_offset
+    local slider_w = avail_w - label_offset
+    local track_w = slider_w - pad * 2
+
+    r.ImGui_InvisibleButton(ctx, id, avail_w, height)
+    local is_active = r.ImGui_IsItemActive(ctx)
+    local is_hovered = r.ImGui_IsItemHovered(ctx)
+    local changed = false
+    local double_clicked = false
+
+    if is_hovered and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+        double_clicked = true
+        info_slider_block_drag[id] = true
+    end
+
+    if not is_active then
+        info_slider_block_drag[id] = nil
+    end
+
+    if is_active and not info_slider_block_drag[id] then
+        local mx = r.ImGui_GetMousePos(ctx)
+        local t = (mx - (slider_x + pad)) / math.max(1, track_w)
+        t = math.max(0, math.min(1, t))
+        local new_val = min_val + t * (max_val - min_val)
+        if new_val ~= value then
+            value = new_val
+            changed = true
+        end
+    end
+
+    local t = (value - min_val) / (max_val - min_val)
+    t = math.max(0, math.min(1, t))
+    local knob_x = slider_x + pad + t * track_w
+
+    r.ImGui_DrawList_AddLine(dl, slider_x + pad, center_y, slider_x + pad + track_w, center_y, rail_color, 2.0)
+    r.ImGui_DrawList_AddCircleFilled(dl, knob_x, center_y, grab_radius, rail_color)
+    r.ImGui_DrawList_AddCircle(dl, knob_x, center_y, grab_radius, 0x333333FF, 0, 1.0)
+
+    if is_hovered or is_active then
+        r.ImGui_SetTooltip(ctx, value_text)
+    end
+
+    return value, changed, is_hovered, double_clicked
+end
+
 function GetTagColorAndTextColor(tag_color)
     local red, g, b, a = r.ImGui_ColorConvertU32ToDouble4(tag_color)
     local brightness = (red * 299 + g * 587 + b * 114) / 1000
@@ -4772,6 +5057,84 @@ function CaptureScreenshot(plugin_name, fx_index)
     end
     r.TrackFX_Show(TRACK, fx_index, 2)
     r.TrackFX_Delete(TRACK, fx_index)
+end
+
+function CaptureScreenshotScreen(plugin_name, fx_index)
+    local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+    if hwnd then
+        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+        local filename
+        if config.screenshot_size_option == 1 then
+            local track_icons_path = EnsureTrackIconsFolderExists()
+            filename = track_icons_path .. safe_name .. ".png"
+        else
+            filename = screenshot_path .. safe_name .. ".png"
+        end
+
+        if IsOSX() then
+            local _, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+            local w, h = right - left, top - bottom
+            ScreenshotOSX(filename, left, top, w, h)
+        else
+            local _, wl, wt, wr, wb = r.JS_Window_GetRect(hwnd)
+            local _, cl, ct, cr, cb = r.JS_Window_GetClientRect(hwnd)
+            local border_l = cl - wl
+            local border_t = ct - wt
+            local border_r = wr - cr
+            local border_b = wb - cb
+            local x = wl + border_l
+            local y = wt + border_t
+            local w = (wr - wl) - border_l - border_r
+            local h = (wb - wt) - border_t - border_b
+            local offset = plugin_name:match("^JS") and 0 or config.capture_height_offset
+            h = h - offset - config.srcy
+            if w > 0 and h > 0 then
+                local screenDC = r.JS_GDI_GetScreenDC()
+                local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
+                local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
+                r.JS_GDI_Blit(srcDC_LICE, 0, 0, screenDC, x, y + config.srcy, w, h)
+                local destBmp
+                if config.screenshot_size_option == 1 then
+                    destBmp = r.JS_LICE_CreateBitmap(true, 128, 128)
+                    r.JS_LICE_ScaledBlit(destBmp, 0, 0, 128, 128, srcBmp, 0, 0, w, h, 1, "FAST")
+                elseif config.screenshot_size_option == 2 then
+                    local scale = 500 / w
+                    local newW, newH = 500, math.floor(h * scale)
+                    destBmp = r.JS_LICE_CreateBitmap(true, newW, newH)
+                    r.JS_LICE_ScaledBlit(destBmp, 0, 0, newW, newH, srcBmp, 0, 0, w, h, 1, "FAST")
+                else
+                    destBmp = srcBmp
+                end
+                r.JS_LICE_WritePNG(filename, destBmp, false)
+                if destBmp ~= srcBmp then r.JS_LICE_DestroyBitmap(destBmp) end
+                r.JS_GDI_ReleaseDC(nil, screenDC)
+                r.JS_LICE_DestroyBitmap(srcBmp)
+            end
+        end
+        log_to_file("Screenshot (Screen Capture) saved: " .. plugin_name)
+    else
+        log_to_file("No Plugin Window for screen capture: " .. plugin_name)
+    end
+    r.TrackFX_Show(TRACK, fx_index, 2)
+    r.TrackFX_Delete(TRACK, fx_index)
+end
+
+function StartScreenCaptureScreenshot(plugin_name, callback)
+    if not plugin_name or plugin_name == '' then if callback then callback() end return end
+    IS_CAPTURING_SCREENSHOT = true
+    local fx_index = AddFXToTrack(TRACK, plugin_name)
+    r.TrackFX_Show(TRACK, fx_index, 3)
+    local start_time = r.time_precise()
+    local function check()
+        if r.time_precise() - start_time >= 3.0 then
+            CaptureScreenshotScreen(plugin_name, fx_index)
+            IS_CAPTURING_SCREENSHOT = false
+            if callback then callback() end
+        else
+            r.defer(check)
+        end
+    end
+    r.defer(check)
 end
 
 function CaptureExistingFX(track, fx_index)
@@ -5480,6 +5843,39 @@ end
 -- FX CHAIN PREVIEW FUNCTIONS
 local fx_chain_cache = {}
 local fx_chain_texture_cache = {}
+local js_chain_lookup = nil
+
+local function BuildJSChainLookup()
+    if js_chain_lookup then return end
+    js_chain_lookup = {}
+    if not FX_LIST_TEST then return end
+    for i = 1, #FX_LIST_TEST do
+        local name = FX_LIST_TEST[i]
+        if type(name) == "string" and name:match('^JS:') then
+            local js_path = name:gsub('^JS:%s*', '')
+            local lower = js_path:lower()
+            js_chain_lookup[lower] = name
+            local basename = lower:match('[^/\\]+$')
+            if basename and not js_chain_lookup[basename] then
+                js_chain_lookup[basename] = name
+            end
+        end
+    end
+    for i = 0, math.huge do
+        local retval, fx_name, ident = r.EnumInstalledFX(i)
+        if not retval then break end
+        if fx_name and fx_name:match('^JS:') and ident then
+            local ident_path = ident:gsub('^JS:%s*',''):gsub('%.jsfx$',''):gsub('%.eel$',''):lower()
+            if not js_chain_lookup[ident_path] then
+                js_chain_lookup[ident_path] = fx_name
+            end
+            local ident_base = ident_path:match('[^/\\]+$')
+            if ident_base and not js_chain_lookup[ident_base] then
+                js_chain_lookup[ident_base] = fx_name
+            end
+        end
+    end
+end
 
 function SimplifyPluginName(fx_name)
     -- Remove plugin type prefix (VST3:, CLAP:, JS:, etc.)
@@ -5526,29 +5922,31 @@ function ParseFxChainFile(chain_path)
     if not file then return fx_list end
     
     for line in file:lines() do
-        -- Check for VST/VST3 plugins
-        local vst_match = line:match('^<VST%s+"([^"]+)"')
+        local trimmed = line:match('^%s*(.*)')
+        
+        local vst_match = trimmed:match('^<VST%s+"([^"]+)"')
         if vst_match then
-            -- Keep the full name with VST prefix for screenshot matching
             table.insert(fx_list, vst_match)
         end
         
-        -- Check for JS plugins
-        local js_match = line:match('^<JS%s+([^%s"]+)')
+        local js_match = trimmed:match('^<JS%s+"([^"]+)"') or trimmed:match('^<JS%s+([^%s"]+)')
         if js_match then
-            -- Keep the full path for JS plugins
-            table.insert(fx_list, "JS: " .. js_match)
+            js_match = js_match:gsub('%.jsfx$',''):gsub('%.eel$','')
+            BuildJSChainLookup()
+            local resolved = js_chain_lookup[js_match:lower()]
+            if not resolved then
+                local basename = js_match:match('[^/\\]+$') or js_match
+                resolved = js_chain_lookup[basename:lower()]
+            end
+            table.insert(fx_list, resolved or ("JS: " .. js_match))
         end
         
-        -- Check for CLAP plugins
-        local clap_match = line:match('^<CLAP%s+"([^"]+)"')
+        local clap_match = trimmed:match('^<CLAP%s+"([^"]+)"')
         if clap_match then
-            -- Keep the full name with CLAP prefix for screenshot matching
             table.insert(fx_list, clap_match)
         end
         
-        -- Check for AU plugins (Mac)
-        local au_match = line:match('^<AU%s+"([^"]+)"')
+        local au_match = trimmed:match('^<AU%s+"([^"]+)"')
         if au_match then
             table.insert(fx_list, au_match)
         end
@@ -5851,6 +6249,7 @@ function ShowFxChainInScreenshotWindow(chain_path, relative_path, chain_name)
     selected_folder = nil
     browser_panel_selected = nil
     ClearScreenshotCache()
+    if fx_chain_cache then fx_chain_cache[chain_path] = nil end
     
     -- Populate screenshot_search_results with the FX from the chain
     for i, fx_name in ipairs(fx_list) do
@@ -5990,6 +6389,60 @@ function GetFileSize(file_path)
     end
     return 0
 end
+
+function GetProjectCoverPath(project_path)
+    local safe_name = project_path:match("([^/\\]+)%.rpp$") or ""
+    safe_name = safe_name:gsub("[^%w%s-]", "_")
+    local png = project_covers_path .. safe_name .. ".png"
+    if r.file_exists(png) then return png end
+    local jpg = project_covers_path .. safe_name .. ".jpg"
+    if r.file_exists(jpg) then return jpg end
+    return nil
+end
+
+function LoadProjectCover(project_path)
+    if project_cover_loaded_for == project_path then return end
+    project_cover_loaded_for = project_path
+    if project_cover_texture and r.ImGui_ValidatePtr(project_cover_texture, 'ImGui_Image*') then
+        project_cover_texture = nil
+    end
+    local cover = GetProjectCoverPath(project_path)
+    if cover then
+        project_cover_texture = r.ImGui_CreateImage(cover)
+    else
+        project_cover_texture = nil
+    end
+end
+
+function SetProjectCover(project_path)
+    local rv, file = r.JS_Dialog_BrowseForOpenFiles("Choose Cover Image", "", "", "Image files\0*.png;*.jpg;*.jpeg\0All files\0*.*\0", false)
+    if rv == 1 and file and file ~= "" then
+        local safe_name = project_path:match("([^/\\]+)%.rpp$") or ""
+        safe_name = safe_name:gsub("[^%w%s-]", "_")
+        local ext = file:match("%.(%w+)$")
+        if not ext then return end
+        ext = ext:lower()
+        if ext ~= "png" and ext ~= "jpg" and ext ~= "jpeg" then
+            r.MB("Alleen PNG en JPG afbeeldingen worden ondersteund.", "Ongeldig bestandstype", 0)
+            return
+        end
+        local dest_ext = (ext == "jpg" or ext == "jpeg") and ".jpg" or ".png"
+        local dest = project_covers_path .. safe_name .. dest_ext
+        local src = io.open(file, "rb")
+        if src then
+            local data = src:read("*a")
+            src:close()
+            local dst = io.open(dest, "wb")
+            if dst then
+                dst:write(data)
+                dst:close()
+            end
+        end
+        project_cover_loaded_for = nil
+        LoadProjectCover(project_path)
+    end
+end
+
 function CountProjectFolderFiles(project_path)
     local folder = project_path:match("(.*[/\\])")
     local count = 0
@@ -6000,7 +6453,71 @@ function CountProjectFolderFiles(project_path)
             handle = r.EnumerateFiles(folder, count)
         end
     end
-    return count - 1  -- -1 omdat de eerste tel 0 is
+    return count - 1
+end
+
+function FormatFileSize(bytes)
+    if not bytes or bytes <= 0 then return "-" end
+    if bytes < 1024 then return string.format("%d B", bytes) end
+    if bytes < 1048576 then return string.format("%.1f KB", bytes / 1024) end
+    return string.format("%.1f MB", bytes / 1048576)
+end
+
+function FormatDuration(seconds)
+    if not seconds or seconds <= 0 then return "-" end
+    local m = math.floor(seconds / 60)
+    local s = seconds % 60
+    return string.format("%d:%02d", m, math.floor(s))
+end
+
+local project_comments = {}
+
+local function LoadProjectComments()
+    local f = io.open(project_comments_path, "r")
+    if f then
+        local content = f:read("*a")
+        f:close()
+        project_comments = json.decode(content) or {}
+    end
+end
+
+local function SaveProjectComments()
+    local f = io.open(project_comments_path, "w")
+    if f then
+        f:write(json.encode(project_comments))
+        f:close()
+    end
+end
+
+LoadProjectComments()
+
+local rpp_header_cache = {}
+
+function ParseRPPHeader(rpp_path)
+    if rpp_header_cache[rpp_path] then return rpp_header_cache[rpp_path] end
+    local f = io.open(rpp_path, "r")
+    if not f then return nil end
+    local bpm, samplerate, track_count = nil, nil, 0
+    local lines_read = 0
+    for line in f:lines() do
+        lines_read = lines_read + 1
+        if lines_read > 5000 then break end
+        if not bpm then
+            local b = line:match("^%s*TEMPO%s+([%d%.]+)")
+            if b then bpm = tonumber(b) end
+        end
+        if not samplerate then
+            local sr = line:match("^%s*SAMPLERATE%s+(%d+)")
+            if sr then samplerate = tonumber(sr) end
+        end
+        if line:match("^%s*<TRACK") then
+            track_count = track_count + 1
+        end
+    end
+    f:close()
+    local info = { bpm = bpm, samplerate = samplerate, track_count = track_count }
+    rpp_header_cache[rpp_path] = info
+    return info
 end
 
 function IsSendTrack(track)
@@ -6118,9 +6635,21 @@ function GetSendIndex(src_track, dst_track)
     return -1
 end
 
+function BuildShortcutMap()
+    shortcut_map = {}
+    for _, action in ipairs(allActions) do
+        local cnt = r.CountActionShortcuts(0, action.id)
+        if cnt and cnt > 0 then
+            local rv, desc = r.GetActionShortcutDesc(0, action.id, 0)
+            if rv and desc and desc ~= "" then
+                shortcut_map[action.id] = desc
+            end
+        end
+    end
+end
+
 function FilterActions()
     if #allActions == 0 then
-        -- Check if SWS extension is available
         if reaper.CF_EnumerateActions then
             local i = 0
             repeat
@@ -6131,7 +6660,6 @@ function FilterActions()
                 i = i + 1
             until retval <= 0
         else
-            -- Fallback: Add some basic actions manually if SWS is not available
             local basic_actions = {
                 {name = "Transport: Play/stop", id = 40044},
                 {name = "Transport: Record", id = 1013},
@@ -6144,6 +6672,10 @@ function FilterActions()
             for _, action in ipairs(basic_actions) do
                 table.insert(allActions, action)
             end
+        end
+        BuildShortcutMap()
+        for _, action in ipairs(allActions) do
+            action.shortcut = shortcut_map[action.id]
         end
     end
 end
@@ -6238,7 +6770,33 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 folder_changed = true
             end, true)
         end
+        if r.ImGui_MenuItem(ctx, "Make Screenshot (OpenGL/DX)") then
+            StartScreenCaptureScreenshot(plugin_name, function()
+                ClearScreenshotCache()
+                BuildScreenshotIndex(true)
+                folder_changed = true
+            end)
+        end
         
+        if r.ImGui_MenuItem(ctx, "Add to New Track") then
+            r.Undo_BeginBlock()
+            r.PreventUIRefresh(1)
+            local track_idx = r.CountTracks(0)
+            r.InsertTrackAtIndex(track_idx, true)
+            local new_track = r.GetTrack(0, track_idx)
+            if new_track then
+                r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name, true)
+                local fx_index = AddFXToTrack(new_track, plugin_name)
+                if config.open_floating_after_adding and fx_index and fx_index >= 0 then
+                    r.TrackFX_Show(new_track, fx_index, 3)
+                end
+                LAST_USED_FX = plugin_name
+                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+            end
+            r.PreventUIRefresh(-1)
+            r.Undo_EndBlock("Add " .. plugin_name .. " to new track", -1)
+        end
+
         if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
             if r.ImGui_MenuItem(ctx, "Add to Selected Tracks") then
                 AddPluginToSelectedTracks(plugin_name)
@@ -6716,6 +7274,31 @@ function ShowFXContextMenu(plugin, menu_id)
         local is_enabled = r.TrackFX_GetEnabled(track, fx_index)
         if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
             r.TrackFX_SetEnabled(track, fx_index, not is_enabled)
+        end
+
+        local item_count = r.CountSelectedMediaItems(0)
+        if item_count > 0 then
+            if r.ImGui_MenuItem(ctx, "Add to Selected Items (" .. item_count .. ")") then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                for i = 0, item_count - 1 do
+                    local item = r.GetSelectedMediaItem(0, i)
+                    if item then
+                        local take = r.GetActiveTake(item)
+                        if take then
+                            local dest_index = r.TakeFX_GetCount(take)
+                            local added_fx = r.TakeFX_AddByName(take, plugin.fx_name, -1000 - dest_index)
+                            if added_fx and added_fx >= 0 and config.open_floating_after_adding then
+                                r.TakeFX_Show(take, added_fx, 3)
+                            end
+                        end
+                    end
+                end
+                LAST_USED_FX = plugin.fx_name
+                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Add " .. plugin.fx_name .. " to selected items", -1)
+            end
         end
 
     local fx_name = plugin.fx_name
@@ -7680,8 +8263,8 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, config.show_name_on_hover_only and "Show Names Always" or "Show Names on Hover Only") then
                 config.show_name_on_hover_only = not config.show_name_on_hover_only; SaveConfig()
             end
-            if r.ImGui_MenuItem(ctx, (config.show_screenshot_info_box and "Hide" or "Show") .. " Info Box") then
-                config.show_screenshot_info_box = not config.show_screenshot_info_box; SaveConfig()
+            if r.ImGui_MenuItem(ctx, config.show_name_on_screenshot and "Hide Name on Screenshot" or "Show Name on Screenshot") then
+                config.show_name_on_screenshot = not config.show_name_on_screenshot; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, config.show_screenshot_scrollbar and "Hide Scrollbar" or "Show Scrollbar") then
                 config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar; SaveConfig()
@@ -9037,7 +9620,8 @@ function ShowBrowserPanel()
 
     local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
     local toggle_button_height = 22
-    local content_h = math.max(0, avail_h - toggle_button_height - 4)
+    local ams_row_height = (browser_panel_show_info and TRACK and r.ValidatePtr(TRACK, "MediaTrack*")) and 24 or 0
+    local content_h = math.max(0, avail_h - toggle_button_height - ams_row_height - 4)
 
     if not browser_panel_show_info then
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
@@ -9430,7 +10014,7 @@ function ShowBrowserPanel()
                 if header_is_open then
                     r.ImGui_Indent(ctx, 10)
                     local tree = GetFxChainsTree()
-                    DrawFxChains(tree, nil, false)  -- false = geen hover preview in browser panel
+                    DrawFxChains(tree, nil, false)
                     r.ImGui_Unindent(ctx, 10)
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
@@ -9623,6 +10207,17 @@ function ShowBrowserPanel()
                 LaunchTKNotes()
             end
         end
+        local chain_is_active = config.show_chain_builder
+        if chain_is_active then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00FF88FF)
+        end
+        if r.ImGui_Selectable(ctx, "FX CHAIN BUILDER", config.show_chain_builder) then
+            config.show_chain_builder = not config.show_chain_builder
+            SaveConfig()
+        end
+        if chain_is_active then
+            r.ImGui_PopStyleColor(ctx)
+        end
                 if config.show_scripts then
                     local is_sel = (selected_folder == "Scripts" and show_scripts_browser)
                     if is_sel then
@@ -9666,7 +10261,7 @@ function ShowBrowserPanel()
         r.ImGui_PopStyleVar(ctx) -- ScrollbarSize (from BrowserContent)
     end
     else
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 8)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
         local info_open = r.ImGui_BeginChild(ctx, "InfoContent", -1, content_h)
         if info_open then
             local proj = 0 
@@ -9691,11 +10286,12 @@ function ShowBrowserPanel()
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                 local track_num = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") or 0
                 local track_color_u32, text_color_u32 = GetTrackColorAndTextColor(TRACK)
+                local header_h = 32
                 
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color_u32)
-                r.ImGui_BeginChild(ctx, "InfoTrackHeader", -1, 25)
-                r.ImGui_PopStyleColor(ctx)
-                
+                local header_open = r.ImGui_BeginChild(ctx, "InfoTrackHeader", -1, header_h)
+                local header_text_hovered = false
+                if header_open then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color_u32)
                 local _, tn = r.GetTrackName(TRACK)
                 track_name = tn or "Master Track"
@@ -9706,14 +10302,213 @@ function ShowBrowserPanel()
                     track_num_display = tostring(math.floor(track_num))
                 end
                 local header_text = string.format("%s: %s", track_num_display, track_name)
-                local text_width = r.ImGui_CalcTextSize(ctx, header_text)
                 local text_height = r.ImGui_GetTextLineHeight(ctx)
                 local header_avail_width = r.ImGui_GetContentRegionAvail(ctx)
-                r.ImGui_SetCursorPosX(ctx, (header_avail_width - text_width) * 0.5)
-                r.ImGui_SetCursorPosY(ctx, (25 - text_height) * 0.5)
-                r.ImGui_Text(ctx, header_text)
+                
+                local arrow_w = r.ImGui_CalcTextSize(ctx, "<") + 12
+                local total_track_count = r.CountTracks(0)
+                local text_zone = header_avail_width - (arrow_w + 4) * 2 - 8
+                
+                local display_text = header_text
+                local text_width = r.ImGui_CalcTextSize(ctx, display_text)
+                if text_width > text_zone then
+                    local dots_w = r.ImGui_CalcTextSize(ctx, "...")
+                    while #display_text > 1 and r.ImGui_CalcTextSize(ctx, display_text .. "...") > text_zone do
+                        display_text = display_text:sub(1, #display_text - 1)
+                    end
+                    display_text = display_text .. "..."
+                    text_width = r.ImGui_CalcTextSize(ctx, display_text)
+                end
+                
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFFFFFF30)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFFFFFF50)
+                
+                r.ImGui_SetCursorPos(ctx, 4, (header_h - text_height) * 0.5 - 2)
+                if r.ImGui_Button(ctx, "<##info_prev_track", arrow_w, text_height + 4) then
+                    local idx = math.floor(track_num)
+                    if idx <= 0 then
+                        if total_track_count > 0 then
+                            local new_track = r.GetTrack(0, total_track_count - 1)
+                            if new_track then
+                                r.SetOnlyTrackSelected(new_track)
+                                TRACK = new_track
+                            end
+                        end
+                    else
+                        local new_idx = idx - 2
+                        if new_idx < 0 then
+                            r.SetOnlyTrackSelected(r.GetMasterTrack(0))
+                            TRACK = r.GetMasterTrack(0)
+                        else
+                            local new_track = r.GetTrack(0, new_idx)
+                            if new_track then
+                                r.SetOnlyTrackSelected(new_track)
+                                TRACK = new_track
+                            end
+                        end
+                    end
+                end
+                
+                r.ImGui_SetCursorPos(ctx, (header_avail_width - text_width) * 0.5, (header_h - text_height) * 0.5)
+                r.ImGui_Text(ctx, display_text)
+                header_text_hovered = r.ImGui_IsItemHovered(ctx)
+                
+                r.ImGui_SetCursorPos(ctx, header_avail_width - arrow_w - 4, (header_h - text_height) * 0.5 - 2)
+                if r.ImGui_Button(ctx, ">##info_next_track", arrow_w, text_height + 4) then
+                    local idx = math.floor(track_num)
+                    local new_track
+                    if idx <= 0 then
+                        if total_track_count > 0 then
+                            new_track = r.GetTrack(0, 0)
+                        end
+                    elseif idx >= total_track_count then
+                        new_track = r.GetMasterTrack(0)
+                    else
+                        new_track = r.GetTrack(0, idx)
+                    end
+                    if new_track then
+                        r.SetOnlyTrackSelected(new_track)
+                        TRACK = new_track
+                    end
+                end
+                
+                r.ImGui_PopStyleColor(ctx, 3)
                 r.ImGui_PopStyleColor(ctx)
                 r.ImGui_EndChild(ctx)
+                if r.ImGui_IsItemHovered(ctx) then
+                    local wheel = r.ImGui_GetMouseWheel(ctx)
+                    if wheel ~= 0 then
+                        local idx = m_floor(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
+                        local tc = r.CountTracks(0)
+                        local new_track
+                        if wheel > 0 then
+                            if idx <= 0 then
+                                new_track = r.GetTrack(0, tc - 1)
+                            elseif idx == 1 then
+                                new_track = r.GetMasterTrack(0)
+                            else
+                                new_track = r.GetTrack(0, idx - 2)
+                            end
+                        else
+                            if idx <= 0 then
+                                if tc > 0 then new_track = r.GetTrack(0, 0) end
+                            elseif idx >= tc then
+                                new_track = r.GetMasterTrack(0)
+                            else
+                                new_track = r.GetTrack(0, idx)
+                            end
+                        end
+                        if new_track then
+                            r.SetOnlyTrackSelected(new_track)
+                            TRACK = new_track
+                        end
+                    end
+                end
+                end
+                r.ImGui_PopStyleColor(ctx)
+                if header_open and header_text_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "InfoTrackHeaderCtx")
+                end
+                if r.ImGui_BeginPopup(ctx, "InfoTrackHeaderCtx") then
+                    if r.ImGui_BeginMenu(ctx, "Color Picker") then
+                        local cur_color = r.GetMediaTrackInfo_Value(TRACK, "I_CUSTOMCOLOR")
+                        local init_col = 0x808080FF
+                        if cur_color ~= 0 then
+                            local cr, cg, cb = r.ColorFromNative(cur_color & 0xFFFFFF)
+                            init_col = r.ImGui_ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, 1)
+                        end
+                        info_track_header_color = info_track_header_color or init_col
+                        local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
+                        local ch_c, nc = r.ImGui_ColorEdit4(ctx, "##hdr_track_col", info_track_header_color, flags)
+                        if ch_c then info_track_header_color = nc end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "Apply##hdr_col_apply") then
+                            local rd, g, b = r.ImGui_ColorConvertU32ToDouble4(info_track_header_color)
+                            local native = r.ColorToNative(m_floor(rd*255), m_floor(g*255), m_floor(b*255)) | 0x1000000
+                            r.Undo_BeginBlock()
+                            r.SetMediaTrackInfo_Value(TRACK, "I_CUSTOMCOLOR", native)
+                            r.Undo_EndBlock("Set track color", -1)
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
+                        r.ImGui_EndMenu(ctx)
+                    end
+                    if r.ImGui_BeginMenu(ctx, "Rename Track") then
+                        info_track_rename_buf = info_track_rename_buf or ""
+                        r.ImGui_SetNextItemWidth(ctx, 200)
+                        local enter, new_val = r.ImGui_InputText(ctx, "##hdr_rename", info_track_rename_buf, r.ImGui_InputTextFlags_EnterReturnsTrue())
+                        info_track_rename_buf = new_val
+                        if enter and new_val ~= "" then
+                            r.Undo_BeginBlock()
+                            r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", new_val, true)
+                            r.Undo_EndBlock("Rename track", -1)
+                            info_track_rename_buf = ""
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
+                        r.ImGui_EndMenu(ctx)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Duplicate Track") then
+                        r.Undo_BeginBlock()
+                        r.SetOnlyTrackSelected(TRACK)
+                        r.Main_OnCommand(40062, 0)
+                        r.Undo_EndBlock("Duplicate track", -1)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Delete Track") then
+                        r.Undo_BeginBlock()
+                        r.SetOnlyTrackSelected(TRACK)
+                        r.Main_OnCommand(40005, 0)
+                        TRACK = r.GetSelectedTrack(0, 0) or r.GetMasterTrack(0)
+                        r.Undo_EndBlock("Delete track", -1)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Add New Track") then
+                        r.Undo_BeginBlock()
+                        local idx = m_floor(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
+                        r.InsertTrackAtIndex(idx, true)
+                        local new_tr = r.GetTrack(0, idx)
+                        if new_tr then
+                            r.SetOnlyTrackSelected(new_tr)
+                            TRACK = new_tr
+                        end
+                        r.Undo_EndBlock("Add new track", -1)
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Show/Hide Envelope") then
+                        r.SetOnlyTrackSelected(TRACK)
+                        r.Main_OnCommand(41151, 0)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Toggle Envelope in Lanes") then
+                        r.SetOnlyTrackSelected(TRACK)
+                        r.Main_OnCommand(40891, 0)
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Move Track Up") then
+                        r.SetOnlyTrackSelected(TRACK)
+                        r.Main_OnCommand(43647, 0)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Move Track Down") then
+                        r.SetOnlyTrackSelected(TRACK)
+                        r.Main_OnCommand(43648, 0)
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Go to First Track") then
+                        local first = r.GetTrack(0, 0)
+                        if first then
+                            r.SetOnlyTrackSelected(first)
+                            TRACK = first
+                        end
+                    end
+                    if r.ImGui_MenuItem(ctx, "Go to Last Track") then
+                        local tc = r.CountTracks(0)
+                        if tc > 0 then
+                            local last = r.GetTrack(0, tc - 1)
+                            if last then
+                                r.SetOnlyTrackSelected(last)
+                                TRACK = last
+                            end
+                        end
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
                 
                 r.ImGui_Dummy(ctx, 0, 3)
                 
@@ -9749,12 +10544,42 @@ function ShowBrowserPanel()
                 end
             end
             
-            r.ImGui_Text(ctx, "Project: " .. proj_name)
+            if r.ImGui_Selectable(ctx, "Project: " .. proj_name) then
+                r.Main_OnCommand(40021, 0)
+            end
             r.ImGui_Text(ctx, string.format("Sample Rate: %s", sr > 0 and (tostring(math.floor(sr)) .. " Hz") or "Device"))
             r.ImGui_Text(ctx, string.format("BPM: %.2f", bpm))
             r.ImGui_Text(ctx, "Items: " .. item_count_display .. item_type_suffix)
             
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                local ic = tonumber(item_count_display) or 0
+                local track_type = "Empty"
+                if ic > 0 then
+                    local has_midi, has_audio = false, false
+                    for i = 0, ic - 1 do
+                        local item = r.GetTrackMediaItem(TRACK, i)
+                        if item then
+                            local take = r.GetActiveTake(item)
+                            if take then
+                                local src = r.GetMediaItemTake_Source(take)
+                                if src then
+                                    local s_type = r.GetMediaSourceType(src, "") or ""
+                                    if s_type:upper() == "MIDI" then has_midi = true else has_audio = true end
+                                    if has_midi and has_audio then break end
+                                end
+                            end
+                        end
+                    end
+                    if has_midi and not has_audio then track_type = "MIDI"
+                    elseif has_audio and not has_midi then track_type = "Audio"
+                    elseif has_audio and has_midi then track_type = "Mixed"
+                    end
+                end
+                r.ImGui_Text(ctx, "Type: " .. track_type)
+                
+                r.ImGui_Dummy(ctx, 0, 3)
+                r.ImGui_Separator(ctx)
+                
                 local guid = r.GetTrackGUID(TRACK)
                 local tags = guid and track_tags and track_tags[guid]
                 r.ImGui_Text(ctx, "Tags:")
@@ -9802,10 +10627,20 @@ function ShowBrowserPanel()
                                 SaveTags()
                             end
                         end
+                        if r.ImGui_IsItemClicked(ctx, 1) then
+                            tag_ctx_menu_tag = tag_avail
+                            tag_rename_active = false
+                            tag_color_edit_active = false
+                            r.ImGui_OpenPopup(ctx, "TagCtxAvail##info")
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Click: add to track | Right-click: menu")
+                        end
                         if tag_colors[tag_avail] then r.ImGui_PopStyleColor(ctx, 3) end
                         line_w_tags = line_w_tags + tag_w_btn
                     end
                     r.ImGui_PopStyleVar(ctx)
+                    DrawTagContextMenu(ctx, "TagCtxAvail##info", guid, nil)
                     r.ImGui_EndPopup(ctx)
                 end
                 if tags and #tags > 0 then
@@ -9834,17 +10669,24 @@ function ShowBrowserPanel()
                         if tag_colors[tag] then r.ImGui_PopStyleColor(ctx, 3) end
                         if pressed then
                             local tagged_tracks = FilterTracksByTag(tag)
-                            r.Main_OnCommand(40297, 0)
-                            for _, tr in ipairs(tagged_tracks) do r.SetTrackSelected(tr, true) end
+                            local all_selected = true
+                            for _, tr in ipairs(tagged_tracks) do
+                                if not r.IsTrackSelected(tr) then all_selected = false break end
+                            end
+                            if all_selected then
+                                for _, tr in ipairs(tagged_tracks) do r.SetTrackSelected(tr, false) end
+                            else
+                                for _, tr in ipairs(tagged_tracks) do r.SetTrackSelected(tr, true) end
+                            end
                         end
                         if r.ImGui_IsItemClicked(ctx, 1) then
-                            for ix = #tags, 1, -1 do
-                                if tags[ix] == tag then table.remove(tags, ix) end
-                            end
-                            SaveTags()
+                            tag_ctx_menu_tag = tag
+                            tag_rename_active = false
+                            tag_color_edit_active = false
+                            r.ImGui_OpenPopup(ctx, "TagCtxAssigned##info")
                         end
                         if r.ImGui_IsItemHovered(ctx) then
-                            r.ImGui_SetTooltip(ctx, "Click: select tracks | Right-click: remove tag")
+                            r.ImGui_SetTooltip(ctx, "Click: select tracks | Right-click: menu")
                         end
                         line_w = line_w + tag_w
                     end
@@ -9852,6 +10694,48 @@ function ShowBrowserPanel()
                 else
                     r.ImGui_SameLine(ctx)
                     r.ImGui_Text(ctx, "-")
+                end
+                DrawTagContextMenu(ctx, "TagCtxAssigned##info", guid, tags)
+                
+                r.ImGui_Dummy(ctx, 0, 6)
+                r.ImGui_Separator(ctx)
+                
+                local slider_track_color = GetTrackColorAndTextColor(TRACK) or 0x808080FF
+                local sr, sg, sb = r.ImGui_ColorConvertU32ToDouble4(slider_track_color)
+                local slider_rail_color = slider_track_color
+                if sr + sg + sb > 2.7 then
+                    slider_rail_color = 0x808080FF
+                end
+                
+                local vol = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
+                local vol_db = 20 * math.log(vol, 10)
+                local new_vol_db, vol_changed, _, vol_dbl = DrawInfoSlider("##info_vol", vol_db, -60.0, 12.0, "Vol", string.format("%.1f dB", vol_db), slider_rail_color)
+                if vol_changed then
+                    r.SetMediaTrackInfo_Value(TRACK, "D_VOL", 10 ^ (new_vol_db / 20))
+                end
+                if vol_dbl then
+                    r.SetMediaTrackInfo_Value(TRACK, "D_VOL", 1.0)
+                end
+                
+                local pan = r.GetMediaTrackInfo_Value(TRACK, "D_PAN")
+                local pan_pct = pan * 100
+                local pan_str = math.abs(pan_pct) < 0.5 and "C" or (pan_pct < 0 and string.format("%.0f%%L", -pan_pct) or string.format("%.0f%%R", pan_pct))
+                local new_pan_pct, pan_changed, _, pan_dbl = DrawInfoSlider("##info_pan", pan_pct, -100.0, 100.0, "Pan", pan_str, slider_rail_color)
+                if pan_changed then
+                    r.SetMediaTrackInfo_Value(TRACK, "D_PAN", new_pan_pct / 100)
+                end
+                if pan_dbl then
+                    r.SetMediaTrackInfo_Value(TRACK, "D_PAN", 0.0)
+                end
+                
+                local width = r.GetMediaTrackInfo_Value(TRACK, "D_WIDTH")
+                local width_pct = width * 100
+                local new_width_pct, w_changed, _, w_dbl = DrawInfoSlider("##info_width", width_pct, -100.0, 100.0, "Width", string.format("%.0f%%", width_pct), slider_rail_color)
+                if w_changed then
+                    r.SetMediaTrackInfo_Value(TRACK, "D_WIDTH", new_width_pct / 100)
+                end
+                if w_dbl then
+                    r.SetMediaTrackInfo_Value(TRACK, "D_WIDTH", 1.0)
                 end
                 
                 local fx_count = r.TrackFX_GetCount(TRACK)
@@ -9866,7 +10750,18 @@ function ShowBrowserPanel()
                             if config.clean_plugin_names or config.remove_manufacturer_names then
                                 fx_name = GetDisplayPluginName(fx_name)
                             end
+                            local tfx_bypassed = not r.TrackFX_GetEnabled(TRACK, i)
+                            local tfx_offline = r.TrackFX_GetOffline(TRACK, i)
+                            local tfx_color_count = 0
+                            if tfx_offline then
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4444AA)
+                                tfx_color_count = 1
+                            elseif tfx_bypassed then
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF)
+                                tfx_color_count = 1
+                            end
                             local clicked = r.ImGui_Selectable(ctx, fx_name .. "##info_trackfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                            if tfx_color_count > 0 then r.ImGui_PopStyleColor(ctx, tfx_color_count) end
                             if clicked then
                                 if r.TrackFX_GetFloatingWindow(TRACK, i) then
                                     r.TrackFX_Show(TRACK, i, 2)
@@ -9874,13 +10769,188 @@ function ShowBrowserPanel()
                                     r.TrackFX_Show(TRACK, i, 3)
                                 end
                             end
+                            if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                r.ImGui_SetDragDropPayload(ctx, "INFO_TRACKFX_DRAG", tostring(i))
+                                r.ImGui_Text(ctx, fx_name)
+                                r.ImGui_EndDragDropSource(ctx)
+                            end
+                            if r.ImGui_BeginDragDropTarget(ctx) then
+                                local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_TRACKFX_DRAG")
+                                if rv then
+                                    local src = tonumber(payload)
+                                    if src and src ~= i then
+                                        local dest = i
+                                        if src < dest then dest = dest + 1 end
+                                        r.Undo_BeginBlock()
+                                        r.TrackFX_CopyToTrack(TRACK, src, TRACK, dest, true)
+                                        r.Undo_EndBlock("Reorder Track FX", -1)
+                                    end
+                                end
+                                r.ImGui_EndDragDropTarget(ctx)
+                            end
                             if r.ImGui_IsItemHovered(ctx) then
-                                r.ImGui_SetTooltip(ctx, "Click to toggle floating window")
+                                r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
+                            end
+                            if r.ImGui_IsItemClicked(ctx, 1) then
+                                r.ImGui_OpenPopup(ctx, "InfoTrackFXCtx_" .. i)
+                            end
+                            if r.ImGui_BeginPopup(ctx, "InfoTrackFXCtx_" .. i) then
+                                local is_bypassed = not r.TrackFX_GetEnabled(TRACK, i)
+                                if r.ImGui_MenuItem(ctx, is_bypassed and "Enable" or "Bypass") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_SetEnabled(TRACK, i, is_bypassed)
+                                    r.Undo_EndBlock(is_bypassed and "Enable FX" or "Bypass FX", -1)
+                                end
+                                local is_offline = r.TrackFX_GetOffline(TRACK, i)
+                                if r.ImGui_MenuItem(ctx, is_offline and "Online" or "Offline") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_SetOffline(TRACK, i, not is_offline)
+                                    r.Undo_EndBlock(is_offline and "Set FX Online" or "Set FX Offline", -1)
+                                end
+                                r.ImGui_Separator(ctx)
+                                if r.ImGui_MenuItem(ctx, "Show in FX Chain") then
+                                    r.TrackFX_Show(TRACK, i, 1)
+                                end
+                                if r.ImGui_MenuItem(ctx, "Float Window") then
+                                    r.TrackFX_Show(TRACK, i, 3)
+                                end
+                                r.ImGui_Separator(ctx)
+                                if i > 0 and r.ImGui_MenuItem(ctx, "Move Up") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_CopyToTrack(TRACK, i, TRACK, i - 1, true)
+                                    r.Undo_EndBlock("Move FX Up", -1)
+                                end
+                                if i < fx_count - 1 and r.ImGui_MenuItem(ctx, "Move Down") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_CopyToTrack(TRACK, i, TRACK, i + 2, true)
+                                    r.Undo_EndBlock("Move FX Down", -1)
+                                end
+                                r.ImGui_Separator(ctx)
+                                if r.ImGui_MenuItem(ctx, "Delete") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_Delete(TRACK, i)
+                                    r.Undo_EndBlock("Delete FX", -1)
+                                end
+                                r.ImGui_EndPopup(ctx)
                             end
                         end
                     end
                     r.ImGui_PopStyleVar(ctx)
                 end
+                
+                r.ImGui_Dummy(ctx, 0, 4)
+                local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                local half_w = (avail_w - 4) * 0.5
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A3A3AFF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A5A5AFF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7A7A7AFF)
+                if r.ImGui_Button(ctx, "Track FX##info_goto_trackfx", half_w, 0) then
+                    if selected_folder == "Current Track FX" and info_btn_prev_folder then
+                        SelectFolderExclusive(info_btn_prev_folder)
+                        UpdateLastViewedFolder(info_btn_prev_folder)
+                        GetPluginsForFolder(info_btn_prev_folder)
+                        info_btn_prev_folder = nil
+                    else
+                        if selected_folder ~= "Current Track FX" and selected_folder ~= "Current Project FX" then
+                            info_btn_prev_folder = selected_folder
+                        end
+                        SelectFolderExclusive("Current Track FX")
+                        UpdateLastViewedFolder("Current Track FX")
+                        show_media_browser = false
+                        show_sends_window = false
+                        show_action_browser = false
+                        RequestClearScreenshotCache()
+                        screenshot_search_results = nil
+                        filtered_plugins = GetCurrentTrackFX()
+                        GetPluginsForFolder("Current Track FX")
+                    end
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Project FX##info_goto_projfx", half_w, 0) then
+                    if selected_folder == "Current Project FX" and info_btn_prev_folder then
+                        SelectFolderExclusive(info_btn_prev_folder)
+                        UpdateLastViewedFolder(info_btn_prev_folder)
+                        GetPluginsForFolder(info_btn_prev_folder)
+                        info_btn_prev_folder = nil
+                    else
+                        if selected_folder ~= "Current Track FX" and selected_folder ~= "Current Project FX" then
+                            info_btn_prev_folder = selected_folder
+                        end
+                        SelectFolderExclusive("Current Project FX")
+                        UpdateLastViewedFolder("Current Project FX")
+                        show_media_browser = false
+                        show_sends_window = false
+                        show_action_browser = false
+                        ClearScreenshotCache()
+                        screenshot_search_results = {}
+                        local project_fx = GetCurrentProjectFX()
+                        current_filtered_fx = {}
+                        for _, fx in ipairs(project_fx) do
+                            table.insert(current_filtered_fx, fx.fx_name)
+                        end
+                        GetPluginsForFolder("Current Project FX")
+                    end
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
+
+                r.ImGui_Dummy(ctx, 0, 2)
+                local fx_count = r.TrackFX_GetCount(TRACK)
+                local all_bypassed = true
+                if fx_count > 0 then
+                    for i = 0, fx_count - 1 do
+                        if r.TrackFX_GetEnabled(TRACK, i) then all_bypassed = false break end
+                    end
+                else
+                    all_bypassed = false
+                end
+                local byp_bg = all_bypassed and 0xCC8800FF or 0x3A3A3AFF
+                local byp_hover = all_bypassed and 0xDDA020FF or 0x5A5A5AFF
+                local byp_active = all_bypassed and 0xEEB030FF or 0x7A7A7AFF
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), byp_bg)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), byp_hover)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), byp_active)
+                local byp_label = all_bypassed and "Unbypass All##info_byp" or "Bypass All##info_byp"
+                if r.ImGui_Button(ctx, byp_label, half_w, 0) then
+                    r.Undo_BeginBlock()
+                    local enable = all_bypassed
+                    for i = 0, fx_count - 1 do
+                        r.TrackFX_SetEnabled(TRACK, i, enable)
+                    end
+                    r.Undo_EndBlock(enable and "Enable all FX" or "Bypass all FX", -1)
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
+                r.ImGui_SameLine(ctx)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A3A3AFF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A5A5AFF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7A7A7AFF)
+                if r.ImGui_Button(ctx, "Make Chain##info_mkchain", half_w, 0) then
+                    if fx_count > 0 then
+                        local _, chunk = r.GetTrackStateChunk(TRACK, "", false)
+                        local fx_chain = chunk:match("<FXCHAIN(.-)>WAK")
+                        if not fx_chain then fx_chain = chunk:match("<FXCHAIN(.-)>\n>") end
+                        if fx_chain then
+                            local chain_content = "<FXCHAIN" .. fx_chain .. ">\n"
+                            local _, track_name = r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", "", false)
+                            if track_name == "" then
+                                track_name = "Track " .. m_floor(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
+                            end
+                            local safe_name = track_name:gsub("[^%w%s%-_]", "")
+                            local chain_dir = ResolveFxChainsRoot()
+                            local chain_path = chain_dir .. os_separator .. safe_name .. ".RfxChain"
+                            local n = 1
+                            while r.file_exists(chain_path) do
+                                chain_path = chain_dir .. os_separator .. safe_name .. " (" .. n .. ").RfxChain"
+                                n = n + 1
+                            end
+                            local f = io.open(chain_path, "w")
+                            if f then
+                                f:write(chain_content)
+                                f:close()
+                            end
+                        end
+                    end
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
                 
                 local sel_item = r.GetSelectedMediaItem(0, 0)
                 local take = sel_item and r.GetActiveTake(sel_item) or nil
@@ -9897,13 +10967,88 @@ function ShowBrowserPanel()
                                 if config.clean_plugin_names or config.remove_manufacturer_names then
                                     ifx_name = GetDisplayPluginName(ifx_name)
                                 end
+                                local ifx_bypassed = not r.TakeFX_GetEnabled(take, i)
+                                local ifx_offline = r.TakeFX_GetOffline(take, i)
+                                local ifx_color_count = 0
+                                if ifx_offline then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF4444AA)
+                                    ifx_color_count = 1
+                                elseif ifx_bypassed then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF)
+                                    ifx_color_count = 1
+                                end
                                 local clicked = r.ImGui_Selectable(ctx, ifx_name .. "##info_itemfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                                if ifx_color_count > 0 then r.ImGui_PopStyleColor(ctx, ifx_color_count) end
                                 if clicked then
                                     if r.TakeFX_GetFloatingWindow(take, i) then
                                         r.TakeFX_Show(take, i, 2)
                                     else
                                         r.TakeFX_Show(take, i, 3)
                                     end
+                                end
+                                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                    r.ImGui_SetDragDropPayload(ctx, "INFO_ITEMFX_DRAG", tostring(i))
+                                    r.ImGui_Text(ctx, ifx_name)
+                                    r.ImGui_EndDragDropSource(ctx)
+                                end
+                                if r.ImGui_BeginDragDropTarget(ctx) then
+                                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_ITEMFX_DRAG")
+                                    if rv then
+                                        local src = tonumber(payload)
+                                        if src and src ~= i then
+                                            local dest = i
+                                            if src < dest then dest = dest + 1 end
+                                            r.Undo_BeginBlock()
+                                            r.TakeFX_CopyToTake(take, src, take, dest, true)
+                                            r.Undo_EndBlock("Reorder Item FX", -1)
+                                        end
+                                    end
+                                    r.ImGui_EndDragDropTarget(ctx)
+                                end
+                                if r.ImGui_IsItemHovered(ctx) then
+                                    r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
+                                end
+                                if r.ImGui_IsItemClicked(ctx, 1) then
+                                    r.ImGui_OpenPopup(ctx, "InfoItemFXCtx_" .. i)
+                                end
+                                if r.ImGui_BeginPopup(ctx, "InfoItemFXCtx_" .. i) then
+                                    local is_bypassed = not r.TakeFX_GetEnabled(take, i)
+                                    if r.ImGui_MenuItem(ctx, is_bypassed and "Enable" or "Bypass") then
+                                        r.Undo_BeginBlock()
+                                        r.TakeFX_SetEnabled(take, i, is_bypassed)
+                                        r.Undo_EndBlock(is_bypassed and "Enable Item FX" or "Bypass Item FX", -1)
+                                    end
+                                    local is_offline = r.TakeFX_GetOffline(take, i)
+                                    if r.ImGui_MenuItem(ctx, is_offline and "Online" or "Offline") then
+                                        r.Undo_BeginBlock()
+                                        r.TakeFX_SetOffline(take, i, not is_offline)
+                                        r.Undo_EndBlock(is_offline and "Set Item FX Online" or "Set Item FX Offline", -1)
+                                    end
+                                    r.ImGui_Separator(ctx)
+                                    if r.ImGui_MenuItem(ctx, "Show in FX Chain") then
+                                        r.TakeFX_Show(take, i, 1)
+                                    end
+                                    if r.ImGui_MenuItem(ctx, "Float Window") then
+                                        r.TakeFX_Show(take, i, 3)
+                                    end
+                                    r.ImGui_Separator(ctx)
+                                    if i > 0 and r.ImGui_MenuItem(ctx, "Move Up") then
+                                        r.Undo_BeginBlock()
+                                        r.TakeFX_CopyToTake(take, i, take, i - 1, true)
+                                        r.Undo_EndBlock("Move Item FX Up", -1)
+                                    end
+                                    if i < ifx_count - 1 and r.ImGui_MenuItem(ctx, "Move Down") then
+                                        r.Undo_BeginBlock()
+                                        r.TakeFX_CopyToTake(take, i, take, i + 2, true)
+                                        r.Undo_EndBlock("Move Item FX Down", -1)
+                                    end
+                                    r.ImGui_Separator(ctx)
+                                    if r.ImGui_MenuItem(ctx, "Delete") then
+                                        r.Undo_BeginBlock()
+                                        r.TakeFX_Delete(take, i)
+                                        r.Undo_EndBlock("Delete Item FX", -1)
+                                    end
+                                    r.ImGui_EndPopup(ctx)
                                 end
                             end
                         end
@@ -9922,10 +11067,63 @@ function ShowBrowserPanel()
                 r.ImGui_Text(ctx, "Item FX: -")
             end
         end
-        r.ImGui_EndChild(ctx) -- InfoContent
-        r.ImGui_PopStyleVar(ctx) -- ScrollbarSize
+        if info_open then
+            r.ImGui_EndChild(ctx)
+        end
+        r.ImGui_PopStyleVar(ctx)
     end
     
+    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") and browser_panel_show_info then
+        local btn_w = (r.ImGui_GetContentRegionAvail(ctx) - 8) / 3
+        local is_armed = r.GetMediaTrackInfo_Value(TRACK, "I_RECARM") == 1
+        local is_muted = r.GetMediaTrackInfo_Value(TRACK, "B_MUTE") == 1
+        local is_soloed = r.GetMediaTrackInfo_Value(TRACK, "I_SOLO") > 0
+
+        if is_armed then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xCC2222FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xDD3333FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xEE4444FF)
+        else
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A3A3AFF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A5A5AFF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7A7A7AFF)
+        end
+        if r.ImGui_Button(ctx, "Arm##info_arm", btn_w, 20) then
+            r.SetMediaTrackInfo_Value(TRACK, "I_RECARM", is_armed and 0 or 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+
+        r.ImGui_SameLine(ctx)
+        if is_muted then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xCC8800FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xDDA020FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xEEB030FF)
+        else
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A3A3AFF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A5A5AFF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7A7A7AFF)
+        end
+        if r.ImGui_Button(ctx, "Mute##info_mute", btn_w, 20) then
+            r.SetMediaTrackInfo_Value(TRACK, "B_MUTE", is_muted and 0 or 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+
+        r.ImGui_SameLine(ctx)
+        if is_soloed then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xCCCC00FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xDDDD20FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xEEEE30FF)
+        else
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A3A3AFF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A5A5AFF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7A7A7AFF)
+        end
+        if r.ImGui_Button(ctx, "Solo##info_solo", btn_w, 20) then
+            r.SetMediaTrackInfo_Value(TRACK, "I_SOLO", is_soloed and 0 or 2)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+    end
+
     local toggle_label = browser_panel_show_info and "Browser" or "Info"
     if r.ImGui_Button(ctx, toggle_label, -1, 20) then
         browser_panel_show_info = not browser_panel_show_info
@@ -10087,6 +11285,31 @@ function DrawFavoriteOverlayAt(tlx, tly, w, h)
     r.ImGui_DrawList_AddRectFilled(dl, x1,   y1,   x2,   y2,   badge_col, rounding)
 end
 
+function DrawNameOnScreenshot(tlx, tly, w, h, name)
+    if not config.show_name_on_screenshot then return end
+    if not name or name == '' then return end
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local display_name = GetDisplayPluginName(name)
+    display_name = display_name:gsub("%s*%([^%)]+%)%s*$", "")
+    local stars = GetStarsString(name)
+    local rating = plugin_ratings[name] or 0
+    local pad_x = 4
+    local pad_y = 2
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+    local lines = (rating > 0) and 2 or 1
+    local bar_h = line_h * lines + pad_y * 2 + (rating > 0 and 2 or 0)
+    local bar_y = tly + h - bar_h
+    r.ImGui_DrawList_AddRectFilled(dl, tlx, bar_y, tlx + w, tly + h, 0x000000B0, 0)
+    local name_w = r.ImGui_CalcTextSize(ctx, display_name)
+    local name_x = tlx + math.floor((w - name_w) * 0.5)
+    r.ImGui_DrawList_AddText(dl, name_x, bar_y + pad_y, 0xFFFFFFFF, display_name)
+    if rating > 0 then
+        local stars_w = r.ImGui_CalcTextSize(ctx, stars)
+        local stars_x = tlx + math.floor((w - stars_w) * 0.5)
+        r.ImGui_DrawList_AddText(dl, stars_x, bar_y + pad_y + line_h + 2, 0xFFD700FF, stars)
+    end
+end
+
 function DrawHorizontalSeparatorBar(thickness, color)
     local dl = r.ImGui_GetWindowDrawList(ctx)
     local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
@@ -10185,6 +11408,7 @@ function DrawMasonryLayout(screenshots, top_offset)
                     
                     if IsPluginPinned and IsPluginPinned(fx.name) then DrawPinnedOverlayAt(item_min_x, item_min_y, actual_w, actual_h) end
                     if favorite_set and favorite_set[fx.name] then DrawFavoriteOverlayAt(item_min_x, item_min_y, actual_w, actual_h) end
+                    DrawNameOnScreenshot(item_min_x, item_min_y, actual_w, actual_h, fx.name)
 
                     if config.enable_drag_add_fx then
                         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -10283,31 +11507,68 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
     end
     
     scripts_launcher = scripts_launcher or {}
-  
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 14, 14)
-    if r.ImGui_Button(ctx, "+##AddScriptLauncher", 20, 20) then
+
+    r.ImGui_Spacing(ctx)
+    if r.ImGui_Button(ctx, "+##AddScriptLauncher", 22, 22) then
         show_launcher_add_popup = true
         new_script_name = ""
         new_script_cmd = ""
         new_script_thumb = ""
         r.ImGui_OpenPopup(ctx, "Add Script")
     end
-    r.ImGui_PopStyleVar(ctx)
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add script or action") end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_PushItemWidth(ctx, 120)
+    local sz_changed, new_sz = r.ImGui_SliderInt(ctx, "##ThumbSize", config.script_thumb_size or 120, 60, 300, "%dpx")
+    if sz_changed then
+        config.script_thumb_size = new_sz
+        SaveConfig()
+    end
+    r.ImGui_PopItemWidth(ctx)
+    r.ImGui_SameLine(ctx)
+    local lbl_active = config.show_script_labels ~= false
+    if not lbl_active then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x555555FF)
+    end
+    if r.ImGui_Button(ctx, "Labels", 0, 22) then
+        config.show_script_labels = not lbl_active
+        SaveConfig()
+    end
+    if not lbl_active then
+        r.ImGui_PopStyleColor(ctx)
+    end
 
     if r.ImGui_BeginPopupModal(ctx, "Add Script", true, r.ImGui_WindowFlags_AlwaysAutoResize()) then
         new_script_name = new_script_name or ""
         new_script_cmd = new_script_cmd or ""
         new_script_thumb = new_script_thumb or ""
+        new_script_label = new_script_label or ""
         local changedName, inpName = r.ImGui_InputText(ctx, "Naam", new_script_name)
         if changedName then new_script_name = inpName end
         local changedCmd, inpCmd = r.ImGui_InputText(ctx, "Script / Action ID", new_script_cmd)
         if changedCmd then new_script_cmd = inpCmd end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Paste##AddPaste") then
+            local clip = r.CF_GetClipboard("")
+            if clip and clip ~= "" then
+                new_script_cmd = clip:match("^%s*(.-)%s*$")
+                if new_script_name == "" then
+                    local name = r.CF_GetCommandText(0, r.NamedCommandLookup(new_script_cmd))
+                    if name and name ~= "" then new_script_name = name end
+                end
+            end
+        end
         r.ImGui_Text(ctx, "Thumbnail (120x80 recommended)")
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "choose...") then
             local ok, file = r.GetUserFileNameForRead("", "Choose Image", "png;bmp;jpg;jpeg")
             if ok and file and file ~= "" then new_script_thumb = file end
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Capture Window##AddCapture") then
+            capture_window_list = GetVisibleWindows()
+            capture_window_mode = "add"
+            r.ImGui_OpenPopup(ctx, "SelectCaptureWindow")
         end
         if new_script_thumb ~= "" then
             local short = new_script_thumb:match("[^/\\]+$") or new_script_thumb
@@ -10315,11 +11576,31 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
         else
             r.ImGui_Text(ctx, "(no Image chosen)")
         end
+        local changedLabel, inpLabel = r.ImGui_InputText(ctx, "Label", new_script_label)
+        if changedLabel then new_script_label = inpLabel end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_BeginCombo(ctx, "##LabelPick", "", r.ImGui_ComboFlags_NoPreview()) then
+            local existing = {}
+            local seen = {}
+            for _, s in ipairs(scripts_launcher) do
+                if s.label and s.label ~= "" and not seen[s.label] then
+                    seen[s.label] = true
+                    table.insert(existing, s.label)
+                end
+            end
+            table.sort(existing, function(a, b) return a:lower() < b:lower() end)
+            for _, lbl in ipairs(existing) do
+                if r.ImGui_Selectable(ctx, lbl) then
+                    new_script_label = lbl
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
         r.ImGui_Separator(ctx)
         local can_save = (new_script_name ~= "" and new_script_cmd ~= "")
         if not can_save then r.ImGui_BeginDisabled(ctx) end
         if r.ImGui_Button(ctx, "SAVE", 60, 25) then
-            table.insert(scripts_launcher, {name=new_script_name, cmd=new_script_cmd, thumb=new_script_thumb})
+            table.insert(scripts_launcher, {name=new_script_name, cmd=new_script_cmd, thumb=new_script_thumb, label=new_script_label ~= "" and new_script_label or nil})
             SaveScriptsLauncher()
             r.ImGui_CloseCurrentPopup(ctx)
         end
@@ -10335,55 +11616,157 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
     local available_height = window_height - current_y - footer_height
     r.ImGui_BeginChild(ctx, "ScriptsLauncherList", -1, available_height)
         local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-        local cell_w = 120
-        local cell_h = 80
+        local cell_w = config.script_thumb_size or 120
+        local cell_h = math.floor(cell_w * 80 / 120)
         local spacing = 12
-        local start_x = r.ImGui_GetCursorPosX(ctx)
-        local x = start_x
-        local y = r.ImGui_GetCursorPosY(ctx)
-    local cols = math.max(1, math.floor((avail_w + spacing) / (cell_w + spacing)))
-    local col_index = 0
+
+        local show_labels = config.show_script_labels ~= false
+
+        local sorted_scripts = {}
         for i, sc in ipairs(scripts_launcher) do
-            if col_index >= cols then
-                col_index = 0
-                x = start_x
-                y = y + cell_h + spacing + 30 
+            table.insert(sorted_scripts, {idx = i, sc = sc})
+        end
+
+        if show_labels then
+            local label_groups = {}
+            local label_order = {}
+            local has_no_label = false
+            for _, item in ipairs(sorted_scripts) do
+                local lbl = item.sc.label or ""
+                if lbl == "" then
+                    has_no_label = true
+                    if not label_groups["__NO_LABEL__"] then
+                        label_groups["__NO_LABEL__"] = {}
+                    end
+                    table.insert(label_groups["__NO_LABEL__"], item)
+                else
+                    if not label_groups[lbl] then
+                        label_groups[lbl] = {}
+                        table.insert(label_order, lbl)
+                    end
+                    table.insert(label_groups[lbl], item)
+                end
             end
-            r.ImGui_SetCursorPos(ctx, x, y)
-            local id = "script_cell_" .. i
-            local cell_clicked = false
-            if type(sc.thumb) == 'string' and sc.thumb ~= "" and r.file_exists(sc.thumb) then
-                local tex = LoadSearchTexture(sc.thumb, sc.thumb)
-                if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
-                    if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
+            table.sort(label_order, function(a, b) return a:lower() < b:lower() end)
+            if has_no_label then
+                table.insert(label_order, "__NO_LABEL__")
+            end
+
+            for _, lbl in ipairs(label_order) do
+                local items = label_groups[lbl]
+                local display_label = lbl == "__NO_LABEL__" and "No Label" or lbl
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                r.ImGui_Text(ctx, display_label)
+                r.ImGui_PopStyleColor(ctx)
+                r.ImGui_Separator(ctx)
+
+                local start_x = r.ImGui_GetCursorPosX(ctx)
+                local x = start_x
+                local y = r.ImGui_GetCursorPosY(ctx)
+                local cols = math.max(1, math.floor((avail_w + spacing) / (cell_w + spacing)))
+                local col_index = 0
+
+                for _, item in ipairs(items) do
+                    local i = item.idx
+                    local sc = item.sc
+                    if col_index >= cols then
+                        col_index = 0
+                        x = start_x
+                        y = y + cell_h + spacing + 30
+                    end
+                    r.ImGui_SetCursorPos(ctx, x, y)
+                    local id = "script_cell_" .. i
+                    local cell_clicked = false
+                    if type(sc.thumb) == 'string' and sc.thumb ~= "" and r.file_exists(sc.thumb) then
+                        local tex = LoadSearchTexture(sc.thumb, sc.thumb)
+                        if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+                            if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
+                        else
+                            if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
+                        end
+                    else
+                        if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
+                    end
+
+                    if cell_clicked then
+                        local cmd = sc.cmd
+                        if cmd:match("^_") then
+                            local cmd_id = r.NamedCommandLookup(cmd)
+                            if cmd_id ~= 0 then r.Main_OnCommand(cmd_id, 0) end
+                        elseif tonumber(cmd) then
+                            r.Main_OnCommand(tonumber(cmd), 0)
+                        end
+                    end
+
+                    if r.ImGui_IsItemClicked(ctx, 1) then
+                        edit_script_index = i
+                        edit_script_name = sc.name
+                        edit_script_cmd = sc.cmd
+                        edit_script_thumb = sc.thumb
+                        edit_script_label = sc.label or ""
+                    end
+                    local text_w = r.ImGui_CalcTextSize(ctx, sc.name)
+                    r.ImGui_SetCursorPos(ctx, x + (cell_w - text_w)/2, y + cell_h + 4)
+                    r.ImGui_Text(ctx, sc.name)
+                    col_index = col_index + 1
+                    x = x + cell_w + spacing
+                end
+                r.ImGui_SetCursorPosY(ctx, y + cell_h + spacing + 30)
+                r.ImGui_Spacing(ctx)
+            end
+        else
+            table.sort(sorted_scripts, function(a, b) return a.sc.name:lower() < b.sc.name:lower() end)
+            local start_x = r.ImGui_GetCursorPosX(ctx)
+            local x = start_x
+            local y = r.ImGui_GetCursorPosY(ctx)
+            local cols = math.max(1, math.floor((avail_w + spacing) / (cell_w + spacing)))
+            local col_index = 0
+
+            for _, item in ipairs(sorted_scripts) do
+                local i = item.idx
+                local sc = item.sc
+                if col_index >= cols then
+                    col_index = 0
+                    x = start_x
+                    y = y + cell_h + spacing + 30
+                end
+                r.ImGui_SetCursorPos(ctx, x, y)
+                local id = "script_cell_" .. i
+                local cell_clicked = false
+                if type(sc.thumb) == 'string' and sc.thumb ~= "" and r.file_exists(sc.thumb) then
+                    local tex = LoadSearchTexture(sc.thumb, sc.thumb)
+                    if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+                        if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
+                    else
+                        if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
+                    end
                 else
                     if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
                 end
-            else
-                if r.ImGui_Button(ctx, sc.name .. "##btn" .. i, cell_w, cell_h) then cell_clicked = true end
-            end
 
-            if cell_clicked then
-                local cmd = sc.cmd
-                if cmd:match("^_") then
-                    local cmd_id = r.NamedCommandLookup(cmd)
-                    if cmd_id ~= 0 then r.Main_OnCommand(cmd_id, 0) end
-                elseif tonumber(cmd) then
-                    r.Main_OnCommand(tonumber(cmd), 0)
+                if cell_clicked then
+                    local cmd = sc.cmd
+                    if cmd:match("^_") then
+                        local cmd_id = r.NamedCommandLookup(cmd)
+                        if cmd_id ~= 0 then r.Main_OnCommand(cmd_id, 0) end
+                    elseif tonumber(cmd) then
+                        r.Main_OnCommand(tonumber(cmd), 0)
+                    end
                 end
-            end
 
-            if r.ImGui_IsItemClicked(ctx, 1) then
-                edit_script_index = i
-                edit_script_name = sc.name
-                edit_script_cmd = sc.cmd
-                edit_script_thumb = sc.thumb
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    edit_script_index = i
+                    edit_script_name = sc.name
+                    edit_script_cmd = sc.cmd
+                    edit_script_thumb = sc.thumb
+                    edit_script_label = sc.label or ""
+                end
+                local text_w = r.ImGui_CalcTextSize(ctx, sc.name)
+                r.ImGui_SetCursorPos(ctx, x + (cell_w - text_w)/2, y + cell_h + 4)
+                r.ImGui_Text(ctx, sc.name)
+                col_index = col_index + 1
+                x = x + cell_w + spacing
             end
-            local text_w = r.ImGui_CalcTextSize(ctx, sc.name)
-            r.ImGui_SetCursorPos(ctx, x + (cell_w - text_w)/2, y + cell_h + 4)
-            r.ImGui_Text(ctx, sc.name)
-            col_index = col_index + 1
-            x = x + cell_w + spacing
         end
         if edit_script_index then
             r.ImGui_Separator(ctx)
@@ -10393,15 +11776,30 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
             edit_script_name = edit_script_name or sc_edit.name
             edit_script_cmd  = edit_script_cmd or sc_edit.cmd
             edit_script_thumb = edit_script_thumb or sc_edit.thumb
+            edit_script_label = edit_script_label or sc_edit.label or ""
             local c1, n1 = r.ImGui_InputText(ctx, "Naam", edit_script_name)
             if c1 then edit_script_name = n1 end
             local c2, n2 = r.ImGui_InputText(ctx, "Script / Action ID", edit_script_cmd)
             if c2 then edit_script_cmd = n2 end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Paste##EditPaste") then
+                local clip = r.CF_GetClipboard("")
+                if clip and clip ~= "" then
+                    edit_script_cmd = clip:match("^%s*(.-)%s*$")
+                end
+            end
             r.ImGui_Text(ctx, "Thumbnail (120x80)")
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "choose...##EditThumb") then
                 local ok, file = r.GetUserFileNameForRead("", "Choose Image", "png;bmp;jpg;jpeg")
                 if ok and file and file ~= "" then edit_script_thumb = file end
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Capture Window##EditCapture") then
+                capture_window_list = GetVisibleWindows()
+                capture_window_mode = "edit"
+                capture_target_index = idx
+                r.ImGui_OpenPopup(ctx, "SelectCaptureWindow")
             end
             if edit_script_thumb and edit_script_thumb ~= "" then
                 local short = edit_script_thumb:match("[^/\\]+$") or edit_script_thumb
@@ -10409,28 +11807,85 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
             else
                 r.ImGui_Text(ctx, "(No Image Chosen)")
             end
+            local c3, n3 = r.ImGui_InputText(ctx, "Label##EditLabel", edit_script_label)
+            if c3 then edit_script_label = n3 end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_BeginCombo(ctx, "##EditLabelPick", "", r.ImGui_ComboFlags_NoPreview()) then
+                local existing = {}
+                local seen = {}
+                for _, s in ipairs(scripts_launcher) do
+                    if s.label and s.label ~= "" and not seen[s.label] then
+                        seen[s.label] = true
+                        table.insert(existing, s.label)
+                    end
+                end
+                table.sort(existing, function(a, b) return a:lower() < b:lower() end)
+                for _, lbl in ipairs(existing) do
+                    if r.ImGui_Selectable(ctx, lbl .. "##editpick") then
+                        edit_script_label = lbl
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x228B22FF)
             if r.ImGui_Button(ctx, "SAVE", 60, 26) then
-                scripts_launcher[idx].name  = (edit_script_name ~= "" and edit_script_name) or scripts_launcher[idx].name
-                scripts_launcher[idx].cmd   = (edit_script_cmd ~= "" and edit_script_cmd) or scripts_launcher[idx].cmd
+                scripts_launcher[idx].name  = (edit_script_name ~= "") and edit_script_name or scripts_launcher[idx].name
+                scripts_launcher[idx].cmd   = (edit_script_cmd ~= "") and edit_script_cmd or scripts_launcher[idx].cmd
                 scripts_launcher[idx].thumb = edit_script_thumb or scripts_launcher[idx].thumb
+                scripts_launcher[idx].label = (edit_script_label ~= "") and edit_script_label or nil
                 SaveScriptsLauncher()
                 edit_script_index = nil
-                edit_script_name, edit_script_cmd, edit_script_thumb = nil, nil, nil
+                edit_script_name, edit_script_cmd, edit_script_thumb, edit_script_label = nil, nil, nil, nil
             end
             r.ImGui_PopStyleColor(ctx)
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "CANCEL", 60, 26) then
                 edit_script_index = nil
-                edit_script_name, edit_script_cmd, edit_script_thumb = nil, nil, nil
+                edit_script_name, edit_script_cmd, edit_script_thumb, edit_script_label = nil, nil, nil, nil
             end
             r.ImGui_SameLine(ctx)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xAA2222FF)
-            if r.ImGui_Button(ctx, "All", 30, 20) then
-                SearchAllPlugins()
+            if r.ImGui_Button(ctx, "DELETE", 60, 26) then
+                table.remove(scripts_launcher, idx)
+                SaveScriptsLauncher()
+                edit_script_index = nil
+                edit_script_name, edit_script_cmd, edit_script_thumb, edit_script_label = nil, nil, nil, nil
             end
             r.ImGui_PopStyleColor(ctx)
-        end 
+        end
+
+        if r.ImGui_BeginPopup(ctx, "SelectCaptureWindow") then
+            r.ImGui_Text(ctx, "Select window to capture:")
+            r.ImGui_Separator(ctx)
+            if #capture_window_list == 0 then
+                r.ImGui_Text(ctx, "(no visible windows found)")
+            else
+                for wi, win in ipairs(capture_window_list) do
+                    if r.ImGui_Selectable(ctx, win.title .. "##capwin_" .. wi) then
+                        local cap_name = win.title:gsub("[^%w%s-]", "_")
+                        local path = CaptureWindowScreenshot(win.hwnd, cap_name)
+                        if path then
+                            if capture_window_mode == "add" then
+                                new_script_thumb = path
+                            elseif capture_window_mode == "edit" and capture_target_index then
+                                edit_script_thumb = path
+                            end
+                        end
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                end
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Button(ctx, "Refresh") then
+                capture_window_list = GetVisibleWindows()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel##CapCancel") then
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+
     r.ImGui_EndChild(ctx)
     return popped_view_stylevars
 end
@@ -10675,17 +12130,56 @@ function ShowScreenshotWindow()
             end
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "D", button_width, button_height) then
-                show_project_dates = not show_project_dates
-            end
-
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "P", button_width, button_height) then
-                show_project_paths = not show_project_paths
+            if r.ImGui_Button(ctx, "\xE2\x98\xB0", button_width, button_height) then
+                r.ImGui_OpenPopup(ctx, "##ProjectColumnsMenu")
             end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "i", button_width, button_height) then
-                show_project_info = not show_project_info
+                config.show_project_info = not config.show_project_info
+                SaveConfig()
+            end
+
+            if r.ImGui_BeginPopup(ctx, "##ProjectColumnsMenu") then
+                local col_changed = false
+                local rv
+                rv, config.show_project_col_sizes = r.ImGui_Checkbox(ctx, "Size", config.show_project_col_sizes)
+                if rv then col_changed = true end
+                rv, config.show_project_col_lengths = r.ImGui_Checkbox(ctx, "Length", config.show_project_col_lengths)
+                if rv then col_changed = true end
+                rv, config.show_project_col_media = r.ImGui_Checkbox(ctx, "Files", config.show_project_col_media)
+                if rv then col_changed = true end
+                rv, config.show_project_col_dates = r.ImGui_Checkbox(ctx, "Date", config.show_project_col_dates)
+                if rv then col_changed = true end
+                rv, config.show_project_col_paths = r.ImGui_Checkbox(ctx, "Path", config.show_project_col_paths)
+                if rv then col_changed = true end
+                rv, config.show_project_col_comment = r.ImGui_Checkbox(ctx, "Comment", config.show_project_col_comment)
+                if rv then col_changed = true end
+                rv, config.show_project_col_bpm = r.ImGui_Checkbox(ctx, "BPM", config.show_project_col_bpm)
+                if rv then col_changed = true end
+                rv, config.show_project_col_samplerate = r.ImGui_Checkbox(ctx, "Sample Rate", config.show_project_col_samplerate)
+                if rv then col_changed = true end
+                rv, config.show_project_col_tracks = r.ImGui_Checkbox(ctx, "Tracks", config.show_project_col_tracks)
+                if rv then col_changed = true end
+                r.ImGui_Separator(ctx)
+                local cover_rv, new_cover = r.ImGui_Checkbox(ctx, "Cover Image", show_project_cover)
+                if cover_rv then
+                    show_project_cover = new_cover
+                    config.show_project_cover = new_cover
+                    col_changed = true
+                end
+                if show_project_cover then
+                    r.ImGui_SameLine(ctx)
+                    local align = config.project_cover_align or "right"
+                    if r.ImGui_Button(ctx, align == "right" and "R" or "L", 20, 0) then
+                        config.project_cover_align = align == "right" and "left" or "right"
+                        col_changed = true
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Align: " .. (config.project_cover_align or "right"))
+                    end
+                end
+                if col_changed then SaveConfig() end
+                r.ImGui_EndPopup(ctx)
             end
             local window_width = r.ImGui_GetWindowWidth(ctx)
             r.ImGui_PushItemWidth(ctx, window_width - 55) 
@@ -10740,32 +12234,160 @@ function ShowScreenshotWindow()
             
             local window_height = r.ImGui_GetWindowHeight(ctx)
             local current_y = r.ImGui_GetCursorPosY(ctx)
-            local footer_height = show_project_info and 175 or 1
+            local footer_height = config.show_project_info and 202 or 1
             local available_height = window_height - current_y - footer_height
             r.ImGui_BeginChild(ctx, "ProjectsList", -1, available_height)
-                for i, project in ipairs(filtered_projects) do
-                    local has_preview = r.file_exists(project.path .. "-PROX")
-                    local display_name = project.name
-                    
-                    if has_preview then
-                        display_name = display_name .. " [P]"
+                local num_columns = 3
+                if config.show_project_col_sizes then num_columns = num_columns + 1 end
+                if config.show_project_col_lengths then num_columns = num_columns + 1 end
+                if config.show_project_col_media then num_columns = num_columns + 1 end
+                if config.show_project_col_dates then num_columns = num_columns + 1 end
+                if config.show_project_col_paths then num_columns = num_columns + 1 end
+                if config.show_project_col_comment then num_columns = num_columns + 1 end
+                if config.show_project_col_bpm then num_columns = num_columns + 1 end
+                if config.show_project_col_samplerate then num_columns = num_columns + 1 end
+                if config.show_project_col_tracks then num_columns = num_columns + 1 end
+                local table_flags = r.ImGui_TableFlags_ScrollY()
+                    | r.ImGui_TableFlags_Resizable()
+                    | r.ImGui_TableFlags_RowBg()
+                    | r.ImGui_TableFlags_SizingStretchProp()
+                    | r.ImGui_TableFlags_Sortable()
+                if r.ImGui_BeginTable(ctx, "ProjectsTable", num_columns, table_flags) then
+                r.ImGui_TableSetupColumn(ctx, "\xE2\x97\x8F", r.ImGui_TableColumnFlags_WidthFixed() | r.ImGui_TableColumnFlags_NoSort() | r.ImGui_TableColumnFlags_NoResize(), 14)
+                r.ImGui_TableSetupColumn(ctx, "Name", r.ImGui_TableColumnFlags_NoHide() | r.ImGui_TableColumnFlags_DefaultSort(), 3)
+                r.ImGui_TableSetupColumn(ctx, "Image", 0, 0.7)
+                if config.show_project_col_sizes then
+                    r.ImGui_TableSetupColumn(ctx, "Size", 0, 1)
+                end
+                if config.show_project_col_lengths then
+                    r.ImGui_TableSetupColumn(ctx, "Length", 0, 1)
+                end
+                if config.show_project_col_media then
+                    r.ImGui_TableSetupColumn(ctx, "Files", 0, 0.7)
+                end
+                if config.show_project_col_paths then
+                    r.ImGui_TableSetupColumn(ctx, "Path", 0, 2)
+                end
+                if config.show_project_col_bpm then
+                    r.ImGui_TableSetupColumn(ctx, "BPM", 0, 0.7)
+                end
+                if config.show_project_col_samplerate then
+                    r.ImGui_TableSetupColumn(ctx, "SR", 0, 0.7)
+                end
+                if config.show_project_col_tracks then
+                    r.ImGui_TableSetupColumn(ctx, "Tracks", 0, 0.7)
+                end
+                if config.show_project_col_dates then
+                    r.ImGui_TableSetupColumn(ctx, "Date", 0, 1.5)
+                end
+                if config.show_project_col_comment then
+                    r.ImGui_TableSetupColumn(ctx, "Comment", 0, 2)
+                end
+                r.ImGui_TableHeadersRow(ctx)
+
+                local need_sort, has_specs = r.ImGui_TableNeedSort(ctx)
+                if need_sort and has_specs then
+                    local ok, col_idx, _, sort_dir = r.ImGui_TableGetColumnSortSpecs(ctx, 0)
+                    if ok then
+                        local col_names = {"preview", "name", "image"}
+                        if config.show_project_col_sizes then table.insert(col_names, "size") end
+                        if config.show_project_col_lengths then table.insert(col_names, "length") end
+                        if config.show_project_col_media then table.insert(col_names, "media") end
+                        if config.show_project_col_paths then table.insert(col_names, "path") end
+                        if config.show_project_col_bpm then table.insert(col_names, "bpm") end
+                        if config.show_project_col_samplerate then table.insert(col_names, "samplerate") end
+                        if config.show_project_col_tracks then table.insert(col_names, "tracks") end
+                        if config.show_project_col_dates then table.insert(col_names, "date") end
+                        if config.show_project_col_comment then table.insert(col_names, "comment") end
+
+                        project_sort_column = col_names[col_idx + 1] or "name"
+                        project_sort_ascending = sort_dir == r.ImGui_SortDirection_Ascending()
                     end
-                    
-                    if show_project_paths then
-                        display_name = display_name .. " - [" .. project.path .. "]"
-                    end
-                    if show_project_dates and reaper.JS_File_Stat then
-                        local retval, _, _, _, datetime = reaper.JS_File_Stat(project.path)
-                        if retval and datetime then
-                            display_name = display_name .. " - [" .. datetime .. "]"
+                end
+
+                if project_sort_column and project_sort_column ~= "preview" then
+                    for _, p in ipairs(filtered_projects) do
+                        if not p.cached_size then p.cached_size = GetFileSize(p.path) end
+                        if p.cached_length == nil then
+                            if r.file_exists(p.path .. "-PROX") then
+                                local src = r.PCM_Source_CreateFromFile(p.path .. "-PROX")
+                                p.cached_length = src and r.GetMediaSourceLength(src) or 0
+                            else
+                                p.cached_length = 0
+                            end
+                        end
+                        if not p.cached_media then p.cached_media = CountProjectFolderFiles(p.path) end
+                        if p.cached_cover == nil then p.cached_cover = GetProjectCoverPath(p.path) ~= nil end
+                        if not p.cached_date then
+                            if reaper.JS_File_Stat then
+                                local retval, _, _, _, datetime = reaper.JS_File_Stat(p.path)
+                                p.cached_date = (retval and datetime) or ""
+                            else
+                                p.cached_date = ""
+                            end
+                        end
+                        if not p.cached_rpp_info then
+                            p.cached_rpp_info = ParseRPPHeader(p.path) or {}
                         end
                     end
-                    
+
+                    local sc = project_sort_column
+                    local asc = project_sort_ascending
+                    table.sort(filtered_projects, function(a, b)
+                        local va, vb
+                        if sc == "name" then
+                            va, vb = a.name:lower(), b.name:lower()
+                        elseif sc == "image" then
+                            va, vb = a.cached_cover and 1 or 0, b.cached_cover and 1 or 0
+                        elseif sc == "size" then
+                            va, vb = a.cached_size or 0, b.cached_size or 0
+                        elseif sc == "length" then
+                            va, vb = a.cached_length or 0, b.cached_length or 0
+                        elseif sc == "media" then
+                            va, vb = a.cached_media or 0, b.cached_media or 0
+                        elseif sc == "date" then
+                            va, vb = a.cached_date or "", b.cached_date or ""
+                        elseif sc == "path" then
+                            va, vb = a.path:lower(), b.path:lower()
+                        elseif sc == "comment" then
+                            va, vb = (project_comments[a.path] or ""):lower(), (project_comments[b.path] or ""):lower()
+                        elseif sc == "bpm" then
+                            va, vb = (a.cached_rpp_info and a.cached_rpp_info.bpm) or 0, (b.cached_rpp_info and b.cached_rpp_info.bpm) or 0
+                        elseif sc == "samplerate" then
+                            va, vb = (a.cached_rpp_info and a.cached_rpp_info.samplerate) or 0, (b.cached_rpp_info and b.cached_rpp_info.samplerate) or 0
+                        elseif sc == "tracks" then
+                            va, vb = (a.cached_rpp_info and a.cached_rpp_info.track_count) or 0, (b.cached_rpp_info and b.cached_rpp_info.track_count) or 0
+                        else
+                            va, vb = a.name:lower(), b.name:lower()
+                        end
+                        if va == vb then return a.path < b.path end
+                        if asc then return va < vb else return va > vb end
+                    end)
+                end
+
+                for i, project in ipairs(filtered_projects) do
+                    r.ImGui_PushID(ctx, project.path)
+                    r.ImGui_TableNextRow(ctx)
+                    r.ImGui_TableNextColumn(ctx)
+
+                    local has_preview = r.file_exists(project.path .. "-PROX")
+                    local has_cover = GetProjectCoverPath(project.path) ~= nil
+
+                    if has_preview then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x50FA7BFF)
+                    else
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x555555FF)
+                    end
+                    r.ImGui_Text(ctx, has_preview and "\xE2\x97\x8F" or "\xE2\x97\x8B")
+                    r.ImGui_PopStyleColor(ctx)
+
+                    r.ImGui_TableNextColumn(ctx)
+
                     local is_selected = (selected_project and selected_project.path == project.path)
-                    
-                    if r.ImGui_Selectable(ctx, display_name, is_selected) then
+
+                    if r.ImGui_Selectable(ctx, project.name, is_selected, r.ImGui_SelectableFlags_SpanAllColumns() | r.ImGui_SelectableFlags_AllowOverlap()) then
                         selected_project = project
-                        
+
                         if has_preview then
                             local source = r.PCM_Source_CreateFromFile(project.path .. "-PROX")
                             current_preview = r.CF_CreatePreview(source)
@@ -10775,19 +12397,134 @@ function ShowScreenshotWindow()
                             current_preview = nil
                             current_source = nil
                         end
-                        
+
                         current_project_info = {
                             path = project.path,
                             name = project.name,
                             has_preview = has_preview,
                             length = has_preview and r.GetMediaSourceLength(current_source) or 0,
                             size = GetFileSize(project.path),
-                            folder_files = CountProjectFolderFiles(project.path)
+                            folder_files = CountProjectFolderFiles(project.path),
+                            rpp_info = ParseRPPHeader(project.path)
                         }
                     end
-                                
+
                     if r.ImGui_IsItemClicked(ctx, 1) then
                         r.ImGui_OpenPopup(ctx, "ProjectContextMenu_" .. i)
+                    end
+
+                    r.ImGui_TableNextColumn(ctx)
+                    if has_cover then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                        r.ImGui_Text(ctx, "Yes")
+                    else
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x555555FF)
+                        r.ImGui_Text(ctx, "No")
+                    end
+                    r.ImGui_PopStyleColor(ctx)
+
+                    if config.show_project_col_sizes then
+                        r.ImGui_TableNextColumn(ctx)
+                        if not project.cached_size then
+                            project.cached_size = GetFileSize(project.path)
+                        end
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                        r.ImGui_Text(ctx, FormatFileSize(project.cached_size))
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+
+                    if config.show_project_col_lengths then
+                        r.ImGui_TableNextColumn(ctx)
+                        if project.cached_length == nil then
+                            if has_preview then
+                                local src = r.PCM_Source_CreateFromFile(project.path .. "-PROX")
+                                if src then
+                                    project.cached_length = r.GetMediaSourceLength(src)
+                                else
+                                    project.cached_length = 0
+                                end
+                            else
+                                project.cached_length = 0
+                            end
+                        end
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                        r.ImGui_Text(ctx, FormatDuration(project.cached_length))
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+
+                    if config.show_project_col_media then
+                        r.ImGui_TableNextColumn(ctx)
+                        if not project.cached_media then
+                            project.cached_media = CountProjectFolderFiles(project.path)
+                        end
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                        r.ImGui_Text(ctx, tostring(project.cached_media))
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+
+                    if config.show_project_col_paths then
+                        r.ImGui_TableNextColumn(ctx)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                        r.ImGui_Text(ctx, project.path)
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+
+                    if config.show_project_col_bpm or config.show_project_col_samplerate or config.show_project_col_tracks then
+                        if not project.cached_rpp_info then
+                            project.cached_rpp_info = ParseRPPHeader(project.path) or {}
+                        end
+                        local ri = project.cached_rpp_info
+                        if config.show_project_col_bpm then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                            r.ImGui_Text(ctx, ri.bpm and tostring(ri.bpm) or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_samplerate then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                            r.ImGui_Text(ctx, ri.samplerate and tostring(ri.samplerate) or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_tracks then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                            r.ImGui_Text(ctx, ri.track_count and ri.track_count > 0 and tostring(ri.track_count) or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                    end
+
+                    if config.show_project_col_dates then
+                        r.ImGui_TableNextColumn(ctx)
+                        if not project.cached_date then
+                            if reaper.JS_File_Stat then
+                                local retval, _, _, _, datetime = reaper.JS_File_Stat(project.path)
+                                project.cached_date = (retval and datetime) or ""
+                            else
+                                project.cached_date = ""
+                            end
+                        end
+                        if project.cached_date ~= "" then
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                            r.ImGui_Text(ctx, project.cached_date)
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                    end
+
+                    if config.show_project_col_comment then
+                        r.ImGui_TableNextColumn(ctx)
+                        r.ImGui_PushItemWidth(ctx, -1)
+                        local cur_comment = project_comments[project.path] or ""
+                        local changed, new_comment = r.ImGui_InputText(ctx, "##comment_" .. i, cur_comment)
+                        if changed then
+                            if new_comment == "" then
+                                project_comments[project.path] = nil
+                            else
+                                project_comments[project.path] = new_comment
+                            end
+                            SaveProjectComments()
+                        end
+                        r.ImGui_PopItemWidth(ctx)
                     end
                     
                     if r.ImGui_BeginPopup(ctx, "ProjectContextMenu_" .. i) then
@@ -10857,76 +12594,150 @@ function ShowScreenshotWindow()
                             
                             r.ImGui_EndMenu(ctx)
                         end
-                        
-                        
+
+                        r.ImGui_Separator(ctx)
+                        if r.ImGui_MenuItem(ctx, "Set Cover Image...") then
+                            SetProjectCover(project.path)
+                        end
+                        local has_cover = GetProjectCoverPath(project.path) ~= nil
+                        if has_cover then
+                            if r.ImGui_MenuItem(ctx, "Remove Cover Image") then
+                                local safe_name = project.path:match("([^/\\]+)%.rpp$") or ""
+                                safe_name = safe_name:gsub("[^%w%s-]", "_")
+                                os.remove(project_covers_path .. safe_name .. ".png")
+                                os.remove(project_covers_path .. safe_name .. ".jpg")
+                                project_cover_loaded_for = nil
+                                project_cover_texture = nil
+                            end
+                        end
                         
                     
                         r.ImGui_EndPopup(ctx)
                     end
-                    
+                    r.ImGui_PopID(ctx)
+                end
+                r.ImGui_EndTable(ctx)
                 end
             r.ImGui_EndChild(ctx)
-            if show_project_info then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x333333FF)
+            if config.show_project_info then
                 r.ImGui_Separator(ctx)
+                local info_footer_h = 195
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x1E1E1EFF)
+                r.ImGui_BeginChild(ctx, "ProjectInfoFooter", -1, info_footer_h, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
+                
+                local has_cover = false
+                local cover_w, cover_h = 0, 0
+                local content_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                local footer_start_x = r.ImGui_GetCursorPosX(ctx)
+                local playback_h = 40
                 
                 if current_project_info then
-                    r.ImGui_Text(ctx, "Project Info:")
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_Text(ctx, "Name: " .. current_project_info.name)
-                    r.ImGui_Text(ctx, "Preview: " .. (current_project_info.has_preview and "Available" or "No Preview"))
-                    r.ImGui_Text(ctx, "Length: " .. string.format("%.2f", current_project_info.length) .. " seconds")
-                    r.ImGui_Text(ctx, "Size: " .. string.format("%.2f", current_project_info.size/1024/1024) .. " MB")
-                    r.ImGui_Text(ctx, "Media files: " .. tostring(current_project_info.folder_files))
-                    
-                    local is_playing = current_preview and select(2, r.CF_Preview_GetValue(current_preview, "B_PLAY"))
-                    if r.ImGui_Button(ctx, is_playing and "Stop" or "Play") then
-                        if is_playing then
-                            r.CF_Preview_StopAll()
-                            current_preview = nil
-                        else
-                            if selected_project then
-                                local source = r.PCM_Source_CreateFromFile(selected_project.path .. "-PROX")
-                                current_preview = r.CF_CreatePreview(source)
-                                r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
-                                r.CF_Preview_Play(current_preview)
-                            end
+                    LoadProjectCover(current_project_info.path)
+                    r.ImGui_Spacing(ctx)
+
+                    if show_project_cover and project_cover_texture and r.ImGui_ValidatePtr(project_cover_texture, 'ImGui_Image*') then
+                        local iw, ih = r.ImGui_Image_GetSize(project_cover_texture)
+                        if iw and ih and iw > 0 and ih > 0 then
+                            has_cover = true
+                            cover_h = info_footer_h - 8
+                            cover_w = math.floor(iw * (cover_h / ih))
                         end
                     end
-                    r.ImGui_SameLine(ctx)
-                    r.ImGui_PushItemWidth(ctx, -1)
-                    local rv, new_vol = r.ImGui_SliderDouble(ctx, "##Volume", preview_volume or 1.0, 0, 2, "%.1f")
-                    if rv then
-                        preview_volume = new_vol
-                        if current_preview then
+
+                    local cover_left = has_cover and (config.project_cover_align or "right") == "left"
+                    local text_x = footer_start_x
+                    if cover_left then
+                        text_x = footer_start_x + cover_w + 10
+                    end
+                    r.ImGui_SetCursorPosX(ctx, text_x)
+
+                    r.ImGui_BeginGroup(ctx)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+                    r.ImGui_Text(ctx, current_project_info.name)
+                    r.ImGui_PopStyleColor(ctx)
+
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                    r.ImGui_Text(ctx, FormatFileSize(current_project_info.size))
+                    if current_project_info.has_preview then
+                        r.ImGui_Text(ctx, FormatDuration(current_project_info.length))
+                    end
+                    r.ImGui_Text(ctx, tostring(current_project_info.folder_files) .. " files")
+                    if current_project_info.rpp_info then
+                        local ri = current_project_info.rpp_info
+                        if ri.bpm then r.ImGui_Text(ctx, tostring(ri.bpm) .. " BPM") end
+                        if ri.samplerate then r.ImGui_Text(ctx, tostring(ri.samplerate) .. " Hz") end
+                        if ri.track_count > 0 then r.ImGui_Text(ctx, tostring(ri.track_count) .. " tracks") end
+                    end
+                    if current_project_info.has_preview then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x50FA7BFF)
+                        r.ImGui_Text(ctx, "\xE2\x97\x8F Preview")
+                        r.ImGui_PopStyleColor(ctx)
+                    else
+                        r.ImGui_Text(ctx, "\xE2\x97\x8B No preview")
+                    end
+                    r.ImGui_PopStyleColor(ctx)
+
+                    r.ImGui_EndGroup(ctx)
+                end
+
+                local cover_left = has_cover and (config.project_cover_align or "right") == "left"
+                local playback_w = has_cover and (content_avail_w - cover_w - 10) or content_avail_w
+                local playback_x = footer_start_x
+                if cover_left then
+                    playback_x = footer_start_x + cover_w + 10
+                end
+
+                r.ImGui_SetCursorPos(ctx, playback_x, info_footer_h - playback_h)
+
+                local is_playing = current_preview and select(2, r.CF_Preview_GetValue(current_preview, "B_PLAY"))
+                if r.ImGui_Button(ctx, is_playing and "\xE2\x96\xA0 Stop" or "\xE2\x96\xB6 Play", 70, 0) then
+                    if is_playing then
+                        r.CF_Preview_StopAll()
+                        current_preview = nil
+                    else
+                        if selected_project then
+                            local source = r.PCM_Source_CreateFromFile(selected_project.path .. "-PROX")
+                            current_preview = r.CF_CreatePreview(source)
                             r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
+                            r.CF_Preview_Play(current_preview)
                         end
                     end
-                    r.ImGui_PopItemWidth(ctx)
                 end
-            
-                local rv, position = r.CF_Preview_GetValue(current_preview, "D_POSITION")
-                local rv2, length = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
-                if position and length then
-                    local progress = position / length
-                    r.ImGui_ProgressBar(ctx, progress, -1, 20, string.format("%.1fs/%.1fs", position, length))
-                end
-                r.ImGui_Text(ctx, "Project:")
                 r.ImGui_SameLine(ctx)
-                r.ImGui_PushItemWidth(ctx, 75)
-                if r.ImGui_BeginCombo(ctx, "##SaveOptions", "Save") then
-                    if r.ImGui_Selectable(ctx, "Save") then
-                        r.Main_OnCommand(40026, 0)
+                r.ImGui_PushItemWidth(ctx, math.min(120, playback_w - 80))
+                local rv, new_vol = r.ImGui_SliderDouble(ctx, "##Volume", preview_volume or 1.0, 0, 2, "Vol %.1f")
+                if rv then
+                    preview_volume = new_vol
+                    if current_preview then
+                        r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
                     end
-                    if r.ImGui_Selectable(ctx, "Save As") then
-                        r.Main_OnCommand(40022, 0)
-                    end
-                    if r.ImGui_Selectable(ctx, "Save Template") then
-                        r.Main_OnCommand(40394, 0)
-                    end
-                    r.ImGui_EndCombo(ctx)
                 end
                 r.ImGui_PopItemWidth(ctx)
+
+                local position, length = 0, 0
+                local progress = 0
+                if current_preview then
+                    local rv1, pos = r.CF_Preview_GetValue(current_preview, "D_POSITION")
+                    local rv2, len = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
+                    if pos and len and len > 0 then
+                        position = pos
+                        length = len
+                        progress = pos / len
+                    end
+                end
+                local bar_label = length > 0 and string.format("%.1fs / %.1fs", position, length) or ""
+                r.ImGui_SetCursorPosX(ctx, playback_x)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x1E1E1EFF)
+                r.ImGui_ProgressBar(ctx, progress, playback_w, 14, bar_label)
+                r.ImGui_PopStyleColor(ctx)
+
+                if has_cover then
+                    local cover_x = cover_left and footer_start_x or (footer_start_x + content_avail_w - cover_w)
+                    r.ImGui_SetCursorPos(ctx, cover_x, 4)
+                    r.ImGui_Image(ctx, project_cover_texture, cover_w, cover_h)
+                end
+
+                r.ImGui_EndChild(ctx)
                 r.ImGui_PopStyleColor(ctx)   
             end
     -----------------------------------------------------------------------------------        
@@ -11361,6 +13172,384 @@ function ShowScreenshotWindow()
             r.ImGui_PopStyleColor(ctx, 2)
         end
 
+    local chain_builder_h = 0
+    chain_builder_hovered = false
+    if config.show_chain_builder and #chain_builder_plugins >= 0 then
+        chain_builder_h = 163
+        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+        r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + chain_builder_h, 0x1A2A1AFF, 3)
+        r.ImGui_DrawList_AddRect(dl, cx, cy, cx + avail_w, cy + chain_builder_h, 0x00FF8840, 3)
+
+        local mx, my = r.ImGui_GetMousePos(ctx)
+        if mx >= cx and mx <= cx + avail_w and my >= cy and my <= cy + chain_builder_h then
+            chain_builder_hovered = true
+            if dragging_fx_name then
+                r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + chain_builder_h, 0x00FF8820, 3)
+            end
+        end
+
+        local btn_row_h = 22
+        local chain_area_h = chain_builder_h - btn_row_h - 4
+        local pad = 8
+        local thumb_h = chain_area_h - 24 - pad * 2
+        local thumb_w = thumb_h * 1.4
+
+        local chain_child_open = r.ImGui_BeginChild(ctx, "ChainBuilderStrip", avail_w, chain_area_h, 0, r.ImGui_WindowFlags_HorizontalScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
+        if chain_child_open then
+            r.ImGui_SetCursorPos(ctx, pad, pad)
+            if #chain_builder_plugins == 0 then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFF50)
+                r.ImGui_SetCursorPosY(ctx, (chain_area_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5)
+                r.ImGui_Text(ctx, "  Drag plugins here to build a chain...")
+                r.ImGui_PopStyleColor(ctx)
+            else
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 4)
+                for ci = 1, #chain_builder_plugins do
+                    local cp = chain_builder_plugins[ci]
+                    local display_name = cp
+                    if config.clean_plugin_names or config.remove_manufacturer_names then
+                        display_name = GetDisplayPluginName(cp)
+                    end
+                    r.ImGui_PushID(ctx, ci)
+
+                    r.ImGui_BeginGroup(ctx)
+                    local num_label = tostring(ci)
+                    local grp_sx, grp_sy = r.ImGui_GetCursorScreenPos(ctx)
+                    local tex = LoadChainFxScreenshot(cp)
+                    local clicked = false
+                    if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+                        local iw, ih = r.ImGui_Image_GetSize(tex)
+                        if iw and ih then
+                            local dw = thumb_w
+                            local dh = dw * (ih / iw)
+                            if dh > thumb_h then
+                                dh = thumb_h
+                                dw = dh * (iw / ih)
+                            end
+                            clicked = r.ImGui_ImageButton(ctx, "cb_" .. ci, tex, dw, dh)
+                        else
+                            clicked = r.ImGui_Button(ctx, display_name .. "##cb", thumb_w, thumb_h)
+                        end
+                    else
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x2A4A2AFF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3A6A3AFF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x4A8A4AFF)
+                        clicked = r.ImGui_Button(ctx, display_name .. "##cb", thumb_w, thumb_h)
+                        r.ImGui_PopStyleColor(ctx, 3)
+                    end
+
+                    local cdl = r.ImGui_GetWindowDrawList(ctx)
+                    local num_tw = r.ImGui_CalcTextSize(ctx, num_label)
+                    r.ImGui_DrawList_AddRectFilled(cdl, grp_sx, grp_sy, grp_sx + num_tw + 6, grp_sy + 14, 0x000000B0, 3)
+                    r.ImGui_DrawList_AddText(cdl, grp_sx + 3, grp_sy + 1, 0x00FF88FF, num_label)
+
+                    if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                        r.ImGui_SetDragDropPayload(ctx, "CHAIN_REORDER", tostring(ci))
+                        r.ImGui_Text(ctx, display_name)
+                        r.ImGui_EndDragDropSource(ctx)
+                    end
+                    if r.ImGui_BeginDragDropTarget(ctx) then
+                        local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "CHAIN_REORDER")
+                        if rv then
+                            local src = tonumber(payload)
+                            if src and src ~= ci then
+                                local item = table.remove(chain_builder_plugins, src)
+                                local dst = ci
+                                if src < ci then dst = dst end
+                                table.insert(chain_builder_plugins, dst, item)
+                                config.chain_builder_plugins = chain_builder_plugins
+                                SaveConfig()
+                            end
+                        end
+                        r.ImGui_EndDragDropTarget(ctx)
+                    end
+                    local btn_hovered = r.ImGui_IsItemHovered(ctx)
+                    local btn_rclicked = r.ImGui_IsItemClicked(ctx, 1)
+
+                    local trunc_name = display_name
+                    local max_text_w = thumb_w - 4
+                    local tw = r.ImGui_CalcTextSize(ctx, trunc_name)
+                    if tw > max_text_w then
+                        while #trunc_name > 3 and r.ImGui_CalcTextSize(ctx, trunc_name .. "..") > max_text_w do
+                            trunc_name = trunc_name:sub(1, -2)
+                        end
+                        trunc_name = trunc_name .. ".."
+                    end
+                    local name_w = r.ImGui_CalcTextSize(ctx, trunc_name)
+                    local name_offset = (thumb_w - name_w) * 0.5
+                    if name_offset > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + name_offset) end
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xCCCCCCFF)
+                    r.ImGui_Text(ctx, trunc_name)
+                    r.ImGui_PopStyleColor(ctx)
+                    r.ImGui_EndGroup(ctx)
+
+                    if btn_rclicked then
+                        table.remove(chain_builder_plugins, ci)
+                        config.chain_builder_plugins = chain_builder_plugins
+                        SaveConfig()
+                        r.ImGui_PopID(ctx)
+                        break
+                    end
+                    if btn_hovered then
+                        r.ImGui_SetTooltip(ctx, cp .. "\nRight-click to remove | Drag to reorder")
+                    end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_PopID(ctx)
+                end
+                r.ImGui_PopStyleVar(ctx)
+            end
+            r.ImGui_EndChild(ctx)
+        end
+
+        if r.ImGui_BeginDragDropTarget(ctx) then
+            local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "CHAIN_REORDER")
+            r.ImGui_EndDragDropTarget(ctx)
+        end
+
+        local btn_w = 70
+        r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + pad)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 0)
+        if r.ImGui_Button(ctx, "Commit##cb", btn_w, btn_row_h) then
+            if #chain_builder_plugins > 0 then
+                local sel_count = r.CountSelectedTracks(0)
+                if sel_count > 0 then
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    for ti = 0, sel_count - 1 do
+                        local track = r.GetSelectedTrack(0, ti)
+                        if track then
+                            for _, pname in ipairs(chain_builder_plugins) do
+                                AddFXToTrack(track, pname)
+                            end
+                        end
+                    end
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("FX Chain Builder: Add chain to " .. sel_count .. " track(s)", -1)
+                end
+            end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            local sel_count = r.CountSelectedTracks(0)
+            r.ImGui_SetTooltip(ctx, "Add chain to " .. sel_count .. " selected track(s)\nChain stays until you Clear")
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Clear##cb", btn_w, btn_row_h) then
+            chain_builder_plugins = {}
+            config.chain_builder_plugins = chain_builder_plugins
+            SaveConfig()
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Save##cb", btn_w, btn_row_h) then
+            if #chain_builder_plugins > 0 then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                local track_count = r.CountTracks(0)
+                r.InsertTrackAtIndex(track_count, false)
+                local temp_track = r.GetTrack(0, track_count)
+                if temp_track then
+                    for _, pname in ipairs(chain_builder_plugins) do
+                        AddFXToTrack(temp_track, pname)
+                    end
+                    local _, chunk = r.GetTrackStateChunk(temp_track, "", false)
+                    local fxchain_block = nil
+                    local fxchain_start = chunk:find("<FXCHAIN")
+                    if fxchain_start then
+                        local depth = 0
+                        local i = fxchain_start
+                        while i <= #chunk do
+                            local c = chunk:sub(i, i)
+                            if c == "<" then depth = depth + 1
+                            elseif c == ">" then
+                                depth = depth - 1
+                                if depth == 0 then
+                                    fxchain_block = chunk:sub(fxchain_start, i)
+                                    break
+                                end
+                            end
+                            i = i + 1
+                        end
+                    end
+                    r.DeleteTrack(temp_track)
+                    if fxchain_block then
+                        local chain_dir = ResolveFxChainsRoot()
+                        local safe_name = "Chain Builder " .. os.date("%Y-%m-%d_%H-%M-%S")
+                        local chain_path = chain_dir .. os_separator .. safe_name .. ".RfxChain"
+                        local f = io.open(chain_path, "w")
+                        if f then
+                            f:write(fxchain_block .. "\n")
+                            f:close()
+                        end
+                    end
+                end
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Chain Builder Save", -1)
+            end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Save chain as .RfxChain file")
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Load##cb", btn_w, btn_row_h) then
+            local retval, file_path
+            if r.JS_Dialog_BrowseForOpenFiles then
+                retval, file_path = r.JS_Dialog_BrowseForOpenFiles("Load FX Chain", ResolveFxChainsRoot(), "", "FX Chain (*.RfxChain)\0*.RfxChain\0All Files (*.*)\0*.*\0", false)
+            else
+                retval, file_path = r.GetUserFileNameForRead("", "Load FX Chain", ".RfxChain")
+            end
+            if retval == 1 and file_path and file_path ~= "" then
+                local loaded = ParseFxChainFile(file_path)
+                if loaded and #loaded > 0 then
+                    for _, fx in ipairs(loaded) do
+                        table.insert(chain_builder_plugins, fx)
+                    end
+                    config.chain_builder_plugins = chain_builder_plugins
+                    SaveConfig()
+                end
+            end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Load .RfxChain into builder")
+        end
+        r.ImGui_SameLine(ctx)
+
+        local chain_templates = {
+            { name = "Clean Channel",   slots = {"instrument", "tone", "dynamics", "timebased"} },
+            { name = "Lo-Fi",           slots = {"instrument", "tone", "modulation", "timebased"} },
+            { name = "Ambient Pad",     slots = {"instrument", "modulation", "timebased", "timebased"} },
+            { name = "Aggressive",      slots = {"instrument", "tone", "tone", "dynamics"} },
+            { name = "Wet & Wide",      slots = {"instrument", "modulation", "modulation", "timebased"} },
+            { name = "Vocal Chain",     slots = {"tone", "dynamics", "dynamics", "timebased"} },
+            { name = "Guitar Rig",      slots = {"tone", "tone", "modulation", "timebased"} },
+            { name = "Drum Bus",        slots = {"tone", "dynamics", "dynamics", "tone"} },
+            { name = "Synth Stack",     slots = {"instrument", "instrument", "tone", "timebased"} },
+            { name = "FX Mangler",      slots = {"tone", "modulation", "tone", "modulation"} },
+        }
+
+        local tone_kw = {"eq", "filter", "saturator", "saturat", "distort", "overdrive", "exciter", "waveshap", "bitcrush", "amp", "cabinet", "preamp", "tube", "warm", "drive", "fuzz", "clipper"}
+        local dyn_kw = {"compressor", "compress", "limiter", "limit", "gate", "expander", "transient", "dynamics", "leveler", "de%-ess", "deess", "multiband"}
+        local mod_kw = {"chorus", "flanger", "phaser", "tremolo", "vibrato", "rotary", "leslie", "ensemble", "unison", "detune", "pitch", "harmoniz", "autotune", "vocoder", "ringmod", "stereo", "widen", "imager"}
+        local time_kw = {"reverb", "delay", "echo", "room", "hall", "plate", "spring", "convol", "shimmer", "ambien", "space", "diffus"}
+
+        local function classify_fx(name)
+            local low = name:lower()
+            for _, kw in ipairs(tone_kw) do if low:find(kw) then return "tone" end end
+            for _, kw in ipairs(dyn_kw) do if low:find(kw) then return "dynamics" end end
+            for _, kw in ipairs(mod_kw) do if low:find(kw) then return "modulation" end end
+            for _, kw in ipairs(time_kw) do if low:find(kw) then return "timebased" end end
+            return "other"
+        end
+
+        local function build_pools()
+            local pools = { instrument = {}, tone = {}, dynamics = {}, modulation = {}, timebased = {}, other = {} }
+            if not FX_LIST_TEST then return pools end
+            for _, name in ipairs(FX_LIST_TEST) do
+                if IsInstrumentPlugin(name) then
+                    pools.instrument[#pools.instrument + 1] = name
+                else
+                    local cat = classify_fx(name)
+                    pools[cat][#pools[cat] + 1] = name
+                end
+            end
+            return pools
+        end
+
+        local function pick_random(pool, used)
+            if not pool or #pool == 0 then return nil end
+            local attempts = 0
+            while attempts < 20 do
+                local pick = pool[math.random(#pool)]
+                if not used[pick] then
+                    used[pick] = true
+                    return pick
+                end
+                attempts = attempts + 1
+            end
+            return pool[math.random(#pool)]
+        end
+
+        local function apply_template(tmpl)
+            math.randomseed(os.time() + math.floor(r.time_precise() * 1000))
+            local pools = build_pools()
+            local fallback_order = {"tone", "dynamics", "modulation", "timebased", "other"}
+            local used = {}
+            chain_builder_plugins = {}
+            for _, slot_cat in ipairs(tmpl.slots) do
+                local fx = pick_random(pools[slot_cat], used)
+                if not fx and slot_cat ~= "instrument" then
+                    for _, fb in ipairs(fallback_order) do
+                        if fb ~= slot_cat then
+                            fx = pick_random(pools[fb], used)
+                            if fx then break end
+                        end
+                    end
+                end
+                if fx then
+                    chain_builder_plugins[#chain_builder_plugins + 1] = fx
+                end
+            end
+            config.chain_builder_plugins = chain_builder_plugins
+            SaveConfig()
+        end
+
+        if r.ImGui_Button(ctx, "\xF0\x9F\x8E\xB2##cb", btn_row_h, btn_row_h) then
+            local pools = build_pools()
+            math.randomseed(os.time() + math.floor(r.time_precise() * 1000))
+            local used = {}
+            if #pools.instrument > 0 then
+                local pick = pick_random(pools.instrument, used)
+                if pick then table.insert(chain_builder_plugins, pick) end
+            end
+            local chain_slots = {
+                {"tone", "dynamics", "other"},
+                {"dynamics", "modulation", "other"},
+                {"modulation", "timebased", "other"},
+            }
+            for _, slot in ipairs(chain_slots) do
+                for _, cat in ipairs(slot) do
+                    local fx = pick_random(pools[cat], used)
+                    if fx then
+                        table.insert(chain_builder_plugins, fx)
+                        break
+                    end
+                end
+            end
+            config.chain_builder_plugins = chain_builder_plugins
+            SaveConfig()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Left-click: Random (1 instr + 3 FX)\nRight-click: Chain Templates")
+        end
+        if r.ImGui_IsItemClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "ChainTemplateMenu")
+        end
+        if r.ImGui_BeginPopup(ctx, "ChainTemplateMenu") then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFF80)
+            r.ImGui_Text(ctx, "Chain Templates")
+            r.ImGui_PopStyleColor(ctx)
+            r.ImGui_Separator(ctx)
+            for _, tmpl in ipairs(chain_templates) do
+                local slot_names = {}
+                for _, s in ipairs(tmpl.slots) do
+                    local labels = {instrument="\xF0\x9F\x8E\xB9", tone="\xF0\x9F\x8E\x9B", dynamics="\xF0\x9F\x94\x8A", modulation="\xF0\x9F\x8C\x80", timebased="\xF0\x9F\x8C\x8A"}
+                    slot_names[#slot_names + 1] = labels[s] or "\xE2\x9A\xA1"
+                end
+                local label = tmpl.name .. "  " .. table.concat(slot_names, " \xE2\x86\x92 ")
+                if r.ImGui_MenuItem(ctx, label) then
+                    apply_template(tmpl)
+                end
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFF80)
+        r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + 3)
+        r.ImGui_Text(ctx, string.format("(%d)", #chain_builder_plugins))
+        r.ImGui_PopStyleColor(ctx)
+        r.ImGui_PopStyleVar(ctx)
+    end
+
     r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0)
             if config.flicker_guard_enabled then
                 local now = r.time_precise()
@@ -11518,6 +13707,11 @@ function ShowScreenshotWindow()
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                            end
+                                            do
+                                                local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                             end
                                             if config.enable_drag_add_fx then
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -11744,6 +13938,11 @@ function ShowScreenshotWindow()
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
                                             end
+                                            do
+                                                local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                            end
                                             if config.enable_drag_add_fx then
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
                                                     potential_drag_fx_name = plugin_name
@@ -11944,6 +14143,40 @@ function ShowScreenshotWindow()
                                             local item_max_x, item_max_y = r.ImGui_GetItemRectMax(ctx)
                                             DrawModernCardBackground(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y)
                                             DrawModernCardForeground(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y)
+                                            DrawNameOnScreenshot(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y, plugin.fx_name)
+                                            if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                                local payload_str = (plugin.is_master and "M" or tostring(plugin.track_number)) .. ":" .. tostring(plugin.fx_index)
+                                                r.ImGui_SetDragDropPayload(ctx, "PROJFX_SHOT_DRAG", payload_str)
+                                                r.ImGui_Text(ctx, GetDisplayPluginName(plugin.fx_name))
+                                                r.ImGui_EndDragDropSource(ctx)
+                                            end
+                                            if r.ImGui_BeginDragDropTarget(ctx) then
+                                                local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "PROJFX_SHOT_DRAG")
+                                                if rv then
+                                                    local src_track_str, src_fx_str = payload:match("^(.+):(%d+)$")
+                                                    local dst_track_str = plugin.is_master and "M" or tostring(plugin.track_number)
+                                                    if src_track_str == dst_track_str then
+                                                        local src_fx = tonumber(src_fx_str)
+                                                        local dst_fx = plugin.fx_index
+                                                        if src_fx and dst_fx and src_fx ~= dst_fx then
+                                                            local track
+                                                            if plugin.is_master then
+                                                                track = r.GetMasterTrack(0)
+                                                            else
+                                                                track = r.GetTrack(0, plugin.track_number - 1)
+                                                            end
+                                                            if track and r.ValidatePtr(track, "MediaTrack*") then
+                                                                if src_fx < dst_fx then dst_fx = dst_fx + 1 end
+                                                                r.Undo_BeginBlock()
+                                                                r.TrackFX_CopyToTrack(track, src_fx, track, dst_fx, true)
+                                                                r.Undo_EndBlock("Reorder Track FX", -1)
+                                                                RefreshCurrentScreenshotView()
+                                                            end
+                                                        end
+                                                    end
+                                                end
+                                                r.ImGui_EndDragDropTarget(ctx)
+                                            end
                                             if clicked or (config.add_fx_with_double_click and r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0)) then
                                                 if plugin.is_master then
                                                     local master_track = r.GetMasterTrack(0)
@@ -12073,6 +14306,28 @@ function ShowScreenshotWindow()
                                     local item_max_x, item_max_y = r.ImGui_GetItemRectMax(ctx)
                                     DrawModernCardBackground(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y)
                                     DrawModernCardForeground(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y)
+                                    DrawNameOnScreenshot(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y, fx.fx_name)
+
+                                    if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                        r.ImGui_SetDragDropPayload(ctx, "TRACKFX_SHOT_DRAG", tostring(fx.fx_index))
+                                        r.ImGui_Text(ctx, GetDisplayPluginName(fx.fx_name))
+                                        r.ImGui_EndDragDropSource(ctx)
+                                    end
+                                    if r.ImGui_BeginDragDropTarget(ctx) then
+                                        local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "TRACKFX_SHOT_DRAG")
+                                        if rv then
+                                            local src = tonumber(payload)
+                                            if src and src ~= fx.fx_index then
+                                                local dest = fx.fx_index
+                                                if src < dest then dest = dest + 1 end
+                                                r.Undo_BeginBlock()
+                                                r.TrackFX_CopyToTrack(TRACK, src, TRACK, dest, true)
+                                                r.Undo_EndBlock("Reorder Track FX", -1)
+                                                RefreshCurrentScreenshotView()
+                                            end
+                                        end
+                                        r.ImGui_EndDragDropTarget(ctx)
+                                    end
 
                                     if clicked then
                                         if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
@@ -12306,6 +14561,11 @@ function ShowScreenshotWindow()
                                                     local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                     local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                     DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
+                                                end
+                                                do
+                                                    local tlx, tly = r.ImGui_GetItemRectMin(ctx)
+                                                    local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                    DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 end
                                                 local do_add = false
                                                 if config.enable_drag_add_fx then
@@ -12643,6 +14903,7 @@ function ShowScreenshotWindow()
                                         if favorite_set and favorite_set[plugin_name] then
                                             DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
                                         end
+                                        DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                         
                                         if not is_fx_chain_item then
                                             if config.enable_drag_add_fx then
@@ -13013,6 +15274,290 @@ function FilterTracksByTag(tag)
         end
     end
     return matching_tracks
+end
+
+function DrawTagContextMenu(ctx, popup_id, current_guid, current_tags)
+    if r.ImGui_BeginPopup(ctx, popup_id) then
+        local ctag = tag_ctx_menu_tag
+        if ctag then
+            local tagged_tracks = FilterTracksByTag(ctag)
+            local tagged_count = #tagged_tracks
+
+            if current_tags then
+                if r.ImGui_MenuItem(ctx, "Remove from This Track") then
+                    for ix = #current_tags, 1, -1 do
+                        if current_tags[ix] == ctag then table.remove(current_tags, ix) end
+                    end
+                    SaveTags()
+                end
+            end
+            if r.ImGui_MenuItem(ctx, "Add '" .. ctag .. "' to Selected Tracks") then
+                r.Undo_BeginBlock()
+                local sel_count = r.CountSelectedTracks(0)
+                for i = 0, sel_count - 1 do
+                    local tr = r.GetSelectedTrack(0, i)
+                    local tg = r.GetTrackGUID(tr)
+                    track_tags[tg] = track_tags[tg] or {}
+                    if not table.contains(track_tags[tg], ctag) then
+                        table.insert(track_tags[tg], ctag)
+                    end
+                end
+                SaveTags()
+                r.Undo_EndBlock("Add tag to selected tracks", -1)
+            end
+            if r.ImGui_MenuItem(ctx, "Remove '" .. ctag .. "' from Selected Tracks") then
+                r.Undo_BeginBlock()
+                local sel_count = r.CountSelectedTracks(0)
+                for i = 0, sel_count - 1 do
+                    local tr = r.GetSelectedTrack(0, i)
+                    local tg = r.GetTrackGUID(tr)
+                    if track_tags[tg] then
+                        for ix = #track_tags[tg], 1, -1 do
+                            if track_tags[tg][ix] == ctag then table.remove(track_tags[tg], ix) end
+                        end
+                    end
+                end
+                SaveTags()
+                r.Undo_EndBlock("Remove tag from selected tracks", -1)
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_MenuItem(ctx, "Select Tracks with '" .. ctag .. "' (" .. tagged_count .. ")") then
+                r.Main_OnCommand(40297, 0)
+                for _, tr in ipairs(tagged_tracks) do r.SetTrackSelected(tr, true) end
+            end
+            if r.ImGui_MenuItem(ctx, "Unselect All Tracks") then
+                r.Main_OnCommand(40297, 0)
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_MenuItem(ctx, "Hide Tracks with '" .. ctag .. "'") then
+                r.PreventUIRefresh(1)
+                for _, tr in ipairs(tagged_tracks) do
+                    r.SetMediaTrackInfo_Value(tr, "B_SHOWINTCP", 0)
+                    r.SetMediaTrackInfo_Value(tr, "B_SHOWINMIXER", 0)
+                end
+                r.PreventUIRefresh(-1)
+                r.TrackList_AdjustWindows(false)
+            end
+            if r.ImGui_MenuItem(ctx, "Show Tracks with '" .. ctag .. "'") then
+                r.PreventUIRefresh(1)
+                for _, tr in ipairs(tagged_tracks) do
+                    r.SetMediaTrackInfo_Value(tr, "B_SHOWINTCP", 1)
+                    r.SetMediaTrackInfo_Value(tr, "B_SHOWINMIXER", 1)
+                end
+                r.PreventUIRefresh(-1)
+                r.TrackList_AdjustWindows(false)
+            end
+            if r.ImGui_MenuItem(ctx, "Hide All Tracks Except '" .. ctag .. "'") then
+                local tagged_set = {}
+                for _, tr in ipairs(tagged_tracks) do tagged_set[r.GetTrackGUID(tr)] = true end
+                r.PreventUIRefresh(1)
+                for i = 0, r.CountTracks(0) - 1 do
+                    local tr = r.GetTrack(0, i)
+                    local visible = tagged_set[r.GetTrackGUID(tr)] and true or false
+                    r.SetMediaTrackInfo_Value(tr, "B_SHOWINTCP", visible and 1 or 0)
+                    r.SetMediaTrackInfo_Value(tr, "B_SHOWINMIXER", visible and 1 or 0)
+                end
+                r.PreventUIRefresh(-1)
+                r.TrackList_AdjustWindows(false)
+            end
+            if r.ImGui_MenuItem(ctx, "Show All Tracks") then
+                r.PreventUIRefresh(1)
+                for i = 0, r.CountTracks(0) - 1 do
+                    local tr = r.GetTrack(0, i)
+                    r.SetMediaTrackInfo_Value(tr, "B_SHOWINTCP", 1)
+                    r.SetMediaTrackInfo_Value(tr, "B_SHOWINMIXER", 1)
+                end
+                r.PreventUIRefresh(-1)
+                r.TrackList_AdjustWindows(false)
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_MenuItem(ctx, "Rename All Tracks with '" .. ctag .. "'") then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                for _, tr in ipairs(tagged_tracks) do
+                    r.GetSetMediaTrackInfo_String(tr, "P_NAME", ctag, true)
+                end
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Rename tagged tracks to tag name", -1)
+            end
+            if r.ImGui_MenuItem(ctx, "Rename All Tracks with '" .. ctag .. "' (numbered)") then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                for idx, tr in ipairs(tagged_tracks) do
+                    r.GetSetMediaTrackInfo_String(tr, "P_NAME", ctag .. " " .. string.format("%02d", idx), true)
+                end
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Rename tagged tracks to tag name numbered", -1)
+            end
+            if current_tags and current_guid then
+                if r.ImGui_MenuItem(ctx, "Rename Current Track with '" .. ctag .. "'") then
+                    r.Undo_BeginBlock()
+                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                        r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", ctag, true)
+                    end
+                    r.Undo_EndBlock("Rename current track to tag name", -1)
+                end
+            end
+            if r.ImGui_MenuItem(ctx, "Rename Tagged Tracks to First Plugin") then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                for _, tr in ipairs(tagged_tracks) do
+                    local fx_count = r.TrackFX_GetCount(tr)
+                    if fx_count > 0 then
+                        local _, fx_name = r.TrackFX_GetFXName(tr, 0, "")
+                        if fx_name and fx_name ~= "" then
+                            local clean = fx_name:match(":%s*(.+)") or fx_name
+                            clean = clean:gsub("%s*%b()", "")
+                            r.GetSetMediaTrackInfo_String(tr, "P_NAME", clean, true)
+                        end
+                    end
+                end
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Rename tagged tracks to first plugin", -1)
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_MenuItem(ctx, "Move to New Folder") then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                if tagged_count > 0 then
+                    local indices = {}
+                    for _, tr in ipairs(tagged_tracks) do
+                        local idx = r.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER")
+                        t_insert(indices, idx)
+                    end
+                    t_sort(indices)
+                    local insert_pos = indices[1] - 1
+                    r.InsertTrackAtIndex(insert_pos, true)
+                    local folder_track = r.GetTrack(0, insert_pos)
+                    r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", ctag, true)
+                    r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
+                    for i, tr in ipairs(tagged_tracks) do
+                        local cur_idx = math.floor(r.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"))
+                        local target = insert_pos + i + 1
+                        if cur_idx ~= target then
+                            r.ReorderSelectedTracks(target - 1, 0)
+                        end
+                    end
+                    local last_tagged = tagged_tracks[#tagged_tracks]
+                    local last_idx = math.floor(r.GetMediaTrackInfo_Value(last_tagged, "IP_TRACKNUMBER"))
+                    local last_tr = r.GetTrack(0, last_idx - 1)
+                    if last_tr then
+                        local cur_depth = r.GetMediaTrackInfo_Value(last_tr, "I_FOLDERDEPTH")
+                        r.SetMediaTrackInfo_Value(last_tr, "I_FOLDERDEPTH", cur_depth - 1)
+                    end
+                end
+                r.PreventUIRefresh(-1)
+                r.TrackList_AdjustWindows(false)
+                r.Undo_EndBlock("Move tagged tracks to new folder", -1)
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_MenuItem(ctx, "Mute Tracks with '" .. ctag .. "'") then
+                r.Undo_BeginBlock()
+                for _, tr in ipairs(tagged_tracks) do r.SetMediaTrackInfo_Value(tr, "B_MUTE", 1) end
+                r.Undo_EndBlock("Mute tagged tracks", -1)
+            end
+            if r.ImGui_MenuItem(ctx, "Unmute Tracks with '" .. ctag .. "'") then
+                r.Undo_BeginBlock()
+                for _, tr in ipairs(tagged_tracks) do r.SetMediaTrackInfo_Value(tr, "B_MUTE", 0) end
+                r.Undo_EndBlock("Unmute tagged tracks", -1)
+            end
+            if r.ImGui_MenuItem(ctx, "Solo Tracks with '" .. ctag .. "'") then
+                r.Undo_BeginBlock()
+                for _, tr in ipairs(tagged_tracks) do r.SetMediaTrackInfo_Value(tr, "I_SOLO", 1) end
+                r.Undo_EndBlock("Solo tagged tracks", -1)
+            end
+            if r.ImGui_MenuItem(ctx, "Unsolo All Tracks") then
+                r.Undo_BeginBlock()
+                for i = 0, r.CountTracks(0) - 1 do
+                    r.SetMediaTrackInfo_Value(r.GetTrack(0, i), "I_SOLO", 0)
+                end
+                r.Undo_EndBlock("Unsolo all tracks", -1)
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_BeginMenu(ctx, "Set Color...") then
+                local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
+                local changed_col, new_col = r.ImGui_ColorEdit4(ctx, "##tag_color_pick", tag_color_edit_color, flags)
+                if changed_col then tag_color_edit_color = new_col end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Apply##tag_color_apply") then
+                    tag_colors[ctag] = tag_color_edit_color
+                    SaveTags()
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+            if tag_colors[ctag] then
+                if r.ImGui_MenuItem(ctx, "Apply Tag Color to Tracks") then
+                    r.Undo_BeginBlock()
+                    local col = tag_colors[ctag]
+                    local rd, g, b = r.ImGui_ColorConvertU32ToDouble4(col)
+                    local native = r.ColorToNative(m_floor(rd * 255), m_floor(g * 255), m_floor(b * 255)) | 0x1000000
+                    for _, tr in ipairs(tagged_tracks) do
+                        r.SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", native)
+                    end
+                    r.Undo_EndBlock("Apply tag color to tracks", -1)
+                end
+                if r.ImGui_MenuItem(ctx, "Remove Color") then
+                    tag_colors[ctag] = nil
+                    SaveTags()
+                end
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_BeginMenu(ctx, "Rename Tag...") then
+                r.ImGui_PushItemWidth(ctx, 120)
+                local ch, nv = r.ImGui_InputText(ctx, "##tag_rename_input", tag_rename_buffer)
+                if ch then tag_rename_buffer = nv end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "OK##tag_rename_ok") then
+                    local new_name = tag_rename_buffer
+                    if new_name ~= "" and new_name ~= ctag then
+                        for tg, arr in pairs(track_tags) do
+                            for ix, t in ipairs(arr) do
+                                if t == ctag then arr[ix] = new_name end
+                            end
+                        end
+                        available_tags[new_name] = true
+                        available_tags[ctag] = nil
+                        if tag_colors[ctag] then
+                            tag_colors[new_name] = tag_colors[ctag]
+                            tag_colors[ctag] = nil
+                        end
+                        SaveTags()
+                        tag_ctx_menu_tag = new_name
+                    end
+                    tag_rename_active = false
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_PopItemWidth(ctx)
+                r.ImGui_EndMenu(ctx)
+            end
+            if r.ImGui_MenuItem(ctx, "Delete '" .. ctag .. "' Globally") then
+                for tg, arr in pairs(track_tags) do
+                    for ix = #arr, 1, -1 do
+                        if arr[ix] == ctag then table.remove(arr, ix) end
+                    end
+                end
+                available_tags[ctag] = nil
+                tag_colors[ctag] = nil
+                SaveTags()
+            end
+        end
+        r.ImGui_EndPopup(ctx)
+    end
 end
 
 function Filter_actions(filter_text)
@@ -14933,6 +17478,15 @@ end
 -- Centralized drag & drop handling function
 function HandleDragAndDrop()
     if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
+        if config.show_chain_builder and chain_builder_hovered then
+            table.insert(chain_builder_plugins, dragging_fx_name)
+            config.chain_builder_plugins = chain_builder_plugins
+            SaveConfig()
+            dragging_fx_name = nil
+            potential_drag_fx_name = nil
+            chain_builder_hovered = false
+            return
+        end
         local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
         if shift then
             local item = r.GetSelectedMediaItem(0,0)

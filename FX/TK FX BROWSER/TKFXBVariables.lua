@@ -32,6 +32,12 @@ current_tag_window_height = 70
 -- TAGS
 tag_colors = {}
 available_tags = {}
+tag_ctx_menu_tag = nil
+tag_rename_active = false
+tag_rename_buffer = ""
+tag_color_edit_active = false
+tag_color_edit_color = 0x4488CCFF
+info_track_header_color = nil
 hide_mode = 0
 
 -- SCREENSHOTS
