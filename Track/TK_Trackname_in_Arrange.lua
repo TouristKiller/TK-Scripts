@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.8
+-- @version 1.8.9
 -- @changelog 
 --[[
+v1.8.9:
++ Labels Toggle: Excluded overlay grid from toggle
+
 v1.8.8:
 + Added TK_Trackname_Labels_Toggle.lua - toggle all labels/text/icons/borders on/off while keeping track colors
 + Added hide_all_labels setting for clean edit mode

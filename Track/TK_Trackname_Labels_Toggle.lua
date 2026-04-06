@@ -1,9 +1,9 @@
 -- @description TK_Trackname_Labels_Toggle
 -- @author TouristKiller
--- @version 2.2
+-- @version 2.3
 -- @changelog:
+--   v2.3: Excluded overlay_grid_enabled from toggle
 --   v2.2: Removed force_save, exclude show_settings_button
---   v2.0: Complete rewrite - robust save/restore of individual settings
 -- @about Toggle all labels, icons, borders and text on/off while keeping track colors
 
 local r = reaper
@@ -31,7 +31,6 @@ local save_keys = {
     "label_alpha",
     "border_opacity",
     "label_border_opacity",
-    "overlay_grid_enabled",
 }
 
 local settings_json = r.GetExtState(section, "settings")
