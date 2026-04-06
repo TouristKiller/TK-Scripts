@@ -772,8 +772,14 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.8.7" author="TouristKiller" time="2025-12-28T00:21:00Z">
+        <version name="1.8.8" author="TouristKiller" time="2026-04-06T16:50:00Z">
             <changelog><![CDATA[
+v1.8.8:
++ Added TK_Trackname_Labels_Toggle.lua - toggle all labels/text/icons/borders on/off while keeping track colors
++ Added hide_all_labels setting for clean edit mode
++ Fixed info line overlapping with track icon on same side
++ Arm/Solo/Mute indicator dots now respect text_opacity
+
 v1.8.7:
 + Freeze Icon: Added optional free positioning mode
 + Freeze Icon: Can now be dragged freely over the entire track including TCP area
@@ -835,6 +841,7 @@ v1.7.0:
             <source main="main" file="TK_Trackname_Overlay_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Overlay_Toggle.lua</source>
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
             <source main="main" file="TK_Trackname_DarkParentToggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_DarkParentToggle.lua</source>
+            <source main="main" file="TK_Trackname_Labels_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Labels_Toggle.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/json.lua</source>
             <source file="track_icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/track_icon_browser.lua</source>
             <source file="track_icon_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/track_icon_manager.lua</source>

@@ -1,8 +1,14 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.7
+-- @version 1.8.8
 -- @changelog 
 --[[
+v1.8.8:
++ Added TK_Trackname_Labels_Toggle.lua - toggle all labels/text/icons/borders on/off while keeping track colors
++ Added hide_all_labels setting for clean edit mode
++ Fixed info line overlapping with track icon on same side
++ Arm/Solo/Mute indicator dots now respect text_opacity
+
 v1.8.7:
 + Freeze Icon: Added optional free positioning mode
 + Freeze Icon: Can now be dragged freely over the entire track including TCP area
@@ -659,6 +665,7 @@ local default_settings              = {
     freeze_icon_offset_y            = 0,
     freeze_icon_locked_x            = nil,
     freeze_icon_locked_y            = nil,
+    hide_all_labels                 = false,
 }
 
 local settings = {}
@@ -4416,7 +4423,7 @@ function loop()
                 local is_child = r.GetParentTrack(track) ~= nil
                 local track_color = r.GetTrackColor(track)
                 
-                if settings.show_track_colors and settings.folder_border and (is_parent or is_child) then
+                if settings.show_track_colors and settings.folder_border and not settings.hide_all_labels and (is_parent or is_child) then
                     local hide_folder_border = settings.exclude_hide_border and IsTrackExcluded(track)
                     if not hide_folder_border then
                         local border_base_color = r.GetTrackColor(track)
@@ -4543,7 +4550,7 @@ function loop()
                             end
                         end
                         
-                        if settings.track_border and not is_parent and not is_child and track_color ~= 0 then
+                        if settings.track_border and not settings.hide_all_labels and not is_parent and not is_child and track_color ~= 0 then
                             local hide_border = settings.exclude_hide_border and IsTrackExcluded(track)
                             if not hide_border then
                                 local blended_color = BlendColor(track, track_color, settings.blend_mode)
@@ -4579,7 +4586,8 @@ function loop()
                         should_show_track = true
                     end
 
-                    if (settings.text_hover_enabled and IsMouseOverTrack(track_y, track_height, WY)) or
+                    if settings.hide_all_labels or
+                    (settings.text_hover_enabled and IsMouseOverTrack(track_y, track_height, WY)) or
                     (settings.text_hover_hide and r.IsTrackSelected(track)) then
                      should_show_track = false
                      should_show_name = false
@@ -4818,13 +4826,11 @@ function loop()
                                 
                                 local icon_offset = 0
                                 if settings.show_track_icons and track_icon_manager.GetTrackIcon(track, settings.use_tcp_icons) then
-                                    if settings.icon_position == 2 then
-                                        icon_offset = settings.icon_size + settings.icon_spacing
-                                    end
+                                    icon_offset = settings.icon_size + settings.icon_spacing
                                 end
                                 
                                 if settings.right_align then
-                                    info_text_x = text_x - r.ImGui_CalcTextSize(ctx, info_text) - 20
+                                    info_text_x = text_x - icon_offset - r.ImGui_CalcTextSize(ctx, info_text) - 20
                                 else
                                     info_text_x = text_x + track_text_width + icon_offset + 20
                                 end
@@ -4841,7 +4847,7 @@ function loop()
                             local dots_start_y = track_center - (total_dots_height / 2)
                             local dot_x = text_x + text_width + 5
                         
-                            if (is_pinned or text_y >= WY + pinned_tracks_height) and is_armed then
+                            if settings.text_opacity > 0 and (is_pinned or text_y >= WY + pinned_tracks_height) and is_armed then
                                 r.ImGui_DrawList_AddCircleFilled(
                                     draw_list,
                                     dot_x,
@@ -4851,7 +4857,7 @@ function loop()
                                 )
                             end
                             
-                            if (is_pinned or text_y >= WY + pinned_tracks_height) and is_soloed then
+                            if settings.text_opacity > 0 and (is_pinned or text_y >= WY + pinned_tracks_height) and is_soloed then
                                 r.ImGui_DrawList_AddCircleFilled(
                                     draw_list,
                                     dot_x,
@@ -4861,7 +4867,7 @@ function loop()
                                 )
                             end
                             
-                            if (is_pinned or text_y >= WY + pinned_tracks_height) and is_muted then
+                            if settings.text_opacity > 0 and (is_pinned or text_y >= WY + pinned_tracks_height) and is_muted then
                                 r.ImGui_DrawList_AddCircleFilled(
                                     draw_list,
                                     dot_x,
@@ -4898,7 +4904,7 @@ function loop()
                             end
                         end
                     end
-                    if settings.show_envelope_names then
+                    if settings.show_envelope_names and not settings.hide_all_labels then
                         local env_count = r.CountTrackEnvelopes(track)
                         for i = 0, env_count - 1 do
                             local env = r.GetTrackEnvelope(track, i)
