@@ -1,8 +1,12 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.2.8
+-- @version 0.2.9
 -- @changelog:
 --[[     
+    + Settings menu: Added "Update Plugins" option to screenshot window settings menu (re-scans installed plugin list)
+    + Context menu: Added "Remove Screenshot" option to plugin right-click menu (only visible when screenshot exists)
+
+    0.2.8
     + FX Chain Builder: Random chain generator (🎲) - 1 instrument + 3 FX in musical signal order (Tone → Dynamics → Modulation/Time)
     + FX Chain Builder: 10 Chain Templates via right-click on 🎲 (Clean Channel, Lo-Fi, Ambient Pad, Aggressive, Wet & Wide, Vocal Chain, Guitar Rig, Drum Bus, Synth Stack, FX Mangler)
     + FX Chain Builder: Smart FX categorization by keywords (EQ/filter/saturation, compressor/limiter/gate, chorus/phaser/delay/reverb, etc.)
@@ -6777,6 +6781,41 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 folder_changed = true
             end)
         end
+        if HasScreenshot(plugin_name) then
+            if r.ImGui_MenuItem(ctx, "Remove Screenshot") then
+                local norm = NormalizePluginNameForMatch(plugin_name)
+                if screenshot_index_norm and screenshot_index_norm[norm] then
+                    local fpath = screenshot_path .. screenshot_index_norm[norm]
+                    if r.file_exists(fpath) then
+                        os.remove(fpath)
+                    end
+                end
+                local stripped_x86 = StripX86Markers(plugin_name)
+                local variants = {
+                    plugin_name,
+                    CleanPluginName(plugin_name),
+                    (plugin_name or ''):gsub('[^%w%s-]','_'),
+                    CleanPluginName(plugin_name):gsub('[^%w%s-]','_'),
+                    stripped_x86,
+                    CleanPluginName(stripped_x86),
+                    StripX86Markers(CleanPluginName(plugin_name))
+                }
+                for _, base in ipairs(variants) do
+                    if base and base ~= '' then
+                        for _, ext in ipairs({'.png', '.jpg'}) do
+                            local path = screenshot_path .. base .. ext
+                            if r.file_exists(path) then
+                                os.remove(path)
+                            end
+                        end
+                    end
+                end
+                screenshot_exists_cache[plugin_name] = nil
+                ClearScreenshotCache()
+                BuildScreenshotIndex(true)
+                folder_changed = true
+            end
+        end
         
         if r.ImGui_MenuItem(ctx, "Add to New Track") then
             r.Undo_BeginBlock()
@@ -8390,6 +8429,17 @@ function ShowScreenshotControls()
         end
         if r.ImGui_IsItemHovered(ctx) then
             r.ImGui_SetTooltip(ctx, "Reload all config, ratings, custom folders, scripts launcher, and tags from files")
+        end
+        if r.ImGui_MenuItem(ctx, "Update Plugins") then
+            FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+            PLUGIN_LIST = FX_LIST_TEST
+            BuildPluginCache()
+            ClearPerformanceCaches()
+            InitializeFilteredPlugins()
+            DebugLog("Manual plugin list update triggered")
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Re-scan and update the installed plugin list")
         end
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end

@@ -1,8 +1,15 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.1.0
+-- @version 2.4.0
 -- @changelog
---   + Added support for startup mode via ExtState (for mode-specific launcher scripts)
+--   + Per-line text colors with 12-color palette (🎨 toolbar button)
+--   + Line colors persist per tab and per context (project/global/track/item)
+--   + Per-tab font size: each tab remembers its own font size
+--   + Responsive toolbar: items that don't fit collapse into a ▼ overflow menu
+--   + Added window pin button to prevent accidental moving
+--   + Added right-click context menu (Cut, Copy, Paste, Select All)
+--   + Added Undo/Redo support (Ctrl+Z / Ctrl+Y) with smart coalescing
+--   + Undo/Redo also available in right-click context menu
 
 --------------------------------------------------------------------------------
 local r = reaper
@@ -102,11 +109,19 @@ local state = {
     eraser_mode = false,
     -- List mode state
     list_mode = "none", -- "none", "bullet", "numbered"
+    window_pinned = false,
+    line_colors = {},
+    selected_text_color = nil,
     -- Background colors per mode
     project_bg_color = nil,
     global_bg_color = nil,
     project_bg_brightness = 1.0,
     global_bg_brightness = 1.0,
+    undo_stack = {},
+    redo_stack = {},
+    undo_max = 100,
+    undo_last_push_time = 0,
+    undo_coalesce_interval = 0.4,
 }
 
 local VARIATION_TEXT = "\239\184\142" 
@@ -199,6 +214,27 @@ local function MakeItemKey(item_guid, suffix)
     return "ITEM::" .. tostring(item_guid) .. "::" .. (suffix or "text")
 end
 
+local function SerializeLineColors(line_colors)
+    if not line_colors then return "" end
+    local parts = {}
+    for line_idx, color in pairs(line_colors) do
+        parts[#parts + 1] = line_idx .. ":" .. string.format("%08X", color)
+    end
+    return table.concat(parts, ",")
+end
+
+local function DeserializeLineColors(str)
+    local lc = {}
+    if not str or str == "" then return lc end
+    for pair in str:gmatch("[^,]+") do
+        local idx, hex = pair:match("^(%d+):(%x+)$")
+        if idx and hex then
+            lc[tonumber(idx)] = tonumber(hex, 16)
+        end
+    end
+    return lc
+end
+
 local function LoadNotebook()
     if r.HasExtState(EXT_NAMESPACE, "auto_save_interval") then
         local stored_interval = r.GetExtState(EXT_NAMESPACE, "auto_save_interval")
@@ -220,7 +256,7 @@ local function SaveNotebook()
     if not is_item_mode and not is_track_mode and not is_project_mode and not is_global_mode then return end
     
     local text = state.text or ""
-    local text_key, align_key, color_key, images_key, strokes_key, font_size_key, font_family_key, auto_save_key, window_width_key, window_height_key, show_status_key, tabs_enabled_key, tabs_data_key, bg_color_key, bg_brightness_key
+    local text_key, align_key, color_key, images_key, strokes_key, font_size_key, font_family_key, auto_save_key, window_width_key, window_height_key, show_status_key, tabs_enabled_key, tabs_data_key, bg_color_key, bg_brightness_key, line_colors_key
     
     if is_item_mode then
         text_key = MakeItemKey(state.current_item_guid, "text")
@@ -236,6 +272,7 @@ local function SaveNotebook()
         show_status_key = MakeItemKey(state.current_item_guid, "show_status")
         tabs_enabled_key = MakeItemKey(state.current_item_guid, "tabs_enabled")
         tabs_data_key = MakeItemKey(state.current_item_guid, "tabs_data")
+        line_colors_key = MakeItemKey(state.current_item_guid, "line_colors")
     elseif is_project_mode then
         text_key = "PROJECT::text"
         align_key = "PROJECT::align"
@@ -252,6 +289,7 @@ local function SaveNotebook()
         tabs_data_key = "PROJECT::tabs_data"
         bg_color_key = "PROJECT::bg_color"
         bg_brightness_key = "PROJECT::bg_brightness"
+        line_colors_key = "PROJECT::line_colors"
     elseif is_global_mode then
         text_key = "GLOBAL::text"
         align_key = "GLOBAL::align"
@@ -268,6 +306,7 @@ local function SaveNotebook()
         tabs_data_key = "GLOBAL::tabs_data"
         bg_color_key = "GLOBAL::bg_color"
         bg_brightness_key = "GLOBAL::bg_brightness"
+        line_colors_key = "GLOBAL::line_colors"
     else
         text_key = state.current_track_guid
         align_key = MakeTrackAlignKey(state.current_track_guid)
@@ -282,6 +321,7 @@ local function SaveNotebook()
         show_status_key = tostring(state.current_track_guid) .. "::show_status"
         tabs_enabled_key = tostring(state.current_track_guid) .. "::tabs_enabled"
         tabs_data_key = tostring(state.current_track_guid) .. "::tabs_data"
+        line_colors_key = tostring(state.current_track_guid) .. "::line_colors"
     end
     
     local align_value = state.text_align or "left"
@@ -321,6 +361,7 @@ local function SaveNotebook()
     local window_height_value = tostring(state.window_height or 400)
     local show_status_value = tostring(state.show_status and "true" or "false")
     local tabs_enabled_value = tostring(state.tabs_enabled and "true" or "false")
+    local line_colors_value = SerializeLineColors(state.line_colors)
     
     -- Serialize tabs data (always save, even if tabs are disabled, to preserve them)
     local tabs_data_value = ""
@@ -330,6 +371,7 @@ local function SaveNotebook()
             state.tabs[state.active_tab_index].text = state.text
             state.tabs[state.active_tab_index].images = state.images
             state.tabs[state.active_tab_index].strokes = state.strokes
+            state.tabs[state.active_tab_index].font_size = state.font_size
         end
         
         -- Format: tab_count|active_index|tab1_name:tab1_text|tab2_name:tab2_text|...
@@ -376,6 +418,7 @@ local function SaveNotebook()
         saved_tabs_data = WriteExtState(EXT_NAMESPACE, tabs_data_key, tabs_data_value)
         saved_bg_color = WriteExtState(EXT_NAMESPACE, bg_color_key, bg_color_value)
         saved_bg_brightness = WriteExtState(EXT_NAMESPACE, bg_brightness_key, bg_brightness_value)
+        WriteExtState(EXT_NAMESPACE, line_colors_key, line_colors_value)
     else
         saved_text = WriteProjExtState(state.current_proj, EXT_NAMESPACE, text_key, text)
         saved_align = WriteProjExtState(state.current_proj, EXT_NAMESPACE, align_key, align_value)
@@ -394,24 +437,33 @@ local function SaveNotebook()
             saved_bg_color = WriteProjExtState(state.current_proj, EXT_NAMESPACE, bg_color_key, bg_color_value)
             saved_bg_brightness = WriteProjExtState(state.current_proj, EXT_NAMESPACE, bg_brightness_key, bg_brightness_value)
         end
+        WriteProjExtState(state.current_proj, EXT_NAMESPACE, line_colors_key, line_colors_value)
     end
     
     -- Save images and strokes per tab (always save, even if tabs are disabled, to preserve them)
     if #state.tabs > 0 then
         for idx, tab in ipairs(state.tabs) do
-            local tab_images_key, tab_strokes_key
+            local tab_images_key, tab_strokes_key, tab_font_size_key, tab_line_colors_key
             if is_item_mode then
                 tab_images_key = MakeItemKey(state.current_item_guid, "tab" .. idx .. "_images")
                 tab_strokes_key = MakeItemKey(state.current_item_guid, "tab" .. idx .. "_strokes")
+                tab_font_size_key = MakeItemKey(state.current_item_guid, "tab" .. idx .. "_font_size")
+                tab_line_colors_key = MakeItemKey(state.current_item_guid, "tab" .. idx .. "_line_colors")
             elseif is_project_mode then
                 tab_images_key = "PROJECT::tab" .. idx .. "_images"
                 tab_strokes_key = "PROJECT::tab" .. idx .. "_strokes"
+                tab_font_size_key = "PROJECT::tab" .. idx .. "_font_size"
+                tab_line_colors_key = "PROJECT::tab" .. idx .. "_line_colors"
             elseif is_global_mode then
                 tab_images_key = "GLOBAL::tab" .. idx .. "_images"
                 tab_strokes_key = "GLOBAL::tab" .. idx .. "_strokes"
+                tab_font_size_key = "GLOBAL::tab" .. idx .. "_font_size"
+                tab_line_colors_key = "GLOBAL::tab" .. idx .. "_line_colors"
             else
                 tab_images_key = tostring(state.current_track_guid) .. "::tab" .. idx .. "_images"
                 tab_strokes_key = tostring(state.current_track_guid) .. "::tab" .. idx .. "_strokes"
+                tab_font_size_key = tostring(state.current_track_guid) .. "::tab" .. idx .. "_font_size"
+                tab_line_colors_key = tostring(state.current_track_guid) .. "::tab" .. idx .. "_line_colors"
             end
             
             local tab_images_str = ""
@@ -439,12 +491,18 @@ local function SaveNotebook()
                 end
             end
             
+            local tab_font_size_str = tostring(tab.font_size or state.font_size)
+            local tab_lc_str = SerializeLineColors(tab.line_colors)
             if is_global_mode then
                 WriteExtState(EXT_NAMESPACE, tab_images_key, tab_images_str)
                 WriteExtState(EXT_NAMESPACE, tab_strokes_key, tab_strokes_str)
+                WriteExtState(EXT_NAMESPACE, tab_font_size_key, tab_font_size_str)
+                WriteExtState(EXT_NAMESPACE, tab_line_colors_key, tab_lc_str)
             else
                 WriteProjExtState(state.current_proj, EXT_NAMESPACE, tab_images_key, tab_images_str)
                 WriteProjExtState(state.current_proj, EXT_NAMESPACE, tab_strokes_key, tab_strokes_str)
+                WriteProjExtState(state.current_proj, EXT_NAMESPACE, tab_font_size_key, tab_font_size_str)
+                WriteProjExtState(state.current_proj, EXT_NAMESPACE, tab_line_colors_key, tab_lc_str)
             end
         end
     end
@@ -482,7 +540,8 @@ local function ResetNotebook()
     editor.mouse_selecting = false
     state.bold_input_active = false
     ClearAllImages()
-    state.strokes = {}  -- Clear all drawings
+    state.strokes = {}
+    state.line_colors = {}
     state.show_status = true
     state.window_width = 600
     state.window_height = 400
@@ -850,6 +909,9 @@ local function LoadProjectState(proj)
     end
     state.text_color_mode = stored_color
     
+    local stored_lc = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::line_colors")
+    state.line_colors = DeserializeLineColors(stored_lc)
+    
     local stored_font_size = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::font_size"))
     local stored_font_family = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::font_family")
     local min_font, max_font = 11, 26
@@ -922,12 +984,24 @@ local function LoadProjectState(proj)
                 if colon_pos then
                     local name = parts[i]:sub(1, colon_pos - 1):gsub("::", ":"):gsub("||", "|")
                     local text = parts[i]:sub(colon_pos + 1):gsub("::", ":"):gsub("||", "|")
-                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}})
+                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}, font_size = state.font_size, line_colors = {}})
                 end
             end
             
-            -- Load images and strokes for each tab
             for idx = 1, #state.tabs do
+                local tab_fs_key = "PROJECT::tab" .. idx .. "_font_size"
+                local stored_tab_fs = ReadProjExtState(proj, EXT_NAMESPACE, tab_fs_key)
+                if stored_tab_fs and stored_tab_fs ~= "" then
+                    local fs = tonumber(stored_tab_fs)
+                    if fs and fs >= 11 and fs <= 26 then
+                        state.tabs[idx].font_size = math.floor(fs + 0.5)
+                    end
+                end
+
+                local tab_lc_key = "PROJECT::tab" .. idx .. "_line_colors"
+                local stored_tab_lc = ReadProjExtState(proj, EXT_NAMESPACE, tab_lc_key)
+                state.tabs[idx].line_colors = DeserializeLineColors(stored_tab_lc)
+
                 local tab_images_key = "PROJECT::tab" .. idx .. "_images"
                 local stored_tab_images = ReadProjExtState(proj, EXT_NAMESPACE, tab_images_key)
                 if stored_tab_images and stored_tab_images ~= "" then
@@ -1009,6 +1083,12 @@ local function LoadProjectState(proj)
                 state.text = state.tabs[state.active_tab_index].text or ""
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
+                state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                local tab_fs = state.tabs[state.active_tab_index].font_size
+                if tab_fs and tab_fs ~= state.font_size then
+                    state.font_size = tab_fs
+                    font_changed = true
+                end
             end
         end
     end
@@ -1035,7 +1115,6 @@ local function LoadProjectState(proj)
         state.window_size_needs_update = true
     end
     
-    -- Load images and strokes when tabs are disabled
     if not state.tabs_enabled then
         LoadImagesFromString(stored_images)
         
@@ -1118,6 +1197,9 @@ local function LoadGlobalState()
     end
     state.text_color_mode = stored_color
     
+    local stored_lc = ReadExtState(EXT_NAMESPACE, "GLOBAL::line_colors")
+    state.line_colors = DeserializeLineColors(stored_lc)
+    
     local stored_font_size = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::font_size"))
     local stored_font_family = ReadExtState(EXT_NAMESPACE, "GLOBAL::font_family")
     local min_font, max_font = 11, 26
@@ -1190,12 +1272,24 @@ local function LoadGlobalState()
                 if colon_pos then
                     local name = parts[i]:sub(1, colon_pos - 1):gsub("::", ":"):gsub("||", "|")
                     local text = parts[i]:sub(colon_pos + 1):gsub("::", ":"):gsub("||", "|")
-                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}})
+                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}, font_size = state.font_size, line_colors = {}})
                 end
             end
             
-            -- Load images and strokes for each tab
             for idx = 1, #state.tabs do
+                local tab_fs_key = "GLOBAL::tab" .. idx .. "_font_size"
+                local stored_tab_fs = ReadExtState(EXT_NAMESPACE, tab_fs_key)
+                if stored_tab_fs and stored_tab_fs ~= "" then
+                    local fs = tonumber(stored_tab_fs)
+                    if fs and fs >= 11 and fs <= 26 then
+                        state.tabs[idx].font_size = math.floor(fs + 0.5)
+                    end
+                end
+
+                local tab_lc_key = "GLOBAL::tab" .. idx .. "_line_colors"
+                local stored_tab_lc = ReadExtState(EXT_NAMESPACE, tab_lc_key)
+                state.tabs[idx].line_colors = DeserializeLineColors(stored_tab_lc)
+
                 local tab_images_key = "GLOBAL::tab" .. idx .. "_images"
                 local stored_tab_images = ReadExtState(EXT_NAMESPACE, tab_images_key)
                 if stored_tab_images and stored_tab_images ~= "" then
@@ -1277,6 +1371,12 @@ local function LoadGlobalState()
                 state.text = state.tabs[state.active_tab_index].text or ""
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
+                state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                local tab_fs = state.tabs[state.active_tab_index].font_size
+                if tab_fs and tab_fs ~= state.font_size then
+                    state.font_size = tab_fs
+                    font_changed = true
+                end
             end
         end
     end
@@ -1303,7 +1403,6 @@ local function LoadGlobalState()
         state.window_size_needs_update = true
     end
     
-    -- Load images and strokes when tabs are disabled
     if not state.tabs_enabled then
         LoadImagesFromString(stored_images)
         
@@ -1386,6 +1485,8 @@ local function LoadTrackState(proj, track, track_guid)
         stored_color = "white"
     end
     state.text_color_mode = stored_color
+    local lc_key = tostring(track_guid) .. "::line_colors"
+    state.line_colors = DeserializeLineColors(ReadProjExtState(proj, EXT_NAMESPACE, lc_key))
     local font_size_key = tostring(track_guid) .. "::font_size"
     local stored_font_size = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, font_size_key))
     local font_family_key = tostring(track_guid) .. "::font_family"
@@ -1452,12 +1553,23 @@ local function LoadTrackState(proj, track, track_guid)
                 if colon_pos then
                     local name = parts[i]:sub(1, colon_pos - 1):gsub("::", ":"):gsub("||", "|")
                     local text = parts[i]:sub(colon_pos + 1):gsub("::", ":"):gsub("||", "|")
-                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}})
+                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}, font_size = state.font_size, line_colors = {}})
                 end
             end
             
-            -- Load images for each tab
             for idx = 1, #state.tabs do
+                local tab_fs_key = tostring(track_guid) .. "::tab" .. idx .. "_font_size"
+                local stored_tab_fs = ReadProjExtState(proj, EXT_NAMESPACE, tab_fs_key)
+                if stored_tab_fs and stored_tab_fs ~= "" then
+                    local fs = tonumber(stored_tab_fs)
+                    if fs and fs >= 11 and fs <= 26 then
+                        state.tabs[idx].font_size = math.floor(fs + 0.5)
+                    end
+                end
+
+                local tab_lc_key = tostring(track_guid) .. "::tab" .. idx .. "_line_colors"
+                state.tabs[idx].line_colors = DeserializeLineColors(ReadProjExtState(proj, EXT_NAMESPACE, tab_lc_key))
+
                 local tab_images_key = tostring(track_guid) .. "::tab" .. idx .. "_images"
                 local stored_tab_images = ReadProjExtState(proj, EXT_NAMESPACE, tab_images_key)
                 if stored_tab_images and stored_tab_images ~= "" then
@@ -1543,6 +1655,12 @@ local function LoadTrackState(proj, track, track_guid)
                 state.text = state.tabs[state.active_tab_index].text or ""
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
+                state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                local tab_fs = state.tabs[state.active_tab_index].font_size
+                if tab_fs and tab_fs ~= state.font_size then
+                    state.font_size = tab_fs
+                    font_changed = true
+                end
             end
         end
     end
@@ -1568,7 +1686,6 @@ local function LoadTrackState(proj, track, track_guid)
         state.show_status = true
     end
     
-    -- Load images and strokes when tabs are disabled
     if not state.tabs_enabled then
         LoadImagesFromString(stored_images)
         
@@ -1667,6 +1784,8 @@ local function LoadItemState(proj, item, item_guid)
     end
     state.text_color_mode = stored_color
     
+    state.line_colors = DeserializeLineColors(ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "line_colors")))
+    
     local stored_font_size = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "font_size")))
     local stored_font_family = ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "font_family"))
     local min_font, max_font = 11, 26
@@ -1725,12 +1844,23 @@ local function LoadItemState(proj, item, item_guid)
                 if colon_pos then
                     local name = parts[i]:sub(1, colon_pos - 1):gsub("::", ":"):gsub("||", "|")
                     local text = parts[i]:sub(colon_pos + 1):gsub("::", ":"):gsub("||", "|")
-                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}})
+                    table.insert(state.tabs, {name = name, text = text, images = {}, strokes = {}, font_size = state.font_size, line_colors = {}})
                 end
             end
             
-            -- Load images for each tab
             for idx = 1, #state.tabs do
+                local tab_fs_key = MakeItemKey(item_guid, "tab" .. idx .. "_font_size")
+                local stored_tab_fs = ReadProjExtState(proj, EXT_NAMESPACE, tab_fs_key)
+                if stored_tab_fs and stored_tab_fs ~= "" then
+                    local fs = tonumber(stored_tab_fs)
+                    if fs and fs >= 11 and fs <= 26 then
+                        state.tabs[idx].font_size = math.floor(fs + 0.5)
+                    end
+                end
+
+                local tab_lc_key = MakeItemKey(item_guid, "tab" .. idx .. "_line_colors")
+                state.tabs[idx].line_colors = DeserializeLineColors(ReadProjExtState(proj, EXT_NAMESPACE, tab_lc_key))
+
                 local tab_images_key = MakeItemKey(item_guid, "tab" .. idx .. "_images")
                 local stored_tab_images = ReadProjExtState(proj, EXT_NAMESPACE, tab_images_key)
                 if stored_tab_images and stored_tab_images ~= "" then
@@ -1815,6 +1945,12 @@ local function LoadItemState(proj, item, item_guid)
                 state.text = state.tabs[state.active_tab_index].text or ""
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
+                state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                local tab_fs = state.tabs[state.active_tab_index].font_size
+                if tab_fs and tab_fs ~= state.font_size then
+                    state.font_size = tab_fs
+                    font_changed = true
+                end
             end
         end
     end
@@ -1823,7 +1959,6 @@ local function LoadItemState(proj, item, item_guid)
         state.window_size_needs_update = true
     end
     
-    -- Load images and strokes when tabs are disabled
     if not state.tabs_enabled then
         LoadImagesFromString(stored_images)
         
@@ -1976,6 +2111,10 @@ UpdateActiveTrackContext = function(force)
 end
 
 UpdateActiveContext = function(force)
+    if force then
+        state.undo_stack = {}
+        state.redo_stack = {}
+    end
     if state.mode == "item" then
         UpdateActiveItemContext(force)
     elseif state.mode == "project" then
@@ -2037,6 +2176,51 @@ local function GetEditorTextColor()
     end
 
     return ResolveColorU32(r.ImGui_Col_Text())
+end
+
+local TEXT_COLOR_PRESETS = {
+    {name = "White",  hex = 0xFFFFFFFF},
+    {name = "Black",  hex = 0x000000FF},
+    {name = "Red",    hex = 0xFF4444FF},
+    {name = "Orange", hex = 0xFF9933FF},
+    {name = "Yellow", hex = 0xFFDD33FF},
+    {name = "Green",  hex = 0x44CC66FF},
+    {name = "Cyan",   hex = 0x44BBDDFF},
+    {name = "Blue",   hex = 0x5588EEFF},
+    {name = "Purple", hex = 0xAA55DDFF},
+    {name = "Pink",   hex = 0xFF66AAFF},
+    {name = "Gray",   hex = 0x999999FF},
+    {name = "Brown",  hex = 0xAA7744FF},
+}
+
+local function GetSourceLineFromByte(text, byte_pos)
+    if byte_pos <= 0 then return 1 end
+    local count = 1
+    for i = 1, math.min(byte_pos, #text) do
+        if text:byte(i) == 10 then count = count + 1 end
+    end
+    return count
+end
+
+local function GetSourceLineFromCaret(text, caret)
+    return GetSourceLineFromByte(text, caret)
+end
+
+local function ShiftLineColors(line_colors, from_line, delta)
+    if not line_colors or delta == 0 then return end
+    local new_colors = {}
+    for line_idx, color in pairs(line_colors) do
+        if line_idx >= from_line then
+            local new_idx = line_idx + delta
+            if new_idx >= 1 then
+                new_colors[new_idx] = color
+            end
+        else
+            new_colors[line_idx] = color
+        end
+    end
+    for k in pairs(line_colors) do line_colors[k] = nil end
+    for k, v in pairs(new_colors) do line_colors[k] = v end
 end
 
 local function ApplyAlpha(color_u32, alpha)
@@ -2283,6 +2467,73 @@ EnsureEditorState = function()
     end
     NormalizeSelection(editor)
     return editor
+end
+
+local function PushUndoState(force)
+    local editor = state.editor
+    local now = r.time_precise()
+    if not force and (now - state.undo_last_push_time) < state.undo_coalesce_interval then
+        local top = state.undo_stack[#state.undo_stack]
+        if top then
+            top.text = state.text
+            top.caret = editor and editor.caret or 0
+            return
+        end
+    end
+    local entry = {
+        text = state.text,
+        caret = editor and editor.caret or 0,
+    }
+    table.insert(state.undo_stack, entry)
+    if #state.undo_stack > state.undo_max then
+        table.remove(state.undo_stack, 1)
+    end
+    state.redo_stack = {}
+    state.undo_last_push_time = now
+end
+
+local function PerformUndo()
+    if #state.undo_stack == 0 then return false end
+    local editor = state.editor or {}
+    local current = {
+        text = state.text,
+        caret = editor.caret or 0,
+    }
+    table.insert(state.redo_stack, current)
+    local entry = table.remove(state.undo_stack)
+    state.text = entry.text
+    if state.editor then
+        state.editor.caret = ClampCaret(state.text, entry.caret)
+        ClearSelection(state.editor, state.editor.caret)
+        state.editor.scroll_to_caret = true
+        state.editor.blink_visible = true
+        state.editor.blink_time = r.time_precise()
+    end
+    state.dirty = true
+    state.last_edit_time = r.time_precise()
+    return true
+end
+
+local function PerformRedo()
+    if #state.redo_stack == 0 then return false end
+    local editor = state.editor or {}
+    local current = {
+        text = state.text,
+        caret = editor.caret or 0,
+    }
+    table.insert(state.undo_stack, current)
+    local entry = table.remove(state.redo_stack)
+    state.text = entry.text
+    if state.editor then
+        state.editor.caret = ClampCaret(state.text, entry.caret)
+        ClearSelection(state.editor, state.editor.caret)
+        state.editor.scroll_to_caret = true
+        state.editor.blink_visible = true
+        state.editor.blink_time = r.time_precise()
+    end
+    state.dirty = true
+    state.last_edit_time = r.time_precise()
+    return true
 end
 
 local function InsertTextAtCaret(text, caret, insert_text)
@@ -2707,6 +2958,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
     local function apply_newline()
         local snapshot = capture_editor_state()
         local previous_text = state.text
+        PushUndoState(true)
         if HasSelection(editor) then
             DeleteSelection(editor)
         end
@@ -2719,6 +2971,8 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
         state.text = new_text
         editor.caret = new_caret
         ClearSelection(editor)
+        local src_line = GetSourceLineFromCaret(state.text, editor.caret)
+        ShiftLineColors(state.line_colors, src_line, 1)
         text_changed = true
         caret_changed = true
     end
@@ -2735,6 +2989,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
         if not ok_char or not char or char == "" then return false end
         local snapshot = capture_editor_state()
         local previous_text = state.text
+        PushUndoState()
         if HasSelection(editor) then
             DeleteSelection(editor)
         end
@@ -2757,6 +3012,16 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
         local key_c = r.ImGui_Key_C and r.ImGui_Key_C()
         local key_x = r.ImGui_Key_X and r.ImGui_Key_X()
         local key_v = r.ImGui_Key_V and r.ImGui_Key_V()
+        local key_z = r.ImGui_Key_Z and r.ImGui_Key_Z()
+        local key_y = r.ImGui_Key_Y and r.ImGui_Key_Y()
+
+        if key_z and ctrl_combo(key_z) then
+            PerformUndo()
+        end
+
+        if key_y and ctrl_combo(key_y) then
+            PerformRedo()
+        end
 
         if key_a and ctrl_combo(key_a) then
             editor.selection_anchor = 0
@@ -2782,6 +3047,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
             local selected_text = GetSelectedText(editor)
             if selected_text and selected_text ~= "" then
                 WriteClipboardText(selected_text)
+                PushUndoState(true)
                 if DeleteSelection(editor) then
                     text_changed = true
                     caret_changed = true
@@ -2805,6 +3071,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
                         state.text = previous_text
                         restore_editor_state(snapshot)
                     elseif new_text ~= state.text or new_caret ~= editor.caret then
+                        PushUndoState(true)
                         state.text = new_text
                         editor.caret = new_caret
                         ClearSelection(editor)
@@ -2890,13 +3157,34 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
 
         if r.ImGui_Key_Backspace and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Backspace(), true) then
             if HasSelection(editor) then
+                PushUndoState(true)
+                local sel_start, sel_end = GetSelectionRange(editor)
+                local nl_count = 0
+                local sl = 1
+                if sel_start and sel_end then
+                    local sel_text = state.text:sub(sel_start + 1, sel_end)
+                    for _ in sel_text:gmatch("\n") do nl_count = nl_count + 1 end
+                    if nl_count > 0 then sl = GetSourceLineFromByte(state.text, sel_start + 1) end
+                end
                 if DeleteSelection(editor) then
+                    if nl_count > 0 then
+                        for i = sl + 1, sl + nl_count do state.line_colors[i] = nil end
+                        ShiftLineColors(state.line_colors, sl + nl_count + 1, -nl_count)
+                    end
                     text_changed = true
                     caret_changed = true
                 end
             else
+                PushUndoState()
+                local old_text = state.text
+                local del_byte = editor.caret
+                local was_newline = del_byte > 0 and old_text:byte(del_byte) == 10
                 local new_text, new_caret = DeletePreviousChar(state.text, editor.caret)
                 if new_text ~= state.text or new_caret ~= editor.caret then
+                    if was_newline then
+                        local src_line = GetSourceLineFromByte(old_text, del_byte)
+                        ShiftLineColors(state.line_colors, src_line, -1)
+                    end
                     state.text = new_text
                     editor.caret = new_caret
                     ClearSelection(editor, editor.caret)
@@ -2908,13 +3196,34 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
 
         if r.ImGui_Key_Delete and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Delete(), true) then
             if HasSelection(editor) then
+                PushUndoState(true)
+                local sel_start, sel_end = GetSelectionRange(editor)
+                local nl_count = 0
+                local sl = 1
+                if sel_start and sel_end then
+                    local sel_text = state.text:sub(sel_start + 1, sel_end)
+                    for _ in sel_text:gmatch("\n") do nl_count = nl_count + 1 end
+                    if nl_count > 0 then sl = GetSourceLineFromByte(state.text, sel_start + 1) end
+                end
                 if DeleteSelection(editor) then
+                    if nl_count > 0 then
+                        for i = sl + 1, sl + nl_count do state.line_colors[i] = nil end
+                        ShiftLineColors(state.line_colors, sl + nl_count + 1, -nl_count)
+                    end
                     text_changed = true
                     caret_changed = true
                 end
             else
+                PushUndoState()
+                local old_text = state.text
+                local del_pos = editor.caret + 1
+                local was_newline = del_pos <= #old_text and old_text:byte(del_pos) == 10
                 local new_text, new_caret = DeleteNextChar(state.text, editor.caret)
                 if new_text ~= state.text then
+                    if was_newline then
+                        local src_line = GetSourceLineFromByte(old_text, del_pos)
+                        ShiftLineColors(state.line_colors, src_line, -1)
+                    end
                     state.text = new_text
                     editor.caret = new_caret
                     ClearSelection(editor, editor.caret)
@@ -3275,190 +3584,281 @@ local function DrawMenuBar()
         r.ImGui_SetCursorPosY(ctx, toolbar_base_y)
     end
     
-    SameLineToolbar()
+    local overflow_items = {}
+    local overflow_mode = false
+    local window_w = r.ImGui_GetWindowWidth(ctx)
     
-    local tabs_icon = "☰"
-    local tabs_tinted = state.tabs_enabled
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
-    if tabs_tinted then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
-    end
-    local tabs_label = tabs_icon .. "##toggle_tabs"
-    if r.ImGui_Button(ctx, tabs_label, button_width, button_height) then
-        state.tabs_enabled = not state.tabs_enabled
-        if state.tabs_enabled and #state.tabs == 0 then
-            state.tabs = {{name = "Notes", text = state.text, images = state.images, strokes = state.strokes}}
-            state.active_tab_index = 1
-        elseif not state.tabs_enabled and #state.tabs > 0 then
-            if state.tabs[state.active_tab_index] then
-                state.text = state.tabs[state.active_tab_index].text
-                state.images = state.tabs[state.active_tab_index].images or {}
-                state.strokes = state.tabs[state.active_tab_index].strokes or {}
-            end
+    local function CheckToolbarFit(item_width)
+        if overflow_mode then return false end
+        local cur_x = r.ImGui_GetCursorPosX(ctx)
+        local overflow_reserve = button_width + 16
+        if cur_x + item_width + overflow_reserve > window_w - 8 then
+            overflow_mode = true
+            return false
         end
-        state.dirty = true
-        state.last_edit_time = r.time_precise()
-    end
-    if tabs_tinted then
-        r.ImGui_PopStyleColor(ctx, 1)
-    end
-    r.ImGui_PopStyleColor(ctx, 3)
-    if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, state.tabs_enabled and "Disable tabs" or "Enable tabs")
+        return true
     end
     
-    SameLineToolbar()
-    
-    local color_icon = state.text_color_mode == "white" and "■" or "▢"
-    local color_tinted = state.text_color_mode == "black"
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
-    if color_tinted then
-        local dark_accent = PackColorToU32(0.3, 0.3, 0.3, 1.0)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), dark_accent)
-    end
-    local color_label = color_icon .. "##toggle_color"
-    if r.ImGui_Button(ctx, color_label, button_width, button_height) then
-        state.text_color_mode = state.text_color_mode == "white" and "black" or "white"
-        SaveNotebook()
-    end
-    if color_tinted then
-        r.ImGui_PopStyleColor(ctx, 1)
-    end
-    r.ImGui_PopStyleColor(ctx, 3)
-    if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Toggle text color (white/black)")
-    end
-
-    SameLineToolbar()
-    local editor = EnsureEditorState()
-    local tinted = state.bold_input_active and true or false
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
-    if tinted then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), bold_accent)
-    end
-    local bold_label = MonoIcon("𝗕") .. "##toggle_bold"
-    if r.ImGui_Button(ctx, bold_label, button_width, button_height) then
-        ToggleBoldFormatting(editor)
-        editor.request_focus = true
-    end
-    if tinted then
-        r.ImGui_PopStyleColor(ctx, 1)
-    end
-    r.ImGui_PopStyleColor(ctx, 3)
-    if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Toggle bold")
-    end
-
-    SameLineToolbar()
-    local alignments = {
-        {icon = "|≡", value = "left", tooltip = "Align left"},
-        {icon = "≡", value = "center", tooltip = "Align center"},
-        {icon = "≡|", value = "right", tooltip = "Align right"},
-    }
-    for idx, info in ipairs(alignments) do
-        if idx > 1 then
-            SameLineToolbar()
-        end
-        local active = state.text_align == info.value
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
+        local tabs_icon = "☰"
+        local tabs_tinted = state.tabs_enabled
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
-        local pushed_text = false
-        if active then
+        if tabs_tinted then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
-            pushed_text = true
         end
-        local icon_label = MonoIcon(info.icon) .. "##align_" .. info.value
-        if r.ImGui_Button(ctx, icon_label, button_width, button_height) then
-            if state.text_align ~= info.value then
-                state.text_align = info.value
-                state.dirty = true
-                state.last_edit_time = r.time_precise()
+        local tabs_label = tabs_icon .. "##toggle_tabs"
+        if r.ImGui_Button(ctx, tabs_label, button_width, button_height) then
+            state.tabs_enabled = not state.tabs_enabled
+            if state.tabs_enabled and #state.tabs == 0 then
+                state.tabs = {{name = "Notes", text = state.text, images = state.images, strokes = state.strokes, font_size = state.font_size, line_colors = state.line_colors}}
+                state.active_tab_index = 1
+            elseif not state.tabs_enabled and #state.tabs > 0 then
+                if state.tabs[state.active_tab_index] then
+                    state.text = state.tabs[state.active_tab_index].text
+                    state.images = state.tabs[state.active_tab_index].images or {}
+                    state.strokes = state.tabs[state.active_tab_index].strokes or {}
+                    state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                end
             end
-            editor.request_focus = true
+            state.dirty = true
+            state.last_edit_time = r.time_precise()
         end
-        if pushed_text then
+        if tabs_tinted then
             r.ImGui_PopStyleColor(ctx, 1)
         end
         r.ImGui_PopStyleColor(ctx, 3)
         if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, info.tooltip)
+            r.ImGui_SetTooltip(ctx, state.tabs_enabled and "Disable tabs" or "Enable tabs")
         end
+    else
+        table.insert(overflow_items, "tabs")
     end
-
-    SameLineToolbar()
     
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
-    local image_label = "▦##load_image"
-    if r.ImGui_Button(ctx, image_label, button_width, button_height) then
-        local ok, path = r.JS_Dialog_BrowseForOpenFiles("Select Image", "", "*.png;*.jpg;*.jpeg;*.bmp;*.gif", "Images", false)
-        if ok and path and path ~= "" then
-            local image = AddImage(path)
-            if image then
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
+        local has_lc = false
+        for _ in pairs(state.line_colors) do has_lc = true; break end
+        local color_icon = has_lc and "🎨" or (state.text_color_mode == "white" and "■" or "▢")
+        local color_tinted = state.text_color_mode == "black" and not has_lc
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+        if color_tinted then
+            local dark_accent = PackColorToU32(0.3, 0.3, 0.3, 1.0)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), dark_accent)
+        end
+        local color_label = color_icon .. "##toggle_color"
+        if r.ImGui_Button(ctx, color_label, button_width, button_height) then
+            r.ImGui_OpenPopup(ctx, "text_color_palette")
+        end
+        if color_tinted then
+            r.ImGui_PopStyleColor(ctx, 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Text color palette\nSet color for current line or all text")
+        end
+    else
+        table.insert(overflow_items, "color")
+    end
+    
+    if r.ImGui_BeginPopup(ctx, "text_color_palette") then
+        r.ImGui_Text(ctx, "Default Text Color")
+        r.ImGui_Separator(ctx)
+        local mode_labels = {{"White", "white"}, {"Black", "black"}}
+        for _, ml in ipairs(mode_labels) do
+            local sel = state.text_color_mode == ml[2]
+            if r.ImGui_MenuItem(ctx, sel and ("✓ " .. ml[1]) or ("  " .. ml[1])) then
+                state.text_color_mode = ml[2]
                 state.dirty = true
                 state.last_edit_time = r.time_precise()
                 SaveNotebook()
-            else
-                r.ShowMessageBox("Failed to load image. Please check if the file format is supported.", "TK Notebook", 0)
             end
         end
-    end
-    r.ImGui_PopStyleColor(ctx, 3)
-    if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Load image")
-    end
-    
-    SameLineToolbar()
-    
-    local drawing_active = state.drawing_enabled or state.eraser_mode
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
-    if state.eraser_mode then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), PackColorToU32(1.0, 0.3, 0.3, 1.0))
-    elseif drawing_active then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), bold_accent)
-    end
-    local draw_label = (state.eraser_mode and "🗑" or "✎") .. "##drawing_tool"
-    if r.ImGui_Button(ctx, draw_label, button_width, button_height) then
-        if state.eraser_mode then
-            state.eraser_mode = false
-        else
-            state.drawing_enabled = not state.drawing_enabled
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Color Current Line")
+        local editor_lc = EnsureEditorState()
+        local cur_src_line = GetSourceLineFromCaret(state.text, editor_lc.caret)
+        local cur_line_col = state.line_colors[cur_src_line]
+        for i, preset in ipairs(TEXT_COLOR_PRESETS) do
+            if i > 1 and (i - 1) % 6 ~= 0 then
+                r.ImGui_SameLine(ctx)
+            end
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), preset.hex)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), preset.hex)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), preset.hex)
+            local btn_size = 24
+            if r.ImGui_Button(ctx, "##lc_preset_" .. i, btn_size, btn_size) then
+                state.line_colors[cur_src_line] = preset.hex
+                state.dirty = true
+                state.last_edit_time = r.time_precise()
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, preset.name)
+            end
         end
+        r.ImGui_Separator(ctx)
+        if cur_line_col then
+            if r.ImGui_MenuItem(ctx, "Reset current line") then
+                state.line_colors[cur_src_line] = nil
+                state.dirty = true
+                state.last_edit_time = r.time_precise()
+            end
+        end
+        local has_any = false
+        for _ in pairs(state.line_colors) do has_any = true; break end
+        if has_any then
+            if r.ImGui_MenuItem(ctx, "Reset all line colors") then
+                state.line_colors = {}
+                state.dirty = true
+                state.last_edit_time = r.time_precise()
+            end
+        end
+        r.ImGui_EndPopup(ctx)
     end
-    if drawing_active then
-        r.ImGui_PopStyleColor(ctx, 1)
+
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
+        local editor = EnsureEditorState()
+        local tinted = state.bold_input_active and true or false
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+        if tinted then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), bold_accent)
+        end
+        local bold_label = MonoIcon("𝗕") .. "##toggle_bold"
+        if r.ImGui_Button(ctx, bold_label, button_width, button_height) then
+            ToggleBoldFormatting(editor)
+            editor.request_focus = true
+        end
+        if tinted then
+            r.ImGui_PopStyleColor(ctx, 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Toggle bold")
+        end
+    else
+        table.insert(overflow_items, "bold")
     end
-    r.ImGui_PopStyleColor(ctx, 3)
-    if r.ImGui_IsItemHovered(ctx) then
-        local tooltip = state.eraser_mode and "Eraser mode (click strokes to delete)\nRight-click for options" 
-                        or (state.drawing_enabled and "Drawing enabled (click and drag to draw)\nRight-click for options" 
-                        or "Enable drawing tool\nRight-click for options")
-        r.ImGui_SetTooltip(ctx, tooltip)
+
+    if CheckToolbarFit((button_width + 4) * 3) then
+        SameLineToolbar()
+        local alignments = {
+            {icon = "|≡", value = "left", tooltip = "Align left"},
+            {icon = "≡", value = "center", tooltip = "Align center"},
+            {icon = "≡|", value = "right", tooltip = "Align right"},
+        }
+        for idx, info in ipairs(alignments) do
+            if idx > 1 then
+                SameLineToolbar()
+            end
+            local align_active = state.text_align == info.value
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+            local pushed_text = false
+            if align_active then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
+                pushed_text = true
+            end
+            local icon_label = MonoIcon(info.icon) .. "##align_" .. info.value
+            if r.ImGui_Button(ctx, icon_label, button_width, button_height) then
+                if state.text_align ~= info.value then
+                    state.text_align = info.value
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+                local ed = EnsureEditorState()
+                ed.request_focus = true
+            end
+            if pushed_text then
+                r.ImGui_PopStyleColor(ctx, 1)
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, info.tooltip)
+            end
+        end
+    else
+        table.insert(overflow_items, "align")
+    end
+
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+        local image_label = "▦##load_image"
+        if r.ImGui_Button(ctx, image_label, button_width, button_height) then
+            local ok, path = r.JS_Dialog_BrowseForOpenFiles("Select Image", "", "*.png;*.jpg;*.jpeg;*.bmp;*.gif", "Images", false)
+            if ok and path and path ~= "" then
+                local image = AddImage(path)
+                if image then
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                    SaveNotebook()
+                else
+                    r.ShowMessageBox("Failed to load image. Please check if the file format is supported.", "TK Notebook", 0)
+                end
+            end
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Load image")
+        end
+    else
+        table.insert(overflow_items, "image")
     end
     
-    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
-        r.ImGui_OpenPopup(ctx, "drawing_options")
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
+        local drawing_active = state.drawing_enabled or state.eraser_mode
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+        if state.eraser_mode then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), PackColorToU32(1.0, 0.3, 0.3, 1.0))
+        elseif drawing_active then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), bold_accent)
+        end
+        local draw_label = (state.eraser_mode and "🗑" or "✎") .. "##drawing_tool"
+        if r.ImGui_Button(ctx, draw_label, button_width, button_height) then
+            if state.eraser_mode then
+                state.eraser_mode = false
+            else
+                state.drawing_enabled = not state.drawing_enabled
+            end
+        end
+        if drawing_active then
+            r.ImGui_PopStyleColor(ctx, 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            local tooltip = state.eraser_mode and "Eraser mode (click strokes to delete)\nRight-click for options" 
+                            or (state.drawing_enabled and "Drawing enabled (click and drag to draw)\nRight-click for options" 
+                            or "Enable drawing tool\nRight-click for options")
+            r.ImGui_SetTooltip(ctx, tooltip)
+        end
+        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "drawing_options")
+        end
+    else
+        table.insert(overflow_items, "drawing")
     end
     
     if r.ImGui_BeginPopup(ctx, "drawing_options") then
         r.ImGui_Text(ctx, "Drawing Options")
         r.ImGui_Separator(ctx)
-        
         r.ImGui_Text(ctx, "Current Pen Color:")
         local col_int = r.ImGui_ColorConvertDouble4ToU32(
             state.drawing_color.r, state.drawing_color.g, state.drawing_color.b, state.drawing_color.a)
         r.ImGui_ColorButton(ctx, "##current_color", col_int, 0, 40, 40)
-        
         r.ImGui_Separator(ctx)
         r.ImGui_Text(ctx, "Color Presets:")
         local presets = {
@@ -3490,17 +3890,13 @@ local function DrawMenuBar()
                 r.ImGui_SetTooltip(ctx, preset.name)
             end
         end
-        
         r.ImGui_Separator(ctx)
-        
         r.ImGui_Text(ctx, "Pen Thickness:")
         local thickness_changed, new_thickness = r.ImGui_SliderDouble(ctx, "##thickness", state.drawing_thickness, 1.0, 10.0, "%.1f")
         if thickness_changed then
             state.drawing_thickness = new_thickness
         end
-        
         r.ImGui_Separator(ctx)
-        
         if r.ImGui_MenuItem(ctx, state.eraser_mode and "✓ Eraser Mode" or "Eraser Mode") then
             state.eraser_mode = not state.eraser_mode
             if state.eraser_mode then
@@ -3510,152 +3906,335 @@ local function DrawMenuBar()
         if r.ImGui_IsItemHovered(ctx) then
             r.ImGui_SetTooltip(ctx, "Click on strokes to delete them")
         end
-        
         r.ImGui_Separator(ctx)
-        
         if r.ImGui_MenuItem(ctx, "Clear All Drawings") then
             state.strokes = {}
             state.dirty = true
             state.last_edit_time = r.time_precise()
             SaveNotebook()
         end
-        
         r.ImGui_EndPopup(ctx)
     end
     
-    SameLineToolbar()
-    
-    local list_active = state.list_mode ~= "none"
-    local list_icon = state.list_mode == "bullet" and "•" or (state.list_mode == "numbered" and "#" or "≡")
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
-    if list_active then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
-    end
-    local list_label = list_icon .. "##list_mode"
-    if r.ImGui_Button(ctx, list_label, button_width, button_height) then
-        if state.list_mode == "none" then
-            state.list_mode = "bullet"
-        else
-            state.list_mode = "none"
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
+        local list_active = state.list_mode ~= "none"
+        local list_icon = state.list_mode == "bullet" and "•" or (state.list_mode == "numbered" and "#" or "≡")
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+        if list_active then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
         end
-        local editor = EnsureEditorState()
-        editor.request_focus = true
-    end
-    if list_active then
-        r.ImGui_PopStyleColor(ctx, 1)
-    end
-    r.ImGui_PopStyleColor(ctx, 3)
-    if r.ImGui_IsItemHovered(ctx) then
-        local tooltip = list_active and ("List mode active (" .. (state.list_mode == "bullet" and "bullets" or "numbers") .. ")\nClick to disable\nRight-click for options") 
-                        or "Enable list mode\nRight-click for options"
-        r.ImGui_SetTooltip(ctx, tooltip)
-    end
-    
-    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
-        r.ImGui_OpenPopup(ctx, "list_options")
+        local list_label = list_icon .. "##list_mode"
+        if r.ImGui_Button(ctx, list_label, button_width, button_height) then
+            if state.list_mode == "none" then
+                state.list_mode = "bullet"
+            else
+                state.list_mode = "none"
+            end
+            local ed = EnsureEditorState()
+            ed.request_focus = true
+        end
+        if list_active then
+            r.ImGui_PopStyleColor(ctx, 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            local tooltip = list_active and ("List mode active (" .. (state.list_mode == "bullet" and "bullets" or "numbers") .. ")\nClick to disable\nRight-click for options") 
+                            or "Enable list mode\nRight-click for options"
+            r.ImGui_SetTooltip(ctx, tooltip)
+        end
+        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "list_options")
+        end
+    else
+        table.insert(overflow_items, "list")
     end
     
     if r.ImGui_BeginPopup(ctx, "list_options") then
         r.ImGui_Text(ctx, "List Type")
         r.ImGui_Separator(ctx)
-        
         if r.ImGui_MenuItem(ctx, state.list_mode == "bullet" and "✓ Bullet (•)" or "Bullet (•)") then
             state.list_mode = "bullet"
         end
-        
         if r.ImGui_MenuItem(ctx, state.list_mode == "numbered" and "✓ Numbered (1. 2. 3.)" or "Numbered (1. 2. 3.)") then
             state.list_mode = "numbered"
         end
-        
         r.ImGui_EndPopup(ctx)
     end
     
-    SameLineToolbar()
-    
-    local info_icon = state.show_status and "ⓘ" or "ⓘ"
-    local info_tinted = state.show_status
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
-    if info_tinted then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
-    end
-    local info_label = info_icon .. "##toggle_info"
-    if r.ImGui_Button(ctx, info_label, button_width, button_height) then
-        state.show_status = not state.show_status
-        state.dirty = true
-        state.last_edit_time = r.time_precise()
-        SaveNotebook()
-    end
-    if info_tinted then
-        r.ImGui_PopStyleColor(ctx, 1)
-    end
-    r.ImGui_PopStyleColor(ctx, 3)
-    if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Toggle status bar")
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
+        local pin_icon = state.window_pinned and "📌" or "📍"
+        local pin_tinted = state.window_pinned
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+        if pin_tinted then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
+        end
+        local pin_label = pin_icon .. "##toggle_pin"
+        if r.ImGui_Button(ctx, pin_label, button_width, button_height) then
+            state.window_pinned = not state.window_pinned
+        end
+        if pin_tinted then
+            r.ImGui_PopStyleColor(ctx, 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, state.window_pinned and "Unpin window (allow moving)" or "Pin window (prevent moving)")
+        end
+    else
+        table.insert(overflow_items, "pin")
     end
 
-    SameLineToolbar()
-    
-    local slider_width = 60.0
-    local slider_height = 16.0
-    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
-    
-    r.ImGui_InvisibleButton(ctx, "##font_size_slider", slider_width, slider_height)
-    local hovered = r.ImGui_IsItemHovered(ctx)
-    local active = r.ImGui_IsItemActive(ctx)
-    
-    local x0, y0 = cursor_x, cursor_y
-    local cx = x0 + 8.0
-    local cy = y0 + slider_height * 0.65
-    local track_w = slider_width - 16.0
-    local min_val, max_val = 11, 26
-    local norm = (state.font_size - min_val) / (max_val - min_val)
-    if norm < 0.0 then norm = 0.0 elseif norm > 1.0 then norm = 1.0 end
-    
-    local font_changed = false
-    if active then
-        local mx, _ = r.ImGui_GetMousePos(ctx)
-        local new_norm = (mx - cx) / math.max(1.0, track_w)
-        if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
-        local new_font = math.floor(min_val + (new_norm * (max_val - min_val)) + 0.5)
-        if new_font ~= state.font_size then
-            state.font_size = new_font
-            BuildFont()
-            font_changed = true
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
+        local info_icon = state.show_status and "ⓘ" or "ⓘ"
+        local info_tinted = state.show_status
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+        if info_tinted then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
         end
-        norm = new_norm
-    elseif hovered and r.ImGui_IsMouseClicked(ctx, 0) then
-        local mx, _ = r.ImGui_GetMousePos(ctx)
-        local new_norm = (mx - cx) / math.max(1.0, track_w)
-        if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
-        local new_font = math.floor(min_val + (new_norm * (max_val - min_val)) + 0.5)
-        if new_font ~= state.font_size then
-            state.font_size = new_font
-            BuildFont()
-            font_changed = true
+        local info_label = info_icon .. "##toggle_info"
+        if r.ImGui_Button(ctx, info_label, button_width, button_height) then
+            state.show_status = not state.show_status
+            state.dirty = true
+            state.last_edit_time = r.time_precise()
+            SaveNotebook()
         end
-        norm = new_norm
-    end
-    if font_changed then
-        state.dirty = true
-        state.last_edit_time = r.time_precise()
-    end
-    
-    local draw_list = r.ImGui_GetWindowDrawList(ctx)
-    local track_col = 0x666666FF  
-    local knob_x = cx + norm * track_w
-    
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx + track_w, cy, track_col, 2.0)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, knob_x, cy, 6.0, 0xFFFFFFFF)
-    r.ImGui_DrawList_AddCircle(draw_list, knob_x, cy, 6.0, 0x333333FF, 0, 1.0)
-    
-    if hovered then
-        r.ImGui_SetTooltip(ctx, string.format("Font size: %d", state.font_size))
+        if info_tinted then
+            r.ImGui_PopStyleColor(ctx, 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Toggle status bar")
+        end
+    else
+        table.insert(overflow_items, "info")
     end
 
+    if CheckToolbarFit(64) then
+        SameLineToolbar()
+        local slider_width = 60.0
+        local slider_height = 16.0
+        local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+        r.ImGui_InvisibleButton(ctx, "##font_size_slider", slider_width, slider_height)
+        local fs_hovered = r.ImGui_IsItemHovered(ctx)
+        local fs_active = r.ImGui_IsItemActive(ctx)
+        local x0, y0 = cursor_x, cursor_y
+        local cx = x0 + 8.0
+        local cy = y0 + slider_height * 0.65
+        local track_w = slider_width - 16.0
+        local min_val, max_val = 11, 26
+        local norm = (state.font_size - min_val) / (max_val - min_val)
+        if norm < 0.0 then norm = 0.0 elseif norm > 1.0 then norm = 1.0 end
+        local font_changed = false
+        if fs_active then
+            local mx, _ = r.ImGui_GetMousePos(ctx)
+            local new_norm = (mx - cx) / math.max(1.0, track_w)
+            if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+            local new_font = math.floor(min_val + (new_norm * (max_val - min_val)) + 0.5)
+            if new_font ~= state.font_size then
+                state.font_size = new_font
+                BuildFont()
+                font_changed = true
+            end
+            norm = new_norm
+        elseif fs_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+            local mx, _ = r.ImGui_GetMousePos(ctx)
+            local new_norm = (mx - cx) / math.max(1.0, track_w)
+            if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
+            local new_font = math.floor(min_val + (new_norm * (max_val - min_val)) + 0.5)
+            if new_font ~= state.font_size then
+                state.font_size = new_font
+                BuildFont()
+                font_changed = true
+            end
+            norm = new_norm
+        end
+        if font_changed then
+            if state.tabs_enabled and state.tabs[state.active_tab_index] then
+                state.tabs[state.active_tab_index].font_size = state.font_size
+            end
+            state.dirty = true
+            state.last_edit_time = r.time_precise()
+        end
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local track_col = 0x666666FF  
+        local knob_x = cx + norm * track_w
+        r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx + track_w, cy, track_col, 2.0)
+        r.ImGui_DrawList_AddCircleFilled(draw_list, knob_x, cy, 6.0, 0xFFFFFFFF)
+        r.ImGui_DrawList_AddCircle(draw_list, knob_x, cy, 6.0, 0x333333FF, 0, 1.0)
+        if fs_hovered then
+            r.ImGui_SetTooltip(ctx, string.format("Font size: %d", state.font_size))
+        end
+    else
+        table.insert(overflow_items, "fontsize")
+    end
+
+    if #overflow_items > 0 then
+        SameLineToolbar()
+        if r.ImGui_BeginMenu(ctx, "▼##overflow") then
+            local overflow_set = {}
+            for _, id in ipairs(overflow_items) do overflow_set[id] = true end
+            
+            if overflow_set["tabs"] then
+                if r.ImGui_MenuItem(ctx, "☰ Tabs", nil, state.tabs_enabled) then
+                    state.tabs_enabled = not state.tabs_enabled
+                    if state.tabs_enabled and #state.tabs == 0 then
+                        state.tabs = {{name = "Notes", text = state.text, images = state.images, strokes = state.strokes, font_size = state.font_size, line_colors = state.line_colors}}
+                        state.active_tab_index = 1
+                    elseif not state.tabs_enabled and #state.tabs > 0 then
+                        if state.tabs[state.active_tab_index] then
+                            state.text = state.tabs[state.active_tab_index].text
+                            state.images = state.tabs[state.active_tab_index].images or {}
+                            state.strokes = state.tabs[state.active_tab_index].strokes or {}
+                            state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                        end
+                    end
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+            end
+            
+            if overflow_set["color"] then
+                if r.ImGui_BeginMenu(ctx, "🎨 Text color") then
+                    local mode_labels = {{"White", "white"}, {"Black", "black"}}
+                    for _, ml in ipairs(mode_labels) do
+                        if r.ImGui_MenuItem(ctx, ml[1], nil, state.text_color_mode == ml[2]) then
+                            state.text_color_mode = ml[2]
+                            state.dirty = true
+                            state.last_edit_time = r.time_precise()
+                            SaveNotebook()
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    local editor_ov = EnsureEditorState()
+                    local ov_src_line = GetSourceLineFromCaret(state.text, editor_ov.caret)
+                    for _, preset in ipairs(TEXT_COLOR_PRESETS) do
+                        local is_set = state.line_colors[ov_src_line] == preset.hex
+                        if r.ImGui_MenuItem(ctx, preset.name .. " (line)", nil, is_set) then
+                            state.line_colors[ov_src_line] = preset.hex
+                            state.dirty = true
+                            state.last_edit_time = r.time_precise()
+                        end
+                    end
+                    if state.line_colors[ov_src_line] then
+                        r.ImGui_Separator(ctx)
+                        if r.ImGui_MenuItem(ctx, "Reset line color") then
+                            state.line_colors[ov_src_line] = nil
+                            state.dirty = true
+                            state.last_edit_time = r.time_precise()
+                        end
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
+            end
+            
+            if overflow_set["bold"] then
+                if r.ImGui_MenuItem(ctx, "𝗕 Bold", nil, state.bold_input_active) then
+                    ToggleBoldFormatting(EnsureEditorState())
+                end
+            end
+            
+            if overflow_set["align"] then
+                r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "|≡ Align left", nil, state.text_align == "left") then
+                    state.text_align = "left"
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+                if r.ImGui_MenuItem(ctx, "≡ Align center", nil, state.text_align == "center") then
+                    state.text_align = "center"
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+                if r.ImGui_MenuItem(ctx, "≡| Align right", nil, state.text_align == "right") then
+                    state.text_align = "right"
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+                r.ImGui_Separator(ctx)
+            end
+            
+            if overflow_set["image"] then
+                if r.ImGui_MenuItem(ctx, "▦ Load image") then
+                    local ok, path = r.JS_Dialog_BrowseForOpenFiles("Select Image", "", "*.png;*.jpg;*.jpeg;*.bmp;*.gif", "Images", false)
+                    if ok and path and path ~= "" then
+                        local img = AddImage(path)
+                        if img then
+                            state.dirty = true
+                            state.last_edit_time = r.time_precise()
+                            SaveNotebook()
+                        end
+                    end
+                end
+            end
+            
+            if overflow_set["drawing"] then
+                local dlbl = state.drawing_enabled and "✎ Drawing (on)" or (state.eraser_mode and "🗑 Eraser (on)" or "✎ Drawing")
+                if r.ImGui_MenuItem(ctx, dlbl, nil, state.drawing_enabled or state.eraser_mode) then
+                    if state.eraser_mode then
+                        state.eraser_mode = false
+                    else
+                        state.drawing_enabled = not state.drawing_enabled
+                    end
+                end
+            end
+            
+            if overflow_set["list"] then
+                if r.ImGui_BeginMenu(ctx, "List mode") then
+                    if r.ImGui_MenuItem(ctx, "Bullet (•)", nil, state.list_mode == "bullet") then
+                        state.list_mode = state.list_mode == "bullet" and "none" or "bullet"
+                    end
+                    if r.ImGui_MenuItem(ctx, "Numbered (1. 2. 3.)", nil, state.list_mode == "numbered") then
+                        state.list_mode = state.list_mode == "numbered" and "none" or "numbered"
+                    end
+                    if r.ImGui_MenuItem(ctx, "None", nil, state.list_mode == "none") then
+                        state.list_mode = "none"
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
+            end
+            
+            if overflow_set["pin"] then
+                if r.ImGui_MenuItem(ctx, state.window_pinned and "📌 Unpin window" or "📍 Pin window", nil, state.window_pinned) then
+                    state.window_pinned = not state.window_pinned
+                end
+            end
+            
+            if overflow_set["info"] then
+                if r.ImGui_MenuItem(ctx, "ⓘ Status bar", nil, state.show_status) then
+                    state.show_status = not state.show_status
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                    SaveNotebook()
+                end
+            end
+            
+            if overflow_set["fontsize"] then
+                r.ImGui_Separator(ctx)
+                r.ImGui_Text(ctx, string.format("Font size: %d", state.font_size))
+                r.ImGui_SetNextItemWidth(ctx, 120)
+                local fs_changed, fs_new = r.ImGui_SliderInt(ctx, "##overflow_fontsize", state.font_size, 11, 26)
+                if fs_changed and fs_new ~= state.font_size then
+                    state.font_size = fs_new
+                    BuildFont()
+                    if state.tabs_enabled and state.tabs[state.active_tab_index] then
+                        state.tabs[state.active_tab_index].font_size = state.font_size
+                    end
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+            end
+            
+            r.ImGui_EndMenu(ctx)
+        end
+    end
 
     if colors_pushed > 0 then
         r.ImGui_PopStyleColor(ctx, colors_pushed)
@@ -3814,11 +4393,19 @@ local function DrawTabBar()
                     state.tabs[state.active_tab_index].text = state.text
                     state.tabs[state.active_tab_index].images = state.images
                     state.tabs[state.active_tab_index].strokes = state.strokes
+                    state.tabs[state.active_tab_index].font_size = state.font_size
+                    state.tabs[state.active_tab_index].line_colors = state.line_colors
                 end
                 state.active_tab_index = i
                 state.text = state.tabs[i].text or ""
                 state.images = state.tabs[i].images or {}
                 state.strokes = state.tabs[i].strokes or {}
+                state.line_colors = state.tabs[i].line_colors or {}
+                local tab_fs = state.tabs[i].font_size
+                if tab_fs and tab_fs ~= state.font_size then
+                    state.font_size = tab_fs
+                    BuildFont()
+                end
                 
                 for _, img in ipairs(state.images) do
                     if img.path then
@@ -3861,6 +4448,8 @@ local function DrawTabBar()
                         state.tabs[state.active_tab_index].text = state.text
                         state.tabs[state.active_tab_index].images = state.images
                         state.tabs[state.active_tab_index].strokes = state.strokes
+                        state.tabs[state.active_tab_index].font_size = state.font_size
+                        state.tabs[state.active_tab_index].line_colors = state.line_colors
                     end
                     
                     table.remove(state.tabs, i)
@@ -3870,6 +4459,12 @@ local function DrawTabBar()
                         state.text = state.tabs[state.active_tab_index].text or ""
                         state.images = state.tabs[state.active_tab_index].images or {}
                         state.strokes = state.tabs[state.active_tab_index].strokes or {}
+                        state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                        local tab_fs = state.tabs[state.active_tab_index].font_size
+                        if tab_fs and tab_fs ~= state.font_size then
+                            state.font_size = tab_fs
+                            BuildFont()
+                        end
                         
                         for _, img in ipairs(state.images) do
                             if img.path then
@@ -3942,12 +4537,15 @@ local function DrawTabBar()
             state.tabs[state.active_tab_index].text = state.text
             state.tabs[state.active_tab_index].images = state.images
             state.tabs[state.active_tab_index].strokes = state.strokes
+            state.tabs[state.active_tab_index].font_size = state.font_size
+            state.tabs[state.active_tab_index].line_colors = state.line_colors
         end
-        table.insert(state.tabs, {name = "Tab " .. (#state.tabs + 1), text = "", images = {}, strokes = {}})
+        table.insert(state.tabs, {name = "Tab " .. (#state.tabs + 1), text = "", images = {}, strokes = {}, font_size = state.font_size, line_colors = {}})
         state.active_tab_index = #state.tabs
         state.text = ""
         state.images = state.tabs[state.active_tab_index].images  
-        state.strokes = state.tabs[state.active_tab_index].strokes  
+        state.strokes = state.tabs[state.active_tab_index].strokes
+        state.line_colors = {}
         state.dirty = true
         state.last_edit_time = r.time_precise()
         SaveNotebook()
@@ -4005,6 +4603,7 @@ local function DrawEditor()
         local area_x, area_y = r.ImGui_GetCursorScreenPos(ctx)
     local can_edit = state.can_edit and true or false
     local content_height = math.max(0, editor_h - margin)
+    local image_hovered = false
     
     for i, img in ipairs(state.images) do
         if img.texture and img.width > 0 and img.height > 0 then
@@ -4081,6 +4680,7 @@ local function DrawEditor()
 
             if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
                 state.selected_image_id = img.id
+                image_hovered = true
                 r.ImGui_OpenPopup(ctx, "image_context_" .. img.id)
             end
 
@@ -4183,6 +4783,63 @@ local function DrawEditor()
         local active = r.ImGui_IsItemActive(ctx)
         local io = r.ImGui_GetIO and r.ImGui_GetIO(ctx) or nil
         local shift_down = IsShiftDown(io)
+
+        if can_edit and hovered and not image_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "editor_context_menu")
+        end
+
+        if r.ImGui_BeginPopup(ctx, "editor_context_menu") then
+            local has_sel = HasSelection(editor)
+            local sel_text = has_sel and GetSelectedText(editor) or nil
+            if r.ImGui_MenuItem(ctx, "Cut", "Ctrl+X", false, has_sel and can_edit) then
+                if sel_text and sel_text ~= "" then
+                    WriteClipboardText(sel_text)
+                    PushUndoState(true)
+                    DeleteSelection(editor)
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+            end
+            if r.ImGui_MenuItem(ctx, "Copy", "Ctrl+C", false, has_sel) then
+                if sel_text and sel_text ~= "" then
+                    WriteClipboardText(sel_text)
+                end
+            end
+            if r.ImGui_MenuItem(ctx, "Paste", "Ctrl+V", false, can_edit) then
+                local clip = ReadClipboardText()
+                if clip and clip ~= "" then
+                    clip = NormalizeLineEndings(clip)
+                    if clip ~= "" then
+                        PushUndoState(true)
+                        if HasSelection(editor) then
+                            DeleteSelection(editor)
+                        end
+                        local new_text, new_caret = InsertTextAtCaret(state.text, editor.caret, clip)
+                        state.text = new_text
+                        editor.caret = new_caret
+                        ClearSelection(editor)
+                        state.dirty = true
+                        state.last_edit_time = r.time_precise()
+                    end
+                end
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Undo", "Ctrl+Z", false, #state.undo_stack > 0) then
+                PerformUndo()
+            end
+            if r.ImGui_MenuItem(ctx, "Redo", "Ctrl+Y", false, #state.redo_stack > 0) then
+                PerformRedo()
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Select All", "Ctrl+A", false, #state.text > 0) then
+                editor.selection_anchor = 0
+                editor.selection_start = 0
+                editor.selection_end = #state.text
+                editor.caret = #state.text
+                editor.scroll_to_caret = true
+            end
+            r.ImGui_EndPopup(ctx)
+        end
 
         if can_edit and r.ImGui_IsItemClicked(ctx) then
             state.selected_image_id = nil
@@ -4296,11 +4953,21 @@ local function DrawEditor()
     DrawSelectionHighlights(draw_list, editor, layout, area_x, area_y, scroll_y, line_height, wrap_width, state.text_align)
 
         local text_color = GetEditorTextColor()
+        local has_line_colors = false
+        for _ in pairs(state.line_colors) do has_line_colors = true; break end
         
         for idx, line in ipairs(layout.lines) do
             local line_offset = CalculateLineOffset(line, wrap_width, state.text_align)
             local base_x = area_x + EditorConstants.padding_x + line_offset
             local line_y = area_y + EditorConstants.padding_y - scroll_y + (idx - 1) * line_height
+            
+            local line_color = text_color
+            if has_line_colors and line.start_byte then
+                local src_line = GetSourceLineFromByte(state.text, line.start_byte)
+                if state.line_colors[src_line] then
+                    line_color = state.line_colors[src_line]
+                end
+            end
             
             local fragments = line.fragments
             if fragments and #fragments > 0 then
@@ -4308,11 +4975,11 @@ local function DrawEditor()
                     local fragment_text = fragment.text
                     if fragment_text and fragment_text ~= "" then
                         local fragment_x = base_x + (fragment.x or 0)
-                        DrawTextFragment(draw_list, fragment_x, line_y, text_color, fragment_text, fragment.bold)
+                        DrawTextFragment(draw_list, fragment_x, line_y, line_color, fragment_text, fragment.bold)
                     end
                 end
             elseif line.text and line.text ~= "" then
-                r.ImGui_DrawList_AddText(draw_list, base_x, line_y, text_color, line.text)
+                r.ImGui_DrawList_AddText(draw_list, base_x, line_y, line_color, line.text)
             end
         end
 
@@ -4524,6 +5191,9 @@ local function Frame()
     local window_flags = r.ImGui_WindowFlags_MenuBar()
     if r.ImGui_WindowFlags_NoTitleBar then
         window_flags = window_flags | r.ImGui_WindowFlags_NoTitleBar()
+    end
+    if state.window_pinned and r.ImGui_WindowFlags_NoMove then
+        window_flags = window_flags | r.ImGui_WindowFlags_NoMove()
     end
 
     local pushed_rounding = false
