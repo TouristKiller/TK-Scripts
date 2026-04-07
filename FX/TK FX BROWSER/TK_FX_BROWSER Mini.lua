@@ -1,8 +1,23 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.2.9
+-- @version 0.3.0
 -- @changelog:
 --[[     
+    + Info Panel: Track FX and Item FX thumbnail view (mini screenshots per FX slot in the info panel)
+    + Info Panel: Separate toggle switches for Track FX Thumbnails and Item FX Thumbnails (Visibility menu)
+    + Info Panel: FX name overlay on thumbnails (centered white text on semi-transparent black bar, same style as screenshot overlay)
+    + Info Panel: Numbered slot badge overlay on thumbnails (top-left, green on black, same style as FX Chain Builder)
+    + Info Panel: Bypassed FX get a dark overlay on their thumbnail
+    + Info Panel: Drag-and-drop from screenshot window to Track FX zone (adds FX to current track)
+    + Info Panel: Drag-and-drop from screenshot window to Item FX zone (adds FX to selected item)
+    + Info Panel: Green highlight on Track FX / Item FX zones when dragging a plugin over them
+    + Info Panel: Fallback to text list when no screenshot exists for an FX
+
+    0.2.9
+    + Layout: Added "Showcase" layout - horizontal full-width cards with thumbnail left, plugin info/badges/stars right
+    + Layout: Added "Polaroid" layout - photo-style white-bordered cards in masonry grid with shadow, type badges, and hover highlight
+    + Menu: Moved "Resize With Window" from Layout menu to Size menu for better organization
+    + Menu: "Resize With Window" now uses checkbox style consistent with other Size menu items
     + Settings menu: Added "Update Plugins" option to screenshot window settings menu (re-scans installed plugin list)
     + Context menu: Added "Remove Screenshot" option to plugin right-click menu (only visible when screenshot exists)
 
@@ -673,6 +688,8 @@ potential_drag_fx_name = potential_drag_fx_name or nil
 drag_start_x, drag_start_y = drag_start_x or 0, drag_start_y or 0
 chain_builder_plugins = chain_builder_plugins or {}
 chain_builder_hovered = false
+info_trackfx_drop_hovered = false
+info_itemfx_drop_hovered = false
 
 -- Window state variables
 was_hidden = was_hidden or false
@@ -1035,6 +1052,8 @@ function SetDefaultConfig()
         use_pagination = true,
         use_masonry_layout = false,
         use_modern_cards = false,
+        use_showcase_layout = false,
+        use_polaroid_layout = false,
         show_favorites_on_top = true,
         show_pinned_on_top = true,
         show_pinned_overlay = true,
@@ -1063,6 +1082,8 @@ function SetDefaultConfig()
         custom_template_dir = "",
         show_debug_window = false,
         always_search_all = false,
+        show_track_fx_thumbnails = false,
+        show_item_fx_thumbnails = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -2883,6 +2904,7 @@ function ClearScreenshotCache(periodic_cleanup)
         texture_last_used = {}
         texture_load_queue = {}
         fx_chain_texture_cache = {}
+        info_fx_texture_cache = {}
     end
 end
 
@@ -5847,6 +5869,7 @@ end
 -- FX CHAIN PREVIEW FUNCTIONS
 local fx_chain_cache = {}
 local fx_chain_texture_cache = {}
+local info_fx_texture_cache = {}
 local js_chain_lookup = nil
 
 local function BuildJSChainLookup()
@@ -6233,6 +6256,45 @@ function LoadChainFxScreenshot(fx_name)
         end
     end
     
+    return nil
+end
+
+function LoadInfoFxScreenshot(fx_name)
+    if info_fx_texture_cache[fx_name] then
+        if r.ImGui_ValidatePtr(info_fx_texture_cache[fx_name], 'ImGui_Image*') then
+            return info_fx_texture_cache[fx_name]
+        else
+            info_fx_texture_cache[fx_name] = nil
+        end
+    end
+    local clean = CleanPluginName(fx_name)
+    local variants = {
+        fx_name:gsub("[^%w%s-]", "_"),
+        clean,
+        clean:gsub("[^%w%s-]", "_"),
+        StripX86Markers(fx_name):gsub("[^%w%s-]", "_"),
+        StripX86Markers(clean):gsub("[^%w%s-]", "_"),
+    }
+    for _, base in ipairs(variants) do
+        if base and base ~= "" then
+            local png = screenshot_path .. base .. ".png"
+            if r.file_exists(png) then
+                local tex = LoadTexture(png)
+                if tex then
+                    info_fx_texture_cache[fx_name] = tex
+                    return tex
+                end
+            end
+            local jpg = screenshot_path .. base .. ".jpg"
+            if r.file_exists(jpg) then
+                local tex = LoadTexture(jpg)
+                if tex then
+                    info_fx_texture_cache[fx_name] = tex
+                    return tex
+                end
+            end
+        end
+    end
     return nil
 end
 
@@ -8314,6 +8376,13 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, (config.show_missing_list ~= false) and "Hide Missing List" or "Show Missing List") then
                 config.show_missing_list = not (config.show_missing_list ~= false); SaveConfig()
             end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Track FX Thumbnails", "", config.show_track_fx_thumbnails) then
+                config.show_track_fx_thumbnails = not config.show_track_fx_thumbnails; SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Item FX Thumbnails", "", config.show_item_fx_thumbnails) then
+                config.show_item_fx_thumbnails = not config.show_item_fx_thumbnails; SaveConfig()
+            end
             r.ImGui_EndMenu(ctx)
         end
 
@@ -8367,11 +8436,14 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, "Modern Cards", "", config.use_modern_cards) then
                 config.use_modern_cards = not config.use_modern_cards; SaveConfig()
             end
+            if r.ImGui_MenuItem(ctx, "Showcase", "", config.use_showcase_layout) then
+                config.use_showcase_layout = not config.use_showcase_layout; SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Polaroid", "", config.use_polaroid_layout) then
+                config.use_polaroid_layout = not config.use_polaroid_layout; SaveConfig()
+            end
             if r.ImGui_MenuItem(ctx, "Compact View", "", config.compact_screenshots) then
                 config.compact_screenshots = not config.compact_screenshots; SaveConfig()
-            end
-            if r.ImGui_MenuItem(ctx, config.resize_screenshots_with_window and "Manual Size" or "Resize With Window") then
-                config.resize_screenshots_with_window = not config.resize_screenshots_with_window; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Pagination", "", config.use_pagination) then
                 config.use_pagination = not config.use_pagination; SaveConfig()
@@ -8383,6 +8455,9 @@ function ShowScreenshotControls()
         if r.ImGui_BeginMenu(ctx, "Size") then
             if r.ImGui_MenuItem(ctx, "Use Global Size", "", config.use_global_screenshot_size) then
                 config.use_global_screenshot_size = not config.use_global_screenshot_size; SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Resize With Window", "", config.resize_screenshots_with_window) then
+                config.resize_screenshots_with_window = not config.resize_screenshots_with_window; SaveConfig()
             end
             if config.use_global_screenshot_size then
                 r.ImGui_PushItemWidth(ctx, 160)
@@ -9582,6 +9657,8 @@ function ShowBrowserPanel()
     local browser_panel_start_y = r.ImGui_GetCursorPosY(ctx)
     browser_footer_text = browser_footer_text or "INFO BOX"
     browser_panel_show_info = browser_panel_show_info or false
+    info_trackfx_drop_hovered = false
+    info_itemfx_drop_hovered = false
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     r.ImGui_BeginChild(ctx, "BrowserSection", config.browser_panel_width, -1)
     local section_pos_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -10791,12 +10868,16 @@ function ShowBrowserPanel()
                 local fx_count = r.TrackFX_GetCount(TRACK)
                 r.ImGui_Dummy(ctx, 0, 6)
                 r.ImGui_Separator(ctx)
+                local tfx_zone_sx, tfx_zone_sy = r.ImGui_GetCursorScreenPos(ctx)
+                local tfx_zone_w = r.ImGui_GetContentRegionAvail(ctx)
                 r.ImGui_Text(ctx, string.format("Track FX (%d):", fx_count))
                 if fx_count > 0 then
-                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 2)
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, config.show_track_fx_thumbnails and 4 or 2)
+                    local thumb_avail_w = r.ImGui_GetContentRegionAvail(ctx)
                     for i = 0, fx_count - 1 do
-                        local ok, fx_name = r.TrackFX_GetFXName(TRACK, i, "")
-                        if ok and fx_name ~= "" then
+                        local ok, fx_name_raw = r.TrackFX_GetFXName(TRACK, i, "")
+                        if ok and fx_name_raw ~= "" then
+                            local fx_name = fx_name_raw
                             if config.clean_plugin_names or config.remove_manufacturer_names then
                                 fx_name = GetDisplayPluginName(fx_name)
                             end
@@ -10810,40 +10891,103 @@ function ShowBrowserPanel()
                                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF)
                                 tfx_color_count = 1
                             end
-                            local clicked = r.ImGui_Selectable(ctx, fx_name .. "##info_trackfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
-                            if tfx_color_count > 0 then r.ImGui_PopStyleColor(ctx, tfx_color_count) end
-                            if clicked then
-                                if r.TrackFX_GetFloatingWindow(TRACK, i) then
-                                    r.TrackFX_Show(TRACK, i, 2)
-                                else
-                                    r.TrackFX_Show(TRACK, i, 3)
+
+                            local tfx_thumb_tex = config.show_track_fx_thumbnails and LoadInfoFxScreenshot(fx_name_raw) or nil
+                            local open_trackfx_ctx = false
+                            if tfx_thumb_tex then
+                                r.ImGui_PushID(ctx, "info_trackfx_thumb_" .. i)
+                                local tw, th = r.ImGui_Image_GetSize(tfx_thumb_tex)
+                                local thumb_h = m_floor(thumb_avail_w * (th / tw))
+                                if thumb_h > 120 then thumb_h = 120 end
+                                local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+                                local img_clicked = r.ImGui_ImageButton(ctx, "tfx_" .. i, tfx_thumb_tex, thumb_avail_w, thumb_h)
+                                local dl = r.ImGui_GetWindowDrawList(ctx)
+                                if tfx_bypassed then
+                                    r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + thumb_avail_w, cy + thumb_h, 0x00000088)
                                 end
-                            end
-                            if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
-                                r.ImGui_SetDragDropPayload(ctx, "INFO_TRACKFX_DRAG", tostring(i))
-                                r.ImGui_Text(ctx, fx_name)
-                                r.ImGui_EndDragDropSource(ctx)
-                            end
-                            if r.ImGui_BeginDragDropTarget(ctx) then
-                                local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_TRACKFX_DRAG")
-                                if rv then
-                                    local src = tonumber(payload)
-                                    if src and src ~= i then
-                                        local dest = i
-                                        if src < dest then dest = dest + 1 end
-                                        r.Undo_BeginBlock()
-                                        r.TrackFX_CopyToTrack(TRACK, src, TRACK, dest, true)
-                                        r.Undo_EndBlock("Reorder Track FX", -1)
+                                local line_h = r.ImGui_GetTextLineHeight(ctx)
+                                local bar_h = line_h + 4
+                                local bar_y = cy + thumb_h - bar_h
+                                r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + thumb_avail_w, cy + thumb_h, 0x000000B0)
+                                local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                                local name_x = cx + m_floor((thumb_avail_w - name_w) * 0.5)
+                                r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, fx_name)
+                                local slot_label = tostring(i + 1)
+                                local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
+                                r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
+                                r.ImGui_DrawList_AddText(dl, cx + 3, cy + 1, 0x00FF88FF, slot_label)
+                                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                    r.ImGui_SetDragDropPayload(ctx, "INFO_TRACKFX_DRAG", tostring(i))
+                                    r.ImGui_Text(ctx, fx_name)
+                                    r.ImGui_EndDragDropSource(ctx)
+                                end
+                                if r.ImGui_BeginDragDropTarget(ctx) then
+                                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_TRACKFX_DRAG")
+                                    if rv then
+                                        local src = tonumber(payload)
+                                        if src and src ~= i then
+                                            local dest = i
+                                            if src < dest then dest = dest + 1 end
+                                            r.Undo_BeginBlock()
+                                            r.TrackFX_CopyToTrack(TRACK, src, TRACK, dest, true)
+                                            r.Undo_EndBlock("Reorder Track FX", -1)
+                                        end
+                                    end
+                                    r.ImGui_EndDragDropTarget(ctx)
+                                end
+                                if img_clicked then
+                                    if r.TrackFX_GetFloatingWindow(TRACK, i) then
+                                        r.TrackFX_Show(TRACK, i, 2)
+                                    else
+                                        r.TrackFX_Show(TRACK, i, 3)
                                     end
                                 end
-                                r.ImGui_EndDragDropTarget(ctx)
+                                if r.ImGui_IsItemHovered(ctx) then
+                                    r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
+                                end
+                                if r.ImGui_IsItemClicked(ctx, 1) then
+                                    open_trackfx_ctx = true
+                                end
+                                r.ImGui_PopID(ctx)
+                            else
+                                local clicked = r.ImGui_Selectable(ctx, fx_name .. "##info_trackfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                                if clicked then
+                                    if r.TrackFX_GetFloatingWindow(TRACK, i) then
+                                        r.TrackFX_Show(TRACK, i, 2)
+                                    else
+                                        r.TrackFX_Show(TRACK, i, 3)
+                                    end
+                                end
+                                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                    r.ImGui_SetDragDropPayload(ctx, "INFO_TRACKFX_DRAG", tostring(i))
+                                    r.ImGui_Text(ctx, fx_name)
+                                    r.ImGui_EndDragDropSource(ctx)
+                                end
+                                if r.ImGui_BeginDragDropTarget(ctx) then
+                                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_TRACKFX_DRAG")
+                                    if rv then
+                                        local src = tonumber(payload)
+                                        if src and src ~= i then
+                                            local dest = i
+                                            if src < dest then dest = dest + 1 end
+                                            r.Undo_BeginBlock()
+                                            r.TrackFX_CopyToTrack(TRACK, src, TRACK, dest, true)
+                                            r.Undo_EndBlock("Reorder Track FX", -1)
+                                        end
+                                    end
+                                    r.ImGui_EndDragDropTarget(ctx)
+                                end
+                                if r.ImGui_IsItemHovered(ctx) then
+                                    r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
+                                end
+                                if r.ImGui_IsItemClicked(ctx, 1) then
+                                    r.ImGui_OpenPopup(ctx, "InfoTrackFXCtx_" .. i)
+                                end
                             end
-                            if r.ImGui_IsItemHovered(ctx) then
-                                r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
-                            end
-                            if r.ImGui_IsItemClicked(ctx, 1) then
+                            if open_trackfx_ctx then
                                 r.ImGui_OpenPopup(ctx, "InfoTrackFXCtx_" .. i)
                             end
+                            if tfx_color_count > 0 then r.ImGui_PopStyleColor(ctx, tfx_color_count) end
                             if r.ImGui_BeginPopup(ctx, "InfoTrackFXCtx_" .. i) then
                                 local is_bypassed = not r.TrackFX_GetEnabled(TRACK, i)
                                 if r.ImGui_MenuItem(ctx, is_bypassed and "Enable" or "Bypass") then
@@ -10886,6 +11030,17 @@ function ShowBrowserPanel()
                         end
                     end
                     r.ImGui_PopStyleVar(ctx)
+                end
+                local _, tfx_zone_ey = r.ImGui_GetCursorScreenPos(ctx)
+                if tfx_zone_ey - tfx_zone_sy < 20 then tfx_zone_ey = tfx_zone_sy + 20 end
+                if dragging_fx_name then
+                    local mx, my = r.ImGui_GetMousePos(ctx)
+                    if mx >= tfx_zone_sx and mx <= tfx_zone_sx + tfx_zone_w and my >= tfx_zone_sy and my <= tfx_zone_ey then
+                        info_trackfx_drop_hovered = true
+                        local dl = r.ImGui_GetWindowDrawList(ctx)
+                        r.ImGui_DrawList_AddRectFilled(dl, tfx_zone_sx, tfx_zone_sy, tfx_zone_sx + tfx_zone_w, tfx_zone_ey, 0x00FF8820, 3)
+                        r.ImGui_DrawList_AddRect(dl, tfx_zone_sx, tfx_zone_sy, tfx_zone_sx + tfx_zone_w, tfx_zone_ey, 0x00FF8860, 3)
+                    end
                 end
                 
                 r.ImGui_Dummy(ctx, 0, 4)
@@ -11007,13 +11162,17 @@ function ShowBrowserPanel()
                 r.ImGui_Dummy(ctx, 0, 4)
                 r.ImGui_Separator(ctx)
                 if take then
+                    local ifx_zone_sx, ifx_zone_sy = r.ImGui_GetCursorScreenPos(ctx)
+                    local ifx_zone_w = r.ImGui_GetContentRegionAvail(ctx)
                     local ifx_count = r.TakeFX_GetCount(take)
                     r.ImGui_Text(ctx, string.format("Item FX (%d):", ifx_count))
                     if ifx_count > 0 then
-                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 2)
+                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, config.show_item_fx_thumbnails and 4 or 2)
+                        local ifx_avail_w = r.ImGui_GetContentRegionAvail(ctx)
                         for i = 0, ifx_count - 1 do
-                            local ok, ifx_name = r.TakeFX_GetFXName(take, i, "")
-                            if ok and ifx_name ~= "" then
+                            local ok, ifx_name_raw = r.TakeFX_GetFXName(take, i, "")
+                            if ok and ifx_name_raw ~= "" then
+                                local ifx_name = ifx_name_raw
                                 if config.clean_plugin_names or config.remove_manufacturer_names then
                                     ifx_name = GetDisplayPluginName(ifx_name)
                                 end
@@ -11027,40 +11186,103 @@ function ShowBrowserPanel()
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF)
                                     ifx_color_count = 1
                                 end
-                                local clicked = r.ImGui_Selectable(ctx, ifx_name .. "##info_itemfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
-                                if ifx_color_count > 0 then r.ImGui_PopStyleColor(ctx, ifx_color_count) end
-                                if clicked then
-                                    if r.TakeFX_GetFloatingWindow(take, i) then
-                                        r.TakeFX_Show(take, i, 2)
-                                    else
-                                        r.TakeFX_Show(take, i, 3)
+
+                                local ifx_thumb_tex = config.show_item_fx_thumbnails and LoadInfoFxScreenshot(ifx_name_raw) or nil
+                                local open_itemfx_ctx = false
+                                if ifx_thumb_tex then
+                                    r.ImGui_PushID(ctx, "info_itemfx_thumb_" .. i)
+                                    local tw, th = r.ImGui_Image_GetSize(ifx_thumb_tex)
+                                    local thumb_h = m_floor(ifx_avail_w * (th / tw))
+                                    if thumb_h > 120 then thumb_h = 120 end
+                                    local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+                                    local img_clicked = r.ImGui_ImageButton(ctx, "ifx_" .. i, ifx_thumb_tex, ifx_avail_w, thumb_h)
+                                    local dl = r.ImGui_GetWindowDrawList(ctx)
+                                    if ifx_bypassed then
+                                        r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + ifx_avail_w, cy + thumb_h, 0x00000088)
                                     end
-                                end
-                                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
-                                    r.ImGui_SetDragDropPayload(ctx, "INFO_ITEMFX_DRAG", tostring(i))
-                                    r.ImGui_Text(ctx, ifx_name)
-                                    r.ImGui_EndDragDropSource(ctx)
-                                end
-                                if r.ImGui_BeginDragDropTarget(ctx) then
-                                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_ITEMFX_DRAG")
-                                    if rv then
-                                        local src = tonumber(payload)
-                                        if src and src ~= i then
-                                            local dest = i
-                                            if src < dest then dest = dest + 1 end
-                                            r.Undo_BeginBlock()
-                                            r.TakeFX_CopyToTake(take, src, take, dest, true)
-                                            r.Undo_EndBlock("Reorder Item FX", -1)
+                                    local line_h = r.ImGui_GetTextLineHeight(ctx)
+                                    local bar_h = line_h + 4
+                                    local bar_y = cy + thumb_h - bar_h
+                                    r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + ifx_avail_w, cy + thumb_h, 0x000000B0)
+                                    local name_w = r.ImGui_CalcTextSize(ctx, ifx_name)
+                                    local name_x = cx + m_floor((ifx_avail_w - name_w) * 0.5)
+                                    r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, ifx_name)
+                                    local slot_label = tostring(i + 1)
+                                    local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
+                                    r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
+                                    r.ImGui_DrawList_AddText(dl, cx + 3, cy + 1, 0x00FF88FF, slot_label)
+                                    if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                        r.ImGui_SetDragDropPayload(ctx, "INFO_ITEMFX_DRAG", tostring(i))
+                                        r.ImGui_Text(ctx, ifx_name)
+                                        r.ImGui_EndDragDropSource(ctx)
+                                    end
+                                    if r.ImGui_BeginDragDropTarget(ctx) then
+                                        local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_ITEMFX_DRAG")
+                                        if rv then
+                                            local src = tonumber(payload)
+                                            if src and src ~= i then
+                                                local dest = i
+                                                if src < dest then dest = dest + 1 end
+                                                r.Undo_BeginBlock()
+                                                r.TakeFX_CopyToTake(take, src, take, dest, true)
+                                                r.Undo_EndBlock("Reorder Item FX", -1)
+                                            end
+                                        end
+                                        r.ImGui_EndDragDropTarget(ctx)
+                                    end
+                                    if img_clicked then
+                                        if r.TakeFX_GetFloatingWindow(take, i) then
+                                            r.TakeFX_Show(take, i, 2)
+                                        else
+                                            r.TakeFX_Show(take, i, 3)
                                         end
                                     end
-                                    r.ImGui_EndDragDropTarget(ctx)
+                                    if r.ImGui_IsItemHovered(ctx) then
+                                        r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
+                                    end
+                                    if r.ImGui_IsItemClicked(ctx, 1) then
+                                        open_itemfx_ctx = true
+                                    end
+                                    r.ImGui_PopID(ctx)
+                                else
+                                    local clicked = r.ImGui_Selectable(ctx, ifx_name .. "##info_itemfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                                    if clicked then
+                                        if r.TakeFX_GetFloatingWindow(take, i) then
+                                            r.TakeFX_Show(take, i, 2)
+                                        else
+                                            r.TakeFX_Show(take, i, 3)
+                                        end
+                                    end
+                                    if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                        r.ImGui_SetDragDropPayload(ctx, "INFO_ITEMFX_DRAG", tostring(i))
+                                        r.ImGui_Text(ctx, ifx_name)
+                                        r.ImGui_EndDragDropSource(ctx)
+                                    end
+                                    if r.ImGui_BeginDragDropTarget(ctx) then
+                                        local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_ITEMFX_DRAG")
+                                        if rv then
+                                            local src = tonumber(payload)
+                                            if src and src ~= i then
+                                                local dest = i
+                                                if src < dest then dest = dest + 1 end
+                                                r.Undo_BeginBlock()
+                                                r.TakeFX_CopyToTake(take, src, take, dest, true)
+                                                r.Undo_EndBlock("Reorder Item FX", -1)
+                                            end
+                                        end
+                                        r.ImGui_EndDragDropTarget(ctx)
+                                    end
+                                    if r.ImGui_IsItemHovered(ctx) then
+                                        r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
+                                    end
+                                    if r.ImGui_IsItemClicked(ctx, 1) then
+                                        r.ImGui_OpenPopup(ctx, "InfoItemFXCtx_" .. i)
+                                    end
                                 end
-                                if r.ImGui_IsItemHovered(ctx) then
-                                    r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
-                                end
-                                if r.ImGui_IsItemClicked(ctx, 1) then
+                                if open_itemfx_ctx then
                                     r.ImGui_OpenPopup(ctx, "InfoItemFXCtx_" .. i)
                                 end
+                                if ifx_color_count > 0 then r.ImGui_PopStyleColor(ctx, ifx_color_count) end
                                 if r.ImGui_BeginPopup(ctx, "InfoItemFXCtx_" .. i) then
                                     local is_bypassed = not r.TakeFX_GetEnabled(take, i)
                                     if r.ImGui_MenuItem(ctx, is_bypassed and "Enable" or "Bypass") then
@@ -11103,6 +11325,17 @@ function ShowBrowserPanel()
                             end
                         end
                         r.ImGui_PopStyleVar(ctx)
+                    end
+                    local _, ifx_zone_ey = r.ImGui_GetCursorScreenPos(ctx)
+                    if ifx_zone_ey - ifx_zone_sy < 20 then ifx_zone_ey = ifx_zone_sy + 20 end
+                    if dragging_fx_name then
+                        local mx, my = r.ImGui_GetMousePos(ctx)
+                        if mx >= ifx_zone_sx and mx <= ifx_zone_sx + ifx_zone_w and my >= ifx_zone_sy and my <= ifx_zone_ey then
+                            info_itemfx_drop_hovered = true
+                            local dl = r.ImGui_GetWindowDrawList(ctx)
+                            r.ImGui_DrawList_AddRectFilled(dl, ifx_zone_sx, ifx_zone_sy, ifx_zone_sx + ifx_zone_w, ifx_zone_ey, 0x00FF8820, 3)
+                            r.ImGui_DrawList_AddRect(dl, ifx_zone_sx, ifx_zone_sy, ifx_zone_sx + ifx_zone_w, ifx_zone_ey, 0x00FF8860, 3)
+                        end
                     end
                 else
                     r.ImGui_Text(ctx, "Item FX: - (no selected item)")
@@ -11537,6 +11770,454 @@ function DrawMasonryLayout(screenshots, top_offset)
         if column_heights[i] > max_height then max_height = column_heights[i] end
     end
     r.ImGui_SetCursorPosY(ctx, max_height + (config.compact_screenshots and 4 or 16))
+end
+
+local showcase_type_colors = {
+    VST3 = 0x4FC1E9FF, VST = 0x48CFADFF, CLAP = 0xAC92ECFF,
+    JS   = 0xFFCE54FF, AU  = 0xED5565FF, LV2  = 0xA0D468FF,
+    OTHER = 0x888888FF
+}
+
+function DrawShowcaseLayout(screenshots, top_offset)
+    top_offset = top_offset or 0
+    local available_width = r.ImGui_GetContentRegionAvail(ctx)
+    local thumb_h = m_max(60, display_size * 0.55)
+    local card_h = thumb_h + 16
+    local card_gap = config.compact_screenshots and 4 or 8
+    local pad = 8
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+
+    if top_offset > 0 then
+        r.ImGui_Dummy(ctx, 0, top_offset)
+    end
+    if not top_screenshot_spacing_applied then
+        r.ImGui_Dummy(ctx, 0, 6)
+        top_screenshot_spacing_applied = true
+    end
+
+    for i, fx in ipairs(screenshots) do
+        if fx.is_separator then
+            local dl2 = r.ImGui_GetWindowDrawList(ctx)
+            local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
+            local x1 = sx + 2
+            local x2 = sx + m_max(0, available_width - 2)
+            local thickness = config.compact_screenshots and 2 or 3
+            r.ImGui_DrawList_AddRectFilled(dl2, x1, sy, x2, sy + thickness, 0x606060FF, 2)
+            if fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
+                local glyph = (fx.kind == 'pinned_end') and "\xF0\x9F\x93\x8C" or "\xE2\x98\x85"
+                r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 4)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                r.ImGui_Text(ctx, glyph)
+                r.ImGui_PopStyleColor(ctx)
+            end
+            r.ImGui_Dummy(ctx, 0, thickness + (config.compact_screenshots and 4 or 8))
+            goto showcase_continue
+        end
+        if fx.is_message then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF)
+            r.ImGui_TextWrapped(ctx, GetDisplayPluginName(fx.name))
+            r.ImGui_PopStyleColor(ctx)
+            goto showcase_continue
+        end
+
+        do
+            local plugin_name = fx.name
+            local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+            local screenshot_file = screenshot_path .. safe_name .. ".png"
+            local texture = nil
+            local tex_w, tex_h = 0, 0
+            local has_tex = false
+            if r.file_exists(screenshot_file) then
+                texture = LoadSearchTexture(screenshot_file, plugin_name)
+                if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                    tex_w, tex_h = r.ImGui_Image_GetSize(texture)
+                    has_tex = tex_w and tex_h and tex_w > 0
+                end
+            end
+
+            local thumb_w = has_tex and m_floor(thumb_h * (tex_w / tex_h)) or m_floor(thumb_h * 1.6)
+            local card_w = m_max(available_width - 4, thumb_w + 200)
+
+            r.ImGui_PushID(ctx, i)
+            local cursor_sx, cursor_sy = r.ImGui_GetCursorScreenPos(ctx)
+
+            local bg_col = 0x1E1E2EE0
+            local hover_col = 0x2A2A3EFF
+            local border_col = 0x404060A0
+
+            local is_hovered = false
+            local mx, my = r.ImGui_GetMousePos(ctx)
+            if mx >= cursor_sx and mx <= cursor_sx + card_w and my >= cursor_sy and my <= cursor_sy + card_h then
+                is_hovered = true
+            end
+
+            local bg = is_hovered and hover_col or bg_col
+            r.ImGui_DrawList_AddRectFilled(dl, cursor_sx, cursor_sy, cursor_sx + card_w, cursor_sy + card_h, bg, 6)
+            r.ImGui_DrawList_AddRect(dl, cursor_sx, cursor_sy, cursor_sx + card_w, cursor_sy + card_h, border_col, 6, 0, 1)
+
+            if is_hovered then
+                r.ImGui_DrawList_AddLine(dl, cursor_sx + 6, cursor_sy, cursor_sx + card_w - 6, cursor_sy, 0xFFFFFF18, 1)
+            end
+
+            local img_x = cursor_sx + pad
+            local img_y = cursor_sy + pad
+            local img_h = thumb_h
+            local img_w = thumb_w
+
+            if has_tex then
+                r.ImGui_SetCursorScreenPos(ctx, img_x, img_y)
+                r.ImGui_Image(ctx, texture, img_w, img_h)
+                r.ImGui_DrawList_AddRect(dl, img_x, img_y, img_x + img_w, img_y + img_h, 0x606080A0, 3, 0, 1)
+            else
+                r.ImGui_DrawList_AddRectFilled(dl, img_x, img_y, img_x + img_w, img_y + img_h, 0x303050FF, 3)
+                local no_img_text = "No Image"
+                local tw = r.ImGui_CalcTextSize(ctx, no_img_text)
+                r.ImGui_DrawList_AddText(dl, img_x + (img_w - tw) * 0.5, img_y + (img_h - line_h) * 0.5, 0x808080FF, no_img_text)
+            end
+
+            if IsPluginPinned and IsPluginPinned(plugin_name) then
+                DrawPinnedOverlayAt(img_x, img_y, img_w, img_h)
+            end
+            if favorite_set and favorite_set[plugin_name] then
+                DrawFavoriteOverlayAt(img_x, img_y, img_w, img_h)
+            end
+
+            local info_x = img_x + img_w + pad * 2
+            local info_y = cursor_sy + pad + 2
+            local max_text_w = card_w - (img_w + pad * 4) - 4
+
+            local display_name = GetDisplayPluginName(plugin_name)
+            local name_tw = r.ImGui_CalcTextSize(ctx, display_name)
+            if name_tw > max_text_w then
+                local truncated = display_name
+                while r.ImGui_CalcTextSize(ctx, truncated .. "...") > max_text_w and #truncated > 1 do
+                    truncated = truncated:sub(1, -2)
+                end
+                display_name = truncated .. "..."
+            end
+            r.ImGui_DrawList_AddText(dl, info_x, info_y, 0xE0E0E0FF, display_name)
+
+            local badge_y = info_y + line_h + 4
+            local p_type = GetPluginType(plugin_name)
+            local badge_text = p_type
+            local badge_col_fill = showcase_type_colors[p_type] or showcase_type_colors.OTHER
+            local badge_tw = r.ImGui_CalcTextSize(ctx, badge_text)
+            local badge_px, badge_py = 6, 2
+            r.ImGui_DrawList_AddRectFilled(dl, info_x, badge_y, info_x + badge_tw + badge_px * 2, badge_y + line_h + badge_py * 2, badge_col_fill, 4)
+            r.ImGui_DrawList_AddText(dl, info_x + badge_px, badge_y + badge_py, 0x000000DD, badge_text)
+
+            local is_instr = IsInstrumentPlugin(plugin_name)
+            if is_instr then
+                local instr_x = info_x + badge_tw + badge_px * 2 + 6
+                local instr_text = "Instrument"
+                local instr_tw2 = r.ImGui_CalcTextSize(ctx, instr_text)
+                r.ImGui_DrawList_AddRectFilled(dl, instr_x, badge_y, instr_x + instr_tw2 + badge_px * 2, badge_y + line_h + badge_py * 2, 0xE8A04CFF, 4)
+                r.ImGui_DrawList_AddText(dl, instr_x + badge_px, badge_y + badge_py, 0x000000DD, instr_text)
+            end
+
+            local stars = GetStarsString(plugin_name)
+            if stars and stars ~= "" then
+                local stars_y = badge_y + line_h + badge_py * 2 + 4
+                r.ImGui_DrawList_AddText(dl, info_x, stars_y, 0xFFD700FF, stars)
+            end
+
+            r.ImGui_SetCursorScreenPos(ctx, cursor_sx, cursor_sy)
+            local clicked = r.ImGui_InvisibleButton(ctx, "##showcase_" .. i, card_w, card_h)
+
+            if config.enable_drag_add_fx then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) then
+                    potential_drag_fx_name = plugin_name
+                    drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                end
+                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx, 0) then
+                    local dmx, dmy = r.ImGui_GetMousePos(ctx)
+                    if math.abs(dmx - drag_start_x) > 3 or math.abs(dmy - drag_start_y) > 3 then
+                        dragging_fx_name = plugin_name
+                        potential_drag_fx_name = nil
+                    end
+                end
+                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx, 0) then
+                    potential_drag_fx_name = nil
+                end
+            end
+
+            local do_add = false
+            if config.add_fx_with_double_click then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) and dragging_fx_name ~= plugin_name then
+                    do_add = true
+                end
+            else
+                if clicked and dragging_fx_name ~= plugin_name then
+                    do_add = true
+                end
+            end
+            if do_add then
+                local target_track = GetTargetTrack()
+                if target_track then
+                    AddFXToTrack(target_track, plugin_name)
+                    LAST_USED_FX = plugin_name
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                end
+            end
+
+            ShowPluginContextMenu(plugin_name, "showcase_" .. i)
+
+            if r.ImGui_IsItemHovered(ctx) then
+                local full_name = GetDisplayPluginName(fx.name)
+                local tip_stars = GetStarsString(fx.name)
+                r.ImGui_SetTooltip(ctx, full_name .. (tip_stars ~= "" and "\n" .. tip_stars or ""))
+            end
+
+            r.ImGui_PopID(ctx)
+            r.ImGui_Dummy(ctx, 0, card_gap)
+        end
+        ::showcase_continue::
+    end
+end
+
+local polaroid_rotations = {}
+local function GetPolaroidRotation(idx)
+    if not polaroid_rotations[idx] then
+        local seed = idx * 7 + 3
+        local raw = math.sin(seed * 9.2847) * 43758.5453
+        raw = raw - m_floor(raw)
+        polaroid_rotations[idx] = (raw - 0.5) * 3.0
+    end
+    return polaroid_rotations[idx]
+end
+
+function DrawPolaroidLayout(screenshots, top_offset)
+    top_offset = top_offset or 0
+    local available_width = r.ImGui_GetContentRegionAvail(ctx)
+    local photo_size = m_max(100, display_size)
+    local border_side = 12
+    local border_top = 12
+    local border_bottom = 44
+    local card_w = photo_size + border_side * 2
+    local card_h = photo_size + border_top + border_bottom
+    local gap = config.compact_screenshots and 8 or 16
+    local num_columns = m_max(1, m_floor((available_width + gap) / (card_w + gap)))
+    local total_w = num_columns * card_w + (num_columns - 1) * gap
+    local start_x = (available_width - total_w) * 0.5
+
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+
+    if top_offset > 0 then
+        r.ImGui_Dummy(ctx, 0, top_offset)
+    end
+    if not top_screenshot_spacing_applied then
+        r.ImGui_Dummy(ctx, 0, 6)
+        top_screenshot_spacing_applied = true
+    end
+
+    local column_heights = {}
+    for c = 1, num_columns do column_heights[c] = 0 end
+
+    local base_sy = select(2, r.ImGui_GetCursorScreenPos(ctx))
+    local base_cy = r.ImGui_GetCursorPosY(ctx)
+
+    for i, fx in ipairs(screenshots) do
+        if fx.is_separator then
+            local max_h = 0
+            for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
+            r.ImGui_SetCursorPosY(ctx, base_cy + max_h)
+            local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
+            local x1 = sx + 2
+            local x2 = sx + m_max(0, available_width - 2)
+            local thickness = config.compact_screenshots and 2 or 3
+            r.ImGui_DrawList_AddRectFilled(dl, x1, sy, x2, sy + thickness, 0x606060FF, 2)
+            if fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
+                local glyph = (fx.kind == 'pinned_end') and "\xF0\x9F\x93\x8C" or "\xE2\x98\x85"
+                r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 4)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                r.ImGui_Text(ctx, glyph)
+                r.ImGui_PopStyleColor(ctx)
+            end
+            local sep_h = thickness + (config.compact_screenshots and 6 or 12)
+            for c = 1, num_columns do column_heights[c] = max_h + sep_h end
+            goto polaroid_continue
+        end
+        if fx.is_message then
+            local max_h = 0
+            for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
+            r.ImGui_SetCursorPosY(ctx, base_cy + max_h)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF)
+            r.ImGui_TextWrapped(ctx, GetDisplayPluginName(fx.name))
+            r.ImGui_PopStyleColor(ctx)
+            local msg_h = r.ImGui_GetCursorPosY(ctx) - (base_cy + max_h)
+            for c = 1, num_columns do column_heights[c] = max_h + msg_h end
+            goto polaroid_continue
+        end
+
+        do
+            local plugin_name = fx.name
+            local shortest_col = 1
+            for c = 2, num_columns do
+                if column_heights[c] < column_heights[shortest_col] then shortest_col = c end
+            end
+
+            local cx = start_x + (shortest_col - 1) * (card_w + gap)
+            local cy = column_heights[shortest_col]
+            local sx_card = select(1, r.ImGui_GetCursorScreenPos(ctx)) - r.ImGui_GetCursorPosX(ctx) + cx
+            local sy_card = base_sy + cy
+
+            local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+            local screenshot_file = screenshot_path .. safe_name .. ".png"
+            local texture, tex_w, tex_h, has_tex = nil, 0, 0, false
+            if r.file_exists(screenshot_file) then
+                texture = LoadSearchTexture(screenshot_file, plugin_name)
+                if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                    tex_w, tex_h = r.ImGui_Image_GetSize(texture)
+                    has_tex = tex_w and tex_h and tex_w > 0
+                end
+            end
+
+            local shadow_off = 4
+            r.ImGui_DrawList_AddRectFilled(dl,
+                sx_card + shadow_off, sy_card + shadow_off,
+                sx_card + card_w + shadow_off, sy_card + card_h + shadow_off,
+                0x00000040, 2)
+
+            r.ImGui_DrawList_AddRectFilled(dl,
+                sx_card, sy_card,
+                sx_card + card_w, sy_card + card_h,
+                0xF0F0F0FF, 2)
+
+            r.ImGui_DrawList_AddRect(dl,
+                sx_card, sy_card,
+                sx_card + card_w, sy_card + card_h,
+                0xC0C0C0FF, 2, 0, 1)
+
+            local img_x = sx_card + border_side
+            local img_y = sy_card + border_top
+
+            if has_tex then
+                local scale = m_min(photo_size / tex_w, photo_size / tex_h)
+                local draw_w = tex_w * scale
+                local draw_h = tex_h * scale
+                local off_x = (photo_size - draw_w) * 0.5
+                local off_y = (photo_size - draw_h) * 0.5
+
+                r.ImGui_DrawList_AddRectFilled(dl,
+                    img_x, img_y,
+                    img_x + photo_size, img_y + photo_size,
+                    0x202020FF)
+
+                r.ImGui_SetCursorScreenPos(ctx, img_x + off_x, img_y + off_y)
+                r.ImGui_Image(ctx, texture, draw_w, draw_h)
+            else
+                r.ImGui_DrawList_AddRectFilled(dl,
+                    img_x, img_y,
+                    img_x + photo_size, img_y + photo_size,
+                    0xD0D0D0FF)
+                local no_txt = "No Image"
+                local ntw = r.ImGui_CalcTextSize(ctx, no_txt)
+                r.ImGui_DrawList_AddText(dl,
+                    img_x + (photo_size - ntw) * 0.5,
+                    img_y + (photo_size - line_h) * 0.5,
+                    0x909090FF, no_txt)
+            end
+
+            if IsPluginPinned and IsPluginPinned(plugin_name) then
+                DrawPinnedOverlayAt(img_x, img_y, photo_size, photo_size)
+            end
+            if favorite_set and favorite_set[plugin_name] then
+                DrawFavoriteOverlayAt(img_x, img_y, photo_size, photo_size)
+            end
+
+            local text_area_y = img_y + photo_size + 4
+            local text_area_w = card_w - border_side * 2
+            local display_name = GetDisplayPluginName(plugin_name)
+
+            local name_tw = r.ImGui_CalcTextSize(ctx, display_name)
+            if name_tw > text_area_w then
+                local truncated = display_name
+                while r.ImGui_CalcTextSize(ctx, truncated .. "..") > text_area_w and #truncated > 1 do
+                    truncated = truncated:sub(1, -2)
+                end
+                display_name = truncated .. ".."
+            end
+            r.ImGui_DrawList_AddText(dl, img_x, text_area_y, 0x303030FF, display_name)
+
+            local stars = GetStarsString(plugin_name)
+            if stars and stars ~= "" then
+                local stars_tw = r.ImGui_CalcTextSize(ctx, stars)
+                r.ImGui_DrawList_AddText(dl, img_x, text_area_y + line_h + 1, 0xD4A017FF, stars)
+            end
+
+            local p_type = GetPluginType(plugin_name)
+            local type_text = p_type
+            local type_tw = r.ImGui_CalcTextSize(ctx, type_text)
+            local type_col = showcase_type_colors[p_type] or showcase_type_colors.OTHER
+            local tx = sx_card + card_w - border_side - type_tw - 6
+            local ty = text_area_y
+            r.ImGui_DrawList_AddRectFilled(dl, tx - 3, ty - 1, tx + type_tw + 3, ty + line_h + 1, type_col, 3)
+            r.ImGui_DrawList_AddText(dl, tx, ty, 0x000000CC, type_text)
+
+            r.ImGui_PushID(ctx, i)
+            r.ImGui_SetCursorScreenPos(ctx, sx_card, sy_card)
+            local clicked = r.ImGui_InvisibleButton(ctx, "##polaroid_" .. i, card_w, card_h)
+
+            if config.enable_drag_add_fx then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) then
+                    potential_drag_fx_name = plugin_name
+                    drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                end
+                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx, 0) then
+                    local dmx, dmy = r.ImGui_GetMousePos(ctx)
+                    if math.abs(dmx - drag_start_x) > 3 or math.abs(dmy - drag_start_y) > 3 then
+                        dragging_fx_name = plugin_name
+                        potential_drag_fx_name = nil
+                    end
+                end
+                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx, 0) then
+                    potential_drag_fx_name = nil
+                end
+            end
+
+            local do_add = false
+            if config.add_fx_with_double_click then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) and dragging_fx_name ~= plugin_name then
+                    do_add = true
+                end
+            else
+                if clicked and dragging_fx_name ~= plugin_name then
+                    do_add = true
+                end
+            end
+            if do_add then
+                local target_track = GetTargetTrack()
+                if target_track then
+                    AddFXToTrack(target_track, plugin_name)
+                    LAST_USED_FX = plugin_name
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                end
+            end
+
+            ShowPluginContextMenu(plugin_name, "polaroid_" .. i)
+
+            if r.ImGui_IsItemHovered(ctx) then
+                local full_name = GetDisplayPluginName(fx.name)
+                local tip_stars = GetStarsString(fx.name)
+                r.ImGui_SetTooltip(ctx, full_name .. (tip_stars ~= "" and "\n" .. tip_stars or ""))
+
+                r.ImGui_DrawList_AddRect(dl,
+                    sx_card - 1, sy_card - 1,
+                    sx_card + card_w + 1, sy_card + card_h + 1,
+                    0x4FC1E9FF, 3, 0, 2)
+            end
+
+            r.ImGui_PopID(ctx)
+            column_heights[shortest_col] = cy + card_h + gap
+        end
+        ::polaroid_continue::
+    end
+
+    local max_h = 0
+    for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
+    r.ImGui_SetCursorPosY(ctx, base_cy + max_h + (config.compact_screenshots and 4 or 12))
 end
 
 function RenderScriptsLauncherSection(popped_view_stylevars)
@@ -13714,7 +14395,7 @@ function ShowScreenshotWindow()
                                 end
                             end
                             r.ImGui_PopStyleVar(ctx)
-                        elseif config.use_masonry_layout or config.use_modern_cards then
+                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_modern_cards then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
                             for _, plugin in ipairs(with_shot) do
@@ -13726,7 +14407,13 @@ function ShowScreenshotWindow()
                                     masonry_data[#masonry_data+1] = {name = plugin}
                                 end
                             end
-                            DrawMasonryLayout(masonry_data)
+                            if config.use_polaroid_layout then
+                                DrawPolaroidLayout(masonry_data)
+                            elseif config.use_showcase_layout then
+                                DrawShowcaseLayout(masonry_data)
+                            else
+                                DrawMasonryLayout(masonry_data)
+                            end
                             RenderMissingList(missing)
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
@@ -13943,7 +14630,7 @@ function ShowScreenshotWindow()
                                 end
                             end
                             r.ImGui_PopStyleVar(ctx)
-                        elseif config.use_masonry_layout or config.use_modern_cards then
+                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_modern_cards then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
                             
@@ -13956,7 +14643,13 @@ function ShowScreenshotWindow()
                                     masonry_data[#masonry_data+1] = { name = plugin }
                                 end
                             end
-                            DrawMasonryLayout(masonry_data)
+                            if config.use_polaroid_layout then
+                                DrawPolaroidLayout(masonry_data)
+                            elseif config.use_showcase_layout then
+                                DrawShowcaseLayout(masonry_data)
+                            else
+                                DrawMasonryLayout(masonry_data)
+                            end
                             RenderMissingList(missing)
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
@@ -14563,7 +15256,7 @@ function ShowScreenshotWindow()
                             local num_columns = math.max(1, min_columns)
                             local column_width = available_width / num_columns
 
-                            if config.use_masonry_layout or config.use_modern_cards then
+                            if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_modern_cards then
                                 if filtered_plugins then
                                     local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                                     local masonry_data = {}
@@ -14576,7 +15269,13 @@ function ShowScreenshotWindow()
                                             masonry_data[#masonry_data+1] = {name = plugin}
                                         end
                                     end
-                                    DrawMasonryLayout(masonry_data)
+                                    if config.use_polaroid_layout then
+                                        DrawPolaroidLayout(masonry_data)
+                                    elseif config.use_showcase_layout then
+                                        DrawShowcaseLayout(masonry_data)
+                                    else
+                                        DrawMasonryLayout(masonry_data)
+                                    end
                                     RenderMissingList(missing)
                                 end
                             else
@@ -14738,7 +15437,7 @@ function ShowScreenshotWindow()
                     end
                     r.ImGui_PopStyleVar(ctx)
                 else
-                    if config.use_masonry_layout or config.use_modern_cards then
+                    if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_modern_cards then
                         local plain_names = {}
                         local messages = {}
                         for _, fx in ipairs(screenshot_search_results) do
@@ -14831,7 +15530,13 @@ function ShowScreenshotWindow()
                                 masonry_data[#masonry_data+1] = {name = plugin_name}
                             end
                         end
-                        DrawMasonryLayout(masonry_data, buttons_height)
+                        if config.use_polaroid_layout then
+                            DrawPolaroidLayout(masonry_data, buttons_height)
+                        elseif config.use_showcase_layout then
+                            DrawShowcaseLayout(masonry_data, buttons_height)
+                        else
+                            DrawMasonryLayout(masonry_data, buttons_height)
+                        end
                         RenderMissingList(missing)
                     else
                         local card_spacing = config.use_modern_cards and 12 or 0
@@ -17535,6 +18240,32 @@ function HandleDragAndDrop()
             dragging_fx_name = nil
             potential_drag_fx_name = nil
             chain_builder_hovered = false
+            return
+        end
+        if info_trackfx_drop_hovered and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+            r.Undo_BeginBlock()
+            AddFXToTrack(TRACK, dragging_fx_name)
+            r.Undo_EndBlock("Add FX to Track", -1)
+            LAST_USED_FX = dragging_fx_name
+            dragging_fx_name = nil
+            potential_drag_fx_name = nil
+            info_trackfx_drop_hovered = false
+            return
+        end
+        if info_itemfx_drop_hovered then
+            local item = r.GetSelectedMediaItem(0, 0)
+            if item then
+                local take = r.GetActiveTake(item)
+                if take then
+                    r.Undo_BeginBlock()
+                    r.TakeFX_AddByName(take, dragging_fx_name, 1)
+                    r.Undo_EndBlock("Add FX to Item", -1)
+                    LAST_USED_FX = dragging_fx_name
+                end
+            end
+            dragging_fx_name = nil
+            potential_drag_fx_name = nil
+            info_itemfx_drop_hovered = false
             return
         end
         local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
