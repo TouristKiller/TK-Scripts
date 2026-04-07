@@ -1,17 +1,13 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.0
+-- @version 0.3.1
 -- @changelog:
 --[[     
-    + Info Panel: Track FX and Item FX thumbnail view (mini screenshots per FX slot in the info panel)
-    + Info Panel: Separate toggle switches for Track FX Thumbnails and Item FX Thumbnails (Visibility menu)
-    + Info Panel: FX name overlay on thumbnails (centered white text on semi-transparent black bar, same style as screenshot overlay)
-    + Info Panel: Numbered slot badge overlay on thumbnails (top-left, green on black, same style as FX Chain Builder)
-    + Info Panel: Bypassed FX get a dark overlay on their thumbnail
-    + Info Panel: Drag-and-drop from screenshot window to Track FX zone (adds FX to current track)
-    + Info Panel: Drag-and-drop from screenshot window to Item FX zone (adds FX to selected item)
-    + Info Panel: Green highlight on Track FX / Item FX zones when dragging a plugin over them
-    + Info Panel: Fallback to text list when no screenshot exists for an FX
+    + Info Panel: A/B Snapshot system for individual FX via chunk-based state capture
+    + Info Panel: Save/Load/Toggle A/B snapshots via right-click context menu (Track FX and Item FX)
+    + Info Panel: A/B badge indicator on thumbnails (top-right, blue=A, orange=B) and in text view
+    + Info Panel: Full FX state storage including all parameters, automation, and internal plugin state
+    + Info Panel: Undo support for snapshot restore actions
 
     0.2.9
     + Layout: Added "Showcase" layout - horizontal full-width cards with thumbnail left, plugin info/badges/stars right
@@ -690,6 +686,7 @@ chain_builder_plugins = chain_builder_plugins or {}
 chain_builder_hovered = false
 info_trackfx_drop_hovered = false
 info_itemfx_drop_hovered = false
+ab_snapshots = ab_snapshots or {}
 
 -- Window state variables
 was_hidden = was_hidden or false
@@ -6259,6 +6256,124 @@ function LoadChainFxScreenshot(fx_name)
     return nil
 end
 
+function FindFXBlockBounds(chunk, chain_tag, fx_idx)
+    local chain_start = chunk:find("<" .. chain_tag .. "\n")
+    if not chain_start then return nil end
+    local depth = 0
+    local fx_count = -1
+    local target_start, target_depth
+    for i = chain_start, #chunk do
+        local c = chunk:sub(i, i)
+        if c == "<" then
+            depth = depth + 1
+            if depth == 2 and not target_start then
+                fx_count = fx_count + 1
+                if fx_count == fx_idx then
+                    target_start = i
+                    target_depth = depth
+                end
+            end
+        elseif c == ">" then
+            if target_start and depth == target_depth then
+                return target_start, i
+            end
+            depth = depth - 1
+            if depth == 0 then break end
+        end
+    end
+    return nil
+end
+
+function GetABKey(track, fx_idx, is_take, take)
+    if is_take then
+        local item = r.GetMediaItemTake_Item(take)
+        local item_guid = r.BR_GetMediaItemGUID(item)
+        local fx_guid = r.TakeFX_GetFXGUID(take, fx_idx)
+        if not fx_guid then fx_guid = tostring(fx_idx) end
+        return "I:" .. item_guid .. ":" .. fx_guid
+    else
+        local track_guid = r.GetTrackGUID(track)
+        local fx_guid = r.TrackFX_GetFXGUID(track, fx_idx)
+        if not fx_guid then fx_guid = tostring(fx_idx) end
+        return "T:" .. track_guid .. ":" .. fx_guid
+    end
+end
+
+function SaveFXSnapshot(track, fx_idx, slot, is_take, take)
+    local chain_tag = is_take and "TAKEFX" or "FXCHAIN"
+    local chunk
+    if is_take then
+        local item = r.GetMediaItemTake_Item(take)
+        local _, c = r.GetItemStateChunk(item, "", false)
+        chunk = c
+    else
+        local _, c = r.GetTrackStateChunk(track, "", false)
+        chunk = c
+    end
+    if not chunk then return false end
+    local bs, be = FindFXBlockBounds(chunk, chain_tag, fx_idx)
+    if not bs or not be then return false end
+    local fx_block = chunk:sub(bs, be)
+    local key = GetABKey(track, fx_idx, is_take, take)
+    if not ab_snapshots[key] then
+        ab_snapshots[key] = { active = nil }
+    end
+    local enabled
+    if is_take then
+        enabled = r.TakeFX_GetEnabled(take, fx_idx)
+    else
+        enabled = r.TrackFX_GetEnabled(track, fx_idx)
+    end
+    ab_snapshots[key][slot] = { chunk = fx_block, enabled = enabled }
+    ab_snapshots[key].active = slot
+    return true
+end
+
+function RestoreFXSnapshot(track, fx_idx, slot, is_take, take)
+    local key = GetABKey(track, fx_idx, is_take, take)
+    if not ab_snapshots[key] or not ab_snapshots[key][slot] then return false end
+    local snap = ab_snapshots[key][slot]
+    local chain_tag = is_take and "TAKEFX" or "FXCHAIN"
+    local chunk
+    if is_take then
+        local item = r.GetMediaItemTake_Item(take)
+        local _, c = r.GetItemStateChunk(item, "", false)
+        chunk = c
+    else
+        local _, c = r.GetTrackStateChunk(track, "", false)
+        chunk = c
+    end
+    if not chunk then return false end
+    local bs, be = FindFXBlockBounds(chunk, chain_tag, fx_idx)
+    if not bs or not be then return false end
+    local new_chunk = chunk:sub(1, bs - 1) .. snap.chunk .. chunk:sub(be + 1)
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    if is_take then
+        local item = r.GetMediaItemTake_Item(take)
+        r.SetItemStateChunk(item, new_chunk, false)
+        r.TakeFX_SetEnabled(take, fx_idx, snap.enabled)
+    else
+        r.SetTrackStateChunk(track, new_chunk, false)
+        r.TrackFX_SetEnabled(track, fx_idx, snap.enabled)
+    end
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Restore FX Snapshot " .. string.upper(slot), -1)
+    ab_snapshots[key].active = slot
+    return true
+end
+
+function GetABInfo(track, fx_idx, is_take, take)
+    local key = GetABKey(track, fx_idx, is_take, take)
+    local snap = ab_snapshots[key]
+    if not snap then return nil end
+    return {
+        has_a = snap.a ~= nil,
+        has_b = snap.b ~= nil,
+        active = snap.active,
+    }
+end
+
 function LoadInfoFxScreenshot(fx_name)
     if info_fx_texture_cache[fx_name] then
         if r.ImGui_ValidatePtr(info_fx_texture_cache[fx_name], 'ImGui_Image*') then
@@ -10916,6 +11031,15 @@ function ShowBrowserPanel()
                                 local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
                                 r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
                                 r.ImGui_DrawList_AddText(dl, cx + 3, cy + 1, 0x00FF88FF, slot_label)
+                                local tfx_ab = GetABInfo(TRACK, i, false, nil)
+                                if tfx_ab and tfx_ab.active then
+                                    local ab_label = string.upper(tfx_ab.active)
+                                    local ab_tw = r.ImGui_CalcTextSize(ctx, ab_label)
+                                    local ab_x = cx + thumb_avail_w - ab_tw - 6
+                                    local ab_col = tfx_ab.active == "a" and 0x44AAFFFF or 0xFF8844FF
+                                    r.ImGui_DrawList_AddRectFilled(dl, ab_x, cy, cx + thumb_avail_w, cy + 14, 0x000000B0, 3)
+                                    r.ImGui_DrawList_AddText(dl, ab_x + 3, cy + 1, ab_col, ab_label)
+                                end
                                 if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                                     r.ImGui_SetDragDropPayload(ctx, "INFO_TRACKFX_DRAG", tostring(i))
                                     r.ImGui_Text(ctx, fx_name)
@@ -10950,7 +11074,12 @@ function ShowBrowserPanel()
                                 end
                                 r.ImGui_PopID(ctx)
                             else
-                                local clicked = r.ImGui_Selectable(ctx, fx_name .. "##info_trackfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                                local tfx_ab_text = GetABInfo(TRACK, i, false, nil)
+                                local tfx_display = fx_name
+                                if tfx_ab_text and tfx_ab_text.active then
+                                    tfx_display = fx_name .. "  [" .. string.upper(tfx_ab_text.active) .. "]"
+                                end
+                                local clicked = r.ImGui_Selectable(ctx, tfx_display .. "##info_trackfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
                                 if clicked then
                                     if r.TrackFX_GetFloatingWindow(TRACK, i) then
                                         r.TrackFX_Show(TRACK, i, 2)
@@ -11024,6 +11153,41 @@ function ShowBrowserPanel()
                                     r.Undo_BeginBlock()
                                     r.TrackFX_Delete(TRACK, i)
                                     r.Undo_EndBlock("Delete FX", -1)
+                                end
+                                r.ImGui_Separator(ctx)
+                                local ab_info = GetABInfo(TRACK, i, false, nil)
+                                if r.ImGui_BeginMenu(ctx, "A/B Snapshot") then
+                                    local a_label = ab_info and ab_info.has_a and "Save A (overwrite)" or "Save A"
+                                    if r.ImGui_MenuItem(ctx, a_label) then
+                                        SaveFXSnapshot(TRACK, i, "a", false, nil)
+                                    end
+                                    local b_label = ab_info and ab_info.has_b and "Save B (overwrite)" or "Save B"
+                                    if r.ImGui_MenuItem(ctx, b_label) then
+                                        SaveFXSnapshot(TRACK, i, "b", false, nil)
+                                    end
+                                    if ab_info and ab_info.has_a and ab_info.has_b then
+                                        r.ImGui_Separator(ctx)
+                                        local swap_to = (ab_info.active == "a") and "b" or "a"
+                                        if r.ImGui_MenuItem(ctx, "Toggle A/B  [" .. string.upper(swap_to) .. "]") then
+                                            RestoreFXSnapshot(TRACK, i, swap_to, false, nil)
+                                        end
+                                    end
+                                    if ab_info and (ab_info.has_a or ab_info.has_b) then
+                                        r.ImGui_Separator(ctx)
+                                        if ab_info.has_a then
+                                            local ra = ab_info.active == "a" and "Load A (active)" or "Load A"
+                                            if r.ImGui_MenuItem(ctx, ra) then
+                                                RestoreFXSnapshot(TRACK, i, "a", false, nil)
+                                            end
+                                        end
+                                        if ab_info.has_b then
+                                            local rb = ab_info.active == "b" and "Load B (active)" or "Load B"
+                                            if r.ImGui_MenuItem(ctx, rb) then
+                                                RestoreFXSnapshot(TRACK, i, "b", false, nil)
+                                            end
+                                        end
+                                    end
+                                    r.ImGui_EndMenu(ctx)
                                 end
                                 r.ImGui_EndPopup(ctx)
                             end
@@ -11211,6 +11375,15 @@ function ShowBrowserPanel()
                                     local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
                                     r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
                                     r.ImGui_DrawList_AddText(dl, cx + 3, cy + 1, 0x00FF88FF, slot_label)
+                                    local ifx_ab = GetABInfo(nil, i, true, take)
+                                    if ifx_ab and ifx_ab.active then
+                                        local ab_label = string.upper(ifx_ab.active)
+                                        local ab_tw = r.ImGui_CalcTextSize(ctx, ab_label)
+                                        local ab_x = cx + ifx_avail_w - ab_tw - 6
+                                        local ab_col = ifx_ab.active == "a" and 0x44AAFFFF or 0xFF8844FF
+                                        r.ImGui_DrawList_AddRectFilled(dl, ab_x, cy, cx + ifx_avail_w, cy + 14, 0x000000B0, 3)
+                                        r.ImGui_DrawList_AddText(dl, ab_x + 3, cy + 1, ab_col, ab_label)
+                                    end
                                     if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                                         r.ImGui_SetDragDropPayload(ctx, "INFO_ITEMFX_DRAG", tostring(i))
                                         r.ImGui_Text(ctx, ifx_name)
@@ -11245,7 +11418,12 @@ function ShowBrowserPanel()
                                     end
                                     r.ImGui_PopID(ctx)
                                 else
-                                    local clicked = r.ImGui_Selectable(ctx, ifx_name .. "##info_itemfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                                    local ifx_ab_text = GetABInfo(nil, i, true, take)
+                                    local ifx_display = ifx_name
+                                    if ifx_ab_text and ifx_ab_text.active then
+                                        ifx_display = ifx_name .. "  [" .. string.upper(ifx_ab_text.active) .. "]"
+                                    end
+                                    local clicked = r.ImGui_Selectable(ctx, ifx_display .. "##info_itemfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
                                     if clicked then
                                         if r.TakeFX_GetFloatingWindow(take, i) then
                                             r.TakeFX_Show(take, i, 2)
@@ -11319,6 +11497,41 @@ function ShowBrowserPanel()
                                         r.Undo_BeginBlock()
                                         r.TakeFX_Delete(take, i)
                                         r.Undo_EndBlock("Delete Item FX", -1)
+                                    end
+                                    r.ImGui_Separator(ctx)
+                                    local iab_info = GetABInfo(nil, i, true, take)
+                                    if r.ImGui_BeginMenu(ctx, "A/B Snapshot") then
+                                        local a_label = iab_info and iab_info.has_a and "Save A (overwrite)" or "Save A"
+                                        if r.ImGui_MenuItem(ctx, a_label) then
+                                            SaveFXSnapshot(nil, i, "a", true, take)
+                                        end
+                                        local b_label = iab_info and iab_info.has_b and "Save B (overwrite)" or "Save B"
+                                        if r.ImGui_MenuItem(ctx, b_label) then
+                                            SaveFXSnapshot(nil, i, "b", true, take)
+                                        end
+                                        if iab_info and iab_info.has_a and iab_info.has_b then
+                                            r.ImGui_Separator(ctx)
+                                            local swap_to = (iab_info.active == "a") and "b" or "a"
+                                            if r.ImGui_MenuItem(ctx, "Toggle A/B  [" .. string.upper(swap_to) .. "]") then
+                                                RestoreFXSnapshot(nil, i, swap_to, true, take)
+                                            end
+                                        end
+                                        if iab_info and (iab_info.has_a or iab_info.has_b) then
+                                            r.ImGui_Separator(ctx)
+                                            if iab_info.has_a then
+                                                local ra = iab_info.active == "a" and "Load A (active)" or "Load A"
+                                                if r.ImGui_MenuItem(ctx, ra) then
+                                                    RestoreFXSnapshot(nil, i, "a", true, take)
+                                                end
+                                            end
+                                            if iab_info.has_b then
+                                                local rb = iab_info.active == "b" and "Load B (active)" or "Load B"
+                                                if r.ImGui_MenuItem(ctx, rb) then
+                                                    RestoreFXSnapshot(nil, i, "b", true, take)
+                                                end
+                                            end
+                                        end
+                                        r.ImGui_EndMenu(ctx)
                                     end
                                     r.ImGui_EndPopup(ctx)
                                 end
