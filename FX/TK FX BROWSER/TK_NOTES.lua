@@ -1,7 +1,10 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.4.0
+-- @version 2.4.1
 -- @changelog
+--   + Auto-context: automatic mode switching based on REAPER selection (item/track/project)
+--   + Auto-context toggle button (⟳) in toolbar with overflow support
+--   + Global mode is never auto-activated (manual only)
 --   + Per-line text colors with 12-color palette (🎨 toolbar button)
 --   + Line colors persist per tab and per context (project/global/track/item)
 --   + Per-tab font size: each tab remembers its own font size
@@ -110,6 +113,7 @@ local state = {
     -- List mode state
     list_mode = "none", -- "none", "bullet", "numbered"
     window_pinned = false,
+    auto_context = false,
     line_colors = {},
     selected_text_color = nil,
     -- Background colors per mode
@@ -242,6 +246,10 @@ local function LoadNotebook()
         if interval and interval >= 2 and interval <= 120 then
             state.auto_save_interval = interval
         end
+    end
+
+    if r.HasExtState(EXT_NAMESPACE, "auto_context") then
+        state.auto_context = r.GetExtState(EXT_NAMESPACE, "auto_context") == "1"
     end
     
     UpdateActiveContext(true)
@@ -508,6 +516,7 @@ local function SaveNotebook()
     end
     
     r.SetExtState(EXT_NAMESPACE, "auto_save_interval", tostring(state.auto_save_interval or 10), true)
+    r.SetExtState(EXT_NAMESPACE, "auto_context", state.auto_context and "1" or "0", true)
     
     if saved_text and saved_align and saved_color and saved_images and saved_strokes and saved_font_size and saved_font_family and saved_auto_save and saved_window_width and saved_window_height and saved_show_status and saved_tabs_enabled and saved_tabs_data then
         state.dirty = false
@@ -3991,6 +4000,31 @@ local function DrawMenuBar()
 
     if CheckToolbarFit(button_width + 4) then
         SameLineToolbar()
+        local ac_icon = "⟳"
+        local ac_tinted = state.auto_context
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+        if ac_tinted then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), align_accent)
+        end
+        if r.ImGui_Button(ctx, ac_icon .. "##toggle_autocontext", button_width, button_height) then
+            state.auto_context = not state.auto_context
+            r.SetExtState(EXT_NAMESPACE, "auto_context", state.auto_context and "1" or "0", true)
+        end
+        if ac_tinted then
+            r.ImGui_PopStyleColor(ctx, 1)
+        end
+        r.ImGui_PopStyleColor(ctx, 3)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, state.auto_context and "Auto-context: ON (click to disable)" or "Auto-context: OFF (click to enable)")
+        end
+    else
+        table.insert(overflow_items, "autocontext")
+    end
+
+    if CheckToolbarFit(button_width + 4) then
+        SameLineToolbar()
         local info_icon = state.show_status and "ⓘ" or "ⓘ"
         local info_tinted = state.show_status
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
@@ -4204,6 +4238,13 @@ local function DrawMenuBar()
             if overflow_set["pin"] then
                 if r.ImGui_MenuItem(ctx, state.window_pinned and "📌 Unpin window" or "📍 Pin window", nil, state.window_pinned) then
                     state.window_pinned = not state.window_pinned
+                end
+            end
+
+            if overflow_set["autocontext"] then
+                if r.ImGui_MenuItem(ctx, "⟳ Auto-context", nil, state.auto_context) then
+                    state.auto_context = not state.auto_context
+                    r.SetExtState(EXT_NAMESPACE, "auto_context", state.auto_context and "1" or "0", true)
                 end
             end
             
@@ -5185,6 +5226,24 @@ local function Frame()
     local max_width = 3000
     local max_height = 3000
     r.ImGui_SetNextWindowSizeConstraints(ctx, min_width, min_height, max_width, max_height)
+
+    if state.auto_context and state.mode ~= "global" then
+        local ac_proj = GetActiveProject()
+        local ac_item = GetFirstSelectedItem(ac_proj)
+        local ac_track = GetFirstSelectedTrack(ac_proj)
+        local ac_new_mode = state.mode
+        if ac_item then
+            ac_new_mode = "item"
+        elseif ac_track then
+            ac_new_mode = "track"
+        else
+            ac_new_mode = "project"
+        end
+        if ac_new_mode ~= state.mode then
+            state.mode = ac_new_mode
+            UpdateActiveContext(true)
+        end
+    end
 
     UpdateActiveContext(false)
 
