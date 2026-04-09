@@ -1,8 +1,35 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.1
+-- @version 0.3.2
 -- @changelog:
 --[[     
+    + Multi-Selection: Ctrl+Click to toggle individual plugins in/out of selection
+    + Multi-Selection: Shift+Click for range selection between anchor and clicked plugin
+    + Multi-Selection: Ctrl+Shift+Click to extend range without clearing existing selection
+    + Multi-Selection: Shift+Arrow keys to extend selection from keyboard
+    + Multi-Selection: Ctrl+A to select all visible plugins in current view
+    + Multi-Selection: Escape to clear multi-selection
+    + Multi-Selection: Enter adds ALL selected plugins to track (wrapped in Undo Block)
+    + Multi-Selection: Right-click context menu for multi-selection (Add All to Track/New Track/Chain Builder/Favorites)
+    + Multi-Selection: Visual feedback - semi-transparent cyan fill for selected items, brighter border for cursor
+    + Multi-Selection: Selection count indicator "[N selected]" in toolbar area
+    + Multi-Selection: Works across all views (Normal grid, Masonry, Showcase, Polaroid)
+    + Navigation: Keyboard navigation (arrow keys) for ALL screenshot views (Normal grid, Masonry, Showcase, Polaroid)
+    + Navigation: Click-to-select plugin in screenshot views (single click selects, double click adds FX)
+    + Navigation: Enter key adds selected plugin to target track(s) from any screenshot view
+    + Navigation: Cyan selection border (2.5px) around selected plugin in all views
+    + Navigation: Auto-scroll to keep selected plugin visible when navigating with arrow keys
+    + Navigation: Position-aware arrow key navigation (left/right moves between columns, up/down within same column)
+    + Navigation: Focus-aware input - screenshot navigation only active when screenshot window has focus (prevents conflict with browser/info panel)
+    + Navigation: Arrow-down from search bar jumps to first plugin in screenshot grid
+    + Navigation: Arrow-up from first grid item returns focus to search bar
+    + Search: Autofocus search bar on script open (screenshot search bar priority, fallback to browser search bar)
+    + Search: Smart focus priority - screenshot search bar takes precedence when visible, browser search bar used as fallback
+    + FX Chain Builder: Mouse wheel horizontal scrolling on the FX chain strip
+    + Layout Menu: Layout options (Normal/Masonry/Showcase/Polaroid) are now mutually exclusive (radio-style selection)
+    + Layout Menu: Modern Cards separated as independent overlay option (works with any layout)
+
+    0.3.0
     + Info Panel: A/B Snapshot system for individual FX via chunk-based state capture
     + Info Panel: Save/Load/Toggle A/B snapshots via right-click context menu (Track FX and Item FX)
     + Info Panel: A/B badge indicator on thumbnails (top-right, blue=A, orange=B) and in text view
@@ -686,7 +713,18 @@ chain_builder_plugins = chain_builder_plugins or {}
 chain_builder_hovered = false
 info_trackfx_drop_hovered = false
 info_itemfx_drop_hovered = false
+masonry_selected_index = masonry_selected_index or nil
+masonry_positions = masonry_positions or {}
+screenshot_nav_index = screenshot_nav_index or nil
+screenshot_nav_positions = screenshot_nav_positions or {}
+screenshot_nav_plugin_indices = screenshot_nav_plugin_indices or {}
+screenshot_multi_selected = screenshot_multi_selected or {}
+screenshot_nav_anchor = screenshot_nav_anchor or nil
+screenshot_nav_names = screenshot_nav_names or {}
+screenshot_search_focus_requested = true
+screenshot_search_to_nav = false
 ab_snapshots = ab_snapshots or {}
+show_shortcuts_window = false
 
 -- Window state variables
 was_hidden = was_hidden or false
@@ -760,6 +798,9 @@ end
 
 function SelectFolderExclusive(name)
     selected_folder = name
+    screenshot_multi_selected = {}
+    screenshot_nav_anchor = nil
+    screenshot_nav_index = nil
     if name ~= nil then
         browser_panel_selected = nil
     
@@ -5604,6 +5645,95 @@ function StartSingleScreenshotCapture(plugin_name, cb, force)
     end
 end
 
+function DrawShortcutsWindow()
+    if not show_shortcuts_window then return end
+
+    local center_x, center_y = r.ImGui_GetMousePos(ctx)
+    r.ImGui_SetNextWindowSize(ctx, 520, 540, r.ImGui_Cond_FirstUseEver())
+
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x1A1A2EFF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBg(), 0x16213EFF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TitleBgActive(), 0x0F3460FF)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8)
+
+    local visible, open = r.ImGui_Begin(ctx, "Keyboard & Mouse Shortcuts", true,
+        r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_TopMost())
+
+    if visible then
+        local section_col = 0x00BFFFFF
+        local key_col = 0xE2B714FF
+        local desc_col = 0xCCCCCCFF
+        local divider_col = 0x333355FF
+
+        local function Section(label)
+            r.ImGui_Spacing(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), section_col)
+            r.ImGui_SeparatorText(ctx, label)
+            r.ImGui_PopStyleColor(ctx)
+        end
+
+        local function Row(keys, desc)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), key_col)
+            r.ImGui_Text(ctx, keys)
+            r.ImGui_PopStyleColor(ctx)
+            r.ImGui_SameLine(ctx, 240)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), desc_col)
+            r.ImGui_Text(ctx, desc)
+            r.ImGui_PopStyleColor(ctx)
+        end
+
+        Section("Plugin Navigation")
+        Row("Arrow Keys",               "Navigate plugin grid")
+        Row("Arrow Down (from search)", "Jump to first plugin")
+        Row("Arrow Up (from first)",    "Return to search bar")
+        Row("Enter",                    "Add plugin(s) to track")
+
+        Section("Multi-Selection (Keyboard)")
+        Row("Ctrl + A",                 "Select all visible plugins")
+        Row("Shift + Arrow Keys",       "Extend selection (range)")
+        Row("Ctrl + Arrow Keys",        "Move cursor, keep selection")
+        Row("Ctrl + Space",             "Toggle current item in selection")
+        Row("Escape",                   "Clear entire selection")
+
+        Section("Multi-Selection (Mouse)")
+        Row("Click",                    "Select single plugin")
+        Row("Ctrl + Click",             "Toggle plugin in selection")
+        Row("Shift + Click",            "Range select (anchor to click)")
+        Row("Ctrl + Shift + Click",     "Extend range to selection")
+        Row("Right Click (multi)",      "Multi-selection context menu")
+
+        Section("Plugin Actions")
+        Row("Double Click",             "Add plugin to track")
+        Row("Right Click",              "Plugin context menu")
+        Row("Drag to FX Strip",         "Add to FX Chain Builder")
+
+        Section("FX Chain Builder")
+        Row("Drag within strip",        "Reorder FX in chain")
+        Row("Right Click on FX",        "Remove FX from chain")
+
+        Section("Search Bar")
+        Row("Type to search",           "Auto-focus search bar")
+        Row("Escape (in search)",       "Clear search text")
+        Row("Arrow Down (in search)",   "Jump to plugin grid")
+
+        Section("Info Panel")
+        Row("Mouse Wheel (track hdr)",  "Cycle through tracks")
+        Row("Drag FX",                  "Reorder track/item FX")
+        Row("Right Click on FX",        "FX context menu")
+
+        Section("General")
+        Row("Mouse Wheel (dropdowns)",  "Cycle dropdown options")
+    end
+    r.ImGui_End(ctx)
+
+    if not open then
+        show_shortcuts_window = false
+    end
+
+    r.ImGui_PopStyleVar(ctx)
+    r.ImGui_PopStyleColor(ctx, 3)
+end
+
 
 function ClearScreenshots()
     for file in io.popen('dir "'..screenshot_path..'" /b'):lines() do
@@ -6935,6 +7065,94 @@ function ShowPluginContextMenu(plugin_name, menu_id)
     end
     if not plugin_name or type(plugin_name) ~= "string" then return end
 
+    local item_index = tonumber(menu_id:match("_(%d+)$"))
+    local multi_count = GetMultiSelectedCount()
+    local is_multi = multi_count > 1 and item_index and (screenshot_multi_selected[item_index] or screenshot_nav_index == item_index)
+
+    if is_multi then
+        if r.ImGui_IsItemClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "MultiSelectContextMenu_" .. menu_id)
+        end
+        if r.ImGui_BeginPopup(ctx, "MultiSelectContextMenu_" .. menu_id) then
+            r.ImGui_Text(ctx, multi_count .. " plugins selected")
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_MenuItem(ctx, "Add All to Track") then
+                local names = GetMultiSelectedPluginNames()
+                local target_track = GetTargetTrack()
+                if target_track and #names > 0 then
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    for _, pname in ipairs(names) do
+                        AddFXToTrack(target_track, pname)
+                    end
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("Add " .. #names .. " FX plugins", -1)
+                    LAST_USED_FX = names[#names]
+                end
+            end
+
+            if r.ImGui_MenuItem(ctx, "Add All to New Track") then
+                local names = GetMultiSelectedPluginNames()
+                if #names > 0 then
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    local track_idx = r.CountTracks(0)
+                    r.InsertTrackAtIndex(track_idx, true)
+                    local new_track = r.GetTrack(0, track_idx)
+                    if new_track then
+                        r.GetSetMediaTrackInfo_String(new_track, "P_NAME", names[1] .. " + " .. (#names - 1) .. " more", true)
+                        for _, pname in ipairs(names) do
+                            AddFXToTrack(new_track, pname)
+                        end
+                        LAST_USED_FX = names[#names]
+                    end
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("Add " .. #names .. " FX to new track", -1)
+                end
+            end
+
+            if r.ImGui_MenuItem(ctx, "Add All to Chain Builder") then
+                local names = GetMultiSelectedPluginNames()
+                for _, pname in ipairs(names) do
+                    if not table.contains(chain_builder_plugins, pname) then
+                        table.insert(chain_builder_plugins, pname)
+                    end
+                end
+                config.chain_builder_plugins = chain_builder_plugins
+                SaveConfig()
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_MenuItem(ctx, "Add All to Favorites") then
+                local names = GetMultiSelectedPluginNames()
+                for _, pname in ipairs(names) do
+                    if not favorite_set[pname] then
+                        AddToFavorites(pname)
+                    end
+                end
+            end
+
+            if r.ImGui_MenuItem(ctx, "Remove All from Favorites") then
+                local names = GetMultiSelectedPluginNames()
+                for _, pname in ipairs(names) do
+                    if favorite_set[pname] then
+                        RemoveFromFavorites(pname)
+                    end
+                end
+            end
+
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Clear Selection") then
+                screenshot_multi_selected = {}
+            end
+
+            r.ImGui_EndPopup(ctx)
+        end
+        return
+    end
+
     if r.ImGui_IsItemClicked(ctx, 1) then
         r.ImGui_OpenPopup(ctx, "PluginContextMenu_" .. menu_id)
     end
@@ -8081,7 +8299,14 @@ function ShowScreenshotControls()
             local search_width = r.ImGui_GetContentRegionAvail(ctx) - button_space
             
             r.ImGui_PushItemWidth(ctx, search_width)
+            if screenshot_search_focus_requested then
+                r.ImGui_SetKeyboardFocusHere(ctx)
+                screenshot_search_focus_requested = false
+            end
             local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+            if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) then
+                screenshot_search_to_nav = true
+            end
             r.ImGui_PopItemWidth(ctx)
             
             local btn_color, btn_hover, btn_active, btn_text = GetButtonColors()
@@ -8259,7 +8484,14 @@ function ShowScreenshotControls()
         if show_screenshot_search then
             r.ImGui_SameLine(ctx)
             r.ImGui_PushItemWidth(ctx, 70)
+            if screenshot_search_focus_requested then
+                r.ImGui_SetKeyboardFocusHere(ctx)
+                screenshot_search_focus_requested = false
+            end
             local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+            if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) then
+                screenshot_search_to_nav = true
+            end
             r.ImGui_PopItemWidth(ctx)
             local btn_color, btn_hover, btn_active, btn_text = GetButtonColors()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), btn_color)
@@ -8545,17 +8777,34 @@ function ShowScreenshotControls()
 
         -- LAYOUT MENU
         if r.ImGui_BeginMenu(ctx, "Layout") then
-            if r.ImGui_MenuItem(ctx, config.use_masonry_layout and "Normal Layout" or "Masonry Layout") then
-                config.use_masonry_layout = not config.use_masonry_layout; SaveConfig()
+            local is_normal = not config.use_masonry_layout and not config.use_showcase_layout and not config.use_polaroid_layout
+            if r.ImGui_MenuItem(ctx, "Normal", "", is_normal) then
+                config.use_masonry_layout = false
+                config.use_showcase_layout = false
+                config.use_polaroid_layout = false
+                SaveConfig()
             end
-            if r.ImGui_MenuItem(ctx, "Modern Cards", "", config.use_modern_cards) then
-                config.use_modern_cards = not config.use_modern_cards; SaveConfig()
+            if r.ImGui_MenuItem(ctx, "Masonry", "", config.use_masonry_layout) then
+                config.use_masonry_layout = true
+                config.use_showcase_layout = false
+                config.use_polaroid_layout = false
+                SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Showcase", "", config.use_showcase_layout) then
-                config.use_showcase_layout = not config.use_showcase_layout; SaveConfig()
+                config.use_masonry_layout = false
+                config.use_showcase_layout = true
+                config.use_polaroid_layout = false
+                SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Polaroid", "", config.use_polaroid_layout) then
-                config.use_polaroid_layout = not config.use_polaroid_layout; SaveConfig()
+                config.use_masonry_layout = false
+                config.use_showcase_layout = false
+                config.use_polaroid_layout = true
+                SaveConfig()
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Modern Cards", "", config.use_modern_cards) then
+                config.use_modern_cards = not config.use_modern_cards; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Compact View", "", config.compact_screenshots) then
                 config.compact_screenshots = not config.compact_screenshots; SaveConfig()
@@ -8633,6 +8882,7 @@ function ShowScreenshotControls()
         end
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
+        if r.ImGui_MenuItem(ctx, "Shortcuts") then show_shortcuts_window = true end
         if r.ImGui_MenuItem(ctx, "Notes") then LaunchTKNotes() end
         if r.ImGui_MenuItem(ctx, "Close Script") then SHOULD_CLOSE_SCRIPT = true end
         r.ImGui_EndPopup(ctx)
@@ -9784,7 +10034,14 @@ function ShowBrowserPanel()
     if header_open then
     if config.show_browser_search then
         r.ImGui_PushItemWidth(ctx, 70)
+        if screenshot_search_focus_requested and not (config.show_screenshot_search ~= false) then
+            r.ImGui_SetKeyboardFocusHere(ctx)
+            screenshot_search_focus_requested = false
+        end
         local changed_browser_search, new_browser_search = r.ImGui_InputTextWithHint(ctx, "##BrowserSearch", "Search...", browser_search_term)
+        if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) then
+            screenshot_search_to_nav = true
+        end
         r.ImGui_PopItemWidth(ctx)
         local btn_color, btn_hover, btn_active, btn_text = GetButtonColors()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), btn_color)
@@ -11818,8 +12075,332 @@ function DrawHorizontalSeparatorBar(thickness, color)
     r.ImGui_Dummy(ctx, 0, t + ((config and config.compact_screenshots) and 4 or 8))
 end
 
+function ScreenshotNavRegister(i, col, x, y, plugin_name)
+    screenshot_nav_plugin_indices[#screenshot_nav_plugin_indices+1] = i
+    screenshot_nav_positions[i] = { col = col, x = x, y = y }
+    if plugin_name then
+        screenshot_nav_names[i] = plugin_name
+    end
+end
+
+function ScreenshotNavReset()
+    screenshot_nav_positions = {}
+    screenshot_nav_plugin_indices = {}
+end
+
+function DrawNavSelectionBorder(i, min_x, min_y, max_x, max_y)
+    local is_cursor = (screenshot_nav_index == i)
+    local is_multi = (screenshot_multi_selected[i] == true)
+    if is_cursor or is_multi then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        if is_multi then
+            r.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, 0x00BFFF30, 3)
+        end
+        local border_col = is_cursor and 0x00BFFFFF or 0x00BFFF99
+        local border_thick = is_cursor and 2.5 or 1.5
+        r.ImGui_DrawList_AddRect(dl, min_x - 2, min_y - 2, max_x + 2, max_y + 2, border_col, 3, 0, border_thick)
+    end
+end
+
+function GetMultiSelectedCount()
+    local count = 0
+    for _ in pairs(screenshot_multi_selected) do count = count + 1 end
+    if screenshot_nav_index and not screenshot_multi_selected[screenshot_nav_index] and count > 0 then
+        count = count + 1
+    end
+    return count
+end
+
+function GetMultiSelectedPluginNames(screenshots)
+    local names = {}
+    local added = {}
+    local indices = {}
+    for idx in pairs(screenshot_multi_selected) do
+        indices[#indices+1] = idx
+    end
+    if screenshot_nav_index and not screenshot_multi_selected[screenshot_nav_index] then
+        indices[#indices+1] = screenshot_nav_index
+    end
+    table.sort(indices)
+    for _, pi in ipairs(indices) do
+        local name = screenshot_nav_names[pi]
+        if not name and screenshots then
+            local fx = screenshots[pi]
+            name = type(fx) == "table" and fx.name or fx
+        end
+        if name and not added[name] then
+            names[#names+1] = name
+            added[name] = true
+        end
+    end
+    return names
+end
+
+function HandleMultiSelectClick(i, screenshots)
+    local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+    local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+
+    if ctrl and shift then
+        if screenshot_nav_anchor then
+            local function find_order(idx)
+                for o, pi in ipairs(screenshot_nav_plugin_indices) do
+                    if pi == idx then return o end
+                end
+                return nil
+            end
+            local from_o = find_order(screenshot_nav_anchor)
+            local to_o = find_order(i)
+            if from_o and to_o then
+                local lo, hi = math.min(from_o, to_o), math.max(from_o, to_o)
+                for o = lo, hi do
+                    screenshot_multi_selected[screenshot_nav_plugin_indices[o]] = true
+                end
+            end
+        end
+        screenshot_nav_index = i
+    elseif ctrl then
+        if GetMultiSelectedCount() == 0 and screenshot_nav_index and screenshot_nav_index ~= i then
+            screenshot_multi_selected[screenshot_nav_index] = true
+        end
+        if screenshot_multi_selected[i] then
+            screenshot_multi_selected[i] = nil
+        else
+            screenshot_multi_selected[i] = true
+        end
+        screenshot_nav_index = i
+        screenshot_nav_anchor = i
+    elseif shift then
+        screenshot_multi_selected = {}
+        local anchor = screenshot_nav_anchor or screenshot_nav_index
+        if anchor then
+            local function find_order(idx)
+                for o, pi in ipairs(screenshot_nav_plugin_indices) do
+                    if pi == idx then return o end
+                end
+                return nil
+            end
+            local from_o = find_order(anchor)
+            local to_o = find_order(i)
+            if from_o and to_o then
+                local lo, hi = math.min(from_o, to_o), math.max(from_o, to_o)
+                for o = lo, hi do
+                    screenshot_multi_selected[screenshot_nav_plugin_indices[o]] = true
+                end
+            end
+        end
+        screenshot_nav_index = i
+    else
+        screenshot_multi_selected = {}
+        screenshot_nav_index = i
+        screenshot_nav_anchor = i
+    end
+end
+
+function HandleScreenshotNavigation(screenshots)
+    local positions = screenshot_nav_positions
+    local plugin_indices = screenshot_nav_plugin_indices
+    if #plugin_indices == 0 then return end
+
+    if screenshot_search_to_nav then
+        screenshot_search_to_nav = false
+        screenshot_multi_selected = {}
+        screenshot_nav_index = plugin_indices[1]
+        screenshot_nav_anchor = plugin_indices[1]
+        return
+    end
+
+    if not r.ImGui_IsAnyItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+        if GetMultiSelectedCount() > 0 then
+            screenshot_multi_selected = {}
+            screenshot_nav_index = nil
+            screenshot_nav_anchor = nil
+            return
+        end
+    end
+
+    if r.ImGui_IsAnyItemActive(ctx) then return end
+    if not r.ImGui_IsWindowFocused(ctx, r.ImGui_FocusedFlags_ChildWindows()) then return end
+
+    local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+    local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+
+    local function find_order(idx)
+        for o, pi in ipairs(plugin_indices) do
+            if pi == idx then return o end
+        end
+        return nil
+    end
+
+    if ctrl and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_A()) then
+        screenshot_multi_selected = {}
+        for _, pi in ipairs(plugin_indices) do
+            screenshot_multi_selected[pi] = true
+        end
+        return
+    end
+
+    if ctrl and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Space()) then
+        if screenshot_nav_index then
+            if screenshot_multi_selected[screenshot_nav_index] then
+                screenshot_multi_selected[screenshot_nav_index] = nil
+            else
+                screenshot_multi_selected[screenshot_nav_index] = true
+            end
+        end
+        return
+    end
+
+    local cur_order = screenshot_nav_index and find_order(screenshot_nav_index)
+    local new_idx = nil
+
+    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_RightArrow()) then
+        if not cur_order then
+            new_idx = plugin_indices[1]
+        else
+            local cur_pos = positions[screenshot_nav_index]
+            if cur_pos then
+                local best_idx, best_dist = nil, math.huge
+                for _, pi in ipairs(plugin_indices) do
+                    local p = positions[pi]
+                    if p and p.col == cur_pos.col + 1 then
+                        local dy = math.abs(p.y - cur_pos.y)
+                        if dy < best_dist then best_dist = dy; best_idx = pi end
+                    end
+                end
+                if not best_idx and cur_order < #plugin_indices then
+                    best_idx = plugin_indices[cur_order + 1]
+                end
+                if best_idx then new_idx = best_idx end
+            end
+        end
+    elseif r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_LeftArrow()) then
+        if not cur_order then
+            new_idx = plugin_indices[1]
+        else
+            local cur_pos = positions[screenshot_nav_index]
+            if cur_pos then
+                local best_idx, best_dist = nil, math.huge
+                for _, pi in ipairs(plugin_indices) do
+                    local p = positions[pi]
+                    if p and p.col == cur_pos.col - 1 then
+                        local dy = math.abs(p.y - cur_pos.y)
+                        if dy < best_dist then best_dist = dy; best_idx = pi end
+                    end
+                end
+                if not best_idx and cur_order > 1 then
+                    best_idx = plugin_indices[cur_order - 1]
+                end
+                if best_idx then new_idx = best_idx end
+            end
+        end
+    elseif r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) then
+        if not cur_order then
+            new_idx = plugin_indices[1]
+        else
+            local cur_pos = positions[screenshot_nav_index]
+            if cur_pos then
+                local best_idx, best_dist = nil, math.huge
+                for _, pi in ipairs(plugin_indices) do
+                    local p = positions[pi]
+                    if p and p.col == cur_pos.col and p.y > cur_pos.y + 1 then
+                        local dy = p.y - cur_pos.y
+                        if dy < best_dist then best_dist = dy; best_idx = pi end
+                    end
+                end
+                if best_idx then new_idx = best_idx end
+            end
+        end
+    elseif r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_UpArrow()) then
+        if not cur_order then
+            new_idx = plugin_indices[1]
+        else
+            local cur_pos = positions[screenshot_nav_index]
+            if cur_pos then
+                local best_idx, best_dist = nil, math.huge
+                for _, pi in ipairs(plugin_indices) do
+                    local p = positions[pi]
+                    if p and p.col == cur_pos.col and p.y < cur_pos.y - 1 then
+                        local dy = cur_pos.y - p.y
+                        if dy < best_dist then best_dist = dy; best_idx = pi end
+                    end
+                end
+                if best_idx then
+                    new_idx = best_idx
+                else
+                    screenshot_search_focus_requested = true
+                    screenshot_nav_index = nil
+                    screenshot_multi_selected = {}
+                end
+            end
+        end
+    end
+
+    if new_idx then
+        if shift then
+            local anchor = screenshot_nav_anchor or screenshot_nav_index or new_idx
+            screenshot_multi_selected = {}
+            local from_o = find_order(anchor)
+            local to_o = find_order(new_idx)
+            if from_o and to_o then
+                local lo, hi = math.min(from_o, to_o), math.max(from_o, to_o)
+                for o = lo, hi do
+                    screenshot_multi_selected[plugin_indices[o]] = true
+                end
+            end
+            screenshot_nav_index = new_idx
+        elseif ctrl then
+            screenshot_nav_index = new_idx
+        else
+            screenshot_multi_selected = {}
+            screenshot_nav_index = new_idx
+            screenshot_nav_anchor = new_idx
+        end
+    end
+
+    if screenshot_nav_index and positions[screenshot_nav_index] then
+        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+            local multi_count = GetMultiSelectedCount()
+            if multi_count > 1 then
+                local names = GetMultiSelectedPluginNames()
+                local target_track = GetTargetTrack()
+                if target_track and #names > 0 then
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    for _, pname in ipairs(names) do
+                        AddFXToTrack(target_track, pname)
+                    end
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("Add " .. #names .. " FX plugins", -1)
+                    LAST_USED_FX = names[#names]
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                end
+            else
+                local fx = screenshots[screenshot_nav_index]
+                local plugin_name = type(fx) == "table" and fx.name or fx
+                if plugin_name then
+                    local target_track = GetTargetTrack()
+                    if target_track then
+                        AddFXToTrack(target_track, plugin_name)
+                        LAST_USED_FX = plugin_name
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+            end
+        end
+
+        local sel_pos = positions[screenshot_nav_index]
+        local scroll_y = r.ImGui_GetScrollY(ctx)
+        local win_h = r.ImGui_GetWindowHeight(ctx)
+        if sel_pos.y < scroll_y + 10 then
+            r.ImGui_SetScrollY(ctx, math.max(0, sel_pos.y - 10))
+        elseif sel_pos.y > scroll_y + win_h - display_size - 40 then
+            r.ImGui_SetScrollY(ctx, sel_pos.y - win_h + display_size + 40)
+        end
+    end
+end
+
 function DrawMasonryLayout(screenshots, top_offset)
-    top_offset = top_offset or 0  -- Default to 0 if not provided
+    top_offset = top_offset or 0
     
     local initial_spacing = top_offset
     if not top_screenshot_spacing_applied then
@@ -11836,6 +12417,8 @@ function DrawMasonryLayout(screenshots, top_offset)
     for i = 1, num_columns do
         column_heights[i] = initial_spacing
     end
+
+    ScreenshotNavReset()
 
     for i, fx in ipairs(screenshots) do
         if fx.is_separator then
@@ -11891,6 +12474,8 @@ function DrawMasonryLayout(screenshots, top_offset)
                 if width and height then
                     local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
 
+                    ScreenshotNavRegister(i, shortest_column, pos_x, pos_y, fx.name)
+
                     r.ImGui_BeginGroup(ctx)
 
                     local masonry_clicked = r.ImGui_ImageButton(ctx, "masonry_" .. i, texture, display_width, display_height)
@@ -11905,6 +12490,8 @@ function DrawMasonryLayout(screenshots, top_offset)
                     if IsPluginPinned and IsPluginPinned(fx.name) then DrawPinnedOverlayAt(item_min_x, item_min_y, actual_w, actual_h) end
                     if favorite_set and favorite_set[fx.name] then DrawFavoriteOverlayAt(item_min_x, item_min_y, actual_w, actual_h) end
                     DrawNameOnScreenshot(item_min_x, item_min_y, actual_w, actual_h, fx.name)
+
+                    DrawNavSelectionBorder(i, item_min_x, item_min_y, item_max_x, item_max_y)
 
                     if config.enable_drag_add_fx then
                         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -11923,22 +12510,26 @@ function DrawMasonryLayout(screenshots, top_offset)
                         end
                     end
 
-                    local should_add = false
                     if config.add_fx_with_double_click then
+                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                            HandleMultiSelectClick(i)
+                        end
                         if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= fx.name then
-                            should_add = true
+                            local target_track = GetTargetTrack()
+                            if target_track then
+                                AddFXToTrack(target_track, fx.name)
+                                LAST_USED_FX = fx.name
+                                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                            end
                         end
                     else
                         if masonry_clicked and dragging_fx_name ~= fx.name then
-                            should_add = true
-                        end
-                    end
-                    if should_add then
-                        local target_track = GetTargetTrack()
-                        if target_track then
-                            AddFXToTrack(target_track, fx.name)
-                            LAST_USED_FX = fx.name
-                            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                            local target_track = GetTargetTrack()
+                            if target_track then
+                                AddFXToTrack(target_track, fx.name)
+                                LAST_USED_FX = fx.name
+                                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                            end
                         end
                     end
 
@@ -11978,6 +12569,9 @@ function DrawMasonryLayout(screenshots, top_offset)
         end
         ::continue:: 
     end
+
+    HandleScreenshotNavigation(screenshots)
+
     local max_height = 0
     for i = 1, #column_heights do
         if column_heights[i] > max_height then max_height = column_heights[i] end
@@ -12008,6 +12602,8 @@ function DrawShowcaseLayout(screenshots, top_offset)
         r.ImGui_Dummy(ctx, 0, 6)
         top_screenshot_spacing_applied = true
     end
+
+    ScreenshotNavReset()
 
     for i, fx in ipairs(screenshots) do
         if fx.is_separator then
@@ -12054,6 +12650,7 @@ function DrawShowcaseLayout(screenshots, top_offset)
 
             r.ImGui_PushID(ctx, i)
             local cursor_sx, cursor_sy = r.ImGui_GetCursorScreenPos(ctx)
+            ScreenshotNavRegister(i, 1, 0, r.ImGui_GetCursorPosY(ctx), plugin_name)
 
             local bg_col = 0x1E1E2EE0
             local hover_col = 0x2A2A3EFF
@@ -12137,6 +12734,7 @@ function DrawShowcaseLayout(screenshots, top_offset)
 
             r.ImGui_SetCursorScreenPos(ctx, cursor_sx, cursor_sy)
             local clicked = r.ImGui_InvisibleButton(ctx, "##showcase_" .. i, card_w, card_h)
+            DrawNavSelectionBorder(i, cursor_sx, cursor_sy, cursor_sx + card_w, cursor_sy + card_h)
 
             if config.enable_drag_add_fx then
                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) then
@@ -12157,6 +12755,9 @@ function DrawShowcaseLayout(screenshots, top_offset)
 
             local do_add = false
             if config.add_fx_with_double_click then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                    HandleMultiSelectClick(i)
+                end
                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) and dragging_fx_name ~= plugin_name then
                     do_add = true
                 end
@@ -12187,6 +12788,8 @@ function DrawShowcaseLayout(screenshots, top_offset)
         end
         ::showcase_continue::
     end
+
+    HandleScreenshotNavigation(screenshots)
 end
 
 local polaroid_rotations = {}
@@ -12230,6 +12833,8 @@ function DrawPolaroidLayout(screenshots, top_offset)
 
     local base_sy = select(2, r.ImGui_GetCursorScreenPos(ctx))
     local base_cy = r.ImGui_GetCursorPosY(ctx)
+
+    ScreenshotNavReset()
 
     for i, fx in ipairs(screenshots) do
         if fx.is_separator then
@@ -12275,6 +12880,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
             local cy = column_heights[shortest_col]
             local sx_card = select(1, r.ImGui_GetCursorScreenPos(ctx)) - r.ImGui_GetCursorPosX(ctx) + cx
             local sy_card = base_sy + cy
+            ScreenshotNavRegister(i, shortest_col, cx, base_cy + cy, plugin_name)
 
             local safe_name = plugin_name:gsub("[^%w%s-]", "_")
             local screenshot_file = screenshot_path .. safe_name .. ".png"
@@ -12372,6 +12978,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_card, sy_card)
             local clicked = r.ImGui_InvisibleButton(ctx, "##polaroid_" .. i, card_w, card_h)
+            DrawNavSelectionBorder(i, sx_card, sy_card, sx_card + card_w, sy_card + card_h)
 
             if config.enable_drag_add_fx then
                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) then
@@ -12392,6 +12999,9 @@ function DrawPolaroidLayout(screenshots, top_offset)
 
             local do_add = false
             if config.add_fx_with_double_click then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                    HandleMultiSelectClick(i)
+                end
                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) and dragging_fx_name ~= plugin_name then
                     do_add = true
                 end
@@ -12427,6 +13037,8 @@ function DrawPolaroidLayout(screenshots, top_offset)
         end
         ::polaroid_continue::
     end
+
+    HandleScreenshotNavigation(screenshots)
 
     local max_h = 0
     for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
@@ -14142,6 +14754,13 @@ function ShowScreenshotWindow()
 
         local chain_child_open = r.ImGui_BeginChild(ctx, "ChainBuilderStrip", avail_w, chain_area_h, 0, r.ImGui_WindowFlags_HorizontalScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
         if chain_child_open then
+            if r.ImGui_IsWindowHovered(ctx) then
+                local wheel = r.ImGui_GetMouseWheel(ctx)
+                if wheel ~= 0 then
+                    local scroll_x = r.ImGui_GetScrollX(ctx)
+                    r.ImGui_SetScrollX(ctx, scroll_x - wheel * thumb_w * 0.5)
+                end
+            end
             r.ImGui_SetCursorPos(ctx, pad, pad)
             if #chain_builder_plugins == 0 then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFF50)
@@ -14494,7 +15113,15 @@ function ShowScreenshotWindow()
         r.ImGui_PopStyleVar(ctx)
     end
 
-    r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0)
+    local _multi_count = GetMultiSelectedCount()
+    if _multi_count > 1 then
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00BFFFCC)
+        r.ImGui_Text(ctx, string.format("[%d selected]", _multi_count))
+        r.ImGui_PopStyleColor(ctx)
+    end
+
+    r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0, 0, r.ImGui_WindowFlags_NoNavInputs())
             if config.flicker_guard_enabled then
                 local now = r.time_precise()
                 local sig = _build_screenshot_signature()
@@ -14608,7 +15235,7 @@ function ShowScreenshotWindow()
                                 end
                             end
                             r.ImGui_PopStyleVar(ctx)
-                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_modern_cards then
+                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
                             for _, plugin in ipairs(with_shot) do
@@ -14639,6 +15266,7 @@ function ShowScreenshotWindow()
                                     local column = (i - 1) % num_columns
                                     local card_horiz_spacing = config.use_modern_cards and 12 or 0
                                     if column > 0 then r.ImGui_SameLine(ctx, 0, card_horiz_spacing) end
+                                    local nav_cy = r.ImGui_GetCursorPosY(ctx)
                                     r.ImGui_BeginGroup(ctx)
                                     local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                                     local screenshot_file = screenshot_path .. safe_name .. ".png"
@@ -14648,6 +15276,12 @@ function ShowScreenshotWindow()
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "fav_" .. i, texture, dw, dh)
+                                            ScreenshotNavRegister(i, column + 1, 0, nav_cy, plugin_name)
+                                            do
+                                                local ntlx, ntly = r.ImGui_GetItemRectMin(ctx)
+                                                local nbrx, nbry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawNavSelectionBorder(i, ntlx, ntly, nbrx, nbry)
+                                            end
                                             if IsPluginPinned and IsPluginPinned(plugin_name) then
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
@@ -14681,6 +15315,7 @@ function ShowScreenshotWindow()
                                             end
                                             local do_add = false
                                             if config.add_fx_with_double_click then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then HandleMultiSelectClick(i) end
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
                                             else
                                                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
@@ -14718,6 +15353,7 @@ function ShowScreenshotWindow()
                                     end
                                 end
                             end
+                            HandleScreenshotNavigation(with_shot)
                             RenderMissingList(missing)
                         end
 
@@ -14843,7 +15479,7 @@ function ShowScreenshotWindow()
                                 end
                             end
                             r.ImGui_PopStyleVar(ctx)
-                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_modern_cards then
+                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
                             
@@ -14867,6 +15503,7 @@ function ShowScreenshotWindow()
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             ApplyTopScreenshotSpacing()
+                            ScreenshotNavReset()
                             for i, plugin_name in ipairs(with_shot) do
                                 if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
                                     DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
@@ -14875,6 +15512,7 @@ function ShowScreenshotWindow()
                                     local column = (i - 1) % num_columns
                                     local card_horiz_spacing = config.use_modern_cards and 12 or 0
                                     if column > 0 then r.ImGui_SameLine(ctx, 0, card_horiz_spacing) end
+                                    local nav_cy = r.ImGui_GetCursorPosY(ctx)
                                     r.ImGui_BeginGroup(ctx)
                                     local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                                     local screenshot_file = screenshot_path .. safe_name .. ".png"
@@ -14884,6 +15522,12 @@ function ShowScreenshotWindow()
                                         if w and h then
                                             local dw, dh = ScaleScreenshotSize(w, h, display_size)
                                             local clicked = r.ImGui_ImageButton(ctx, "custom_" .. i, texture, dw, dh)
+                                            ScreenshotNavRegister(i, column + 1, 0, nav_cy, plugin_name)
+                                            do
+                                                local ntlx, ntly = r.ImGui_GetItemRectMin(ctx)
+                                                local nbrx, nbry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawNavSelectionBorder(i, ntlx, ntly, nbrx, nbry)
+                                            end
                                             if pinned_set and pinned_set[plugin_name] then
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
@@ -14917,6 +15561,7 @@ function ShowScreenshotWindow()
                                             end
                                             local do_add = false
                                             if config.add_fx_with_double_click then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then HandleMultiSelectClick(i) end
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
                                             else
                                                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
@@ -14954,6 +15599,7 @@ function ShowScreenshotWindow()
                                     end
                                 end
                             end
+                            HandleScreenshotNavigation(with_shot)
                             RenderMissingList(missing)
                         end
                     end
@@ -15469,7 +16115,7 @@ function ShowScreenshotWindow()
                             local num_columns = math.max(1, min_columns)
                             local column_width = available_width / num_columns
 
-                            if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_modern_cards then
+                            if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
                                 if filtered_plugins then
                                     local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                                     local masonry_data = {}
@@ -15494,6 +16140,7 @@ function ShowScreenshotWindow()
                             else
                                 local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                                 ApplyTopScreenshotSpacing()
+                                ScreenshotNavReset()
                                 for i, plugin_name in ipairs(with_shot) do
                                     if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
                                         DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
@@ -15503,6 +16150,7 @@ function ShowScreenshotWindow()
                                         local column = (i - 1) % num_columns
                                         local card_horiz_spacing = config.use_modern_cards and 12 or 0
                                         if column > 0 then r.ImGui_SameLine(ctx, 0, card_horiz_spacing) end
+                                        local nav_cy = r.ImGui_GetCursorPosY(ctx)
                                         r.ImGui_BeginGroup(ctx)
                                         local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                                         local screenshot_file = screenshot_path .. safe_name .. ".png"
@@ -15512,8 +16160,10 @@ function ShowScreenshotWindow()
                                             if width and height then
                                                 local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                                 local folder_clicked = r.ImGui_ImageButton(ctx, "folder_plugin_" .. i, texture, display_width, display_height)
+                                                ScreenshotNavRegister(i, column + 1, 0, nav_cy, plugin_name)
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                                DrawNavSelectionBorder(i, tlx, tly, brx, bry)
                                                 DrawModernCardBackground(tlx, tly, brx - tlx, bry - tly)
                                                 DrawModernCardForeground(tlx, tly, brx - tlx, bry - tly)
                                                 if IsPluginPinned and IsPluginPinned(plugin_name) then
@@ -15548,6 +16198,7 @@ function ShowScreenshotWindow()
                                                     end
                                                 end
                                                 if config.add_fx_with_double_click then
+                                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then HandleMultiSelectClick(i) end
                                                     if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
                                                 else
                                                     if folder_clicked and dragging_fx_name ~= plugin_name then do_add = true end
@@ -15585,6 +16236,7 @@ function ShowScreenshotWindow()
                                         end
                                     end
                                 end
+                                HandleScreenshotNavigation(with_shot)
                                 RenderMissingList(missing)
                             end
                         end
@@ -15650,14 +16302,13 @@ function ShowScreenshotWindow()
                     end
                     r.ImGui_PopStyleVar(ctx)
                 else
-                    if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_modern_cards then
+                    if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
                         local plain_names = {}
                         local messages = {}
                         for _, fx in ipairs(screenshot_search_results) do
                             if fx.is_message then
                                 messages[#messages+1] = fx 
                             elseif fx.is_separator then
-                               
                                 if fx.kind == 'pinned_end' then
                                     plain_names[#plain_names+1] = "--Pinned End--"
                                 else
@@ -15835,6 +16486,7 @@ function ShowScreenshotWindow()
                         end
                         
                         if #with_shot > 0 then ApplyTopScreenshotSpacing() end
+                        ScreenshotNavReset()
                         for i, plugin_name in ipairs(with_shot) do
                             if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
                                 DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
@@ -15851,6 +16503,7 @@ function ShowScreenshotWindow()
                             local column = (i - 1) % num_columns
                             local card_horiz_spacing = config.use_modern_cards and 12 or 0
                             if column > 0 then r.ImGui_SameLine(ctx, 0, card_horiz_spacing) end
+                            local nav_cy = r.ImGui_GetCursorPosY(ctx)
                             r.ImGui_BeginGroup(ctx)
                             local safe_name = plugin_name:gsub("[^%w%s-]", "_")
                             local screenshot_file = screenshot_path .. safe_name .. ".png"
@@ -15861,8 +16514,10 @@ function ShowScreenshotWindow()
                                     if width and height then
                                         local display_width, display_height = ScaleScreenshotSize(width, height, display_size)
                                         local clicked = r.ImGui_ImageButton(ctx, "search_result_" .. i, texture, display_width, display_height)
+                                        ScreenshotNavRegister(i, column + 1, 0, nav_cy, plugin_name)
                                         local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                         local brx, bry = r.ImGui_GetItemRectMax(ctx)
+                                        DrawNavSelectionBorder(i, tlx, tly, brx, bry)
                                         DrawModernCardBackground(tlx, tly, brx - tlx, bry - tly)
                                         DrawModernCardForeground(tlx, tly, brx - tlx, bry - tly)
                                         if pinned_set and pinned_set[plugin_name] then
@@ -15892,6 +16547,7 @@ function ShowScreenshotWindow()
                                             end
                                             local do_add = false
                                             if config.add_fx_with_double_click then
+                                                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then HandleMultiSelectClick(i) end
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) and dragging_fx_name ~= plugin_name then do_add = true end
                                             else
                                                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
@@ -15932,6 +16588,7 @@ function ShowScreenshotWindow()
                             end
                                 end
                         end
+                        HandleScreenshotNavigation(with_shot)
                         RenderMissingList(missing)
                     end
                 end
@@ -18754,6 +19411,8 @@ if not should_show_main_window then
     if config.show_debug_window then
         ShowDebugWindow()
     end
+
+    DrawShortcutsWindow()
     
     if show_settings then
         show_settings = ShowConfigWindow()
