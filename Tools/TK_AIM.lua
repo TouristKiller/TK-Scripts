@@ -1,19 +1,21 @@
--- @description TK Automation Item Manager (AIM)
--- @version 0.0.8
+﻿-- @description TK Automation Item Manager (AIM)
+-- @version 0.1.0
 -- @author TouristKiller
 -- @about
---   Automation Item Manager with visual previews
+--   Automation Item Manager with visual previews and ReaCurve integration
 -- @changelog:
---   Attempt to make cross platform (Windows/Linux/Mac) by avoiding OS-specific commands (need user feedback on this)
---   Added insert Automation Item at cursor position (time selection)
---   Added insert end points (if not present) to avoid issues with some envelopes
---   Made move edit cursor optional
---   Added Drag&Drop (testing needed!!)
---   Added color pickers for curve and points
---   Added buttons for pool and unpool
---   Added some extra checks and messages
+--   v0.1.0 — ReaCurve Integration Update
+--   + ScaleConverter for accurate Volume/Pitch/Tempo envelope handling
+--   + Envelope range detection via state chunk (MINVAL/MAXVAL)
+--   + Time selection support (fit automation items to selection)
+--   + Take FX envelope support
+--   + Export envelope points to .ReaperAutoItem file
+--   + ReaCurve MORPH bridge (send curve to Slot A/B)
+--   + Select for SCULPT option
+--   + PreventUIRefresh for heavy operations
 
 -- THANX TO MPL FOR ALL THE THINGS HE DOES FOR THE REAPER COMMUNITY!! (I Used code inspired by MPL to do the conversions)
+-- ScaleConverter logic inspired by sailok's ReaCurve Suite (EnvConvert/ScaleConverter)
 -------------------------------------------------------------------------------------------------------
 local r = reaper
 local script_name = "TK AIM"
@@ -63,13 +65,15 @@ local automation_folder_exists = false
 
 local preview_width = 120
 local preview_height = 60
-local FOOTER_H = 120  
-local INFO_H = 45     
+local FOOTER_H = 140
+local INFO_H = 45
 
 local enable_loop = false
 local color_scheme = "green_yellow"  
 local show_lines_only = false  
 local move_edit_cursor = false
+local use_time_selection = true
+local show_tooltips = true
 
 local curve_color = 0x00FF00FF   
 local points_color = 0xFFFF00FF  
@@ -87,6 +91,14 @@ local drag_hover_name = nil
 function SetFooterMessage(msg)
     footer_message = msg
     footer_message_time = r.time_precise()
+end
+
+function Tooltip(text)
+    if show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_BeginTooltip(ctx)
+        r.ImGui_Text(ctx, text)
+        r.ImGui_EndTooltip(ctx)
+    end
 end
 
 ---------------------------------------------------
@@ -108,6 +120,8 @@ function SaveSettings()
         color_scheme = color_scheme,
         show_lines_only = show_lines_only,
         move_edit_cursor = move_edit_cursor,
+        use_time_selection = use_time_selection,
+        show_tooltips = show_tooltips,
         curve_color = curve_color,
         points_color = points_color
     }
@@ -124,13 +138,19 @@ function LoadSettings()
     if file then
         local content = file:read("*all")
         file:close()
-        
-        local settings = json.decode(content)
+        content = content:gsub("^\239\187\191", "")
+        local ok, settings = pcall(json.decode, content)
+        if not ok or not settings or type(settings) ~= "table" then
+            os.remove(settings_file)
+            return false
+        end
         if settings and type(settings) == "table" then
             enable_loop = settings.enable_loop or false
             color_scheme = settings.color_scheme or "green_yellow"
             show_lines_only = settings.show_lines_only or false
             move_edit_cursor = settings.move_edit_cursor or false
+            if settings.use_time_selection ~= nil then use_time_selection = settings.use_time_selection else use_time_selection = true end
+            if settings.show_tooltips ~= nil then show_tooltips = settings.show_tooltips else show_tooltips = true end
             if settings.curve_color then curve_color = settings.curve_color end
             if settings.points_color then points_color = settings.points_color end
             return true
@@ -178,45 +198,234 @@ function GetEnvelopeType(envelope)
     return "unknown"
 end
 
-function ConvertValueForEnvelope(value, env_type)
-    if env_type == "volume" then
-        if value <= 0.001 then
-            volume_value = 0.0
-        elseif value <= 0.5 then
-            local t = (value - 0.001) / (0.5 - 0.001)
-            volume_value = 0.001 + (t * 424.999) 
+---------------------------------------------------
+-- ScaleConverter (gebaseerd op sailok's ReaCurve)
+---------------------------------------------------
+
+local SC = {}
+SC.__index = SC
+
+local VOL_PARAMS = {
+    [3] = { split = 1.0000, n = 3.3219, max_db = 0 },
+    [2] = { split = 0.8421, n = 3.3180, max_db = 6 },
+    [6] = { split = 0.7083, n = 3.3164, max_db = 12 },
+    [7] = { split = 0.5387, n = 3.4490, max_db = 24 },
+}
+
+function SC.newVolume()
+    local raw = 7
+    if r.SNM_GetIntConfigVar then
+        raw = r.SNM_GetIntConfigVar("volenvrange", 0)
+    end
+    local p = VOL_PARAMS[raw] or VOL_PARAMS[7]
+    local self = setmetatable({}, SC)
+    self.type = "volume"
+    self.max_db = p.max_db
+    self.max_gain = 10.0 ^ (p.max_db / 20.0)
+    self.split = p.split
+    self.n = p.n
+    return self
+end
+
+function SC.newPitch()
+    local range = 12
+    if r.SNM_GetIntConfigVar then
+        local raw = r.SNM_GetIntConfigVar("pitchenvrange", 0)
+        local val = raw & 0xFF
+        if val > 0 then range = val end
+    end
+    local self = setmetatable({}, SC)
+    self.type = "pitch"
+    self.range = range
+    return self
+end
+
+function SC.newTempo()
+    local t_min, t_max = 60, 180
+    if r.SNM_GetIntConfigVar then
+        local mn = r.SNM_GetIntConfigVar("tempoenvmin", -1)
+        local mx = r.SNM_GetIntConfigVar("tempoenvmax", -1)
+        if mn > 0 then t_min = mn end
+        if mx > 0 then t_max = mx end
+    end
+    local self = setmetatable({}, SC)
+    self.type = "tempo"
+    self.t_min = t_min
+    self.t_max = t_max
+    return self
+end
+
+function SC:toNative(v)
+    if self.type == "volume" then
+        if v <= 0 then return 0.0 end
+        if v >= 1 then return self.max_gain end
+        if v <= self.split then
+            return (v / self.split) ^ self.n
         else
-            local t = (value - 0.5) / 0.5
-            volume_value = 425.0 + (t * 425.0)  
+            local db = (v - self.split) / (1.0 - self.split) * self.max_db
+            return 10.0 ^ (db / 20.0)
         end
-        return volume_value
-    elseif env_type == "pan" then
-        return (value * 2.0) - 1.0
-    elseif env_type == "pitch" then
-        if math.abs(value) > 12 then
-            return (value + 1200) / 2400
-        else
-            return value
-        end
-    elseif env_type == "mute" then
-        return value > 0.5 and 1 or 0
-    else
-        return value
+    elseif self.type == "pitch" then
+        return (math.max(0, math.min(1, v)) * 2.0 - 1.0) * self.range
+    elseif self.type == "tempo" then
+        return self.t_min + math.max(0, math.min(1, v)) * (self.t_max - self.t_min)
     end
 end
 
+function SC:fromNative(native)
+    if self.type == "volume" then
+        if native <= 0 then return 0.0 end
+        if native >= self.max_gain then return 1.0 end
+        if native <= 1.0 then
+            return self.split * (native ^ (1.0 / self.n))
+        else
+            local db = math.log(native) / math.log(10) * 20.0
+            return self.split + (1.0 - self.split) * db / self.max_db
+        end
+    elseif self.type == "pitch" then
+        return (math.max(-self.range, math.min(self.range, native)) / self.range + 1.0) / 2.0
+    elseif self.type == "tempo" then
+        return (math.max(self.t_min, math.min(self.t_max, native)) - self.t_min) / (self.t_max - self.t_min)
+    end
+end
+
+function SC:toEnvelope(linear_val, scaling_mode)
+    return r.ScaleToEnvelopeMode(scaling_mode, self:toNative(linear_val))
+end
+
+function SC:fromEnvelope(env_val, scaling_mode)
+    return self:fromNative(r.ScaleFromEnvelopeMode(scaling_mode, env_val))
+end
+
 ---------------------------------------------------
--- Volume envelope handling
+-- Envelope value conversion (ReaCurve-compatibel)
 ---------------------------------------------------
 
-function IsVolumeEnvelope(envelope)
-    if not envelope then return false end
-    
-    local retval, env_name = r.GetEnvelopeName(envelope)
-    if not retval then return false end
-    
-    local lower_name = env_name:lower()
-    return lower_name:match("volume") or lower_name:match("vol") or lower_name:match("track volume")
+function ToEnvValue(v, conv, lo, hi, mode)
+    if conv then
+        if conv.type == "volume" then return conv:toEnvelope(v, mode)
+        else return conv:toNative(v) end
+    end
+    local v_fader = (mode == 1) and v or (lo + v * (hi - lo))
+    return r.ScaleToEnvelopeMode(mode, v_fader)
+end
+
+function FromEnvValue(v_raw, conv, lo, hi, mode)
+    local result
+    if conv then
+        if conv.type == "volume" then result = conv:fromEnvelope(v_raw, mode)
+        else result = conv:fromNative(v_raw) end
+    else
+        local vf = r.ScaleFromEnvelopeMode(mode, v_raw)
+        if mode == 1 then result = vf
+        else
+            local range = hi - lo
+            if math.abs(range) < 1e-9 then result = 0.5
+            else result = (vf - lo) / range end
+        end
+    end
+    if result ~= result or result >= math.huge or result <= -math.huge then return 0.0 end
+    return result
+end
+
+function GetEnvelopeInfo(env)
+    if not env then return nil end
+    local _, env_name = r.GetEnvelopeName(env)
+    env_name = env_name or ""
+
+    local mode = r.GetEnvelopeScalingMode(env)
+
+    local conv = nil
+    if env_name == "Volume" or env_name == "Volume (Pre-FX)" then
+        conv = SC.newVolume()
+    elseif env_name == "Pitch" then
+        conv = SC.newPitch()
+    elseif env_name == "Tempo map" or env_name == "Tempo" then
+        conv = SC.newTempo()
+    end
+
+    local lo, hi = 0, 1
+    if mode ~= 1 then
+        local ok, chunk = r.GetEnvelopeStateChunk(env, "", false)
+        if ok and chunk then
+            local mn = chunk:match("\nMINVAL ([%-%.%d]+)")
+            local mx = chunk:match("\nMAXVAL ([%-%.%d]+)")
+            if mn and mx then
+                local clo, chi = tonumber(mn), tonumber(mx)
+                if chi - clo > 1e-9 then lo = clo; hi = chi end
+            end
+        end
+        if env_name == "Pan" or env_name == "Pan (Pre-FX)" then lo = -1; hi = 1
+        elseif env_name == "Width" or env_name == "Width (Pre-FX)" then lo = -1; hi = 1
+        end
+    end
+
+    local pmin = r.GetEnvelopeInfo_Value(env, "PARM_MIN")
+    local pmax = r.GetEnvelopeInfo_Value(env, "PARM_MAX")
+    if pmin and pmax and (pmax - pmin) > 1e-9 then
+        lo = pmin; hi = pmax
+    end
+
+    return {
+        name = env_name,
+        conv = conv,
+        lo = lo,
+        hi = hi,
+        mode = mode,
+    }
+end
+
+function NormalizeSourceValue(value, source_type)
+    if source_type == "pan_or_bipolar" then
+        return (value + 1.0) / 2.0
+    elseif source_type == "volume_or_gain" and value > 1.0 then
+        local vol_conv = SC.newVolume()
+        return vol_conv:fromNative(value)
+    end
+    return math.max(0, math.min(1, value))
+end
+
+---------------------------------------------------
+-- Target envelope resolution (track + take support)
+---------------------------------------------------
+
+function ResolveTargetEnvelope()
+    local sel_env = r.GetSelectedEnvelope(0)
+    if sel_env then return sel_env end
+
+    if r.CountSelectedMediaItems(0) > 0 then
+        local item = r.GetSelectedMediaItem(0, 0)
+        local take = r.GetActiveTake(item)
+        if take then
+            for e = 0, r.CountTakeEnvelopes(take) - 1 do
+                local env = r.GetTakeEnvelope(take, e)
+                local ok, chunk = r.GetEnvelopeStateChunk(env, "", false)
+                if ok and chunk then
+                    local vis = chunk:match("\nVIS (%d)")
+                    if not vis or tonumber(vis) == 1 then
+                        return env
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+---------------------------------------------------
+-- Time selection support
+---------------------------------------------------
+
+function GetEffectiveRange(default_length)
+    if use_time_selection then
+        local ts_s, ts_e = r.GetSet_LoopTimeRange2(0, false, false, 0, 0, false)
+        if (ts_e - ts_s) >= 0.01 then
+            return ts_s, ts_e, true
+        end
+    end
+    local cursor = r.GetCursorPosition()
+    return cursor, cursor + (default_length or 1.0), false
 end
 
 function LoadCache()
@@ -225,8 +434,12 @@ function LoadCache()
     if file then
         local content = file:read("*all")
         file:close()
-        
-        local cached_items = json.decode(content)
+        content = content:gsub("^\239\187\191", "")
+        local ok, cached_items = pcall(json.decode, content)
+        if not ok or not cached_items then
+            os.remove(cache_file)
+            return false
+        end
         if cached_items and type(cached_items) == "table" and next(cached_items) ~= nil then
             automation_items = cached_items
             
@@ -325,15 +538,15 @@ end
 local function EnsureAutomationFolderExists()
     automation_folder_exists = AutomationFolderExists()
     if automation_folder_exists then return true end
-    local ret = r.ShowMessageBox("AutomationItems folder not found:\n" .. automation_folder .. "\n\nWil je deze nu aanmaken?", script_name, 4)
+    local ret = r.ShowMessageBox("AutomationItems folder not found:\n" .. automation_folder .. "\n\nCreate it now?", script_name, 4)
     if ret == 6 then -- Yes
         local ok = r.RecursiveCreateDirectory and (r.RecursiveCreateDirectory(automation_folder, 0) == 1)
         if ok then
             automation_folder_exists = true
-            SetFooterMessage("AutomationItems folder aangemaakt")
+            SetFooterMessage("AutomationItems folder created")
             return true
         else
-            SetFooterMessage("Kon AutomationItems folder niet aanmaken")
+            SetFooterMessage("Could not create AutomationItems folder")
             return false
         end
     end
@@ -441,6 +654,9 @@ function ParseAutomationFile(file_path)
             end
         end
     end
+
+    if data.value_range.min == math.huge then data.value_range.min = 0 end
+    if data.value_range.max == -math.huge then data.value_range.max = 1 end
 
     if data.value_range.min ~= math.huge and data.value_range.max ~= -math.huge then
         local min_val = data.value_range.min
@@ -689,170 +905,68 @@ function InsertAutomationItemAtCursor(item_data)
 end
 
 ---------------------------------------------------
--- NIEUWE functie: Apply Parsed Data als Envelope Points
+-- Apply Parsed Data als Envelope Points
 ---------------------------------------------------
 
 function ApplyParsedDataAsEnvelopePoints(item_data, target_position, replace_existing)
-    
     if not item_data or not item_data.points or #item_data.points == 0 then
-    SetFooterMessage("No valid automation data to apply")
+        SetFooterMessage("No valid automation data")
         return false
     end
-    
-    local env = r.GetSelectedEnvelope(0)
+
+    local env = ResolveTargetEnvelope()
     if not env then
-    SetFooterMessage("Please select an envelope first")
+        SetFooterMessage("Select an envelope lane first")
         return false
     end
-    
-    local retval, env_name = r.GetEnvelopeName(env)
 
+    local env_info = GetEnvelopeInfo(env)
+    local source_length = (item_data.srclen or 1.0) * 0.5
 
-    local target_envelope_type = "unknown"
-    local source_envelope_type = item_data.source_envelope_type or "unknown"
-
-    if env_name then
-        local lower_name = env_name:lower()
-        if lower_name:match("volume") or lower_name:match("vol") then
-            target_envelope_type = "volume"
-        elseif lower_name:match("mute") then
-            target_envelope_type = "mute" 
-        elseif lower_name:match("pan") then
-            target_envelope_type = "pan"
-        end
-    end
-    
-    local needs_conversion = false
-    local conversion_info = ""
-    
-    if source_envelope_type == "mute_or_normalized" and target_envelope_type == "volume" then
-        needs_conversion = true
-        conversion_info = "Converting MUTE/normalized (0-1) to VOLUME scaling"
-    elseif source_envelope_type == "volume_or_gain" and target_envelope_type == "mute" then
-        needs_conversion = true  
-        conversion_info = "Converting VOLUME to MUTE (clamping to 0-1)"
-    elseif source_envelope_type == "pan_or_bipolar" and target_envelope_type ~= "pan" then
-        needs_conversion = true
-        conversion_info = "Converting PAN (-1 to +1) to " .. target_envelope_type .. " range"
-    end
-    
-    if needs_conversion then
-
+    local insert_start, insert_end, has_ts
+    if target_position then
+        insert_start = target_position
+        insert_end = target_position + source_length
+        has_ts = false
     else
-
+        insert_start, insert_end, has_ts = GetEffectiveRange(source_length)
     end
 
-    local is_volume_env = false
-    local envelope_info = ""
-    
-    if target_envelope_type == "volume" then
-
-        if r.BR_EnvAlloc then
-            local br_env = r.BR_EnvAlloc(env, false)
-            if br_env then
-                local active, visible, armed, inLane, laneHeight, defaultShape, minValue, maxValue, centerValue, type, faderScaling = r.BR_EnvGetProperties(br_env)
-                r.BR_EnvFree(br_env, true)
-                
-                is_volume_env = faderScaling or false
-                envelope_info = string.format("min=%.3f max=%.3f center=%.3f fader=%s", 
-                                            minValue or 0, maxValue or 1, centerValue or 0.5, tostring(faderScaling))
-
-            end
-        else
-
-            is_volume_env = true 
-        end
-    end
-    
-    target_position = target_position or r.GetCursorPosition()
+    local target_length = insert_end - insert_start
+    local time_scale = (has_ts and source_length > 0.001) and (target_length / source_length) or 1.0
     replace_existing = replace_existing or false
-    
+
     r.Undo_BeginBlock()
-    
+    r.PreventUIRefresh(1)
+
     if replace_existing then
-        local start_time = target_position
-        local end_time = target_position + item_data.srclen
-        
         for ptidx = r.CountEnvelopePoints(env) - 1, 0, -1 do
-            local retval, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
-            if time >= start_time and time <= end_time then
-                r.DeleteEnvelopePoint(env, ptidx)
+            local ok, time = r.GetEnvelopePointEx(env, -1, ptidx)
+            if ok and time >= insert_start and time <= insert_end then
+                r.DeleteEnvelopePointEx(env, -1, ptidx)
             end
         end
     end
-    
+
     local points_added = 0
-    for i, point in ipairs(item_data.points) do
+    for _, point in ipairs(item_data.points) do
+        local corrected_time = point.time * 0.5
+        local scaled_time = corrected_time * time_scale
+        local absolute_time = insert_start + scaled_time
 
-        local corrected_time = point.time * 0.5 
-        local absolute_time = target_position + corrected_time
+        local norm_value = NormalizeSourceValue(point.value, item_data.source_envelope_type)
+        local final_value = ToEnvValue(norm_value, env_info.conv, env_info.lo, env_info.hi, env_info.mode)
 
-        local scaled_value = point.value
-
-        if target_envelope_type == "volume" then
-            
-            if source_envelope_type == "mute_or_normalized" then
-                if point.value <= 0.0 then
-                    scaled_value = 0.0  
-                elseif point.value >= 1.0 then
-                    scaled_value = 1.0  
-                else
-                    scaled_value = point.value
-                end
-                
-            elseif source_envelope_type == "pan_or_bipolar" then
-                scaled_value = math.abs(point.value)  
-                
-            elseif source_envelope_type == "volume_or_gain" then
-                scaled_value = point.value
-                
-            else
-             
-                if point.value >= -1.0 and point.value <= 1.0 then
-                  
-                    scaled_value = math.abs(point.value)
-                else
-                    scaled_value = point.value
-                end
-            end
-            
-        elseif source_envelope_type == "volume_or_gain" and target_envelope_type == "mute" then
-          
-            scaled_value = math.max(0.0, math.min(1.0, point.value))
-            
-        elseif source_envelope_type == "pan_or_bipolar" and target_envelope_type == "mute" then
-            scaled_value = math.abs(point.value)
-            
-        elseif target_envelope_type == "pan" then
-
-            scaled_value = point.value
-            
-        else
-            scaled_value = point.value
-        end
-        
-        local point_index = r.InsertEnvelopePoint(
-            env,                    -- envelope
-            absolute_time,          -- time position
-            scaled_value,          -- scaled value
-            point.shape or 0,      -- shape
-            point.tension or 0,    -- tension
-            false,                 -- selected
-            true                   -- noSort (we voegen chronologisch toe)
-        )
-        
-        if (type(point_index) == "number" and point_index >= 0) or (type(point_index) == "boolean" and point_index == true) then
-            points_added = points_added + 1
-        end
+        local ok = r.InsertEnvelopePoint(env, absolute_time, final_value, point.shape or 0, point.tension or 0, false, true)
+        if ok then points_added = points_added + 1 end
     end
-    
+
     r.Envelope_SortPoints(env)
-    
+    r.PreventUIRefresh(-1)
     r.UpdateArrange()
-    r.Undo_EndBlock("Apply parsed automation as envelope points (" .. points_added .. " points)", -1)
-    
-    SetFooterMessage("Applied " .. points_added .. " envelope points from parsed data")
-    
+    r.Undo_EndBlock("TK AIM: Apply envelope points (" .. points_added .. ")", -1)
+
+    SetFooterMessage("Applied " .. points_added .. " envelope points" .. (has_ts and " (fitted to time selection)" or ""))
     return true
 end
 
@@ -881,170 +995,144 @@ function TK_ConvertSelectedEnvelopePointsToAutomationItem(target_env)
 end
 
 function ApplyAndCreateAutomationItem(item_data, target_env, target_time)
-    
     if not item_data or not item_data.points or #item_data.points == 0 then
-    SetFooterMessage("No valid automation data found")
+        SetFooterMessage("No valid automation data")
         return false
     end
-    
-    local env = target_env or r.GetSelectedEnvelope(0)
+
+    local env
+    if target_env then
+        env = target_env
+    else
+        env = ResolveTargetEnvelope()
+    end
     if not env then
-    SetFooterMessage("Please select an envelope lane first")
+        SetFooterMessage("Select an envelope lane first")
         return false
     end
-    
-    local cursor_pos = (target_time ~= nil) and target_time or r.GetCursorPosition()
+
+    local env_info = GetEnvelopeInfo(env)
+
     local max_time = 0
-    for i, point in ipairs(item_data.points) do
-        if point.time > max_time then
-            max_time = point.time
+    for _, point in ipairs(item_data.points) do
+        if point.time > max_time then max_time = point.time end
+    end
+    local source_length = max_time * 0.5
+
+    local insert_start, insert_end, has_ts
+    if target_time then
+        insert_start = target_time
+        if use_time_selection then
+            local ts_s, ts_e = r.GetSet_LoopTimeRange2(0, false, false, 0, 0, false)
+            if (ts_e - ts_s) >= 0.01 then
+                insert_end = target_time + (ts_e - ts_s)
+                has_ts = true
+            else
+                insert_end = target_time + source_length
+                has_ts = false
+            end
+        else
+            insert_end = target_time + source_length
+            has_ts = false
         end
+    else
+        insert_start, insert_end, has_ts = GetEffectiveRange(source_length)
     end
 
-    local corrected_length = max_time * 0.5  
-    local first_time = cursor_pos
-    local last_time = cursor_pos + corrected_length
-    local env_type = GetEnvelopeType(env)
+    local target_length = insert_end - insert_start
+    local time_scale = (has_ts and source_length > 0.001) and (target_length / source_length) or 1.0
+    local final_length = has_ts and target_length or source_length
 
-    local retval, env_name = r.GetEnvelopeName(env)
-    local initial_points = r.CountEnvelopePoints(env)
     local initial_automation_items = r.CountAutomationItems(env)
-    
-   
+
     local original_points = {}
-    local points_in_selection = 0
-    
     for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
-        local retval, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
-        if retval and time >= first_time and time <= last_time then
-            table.insert(original_points, {
-                time = time,
-                value = value,
-                shape = shape,
-                tension = tension
-            })
-            points_in_selection = points_in_selection + 1
+        local ok, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
+        if ok and time >= insert_start and time <= insert_start + final_length then
+            table.insert(original_points, {time = time, value = value, shape = shape, tension = tension})
         end
     end
 
-    
     r.Undo_BeginBlock()
-    
-    local deleted_count = 0
-    for ptidx = r.CountEnvelopePoints(env) - 1, 0, -1 do
-        local retval, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
-        if retval and time >= first_time and time <= last_time then
-            r.DeleteEnvelopePointEx(env, -1, ptidx)  
-            deleted_count = deleted_count + 1
-        end
-    end
-    
-    local placed_count = 0
-    local max_actual_time = 0
-    
-    for i, point in ipairs(item_data.points) do
-        local corrected_time = point.time * 0.5 
-        local absolute_time = cursor_pos + corrected_time
- 
-        if corrected_time > max_actual_time then
-            max_actual_time = corrected_time
-        end
+    r.PreventUIRefresh(1)
 
-        local converted_value = ConvertValueForEnvelope(point.value, env_type)
-        
-        r.InsertEnvelopePoint(env, absolute_time, converted_value, point.shape or 0, 0, false)
-        placed_count = placed_count + 1
-        
-    end
-    
-    corrected_length = max_actual_time
-    last_time = cursor_pos + corrected_length
-    
-    local selected_count = 0
-    for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
-        local retval, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
-        if retval and time >= first_time and time <= last_time then  
-            r.SetEnvelopePointEx(env, -1, ptidx, time, value, shape, tension, true, false)
-            selected_count = selected_count + 1
-         
+    for ptidx = r.CountEnvelopePoints(env) - 1, 0, -1 do
+        local ok, time = r.GetEnvelopePointEx(env, -1, ptidx)
+        if ok and time >= insert_start and time <= insert_start + final_length then
+            r.DeleteEnvelopePointEx(env, -1, ptidx)
         end
     end
-     
+
+    local placed_count = 0
+    for _, point in ipairs(item_data.points) do
+        local corrected_time = point.time * 0.5
+        local scaled_time = corrected_time * time_scale
+        local absolute_time = insert_start + scaled_time
+
+        local norm_value = NormalizeSourceValue(point.value, item_data.source_envelope_type)
+        local final_value = ToEnvValue(norm_value, env_info.conv, env_info.lo, env_info.hi, env_info.mode)
+
+        r.InsertEnvelopePoint(env, absolute_time, final_value, point.shape or 0, point.tension or 0, true, true)
+        placed_count = placed_count + 1
+    end
+
+    r.Envelope_SortPoints(env)
+
     local conversion_success = TK_ConvertSelectedEnvelopePointsToAutomationItem(env)
     if not conversion_success then
         SetFooterMessage("Conversion failed (span too short)")
     end
-    
+
     local automation_count_after = r.CountAutomationItems(env)
-    local points_after_conversion = r.CountEnvelopePoints(env)
-    
+
     if automation_count_after > initial_automation_items then
         local item_idx = automation_count_after - 1
-        local item_pos = r.GetSetAutomationItemInfo(env, item_idx, "D_POSITION", 0, false)
-        local item_len = r.GetSetAutomationItemInfo(env, item_idx, "D_LENGTH", 0, false)
-        
-        if math.abs(item_len - corrected_length) > 0.01 then  
-            r.GetSetAutomationItemInfo(env, item_idx, "D_LENGTH", corrected_length, true)
-        end
-
-        r.GetSetAutomationItemInfo(env, item_idx, "D_LOOPSRC", enable_loop and 1 or 0, true)  
-     
+        r.GetSetAutomationItemInfo(env, item_idx, "D_LENGTH", final_length, true)
+        r.GetSetAutomationItemInfo(env, item_idx, "D_LOOPSRC", enable_loop and 1 or 0, true)
         r.GetSetAutomationItemInfo(env, item_idx, "D_PLAYRATE", 1.0, true)
     end
-  
-    
+
     for i = 0, r.CountAutomationItems(env) - 1 do
-        r.GetSetAutomationItemInfo(env, i, "D_UISEL", 0, false)  
+        r.GetSetAutomationItemInfo(env, i, "D_UISEL", 0, false)
     end
 
-    local cleaned_count = 0
     for ptidx = r.CountEnvelopePoints(env) - 1, 0, -1 do
-        local retval, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
-        if retval then
-            if math.abs(time - first_time) < 0.001 or math.abs(time - last_time) < 0.001 then
+        local ok, time = r.GetEnvelopePointEx(env, -1, ptidx)
+        if ok then
+            if math.abs(time - insert_start) < 0.001 or math.abs(time - (insert_start + final_length)) < 0.001 then
                 r.DeleteEnvelopePointEx(env, -1, ptidx)
-                cleaned_count = cleaned_count + 1
             end
         end
     end
-    
 
-    local restored_count = 0
-    local skipped_count = 0
-    
-    for _, orig_point in ipairs(original_points) do
-        local point_exists = false
+    for _, orig in ipairs(original_points) do
+        local exists = false
         for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
-            local retval, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
-            if retval and math.abs(time - orig_point.time) < 0.001 then  
-                point_exists = true
+            local ok, time = r.GetEnvelopePointEx(env, -1, ptidx)
+            if ok and math.abs(time - orig.time) < 0.001 then
+                exists = true
                 break
             end
         end
-        
-        if not point_exists then
-            r.InsertEnvelopePoint(env, orig_point.time, orig_point.value, orig_point.shape, orig_point.tension, false, false)
-            restored_count = restored_count + 1
-        else
-            skipped_count = skipped_count + 1
+        if not exists then
+            r.InsertEnvelopePoint(env, orig.time, orig.value, orig.shape, orig.tension, false, false)
         end
     end
-    
-    for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
-        local retval, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
-        r.SetEnvelopePointEx(env, -1, ptidx, time, value, shape, tension, false, false)
-    end
-    
-    r.Envelope_SortPoints(env)
-    r.UpdateArrange()
-    r.Undo_EndBlock("Create automation item with envelope restore", -1)
-    
-    local final_points = r.CountEnvelopePoints(env)
-    local final_items = r.CountAutomationItems(env)
 
-    local end_position = cursor_pos + corrected_length
-    if move_edit_cursor then r.SetEditCurPos(end_position, true, false) end
-    
+    for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
+        local ok, time, value, shape, tension = r.GetEnvelopePointEx(env, -1, ptidx)
+        if ok then
+            r.SetEnvelopePointEx(env, -1, ptidx, time, value, shape, tension, false, false)
+        end
+    end
+
+    r.Envelope_SortPoints(env)
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+    r.Undo_EndBlock("TK AIM: Create automation item", -1)
+
+    if move_edit_cursor then r.SetEditCurPos(insert_start + final_length, true, false) end
+
     return true
 end
 
@@ -1174,6 +1262,255 @@ function ConvertSelectedEnvelopePointsToAutomationItem()
 end
 
 ---------------------------------------------------
+-- Export envelope points to .ReaperAutoItem
+---------------------------------------------------
+
+function ExportEnvelopePointsToFile()
+    local env = r.GetSelectedEnvelope(0)
+    if not env then
+        SetFooterMessage("Select an envelope first")
+        return false
+    end
+
+    local point_count = r.CountEnvelopePoints(env)
+    if point_count == 0 then
+        SetFooterMessage("No envelope points found")
+        return false
+    end
+
+    local env_info = GetEnvelopeInfo(env)
+
+    local sel_start, sel_end = math.huge, -math.huge
+    local has_selection = false
+    local points = {}
+
+    for i = 0, point_count - 1 do
+        local ok, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, i)
+        if ok then
+            if selected then
+                has_selection = true
+                sel_start = math.min(sel_start, time)
+                sel_end = math.max(sel_end, time)
+            end
+            table.insert(points, {time = time, value = value, shape = shape, tension = tension, selected = selected})
+        end
+    end
+
+    local export_points = {}
+    local time_offset = 0
+
+    if has_selection and sel_end > sel_start then
+        time_offset = sel_start
+        for _, p in ipairs(points) do
+            if p.selected then
+                local norm_value = FromEnvValue(p.value, env_info.conv, env_info.lo, env_info.hi, env_info.mode)
+                table.insert(export_points, {
+                    time = (p.time - time_offset) * 2,
+                    value = norm_value,
+                    shape = p.shape,
+                    tension = p.tension
+                })
+            end
+        end
+    else
+        local ts_s, ts_e = r.GetSet_LoopTimeRange2(0, false, false, 0, 0, false)
+        local use_ts = (ts_e - ts_s) >= 0.01
+        if use_ts then
+            time_offset = ts_s
+            for _, p in ipairs(points) do
+                if p.time >= ts_s and p.time <= ts_e then
+                    local norm_value = FromEnvValue(p.value, env_info.conv, env_info.lo, env_info.hi, env_info.mode)
+                    table.insert(export_points, {
+                        time = (p.time - time_offset) * 2,
+                        value = norm_value,
+                        shape = p.shape,
+                        tension = p.tension
+                    })
+                end
+            end
+        else
+            if #points > 0 then time_offset = points[1].time end
+            for _, p in ipairs(points) do
+                local norm_value = FromEnvValue(p.value, env_info.conv, env_info.lo, env_info.hi, env_info.mode)
+                table.insert(export_points, {
+                    time = (p.time - time_offset) * 2,
+                    value = norm_value,
+                    shape = p.shape,
+                    tension = p.tension
+                })
+            end
+        end
+    end
+
+    if #export_points == 0 then
+        SetFooterMessage("No points to export")
+        return false
+    end
+
+    if not EnsureAutomationFolderExists() then return false end
+
+    local total_time = export_points[#export_points].time
+
+    local retval, name = r.GetUserInputs("Export as .ReaperAutoItem", 1, "Name:", "Exported_" .. os.date("%Y%m%d_%H%M%S"))
+    if not retval or not name or name == "" then return false end
+
+    local filename = name .. ".ReaperAutoItem"
+    local filepath = automation_folder .. dir_sep .. filename
+
+    local file_check = io.open(filepath, "r")
+    if file_check then
+        file_check:close()
+        local overwrite = r.ShowMessageBox("File already exists:\n" .. filename .. "\n\nOverwrite?", script_name, 4)
+        if overwrite ~= 6 then return false end
+    end
+
+    local file = io.open(filepath, "w")
+    if not file then
+        SetFooterMessage("Could not create file: " .. filepath)
+        return false
+    end
+
+    file:write("SRCLEN " .. string.format("%.10f", total_time) .. "\n")
+    for _, p in ipairs(export_points) do
+        file:write(string.format("PPT %.10f %.10f %d %.10f\n", p.time, p.value, p.shape, p.tension))
+    end
+    file:close()
+
+    ScanAutomationItems()
+    SetFooterMessage("Exported: " .. filename .. " (" .. #export_points .. " points)")
+    return true
+end
+
+---------------------------------------------------
+-- ReaCurve MORPH bridge (selected envelope points)
+---------------------------------------------------
+
+local morph_cleanup = nil
+
+function MorphCleanupPoll()
+    if not morph_cleanup then return end
+    local env = morph_cleanup.env
+    if not r.ValidatePtr(env, "TrackEnvelope*") then
+        morph_cleanup = nil
+        return
+    end
+
+    morph_cleanup.frames = morph_cleanup.frames + 1
+
+    local any_found = false
+    for _, t in ipairs(morph_cleanup.times) do
+        for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
+            local ok, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
+            if ok and math.abs(time - t) < 0.0001 then
+                any_found = true
+                if not selected then
+                    r.SetEnvelopePointEx(env, -1, ptidx, time, value, shape, tension, true, true)
+                end
+                break
+            end
+        end
+    end
+
+    if any_found and morph_cleanup.frames <= 100 then
+        r.defer(MorphCleanupPoll)
+        return
+    end
+
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for i = #morph_cleanup.times, 1, -1 do
+        local target_t = morph_cleanup.times[i]
+        for ptidx = r.CountEnvelopePoints(env) - 1, 0, -1 do
+            local ok, time = r.GetEnvelopePointEx(env, -1, ptidx)
+            if ok and math.abs(time - target_t) < 0.0001 then
+                r.DeleteEnvelopePointEx(env, -1, ptidx)
+                break
+            end
+        end
+    end
+    r.Envelope_SortPoints(env)
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+    r.Undo_EndBlock("TK AIM: MORPH cleanup", -1)
+
+    if morph_cleanup.frames > 100 then
+        SetFooterMessage("MORPH timeout — points removed. Click Capture in ReaCurve first!")
+    else
+        SetFooterMessage("MORPH capture complete — temporary points removed")
+    end
+    morph_cleanup = nil
+end
+
+function SendToMorphSlot(item_data, slot)
+    if not item_data or not item_data.points or #item_data.points == 0 then
+        SetFooterMessage("No valid data for MORPH slot")
+        return false
+    end
+
+    local env = ResolveTargetEnvelope()
+    if not env then
+        SetFooterMessage("Select an envelope lane for MORPH")
+        return false
+    end
+
+    local env_info = GetEnvelopeInfo(env)
+    local source_length = (item_data.srclen or 1.0) * 0.5
+    local insert_start = r.GetCursorPosition()
+
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+
+    for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
+        local ok, time, value, shape, tension = r.GetEnvelopePointEx(env, -1, ptidx)
+        if ok then
+            r.SetEnvelopePointEx(env, -1, ptidx, time, value, shape, tension, false, false)
+        end
+    end
+
+    local inserted_times = {}
+    local points_added = 0
+    for _, point in ipairs(item_data.points) do
+        local corrected_time = point.time * 0.5
+        local absolute_time = insert_start + corrected_time
+        local norm_value = NormalizeSourceValue(point.value, item_data.source_envelope_type)
+        local final_value = ToEnvValue(norm_value, env_info.conv, env_info.lo, env_info.hi, env_info.mode)
+
+        local ok = r.InsertEnvelopePoint(env, absolute_time, final_value, point.shape or 0, point.tension or 0, true, true)
+        if ok then
+            points_added = points_added + 1
+            table.insert(inserted_times, absolute_time)
+        end
+    end
+
+    r.Envelope_SortPoints(env)
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+    r.Undo_EndBlock("TK AIM: MORPH prep (" .. points_added .. " pts)", -1)
+
+    morph_cleanup = { env = env, times = inserted_times, frames = 0 }
+    r.defer(MorphCleanupPoll)
+
+    SetFooterMessage("MORPH " .. slot .. ": " .. points_added .. " points — waiting for ReaCurve capture...")
+    return true
+end
+
+---------------------------------------------------
+-- Select for SCULPT helper
+---------------------------------------------------
+
+function SelectInsertedPoints(env, start_time, end_time)
+    if not env then return end
+    for ptidx = 0, r.CountEnvelopePoints(env) - 1 do
+        local ok, time, value, shape, tension, selected = r.GetEnvelopePointEx(env, -1, ptidx)
+        if ok and time >= start_time - 0.001 and time <= end_time + 0.001 then
+            r.SetEnvelopePointEx(env, -1, ptidx, time, value, shape, tension, true, false)
+        end
+    end
+    r.Envelope_SortPoints(env)
+    r.UpdateArrange()
+end
+
+---------------------------------------------------
 -- GUI functies
 ---------------------------------------------------
 
@@ -1214,31 +1551,50 @@ function DrawMainWindow()
         if r.ImGui_Button(ctx, "⚙", settings_button_width, 0) then
             r.ImGui_OpenPopup(ctx, "settings_menu")
         end
+        Tooltip("Open settings")
         
         r.ImGui_PopStyleVar(ctx, 1)
         r.ImGui_PopStyleColor(ctx, 3)
         
         if r.ImGui_BeginPopup(ctx, "settings_menu") then
             local changed, new_value = r.ImGui_Checkbox(ctx, "🔄 Enable Loop", enable_loop)
+            Tooltip("Loop automation items when inserted")
             if changed then
                 enable_loop = new_value
                 SaveSettings()
             end
             
             local mec_changed, mec_value = r.ImGui_Checkbox(ctx, "▶ Move Edit Cursor", move_edit_cursor)
+            Tooltip("Move edit cursor to end of inserted item")
             if mec_changed then
                 move_edit_cursor = mec_value
                 SaveSettings()
             end
             
             local slo_changed, slo_value = r.ImGui_Checkbox(ctx, "Lines Only", show_lines_only)
+            Tooltip("Hide control point dots in previews")
             if slo_changed then
                 show_lines_only = slo_value
+                SaveSettings()
+            end
+
+            local ts_changed, ts_value = r.ImGui_Checkbox(ctx, "⏱ Use Time Selection", use_time_selection)
+            Tooltip("Scale items to fit the current time selection")
+            if ts_changed then
+                use_time_selection = ts_value
+                SaveSettings()
+            end
+
+            local tt_changed, tt_value = r.ImGui_Checkbox(ctx, "💬 Show Tooltips", show_tooltips)
+            Tooltip("Show helpful tooltips on hover")
+            if tt_changed then
+                show_tooltips = tt_value
                 SaveSettings()
             end
             if r.ImGui_ColorButton(ctx, "##curve_color_btn", curve_color, 0, 20, 20) then
                 r.ImGui_OpenPopup(ctx, "curve_color_picker")
             end
+            Tooltip("Preview line color")
             r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Line")
             if r.ImGui_BeginPopup(ctx, "curve_color_picker") then
@@ -1253,6 +1609,7 @@ function DrawMainWindow()
             if r.ImGui_ColorButton(ctx, "##points_color_btn", points_color, 0, 20, 20) then
                 r.ImGui_OpenPopup(ctx, "points_color_picker")
             end
+            Tooltip("Preview dot color")
             r.ImGui_SameLine(ctx)
             r.ImGui_Text(ctx, "Dots")
             if r.ImGui_BeginPopup(ctx, "points_color_picker") then
@@ -1265,7 +1622,7 @@ function DrawMainWindow()
             end
             r.ImGui_Separator(ctx)
             if r.ImGui_MenuItem(ctx, "ℹ️ About") then
-                SetFooterMessage("TK Automation Item Manager - Version 0.0.4")
+                SetFooterMessage("TK Automation Item Manager v0.1.0 — ReaCurve Integration")
             end
             
             r.ImGui_EndPopup(ctx)
@@ -1334,31 +1691,56 @@ function DrawItemsGrid()
             end
             
             if r.ImGui_BeginPopup(ctx, "context_menu_" .. i) then
+                if r.ImGui_MenuItem(ctx, "📌 Insert as Points") then
+                    ApplyParsedDataAsEnvelopePoints(item, nil, false)
+                end
+                Tooltip("Insert curve as envelope points on the selected envelope")
+
+                r.ImGui_Separator(ctx)
+
+                if r.ImGui_MenuItem(ctx, "🔀 MORPH Slot A") then
+                    SendToMorphSlot(item, "A")
+                end
+                Tooltip("Send to ReaCurve MORPH Slot A for morphing")
+
+                if r.ImGui_MenuItem(ctx, "🔀 MORPH Slot B") then
+                    SendToMorphSlot(item, "B")
+                end
+                Tooltip("Send to ReaCurve MORPH Slot B for morphing")
+
+                r.ImGui_Separator(ctx)
+
                 if r.ImGui_MenuItem(ctx, "🗑️ Delete") then
                     DeleteAutomationItem(item, i)
                 end
-                
+                Tooltip("Delete this automation item file from disk")
+
                 if r.ImGui_MenuItem(ctx, "✏️ Rename") then
                     RenameAutomationItem(item, i)
                 end
-                
+                Tooltip("Rename this automation item file")
+
                 r.ImGui_Separator(ctx)
-                
+
                 if r.ImGui_MenuItem(ctx, "📁 Show in Explorer") then
                     ShowItemInExplorer(item)
                 end
-                
+                Tooltip("Open folder containing this file in Explorer")
+
                 if r.ImGui_MenuItem(ctx, "📋 Copy Path") then
                     CopyItemPath(item)
                 end
-                
+                Tooltip("Copy the full file path to clipboard")
+
                 r.ImGui_EndPopup(ctx)
             end
 
-            if r.ImGui_IsItemHovered(ctx) then
+            if r.ImGui_IsItemHovered(ctx) and show_tooltips then
                 r.ImGui_BeginTooltip(ctx)
                 r.ImGui_Text(ctx, item.name or "Unknown")
-                r.ImGui_Text(ctx, "Click to load as envelope points")
+                r.ImGui_Text(ctx, "Click: insert as automation item")
+                r.ImGui_Text(ctx, "Drag: drop on envelope in Arrange")
+                r.ImGui_Text(ctx, "Right-click: more options")
 
                 local corrected_srclen = (item.srclen or 0) * 0.5
                 r.ImGui_Text(ctx, "📊 " .. (item.point_count or 0) .. " points, " .. string.format("%.1fs", corrected_srclen))
@@ -1484,43 +1866,6 @@ function RenameAutomationItem(item, index)
     end
 end
 
-function RenameAutomationItem(item, index)
-    if not item or not item.path then
-    SetFooterMessage("Cannot rename: invalid item data")
-        return
-    end
-    
-    local old_filename = item.filename or "Unknown"
-    local old_name = old_filename:gsub("%.ReaperAutoItem$", "")
-    
-    local retval, new_name = r.GetUserInputs("Rename Automation Item", 1, "New name:", old_name)
-    
-    if retval and new_name and new_name ~= "" and new_name ~= old_name then
-
-        local new_filename = new_name .. ".ReaperAutoItem"
-        local folder_path = item.path:match("^(.+[/\\])")
-        local new_path = folder_path .. new_filename
-        
-        local file = io.open(new_path, "r")
-        if file then
-            file:close()
-            SetFooterMessage("File already exists: " .. new_filename)
-            return
-        end
-        
-        local ok, err = os.rename(item.path, new_path)
-        if ok then
-            automation_items[index].name = new_name
-            automation_items[index].filename = new_filename
-            automation_items[index].path = new_path
-            SaveCache()
-            SetFooterMessage("Successfully renamed to: " .. new_filename)
-        else
-            SetFooterMessage("Failed to rename file: " .. old_filename)
-        end
-    end
-end
-
 ---------------------------------------------------
 -- Color Scheme functies
 ---------------------------------------------------
@@ -1586,38 +1931,48 @@ function DrawStatusBar()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 2, 2)
     
     local spacing_x = 4
-    local top_cols = 4
-    local top_btn_w = math.max(60, math.floor((available_width - spacing_x) / top_cols))
-    
+    local top_cols = 5
+    local top_btn_w = math.max(50, math.floor((available_width - spacing_x) / top_cols))
+
     if r.ImGui_Button(ctx, "Refresh", top_btn_w, 0) then
         ScanAutomationItems()
-        SetFooterMessage("Automation items refreshed! Found " .. #automation_items .. " items")
+        SetFooterMessage("Refreshed! " .. #automation_items .. " items found")
     end
-    
+    Tooltip("Rescan AutomationItems folder")
+
     r.ImGui_SameLine(ctx)
 
-    if r.ImGui_Button(ctx, "Convert Points", top_btn_w, 0) then
+    if r.ImGui_Button(ctx, "Convert", top_btn_w, 0) then
         local success = ConvertSelectedEnvelopePointsToAutomationItem()
-        if success then
-            SetFooterMessage("Successfully converted envelope points to automation item")
-        else
-            SetFooterMessage("Failed to convert - check envelope selection and points")
+        if not success then
+            SetFooterMessage("Conversion failed — check envelope selection and points")
         end
     end
-    
+    Tooltip("Convert selected envelope points to automation item")
+
     r.ImGui_SameLine(ctx)
 
     if r.ImGui_Button(ctx, "Save", top_btn_w, 0) then
-        r.Main_OnCommand(42092, 0)  
+        r.Main_OnCommand(42092, 0)
         SetFooterMessage("Save automation item command executed")
     end
+    Tooltip("Save selected automation item to file")
 
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Open AI Folder", top_btn_w, 0) then
+
+    if r.ImGui_Button(ctx, "Export", top_btn_w, 0) then
+        ExportEnvelopePointsToFile()
+    end
+    Tooltip("Export envelope points to .ReaperAutoItem file")
+
+    r.ImGui_SameLine(ctx)
+
+    if r.ImGui_Button(ctx, "Folder", top_btn_w, 0) then
         if EnsureAutomationFolderExists() then
             OpenPathInExplorer(automation_folder)
         end
     end
+    Tooltip("Open AutomationItems folder in Explorer")
 
     local bottom_col_w = math.max(80, math.floor((available_width - spacing_x) / 2))
 
@@ -1625,21 +1980,25 @@ function DrawStatusBar()
         r.Main_OnCommand(42082, 0)
         SetFooterMessage("Inserted automation item")
     end
+    Tooltip("Insert a new empty automation item on selected envelope")
     r.ImGui_SameLine(ctx)
     if r.ImGui_Button(ctx, "Edge points", bottom_col_w, 0) then
         r.Main_OnCommand(42209, 0)
         SetFooterMessage("Added edge points")
     end
+    Tooltip("Add edge points at automation item boundaries")
     
     if r.ImGui_Button(ctx, "Pool (duplicate)", bottom_col_w, 0) then
         r.Main_OnCommand(42085, 0)
         SetFooterMessage("Pooled duplicate created")
     end
+    Tooltip("Duplicate selected automation item as pooled copy")
     r.ImGui_SameLine(ctx)
     if r.ImGui_Button(ctx, "Unpool (sel)", bottom_col_w, 0) then
         r.Main_OnCommand(42084, 0)
         SetFooterMessage("Unpooled selected item(s)")
     end
+    Tooltip("Make selected automation item independent (unpool)")
     
     r.ImGui_PopStyleVar(ctx, 3)
     r.ImGui_PopStyleColor(ctx, 3)
@@ -1677,7 +2036,6 @@ end
 
 -- Cleanup function for when script exits
 function cleanup()
-    -- ReaImGui ruimt automatisch contexts op, geen handmatige cleanup nodig
     ctx = nil
 end
 
