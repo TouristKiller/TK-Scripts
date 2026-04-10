@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.4.5" author="TouristKiller" time="2026-04-07T21:45:00Z">
+    <version name="2.4.6" author="TouristKiller" time="2026-04-10T14:45:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -46,32 +46,15 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[    
-    + 2.4.5 Update - April 10, 2026 - UPDATES TO MINI 0.3.2
-    + Multi-Selection: Ctrl+Click to toggle individual plugins in/out of selection
-    + Multi-Selection: Shift+Click for range selection between anchor and clicked plugin
-    + Multi-Selection: Ctrl+Shift+Click to extend range without clearing existing selection
-    + Multi-Selection: Shift+Arrow keys to extend selection from keyboard
-    + Multi-Selection: Ctrl+A to select all visible plugins in current view
-    + Multi-Selection: Escape to clear multi-selection
-    + Multi-Selection: Enter adds ALL selected plugins to track (wrapped in Undo Block)
-    + Multi-Selection: Right-click context menu for multi-selection (Add All to Track/New Track/Chain Builder/Favorites)
-    + Multi-Selection: Visual feedback - semi-transparent cyan fill for selected items, brighter border for cursor
-    + Multi-Selection: Selection count indicator "[N selected]" in toolbar area
-    + Multi-Selection: Works across all views (Normal grid, Masonry, Showcase, Polaroid)
-    + Navigation: Keyboard navigation (arrow keys) for ALL screenshot views (Normal grid, Masonry, Showcase, Polaroid)
-    + Navigation: Click-to-select plugin in screenshot views (single click selects, double click adds FX)
-    + Navigation: Enter key adds selected plugin to target track(s) from any screenshot view
-    + Navigation: Cyan selection border (2.5px) around selected plugin in all views
-    + Navigation: Auto-scroll to keep selected plugin visible when navigating with arrow keys
-    + Navigation: Position-aware arrow key navigation (left/right moves between columns, up/down within same column)
-    + Navigation: Focus-aware input - screenshot navigation only active when screenshot window has focus (prevents conflict with browser/info panel)
-    + Navigation: Arrow-down from search bar jumps to first plugin in screenshot grid
-    + Navigation: Arrow-up from first grid item returns focus to search bar
-    + Search: Autofocus search bar on script open (screenshot search bar priority, fallback to browser search bar)
-    + Search: Smart focus priority - screenshot search bar takes precedence when visible, browser search bar used as fallback
-    + FX Chain Builder: Mouse wheel horizontal scrolling on the FX chain strip
-    + Layout Menu: Layout options (Normal/Masonry/Showcase/Polaroid) are now mutually exclusive (radio-style selection)
-    + Layout Menu: Modern Cards separated as independent overlay option (works with any layout)
+    + 2.4.6 Update - April 10, 2026 - UPDATES TO MINI 0.3.3
+    + FX Chain Builder: "Grab" button - load FX chain from selected track directly into chain builder
+    + FX Chain Builder: "Replace" button - replace entire FX chain on selected track(s) with chain builder contents (removes existing FX first)
+    + FX Chain Builder: Commit, Replace and Save now preserve exact chain order (instruments-on-top setting is bypassed for chain builder actions)
+    + Multi-Selection: Ctrl+Arrow keys to move cursor without changing selection
+    + Multi-Selection: Ctrl+Space to toggle individual item in/out of selection via keyboard
+    + Shortcuts Window: New popup showing all keyboard & mouse shortcuts (Settings menu > Shortcuts)
+    + Shortcuts: Escape now properly clears selection even when child window loses focus
+    + FX Chain Builder: Customizable accent color and background darkness via Main Settings > GUI > FX Chain Builder
 ]]></changelog>
     </version>
     </reapack>

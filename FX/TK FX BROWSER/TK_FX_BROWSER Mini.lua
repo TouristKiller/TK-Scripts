@@ -1,8 +1,18 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.2
+-- @version 0.3.3
 -- @changelog:
 --[[     
+    + FX Chain Builder: "Grab" button - load FX chain from selected track directly into chain builder
+    + FX Chain Builder: "Replace" button - replace entire FX chain on selected track(s) with chain builder contents (removes existing FX first)
+    + FX Chain Builder: Commit, Replace and Save now preserve exact chain order (instruments-on-top setting is bypassed for chain builder actions)
+    + Multi-Selection: Ctrl+Arrow keys to move cursor without changing selection
+    + Multi-Selection: Ctrl+Space to toggle individual item in/out of selection via keyboard
+    + Shortcuts Window: New popup showing all keyboard & mouse shortcuts (Settings menu > Shortcuts)
+    + Shortcuts: Escape now properly clears selection even when child window loses focus
+    + FX Chain Builder: Customizable accent color and background darkness via Main Settings > GUI > FX Chain Builder
+
+    0.3.2
     + Multi-Selection: Ctrl+Click to toggle individual plugins in/out of selection
     + Multi-Selection: Shift+Click for range selection between anchor and clicked plugin
     + Multi-Selection: Ctrl+Shift+Click to extend range without clearing existing selection
@@ -1001,6 +1011,8 @@ function SetDefaultConfig()
         browser_segment_utilities_visible = true,
         show_chain_builder = false,
         chain_builder_plugins = {},
+        chain_builder_color = 0x00FF88FF,
+        chain_builder_darkness = 0.10,
         bulk_screenshot_vst = true,
         bulk_screenshot_vst3 = true,
         bulk_screenshot_js = true,
@@ -1951,11 +1963,11 @@ function GetTargetTrack()
     return r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0)
 end
 
-function AddFXToTrack(track, plugin_name)
+function AddFXToTrack(track, plugin_name, preserve_order)
     if not track or not plugin_name or plugin_name == '' then return -1 end
     local dest_index = r.TrackFX_GetCount(track)
     local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - dest_index)
-    if fx_index and fx_index >= 0 and config and config.add_instruments_on_top and IsInstrumentPlugin(plugin_name) then
+    if not preserve_order and fx_index and fx_index >= 0 and config and config.add_instruments_on_top and IsInstrumentPlugin(plugin_name) then
         r.TrackFX_CopyToTrack(track, fx_index, track, 0, true)
         fx_index = 0
     end
@@ -3736,6 +3748,32 @@ function ShowConfigWindow()
             local changed5, new_col5 = r.ImGui_ColorEdit4(ctx, "##L5Col", col5, flags)
             if changed5 then config.custom_folder_level_colors[5] = new_col5; SaveConfig() end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 5+ Folder Color") end
+
+            NewSection("FX Chain Builder:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Color")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            local cb_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
+            local cb_changed, cb_new_col = r.ImGui_ColorEdit4(ctx, "##ChainBuilderColor", config.chain_builder_color or 0x00FF88FF, cb_flags)
+            if cb_changed then
+                config.chain_builder_color = cb_new_col
+                SaveConfig()
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "FX Chain Builder accent color") end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Darkness")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local dk_changed, dk_new = r.ImGui_SliderDouble(ctx, "##ChainDarkness", config.chain_builder_darkness or 0.10, 0.02, 0.5, "%.2f")
+            if dk_changed then
+                config.chain_builder_darkness = dk_new
+                SaveConfig()
+            end
+            r.ImGui_PopItemWidth(ctx)
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Background darkness intensity for chain builder") end
 
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
             r.ImGui_Separator(ctx)
@@ -5722,6 +5760,7 @@ function DrawShortcutsWindow()
         Row("Right Click on FX",        "FX context menu")
 
         Section("General")
+        Row("Ctrl + Z",                 "Undo last action (REAPER)")
         Row("Mouse Wheel (dropdowns)",  "Cycle dropdown options")
     end
     r.ImGui_End(ctx)
@@ -14731,18 +14770,31 @@ function ShowScreenshotWindow()
     local chain_builder_h = 0
     chain_builder_hovered = false
     if config.show_chain_builder and #chain_builder_plugins >= 0 then
+        local cb_base = config.chain_builder_color or 0x00FF88FF
+        local cb_dark = config.chain_builder_darkness or 0.10
+        local cb_r, cb_g, cb_b = r.ImGui_ColorConvertU32ToDouble4(cb_base)
+        local function cb_col(mult, alpha)
+            return r.ImGui_ColorConvertDouble4ToU32(cb_r * mult, cb_g * mult, cb_b * mult, alpha)
+        end
+        local cb_bg = cb_col(cb_dark, 1.0)
+        local cb_border = cb_col(1.0, 0.25)
+        local cb_drop_highlight = cb_col(1.0, 0.125)
+        local cb_accent = cb_col(1.0, 1.0)
+        local cb_btn = cb_col(cb_dark * 1.6, 1.0)
+        local cb_btn_hover = cb_col(cb_dark * 2.2, 1.0)
+        local cb_btn_active = cb_col(cb_dark * 2.8, 1.0)
         chain_builder_h = 163
         local avail_w = r.ImGui_GetContentRegionAvail(ctx)
         local dl = r.ImGui_GetWindowDrawList(ctx)
         local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
-        r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + chain_builder_h, 0x1A2A1AFF, 3)
-        r.ImGui_DrawList_AddRect(dl, cx, cy, cx + avail_w, cy + chain_builder_h, 0x00FF8840, 3)
+        r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + chain_builder_h, cb_bg, 3)
+        r.ImGui_DrawList_AddRect(dl, cx, cy, cx + avail_w, cy + chain_builder_h, cb_border, 3)
 
         local mx, my = r.ImGui_GetMousePos(ctx)
         if mx >= cx and mx <= cx + avail_w and my >= cy and my <= cy + chain_builder_h then
             chain_builder_hovered = true
             if dragging_fx_name then
-                r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + chain_builder_h, 0x00FF8820, 3)
+                r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + chain_builder_h, cb_drop_highlight, 3)
             end
         end
 
@@ -14796,9 +14848,9 @@ function ShowScreenshotWindow()
                             clicked = r.ImGui_Button(ctx, display_name .. "##cb", thumb_w, thumb_h)
                         end
                     else
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x2A4A2AFF)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3A6A3AFF)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x4A8A4AFF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), cb_btn)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), cb_btn_hover)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), cb_btn_active)
                         clicked = r.ImGui_Button(ctx, display_name .. "##cb", thumb_w, thumb_h)
                         r.ImGui_PopStyleColor(ctx, 3)
                     end
@@ -14806,7 +14858,7 @@ function ShowScreenshotWindow()
                     local cdl = r.ImGui_GetWindowDrawList(ctx)
                     local num_tw = r.ImGui_CalcTextSize(ctx, num_label)
                     r.ImGui_DrawList_AddRectFilled(cdl, grp_sx, grp_sy, grp_sx + num_tw + 6, grp_sy + 14, 0x000000B0, 3)
-                    r.ImGui_DrawList_AddText(cdl, grp_sx + 3, grp_sy + 1, 0x00FF88FF, num_label)
+                    r.ImGui_DrawList_AddText(cdl, grp_sx + 3, grp_sy + 1, cb_accent, num_label)
 
                     if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                         r.ImGui_SetDragDropPayload(ctx, "CHAIN_REORDER", tostring(ci))
@@ -14884,7 +14936,7 @@ function ShowScreenshotWindow()
                         local track = r.GetSelectedTrack(0, ti)
                         if track then
                             for _, pname in ipairs(chain_builder_plugins) do
-                                AddFXToTrack(track, pname)
+                                AddFXToTrack(track, pname, true)
                             end
                         end
                     end
@@ -14896,6 +14948,34 @@ function ShowScreenshotWindow()
         if r.ImGui_IsItemHovered(ctx) then
             local sel_count = r.CountSelectedTracks(0)
             r.ImGui_SetTooltip(ctx, "Add chain to " .. sel_count .. " selected track(s)\nChain stays until you Clear")
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Replace##cb", btn_w, btn_row_h) then
+            if #chain_builder_plugins > 0 then
+                local sel_count = r.CountSelectedTracks(0)
+                if sel_count > 0 then
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    for ti = 0, sel_count - 1 do
+                        local track = r.GetSelectedTrack(0, ti)
+                        if track then
+                            local existing = r.TrackFX_GetCount(track)
+                            for fi = existing - 1, 0, -1 do
+                                r.TrackFX_Delete(track, fi)
+                            end
+                            for _, pname in ipairs(chain_builder_plugins) do
+                                AddFXToTrack(track, pname, true)
+                            end
+                        end
+                    end
+                    r.PreventUIRefresh(-1)
+                    r.Undo_EndBlock("FX Chain Builder: Replace chain on " .. sel_count .. " track(s)", -1)
+                end
+            end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            local sel_count = r.CountSelectedTracks(0)
+            r.ImGui_SetTooltip(ctx, "Replace FX chain on " .. sel_count .. " selected track(s)\nRemoves all existing FX first")
         end
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "Clear##cb", btn_w, btn_row_h) then
@@ -14913,7 +14993,7 @@ function ShowScreenshotWindow()
                 local temp_track = r.GetTrack(0, track_count)
                 if temp_track then
                     for _, pname in ipairs(chain_builder_plugins) do
-                        AddFXToTrack(temp_track, pname)
+                        AddFXToTrack(temp_track, pname, true)
                     end
                     local _, chunk = r.GetTrackStateChunk(temp_track, "", false)
                     local fxchain_block = nil
@@ -14974,6 +15054,38 @@ function ShowScreenshotWindow()
         end
         if r.ImGui_IsItemHovered(ctx) then
             r.ImGui_SetTooltip(ctx, "Load .RfxChain into builder")
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Grab##cb", btn_w, btn_row_h) then
+            local track = r.GetSelectedTrack(0, 0)
+            if not track then track = r.GetMasterTrack(0) end
+            if track and r.ValidatePtr2(0, track, "MediaTrack*") then
+                local fx_count = r.TrackFX_GetCount(track)
+                if fx_count > 0 then
+                    chain_builder_plugins = {}
+                    for fi = 0, fx_count - 1 do
+                        local retval, fx_name = r.TrackFX_GetFXName(track, fi)
+                        if retval and fx_name and fx_name ~= "" then
+                            chain_builder_plugins[#chain_builder_plugins + 1] = fx_name
+                        end
+                    end
+                    config.chain_builder_plugins = chain_builder_plugins
+                    SaveConfig()
+                end
+            end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            local track = r.GetSelectedTrack(0, 0)
+            local tip = "Grab FX chain from selected track"
+            if track then
+                local _, name = r.GetTrackName(track)
+                local num = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+                tip = tip .. "\nTrack " .. num .. ": " .. name
+                tip = tip .. " (" .. r.TrackFX_GetCount(track) .. " FX)"
+            else
+                tip = tip .. "\n(no track selected)"
+            end
+            r.ImGui_SetTooltip(ctx, tip)
         end
         r.ImGui_SameLine(ctx)
 
