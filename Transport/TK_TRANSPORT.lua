@@ -1,8 +1,12 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.9.2
+-- @version 1.9.3
 -- @changelog 
 --[[
+  v1.9.3:
+  + Fixed: Time display now respects Project start time offset (CursorPosition, TimeSelection, WaveformScrubber)
+  + Fixed: Tempo drag not working on macOS (JS_Mouse_SetPosition verification)
+
   v1.9.2:
   + Added: Text hover/active colors for transport widgets (Tempo, TapTempo, TimeSig, TimeSelection, CursorPos, Env, WindowSetPicker)
   + Added: Text hover/active colors for custom buttons
@@ -19698,7 +19702,7 @@ function ShowWaveformScrubber(main_window_width, main_window_height)
  local current_pos = (play_state == 1) and r.GetPlayPosition() or r.GetCursorPosition()
  
  local project_length = r.GetProjectLength(0)
- local project_start = 0
+ local project_start = r.GetProjectTimeOffset(0, false)
  
  local start_time, end_time
  
@@ -19842,15 +19846,16 @@ function ShowWaveformScrubber(main_window_width, main_window_height)
  if settings.waveform_scrubber_show_time_labels then
  local text_color = 0xCCCCCCFF
  
- local start_str = string.format("%.1fs", start_time)
+ local scrub_offset = r.GetProjectTimeOffset(0, false)
+ local start_str = string.format("%.1fs", start_time + scrub_offset)
  r.ImGui_DrawList_AddText(draw_list, screen_x + 2, screen_y + height - 12, text_color, start_str)
  
- local end_str = string.format("%.1fs", end_time)
+ local end_str = string.format("%.1fs", end_time + scrub_offset)
  local text_size_x = r.ImGui_CalcTextSize(ctx, end_str)
  r.ImGui_DrawList_AddText(draw_list, screen_x + width - text_size_x - 2, screen_y + height - 12, text_color, end_str)
  
  if playhead_relative_pos >= 0 and playhead_relative_pos <= 1 then
- local current_str = string.format("%.2fs", current_pos)
+ local current_str = string.format("%.2fs", current_pos + scrub_offset)
  local current_text_size = r.ImGui_CalcTextSize(ctx, current_str)
  local text_x = math.max(screen_x + 2, math.min(screen_x + width - current_text_size - 2, playhead_x - current_text_size/2))
  r.ImGui_DrawList_AddText(draw_list, text_x, screen_y + 2, text_color, current_str)
@@ -19876,14 +19881,17 @@ function ShowCursorPosition(main_window_width, main_window_height)
  local beat_fraction = beatsInMeasure - math.floor(beatsInMeasure)
  local ticks = math.floor(beat_fraction * 100 + 0.5)
  if ticks >= 100 then ticks = 99 end
- local hours = math.floor(position / 3600)
- local minutes = math.floor((position % 3600) / 60)
- local seconds = position % 60
+ local display_pos = position + r.GetProjectTimeOffset(0, false)
+ local abs_pos = math.abs(display_pos)
+ local sign = display_pos < 0 and "-" or ""
+ local hours = math.floor(abs_pos / 3600)
+ local minutes = math.floor((abs_pos % 3600) / 60)
+ local seconds = abs_pos % 60
  local time_str
  if settings.cursorpos_hide_milliseconds then
-   time_str = (hours > 0) and string.format("%d:%02d:%02d", hours, minutes, math.floor(seconds)) or string.format("%d:%02d", minutes, math.floor(seconds))
+   time_str = (hours > 0) and string.format("%s%d:%02d:%02d", sign, hours, minutes, math.floor(seconds)) or string.format("%s%d:%02d", sign, minutes, math.floor(seconds))
  else
-   time_str = (hours > 0) and string.format("%d:%02d:%06.3f", hours, minutes, seconds) or string.format("%d:%06.3f", minutes, seconds)
+   time_str = (hours > 0) and string.format("%s%d:%02d:%06.3f", sign, hours, minutes, seconds) or string.format("%s%d:%06.3f", sign, minutes, seconds)
  end
  local mbt_str = string.format("%d.%d.%02d", math.floor(measures + measure_correction), math.floor(beatsInMeasure+1), ticks)
  local mode = settings.cursorpos_mode or "both"
@@ -20750,7 +20758,12 @@ if tempo_drag.last_mouse_y then
 end
  if reaper.JS_Mouse_SetPosition and tempo_drag.mouse_anchor_x then
  reaper.JS_Mouse_SetPosition(tempo_drag.mouse_anchor_x, tempo_drag.mouse_anchor_y)
- tempo_drag.last_mouse_y = tempo_drag.mouse_anchor_y
+ local _, verify_y = reaper.GetMousePosition()
+ if math.abs(verify_y - tempo_drag.mouse_anchor_y) <= 2 then
+  tempo_drag.last_mouse_y = tempo_drag.mouse_anchor_y
+ else
+  tempo_drag.last_mouse_y = current_mouse_y
+ end
  else
  tempo_drag.last_mouse_y = current_mouse_y
  end
@@ -21183,9 +21196,15 @@ function ShowTimeSelection(main_window_width, main_window_height)
  local _, projmeasoffs = r.get_config_var_string("projmeasoffs")
  local measure_correction = (projmeasoffs and tonumber(projmeasoffs) == 0) and 1 or 0
  
- local minutes_start = math.floor(start_time / 60)
- local seconds_start = start_time % 60
- local sec_format = string.format("%d:%06.3f", minutes_start, seconds_start)
+ local time_offset = r.GetProjectTimeOffset(0, false)
+ local display_start = start_time + time_offset
+ local display_end = end_time + time_offset
+ 
+ local abs_start = math.abs(display_start)
+ local sign_start = display_start < 0 and "-" or ""
+ local minutes_start = math.floor(abs_start / 60)
+ local seconds_start = abs_start % 60
+ local sec_format = string.format("%s%d:%06.3f", sign_start, minutes_start, seconds_start)
  
  local retval, measures_start, cml, fullbeats_start = r.TimeMap2_timeToBeats(0, start_time)
  local beatsInMeasure_start = fullbeats_start % timesig_num
@@ -21195,9 +21214,11 @@ function ShowTimeSelection(main_window_width, main_window_height)
  math.floor(beatsInMeasure_start+1),
  ticks_start)
  
- local minutes_end = math.floor(end_time / 60)
- local seconds_end = end_time % 60
- local end_format = string.format("%d:%06.3f", minutes_end, seconds_end)
+ local abs_end = math.abs(display_end)
+ local sign_end = display_end < 0 and "-" or ""
+ local minutes_end = math.floor(abs_end / 60)
+ local seconds_end = abs_end % 60
+ local end_format = string.format("%s%d:%06.3f", sign_end, minutes_end, seconds_end)
  
  local retval, measures_end, cml, fullbeats_end = r.TimeMap2_timeToBeats(0, end_time)
  local beatsInMeasure_end = fullbeats_end % timesig_num
