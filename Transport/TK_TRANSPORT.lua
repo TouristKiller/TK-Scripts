@@ -1,8 +1,17 @@
 -- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.9.3
+-- @version 1.9.4
 -- @changelog 
 --[[
+  v1.9.4:
+  + Added: Configurable transport button order (reorder via up/down arrows in settings)
+  + Added: Optional button background for transport buttons (color, hover, active, padding, rounding, border)
+  + Added: Separate icon color setting for graphic transport buttons
+  + Added: Extra width (horizontal padding) control for transport button backgrounds
+  + Fixed: Arrow icons (rewind/forward) now properly centered within button area
+  + Fixed: Equal spacing between transport buttons when background is enabled
+  + Refactored: Graphic and text mode rendering now use a single data-driven loop
+
   v1.9.3:
   + Fixed: Time display now respects Project start time offset (CursorPosition, TimeSelection, WaveformScrubber)
   + Fixed: Tempo drag not working on macOS (JS_Mouse_SetPosition verification)
@@ -269,6 +278,23 @@ local COMMANDS = {
  REPEAT = 1068,
  GOTO_START = 40042,
  GOTO_END = 40043
+}
+
+local DEFAULT_BUTTON_ORDER = {"rewind", "play", "stop", "pause", "record", "loop", "forward"}
+
+local TRANSPORT_BTN_DEFS = {
+ rewind  = { id = "<<",    size_key = "rewind",  command = 40042, use_custom = "use_custom_rewind_image",  custom_img = "rewind",  draw_fn = "DrawArrows", draw_arg = false },
+ forward = { id = ">>",    size_key = "forward", command = 40043, use_custom = "use_custom_forward_image", custom_img = "forward", draw_fn = "DrawArrows", draw_arg = true },
+ play    = { id = "PLAY",  size_key = "play",    command = 1007,  use_custom = "use_custom_play_image",    custom_img = "play",    draw_fn = "DrawPlay" },
+ stop    = { id = "STOP",  size_key = "stop",    command = 1016,  use_custom = "use_custom_stop_image",    custom_img = "stop",    draw_fn = "DrawStop" },
+ pause   = { id = "PAUSE", size_key = "pause",   command = 1008,  use_custom = "use_custom_pause_image",   custom_img = "pause",   draw_fn = "DrawPause" },
+ record  = { id = "REC",   size_key = "rec",     command = 1013,  use_custom = "use_custom_record_image",  custom_img = "record",  draw_fn = "DrawRecord" },
+ loop    = { id = "LOOP",  size_key = "loop",    command = 1068,  use_custom = "use_custom_loop_image",    custom_img = "loop",    draw_fn = "DrawLoop" },
+}
+
+local TRANSPORT_BTN_LABELS = {
+ rewind = "Rewind", forward = "Forward", play = "Play", stop = "Stop",
+ pause = "Pause", record = "Record", loop = "Loop",
 }
 
 local tap_tempo = {
@@ -811,6 +837,40 @@ local default_settings = {
  -- Visibility settings
  use_graphic_buttons = false,
  graphic_style = 0,  -- 0=Filled, 1=Outlined, 2=Rounded, 3=Sharp, 4=Alien, 5=Retro, 6=Gaming, 7=Neon, 8=Organic, 9=Industrial, 10=Circus, 11=Crystal
+ transport_show_button_bg_graphic = false,
+ transport_show_button_bg_text = false,
+ transport_show_button_bg_custom = false,
+ transport_icon_color_graphic = 0xFFFFFFFF,
+ transport_icon_color_text = 0xFFFFFFFF,
+ transport_icon_color_custom = 0xFFFFFFFF,
+ transport_bg_color_graphic = 0x333333FF,
+ transport_bg_color_text = 0x333333FF,
+ transport_bg_color_custom = 0x333333FF,
+ transport_bg_hover_graphic = 0x555555FF,
+ transport_bg_hover_text = 0x555555FF,
+ transport_bg_hover_custom = 0x555555FF,
+ transport_bg_active_graphic = 0x777777FF,
+ transport_bg_active_text = 0x777777FF,
+ transport_bg_active_custom = 0x777777FF,
+ transport_bg_padding_graphic = 4,
+ transport_bg_padding_text = 4,
+ transport_bg_padding_custom = 4,
+ transport_bg_padding_x_graphic = 4,
+ transport_bg_padding_x_text = 4,
+ transport_bg_padding_x_custom = 4,
+ transport_bg_rounding_graphic = 6,
+ transport_bg_rounding_text = 6,
+ transport_bg_rounding_custom = 6,
+ transport_bg_border_graphic = false,
+ transport_bg_border_text = false,
+ transport_bg_border_custom = false,
+ transport_bg_border_color_graphic = 0xFFFFFFFF,
+ transport_bg_border_color_text = 0xFFFFFFFF,
+ transport_bg_border_color_custom = 0xFFFFFFFF,
+ transport_bg_border_size_graphic = 1.0,
+ transport_bg_border_size_text = 1.0,
+ transport_bg_border_size_custom = 1.0,
+ transport_button_order = {"rewind", "play", "stop", "pause", "record", "loop", "forward"},
  show_timesel = true,
  show_transport = true,
  show_cursorpos = true,
@@ -1936,6 +1996,122 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  end
  end  
  
+ if settings.transport_mode ~= 2 then
+ local current_show_bg = GetModeSetting("transport_show_button_bg", false)
+ rv, current_show_bg = r.ImGui_Checkbox(ctx, "Button Background", current_show_bg)
+ if rv then SetModeSetting("transport_show_button_bg", current_show_bg) end
+ 
+ if current_show_bg then
+ r.ImGui_Indent(ctx, 16)
+ 
+ r.ImGui_Text(ctx, "Background Colors:")
+ if r.ImGui_BeginTable(ctx, "BgColors", 3, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ local bg_normal = GetModeSetting("transport_bg_color", 0x333333FF)
+ rv, bg_normal = r.ImGui_ColorEdit4(ctx, "Normal##bg", bg_normal, color_flags)
+ if rv then SetModeSetting("transport_bg_color", bg_normal) end
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ local bg_hover = GetModeSetting("transport_bg_hover", 0x555555FF)
+ rv, bg_hover = r.ImGui_ColorEdit4(ctx, "Hover##bg", bg_hover, color_flags)
+ if rv then SetModeSetting("transport_bg_hover", bg_hover) end
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ local bg_active = GetModeSetting("transport_bg_active", 0x777777FF)
+ rv, bg_active = r.ImGui_ColorEdit4(ctx, "Active##bg", bg_active, color_flags)
+ if rv then SetModeSetting("transport_bg_active", bg_active) end
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ r.ImGui_Text(ctx, "Icon Color:")
+ r.ImGui_SameLine(ctx)
+ local current_icon_color = GetModeSetting("transport_icon_color", 0xFFFFFFFF)
+ rv, current_icon_color = r.ImGui_ColorEdit4(ctx, "##IconColor", current_icon_color, color_flags)
+ if rv then SetModeSetting("transport_icon_color", current_icon_color) end
+ 
+ if r.ImGui_BeginTable(ctx, "BgSizeTable", 3, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
+ r.ImGui_Text(ctx, "Padding:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local bg_padding = GetModeSetting("transport_bg_padding", 4)
+ rv, bg_padding = r.ImGui_SliderInt(ctx, "##BgPadding", bg_padding, 0, 20)
+ if rv then SetModeSetting("transport_bg_padding", bg_padding) end
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Extra Width:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local bg_padding_x = GetModeSetting("transport_bg_padding_x", 4)
+ rv, bg_padding_x = r.ImGui_SliderInt(ctx, "##BgPaddingX", bg_padding_x, 0, 30)
+ if rv then SetModeSetting("transport_bg_padding_x", bg_padding_x) end
+ r.ImGui_TableSetColumnIndex(ctx, 2)
+ r.ImGui_Text(ctx, "Rounding:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local bg_rounding = GetModeSetting("transport_bg_rounding", 6)
+ rv, bg_rounding = r.ImGui_SliderInt(ctx, "##BgRounding", bg_rounding, 0, 30)
+ if rv then SetModeSetting("transport_bg_rounding", bg_rounding) end
+ r.ImGui_EndTable(ctx)
+ end
+ 
+ local bg_show_border = GetModeSetting("transport_bg_border", false)
+ rv, bg_show_border = r.ImGui_Checkbox(ctx, "Border##bg", bg_show_border)
+ if rv then SetModeSetting("transport_bg_border", bg_show_border) end
+ if bg_show_border then
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Color:")
+ r.ImGui_SameLine(ctx)
+ local bg_border_color = GetModeSetting("transport_bg_border_color", 0xFFFFFFFF)
+ rv, bg_border_color = r.ImGui_ColorEdit4(ctx, "##BgBorderColor", bg_border_color, color_flags)
+ if rv then SetModeSetting("transport_bg_border_color", bg_border_color) end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, "Size:")
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, 80)
+ local bg_border_size = GetModeSetting("transport_bg_border_size", 1.0)
+ rv, bg_border_size = r.ImGui_SliderDouble(ctx, "##BgBorderSize", bg_border_size, 0.5, 5.0, "%.1f")
+ if rv then SetModeSetting("transport_bg_border_size", bg_border_size) end
+ end
+ 
+ r.ImGui_Unindent(ctx, 16)
+ end
+ 
+ r.ImGui_Separator(ctx)
+ end
+
+ r.ImGui_Text(ctx, "Button Order:")
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_SmallButton(ctx, "Reset##btnorder") then
+ settings.transport_button_order = nil
+ MarkTransportPresetChanged()
+ end
+ local current_order = settings.transport_button_order or DEFAULT_BUTTON_ORDER
+ for i, btn_name in ipairs(current_order) do
+ r.ImGui_PushID(ctx, i)
+ local can_up = i > 1
+ local can_down = i < #current_order
+ if not can_up then r.ImGui_BeginDisabled(ctx) end
+ if r.ImGui_SmallButton(ctx, "\xE2\x96\xB2") then
+ local new_order = {}
+ for j, v in ipairs(current_order) do new_order[j] = v end
+ new_order[i], new_order[i-1] = new_order[i-1], new_order[i]
+ settings.transport_button_order = new_order
+ MarkTransportPresetChanged()
+ end
+ if not can_up then r.ImGui_EndDisabled(ctx) end
+ r.ImGui_SameLine(ctx)
+ if not can_down then r.ImGui_BeginDisabled(ctx) end
+ if r.ImGui_SmallButton(ctx, "\xE2\x96\xBC") then
+ local new_order = {}
+ for j, v in ipairs(current_order) do new_order[j] = v end
+ new_order[i], new_order[i+1] = new_order[i+1], new_order[i]
+ settings.transport_button_order = new_order
+ MarkTransportPresetChanged()
+ end
+ if not can_down then r.ImGui_EndDisabled(ctx) end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_Text(ctx, TRANSPORT_BTN_LABELS[btn_name] or btn_name)
+ r.ImGui_PopID(ctx)
+ end
+ r.ImGui_Separator(ctx)
+
  if settings.transport_mode ~= 1 then
  r.ImGui_Text(ctx, "Button Rounding:")
  r.ImGui_SetNextItemWidth(ctx, 150)
@@ -10115,6 +10291,30 @@ function Transport_Buttons(main_window_width, main_window_height)
  local mode_loop_active = settings["loop_active" .. mode_suffix]
  if mode_loop_active == nil then mode_loop_active = 0x00FFFFFF end
 
+ local mode_show_button_bg = settings["transport_show_button_bg" .. mode_suffix]
+ if mode_show_button_bg == nil then mode_show_button_bg = false end
+
+ local mode_icon_color = settings["transport_icon_color" .. mode_suffix]
+ if mode_icon_color == nil then mode_icon_color = 0xFFFFFFFF end
+
+ local mode_bg_color = settings["transport_bg_color" .. mode_suffix]
+ if mode_bg_color == nil then mode_bg_color = 0x333333FF end
+ local mode_bg_hover = settings["transport_bg_hover" .. mode_suffix]
+ if mode_bg_hover == nil then mode_bg_hover = 0x555555FF end
+ local mode_bg_active = settings["transport_bg_active" .. mode_suffix]
+ if mode_bg_active == nil then mode_bg_active = 0x777777FF end
+ local mode_bg_padding = settings["transport_bg_padding" .. mode_suffix]
+ if mode_bg_padding == nil then mode_bg_padding = 4 end
+ local mode_bg_padding_x = settings["transport_bg_padding_x" .. mode_suffix]
+ if mode_bg_padding_x == nil then mode_bg_padding_x = mode_bg_padding end
+ local mode_bg_rounding = settings["transport_bg_rounding" .. mode_suffix]
+ if mode_bg_rounding == nil then mode_bg_rounding = 6 end
+ local mode_bg_border = settings["transport_bg_border" .. mode_suffix]
+ if mode_bg_border == nil then mode_bg_border = false end
+ local mode_bg_border_color = settings["transport_bg_border_color" .. mode_suffix]
+ if mode_bg_border_color == nil then mode_bg_border_color = 0xFFFFFFFF end
+ local mode_bg_border_size = settings["transport_bg_border_size" .. mode_suffix]
+ if mode_bg_border_size == nil then mode_bg_border_size = 1.0 end
 
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), mode_rounding)
@@ -10134,7 +10334,8 @@ function Transport_Buttons(main_window_width, main_window_height)
  local spacing_graphic = math.floor(buttonSize_graphic * 0.2 * mode_spacing)
  local spacing_text = math.floor(buttonSize_text * 0.2 * mode_spacing)
  local spacing = settings.use_graphic_buttons and spacing_graphic or spacing_text
- local count = 7
+ local button_order = settings.transport_button_order or DEFAULT_BUTTON_ORDER
+ local count = #button_order
  local perButtonWidth_text = buttonSize_text * 1.7 
 
  local drawList = r.ImGui_GetWindowDrawList(ctx)
@@ -10166,19 +10367,28 @@ function Transport_Buttons(main_window_width, main_window_height)
  loop = sz(settings.use_custom_loop_image, transport_custom_images.loop, settings.custom_loop_image_size),
  forward = sz(settings.use_custom_forward_image, transport_custom_images.forward, settings.custom_forward_image_size),
  }
- total_width = (sizes.rewind + sizes.play + sizes.stop + sizes.pause + sizes.rec + sizes.loop + sizes.forward)
- + spacing * (count - 1)
+ total_width = spacing * (count - 1)
+ for _, bname in ipairs(button_order) do
+ local bdef = TRANSPORT_BTN_DEFS[bname]
+ if bdef then total_width = total_width + sizes[bdef.size_key] end
+ end
+ if mode_show_button_bg then
+ total_width = total_width + mode_bg_padding_x * 2 * count
+ end
  else
  widths_text = {}
- local labels = {"<<","PLAY","STOP","PAUSE","REC","LOOP",">>"}
  local pad = math.floor(buttonSize_text * 0.6) 
- for i=1,#labels do
- local tw, _ = r.ImGui_CalcTextSize(ctx, labels[i])
- widths_text[i] = math.max(tw + pad, perButtonWidth_text)
+ for _, bname in ipairs(button_order) do
+ local bdef = TRANSPORT_BTN_DEFS[bname]
+ if bdef then
+ local tw, _ = r.ImGui_CalcTextSize(ctx, bdef.id)
+ widths_text[bname] = math.max(tw + pad, perButtonWidth_text)
  end
- total_width = 0
- for i=1,#widths_text do total_width = total_width + widths_text[i] end
- total_width = total_width + spacing * (count - 1)
+ end
+ total_width = spacing * (count - 1)
+ for _, bname in ipairs(button_order) do
+ if widths_text[bname] then total_width = total_width + widths_text[bname] end
+ end
  end
 
  local mode_center = settings["center_transport" .. mode_suffix]
@@ -10243,6 +10453,33 @@ function Transport_Buttons(main_window_width, main_window_height)
  return color
  end
 
+ local function GetBgColor()
+ local color
+ if r.ImGui_IsItemActive(ctx) then
+ color = mode_bg_active
+ elseif r.ImGui_IsItemHovered(ctx) then
+ color = mode_bg_hover
+ else
+ color = mode_bg_color
+ end
+ return color
+ end
+
+ local function DrawButtonBg(pos_x, pos_y, btn_size, bg_col)
+ local pad_y = mode_bg_padding
+ local pad_x = mode_bg_padding_x
+ r.ImGui_DrawList_AddRectFilled(drawList,
+ pos_x - pad_x, pos_y - pad_y,
+ pos_x + btn_size + pad_x, pos_y + btn_size + pad_y,
+ bg_col, mode_bg_rounding)
+ if mode_bg_border then
+ r.ImGui_DrawList_AddRect(drawList,
+ pos_x - pad_x, pos_y - pad_y,
+ pos_x + btn_size + pad_x, pos_y + btn_size + pad_y,
+ mode_bg_border_color, mode_bg_rounding, nil, mode_bg_border_size)
+ end
+ end
+
  local function update_group_bounds()
  local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
  local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
@@ -10259,152 +10496,67 @@ function Transport_Buttons(main_window_width, main_window_height)
  if settings.use_graphic_buttons then
  local x = base_x_px
  local pos_x, pos_y
+ local pad = mode_show_button_bg and mode_bg_padding_x or 0
+ local active_colors = {
+ play = mode_play_active,
+ pause = mode_pause_active,
+ record = mode_record_active,
+ loop = mode_loop_active,
+ }
 
- 
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
- do
- local clicked = r.ImGui_InvisibleButton(ctx, "<<", sizes.rewind, sizes.rewind)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.GOTO_START, 0) end
+ for _, btn_name in ipairs(button_order) do
+ local def = TRANSPORT_BTN_DEFS[btn_name]
+ if def then
+ local btn_size = sizes[def.size_key]
+ local is_active = false
+ if btn_name == "play" then is_active = r.GetPlayState() & 1 == 1
+ elseif btn_name == "pause" then is_active = r.GetPlayState() & 2 == 2
+ elseif btn_name == "record" then is_active = r.GetToggleCommandState(COMMANDS.RECORD) == 1
+ elseif btn_name == "loop" then is_active = r.GetToggleCommandState(COMMANDS.REPEAT) == 1
  end
- DrawTransportButtonBorder(ctx, mode_suffix)
- update_group_bounds()
- if settings.transport_mode ~= 1 and settings.use_custom_rewind_image and transport_custom_images.rewind and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.rewind, 'ImGui_Image*')) then
- local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
- r.ImGui_DrawList_AddImageRounded(drawList, transport_custom_images.rewind, pos_x, pos_y, pos_x + sizes.rewind, pos_y + sizes.rewind, uv_x, 0, uv_x + 0.33, 1, 0xFFFFFFFF, mode_rounding)
- else
- local rewind_color = GetButtonColor()
- local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.rewind, rewind_color)
- graphics.DrawArrows(pos_x, pos_y, sizes.rewind, false)
- end
- local play_uses_vector = not (settings.transport_mode ~= 1 and settings.use_custom_play_image and transport_custom_images.play and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.play, 'ImGui_Image*')))
- local play_bias = play_uses_vector and math.floor(spacing * 0.5) or 0
- x = x + sizes.rewind + spacing + play_bias
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- local play_state = r.GetPlayState() & 1 == 1
- pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
- do
- local clicked = r.ImGui_InvisibleButton(ctx, "PLAY", sizes.play, sizes.play)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.PLAY, 0) end
- end
- DrawTransportButtonBorder(ctx, mode_suffix)
- update_group_bounds()
- ShowPlaySyncMenu()
- if settings.transport_mode ~= 1 and settings.use_custom_play_image and transport_custom_images.play and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.play, 'ImGui_Image*')) then
- local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
- if play_state then uv_x = 0.66 end
- r.ImGui_DrawList_AddImageRounded(drawList, transport_custom_images.play, pos_x, pos_y, pos_x + sizes.play, pos_y + sizes.play, uv_x, 0, uv_x + 0.33, 1, 0xFFFFFFFF, mode_rounding)
- else
- local play_color = play_state and mode_play_active or GetButtonColor()
- local play_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.play, play_color)
- play_graphics.DrawPlay(pos_x, pos_y, sizes.play)
- end
- local post_play_spacing = spacing - play_bias
- if post_play_spacing < 0 then post_play_spacing = 0 end
- x = x + sizes.play + post_play_spacing
 
  r.ImGui_SetCursorPosX(ctx, x)
  r.ImGui_SetCursorPosY(ctx, base_y_px)
  pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
  do
- local clicked = r.ImGui_InvisibleButton(ctx, "STOP", sizes.stop, sizes.stop)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.STOP, 0) end
+ local btn_w = btn_size + pad * 2
+ local btn_h = btn_size + pad * 2
+ local clicked = r.ImGui_InvisibleButton(ctx, def.id, btn_w, btn_h)
+ if allow_input and clicked then r.Main_OnCommand(def.command, 0) end
  end
  DrawTransportButtonBorder(ctx, mode_suffix)
  update_group_bounds()
- if settings.transport_mode ~= 1 and settings.use_custom_stop_image and transport_custom_images.stop and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.stop, 'ImGui_Image*')) then
- local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
- r.ImGui_DrawList_AddImageRounded(drawList, transport_custom_images.stop, pos_x, pos_y, pos_x + sizes.stop, pos_y + sizes.stop, uv_x, 0, uv_x + 0.33, 1, 0xFFFFFFFF, mode_rounding)
- else
- local stop_color = GetButtonColor()
- local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.stop, stop_color)
- graphics.DrawStop(pos_x, pos_y, sizes.stop)
- end
- x = x + sizes.stop + spacing
+ if btn_name == "play" then ShowPlaySyncMenu() end
+ if btn_name == "record" then ShowRecordMenu() end
 
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- local pause_state = r.GetPlayState() & 2 == 2
- pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
- do
- local clicked = r.ImGui_InvisibleButton(ctx, "PAUSE", sizes.pause, sizes.pause)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.PAUSE, 0) end
- end
- DrawTransportButtonBorder(ctx, mode_suffix)
- update_group_bounds()
- if settings.transport_mode ~= 1 and settings.use_custom_pause_image and transport_custom_images.pause and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.pause, 'ImGui_Image*')) then
+ if settings.transport_mode ~= 1 and settings[def.use_custom] and transport_custom_images[def.custom_img] and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images[def.custom_img], 'ImGui_Image*')) then
  local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
- if pause_state then uv_x = 0.66 end
- r.ImGui_DrawList_AddImageRounded(drawList, transport_custom_images.pause, pos_x, pos_y, pos_x + sizes.pause, pos_y + sizes.pause, uv_x, 0, uv_x + 0.33, 1, 0xFFFFFFFF, mode_rounding)
+ if is_active then uv_x = 0.66 end
+ r.ImGui_DrawList_AddImageRounded(drawList, transport_custom_images[def.custom_img], pos_x + pad, pos_y + pad, pos_x + pad + btn_size, pos_y + pad + btn_size, uv_x, 0, uv_x + 0.33, 1, 0xFFFFFFFF, mode_rounding)
  else
- local pause_color = pause_state and mode_pause_active or GetButtonColor()
- local pause_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.pause, pause_color)
- pause_graphics.DrawPause(pos_x, pos_y, sizes.pause)
- end
- x = x + sizes.pause + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- local rec_state = r.GetToggleCommandState(COMMANDS.RECORD)
- pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
- do
- local clicked = r.ImGui_InvisibleButton(ctx, "REC", sizes.rec, sizes.rec)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.RECORD, 0) end
- end
- DrawTransportButtonBorder(ctx, mode_suffix)
- update_group_bounds()
- ShowRecordMenu()
- if settings.transport_mode ~= 1 and settings.use_custom_record_image and transport_custom_images.record and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.record, 'ImGui_Image*')) then
- local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
- if rec_state == 1 then uv_x = 0.66 end
- r.ImGui_DrawList_AddImageRounded(drawList, transport_custom_images.record, pos_x, pos_y, pos_x + sizes.rec, pos_y + sizes.rec, uv_x, 0, uv_x + 0.33, 1, 0xFFFFFFFF, mode_rounding)
+ if mode_show_button_bg then
+ local active_col = active_colors[btn_name]
+ local bg_col = (is_active and active_col) or GetBgColor()
+ DrawButtonBg(pos_x + pad, pos_y + pad, btn_size, bg_col)
+ local graphics = DrawTransportGraphics(drawList, pos_x + pad, pos_y + pad, btn_size, mode_icon_color)
+ if def.draw_fn == "DrawArrows" then
+ graphics.DrawArrows(pos_x + pad, pos_y + pad, btn_size, def.draw_arg)
  else
- local rec_color = (rec_state == 1) and mode_record_active or GetButtonColor()
- local rec_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.rec, rec_color)
- rec_graphics.DrawRecord(pos_x, pos_y, sizes.rec)
+ graphics[def.draw_fn](pos_x + pad, pos_y + pad, btn_size)
  end
- x = x + sizes.rec + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- local repeat_state = r.GetToggleCommandState(COMMANDS.REPEAT)
- pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
- do
- local clicked = r.ImGui_InvisibleButton(ctx, "LOOP", sizes.loop, sizes.loop)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.REPEAT, 0) end
- end
- DrawTransportButtonBorder(ctx, mode_suffix)
- update_group_bounds()
- if settings.transport_mode ~= 1 and settings.use_custom_loop_image and transport_custom_images.loop and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.loop, 'ImGui_Image*')) then
- local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
- if repeat_state == 1 then uv_x = 0.66 end
- r.ImGui_DrawList_AddImageRounded(drawList, transport_custom_images.loop, pos_x, pos_y, pos_x + sizes.loop, pos_y + sizes.loop, uv_x, 0, uv_x + 0.33, 1, 0xFFFFFFFF, mode_rounding)
  else
- local loop_color = (repeat_state == 1) and mode_loop_active or GetButtonColor()
- local loop_graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.loop, loop_color)
- loop_graphics.DrawLoop(pos_x, pos_y, sizes.loop)
- end
- x = x + sizes.loop + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
- do
- local clicked = r.ImGui_InvisibleButton(ctx, ">>", sizes.forward, sizes.forward)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.GOTO_END, 0) end
- end
- DrawTransportButtonBorder(ctx, mode_suffix)
- update_group_bounds()
- if settings.transport_mode ~= 1 and settings.use_custom_forward_image and transport_custom_images.forward and (not r.ImGui_ValidatePtr or r.ImGui_ValidatePtr(transport_custom_images.forward, 'ImGui_Image*')) then
- local uv_x = r.ImGui_IsItemHovered(ctx) and 0.33 or 0
- r.ImGui_DrawList_AddImageRounded(drawList, transport_custom_images.forward, pos_x, pos_y, pos_x + sizes.forward, pos_y + sizes.forward, uv_x, 0, uv_x + 0.33, 1, 0xFFFFFFFF, mode_rounding)
+ local active_col = active_colors[btn_name]
+ local btn_color = (is_active and active_col) or GetButtonColor()
+ local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, btn_size, btn_color)
+ if def.draw_fn == "DrawArrows" then
+ graphics.DrawArrows(pos_x, pos_y, btn_size, def.draw_arg)
  else
- local forward_color = GetButtonColor()
- local graphics = DrawTransportGraphics(drawList, pos_x, pos_y, sizes.forward, forward_color)
- graphics.DrawArrows(pos_x, pos_y, sizes.forward, true)
+ graphics[def.draw_fn](pos_x, pos_y, btn_size)
+ end
+ end
+ end
+ x = x + btn_size + pad * 2 + spacing
+ end
  end
 
  else
@@ -10427,75 +10579,37 @@ function Transport_Buttons(main_window_width, main_window_height)
  local clicked
  local x = base_x_px
  local w = widths_text or {}
+ local active_colors = {
+ play = mode_play_active,
+ pause = mode_pause_active,
+ record = mode_record_active,
+ loop = mode_loop_active,
+ }
+
+ for _, btn_name in ipairs(button_order) do
+ local def = TRANSPORT_BTN_DEFS[btn_name]
+ if def then
+ local is_active = false
+ if btn_name == "play" then is_active = r.GetPlayState() & 1 == 1
+ elseif btn_name == "pause" then is_active = r.GetPlayState() & 2 == 2
+ elseif btn_name == "record" then is_active = r.GetToggleCommandState(COMMANDS.RECORD) == 1
+ elseif btn_name == "loop" then is_active = r.GetToggleCommandState(COMMANDS.REPEAT) == 1
+ end
+ local active_col = active_colors[btn_name]
 
  r.ImGui_SetCursorPosX(ctx, x)
  r.ImGui_SetCursorPosY(ctx, base_y_px)
- clicked = r.ImGui_Button(ctx, "<<", w[1] or perButtonWidth_text, buttonHeight)
+ if is_active and active_col then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), active_col) end
+ clicked = r.ImGui_Button(ctx, def.id, w[btn_name] or perButtonWidth_text, buttonHeight)
  DrawTransportButtonBorder(ctx, mode_suffix)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.GOTO_START, 0) end
+ if allow_input and clicked then r.Main_OnCommand(def.command, 0) end
+ if is_active and active_col then r.ImGui_PopStyleColor(ctx) end
  update_group_bounds()
- x = x + (w[1] or perButtonWidth_text) + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- local play_state = r.GetPlayState() & 1 == 1
- if play_state then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), mode_play_active) end
- clicked = r.ImGui_Button(ctx, "PLAY", w[2] or perButtonWidth_text, buttonHeight)
- DrawTransportButtonBorder(ctx, mode_suffix)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.PLAY, 0) end
- if play_state then r.ImGui_PopStyleColor(ctx) end
- update_group_bounds()
- ShowPlaySyncMenu()
- x = x + (w[2] or perButtonWidth_text) + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- clicked = r.ImGui_Button(ctx, "STOP", w[3] or perButtonWidth_text, buttonHeight)
- DrawTransportButtonBorder(ctx, mode_suffix)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.STOP, 0) end
- update_group_bounds()
- x = x + (w[3] or perButtonWidth_text) + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- local pause_state = r.GetPlayState() & 2 == 2
- if pause_state then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), mode_pause_active) end
- clicked = r.ImGui_Button(ctx, "PAUSE", w[4] or perButtonWidth_text, buttonHeight)
- DrawTransportButtonBorder(ctx, mode_suffix)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.PAUSE, 0) end
- if pause_state then r.ImGui_PopStyleColor(ctx) end
- update_group_bounds()
- x = x + (w[4] or perButtonWidth_text) + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- local rec_state = r.GetToggleCommandState(COMMANDS.RECORD)
- if rec_state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), mode_record_active) end
- clicked = r.ImGui_Button(ctx, "REC", w[5] or perButtonWidth_text, buttonHeight)
- DrawTransportButtonBorder(ctx, mode_suffix)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.RECORD, 0) end
- if rec_state == 1 then r.ImGui_PopStyleColor(ctx) end
- update_group_bounds()
- ShowRecordMenu()
- x = x + (w[5] or perButtonWidth_text) + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- local repeat_state = r.GetToggleCommandState(COMMANDS.REPEAT)
- if repeat_state == 1 then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), mode_loop_active) end
- clicked = r.ImGui_Button(ctx, "LOOP", w[6] or perButtonWidth_text, buttonHeight)
- DrawTransportButtonBorder(ctx, mode_suffix)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.REPEAT, 0) end
- if repeat_state == 1 then r.ImGui_PopStyleColor(ctx) end
- update_group_bounds()
- x = x + (w[6] or perButtonWidth_text) + spacing
-
- r.ImGui_SetCursorPosX(ctx, x)
- r.ImGui_SetCursorPosY(ctx, base_y_px)
- clicked = r.ImGui_Button(ctx, ">>", w[7] or perButtonWidth_text, buttonHeight)
- DrawTransportButtonBorder(ctx, mode_suffix)
- if allow_input and clicked then r.Main_OnCommand(COMMANDS.GOTO_END, 0) end
- update_group_bounds()
+ if btn_name == "play" then ShowPlaySyncMenu() end
+ if btn_name == "record" then ShowRecordMenu() end
+ x = x + (w[btn_name] or perButtonWidth_text) + spacing
+ end
+ end
  
  r.ImGui_PopStyleColor(ctx, 3)
  
@@ -18247,10 +18361,11 @@ function DrawTransportGraphics(drawList, x, y, size, color)
 
  local function DrawPlay(x, y, size)
  local adjustedSize = size
+ local m = size * 0.05
  local points = {
- x + size * 0.1, y + size * 0.1,
- x + size * 0.1, y + adjustedSize,
- x + adjustedSize, y + size / 2
+ x + m, y + m,
+ x + m, y + size - m,
+ x + size - m, y + size * 0.5
  }
  
  if style == 1 then
@@ -18267,9 +18382,9 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  color)
  elseif style == 3 then
  local sharpPoints = {
- x + size * 0.05, y + size * 0.05,
- x + size * 0.05, y + size * 1.05,
- x + size * 1.05, y + size / 2
+ x, y,
+ x, y + size,
+ x + size, y + size * 0.5
  }
  r.ImGui_DrawList_AddTriangleFilled(drawList,
  sharpPoints[1], sharpPoints[2],
@@ -18408,22 +18523,23 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local function DrawStop(x, y, size)
  local adjustedSize = size
  local rounding = 0
+ local m = size * 0.05
  
  if style == 1 then
  r.ImGui_DrawList_AddRect(drawList,
- x + size * 0.1, y + size * 0.1,
- x + adjustedSize, y + adjustedSize,
+ x + m, y + m,
+ x + size - m, y + size - m,
  color, 0, nil, 2.5)
  elseif style == 2 then
  rounding = size * 0.15
  r.ImGui_DrawList_AddRectFilled(drawList,
- x + size * 0.1, y + size * 0.1,
- x + adjustedSize, y + adjustedSize,
+ x + m, y + m,
+ x + size - m, y + size - m,
  color, rounding)
  elseif style == 3 then
  r.ImGui_DrawList_AddRectFilled(drawList,
- x + size * 0.05, y + size * 0.05,
- x + size * 1.05, y + size * 1.05,
+ x, y,
+ x + size, y + size,
  color, 0)
  elseif style == 4 then
  local cx, cy = x + size / 2, y + size / 2
@@ -18528,8 +18644,8 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  else
  r.ImGui_DrawList_AddRectFilled(drawList,
- x + size * 0.1, y + size * 0.1,
- x + adjustedSize, y + adjustedSize,
+ x + size * 0.05, y + size * 0.05,
+ x + size * 0.95, y + size * 0.95,
  color)
  end
  end
@@ -18540,23 +18656,25 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  local rounding = (style == 2) and (size * 0.1) or 0
  
  if style == 1 then
+ local m = size * 0.05
+ local bw = size * 0.3
  r.ImGui_DrawList_AddRect(drawList,
- x + size * 0.1, y + size * 0.1,
- x + size * 0.1 + barWidth, y + adjustedSize,
+ x + m, y + m,
+ x + m + bw, y + size - m,
  color, 0, nil, 2.5)
  r.ImGui_DrawList_AddRect(drawList,
- x + adjustedSize - barWidth, y + size * 0.1,
- x + adjustedSize, y + adjustedSize,
+ x + size - m - bw, y + m,
+ x + size - m, y + size - m,
  color, 0, nil, 2.5)
  elseif style == 3 then
- local sharpWidth = adjustedSize / 3.5
+ local sharpWidth = size / 3.5
  r.ImGui_DrawList_AddRectFilled(drawList,
- x + size * 0.1, y + size * 0.05,
- x + size * 0.1 + sharpWidth, y + size * 1.05,
+ x, y,
+ x + sharpWidth, y + size,
  color)
  r.ImGui_DrawList_AddRectFilled(drawList,
- x + adjustedSize - sharpWidth + size * 0.1, y + size * 0.05,
- x + adjustedSize + size * 0.1, y + size * 1.05,
+ x + size - sharpWidth, y,
+ x + size, y + size,
  color)
  elseif style == 4 then
  local dotRadius = size * 0.15
@@ -18681,13 +18799,15 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  end
  end
  else
+ local m = size * 0.05
+ local bw = size * 0.3
  r.ImGui_DrawList_AddRectFilled(drawList,
- x + size * 0.1, y + size * 0.1,
- x + size * 0.1 + barWidth, y + adjustedSize,
+ x + m, y + m,
+ x + m + bw, y + size - m,
  color, rounding)
  r.ImGui_DrawList_AddRectFilled(drawList,
- x + adjustedSize - barWidth, y + size * 0.1,
- x + adjustedSize, y + adjustedSize,
+ x + size - m - bw, y + m,
+ x + size - m, y + size - m,
  color, rounding)
  end
  end
@@ -19060,6 +19180,15 @@ function DrawTransportGraphics(drawList, x, y, size, color)
  arrowSize = size / 2
  spacing = size / 10
  end
+
+ local totalArrowWidth
+ if style == 4 then
+ totalArrowWidth = arrowSize * 2 + spacing * 2
+ else
+ totalArrowWidth = arrowSize * 2 + spacing
+ end
+ local offsetX = (size - totalArrowWidth) / 2
+ x = x + offsetX
 
  if style == 4 then
  for i = 0, 1 do
