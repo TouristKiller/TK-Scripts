@@ -1,11 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.4.6
+-- @version 2.4.7
 -- @changelog:
 --[[     
-    + Added: Submenu Width and FX List Width settings in GUI tab
-    + Added: Subfolders can now coexist with plugins in custom folders
-    + Fixed: Custom folder popup width now matches developer folders
+    + Added Pin persistence in TK NOTES: The pinned state of notes windows is now saved and loaded from ExtState, ensuring that pinned notes remain pinned across REAPER sessions and different contexts. This means that if you pin a notes window for a specific plugin or track, it will stay pinned even after closing and reopening REAPER, providing a more consistent and reliable note-taking experience.
 
 ]]--        
 --------------------------------------------------------------------------

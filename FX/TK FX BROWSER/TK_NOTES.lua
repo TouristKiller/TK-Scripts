@@ -1,7 +1,10 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.4.1
+-- @version 2.4.2
 -- @changelog
+-- 2.4.2
+--   + pin persistence fix: window_pinned state is now saved and loaded from ExtState, ensuring it persists across sessions and contexts.
+-- 2.4.1
 --   + Auto-context: automatic mode switching based on REAPER selection (item/track/project)
 --   + Auto-context toggle button (⟳) in toolbar with overflow support
 --   + Global mode is never auto-activated (manual only)
@@ -250,6 +253,10 @@ local function LoadNotebook()
 
     if r.HasExtState(EXT_NAMESPACE, "auto_context") then
         state.auto_context = r.GetExtState(EXT_NAMESPACE, "auto_context") == "1"
+    end
+
+    if r.HasExtState(EXT_NAMESPACE, "window_pinned") then
+        state.window_pinned = r.GetExtState(EXT_NAMESPACE, "window_pinned") == "1"
     end
     
     UpdateActiveContext(true)
@@ -517,6 +524,7 @@ local function SaveNotebook()
     
     r.SetExtState(EXT_NAMESPACE, "auto_save_interval", tostring(state.auto_save_interval or 10), true)
     r.SetExtState(EXT_NAMESPACE, "auto_context", state.auto_context and "1" or "0", true)
+    r.SetExtState(EXT_NAMESPACE, "window_pinned", state.window_pinned and "1" or "0", true)
     
     if saved_text and saved_align and saved_color and saved_images and saved_strokes and saved_font_size and saved_font_family and saved_auto_save and saved_window_width and saved_window_height and saved_show_status and saved_tabs_enabled and saved_tabs_data then
         state.dirty = false
@@ -3986,6 +3994,7 @@ local function DrawMenuBar()
         local pin_label = pin_icon .. "##toggle_pin"
         if r.ImGui_Button(ctx, pin_label, button_width, button_height) then
             state.window_pinned = not state.window_pinned
+            r.SetExtState(EXT_NAMESPACE, "window_pinned", state.window_pinned and "1" or "0", true)
         end
         if pin_tinted then
             r.ImGui_PopStyleColor(ctx, 1)
@@ -4238,6 +4247,7 @@ local function DrawMenuBar()
             if overflow_set["pin"] then
                 if r.ImGui_MenuItem(ctx, state.window_pinned and "📌 Unpin window" or "📍 Pin window", nil, state.window_pinned) then
                     state.window_pinned = not state.window_pinned
+                    r.SetExtState(EXT_NAMESPACE, "window_pinned", state.window_pinned and "1" or "0", true)
                 end
             end
 
