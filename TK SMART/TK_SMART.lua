@@ -1,11 +1,41 @@
 -- @description TK Script Template for ReaScript with TK GUI
 -- @author TouristKiller
--- @version 2.1.0
+-- @version 2.3.0
 -- @changelog
 --[[
-+ Added Zoom In (+) and Zoom Out (-) buttons to Regions table
-+ Added Auto-Color Rules tab with Auto-Apply on Rename option
-+ Added Duplicate Region Content (D) button - left-click: ripple, right-click: no ripple
++ Fixed region time editing: only first region was editable due to shared global state and ImGui ID collisions
++ Fixed nil crash in mbt_to_seconds when edited_times_buf had no value yet
++ Improved timeline minimap: added arrange viewport indicator, play cursor (green), time selection overlay
++ Improved timeline minimap: regions now semi-transparent (45% alpha) with border for better overlap visibility
++ Improved timeline minimap: markers now have shadow outline and triangle head for better contrast
++ Improved timeline minimap: hover tooltip shows type, number, name and time position
++ Improved timeline minimap: fixed BeginChild return value check
++ Added "RULER" button (Ruler Lane Manager, action 43542) to bottom button bar
++ Added "Vis" header toggle for regions table (was only on markers)
++ Renamed DEL ALL MARKERS/REGIONS to compact "DEL MKR"/"DEL RGN" with red styling and tooltips
++ Added drag & drop for markers/regions in timeline minimap with grid snap and auto-renumbering
++ Added right-click to set edit cursor position in timeline minimap
++ Added Undo/Redo buttons alongside tabs with custom drawn curved arrow icons
++ Added ruler lane support: markers/regions now show their lane number in tables (Ln column)
++ Added ruler lane visualization in timeline minimap with stacked sub-lanes and lane separators
++ Added lane filter dropdown (Ln) next to type filter when multiple ruler lanes are present
++ Added lane info to minimap hover/drag tooltips
++ Dynamic minimap height scales with number of visible lanes
++ Added region name labels inside regions on the timeline minimap with text clipping
++ Added per-table lane filter dropdowns behind bulk action buttons for markers and regions separately
++ Improved table sorting: items now sorted by lane first, then by position within each lane
++ Added lane separator header rows in marker and region tables for visual grouping
++ Replaced SWS-based renumbering with custom lane-aware renumber function that preserves lane assignments
++ Removed automatic renumber on drag completion (was too destructive)
++ Added double-click on minimap items to select/deselect them in REAPER's ruler (B_UISEL)
++ Added 4px drag threshold to prevent accidental drags interfering with double-click
++ Fixed PushClipRect usage: replaced ImGui.PushClipRect with DrawList_PushClipRect for region name text clipping
++ Fixed scroll wheel causing window content to bounce by adding NoScrollWithMouse flag
++ Increased bottom section height from 82 to 90 to prevent table overlapping bottom section
++ Added lane-aware progress bar: get_region_under_play_cursor now filters by lane
++ Added lane selector combo next to progress bar when multiple region lanes are present
++ Info status line (Rgn:) now respects the progress lane filter
++ Changed progress bar text color to black for better readability
 ]]--
 ----------------------------------------------------------------------------
 local r = reaper
@@ -44,7 +74,8 @@ local pop_item_width = ImGui.PopItemWidth
 local sepa_rator = ImGui.Separator
 
 local BASE_WINDOW_FLAGS = ImGui.WindowFlags_NoTitleBar |
-                         ImGui.WindowFlags_NoScrollbar --|
+                         ImGui.WindowFlags_NoScrollbar |
+                         ImGui.WindowFlags_NoScrollWithMouse
 
 local BASE_SETTINGS_FLAGS = ImGui.WindowFlags_NoTitleBar |
                            ImGui.WindowFlags_NoResize |
@@ -136,10 +167,8 @@ end
 local editing_id = nil
 local editing_name = nil
 
-local editing_time = nil
-local editing_end_time = nil
-local edited_times = {}
-local edited_end_times = {}
+local editing_time_state = nil
+local edited_times_buf = {}
 
 local current_project = nil
 local project_items = {}
@@ -151,6 +180,19 @@ local item_names = {}
 
 local show_weblink_browser = false
 local show_minimap = true
+local timeline_filter = "all"
+local timeline_lane_filter = "all"
+local table_lane_filter_marker = "all"
+local table_lane_filter_region = "all"
+local progress_lane_filter = "all"
+
+-- Search & Filter
+local search_marker = ""
+local search_region = ""
+
+-- Multi-select
+local multi_selected_markers = {}
+local multi_selected_regions = {}
 
 -- Auto Color Variables
 local auto_color_rules = {} 
@@ -191,7 +233,8 @@ local COMMANDS = {
     PLAYLIST = r.NamedCommandLookup("_S&M_SHOW_RGN_PLAYLIST"),
     MATRIX = 41888,
     MANAGER = 40326,
-    GRIDLINES = 42328
+    GRIDLINES = 42328,
+    RULER_LANES = 43542
 }
 
 local CACHE_CONFIG = {
@@ -688,6 +731,7 @@ local function format_time_and_mbt(seconds)
 end
 
 local function mbt_to_seconds(mbt_string)
+    if not mbt_string then return nil end
     local measure, beat, ticks = mbt_string:match("(%d+)%.(%d+)%.(%d+)")
     if measure and beat and ticks then
         measure = tonumber(measure)
@@ -703,24 +747,24 @@ end
 local function edit_time(ctx, item, is_end_time)
     local time = is_end_time and item.rgnend or item.pos
     local time_str = format_time_and_mbt(time)
-    local label = is_end_time and "End##" or "Time##"
-    local edit_key = is_end_time and "editing_end_time" or "editing_time"
-    local edited_times_key = is_end_time and edited_end_times or edited_times
+    local uid = tostring(item.index) .. (item.isRegion and "R" or "M")
+    local label = is_end_time and ("End##" .. uid) or ("Time##" .. uid)
+    local state_key = uid .. (is_end_time and "_end" or "_start")
     
-    if _G[edit_key] == item.index then
-        local current_mbt = edited_times_key[item.index] or r.format_timestr_pos(time, "", 2):match("(%d+%.%d+%.%d+)")
+    if editing_time_state == state_key then
+        local current_mbt = edited_times_buf[state_key] or r.format_timestr_pos(time, "", 2):match("(%d+%.%d+%.%d+)")
         local measure, beat, ticks = current_mbt:match("(%d+)%.(%d+)%.(%d%d%d)")
         if measure and beat and ticks then
             ticks = math.floor(tonumber(ticks) / 10)
             current_mbt = string.format("%s.%s.%02d", measure, beat, ticks)
         end
         local flags = ImGui.InputTextFlags_AutoSelectAll | ImGui.InputTextFlags_EnterReturnsTrue
-        local changed, new_time_str = ImGui.InputText(ctx, label .. item.index, current_mbt, flags)
+        local changed, new_time_str = ImGui.InputText(ctx, label, current_mbt, flags)
         if changed then
-            edited_times_key[item.index] = new_time_str
+            edited_times_buf[state_key] = new_time_str
         end
         if ImGui.IsItemDeactivatedAfterEdit(ctx) or (changed and ImGui.IsKeyPressed(ctx, ImGui.Key_Enter)) then
-            local new_time = mbt_to_seconds(edited_times_key[item.index])
+            local new_time = mbt_to_seconds(edited_times_buf[state_key])
             if new_time then
                 if is_end_time then
                     item.rgnend = new_time
@@ -733,16 +777,16 @@ local function edit_time(ctx, item, is_end_time)
                 r.UpdateArrange()
                 r.Undo_OnStateChange("Update " .. (is_end_time and "region end" or "marker/region start") .. " position")
             end
-            _G[edit_key] = nil
-            edited_times_key[item.index] = nil
+            editing_time_state = nil
+            edited_times_buf[state_key] = nil
         end        
         if ImGui.IsKeyPressed(ctx, ImGui.Key_Escape) then
-            _G[edit_key] = nil
-            edited_times_key[item.index] = nil
+            editing_time_state = nil
+            edited_times_buf[state_key] = nil
         end
     else
-        if ImGui.Selectable(ctx, time_str, false) then
-            _G[edit_key] = item.index
+        if ImGui.Selectable(ctx, time_str .. "##" .. uid .. (is_end_time and "e" or "s"), false) then
+            editing_time_state = state_key
         end
     end
 end
@@ -815,8 +859,17 @@ local function get_markers_and_regions()
     local _, num_markers, num_regions = r.CountProjectMarkers(0)
     local new_items = {}
 
+    local has_lane_api = r.GetRegionOrMarker ~= nil and r.GetRegionOrMarkerInfo_Value ~= nil
+
     for i = 0, num_markers + num_regions - 1 do
         local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
+        local lane = 0
+        if has_lane_api then
+            local marker = r.GetRegionOrMarker(0, i, "")
+            if marker then
+                lane = r.GetRegionOrMarkerInfo_Value(0, marker, "I_LANENUMBER") or 0
+            end
+        end
         local visibility_key = tostring(markrgnindexnumber) .. (isrgn and "R" or "M")
         local item = {
             name = name or (isrgn and 'Region ' or 'Marker ') .. markrgnindexnumber,
@@ -825,6 +878,7 @@ local function get_markers_and_regions()
             color = color,
             index = markrgnindexnumber,
             isRegion = isrgn,
+            lane = lane,
             visible = visibility_data[visibility_key] ~= false,
             project_key = current_project_key
         }
@@ -841,6 +895,9 @@ local function get_markers_and_regions()
     end
 
     table.sort(new_items, function(a, b)
+        local la = a.lane or 0
+        local lb = b.lane or 0
+        if la ~= lb then return la < lb end
         if a.pos == b.pos then
             return a.index < b.index
         end
@@ -883,15 +940,36 @@ local function snap_to_grid(time)
     return math.floor(time / (division * 2) + 0.5) * (division * 2)
 end
 
+local renumber_items
+
+local timeline_hovered_item = nil
+local timeline_dragging = nil
+local timeline_drag_start_x = nil
+local timeline_drag_offset = 0
+
 local function draw_timeline_minimap(ctx, items)
     local width, height = ImGui.GetContentRegionAvail(ctx)
     local project_length = r.GetProjectLength(0)
+    if project_length <= 0 then return end
     local draw_list = ImGui.GetWindowDrawList(ctx)
     local pos_x, pos_y = ImGui.GetCursorScreenPos(ctx)
-    local right_margin = 0
     local time_label_height = 13 * settings.scale_factor
+    local bar_h = height - time_label_height
     
-    ImGui.DrawList_AddRectFilled(draw_list, pos_x, pos_y, pos_x + width - right_margin, pos_y + height - time_label_height, cached_colors.bg_color)
+    ImGui.DrawList_AddRectFilled(draw_list, pos_x, pos_y, pos_x + width, pos_y + bar_h, cached_colors.bg_color)
+    
+    local ts_start, ts_end = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    if ts_end > ts_start then
+        local sx = pos_x + (ts_start / project_length) * width
+        local ex = pos_x + (ts_end / project_length) * width
+        ImGui.DrawList_AddRectFilled(draw_list, sx, pos_y, ex, pos_y + bar_h, 0xFFFFFF18)
+    end
+    
+    local arr_start, arr_end = r.GetSet_ArrangeView2(0, false, 0, 0, 0, 0)
+    local vp_x1 = pos_x + (arr_start / project_length) * width
+    local vp_x2 = pos_x + (arr_end / project_length) * width
+    ImGui.DrawList_AddRectFilled(draw_list, vp_x1, pos_y, vp_x2, pos_y + bar_h, 0xFFFFFF12)
+    ImGui.DrawList_AddRect(draw_list, vp_x1, pos_y, vp_x2, pos_y + bar_h, 0xFFFFFF40, 0, 0, 1)
     
     local num_markers = 8
     for i = 0, num_markers do
@@ -900,41 +978,232 @@ local function draw_timeline_minimap(ctx, items)
         local beat_time = r.TimeMap2_timeToQN(0, time)
         local nearest_measure = math.floor(beat_time / 4) * 4
         local nearest_measure_time = r.TimeMap2_QNToTime(0, nearest_measure)
-        local x = pos_x + (nearest_measure_time / project_length) * (width - right_margin)
+        local x = pos_x + (nearest_measure_time / project_length) * width
         local mbt = r.format_timestr_pos(nearest_measure_time, "", 1):match("(%d+%.1)")
         
-        ImGui.DrawList_AddLine(draw_list, x, pos_y, x, pos_y + height - time_label_height, cached_colors.accent_color, 1)
-        ImGui.DrawList_AddText(draw_list, x, pos_y + height - time_label_height, cached_colors.text_color, mbt)
+        ImGui.DrawList_AddLine(draw_list, x, pos_y, x, pos_y + bar_h, cached_colors.accent_color, 1)
+        ImGui.DrawList_AddText(draw_list, x, pos_y + bar_h, cached_colors.text_color, mbt)
     end
     
+    local active_lanes = {}
+    local active_lane_set = {}
     for _, item in ipairs(items) do
-        if item.visible then
-            local x = pos_x + ((item.pos / project_length) * (width - right_margin))
-            -- avoid shadowing global 'r' (reaper) with color components
+        if item.visible
+           and (timeline_filter == "all" or (timeline_filter == "markers" and not item.isRegion) or (timeline_filter == "regions" and item.isRegion))
+           and (timeline_lane_filter == "all" or tostring(item.lane or 0) == timeline_lane_filter) then
+            local l = item.lane or 0
+            if not active_lane_set[l] then
+                active_lane_set[l] = true
+                active_lanes[#active_lanes + 1] = l
+            end
+        end
+    end
+    table.sort(active_lanes)
+    local num_active_lanes = math.max(1, #active_lanes)
+    local lane_h = bar_h / num_active_lanes
+    local lane_y_map = {}
+    for idx, l in ipairs(active_lanes) do
+        lane_y_map[l] = pos_y + (idx - 1) * lane_h
+    end
+
+    if #active_lanes > 1 then
+        for idx = 2, #active_lanes do
+            local sep_y = pos_y + (idx - 1) * lane_h
+            ImGui.DrawList_AddLine(draw_list, pos_x, sep_y, pos_x + width, sep_y, 0xFFFFFF30, 1)
+        end
+        for idx, l in ipairs(active_lanes) do
+            local ly = lane_y_map[l]
+            ImGui.DrawList_AddText(draw_list, pos_x + 2, ly + 1, 0xFFFFFF80, tostring(l))
+        end
+    end
+
+    timeline_hovered_item = nil
+    local mouse_x, mouse_y = ImGui.GetMousePos(ctx)
+    
+    for _, item in ipairs(items) do
+        if item.visible
+           and (timeline_filter == "all" or (timeline_filter == "markers" and not item.isRegion) or (timeline_filter == "regions" and item.isRegion))
+           and (timeline_lane_filter == "all" or tostring(item.lane or 0) == timeline_lane_filter) then
+            local draw_pos = item.pos
+            local draw_end = item.rgnend
+            if timeline_dragging and timeline_dragging.index == item.index and timeline_dragging.isRegion == item.isRegion then
+                local delta_time = ((mouse_x - timeline_drag_start_x) / width) * project_length
+                draw_pos = math.max(0, item.pos + delta_time)
+                if item.isRegion then
+                    local duration = item.rgnend - item.pos
+                    draw_end = draw_pos + duration
+                end
+            end
+            
+            local x = pos_x + (draw_pos / project_length) * width
             local cr, cg, cb = r.ColorFromNative(item.color)
-            local color = ImGui.ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, 1)
+            local ly = lane_y_map[item.lane or 0] or pos_y
+            local lh = lane_h
 
             if item.isRegion then
-                local end_x = pos_x + ((item.rgnend / project_length) * (width - right_margin))
-                ImGui.DrawList_AddRectFilled(draw_list, x, pos_y, end_x, pos_y + height - time_label_height, color)
+                local end_x = pos_x + (draw_end / project_length) * width
+                local region_color = ImGui.ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, 0.45)
+                local border_color = ImGui.ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, 0.8)
+                ImGui.DrawList_AddRectFilled(draw_list, x, ly, end_x, ly + lh, region_color)
+                ImGui.DrawList_AddRect(draw_list, x, ly, end_x, ly + lh, border_color, 0, 0, 1)
+                if item.name and item.name ~= "" then
+                    local rgn_w = end_x - x
+                    local txt_w = ImGui.CalcTextSize(ctx, item.name)
+                    if txt_w <= rgn_w - 4 then
+                        ImGui.DrawList_AddText(draw_list, x + 2, ly + 1, 0xFFFFFFCC, item.name)
+                    elseif rgn_w > 12 then
+                        ImGui.DrawList_PushClipRect(draw_list, x + 1, ly, end_x - 1, ly + lh, true)
+                        ImGui.DrawList_AddText(draw_list, x + 2, ly + 1, 0xFFFFFFCC, item.name)
+                        ImGui.DrawList_PopClipRect(draw_list)
+                    end
+                end
+                if not timeline_dragging and mouse_x >= x and mouse_x <= end_x and mouse_y >= ly and mouse_y <= ly + lh then
+                    timeline_hovered_item = item
+                end
             else
-                ImGui.DrawList_AddLine(draw_list, x, pos_y, x, pos_y + height - time_label_height, color, 2)
+                local marker_color = ImGui.ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, 1)
+                ImGui.DrawList_AddLine(draw_list, x, ly, x, ly + lh, 0x000000AA, 4)
+                ImGui.DrawList_AddLine(draw_list, x, ly, x, ly + lh, marker_color, 2)
+                local tri_h = math.min(6 * settings.scale_factor, lh * 0.35)
+                ImGui.DrawList_AddTriangleFilled(draw_list, x, ly, x - tri_h, ly - tri_h, x + tri_h, ly - tri_h, marker_color)
+                ImGui.DrawList_AddTriangle(draw_list, x, ly, x - tri_h, ly - tri_h, x + tri_h, ly - tri_h, 0x000000AA, 1)
+                if not timeline_dragging and math.abs(mouse_x - x) < 6 and mouse_y >= ly - tri_h and mouse_y <= ly + lh then
+                    timeline_hovered_item = item
+                end
             end
         end
     end
     
+    local drag_threshold = 4
+    local drag_active = timeline_dragging and math.abs(mouse_x - (timeline_drag_start_x or mouse_x)) > drag_threshold
+
+    if drag_active then
+        local delta_time = ((mouse_x - timeline_drag_start_x) / width) * project_length
+        local preview_pos = snap_to_grid(math.max(0, timeline_dragging.pos + delta_time))
+        local preview_x = pos_x + (preview_pos / project_length) * width
+        ImGui.DrawList_AddLine(draw_list, preview_x, pos_y, preview_x, pos_y + bar_h, 0xFFFF00AA, 1)
+        
+        local type_label = timeline_dragging.isRegion and "Region" or "Marker"
+        local drag_tip = type_label .. " #" .. timeline_dragging.index
+        if timeline_dragging.name and timeline_dragging.name ~= "" then
+            drag_tip = drag_tip .. ": " .. timeline_dragging.name
+        end
+        if num_active_lanes > 1 or (timeline_dragging.lane or 0) > 0 then
+            drag_tip = drag_tip .. "  [L" .. (timeline_dragging.lane or 0) .. "]"
+        end
+        drag_tip = drag_tip .. "\n" .. format_time_and_mbt(preview_pos)
+        ImGui.SetTooltip(ctx, drag_tip)
+    end
+    
     local cursor_pos = r.GetCursorPosition()
-    local cursor_x = pos_x + ((cursor_pos / project_length) * (width - right_margin))
-    ImGui.DrawList_AddLine(draw_list, cursor_x, pos_y, cursor_x, pos_y + height - time_label_height, cached_colors.text_color, 2)
+    local cursor_x = pos_x + (cursor_pos / project_length) * width
+    ImGui.DrawList_AddLine(draw_list, cursor_x, pos_y, cursor_x, pos_y + bar_h, cached_colors.text_color, 2)
+    
+    local play_state = r.GetPlayState()
+    if play_state & 1 == 1 then
+        local play_pos = r.GetPlayPosition()
+        local play_x = pos_x + (play_pos / project_length) * width
+        ImGui.DrawList_AddLine(draw_list, play_x, pos_y, play_x, pos_y + bar_h, 0x00FF00CC, 2)
+    end
     
     ImGui.InvisibleButton(ctx, "timeline", width, height)
-    if ImGui.IsItemHovered(ctx) then
+    local is_hovered = ImGui.IsItemHovered(ctx)
+    
+    if is_hovered and not timeline_dragging and timeline_hovered_item then
+        if ImGui.IsMouseDoubleClicked(ctx, 0) then
+            local item = timeline_hovered_item
+            r.SetEditCurPos(item.pos, true, false)
+            if item.isRegion then
+                r.GetSet_LoopTimeRange(true, false, item.pos, item.rgnend, false)
+            end
+            if r.GetRegionOrMarker and r.SetRegionOrMarkerInfo_Value then
+                local _, num_m, num_r = r.CountProjectMarkers(0)
+                for mi = 0, num_m + num_r - 1 do
+                    local rv, isrgn, pos, rgnend, name, idx = r.EnumProjectMarkers3(0, mi)
+                    if rv ~= 0 then
+                        local marker = r.GetRegionOrMarker(0, mi, "")
+                        if marker then
+                            local should_select = (isrgn == item.isRegion and idx == item.index) and 1 or 0
+                            r.SetRegionOrMarkerInfo_Value(0, marker, "B_UISEL", should_select)
+                        end
+                    end
+                end
+            end
+            r.UpdateTimeline()
+            timeline_dragging = nil
+            timeline_drag_start_x = nil
+        elseif ImGui.IsMouseClicked(ctx, 0) then
+            timeline_dragging = timeline_hovered_item
+            timeline_drag_start_x = mouse_x
+        end
+        local type_label = timeline_hovered_item.isRegion and "Region" or "Marker"
+        local tip = type_label .. " #" .. timeline_hovered_item.index
+        if timeline_hovered_item.name and timeline_hovered_item.name ~= "" then
+            tip = tip .. ": " .. timeline_hovered_item.name
+        end
+        if num_active_lanes > 1 or (timeline_hovered_item.lane or 0) > 0 then
+            tip = tip .. "  [L" .. (timeline_hovered_item.lane or 0) .. "]"
+        end
+        local t = format_time_and_mbt(timeline_hovered_item.pos)
+        if timeline_hovered_item.isRegion then
+            t = t .. " - " .. format_time_and_mbt(timeline_hovered_item.rgnend)
+        end
+        tip = tip .. "\n" .. t
+        ImGui.SetTooltip(ctx, tip)
+    end
+    
+    if timeline_dragging then
+        if ImGui.IsMouseReleased(ctx, 0) then
+            if drag_active then
+                local delta_time = ((mouse_x - timeline_drag_start_x) / width) * project_length
+                local new_pos = snap_to_grid(math.max(0, timeline_dragging.pos + delta_time))
+                
+                if math.abs(new_pos - timeline_dragging.pos) > 0.001 then
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    
+                    if timeline_dragging.isRegion then
+                        local duration = timeline_dragging.rgnend - timeline_dragging.pos
+                        local new_end = new_pos + duration
+                        r.SetProjectMarker3(0, timeline_dragging.index, true, new_pos, new_end, timeline_dragging.name, timeline_dragging.color)
+                        timeline_dragging.pos = new_pos
+                        timeline_dragging.rgnend = new_end
+                    else
+                        r.SetProjectMarker3(0, timeline_dragging.index, false, new_pos, 0, timeline_dragging.name, timeline_dragging.color)
+                        timeline_dragging.pos = new_pos
+                    end
+                    
+                    CACHE_CONFIG.MARKERS.last_update = 0
+                    
+                    r.PreventUIRefresh(-1)
+                    r.UpdateTimeline()
+                    r.UpdateArrange()
+                    local action_name = timeline_dragging.isRegion and "Move region via minimap" or "Move marker via minimap"
+                    r.Undo_EndBlock(action_name, -1)
+                end
+            end
+            
+            timeline_dragging = nil
+            timeline_drag_start_x = nil
+        end
+    elseif is_hovered and not timeline_hovered_item then
         if ImGui.IsMouseClicked(ctx, 0) then
-            local mouse_x = ImGui.GetMousePos(ctx)
-            local new_pos = ((mouse_x - pos_x) / (width - right_margin)) * project_length
+            local mx = ImGui.GetMousePos(ctx)
+            local new_pos = ((mx - pos_x) / width) * project_length
             local snapped_pos = snap_to_grid(new_pos)
             r.SetEditCurPos(snapped_pos, true, true)
         end
+    end
+    
+    if is_hovered and ImGui.IsMouseClicked(ctx, 1) then
+        local mx = ImGui.GetMousePos(ctx)
+        local new_pos = ((mx - pos_x) / width) * project_length
+        local snapped_pos = snap_to_grid(new_pos)
+        r.SetEditCurPos(snapped_pos, true, true)
+    end
+    
+    if timeline_dragging or (is_hovered and timeline_hovered_item) then
+        ImGui.SetMouseCursor(ctx, ImGui.MouseCursor_Hand)
     end
 end
 
@@ -1151,7 +1420,9 @@ local function apply_color_rules_to_project()
     r.Undo_BeginBlock()
     for _, item in ipairs(items) do
         for _, rule in ipairs(auto_color_rules) do
-            if rule.enabled and rule.text ~= "" then
+            local scope = rule.scope or "all"
+            local scope_match = scope == "all" or (scope == "markers" and not item.isRegion) or (scope == "regions" and item.isRegion)
+            if rule.enabled and rule.text ~= "" and scope_match then
                 if string.find(string.lower(item.name), string.lower(rule.text), 1, true) then
                     if item.color ~= rule.color then
                         item.color = rule.color
@@ -1257,30 +1528,219 @@ local function delete_item(item)
     save_visibility_to_project()
 end
 
+local function update_all_items_visibility(visible, filter_type)
+    local current_project_key = get_project_key()
+    local items = project_items[current_project_key] or {}
+    for _, item in ipairs(items) do
+        if (filter_type == "markers" and not item.isRegion) or
+           (filter_type == "regions" and item.isRegion) or
+           filter_type == "all" then
+            if item.visible ~= visible then
+                set_item_visibility(item, visible)
+            end
+        end
+    end
+end
+
+local function matches_search(item, search_text)
+    if search_text == "" then return true end
+    local lower_name = string.lower(item.name or "")
+    local lower_search = string.lower(search_text)
+    return string.find(lower_name, lower_search, 1, true) ~= nil
+end
+
+local function get_multiselect_key(item)
+    return tostring(item.index) .. (item.isRegion and "R" or "M")
+end
+
+local function count_multi_selected(selection_table)
+    local count = 0
+    for _, v in pairs(selection_table) do
+        if v then count = count + 1 end
+    end
+    return count
+end
+
+local function bulk_delete(selection_table, items)
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local to_delete = {}
+    for _, item in ipairs(items) do
+        local key = get_multiselect_key(item)
+        if selection_table[key] then
+            table.insert(to_delete, item)
+        end
+    end
+    for i = #to_delete, 1, -1 do
+        delete_item(to_delete[i])
+    end
+    for k in pairs(selection_table) do selection_table[k] = nil end
+    r.PreventUIRefresh(-1)
+    r.UpdateTimeline()
+    r.Undo_EndBlock("Bulk Delete Markers/Regions", -1)
+end
+
+local function bulk_set_visibility(selection_table, items, visible)
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for _, item in ipairs(items) do
+        local key = get_multiselect_key(item)
+        if selection_table[key] and item.visible ~= visible then
+            set_item_visibility(item, visible)
+        end
+    end
+    r.PreventUIRefresh(-1)
+    r.UpdateTimeline()
+    r.Undo_EndBlock("Bulk Set Visibility", -1)
+end
+
+local function bulk_set_color(selection_table, items, color)
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for _, item in ipairs(items) do
+        local key = get_multiselect_key(item)
+        if selection_table[key] then
+            item.color = color
+            if item.visible then
+                r.SetProjectMarker3(0, item.index, item.isRegion, item.pos, item.rgnend or 0, item.name, color)
+            end
+        end
+    end
+    r.PreventUIRefresh(-1)
+    r.UpdateTimeline()
+    r.Undo_EndBlock("Bulk Set Color", -1)
+end
+
+local bulk_color_marker = nil
+local bulk_color_region = nil
+
+local function draw_search_and_bulk_bar(ctx, search_var, selection_table, items, is_region)
+    local sel_count = count_multi_selected(selection_table)
+    local label = is_region and "##search_region" or "##search_marker"
+    local hint = "Filter by name..."
+
+    push_item_width(ctx, 150 * settings.scale_factor)
+    local changed, new_val = ImGui.InputTextWithHint(ctx, label, hint, search_var)
+    pop_item_width(ctx)
+    if changed then
+        if is_region then search_region = new_val else search_marker = new_val end
+    end
+
+    same_line(ctx)
+    if ImGui.Button(ctx, "All##sel" .. label) then
+        for _, item in ipairs(items) do
+            if item.isRegion == is_region and matches_search(item, is_region and search_region or search_marker) then
+                selection_table[get_multiselect_key(item)] = true
+            end
+        end
+    end
+    ShowTooltip("Select All (filtered)")
+    same_line(ctx)
+    if ImGui.Button(ctx, "None##sel" .. label) then
+        for k in pairs(selection_table) do selection_table[k] = nil end
+    end
+    ShowTooltip("Deselect All")
+
+    if sel_count > 0 then
+        same_line(ctx)
+        ImGui.Text(ctx, "(" .. sel_count .. ")")
+        same_line(ctx)
+
+        push_style_color(ctx, ImGui.Col_Button, 0xAA0000FF)
+        if ImGui.Button(ctx, "Del##bulk" .. label) then
+            bulk_delete(selection_table, items)
+        end
+        pop_style_color(ctx)
+        ShowTooltip("Delete selected")
+
+        same_line(ctx)
+        if ImGui.Button(ctx, "Show##bulk" .. label) then
+            bulk_set_visibility(selection_table, items, true)
+        end
+        ShowTooltip("Show selected")
+        same_line(ctx)
+        if ImGui.Button(ctx, "Hide##bulk" .. label) then
+            bulk_set_visibility(selection_table, items, false)
+        end
+        ShowTooltip("Hide selected")
+
+        same_line(ctx)
+        local bulk_color_ref = is_region and bulk_color_region or bulk_color_marker
+        local col_val = bulk_color_ref or 0xFFFFFF
+        local retval, new_col = ImGui.ColorEdit3(ctx, "##bulkclr" .. label, col_val, ImGui.ColorEditFlags_NoInputs)
+        if retval then
+            if is_region then bulk_color_region = new_col else bulk_color_marker = new_col end
+            local new_r = (new_col >> 16) & 0xFF
+            local new_g = (new_col >> 8) & 0xFF
+            local new_b = new_col & 0xFF
+            local native_color = r.ColorToNative(new_r, new_g, new_b) | 0x1000000
+            bulk_set_color(selection_table, items, native_color)
+        end
+        ShowTooltip("Color selected")
+    end
+
+    local lane_filter_ref = is_region and table_lane_filter_region or table_lane_filter_marker
+    local lane_set = {}
+    local lane_list = {}
+    for _, item in ipairs(items) do
+        if item.isRegion == is_region then
+            local l = item.lane or 0
+            if not lane_set[l] then
+                lane_set[l] = true
+                lane_list[#lane_list + 1] = l
+            end
+        end
+    end
+    table.sort(lane_list)
+
+    if #lane_list > 1 then
+        same_line(ctx)
+        local lane_lbl = lane_filter_ref == "all" and "All Lanes" or ("Lane " .. lane_filter_ref)
+        ImGui.SetNextItemWidth(ctx, 75 * settings.scale_factor)
+        if ImGui.BeginCombo(ctx, "##lane_tbl" .. label, lane_lbl, ImGui.ComboFlags_NoArrowButton) then
+            if ImGui.Selectable(ctx, "All Lanes", lane_filter_ref == "all") then
+                if is_region then table_lane_filter_region = "all" else table_lane_filter_marker = "all" end
+            end
+            for _, l in ipairs(lane_list) do
+                local ls = tostring(l)
+                if ImGui.Selectable(ctx, "Lane " .. ls, lane_filter_ref == ls) then
+                    if is_region then table_lane_filter_region = ls else table_lane_filter_marker = ls end
+                end
+            end
+            ImGui.EndCombo(ctx)
+        end
+        ShowTooltip("Filter by ruler lane")
+    end
+end
+
 local function draw_marker_table(ctx, items)
-    local table_flags = ImGui.TableFlags_Borders
-    if ImGui.BeginTable(ctx, "MarkersTable", 9, table_flags) then
+    draw_search_and_bulk_bar(ctx, search_marker, multi_selected_markers, items, false)
+
+    local table_flags = ImGui.TableFlags_Borders | ImGui.TableFlags_SizingFixedFit
+    if ImGui.BeginTable(ctx, "MarkersTable", 11, table_flags) then
         local col_flags_fixed = ImGui.TableColumnFlags_WidthFixed
         
-        ImGui.TableSetupColumn(ctx, "##Visible", col_flags_fixed, 35 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "ID", col_flags_fixed, 30 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Play", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "##Sel", col_flags_fixed, 24 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "##Visible", col_flags_fixed, 24 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "ID", col_flags_fixed, 32 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Play", col_flags_fixed, 40 * settings.scale_factor)
         ImGui.TableSetupColumn(ctx, "Name", ImGui.TableColumnFlags_WidthStretch)
-        ImGui.TableSetupColumn(ctx, "Time", col_flags_fixed, 75 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Color", col_flags_fixed, 35 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Convert", col_flags_fixed, 55 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Del", col_flags_fixed, 15 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Sel", col_flags_fixed, 15 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Time", col_flags_fixed, 130 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Color", col_flags_fixed, 40 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Convert", col_flags_fixed, 65 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Del", col_flags_fixed, 22 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Nav", col_flags_fixed, 22 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Ln", col_flags_fixed, 22 * settings.scale_factor)
         ImGui.TableHeadersRow(ctx)
 
-        ImGui.TableSetColumnIndex(ctx, 0)
+        ImGui.TableSetColumnIndex(ctx, 1)
         local x, y = ImGui.GetCursorScreenPos(ctx)
         local draw_list = ImGui.GetWindowDrawList(ctx)
-        local text_width = ImGui.CalcTextSize(ctx, "Visible")
-        local cell_width = 35 * settings.scale_factor
+        local text_width = ImGui.CalcTextSize(ctx, "Vis")
+        local cell_width = 24 * settings.scale_factor
         local cell_height = ImGui.GetTextLineHeight(ctx)
         
-        ImGui.DrawList_AddText(draw_list, x + (cell_width - text_width) / 2, y, cached_colors.text_color, "Visible")
+        ImGui.DrawList_AddText(draw_list, x + (cell_width - text_width) / 2, y, cached_colors.text_color, "Vis")
         if ImGui.InvisibleButton(ctx, "##VisibleHeaderMarkers", cell_width, cell_height) then
             local all_markers_visible = true
             for _, item in ipairs(project_items[get_project_key()] or {}) do
@@ -1291,17 +1751,37 @@ local function draw_marker_table(ctx, items)
             update_all_items_visibility(not all_markers_visible, "markers")
         end
 
+        local last_drawn_lane_m = nil
         for i, item in ipairs(items) do
-            if not item.isRegion then
+            if not item.isRegion and matches_search(item, search_marker)
+               and (table_lane_filter_marker == "all" or tostring(item.lane or 0) == table_lane_filter_marker) then
+                local item_lane = item.lane or 0
+                if last_drawn_lane_m ~= nil and item_lane ~= last_drawn_lane_m then
+                    ImGui.TableNextRow(ctx)
+                    ImGui.TableSetBgColor(ctx, ImGui.TableBgTarget_RowBg0, 0xFFFFFF15)
+                    ImGui.TableSetColumnIndex(ctx, 2)
+                    push_style_color(ctx, ImGui.Col_Text, 0xFFFFFF80)
+                    ImGui.Text(ctx, "Lane " .. tostring(item_lane))
+                    pop_style_color(ctx)
+                end
+                last_drawn_lane_m = item_lane
+
+                local ms_key = get_multiselect_key(item)
                 ImGui.TableNextRow(ctx)
+
                 ImGui.TableSetColumnIndex(ctx, 0)
+                local is_sel = multi_selected_markers[ms_key] or false
+                local sel_changed, new_sel = ImGui.Checkbox(ctx, "##ms" .. i, is_sel)
+                if sel_changed then multi_selected_markers[ms_key] = new_sel or nil end
+
+                ImGui.TableSetColumnIndex(ctx, 1)
                 local changed, new_visible = ImGui.Checkbox(ctx, "##visible" .. i, item.visible)
                 if changed then
                     set_item_visibility(item, new_visible)
                 end
-                ImGui.TableSetColumnIndex(ctx, 1)
-                display_colored_id(ctx, item, i, items)
                 ImGui.TableSetColumnIndex(ctx, 2)
+                display_colored_id(ctx, item, i, items)
+                ImGui.TableSetColumnIndex(ctx, 3)
                 local button_text = "Play"
                 local button_color = cached_colors.accent_color
                 if currently_playing_marker and currently_playing_marker.index == item.index then
@@ -1334,7 +1814,7 @@ local function draw_marker_table(ctx, items)
                 end
                 pop_style_color(ctx)
 
-                ImGui.TableSetColumnIndex(ctx, 3)
+                ImGui.TableSetColumnIndex(ctx, 4)
                 if ImGui.Button(ctx, "X##clear_name" .. i) then
                     clear_item_name(item)
                 end
@@ -1354,27 +1834,30 @@ local function draw_marker_table(ctx, items)
                         editing_name = i
                     end
                 end
-                ImGui.TableSetColumnIndex(ctx, 4)
+                ImGui.TableSetColumnIndex(ctx, 5)
                 edit_time(ctx, item, false)
 
-                ImGui.TableSetColumnIndex(ctx, 5)
+                ImGui.TableSetColumnIndex(ctx, 6)
                 edit_color(item, i)
 
-                ImGui.TableSetColumnIndex(ctx, 6)
+                ImGui.TableSetColumnIndex(ctx, 7)
                 if ImGui.Button(ctx, "To Region##" .. i) then
                     toggle_marker_region(item, items)
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 7)
+                ImGui.TableSetColumnIndex(ctx, 8)
                 if ImGui.Button(ctx, "X##" .. i) then
                     delete_item(item)
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 8)
+                ImGui.TableSetColumnIndex(ctx, 9)
                 if ImGui.Button(ctx, ">##nav" .. i) then
                     r.SetEditCurPos(item.pos, true, false)
                     r.UpdateTimeline()
                 end
+
+                ImGui.TableSetColumnIndex(ctx, 10)
+                ImGui.Text(ctx, tostring(item.lane or 0))
             end
         end
         ImGui.EndTable(ctx)
@@ -1437,39 +1920,80 @@ local function handle_region_playback()
 end
 
 local function draw_region_table(ctx, items)
-    local table_flags = ImGui.TableFlags_Borders
-    if ImGui.BeginTable(ctx, "RegionsTable", 12, table_flags) then
+    draw_search_and_bulk_bar(ctx, search_region, multi_selected_regions, items, true)
+
+    local table_flags = ImGui.TableFlags_Borders | ImGui.TableFlags_SizingFixedFit
+    if ImGui.BeginTable(ctx, "RegionsTable", 14, table_flags) then
         local col_flags_fixed = ImGui.TableColumnFlags_WidthFixed
         local col_flags_stretch = ImGui.TableColumnFlags_WidthStretch
         
-        ImGui.TableSetupColumn(ctx, "##Visible", col_flags_fixed, 35 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "ID", col_flags_fixed, 30 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Play", col_flags_fixed, 35 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "##Sel", col_flags_fixed, 24 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "##Visible", col_flags_fixed, 24 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "ID", col_flags_fixed, 32 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Play", col_flags_fixed, 40 * settings.scale_factor)
         ImGui.TableSetupColumn(ctx, "Name", col_flags_stretch)
-        ImGui.TableSetupColumn(ctx, "Start", col_flags_fixed, 75 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "End", col_flags_fixed, 75 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Color", col_flags_fixed, 35 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Zoom", col_flags_fixed, 60 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Dup", col_flags_fixed, 30 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Convert", col_flags_fixed, 55 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Del", col_flags_fixed, 15 * settings.scale_factor)
-        ImGui.TableSetupColumn(ctx, "Sel", col_flags_fixed, 15 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Start", col_flags_fixed, 130 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "End", col_flags_fixed, 130 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Color", col_flags_fixed, 40 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Zoom", col_flags_fixed, 48 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "D", col_flags_fixed, 22 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Convert", col_flags_fixed, 65 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Del", col_flags_fixed, 22 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Nav", col_flags_fixed, 22 * settings.scale_factor)
+        ImGui.TableSetupColumn(ctx, "Ln", col_flags_fixed, 22 * settings.scale_factor)
         ImGui.TableHeadersRow(ctx)
 
+        ImGui.TableSetColumnIndex(ctx, 1)
+        local x, y = ImGui.GetCursorScreenPos(ctx)
+        local draw_list = ImGui.GetWindowDrawList(ctx)
+        local text_width = ImGui.CalcTextSize(ctx, "Vis")
+        local cell_width = 24 * settings.scale_factor
+        local cell_height = ImGui.GetTextLineHeight(ctx)
+        
+        ImGui.DrawList_AddText(draw_list, x + (cell_width - text_width) / 2, y, cached_colors.text_color, "Vis")
+        if ImGui.InvisibleButton(ctx, "##VisibleHeaderRegions", cell_width, cell_height) then
+            local all_regions_visible = true
+            for _, item in ipairs(project_items[get_project_key()] or {}) do
+                if item.isRegion then
+                    all_regions_visible = all_regions_visible and item.visible
+                end
+            end
+            update_all_items_visibility(not all_regions_visible, "regions")
+        end
+
+        local last_drawn_lane_r = nil
         for i, item in ipairs(items) do
-            if item.isRegion then
+            if item.isRegion and matches_search(item, search_region)
+               and (table_lane_filter_region == "all" or tostring(item.lane or 0) == table_lane_filter_region) then
+                local item_lane = item.lane or 0
+                if last_drawn_lane_r ~= nil and item_lane ~= last_drawn_lane_r then
+                    ImGui.TableNextRow(ctx)
+                    ImGui.TableSetBgColor(ctx, ImGui.TableBgTarget_RowBg0, 0xFFFFFF15)
+                    ImGui.TableSetColumnIndex(ctx, 2)
+                    push_style_color(ctx, ImGui.Col_Text, 0xFFFFFF80)
+                    ImGui.Text(ctx, "Lane " .. tostring(item_lane))
+                    pop_style_color(ctx)
+                end
+                last_drawn_lane_r = item_lane
+
+                local ms_key = get_multiselect_key(item)
                 ImGui.TableNextRow(ctx)
-                
+
                 ImGui.TableSetColumnIndex(ctx, 0)
+                local is_sel = multi_selected_regions[ms_key] or false
+                local sel_changed, new_sel = ImGui.Checkbox(ctx, "##ms" .. i, is_sel)
+                if sel_changed then multi_selected_regions[ms_key] = new_sel or nil end
+
+                ImGui.TableSetColumnIndex(ctx, 1)
                 local changed, new_visible = ImGui.Checkbox(ctx, "##visible" .. i, item.visible)
                 if changed then
                     set_item_visibility(item, new_visible)
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 1)
+                ImGui.TableSetColumnIndex(ctx, 2)
                 display_colored_id(ctx, item, i, items)
 
-                ImGui.TableSetColumnIndex(ctx, 2)
+                ImGui.TableSetColumnIndex(ctx, 3)
                 local button_text = "Play"
                 local button_color = cached_colors.accent_color
 
@@ -1503,7 +2027,7 @@ local function draw_region_table(ctx, items)
                 end
                 pop_style_color(ctx)
 
-                ImGui.TableSetColumnIndex(ctx, 3)
+                ImGui.TableSetColumnIndex(ctx, 4)
                 if ImGui.Button(ctx, "X##clear_name" .. i) then
                     clear_item_name(item)
                 end
@@ -1524,28 +2048,28 @@ local function draw_region_table(ctx, items)
                     end
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 4)
+                ImGui.TableSetColumnIndex(ctx, 5)
                 edit_time(ctx, item, false)
 
-                ImGui.TableSetColumnIndex(ctx, 5)
+                ImGui.TableSetColumnIndex(ctx, 6)
                 edit_time(ctx, item, true)
 
-                ImGui.TableSetColumnIndex(ctx, 6)
+                ImGui.TableSetColumnIndex(ctx, 7)
                 edit_color(item, i)
 
-                ImGui.TableSetColumnIndex(ctx, 7)
+                ImGui.TableSetColumnIndex(ctx, 8)
                 if ImGui.Button(ctx, "+##z_in" .. i) then
                     r.GetSet_LoopTimeRange(true, false, item.pos, item.rgnend, false)
-                    r.Main_OnCommand(40031, 0) -- View: Zoom time selection
+                    r.Main_OnCommand(40031, 0)
                 end
                 ShowTooltip("Zoom to Region")
                 ImGui.SameLine(ctx)
                 if ImGui.Button(ctx, "-##z_out" .. i) then
-                    r.Main_OnCommand(40295, 0) -- View: Zoom to project
+                    r.Main_OnCommand(40295, 0)
                 end
                 ShowTooltip("Zoom to Project")
 
-                ImGui.TableSetColumnIndex(ctx, 8)
+                ImGui.TableSetColumnIndex(ctx, 9)
                 if ImGui.Button(ctx, "D##dup" .. i) then
                     duplicate_region_content(item, true)
                 end
@@ -1554,22 +2078,25 @@ local function draw_region_table(ctx, items)
                     duplicate_region_content(item, false)
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 9)
+                ImGui.TableSetColumnIndex(ctx, 10)
                 if ImGui.Button(ctx, "To Marker##" .. i) then
                     toggle_marker_region(item, items)
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 10)
+                ImGui.TableSetColumnIndex(ctx, 11)
                 if ImGui.Button(ctx, "X##" .. i) then
                     delete_item(item)
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 11)
+                ImGui.TableSetColumnIndex(ctx, 12)
                 if ImGui.Button(ctx, ">##nav" .. i) then
                     r.SetEditCurPos(item.pos, true, false)
                     r.GetSet_LoopTimeRange(true, false, item.pos, item.rgnend, false)
                     r.UpdateTimeline()
                 end
+
+                ImGui.TableSetColumnIndex(ctx, 13)
+                ImGui.Text(ctx, tostring(item.lane or 0))
             end
         end
         ImGui.EndTable(ctx)
@@ -1579,7 +2106,7 @@ end
 local function calculate_available_height(ctx)
     local window_height = ImGui.GetWindowHeight(ctx)
     local cursor_pos_y = ImGui.GetCursorPosY(ctx)
-    local bottom_section_height = 57 * settings.scale_factor
+    local bottom_section_height = 90 * settings.scale_factor
     return window_height - cursor_pos_y - bottom_section_height
 end
 
@@ -1697,7 +2224,8 @@ local function draw_color_rules_tab(ctx)
             table.insert(auto_color_rules, {
                 text = "New Rule", 
                 color = 0xFFFFFFFF,
-                enabled = true
+                enabled = true,
+                scope = "all"
             })
             save_color_rules()
         end
@@ -1718,8 +2246,11 @@ local function draw_color_rules_tab(ctx)
         ImGui.Separator(ctx)
 
         local table_flags = ImGui.TableFlags_Borders | ImGui.TableFlags_RowBg
-        if ImGui.BeginTable(ctx, "RulesTable", 4, table_flags) then
+        local scope_labels = { "All", "Markers", "Regions" }
+        local scope_values = { "all", "markers", "regions" }
+        if ImGui.BeginTable(ctx, "RulesTable", 5, table_flags) then
             ImGui.TableSetupColumn(ctx, "On", ImGui.TableColumnFlags_WidthFixed, 30 * settings.scale_factor)
+            ImGui.TableSetupColumn(ctx, "Scope", ImGui.TableColumnFlags_WidthFixed, 75 * settings.scale_factor)
             ImGui.TableSetupColumn(ctx, "If Name Contains...", ImGui.TableColumnFlags_WidthStretch)
             ImGui.TableSetupColumn(ctx, "Color", ImGui.TableColumnFlags_WidthFixed, 50 * settings.scale_factor)
             ImGui.TableSetupColumn(ctx, "Del", ImGui.TableColumnFlags_WidthFixed, 30 * settings.scale_factor)
@@ -1739,6 +2270,24 @@ local function draw_color_rules_tab(ctx)
                 end
 
                 ImGui.TableSetColumnIndex(ctx, 1)
+                local cur_scope = rule.scope or "all"
+                local cur_idx = 0
+                for si, sv in ipairs(scope_values) do
+                    if sv == cur_scope then cur_idx = si - 1 break end
+                end
+                ImGui.SetNextItemWidth(ctx, -1)
+                if ImGui.BeginCombo(ctx, "##scope", scope_labels[cur_idx + 1]) then
+                    for si, sl in ipairs(scope_labels) do
+                        local is_sel = (cur_idx == si - 1)
+                        if ImGui.Selectable(ctx, sl, is_sel) then
+                            rule.scope = scope_values[si]
+                            save_color_rules()
+                        end
+                    end
+                    ImGui.EndCombo(ctx)
+                end
+
+                ImGui.TableSetColumnIndex(ctx, 2)
                 ImGui.SetNextItemWidth(ctx, -1)
                 local txt_changed, new_txt = ImGui.InputText(ctx, "##txt", rule.text)
                 if txt_changed then 
@@ -1746,18 +2295,19 @@ local function draw_color_rules_tab(ctx)
                     save_color_rules()
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 2)
+                ImGui.TableSetColumnIndex(ctx, 3)
                 local r_val, g_val, b_val = r.ColorFromNative(rule.color)
-                local col_packed = ImGui.ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
-                local retval, new_col_packed = ImGui.ColorEdit3(ctx, "##clr" .. i, col_packed, ImGui.ColorEditFlags_NoInputs)
+                local col_rgb = (r_val << 16) | (g_val << 8) | b_val
+                local retval, new_col_rgb = ImGui.ColorEdit3(ctx, "##clr" .. i, col_rgb, ImGui.ColorEditFlags_NoInputs)
                 if retval then
-                    local r_new, g_new, b_new = ImGui.ColorConvertU32ToDouble4(new_col_packed)
-                    local new_native = r.ColorToNative(math.floor(r_new*255), math.floor(g_new*255), math.floor(b_new*255))
-                    rule.color = new_native | 0x1000000
+                    local new_r = (new_col_rgb >> 16) & 0xFF
+                    local new_g = (new_col_rgb >> 8) & 0xFF
+                    local new_b = new_col_rgb & 0xFF
+                    rule.color = r.ColorToNative(new_r, new_g, new_b) | 0x1000000
                     save_color_rules()
                 end
 
-                ImGui.TableSetColumnIndex(ctx, 3)
+                ImGui.TableSetColumnIndex(ctx, 4)
                 if ImGui.Button(ctx, "X") then
                     to_remove = i
                 end
@@ -1951,19 +2501,31 @@ local function DrawRenderMatrixCheckbox(ctx)
 end
 
 
-local function get_region_under_play_cursor()
+local function get_region_under_play_cursor(lane_filter)
     local play_pos = r.GetPlayPosition()
     local num_markers = r.CountProjectMarkers(0)
+    local has_lane_api = r.GetRegionOrMarker ~= nil and r.GetRegionOrMarkerInfo_Value ~= nil
     for i = 0, num_markers - 1 do
         local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
         if isrgn and pos <= play_pos and rgnend >= play_pos then
-            return {
-                start = pos,
-                ending = rgnend,
-                name = name,
-                color = color,
-                index = markrgnindexnumber
-            }
+            local lane = 0
+            if has_lane_api then
+                local marker = r.GetRegionOrMarker(0, i, "")
+                if marker then
+                    lane = r.GetRegionOrMarkerInfo_Value(0, marker, "I_LANENUMBER") or 0
+                end
+            end
+            if lane_filter and lane_filter ~= "all" and tostring(lane) ~= lane_filter then
+            else
+                return {
+                    start = pos,
+                    ending = rgnend,
+                    name = name,
+                    color = color,
+                    index = markrgnindexnumber,
+                    lane = lane
+                }
+            end
         end
     end
     return nil
@@ -2015,8 +2577,8 @@ local function draw_region_progress(ctx, region, window_width)
     local text_width = ImGui.CalcTextSize(ctx, time_text)
     local text_x = pos_x + (bar_width - text_width) / 2
     
-    ImGui.DrawList_AddText(draw_list, text_x, pos_y + 1, cached_colors.text_color, time_text)
-    ImGui.Dummy(ctx, 0, 1)
+    ImGui.DrawList_AddText(draw_list, text_x, pos_y + 1, 0x000000FF, time_text)
+    ImGui.Dummy(ctx, bar_width, bar_height)
 end
 
 
@@ -2058,24 +2620,160 @@ local function draw_bottom_section(ctx)
         r.Main_OnCommand(COMMANDS.MATRIX, 0)
     end
     same_line(ctx)
+    if ImGui.Button(ctx, "RULER", button_width) then
+        r.Main_OnCommand(COMMANDS.RULER_LANES, 0)
+    end
+    same_line(ctx)
 
-    ImGui.SetCursorPosX(ctx, window_width - (105 + 118) * settings.scale_factor)
-    if ImGui.Button(ctx, "DEL ALL MARKERS", 105 * settings.scale_factor) then
+    local del_w = 70 * settings.scale_factor
+    ImGui.SetCursorPosX(ctx, window_width - (del_w * 2 + 12) * settings.scale_factor / settings.scale_factor)
+    push_style_color(ctx, ImGui.Col_Button, 0x8B0000CC)
+    push_style_color(ctx, ImGui.Col_ButtonHovered, 0xCC0000FF)
+    push_style_color(ctx, ImGui.Col_ButtonActive, 0xFF0000FF)
+    if ImGui.Button(ctx, "DEL MKR", del_w) then
         r.Main_OnCommand(r.NamedCommandLookup("_SWSMARKERLIST9"), 0)
     end
-
+    if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Delete all markers") end
     same_line(ctx)
-    ImGui.SetCursorPosX(ctx, window_width - (105 + 8) * settings.scale_factor)
-    if ImGui.Button(ctx, "DEL ALL REGIONS", 105 * settings.scale_factor) then
+    if ImGui.Button(ctx, "DEL RGN", del_w) then
         r.Main_OnCommand(r.NamedCommandLookup("_SWSMARKERLIST10"), 0)
     end
+    if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Delete all regions") end
+    pop_style_color(ctx, 3)
 
-    local progress_y = window_height - 24 * settings.scale_factor
-    ImGui.SetCursorPosY(ctx, progress_y - (2 * settings.scale_factor))
-    ImGui.Dummy(ctx, 1, 1)
-    local current_region = get_region_under_play_cursor()
-    draw_region_progress(ctx, current_region, window_width)
-    ImGui.Dummy(ctx, 1, 5)
+    ImGui.Dummy(ctx, 0, 2)
+    ImGui.DrawList_AddLine(draw_list, window_pos_x, window_pos_y + ImGui.GetCursorPosY(ctx), window_pos_x + window_width, window_pos_y + ImGui.GetCursorPosY(ctx), line_color, line_thickness)
+    ImGui.Dummy(ctx, 0, 2)
+
+    local current_project_key = get_project_key()
+    local all_items = project_items[current_project_key] or {}
+    local m_vis, m_hid, r_vis, r_hid = 0, 0, 0, 0
+    for _, itm in ipairs(all_items) do
+        if itm.isRegion then
+            if itm.visible then r_vis = r_vis + 1 else r_hid = r_hid + 1 end
+        else
+            if itm.visible then m_vis = m_vis + 1 else m_hid = m_hid + 1 end
+        end
+    end
+    
+    local cursor_pos = r.GetCursorPosition()
+    local cursor_str = format_time_and_mbt(cursor_pos)
+    local proj_len = r.GetProjectLength(0)
+    local proj_str = format_time_and_mbt(proj_len)
+    
+    local cur_region = get_region_under_play_cursor(progress_lane_filter)
+    local region_name = cur_region and (cur_region.index .. ": " .. (cur_region.name or "")) or "-"
+    
+    push_style_color(ctx, ImGui.Col_Text, 0xAAAAAAFF)
+    ImGui.Text(ctx, string.format("M: %d/%d  R: %d/%d  |  Cursor: %s  |  Len: %s  |  Rgn: %s", m_vis, m_vis + m_hid, r_vis, r_vis + r_hid, cursor_str, proj_str, region_name))
+    if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Markers visible/total  |  Regions visible/total  |  Edit cursor  |  Project length  |  Current region") end
+    pop_style_color(ctx, 1)
+
+    local tb_w = 24 * settings.scale_factor
+    local tb_w_wide = 30 * settings.scale_factor
+    local tb_h = ImGui.GetTextLineHeightWithSpacing(ctx)
+    local tb_total = tb_w_wide * 2 + tb_w * 2 + 12 * settings.scale_factor
+    ImGui.SameLine(ctx)
+    ImGui.SetCursorPosX(ctx, window_width - tb_total - 16 * settings.scale_factor)
+    
+    local play_state = r.GetPlayState()
+    local is_playing = (play_state & 1 == 1) or (play_state & 4 == 4)
+    local icon_col = 0xCCCCCCFF
+    local icon_play = 0x66FF66FF
+    local s = settings.scale_factor
+    local dl = ImGui.GetWindowDrawList(ctx)
+    local pad = 5 * s
+    
+    local bx, by = ImGui.GetCursorScreenPos(ctx)
+    if ImGui.Button(ctx, "##tb_start", tb_w_wide, tb_h) then
+        r.Main_OnCommand(40042, 0)
+    end
+    if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Go to start of project") end
+    local cx, cy = bx + tb_w_wide / 2, by + tb_h / 2
+    local hs = (tb_h / 2) - pad
+    ImGui.DrawList_AddLine(dl, cx - hs * 0.6, cy - hs, cx - hs * 0.6, cy + hs, icon_col, 2 * s)
+    ImGui.DrawList_AddTriangleFilled(dl, cx + hs * 0.4, cy - hs, cx + hs * 0.4, cy + hs, cx - hs * 0.4, cy, icon_col)
+    ImGui.SameLine(ctx)
+    
+    bx, by = ImGui.GetCursorScreenPos(ctx)
+    if ImGui.Button(ctx, "##tb_stop", tb_w, tb_h) then
+        r.Main_OnCommand(1016, 0)
+    end
+    if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Stop") end
+    cx, cy = bx + tb_w / 2, by + tb_h / 2
+    ImGui.DrawList_AddRectFilled(dl, cx - hs * 0.75, cy - hs * 0.75, cx + hs * 0.75, cy + hs * 0.75, icon_col)
+    ImGui.SameLine(ctx)
+    
+    bx, by = ImGui.GetCursorScreenPos(ctx)
+    if ImGui.Button(ctx, "##tb_play", tb_w, tb_h) then
+        r.Main_OnCommand(40073, 0)
+    end
+    if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, is_playing and "Pause" or "Play") end
+    cx, cy = bx + tb_w / 2, by + tb_h / 2
+    if is_playing then
+        local pw = 2 * s
+        local gap = 2 * s
+        ImGui.DrawList_AddRectFilled(dl, cx - gap - pw, cy - hs * 0.7, cx - gap, cy + hs * 0.7, icon_play)
+        ImGui.DrawList_AddRectFilled(dl, cx + gap, cy - hs * 0.7, cx + gap + pw, cy + hs * 0.7, icon_play)
+    else
+        ImGui.DrawList_AddTriangleFilled(dl, cx - hs * 0.5, cy - hs, cx - hs * 0.5, cy + hs, cx + hs * 0.7, cy, icon_col)
+    end
+    ImGui.SameLine(ctx)
+    
+    bx, by = ImGui.GetCursorScreenPos(ctx)
+    if ImGui.Button(ctx, "##tb_end", tb_w_wide, tb_h) then
+        r.Main_OnCommand(40043, 0)
+    end
+    if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Go to end of project") end
+    cx, cy = bx + tb_w_wide / 2, by + tb_h / 2
+    ImGui.DrawList_AddTriangleFilled(dl, cx - hs * 0.4, cy - hs, cx - hs * 0.4, cy + hs, cx + hs * 0.4, cy, icon_col)
+    ImGui.DrawList_AddLine(dl, cx + hs * 0.6, cy - hs, cx + hs * 0.6, cy + hs, icon_col, 2 * s)
+
+    ImGui.Dummy(ctx, 0, 2)
+
+    local current_project_key_p = get_project_key()
+    local all_items_p = project_items[current_project_key_p] or {}
+    local progress_lanes = {}
+    for _, itm in ipairs(all_items_p) do
+        if itm.isRegion then
+            local ln = tostring(itm.lane or 0)
+            if not progress_lanes[ln] then
+                progress_lanes[ln] = true
+            end
+        end
+    end
+    local progress_lane_list = {}
+    for ln, _ in pairs(progress_lanes) do
+        table.insert(progress_lane_list, tonumber(ln))
+    end
+    table.sort(progress_lane_list)
+
+    if #progress_lane_list > 1 then
+        local combo_w = 52 * settings.scale_factor
+        ImGui.SetNextItemWidth(ctx, combo_w)
+        local preview = progress_lane_filter == "all" and "All" or ("Ln " .. progress_lane_filter)
+        if ImGui.BeginCombo(ctx, "##progress_lane", preview, ImGui.ComboFlags_NoArrowButton) then
+            if ImGui.Selectable(ctx, "All", progress_lane_filter == "all") then
+                progress_lane_filter = "all"
+            end
+            for _, ln in ipairs(progress_lane_list) do
+                local ls = tostring(ln)
+                if ImGui.Selectable(ctx, "Ln " .. ls, progress_lane_filter == ls) then
+                    progress_lane_filter = ls
+                end
+            end
+            ImGui.EndCombo(ctx)
+        end
+        if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Progress lane filter") end
+        same_line(ctx)
+        local current_region = get_region_under_play_cursor(progress_lane_filter)
+        local remaining_w = window_width - ImGui.GetCursorPosX(ctx) - 8
+        draw_region_progress(ctx, current_region, remaining_w)
+    else
+        local current_region = get_region_under_play_cursor(progress_lane_filter)
+        draw_region_progress(ctx, current_region, window_width)
+    end
+    ImGui.Dummy(ctx, 0, 2)
 end
 
 local function get_directory_hash(path)
@@ -2360,48 +3058,100 @@ local function handle_preset_item(ctx, preset, index, category, selected_preset)
     end
 end
 
-local function renumber_items(is_region)
+renumber_items = function(is_region)
     local current_project_key = get_project_key()
     local items = project_items[current_project_key] or {}
+    local has_lane_api = r.GetRegionOrMarker ~= nil and r.SetRegionOrMarkerInfo_Value ~= nil
+
     local visibility_status = {}
+    local lane_status = {}
+    local lanes = {}
     for _, item in ipairs(items) do
         if item.isRegion == is_region then
             visibility_status[item.index] = item.visible
+            lane_status[item.index] = item.lane or 0
+            local l = item.lane or 0
+            if not lanes[l] then lanes[l] = {} end
+            table.insert(lanes[l], item)
             if not item.visible then
                 set_item_visibility(item, true)
             end
         end
     end
 
-    local action_id = is_region and "_SWSMARKERLIST8" or "_SWSMARKERLIST7"
-    r.Main_OnCommand(r.NamedCommandLookup(action_id), 0)
+    local sorted_lanes = {}
+    for l in pairs(lanes) do sorted_lanes[#sorted_lanes + 1] = l end
+    table.sort(sorted_lanes)
 
-    local _, num_markers, num_regions = r.CountProjectMarkers(0)
-    local new_items = {}
-    for i = 0, num_markers + num_regions - 1 do
-        local retval, isrgn, pos, rgnend, name, markrgnindexnumber, color = r.EnumProjectMarkers3(0, i)
-        if retval ~= 0 and isrgn == is_region then
-            local item = {
-                name = name,
-                pos = pos,
-                rgnend = rgnend,
-                color = color,
-                index = markrgnindexnumber,
-                isRegion = isrgn,
-                visible = true,
-                project_key = current_project_key
+    for _, l in ipairs(sorted_lanes) do
+        table.sort(lanes[l], function(a, b) return a.pos < b.pos end)
+    end
+
+    r.PreventUIRefresh(1)
+
+    local next_id = 1
+    local rename_map = {}
+    for _, l in ipairs(sorted_lanes) do
+        for _, item in ipairs(lanes[l]) do
+            rename_map[#rename_map + 1] = {
+                old_index = item.index,
+                new_index = next_id,
+                is_region = is_region,
+                pos = item.pos,
+                rgnend = item.rgnend or 0,
+                name = item.name,
+                color = item.color,
+                lane = l,
+                visible = visibility_status[item.index]
             }
-            table.insert(new_items, item)
+            next_id = next_id + 1
         end
     end
-    
-    for _, item in ipairs(new_items) do
-        local original_visibility = visibility_status[item.index]
-        if original_visibility == false then
-            set_item_visibility(item, false)
+
+    for _, entry in ipairs(rename_map) do
+        r.DeleteProjectMarker(0, entry.old_index, is_region)
+    end
+
+    for _, entry in ipairs(rename_map) do
+        r.AddProjectMarker2(0, is_region, entry.pos, entry.rgnend, entry.name, entry.new_index, entry.color)
+    end
+
+    if has_lane_api then
+        local _, num_m, num_r = r.CountProjectMarkers(0)
+        for mi = 0, num_m + num_r - 1 do
+            local rv, isrgn, pos, rgnend, name, idx = r.EnumProjectMarkers3(0, mi)
+            if rv ~= 0 and isrgn == is_region then
+                for _, entry in ipairs(rename_map) do
+                    if entry.new_index == idx then
+                        local marker = r.GetRegionOrMarker(0, mi, "")
+                        if marker then
+                            r.SetRegionOrMarkerInfo_Value(0, marker, "I_LANENUMBER", entry.lane)
+                        end
+                        break
+                    end
+                end
+            end
         end
     end
-    project_items[current_project_key] = new_items
+
+    r.PreventUIRefresh(-1)
+
+    CACHE_CONFIG.MARKERS.last_update = 0
+    local refreshed = get_markers_and_regions()
+
+    for _, item in ipairs(refreshed) do
+        if item.isRegion == is_region then
+            for _, entry in ipairs(rename_map) do
+                if entry.new_index == item.index then
+                    if entry.visible == false then
+                        set_item_visibility(item, false)
+                    end
+                    break
+                end
+            end
+        end
+    end
+
     r.UpdateTimeline()
     save_invisible_items()
     save_visibility_to_project()
@@ -2496,17 +3246,68 @@ function frame()
         ImGui.PushStyleColor(ctx, ImGui.Col_Header, 0x00000000)
         ImGui.PushStyleColor(ctx, ImGui.Col_HeaderHovered, 0x00000000)
         ImGui.PushStyleColor(ctx, ImGui.Col_HeaderActive, 0x00000000)
-        if ImGui.Selectable(ctx, "Timeline", false) then
+        local tl_text_w = ImGui.CalcTextSize(ctx, "Timeline")
+        if ImGui.Selectable(ctx, "Timeline", false, 0, tl_text_w + 8 * settings.scale_factor, 0) then
             show_minimap = not show_minimap
         end
         ImGui.PopStyleColor(ctx, 3)
 
-        if show_minimap then
-            local timeline_height = 50 * settings.scale_factor
-            ImGui.BeginChild(ctx, "Timeline", 0, timeline_height, ImGui.WindowFlags_None)
-            draw_timeline_minimap(ctx, items)
-            ImGui.EndChild(ctx)
+        local all_lanes = {}
+        local lane_check = {}
+        for _, it in ipairs(items) do
+            local l = it.lane or 0
+            if not lane_check[l] then
+                lane_check[l] = true
+                all_lanes[#all_lanes + 1] = l
+            end
         end
+        table.sort(all_lanes)
+        
+        if show_minimap then
+            ImGui.SameLine(ctx)
+            local filter_labels = { ["all"] = "All", ["markers"] = "M", ["regions"] = "R" }
+            local btn_s = settings.scale_factor
+            local filter_w = 40 * btn_s
+            ImGui.PushStyleVar(ctx, ImGui.StyleVar_FramePadding, 4 * btn_s, 0)
+            ImGui.SetNextItemWidth(ctx, filter_w)
+            if ImGui.BeginCombo(ctx, "##tl_filter", filter_labels[timeline_filter], ImGui.ComboFlags_NoArrowButton) then
+                if ImGui.Selectable(ctx, "All", timeline_filter == "all") then timeline_filter = "all" end
+                if ImGui.Selectable(ctx, "Markers", timeline_filter == "markers") then timeline_filter = "markers" end
+                if ImGui.Selectable(ctx, "Regions", timeline_filter == "regions") then timeline_filter = "regions" end
+                ImGui.EndCombo(ctx)
+            end
+            if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Timeline filter: All / Markers / Regions") end
+
+            if #all_lanes > 1 then
+                ImGui.SameLine(ctx)
+                local lane_label = timeline_lane_filter == "all" and "Ln" or ("L" .. timeline_lane_filter)
+                ImGui.SetNextItemWidth(ctx, filter_w)
+                if ImGui.BeginCombo(ctx, "##tl_lane_filter", lane_label, ImGui.ComboFlags_NoArrowButton) then
+                    if ImGui.Selectable(ctx, "All Lanes", timeline_lane_filter == "all") then timeline_lane_filter = "all" end
+                    for _, l in ipairs(all_lanes) do
+                        local ls = tostring(l)
+                        if ImGui.Selectable(ctx, "Lane " .. ls, timeline_lane_filter == ls) then timeline_lane_filter = ls end
+                    end
+                    ImGui.EndCombo(ctx)
+                end
+                if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Filter by ruler lane") end
+            end
+
+            ImGui.PopStyleVar(ctx)
+        end
+
+        if show_minimap then
+            local base_height = 50 * settings.scale_factor
+            local visible_lane_count = (#all_lanes > 1 and timeline_lane_filter == "all") and #all_lanes or 1
+            local timeline_height = base_height + math.max(0, visible_lane_count - 1) * 20 * settings.scale_factor
+            if ImGui.BeginChild(ctx, "Timeline", 0, timeline_height, ImGui.WindowFlags_None) then
+                draw_timeline_minimap(ctx, items)
+                ImGui.EndChild(ctx)
+            end
+        end
+        
+        local tab_avail_w = ImGui.GetContentRegionAvail(ctx)
+        local tab_sx, tab_sy = ImGui.GetCursorScreenPos(ctx)
         
         if ImGui.BeginTabBar(ctx, "MarkerRegionTabs") then
             local available_height = calculate_available_height(ctx)
@@ -2541,6 +3342,39 @@ function frame()
             end   
             ImGui.EndTabBar(ctx)
         end
+        
+        local restore_cy = ImGui.GetCursorPosY(ctx)
+        local ur_dl = ImGui.GetWindowDrawList(ctx)
+        local ur_s = settings.scale_factor
+        local undo_btn_w = 28 * ur_s
+        local ur_h = ImGui.GetFrameHeight(ctx)
+        local ur_col = 0xCCCCCCFF
+        local ur_pad = 3 * ur_s
+        local ur_r = (ur_h / 2) - ur_pad
+        
+        ImGui.SetCursorScreenPos(ctx, tab_sx + tab_avail_w - undo_btn_w * 2 - 4 * ur_s, tab_sy)
+        
+        local ubx, uby = ImGui.GetCursorScreenPos(ctx)
+        if ImGui.InvisibleButton(ctx, "##undo_btn", undo_btn_w, ur_h) then
+            r.Main_OnCommand(40029, 0)
+        end
+        if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Undo") end
+        local ucx, ucy = ubx + undo_btn_w / 2, uby + ur_h / 2
+        ImGui.DrawList_AddBezierCubic(ur_dl, ucx + ur_r * 0.6, ucy - ur_r * 0.7, ucx - ur_r * 0.3, ucy - ur_r * 1.1, ucx - ur_r * 0.7, ucy - ur_r * 0.2, ucx - ur_r * 0.2, ucy + ur_r * 0.3, ur_col, 1.5 * ur_s, 12)
+        ImGui.DrawList_AddTriangleFilled(ur_dl, ucx - ur_r * 0.8, ucy - ur_r * 0.1, ucx - ur_r * 0.1, ucy - ur_r * 0.6, ucx - ur_r * 0.0, ucy + ur_r * 0.4, ur_col)
+        
+        ImGui.SameLine(ctx)
+        
+        local rbx, rby = ImGui.GetCursorScreenPos(ctx)
+        if ImGui.InvisibleButton(ctx, "##redo_btn", undo_btn_w, ur_h) then
+            r.Main_OnCommand(40030, 0)
+        end
+        if ImGui.IsItemHovered(ctx) then ImGui.SetTooltip(ctx, "Redo") end
+        local rcx, rcy = rbx + undo_btn_w / 2, rby + ur_h / 2
+        ImGui.DrawList_AddBezierCubic(ur_dl, rcx - ur_r * 0.6, rcy - ur_r * 0.7, rcx + ur_r * 0.3, rcy - ur_r * 1.1, rcx + ur_r * 0.7, rcy - ur_r * 0.2, rcx + ur_r * 0.2, rcy + ur_r * 0.3, ur_col, 1.5 * ur_s, 12)
+        ImGui.DrawList_AddTriangleFilled(ur_dl, rcx + ur_r * 0.8, rcy - ur_r * 0.1, rcx + ur_r * 0.1, rcy - ur_r * 0.6, rcx + ur_r * 0.0, rcy + ur_r * 0.4, ur_col)
+        
+        ImGui.SetCursorPosY(ctx, restore_cy)
 
         draw_bottom_section(ctx)
         handle_region_playback()
@@ -2551,6 +3385,10 @@ function frame()
         pop_style_var(ctx, 5)
         pop_font(ctx)
         ImGui.End(ctx)
+    else
+        pop_style_color(ctx, 24)
+        pop_style_var(ctx, 5)
+        pop_font(ctx)
     end
     if not window_open then
         if settings.save_on_close then SaveSettings() end
