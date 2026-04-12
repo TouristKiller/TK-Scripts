@@ -329,27 +329,8 @@
 
   <category name="Midi">
     <reapack name="TK_GTR2MIDI.lua" type="script" desc="TK GTR2MIDI - With Chord Engine">
-    <version name="0.4.0" author="TouristKiller" time="2025-11-27T21:50:00Z">
+    <version name="0.4.1" author="TouristKiller" time="2026-04-12T19:30:00Z">
       <changelog><![CDATA[           
-0.4.0
-+   NEW: Chord Generator Engine!
-    -   Generate voicings dynamically based on formulas and tuning.
-    -   Smart Scoring System prioritizing "standard" and "playable" voicings.
-    -   "Campfire Chord" logic: Bonus for open strings and open position (frets 0-3).
-    -   Smart Finger Logic: Prevents impossible finger crossings and stretches.
-    -   Complexity Mode (Settings): Choose between "Simple" (Beginner/Easy) and "Rich" (Advanced/Full) voicings.
-+   UI Improvements:
-    -   Added +/- buttons for quick chord variation navigation.
-    -   Wider dropdowns for better readability.
-    -   Best Match highlighting (Green + *) in variation list.
-    -   Settings menu updated with Complexity Mode selector.
-+   General:
-    -   Improved sorting: Best matches first, then by fret position.
-
-0.3.0
-+ Lefty view
-+ Mirror view
-+ Optical string thickness
    ]]></changelog>
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI.lua</source>
     <source file="TK_GTR2MIDI_ChordEngine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_GTR2MIDI_ChordEngine.lua</source>
