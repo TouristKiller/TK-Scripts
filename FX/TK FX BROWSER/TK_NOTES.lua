@@ -1,7 +1,13 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.4.2
+-- @version 2.5
 -- @changelog
+-- 2.5
+--   + Apply window size to contexts: File menu submenu to apply current window size to Global/Project/All Tracks/All Items or All
+--   + Apply status bar to contexts: same submenu structure for status bar on/off
+--   + Apply tabs to contexts: same submenu structure for tabs on/off, auto-creates default tab when needed
+--   + Global defaults fallback: new tracks/items/projects inherit window size, status bar and tabs settings from Global Notes
+--   + Master track included in "All Tracks" apply actions
 -- 2.4.2
 --   + pin persistence fix: window_pinned state is now saved and loaded from ExtState, ensuring it persists across sessions and contexts.
 -- 2.4.1
@@ -240,6 +246,19 @@ local function DeserializeLineColors(str)
         end
     end
     return lc
+end
+
+local function GetGlobalDefaults()
+    local defaults = {window_width = 600, window_height = 400, show_status = true, tabs_enabled = false}
+    local gw = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::window_width"))
+    if gw and gw >= 300 and gw <= 3000 then defaults.window_width = gw end
+    local gh = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::window_height"))
+    if gh and gh >= 250 and gh <= 3000 then defaults.window_height = gh end
+    local gs = ReadExtState(EXT_NAMESPACE, "GLOBAL::show_status")
+    if gs ~= "" then defaults.show_status = (gs == "true") end
+    local gt = ReadExtState(EXT_NAMESPACE, "GLOBAL::tabs_enabled")
+    if gt ~= "" then defaults.tabs_enabled = (gt == "true") end
+    return defaults
 end
 
 local function LoadNotebook()
@@ -743,6 +762,189 @@ local function GetItemGUID(item)
     return track_guid .. "::" .. string.format("%.6f", pos) .. "::" .. string.format("%.6f", length)
 end
 
+local function ApplyWindowSizeToAll(apply_global, apply_project, apply_tracks, apply_items)
+    local w = tostring(state.window_width or 600)
+    local h = tostring(state.window_height or 400)
+
+    if apply_global then
+        WriteExtState(EXT_NAMESPACE, "GLOBAL::window_width", w)
+        WriteExtState(EXT_NAMESPACE, "GLOBAL::window_height", h)
+    end
+
+    local proj = GetActiveProject()
+    if proj then
+        if apply_project then
+            WriteProjExtState(proj, EXT_NAMESPACE, "PROJECT::window_width", w)
+            WriteProjExtState(proj, EXT_NAMESPACE, "PROJECT::window_height", h)
+        end
+
+        if apply_tracks then
+            local master = r.GetMasterTrack(proj)
+            if master then
+                local mguid = r.GetTrackGUID(master)
+                if mguid and mguid ~= "" then
+                    WriteProjExtState(proj, EXT_NAMESPACE, mguid .. "::window_width", w)
+                    WriteProjExtState(proj, EXT_NAMESPACE, mguid .. "::window_height", h)
+                end
+            end
+            local num_tracks = r.CountTracks(proj) or 0
+            for i = 0, num_tracks - 1 do
+                local track = r.GetTrack(proj, i)
+                if track then
+                    local guid = r.GetTrackGUID(track)
+                    if guid and guid ~= "" then
+                        WriteProjExtState(proj, EXT_NAMESPACE, guid .. "::window_width", w)
+                        WriteProjExtState(proj, EXT_NAMESPACE, guid .. "::window_height", h)
+                    end
+                end
+            end
+        end
+
+        if apply_items then
+            local num_items = r.CountMediaItems(proj) or 0
+            for i = 0, num_items - 1 do
+                local item = r.GetMediaItem(proj, i)
+                if item then
+                    local item_guid = GetItemGUID(item)
+                    if item_guid then
+                        local wk = MakeItemKey(item_guid, "window_width")
+                        local hk = MakeItemKey(item_guid, "window_height")
+                        WriteProjExtState(proj, EXT_NAMESPACE, wk, w)
+                        WriteProjExtState(proj, EXT_NAMESPACE, hk, h)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function ApplyStatusBarToAll(apply_global, apply_project, apply_tracks, apply_items)
+    local val = state.show_status and "true" or "false"
+
+    if apply_global then
+        WriteExtState(EXT_NAMESPACE, "GLOBAL::show_status", val)
+    end
+
+    local proj = GetActiveProject()
+    if proj then
+        if apply_project then
+            WriteProjExtState(proj, EXT_NAMESPACE, "PROJECT::show_status", val)
+        end
+
+        if apply_tracks then
+            local master = r.GetMasterTrack(proj)
+            if master then
+                local mguid = r.GetTrackGUID(master)
+                if mguid and mguid ~= "" then
+                    WriteProjExtState(proj, EXT_NAMESPACE, mguid .. "::show_status", val)
+                end
+            end
+            local num_tracks = r.CountTracks(proj) or 0
+            for i = 0, num_tracks - 1 do
+                local track = r.GetTrack(proj, i)
+                if track then
+                    local guid = r.GetTrackGUID(track)
+                    if guid and guid ~= "" then
+                        WriteProjExtState(proj, EXT_NAMESPACE, guid .. "::show_status", val)
+                    end
+                end
+            end
+        end
+
+        if apply_items then
+            local num_items = r.CountMediaItems(proj) or 0
+            for i = 0, num_items - 1 do
+                local item = r.GetMediaItem(proj, i)
+                if item then
+                    local item_guid = GetItemGUID(item)
+                    if item_guid then
+                        WriteProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "show_status"), val)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function ApplyTabsToAll(apply_global, apply_project, apply_tracks, apply_items)
+    local val = state.tabs_enabled and "true" or "false"
+    local default_tabs_data = "1|1|Notes:"
+
+    if apply_global then
+        WriteExtState(EXT_NAMESPACE, "GLOBAL::tabs_enabled", val)
+        if state.tabs_enabled then
+            local existing = ReadExtState(EXT_NAMESPACE, "GLOBAL::tabs_data")
+            if not existing or existing == "" then
+                WriteExtState(EXT_NAMESPACE, "GLOBAL::tabs_data", default_tabs_data)
+            end
+        end
+    end
+
+    local proj = GetActiveProject()
+    if proj then
+        if apply_project then
+            WriteProjExtState(proj, EXT_NAMESPACE, "PROJECT::tabs_enabled", val)
+            if state.tabs_enabled then
+                local existing = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::tabs_data")
+                if not existing or existing == "" then
+                    WriteProjExtState(proj, EXT_NAMESPACE, "PROJECT::tabs_data", default_tabs_data)
+                end
+            end
+        end
+
+        if apply_tracks then
+            local master = r.GetMasterTrack(proj)
+            if master then
+                local mguid = r.GetTrackGUID(master)
+                if mguid and mguid ~= "" then
+                    WriteProjExtState(proj, EXT_NAMESPACE, mguid .. "::tabs_enabled", val)
+                    if state.tabs_enabled then
+                        local existing = ReadProjExtState(proj, EXT_NAMESPACE, mguid .. "::tabs_data")
+                        if not existing or existing == "" then
+                            WriteProjExtState(proj, EXT_NAMESPACE, mguid .. "::tabs_data", default_tabs_data)
+                        end
+                    end
+                end
+            end
+            local num_tracks = r.CountTracks(proj) or 0
+            for i = 0, num_tracks - 1 do
+                local track = r.GetTrack(proj, i)
+                if track then
+                    local guid = r.GetTrackGUID(track)
+                    if guid and guid ~= "" then
+                        WriteProjExtState(proj, EXT_NAMESPACE, guid .. "::tabs_enabled", val)
+                        if state.tabs_enabled then
+                            local existing = ReadProjExtState(proj, EXT_NAMESPACE, guid .. "::tabs_data")
+                            if not existing or existing == "" then
+                                WriteProjExtState(proj, EXT_NAMESPACE, guid .. "::tabs_data", default_tabs_data)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if apply_items then
+            local num_items = r.CountMediaItems(proj) or 0
+            for i = 0, num_items - 1 do
+                local item = r.GetMediaItem(proj, i)
+                if item then
+                    local item_guid = GetItemGUID(item)
+                    if item_guid then
+                        WriteProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "tabs_enabled"), val)
+                        if state.tabs_enabled then
+                            local existing = ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "tabs_data"))
+                            if not existing or existing == "" then
+                                WriteProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "tabs_data"), default_tabs_data)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 local function PackColorToU32(rf, gf, bf, af)
     local function clamp(v)
         if not v then return 1.0 end
@@ -980,8 +1182,14 @@ local function LoadProjectState(proj)
         state.auto_save_enabled = true
     end
     
+    local gdef = GetGlobalDefaults()
+    
     -- Load tabs data (always load, even if tabs are disabled, to preserve them)
-    state.tabs_enabled = stored_tabs_enabled == "true"
+    if stored_tabs_enabled and stored_tabs_enabled ~= "" then
+        state.tabs_enabled = stored_tabs_enabled == "true"
+    else
+        state.tabs_enabled = gdef.tabs_enabled
+    end
     state.tabs = {}
     state.active_tab_index = 1
     state.strokes = {}
@@ -1110,22 +1318,27 @@ local function LoadProjectState(proj)
         end
     end
     
+    if state.tabs_enabled and #state.tabs == 0 then
+        state.tabs = {{name = "Notes", text = state.text, images = {}, strokes = {}, font_size = state.font_size, line_colors = {}}}
+        state.active_tab_index = 1
+    end
+    
     local prev_width = state.window_width
     local prev_height = state.window_height
     if stored_width and stored_width >= 300 and stored_width <= 3000 then
         state.window_width = stored_width
     else
-        state.window_width = 600
+        state.window_width = gdef.window_width
     end
     if stored_height and stored_height >= 250 and stored_height <= 3000 then
         state.window_height = stored_height
     else
-        state.window_height = 400
+        state.window_height = gdef.window_height
     end
-    if stored_show_status then
+    if stored_show_status and stored_show_status ~= "" then
         state.show_status = (stored_show_status == "true")
     else
-        state.show_status = true
+        state.show_status = gdef.show_status
     end
     
     if prev_width ~= state.window_width or prev_height ~= state.window_height then
@@ -1542,14 +1755,19 @@ local function LoadTrackState(proj, track, track_guid)
     local tabs_data_key = tostring(track_guid) .. "::tabs_data"
     local stored_tabs_data = ReadProjExtState(proj, EXT_NAMESPACE, tabs_data_key)
     
+    local gdef = GetGlobalDefaults()
+    
     if stored_auto_save then
         state.auto_save_enabled = (stored_auto_save == "true")
     else
         state.auto_save_enabled = true
     end
     
-    -- Load tabs data (always load, even if tabs are disabled, to preserve them)
-    state.tabs_enabled = stored_tabs_enabled == "true"
+    if stored_tabs_enabled and stored_tabs_enabled ~= "" then
+        state.tabs_enabled = stored_tabs_enabled == "true"
+    else
+        state.tabs_enabled = gdef.tabs_enabled
+    end
     state.tabs = {}
     state.active_tab_index = 1
     state.strokes = {}  -- Reset strokes
@@ -1682,25 +1900,30 @@ local function LoadTrackState(proj, track, track_guid)
         end
     end
     
+    if state.tabs_enabled and #state.tabs == 0 then
+        state.tabs = {{name = "Notes", text = state.text, images = {}, strokes = {}, font_size = state.font_size, line_colors = {}}}
+        state.active_tab_index = 1
+    end
+    
     local prev_width = state.window_width
     local prev_height = state.window_height
     if stored_width and stored_width >= 300 and stored_width <= 3000 then
         state.window_width = stored_width
     else
-        state.window_width = 600
+        state.window_width = gdef.window_width
     end
     if stored_height and stored_height >= 250 and stored_height <= 3000 then
         state.window_height = stored_height
     else
-        state.window_height = 400
+        state.window_height = gdef.window_height
     end
     if prev_width ~= state.window_width or prev_height ~= state.window_height then
         state.window_size_needs_update = true
     end
-    if stored_show_status then
+    if stored_show_status and stored_show_status ~= "" then
         state.show_status = (stored_show_status == "true")
     else
-        state.show_status = true
+        state.show_status = gdef.show_status
     end
     
     if not state.tabs_enabled then
@@ -1832,16 +2055,21 @@ local function LoadItemState(proj, item, item_guid)
     local stored_tabs_enabled = ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "tabs_enabled"))
     local stored_tabs_data = ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "tabs_data"))
     
+    local gdef = GetGlobalDefaults()
+    
     local prev_width = state.window_width
     local prev_height = state.window_height
     
     state.auto_save_enabled = stored_auto_save and (stored_auto_save == "true") or true
-    state.window_width = (stored_width and stored_width >= 300 and stored_width <= 3000) and stored_width or 600
-    state.window_height = (stored_height and stored_height >= 250 and stored_height <= 3000) and stored_height or 400
-    state.show_status = (stored_show_status == nil or stored_show_status == "") and true or (stored_show_status == "true")
+    state.window_width = (stored_width and stored_width >= 300 and stored_width <= 3000) and stored_width or gdef.window_width
+    state.window_height = (stored_height and stored_height >= 250 and stored_height <= 3000) and stored_height or gdef.window_height
+    state.show_status = (stored_show_status == nil or stored_show_status == "") and gdef.show_status or (stored_show_status == "true")
     
-    -- Load tabs data
-    state.tabs_enabled = stored_tabs_enabled == "true"
+    if stored_tabs_enabled and stored_tabs_enabled ~= "" then
+        state.tabs_enabled = stored_tabs_enabled == "true"
+    else
+        state.tabs_enabled = gdef.tabs_enabled
+    end
     state.tabs = {}
     state.active_tab_index = 1
     state.strokes = {}  -- Reset strokes
@@ -1970,6 +2198,11 @@ local function LoadItemState(proj, item, item_guid)
                 end
             end
         end
+    end
+    
+    if state.tabs_enabled and #state.tabs == 0 then
+        state.tabs = {{name = "Notes", text = state.text, images = {}, strokes = {}, font_size = state.font_size, line_colors = {}}}
+        state.active_tab_index = 1
     end
     
     if prev_width ~= state.window_width or prev_height ~= state.window_height then
@@ -3426,6 +3659,67 @@ local function DrawMenuBar()
                     file:close()
                 end
             end
+        end
+        r.ImGui_Separator(ctx)
+        local size_label = string.format("Apply window size (%dx%d)", state.window_width or 600, state.window_height or 400)
+        if r.ImGui_BeginMenu(ctx, size_label) then
+            if r.ImGui_MenuItem(ctx, "Global") then
+                ApplyWindowSizeToAll(true, false, false, false)
+            end
+            if r.ImGui_MenuItem(ctx, "Project") then
+                ApplyWindowSizeToAll(false, true, false, false)
+            end
+            if r.ImGui_MenuItem(ctx, "All Tracks") then
+                ApplyWindowSizeToAll(false, false, true, false)
+            end
+            if r.ImGui_MenuItem(ctx, "All Items") then
+                ApplyWindowSizeToAll(false, false, false, true)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "All") then
+                ApplyWindowSizeToAll(true, true, true, true)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+        local status_label = string.format("Apply status bar (%s)", state.show_status and "on" or "off")
+        if r.ImGui_BeginMenu(ctx, status_label) then
+            if r.ImGui_MenuItem(ctx, "Global") then
+                ApplyStatusBarToAll(true, false, false, false)
+            end
+            if r.ImGui_MenuItem(ctx, "Project") then
+                ApplyStatusBarToAll(false, true, false, false)
+            end
+            if r.ImGui_MenuItem(ctx, "All Tracks") then
+                ApplyStatusBarToAll(false, false, true, false)
+            end
+            if r.ImGui_MenuItem(ctx, "All Items") then
+                ApplyStatusBarToAll(false, false, false, true)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "All") then
+                ApplyStatusBarToAll(true, true, true, true)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+        local tabs_label = string.format("Apply tabs (%s)", state.tabs_enabled and "on" or "off")
+        if r.ImGui_BeginMenu(ctx, tabs_label) then
+            if r.ImGui_MenuItem(ctx, "Global") then
+                ApplyTabsToAll(true, false, false, false)
+            end
+            if r.ImGui_MenuItem(ctx, "Project") then
+                ApplyTabsToAll(false, true, false, false)
+            end
+            if r.ImGui_MenuItem(ctx, "All Tracks") then
+                ApplyTabsToAll(false, false, true, false)
+            end
+            if r.ImGui_MenuItem(ctx, "All Items") then
+                ApplyTabsToAll(false, false, false, true)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "All") then
+                ApplyTabsToAll(true, true, true, true)
+            end
+            r.ImGui_EndMenu(ctx)
         end
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Exit") then

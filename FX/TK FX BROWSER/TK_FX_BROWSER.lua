@@ -1,10 +1,29 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.4.7
+-- @version 2.4.8
 -- @changelog:
---[[     
-    + Added Pin persistence in TK NOTES: The pinned state of notes windows is now saved and loaded from ExtState, ensuring that pinned notes remain pinned across REAPER sessions and different contexts. This means that if you pin a notes window for a specific plugin or track, it will stay pinned even after closing and reopening REAPER, providing a more consistent and reliable note-taking experience.
+--[[  
+    MINI UPDATE 0.3.4: 
+    + FX Chains: "Show All FX Chains" button - displays all chains separated by dividers with chain name labels
+    + FX Chains: Chain divider context menu (right-click) with Add, Replace, Builder, Rename, Delete per chain
+    + FX Chains: Individual chain view now shows full action button bar (Add, Replace, Builder, Rename, Delete)
+    + FX Chains: Action buttons auto-wrap to multiple rows when window is too narrow
+    + FX Chains: Duplicate plugins in chains are now correctly added to the FX Chain Builder
+    + FX Chain Builder: Button strip now scales dynamically with window width instead of clipping
+    + FX Chain Builder: "Replace" button - replace entire FX chain on selected track(s) with chain builder contents (removes existing FX first)
+    + FX Chain Builder: Commit, Replace and Save now preserve exact chain order (instruments-on-top setting is bypassed for chain builder actions)
+    + Multi-Selection: Ctrl+Arrow keys to move cursor without changing selection
+    + Multi-Selection: Ctrl+Space to toggle individual item in/out of selection via keyboard
+    + Shortcuts Window: New popup showing all keyboard & mouse shortcuts (Settings menu > Shortcuts)
+    + Shortcuts: Escape now properly clears selection even when child window loses focus
+    + FX Chain Builder: Customizable accent color and background darkness via Main Settings > GUI > FX Chain Builder
 
+    TK NOTES UPDATE 2.5.0:
+    + Apply window size to contexts: File menu submenu to apply current window size to Global/Project/All Tracks/All Items or All
+    + Apply status bar to contexts: same submenu structure for status bar on/off
+    + Apply tabs to contexts: same submenu structure for tabs on/off, auto-creates default tab when needed
+    + Global defaults fallback: new tracks/items/projects inherit window size, status bar and tabs settings from Global Notes
+    + Master track included in "All Tracks" apply actions
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper

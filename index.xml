@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.4.7" author="TouristKiller" time="2026-04-12T00:15:00Z">
+    <version name="2.4.8" author="TouristKiller" time="2026-04-12T13:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -46,8 +46,12 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[    
-    + 2.4.6 Update - April 10, 2026 - UPDATES TO MINI 0.3.3
-    + FX Chain Builder: "Grab" button - load FX chain from selected track directly into chain builder
+    + FX Chains: "Show All FX Chains" button - displays all chains separated by dividers with chain name labels
+    + FX Chains: Chain divider context menu (right-click) with Add, Replace, Builder, Rename, Delete per chain
+    + FX Chains: Individual chain view now shows full action button bar (Add, Replace, Builder, Rename, Delete)
+    + FX Chains: Action buttons auto-wrap to multiple rows when window is too narrow
+    + FX Chains: Duplicate plugins in chains are now correctly added to the FX Chain Builder
+    + FX Chain Builder: Button strip now scales dynamically with window width instead of clipping
     + FX Chain Builder: "Replace" button - replace entire FX chain on selected track(s) with chain builder contents (removes existing FX first)
     + FX Chain Builder: Commit, Replace and Save now preserve exact chain order (instruments-on-top setting is bypassed for chain builder actions)
     + Multi-Selection: Ctrl+Arrow keys to move cursor without changing selection
@@ -55,6 +59,13 @@
     + Shortcuts Window: New popup showing all keyboard & mouse shortcuts (Settings menu > Shortcuts)
     + Shortcuts: Escape now properly clears selection even when child window loses focus
     + FX Chain Builder: Customizable accent color and background darkness via Main Settings > GUI > FX Chain Builder
+
+    TK NOTES UPDATE 2.5.0:
+    + Apply window size to contexts: File menu submenu to apply current window size to Global/Project/All Tracks/All Items or All
+    + Apply status bar to contexts: same submenu structure for status bar on/off
+    + Apply tabs to contexts: same submenu structure for tabs on/off, auto-creates default tab when needed
+    + Global defaults fallback: new tracks/items/projects inherit window size, status bar and tabs settings from Global Notes
+    + Master track included in "All Tracks" apply actions
 ]]></changelog>
     </version>
     </reapack>

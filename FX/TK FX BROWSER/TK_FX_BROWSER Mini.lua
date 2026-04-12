@@ -1,9 +1,14 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.3
+-- @version 0.3.4
 -- @changelog:
 --[[     
-    + FX Chain Builder: "Grab" button - load FX chain from selected track directly into chain builder
+    + FX Chains: "Show All FX Chains" button - displays all chains separated by dividers with chain name labels
+    + FX Chains: Chain divider context menu (right-click) with Add, Replace, Builder, Rename, Delete per chain
+    + FX Chains: Individual chain view now shows full action button bar (Add, Replace, Builder, Rename, Delete)
+    + FX Chains: Action buttons auto-wrap to multiple rows when window is too narrow
+    + FX Chains: Duplicate plugins in chains are now correctly added to the FX Chain Builder
+    + FX Chain Builder: Button strip now scales dynamically with window width instead of clipping
     + FX Chain Builder: "Replace" button - replace entire FX chain on selected track(s) with chain builder contents (removes existing FX first)
     + FX Chain Builder: Commit, Replace and Save now preserve exact chain order (instruments-on-top setting is bypassed for chain builder actions)
     + Multi-Selection: Ctrl+Arrow keys to move cursor without changing selection
@@ -1560,6 +1565,26 @@ local function GetFxChainsTree()
     return tree, root
 end
 
+local function CollectAllFxChainsFlat(tbl, path, result)
+    path = path or ""
+    result = result or {}
+    for i = 1, #tbl do
+        local item = tbl[i]
+        if type(item) == "table" and item.dir then
+            CollectAllFxChainsFlat(item, path .. os_separator .. item.dir, result)
+        elseif type(item) == "string" then
+            result[#result+1] = { name = item, path = path }
+        elseif type(item) == "table" and not item.dir then
+            for j = 1, #item do
+                if type(item[j]) == "string" then
+                    result[#result+1] = { name = item[j], path = path }
+                end
+            end
+        end
+    end
+    return result
+end
+
 local function GetTrackTemplatesTree()
     local root = ResolveTrackTemplatesRoot()
     
@@ -2190,7 +2215,7 @@ function SplitPluginsByScreenshot(plugin_list)
         if config.respect_search_exclusions_in_screenshots and config.excluded_plugins and config.excluded_plugins[name] then
             goto continue_plugin
         end
-        if name == "--Favorites End--" or name == "--Pinned End--" then
+        if name == "--Favorites End--" or name == "--Pinned End--" or name:match("^%-%-Chain:.+%-%-$") then
             table.insert(with_shot, name) 
         else
             if HasScreenshot(name) then
@@ -6629,6 +6654,305 @@ function ShowFxChainInScreenshotWindow(chain_path, relative_path, chain_name)
     end
 end
 
+function DrawFxChainActionButtons(suffix)
+    if not (current_fx_chain_relative_path and current_fx_chain_name) then return 0 end
+
+    local start_y = r.ImGui_GetCursorPosY(ctx)
+    r.ImGui_Dummy(ctx, 0, 5)
+
+    local win_w = r.ImGui_GetContentRegionAvail(ctx)
+    local btn_count = config.show_chain_builder and 5 or 4
+    local spacing = 4
+    local min_btn_w = 55
+    local per_row = math.min(btn_count, math.max(1, math.floor((win_w + spacing) / (min_btn_w + spacing))))
+    local btn_w = math.floor((win_w - spacing * (per_row - 1)) / per_row)
+    local btn_idx = 0
+
+    local function NextBtn()
+        if btn_idx % per_row == 0 then
+            local cols = math.min(per_row, btn_count - btn_idx)
+            local row_w = btn_w * cols + spacing * (cols - 1)
+            r.ImGui_SetCursorPosX(ctx, (win_w - row_w) * 0.5)
+        else
+            r.ImGui_SameLine(ctx, 0, spacing)
+        end
+        btn_idx = btn_idx + 1
+    end
+
+    NextBtn()
+    if r.ImGui_Button(ctx, "Add##" .. suffix, btn_w, 26) then
+        local cnt = r.CountSelectedTracks(0)
+        if cnt > 0 then
+            for t = 0, cnt - 1 do
+                local track = r.GetSelectedTrack(0, t)
+                if track and r.ValidatePtr(track, "MediaTrack*") then
+                    AddFXToTrack(track, current_fx_chain_relative_path)
+                end
+            end
+            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+        else
+            r.ShowMessageBox("No tracks selected.", "Add FX Chain", 0)
+        end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Add '" .. current_fx_chain_name .. "' to selected tracks")
+    end
+
+    NextBtn()
+    if r.ImGui_Button(ctx, "Replace##" .. suffix, btn_w, 26) then
+        local cnt = r.CountSelectedTracks(0)
+        if cnt > 0 then
+            for t = 0, cnt - 1 do
+                local track = r.GetSelectedTrack(0, t)
+                if track and r.ValidatePtr(track, "MediaTrack*") then
+                    local fx_count = r.TrackFX_GetCount(track)
+                    for j = fx_count - 1, 0, -1 do r.TrackFX_Delete(track, j) end
+                    AddFXToTrack(track, current_fx_chain_relative_path)
+                end
+            end
+            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+        else
+            r.ShowMessageBox("No tracks selected.", "Replace FX", 0)
+        end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Replace FX on selected tracks with '" .. current_fx_chain_name .. "'")
+    end
+
+    if config.show_chain_builder then
+        NextBtn()
+        if r.ImGui_Button(ctx, "Builder##" .. suffix, btn_w, 26) then
+            if current_fx_chain_path then
+                local fx_list = ParseFxChainFile(current_fx_chain_path)
+                if fx_list then
+                    for _, pname in ipairs(fx_list) do
+                        table.insert(chain_builder_plugins, pname)
+                    end
+                    config.chain_builder_plugins = chain_builder_plugins
+                    SaveConfig()
+                end
+            end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Add all FX to Chain Builder")
+        end
+    end
+
+    NextBtn()
+    if r.ImGui_Button(ctx, "Rename##" .. suffix, btn_w, 26) then
+        if current_fx_chain_path and current_fx_chain_name then
+            local retval, new_name = r.GetUserInputs("Rename FX Chain", 1, "New name:", current_fx_chain_name)
+            if retval then
+                local dir_part = current_fx_chain_path:match("^(.*)[/\\]")
+                local new_path = dir_part .. os_separator .. new_name .. ".RfxChain"
+                if os.rename(current_fx_chain_path, new_path) then
+                    FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+                    if fx_chain_cache then fx_chain_cache[current_fx_chain_path] = nil end
+                    local new_rel = current_fx_chain_relative_path:gsub(
+                        current_fx_chain_name .. "%.RfxChain$",
+                        new_name .. ".RfxChain"
+                    )
+                    ShowFxChainInScreenshotWindow(new_path, new_rel, new_name)
+                else
+                    r.ShowMessageBox("Could not rename FX Chain", "Error", 0)
+                end
+            end
+        end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Rename this FX Chain") end
+
+    NextBtn()
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x8B0000FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xCC0000FF)
+    if r.ImGui_Button(ctx, "Delete##" .. suffix, btn_w, 26) then
+        if current_fx_chain_path then
+            local confirm = r.ShowMessageBox(
+                "Delete '" .. (current_fx_chain_name or "") .. "'?",
+                "Delete FX Chain", 4
+            )
+            if confirm == 6 then
+                if os.remove(current_fx_chain_path) then
+                    FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+                    if fx_chain_cache then fx_chain_cache[current_fx_chain_path] = nil end
+                    current_fx_chain_path = nil
+                    current_fx_chain_relative_path = nil
+                    current_fx_chain_name = nil
+                    screenshot_search_results = {}
+                    ClearScreenshotCache()
+                else
+                    r.ShowMessageBox("Could not delete FX Chain", "Error", 0)
+                end
+            end
+        end
+    end
+    r.ImGui_PopStyleColor(ctx, 2)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete this FX Chain") end
+
+    r.ImGui_Dummy(ctx, 0, 8)
+    return r.ImGui_GetCursorPosY(ctx) - start_y
+end
+
+function ShowChainDividerContextMenu(popup_id, fx)
+    if r.ImGui_BeginPopup(ctx, popup_id) then
+        local chain_rel = fx.chain_relative_path
+        local chain_abs = fx.chain_file_path
+        local chain_name = fx.chain_name or fx.label
+
+        if r.ImGui_MenuItem(ctx, "Add to selected track(s)") then
+            if chain_rel then
+                local selected_track_count = r.CountSelectedTracks(0)
+                if selected_track_count > 0 then
+                    for t = 0, selected_track_count - 1 do
+                        local track = r.GetSelectedTrack(0, t)
+                        if track and r.ValidatePtr(track, "MediaTrack*") then
+                            AddFXToTrack(track, chain_rel)
+                        end
+                    end
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                else
+                    r.ShowMessageBox("No tracks selected.", "Add FX Chain", 0)
+                end
+            end
+        end
+
+        if r.ImGui_MenuItem(ctx, "Replace selected track(s) FX") then
+            if chain_rel then
+                local selected_track_count = r.CountSelectedTracks(0)
+                if selected_track_count > 0 then
+                    for t = 0, selected_track_count - 1 do
+                        local track = r.GetSelectedTrack(0, t)
+                        if track and r.ValidatePtr(track, "MediaTrack*") then
+                            local fx_count = r.TrackFX_GetCount(track)
+                            for j = fx_count - 1, 0, -1 do r.TrackFX_Delete(track, j) end
+                            AddFXToTrack(track, chain_rel)
+                        end
+                    end
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                else
+                    r.ShowMessageBox("No tracks selected.", "Replace FX", 0)
+                end
+            end
+        end
+
+        if config.show_chain_builder then
+            if r.ImGui_MenuItem(ctx, "Add to FX Chain Builder") then
+                if chain_abs then
+                    local fx_list = ParseFxChainFile(chain_abs)
+                    if fx_list then
+                        for _, pname in ipairs(fx_list) do
+                            table.insert(chain_builder_plugins, pname)
+                        end
+                        config.chain_builder_plugins = chain_builder_plugins
+                        SaveConfig()
+                    end
+                end
+            end
+        end
+
+        r.ImGui_Separator(ctx)
+
+        if r.ImGui_MenuItem(ctx, "Rename") then
+            if chain_abs and chain_name then
+                local retval, new_name = r.GetUserInputs("Rename FX Chain", 1, "New name:", chain_name)
+                if retval then
+                    local dir_part = chain_abs:match("^(.*)[/\\]")
+                    local new_path = dir_part .. os_separator .. new_name .. ".RfxChain"
+                    if os.rename(chain_abs, new_path) then
+                        FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+                        if fx_chain_cache then fx_chain_cache[chain_abs] = nil end
+                        ShowAllFxChainsInScreenshotWindow()
+                    else
+                        r.ShowMessageBox("Could not rename FX Chain", "Error", 0)
+                    end
+                end
+            end
+        end
+
+        if r.ImGui_MenuItem(ctx, "Delete") then
+            if chain_abs then
+                local confirm = r.ShowMessageBox("Delete '" .. (chain_name or "") .. "'?", "Delete FX Chain", 4)
+                if confirm == 6 then
+                    if os.remove(chain_abs) then
+                        FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+                        if fx_chain_cache then fx_chain_cache[chain_abs] = nil end
+                        ShowAllFxChainsInScreenshotWindow()
+                    else
+                        r.ShowMessageBox("Could not delete FX Chain", "Error", 0)
+                    end
+                end
+            end
+        end
+
+        r.ImGui_EndPopup(ctx)
+    end
+end
+
+function ShowAllFxChainsInScreenshotWindow()
+    local tree = GetFxChainsTree()
+    local all_chains = CollectAllFxChainsFlat(tree)
+    if #all_chains == 0 then return end
+    
+    screenshot_search_results = {}
+    selected_folder = nil
+    browser_panel_selected = nil
+    ClearScreenshotCache()
+    if fx_chain_cache then
+        for k in pairs(fx_chain_cache) do fx_chain_cache[k] = nil end
+    end
+    current_fx_chain_path = nil
+    current_fx_chain_relative_path = nil
+    current_fx_chain_name = nil
+    
+    local extension = ".RfxChain"
+    local fx_chains_root = ResolveFxChainsRoot()
+    
+    for idx, chain_info in ipairs(all_chains) do
+        local chain_file_path = fx_chains_root .. chain_info.path .. os_separator .. chain_info.name .. extension
+        local fx_list = ParseFxChainFile(chain_file_path)
+        
+        if fx_list and #fx_list > 0 then
+            local relative_path = chain_info.path .. os_separator .. chain_info.name .. extension
+            table.insert(screenshot_search_results, {
+                is_separator = true,
+                kind = "chain_divider",
+                label = chain_info.name,
+                chain_file_path = chain_file_path,
+                chain_relative_path = relative_path,
+                chain_name = chain_info.name
+            })
+            
+            for _, fx_name in ipairs(fx_list) do
+                table.insert(screenshot_search_results, {
+                    name = fx_name,
+                    is_fx_chain_item = true,
+                    chain_path = chain_file_path,
+                    chain_name = chain_info.name
+                })
+            end
+            
+            local safe_name
+            for _, fx_name in ipairs(fx_list) do
+                safe_name = fx_name:gsub("[^%w%s-]", "_")
+                local screenshot_file = screenshot_path .. safe_name .. ".png"
+                if r.file_exists(screenshot_file) then
+                    local rel = screenshot_file:gsub(screenshot_path, "")
+                    local unique_key = rel .. "_" .. fx_name
+                    if not texture_load_queue[unique_key] and not search_texture_cache[unique_key] then
+                        texture_load_queue[unique_key] = {
+                            file = screenshot_file,
+                            queued_at = r.time_precise(),
+                            plugin = fx_name
+                        }
+                    end
+                end
+            end
+        end
+    end
+    
+    show_screenshot_window = true
+    screenshot_window_interactive = true
+end
+
 function GetCurrentProjectFX()
     local fx_list = {}
     local track_count = reaper.CountTracks(0)
@@ -10551,6 +10875,10 @@ function ShowBrowserPanel()
                 
                 if header_is_open then
                     r.ImGui_Indent(ctx, 10)
+                    if r.ImGui_Selectable(ctx, ">> Show All FX Chains ##show_all_chains") then
+                        ShowAllFxChainsInScreenshotWindow()
+                    end
+                    r.ImGui_Separator(ctx)
                     local tree = GetFxChainsTree()
                     DrawFxChains(tree, nil, false)
                     r.ImGui_Unindent(ctx, 10)
@@ -12472,15 +12800,31 @@ function DrawMasonryLayout(screenshots, top_offset)
             local thickness = (config.compact_screenshots and 2) or 3
             local col = 0x606060FF
             r.ImGui_DrawList_AddRectFilled(dl, x1, sy, x2, sy + thickness, col, 2)
-            if fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
+            if fx.kind == 'chain_divider' and fx.label then
+                r.ImGui_SetCursorPos(ctx, padding + 4, max_h + thickness + 2)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                r.ImGui_Text(ctx, "\xF0\x9F\x94\x97 " .. fx.label)
+                r.ImGui_PopStyleColor(ctx)
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click for options") end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "chain_div_ctx_" .. i)
+                end
+                ShowChainDividerContextMenu("chain_div_ctx_" .. i, fx)
+                local label_h = r.ImGui_GetTextLineHeightWithSpacing(ctx) + 6
+                local sep_height = thickness + label_h + (config.compact_screenshots and 4 or 8)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_height end
+            elseif fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
                 local glyph = (fx.kind == 'pinned_end') and '📌' or '★'
                 r.ImGui_SetCursorPos(ctx, padding + 4, max_h - (config.compact_screenshots and 0 or 2))
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
                 r.ImGui_Text(ctx, glyph)
                 r.ImGui_PopStyleColor(ctx)
+                local sep_height = thickness + (config.compact_screenshots and 8 or 14)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_height end
+            else
+                local sep_height = thickness + (config.compact_screenshots and 8 or 14)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_height end
             end
-            local sep_height = thickness + (config.compact_screenshots and 8 or 14)
-            for c = 1, num_columns do column_heights[c] = max_h + sep_height end
             goto continue
         end
         if fx.is_message then
@@ -12652,14 +12996,28 @@ function DrawShowcaseLayout(screenshots, top_offset)
             local x2 = sx + m_max(0, available_width - 2)
             local thickness = config.compact_screenshots and 2 or 3
             r.ImGui_DrawList_AddRectFilled(dl2, x1, sy, x2, sy + thickness, 0x606060FF, 2)
-            if fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
+            if fx.kind == 'chain_divider' and fx.label then
+                r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 4)
+                r.ImGui_Dummy(ctx, 0, 2)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                r.ImGui_Text(ctx, "\xF0\x9F\x94\x97 " .. fx.label)
+                r.ImGui_PopStyleColor(ctx)
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click for options") end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "chain_div_ctx_" .. i)
+                end
+                ShowChainDividerContextMenu("chain_div_ctx_" .. i, fx)
+                r.ImGui_Dummy(ctx, 0, config.compact_screenshots and 2 or 4)
+            elseif fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
                 local glyph = (fx.kind == 'pinned_end') and "\xF0\x9F\x93\x8C" or "\xE2\x98\x85"
                 r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 4)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
                 r.ImGui_Text(ctx, glyph)
                 r.ImGui_PopStyleColor(ctx)
+                r.ImGui_Dummy(ctx, 0, thickness + (config.compact_screenshots and 4 or 8))
+            else
+                r.ImGui_Dummy(ctx, 0, thickness + (config.compact_screenshots and 4 or 8))
             end
-            r.ImGui_Dummy(ctx, 0, thickness + (config.compact_screenshots and 4 or 8))
             goto showcase_continue
         end
         if fx.is_message then
@@ -12885,15 +13243,32 @@ function DrawPolaroidLayout(screenshots, top_offset)
             local x2 = sx + m_max(0, available_width - 2)
             local thickness = config.compact_screenshots and 2 or 3
             r.ImGui_DrawList_AddRectFilled(dl, x1, sy, x2, sy + thickness, 0x606060FF, 2)
-            if fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
+            if fx.kind == 'chain_divider' and fx.label then
+                r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 4)
+                r.ImGui_SetCursorPosY(ctx, base_cy + max_h + thickness + 2)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                r.ImGui_Text(ctx, "\xF0\x9F\x94\x97 " .. fx.label)
+                r.ImGui_PopStyleColor(ctx)
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click for options") end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "chain_div_ctx_" .. i)
+                end
+                ShowChainDividerContextMenu("chain_div_ctx_" .. i, fx)
+                local label_h = r.ImGui_GetTextLineHeightWithSpacing(ctx) + 6
+                local sep_h = thickness + label_h + (config.compact_screenshots and 4 or 8)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_h end
+            elseif fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
                 local glyph = (fx.kind == 'pinned_end') and "\xF0\x9F\x93\x8C" or "\xE2\x98\x85"
                 r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 4)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
                 r.ImGui_Text(ctx, glyph)
                 r.ImGui_PopStyleColor(ctx)
+                local sep_h = thickness + (config.compact_screenshots and 6 or 12)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_h end
+            else
+                local sep_h = thickness + (config.compact_screenshots and 6 or 12)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_h end
             end
-            local sep_h = thickness + (config.compact_screenshots and 6 or 12)
-            for c = 1, num_columns do column_heights[c] = max_h + sep_h end
             goto polaroid_continue
         end
         if fx.is_message then
@@ -14923,7 +15298,13 @@ function ShowScreenshotWindow()
             r.ImGui_EndDragDropTarget(ctx)
         end
 
-        local btn_w = 70
+        local dice_w = btn_row_h
+        local btn_spacing = 4
+        local count_text = string.format("(%d)", #chain_builder_plugins)
+        local count_w = r.ImGui_CalcTextSize(ctx, count_text) + 10
+        local total_btns = 6
+        local usable = avail_w - pad * 2 - dice_w - count_w - btn_spacing * (total_btns + 1)
+        local btn_w = math.max(38, math.floor(usable / total_btns))
         r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + pad)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 0)
         if r.ImGui_Button(ctx, "Commit##cb", btn_w, btn_row_h) then
@@ -16373,10 +16754,22 @@ function ShowScreenshotWindow()
                             r.ImGui_TextWrapped(ctx, msg_name)
                             r.ImGui_PopStyleColor(ctx)
                         elseif fx.is_separator then
-                            local label = (fx.kind == 'pinned_end') and "--- Pinned End ---" or "--- Favorites End ---"
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                            r.ImGui_Text(ctx, label)
-                            r.ImGui_PopStyleColor(ctx)
+                            if fx.kind == 'chain_divider' and fx.label then
+                                r.ImGui_Separator(ctx)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                                r.ImGui_Text(ctx, "\xF0\x9F\x94\x97 " .. fx.label)
+                                r.ImGui_PopStyleColor(ctx)
+                                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click for options") end
+                                if r.ImGui_IsItemClicked(ctx, 1) then
+                                    r.ImGui_OpenPopup(ctx, "chain_div_ctx_" .. i)
+                                end
+                                ShowChainDividerContextMenu("chain_div_ctx_" .. i, fx)
+                            else
+                                local label = (fx.kind == 'pinned_end') and "--- Pinned End ---" or "--- Favorites End ---"
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                                r.ImGui_Text(ctx, label)
+                                r.ImGui_PopStyleColor(ctx)
+                            end
                         else
                             local display_name = GetDisplayPluginName(fx.name)
                             local stars = GetStarsString(fx.name)
@@ -16421,7 +16814,9 @@ function ShowScreenshotWindow()
                             if fx.is_message then
                                 messages[#messages+1] = fx 
                             elseif fx.is_separator then
-                                if fx.kind == 'pinned_end' then
+                                if fx.kind == 'chain_divider' then
+                                    plain_names[#plain_names+1] = "--Chain:" .. (fx.label or "") .. "--"
+                                elseif fx.kind == 'pinned_end' then
                                     plain_names[#plain_names+1] = "--Pinned End--"
                                 else
                                     plain_names[#plain_names+1] = "--Favorites End--"
@@ -16436,69 +16831,23 @@ function ShowScreenshotWindow()
                         
                         local buttons_height = 0  
                         if current_fx_chain_relative_path and current_fx_chain_name then
-                            local start_cursor_y = r.ImGui_GetCursorPosY(ctx)
-                            
-                            r.ImGui_Dummy(ctx, 0, 5)
-                            local window_width = r.ImGui_GetContentRegionAvail(ctx)
-                            local button_width = math.min(145, (window_width - 20) / 2)
-                            local total_width = button_width * 2 + 10
-                            local cursor_x = (window_width - total_width) * 0.5
-                            r.ImGui_SetCursorPosX(ctx, cursor_x)
-                            
-                            if r.ImGui_Button(ctx, "➕ Add##masonry_add", button_width, 30) then
-                                local selected_track_count = r.CountSelectedTracks(0)
-                                if selected_track_count > 0 then
-                                    for i = 0, selected_track_count - 1 do
-                                        local track = r.GetSelectedTrack(0, i)
-                                        if track and r.ValidatePtr(track, "MediaTrack*") then
-                                            AddFXToTrack(track, current_fx_chain_relative_path)
-                                        end
-                                    end
-                                    if config.close_after_adding_fx then
-                                        SHOULD_CLOSE_SCRIPT = true
-                                    end
-                                else
-                                    r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Add FX Chain", 0)
-                                end
-                            end
-                            if r.ImGui_IsItemHovered(ctx) then
-                                r.ImGui_SetTooltip(ctx, "Add '" .. current_fx_chain_name .. "' to all selected tracks")
-                            end
-                            
-                            r.ImGui_SameLine(ctx, 0, 10)
-                            
-                            if r.ImGui_Button(ctx, "🔄 Replace##masonry_replace", button_width, 30) then
-                                local selected_track_count = r.CountSelectedTracks(0)
-                                if selected_track_count > 0 then
-                                    for i = 0, selected_track_count - 1 do
-                                        local track = r.GetSelectedTrack(0, i)
-                                        if track and r.ValidatePtr(track, "MediaTrack*") then
-                                            local fx_count = r.TrackFX_GetCount(track)
-                                            for j = fx_count - 1, 0, -1 do
-                                                r.TrackFX_Delete(track, j)
-                                            end
-                                            AddFXToTrack(track, current_fx_chain_relative_path)
-                                        end
-                                    end
-                                    if config.close_after_adding_fx then
-                                        SHOULD_CLOSE_SCRIPT = true
-                                    end
-                                else
-                                    r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Replace FX", 0)
-                                end
-                            end
-                            if r.ImGui_IsItemHovered(ctx) then
-                                r.ImGui_SetTooltip(ctx, "Replace all FX on selected tracks with '" .. current_fx_chain_name .. "'")
-                            end
-                            
-                            r.ImGui_Dummy(ctx, 0, 10)
-                            
-                            local end_cursor_y = r.ImGui_GetCursorPosY(ctx)
-                            buttons_height = end_cursor_y - start_cursor_y
+                            buttons_height = DrawFxChainActionButtons("masonry")
                         end
                         
                         for _, plugin_name in ipairs(with_shot) do
-                            if plugin_name == "--Favorites End--" then
+                            local chain_label = plugin_name:match("^%-%-Chain:(.+)%-%-$")
+                            if chain_label then
+                                local sep_data = {is_separator = true, kind = "chain_divider", label = chain_label}
+                                for _, fx in ipairs(screenshot_search_results) do
+                                    if fx.is_separator and fx.kind == 'chain_divider' and fx.label == chain_label then
+                                        sep_data.chain_file_path = fx.chain_file_path
+                                        sep_data.chain_relative_path = fx.chain_relative_path
+                                        sep_data.chain_name = fx.chain_name
+                                        break
+                                    end
+                                end
+                                masonry_data[#masonry_data+1] = sep_data
+                            elseif plugin_name == "--Favorites End--" then
                                 masonry_data[#masonry_data+1] = {is_separator = true, kind = "favorites_end"}
                             elseif plugin_name == "--Pinned End--" then
                                 masonry_data[#masonry_data+1] = {is_separator = true, kind = "pinned_end"}
@@ -16523,7 +16872,9 @@ function ShowScreenshotWindow()
                             if fx.is_message then
                                 messages[#messages+1] = fx
                             elseif fx.is_separator then
-                                if fx.kind == 'pinned_end' then
+                                if fx.kind == 'chain_divider' then
+                                    plain_names[#plain_names+1] = "--Chain:" .. (fx.label or "") .. "--"
+                                elseif fx.kind == 'pinned_end' then
                                     plain_names[#plain_names+1] = "--Pinned End--"
                                 else
                                     plain_names[#plain_names+1] = "--Favorites End--"
@@ -16541,66 +16892,31 @@ function ShowScreenshotWindow()
                         end
                         
                         if current_fx_chain_relative_path and current_fx_chain_name then
-                            r.ImGui_Dummy(ctx, 0, 5)
-                            local window_width = r.ImGui_GetContentRegionAvail(ctx)
-                            local button_width = math.min(145, (window_width - 20) / 2)
-                            local total_width = button_width * 2 + 10
-                            local cursor_x = (window_width - total_width) * 0.5
-                            r.ImGui_SetCursorPosX(ctx, cursor_x)
-                            
-                            if r.ImGui_Button(ctx, "➕ Add##normal_add", button_width, 30) then
-                                local selected_track_count = r.CountSelectedTracks(0)
-                                if selected_track_count > 0 then
-                                    for i = 0, selected_track_count - 1 do
-                                        local track = r.GetSelectedTrack(0, i)
-                                        if track and r.ValidatePtr(track, "MediaTrack*") then
-                                            AddFXToTrack(track, current_fx_chain_relative_path)
-                                        end
-                                    end
-                                    if config.close_after_adding_fx then
-                                        SHOULD_CLOSE_SCRIPT = true
-                                    end
-                                else
-                                    r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Add FX Chain", 0)
-                                end
-                            end
-                            if r.ImGui_IsItemHovered(ctx) then
-                                r.ImGui_SetTooltip(ctx, "Add '" .. current_fx_chain_name .. "' to all selected tracks")
-                            end
-                            
-                            r.ImGui_SameLine(ctx, 0, 10)
-                            
-                            if r.ImGui_Button(ctx, "🔄 Replace##normal_replace", button_width, 30) then
-                                local selected_track_count = r.CountSelectedTracks(0)
-                                if selected_track_count > 0 then
-                                    for i = 0, selected_track_count - 1 do
-                                        local track = r.GetSelectedTrack(0, i)
-                                        if track and r.ValidatePtr(track, "MediaTrack*") then
-                                            local fx_count = r.TrackFX_GetCount(track)
-                                            for j = fx_count - 1, 0, -1 do
-                                                r.TrackFX_Delete(track, j)
-                                            end
-                                            AddFXToTrack(track, current_fx_chain_relative_path)
-                                        end
-                                    end
-                                    if config.close_after_adding_fx then
-                                        SHOULD_CLOSE_SCRIPT = true
-                                    end
-                                else
-                                    r.ShowMessageBox("No tracks selected. Please select one or more tracks first.", "Replace FX", 0)
-                                end
-                            end
-                            if r.ImGui_IsItemHovered(ctx) then
-                                r.ImGui_SetTooltip(ctx, "Replace all FX on selected tracks with '" .. current_fx_chain_name .. "'")
-                            end
-                            
-                            r.ImGui_Dummy(ctx, 0, 10)
+                            DrawFxChainActionButtons("normal")
                         end
                         
                         if #with_shot > 0 then ApplyTopScreenshotSpacing() end
                         ScreenshotNavReset()
                         for i, plugin_name in ipairs(with_shot) do
-                            if plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
+                            local chain_label = plugin_name:match("^%-%-Chain:(.+)%-%-$")
+                            if chain_label then
+                                DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                                r.ImGui_Text(ctx, "\xF0\x9F\x94\x97 " .. chain_label)
+                                r.ImGui_PopStyleColor(ctx)
+                                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click for options") end
+                                if r.ImGui_IsItemClicked(ctx, 1) then
+                                    r.ImGui_OpenPopup(ctx, "chain_div_grid_" .. i)
+                                end
+                                local sep_fx = nil
+                                for _, fx in ipairs(screenshot_search_results) do
+                                    if fx.is_separator and fx.kind == 'chain_divider' and fx.label == chain_label then
+                                        sep_fx = fx; break
+                                    end
+                                end
+                                if sep_fx then ShowChainDividerContextMenu("chain_div_grid_" .. i, sep_fx) end
+                                r.ImGui_Dummy(ctx, 0, (config.compact_screenshots and 4 or 8))
+                            elseif plugin_name == "--Favorites End--" or plugin_name == "--Pinned End--" then
                                 DrawHorizontalSeparatorBar((config.compact_screenshots and 2 or 3), 0x606060FF)
                                 r.ImGui_Dummy(ctx, 0, (config.compact_screenshots and 6 or 10))
                             else
