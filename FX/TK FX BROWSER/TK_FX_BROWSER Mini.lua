@@ -1,9 +1,15 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.4
+-- @version 0.3.5
 -- @changelog:
 --[[     
-    + FX Chains: "Show All FX Chains" button - displays all chains separated by dividers with chain name labels
+    + FX Chain Builder: Grab now preserves FX settings - plugin state (chunks) are stored alongside plugin names
+    + FX Chain Builder: Commit/Replace restore saved FX settings when placing plugins back on tracks
+    + FX Chain Builder: Save exports chain with preserved FX settings to .RfxChain files
+    + FX Chain Builder: Reorder (drag/drop) and Remove (right-click) keep chunks in sync
+    + FX Chain Builder: New plugins added via browser/drag/templates use default settings
+
+    0.3.4
     + FX Chains: Chain divider context menu (right-click) with Add, Replace, Builder, Rename, Delete per chain
     + FX Chains: Individual chain view now shows full action button bar (Add, Replace, Builder, Rename, Delete)
     + FX Chains: Action buttons auto-wrap to multiple rows when window is too narrow
@@ -725,6 +731,7 @@ dragging_fx_name = dragging_fx_name or nil
 potential_drag_fx_name = potential_drag_fx_name or nil
 drag_start_x, drag_start_y = drag_start_x or 0, drag_start_y or 0
 chain_builder_plugins = chain_builder_plugins or {}
+chain_builder_chunks = chain_builder_chunks or {}
 chain_builder_hovered = false
 info_trackfx_drop_hovered = false
 info_itemfx_drop_hovered = false
@@ -2004,6 +2011,33 @@ function AddFXToTrack(track, plugin_name, preserve_order)
     end
 
     return fx_index or -1
+end
+
+function RestoreChainBuilderChunk(track, fx_idx, saved_chunk)
+    if not track or not saved_chunk or fx_idx < 0 then return false end
+    local _, chunk = r.GetTrackStateChunk(track, "", false)
+    if not chunk then return false end
+    local bs, be = FindFXBlockBounds(chunk, "FXCHAIN", fx_idx)
+    if not bs or not be then return false end
+    local new_chunk = chunk:sub(1, bs - 1) .. saved_chunk .. chunk:sub(be + 1)
+    r.SetTrackStateChunk(track, new_chunk, false)
+    return true
+end
+
+function GrabChainBuilderChunks(track)
+    if not track then return {} end
+    local fx_count = r.TrackFX_GetCount(track)
+    if fx_count == 0 then return {} end
+    local _, chunk = r.GetTrackStateChunk(track, "", false)
+    if not chunk then return {} end
+    local chunks = {}
+    for fi = 0, fx_count - 1 do
+        local bs, be = FindFXBlockBounds(chunk, "FXCHAIN", fi)
+        if bs and be then
+            chunks[fi + 1] = chunk:sub(bs, be)
+        end
+    end
+    return chunks
 end
 
 function CreateInstrumentTrack(plugin_name, midi_input_value)
@@ -6727,6 +6761,7 @@ function DrawFxChainActionButtons(suffix)
                 if fx_list then
                     for _, pname in ipairs(fx_list) do
                         table.insert(chain_builder_plugins, pname)
+                        chain_builder_chunks[#chain_builder_plugins] = false
                     end
                     config.chain_builder_plugins = chain_builder_plugins
                     SaveConfig()
@@ -6841,6 +6876,7 @@ function ShowChainDividerContextMenu(popup_id, fx)
                     if fx_list then
                         for _, pname in ipairs(fx_list) do
                             table.insert(chain_builder_plugins, pname)
+                            chain_builder_chunks[#chain_builder_plugins] = false
                         end
                         config.chain_builder_plugins = chain_builder_plugins
                         SaveConfig()
@@ -7480,6 +7516,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 for _, pname in ipairs(names) do
                     if not table.contains(chain_builder_plugins, pname) then
                         table.insert(chain_builder_plugins, pname)
+                        chain_builder_chunks[#chain_builder_plugins] = false
                     end
                 end
                 config.chain_builder_plugins = chain_builder_plugins
@@ -15246,9 +15283,11 @@ function ShowScreenshotWindow()
                             local src = tonumber(payload)
                             if src and src ~= ci then
                                 local item = table.remove(chain_builder_plugins, src)
+                                local chunk_item = table.remove(chain_builder_chunks, src) or nil
                                 local dst = ci
                                 if src < ci then dst = dst end
                                 table.insert(chain_builder_plugins, dst, item)
+                                table.insert(chain_builder_chunks, dst, chunk_item)
                                 config.chain_builder_plugins = chain_builder_plugins
                                 SaveConfig()
                             end
@@ -15277,6 +15316,7 @@ function ShowScreenshotWindow()
 
                     if btn_rclicked then
                         table.remove(chain_builder_plugins, ci)
+                        if chain_builder_chunks[ci] then table.remove(chain_builder_chunks, ci) end
                         config.chain_builder_plugins = chain_builder_plugins
                         SaveConfig()
                         r.ImGui_PopID(ctx)
@@ -15316,8 +15356,11 @@ function ShowScreenshotWindow()
                     for ti = 0, sel_count - 1 do
                         local track = r.GetSelectedTrack(0, ti)
                         if track then
-                            for _, pname in ipairs(chain_builder_plugins) do
-                                AddFXToTrack(track, pname, true)
+                            for ci, pname in ipairs(chain_builder_plugins) do
+                                local fx_idx = AddFXToTrack(track, pname, true)
+                                if fx_idx >= 0 and chain_builder_chunks[ci] then
+                                    RestoreChainBuilderChunk(track, fx_idx, chain_builder_chunks[ci])
+                                end
                             end
                         end
                     end
@@ -15344,8 +15387,11 @@ function ShowScreenshotWindow()
                             for fi = existing - 1, 0, -1 do
                                 r.TrackFX_Delete(track, fi)
                             end
-                            for _, pname in ipairs(chain_builder_plugins) do
-                                AddFXToTrack(track, pname, true)
+                            for ci, pname in ipairs(chain_builder_plugins) do
+                                local fx_idx = AddFXToTrack(track, pname, true)
+                                if fx_idx >= 0 and chain_builder_chunks[ci] then
+                                    RestoreChainBuilderChunk(track, fx_idx, chain_builder_chunks[ci])
+                                end
                             end
                         end
                     end
@@ -15361,6 +15407,7 @@ function ShowScreenshotWindow()
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "Clear##cb", btn_w, btn_row_h) then
             chain_builder_plugins = {}
+            chain_builder_chunks = {}
             config.chain_builder_plugins = chain_builder_plugins
             SaveConfig()
         end
@@ -15373,8 +15420,11 @@ function ShowScreenshotWindow()
                 r.InsertTrackAtIndex(track_count, false)
                 local temp_track = r.GetTrack(0, track_count)
                 if temp_track then
-                    for _, pname in ipairs(chain_builder_plugins) do
-                        AddFXToTrack(temp_track, pname, true)
+                    for ci, pname in ipairs(chain_builder_plugins) do
+                        local fx_idx = AddFXToTrack(temp_track, pname, true)
+                        if fx_idx >= 0 and chain_builder_chunks[ci] then
+                            RestoreChainBuilderChunk(temp_track, fx_idx, chain_builder_chunks[ci])
+                        end
                     end
                     local _, chunk = r.GetTrackStateChunk(temp_track, "", false)
                     local fxchain_block = nil
@@ -15427,6 +15477,7 @@ function ShowScreenshotWindow()
                 if loaded and #loaded > 0 then
                     for _, fx in ipairs(loaded) do
                         table.insert(chain_builder_plugins, fx)
+                        chain_builder_chunks[#chain_builder_plugins] = false
                     end
                     config.chain_builder_plugins = chain_builder_plugins
                     SaveConfig()
@@ -15444,6 +15495,7 @@ function ShowScreenshotWindow()
                 local fx_count = r.TrackFX_GetCount(track)
                 if fx_count > 0 then
                     chain_builder_plugins = {}
+                    chain_builder_chunks = GrabChainBuilderChunks(track)
                     for fi = 0, fx_count - 1 do
                         local retval, fx_name = r.TrackFX_GetFXName(track, fi)
                         if retval and fx_name and fx_name ~= "" then
@@ -15531,6 +15583,7 @@ function ShowScreenshotWindow()
             local fallback_order = {"tone", "dynamics", "modulation", "timebased", "other"}
             local used = {}
             chain_builder_plugins = {}
+            chain_builder_chunks = {}
             for _, slot_cat in ipairs(tmpl.slots) do
                 local fx = pick_random(pools[slot_cat], used)
                 if not fx and slot_cat ~= "instrument" then
@@ -15553,6 +15606,7 @@ function ShowScreenshotWindow()
             local pools = build_pools()
             math.randomseed(os.time() + math.floor(r.time_precise() * 1000))
             local used = {}
+            chain_builder_chunks = {}
             if #pools.instrument > 0 then
                 local pick = pick_random(pools.instrument, used)
                 if pick then table.insert(chain_builder_plugins, pick) end
@@ -19533,6 +19587,7 @@ function HandleDragAndDrop()
     if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
         if config.show_chain_builder and chain_builder_hovered then
             table.insert(chain_builder_plugins, dragging_fx_name)
+            chain_builder_chunks[#chain_builder_plugins] = false
             config.chain_builder_plugins = chain_builder_plugins
             SaveConfig()
             dragging_fx_name = nil

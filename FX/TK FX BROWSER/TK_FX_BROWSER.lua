@@ -1,8 +1,15 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.4.9
+-- @version 2.5.0
 -- @changelog:
---[[  
+--[[ 
+    MINI UPDATE 0.3.5:
+    + FX Chain Builder: Grab now preserves FX settings - plugin state (chunks) are stored alongside plugin names
+    + FX Chain Builder: Commit/Replace restore saved FX settings when placing plugins back on tracks
+    + FX Chain Builder: Save exports chain with preserved FX settings to .RfxChain files
+    + FX Chain Builder: Reorder (drag/drop) and Remove (right-click) keep chunks in sync
+    + FX Chain Builder: New plugins added via browser/drag/templates use default settings
+
     MINI UPDATE 0.3.4: 
     + FX Chains: "Show All FX Chains" button - displays all chains separated by dividers with chain name labels
     + FX Chains: Chain divider context menu (right-click) with Add, Replace, Builder, Rename, Delete per chain
