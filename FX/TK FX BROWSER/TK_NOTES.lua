@@ -1,7 +1,9 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.5
+-- @version 2.5.1
 -- @changelog
+-- 2.5.1
+--   + Small bug fix - dummy item added at end of menu bar to prevent rare ImGui crash when right-clicking toolbar button and quickly closing menu
 -- 2.5
 --   + Apply window size to contexts: File menu submenu to apply current window size to Global/Project/All Tracks/All Items or All
 --   + Apply status bar to contexts: same submenu structure for status bar on/off
@@ -4585,6 +4587,7 @@ local function DrawMenuBar()
         r.ImGui_PopStyleColor(ctx, colors_pushed)
     end
     
+    r.ImGui_Dummy(ctx, 0, 0)
     r.ImGui_EndMenuBar(ctx)
     return not should_close
 end

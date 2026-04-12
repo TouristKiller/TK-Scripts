@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.4.8
+-- @version 2.4.9
 -- @changelog:
 --[[  
     MINI UPDATE 0.3.4: 
