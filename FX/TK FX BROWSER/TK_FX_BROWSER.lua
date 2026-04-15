@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.5.1
+-- @version 2.5.2
 -- @changelog:
 --[[ 
     MINI UPDATE 0.3.5:
@@ -4746,16 +4746,6 @@ end
 
 function Literalize(str)
     return str:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%1")
-end
-
-function GetFileContext(filename)
-    local file = io.open(filename, "r")
-    if file then
-        local content = file:read("*all")
-        file:close()
-        return content
-    end
-    return nil
 end
 
 function GetTrackName(track)
