@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.5
+-- @version 0.3.6
 -- @changelog:
 --[[     
     + FX Chain Builder: Grab now preserves FX settings - plugin state (chunks) are stored alongside plugin names
@@ -5091,16 +5091,6 @@ end
 
 function Literalize(str)
     return str:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%1")
-end
-
-function GetFileContext(filename)
-    local file = io.open(filename, "r")
-    if file then
-        local content = file:read("*all")
-        file:close()
-        return content
-    end
-    return nil
 end
 
 function GetTrackName(track)
