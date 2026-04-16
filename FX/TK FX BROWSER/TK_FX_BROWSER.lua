@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.5.3
+-- @version 2.5.4
 -- @changelog:
 --[[ 
     + Modern Cards now work in Normal layout view (all sections)
