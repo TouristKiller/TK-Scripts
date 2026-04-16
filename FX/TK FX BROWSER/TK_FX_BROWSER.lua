@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.5.4
+-- @version 2.5.5
 -- @changelog:
 --[[ 
     + Modern Cards now work in Normal layout view (all sections)
@@ -18407,6 +18407,7 @@ function ShowTrackFXContent()
         return
     end
     local fx_count = r.TrackFX_GetCount(TRACK)
+    local row_h = r.ImGui_GetTextLineHeight(ctx)
     if fx_count > 0 then
         local track_bypassed = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
         for i = 0, fx_count - 1 do
@@ -18419,7 +18420,7 @@ function ShowTrackFXContent()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
-            if r.ImGui_Button(ctx, "##updown", 14, 14) then
+            if r.ImGui_Button(ctx, "##updown", row_h, row_h) then
                 if i > 0 then
                     r.TrackFX_CopyToTrack(TRACK, i, TRACK, i - 1, true)
                 end
@@ -18439,7 +18440,7 @@ function ShowTrackFXContent()
             if not is_enabled or track_bypassed then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
             end               
-            if r.ImGui_Button(ctx, display_name, 0, 14) then
+            if r.ImGui_Button(ctx, display_name, 0, row_h) then
                 if is_open then
                     r.TrackFX_Show(TRACK, i, 2)
                 else
@@ -18531,6 +18532,7 @@ function ShowItemFXContent()
     end
     
     local fx_count = r.TakeFX_GetCount(take)
+    local row_h = r.ImGui_GetTextLineHeight(ctx)
     if fx_count > 0 then
         for i = 0, fx_count - 1 do
             local retval, fx_name = r.TakeFX_GetFXName(take, i, "")
@@ -18543,7 +18545,7 @@ function ShowItemFXContent()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
-            if r.ImGui_Button(ctx, "##updown", 13, 13) then
+            if r.ImGui_Button(ctx, "##updown", row_h, row_h) then
                 if i > 0 then
                     r.TakeFX_CopyToTake(take, i, take, i - 1, true)
                 end
@@ -18566,7 +18568,7 @@ function ShowItemFXContent()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
             end
 
-            if r.ImGui_Button(ctx, display_name, 0, 13) then
+            if r.ImGui_Button(ctx, display_name, 0, row_h) then
                 if is_open then
                     r.TakeFX_Show(take, i, 2)
                 else
@@ -18928,6 +18930,7 @@ function ShowTrackFX()
         r.ImGui_Dummy(ctx, 0, 5)
         r.ImGui_Text(ctx, "FX on Track:")
         local fx_count = r.TrackFX_GetCount(TRACK)
+        local row_h = r.ImGui_GetTextLineHeight(ctx)
         if fx_count > 0 then
             local track_bypassed = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
             for i = 0, fx_count - 1 do
@@ -18940,7 +18943,7 @@ function ShowTrackFX()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
-                if r.ImGui_Button(ctx, "##updown", 14, 14) then
+                if r.ImGui_Button(ctx, "##updown", row_h, row_h) then
                     if i > 0 then
                         r.TrackFX_CopyToTrack(TRACK, i, TRACK, i - 1, true)
                     end
@@ -18962,7 +18965,7 @@ function ShowTrackFX()
                 if not is_enabled or track_bypassed then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)  -- Grijze kleur voor gebypaste plugins
                 end               
-                if r.ImGui_Button(ctx, display_name, 0, 14) then
+                if r.ImGui_Button(ctx, display_name, 0, row_h) then
                     if is_open then
                         r.TrackFX_Show(TRACK, i, 2)
                     else
@@ -19056,6 +19059,7 @@ function ShowItemFX()
         r.ImGui_Dummy(ctx, 0, 5)
         r.ImGui_Text(ctx, "FX on Item:")
         local fx_count = r.TakeFX_GetCount(take)
+        local row_h = r.ImGui_GetTextLineHeight(ctx)
         if fx_count > 0 then
             for i = 0, fx_count - 1 do
                 local retval, fx_name = r.TakeFX_GetFXName(take, i, "")
@@ -19068,7 +19072,7 @@ function ShowItemFX()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
-                if r.ImGui_Button(ctx, "##updown", 13, 13) then
+                if r.ImGui_Button(ctx, "##updown", row_h, row_h) then
                     if i > 0 then
                         r.TakeFX_CopyToTake(take, i, take, i - 1, true)
                     end
@@ -19093,7 +19097,7 @@ function ShowItemFX()
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
                 end
 
-                if r.ImGui_Button(ctx, display_name, 0, 13) then
+                if r.ImGui_Button(ctx, display_name, 0, row_h) then
                     if is_open then
                         r.TakeFX_Show(take, i, 2)
                     else
@@ -19644,12 +19648,12 @@ end
 
 function DrawMainTrackFXPanel(show_item_fx)
     local meter_header_h = 22
-    local meter_content_h = (config.main_segment_meter_visible and not config.hideMeter) and 95 or 0
+    local meter_content_h = (config.main_segment_meter_visible and not config.hideMeter) and 90 or 0
     local buttons_header_h = 22
     local vol_h = (not config.hideBottomButtons and not config.hideVolumeSlider) and 45 or 0
     local btn_h = (not config.hideBottomButtons) and 70 or 0
     local buttons_content_h = config.main_segment_buttons_visible and (vol_h + btn_h) or 0
-    local below_h = meter_header_h + meter_content_h + buttons_header_h + buttons_content_h + 15
+    local below_h = meter_header_h + meter_content_h + buttons_header_h + buttons_content_h + 10
     local current_y = r.ImGui_GetCursorPosY(ctx)
     local window_h = r.ImGui_GetWindowHeight(ctx)
     local available_height = window_h - current_y - below_h
