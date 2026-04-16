@@ -1,38 +1,13 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.6
+-- @version 0.3.7
 -- @changelog:
---[[     
-    + FX Chain Builder: Grab now preserves FX settings - plugin state (chunks) are stored alongside plugin names
-    + FX Chain Builder: Commit/Replace restore saved FX settings when placing plugins back on tracks
-    + FX Chain Builder: Save exports chain with preserved FX settings to .RfxChain files
-    + FX Chain Builder: Reorder (drag/drop) and Remove (right-click) keep chunks in sync
-    + FX Chain Builder: New plugins added via browser/drag/templates use default settings
-
-    0.3.4
-    + FX Chains: Chain divider context menu (right-click) with Add, Replace, Builder, Rename, Delete per chain
-    + FX Chains: Individual chain view now shows full action button bar (Add, Replace, Builder, Rename, Delete)
-    + FX Chains: Action buttons auto-wrap to multiple rows when window is too narrow
-    + FX Chains: Duplicate plugins in chains are now correctly added to the FX Chain Builder
-    + FX Chain Builder: Button strip now scales dynamically with window width instead of clipping
-    + FX Chain Builder: "Replace" button - replace entire FX chain on selected track(s) with chain builder contents (removes existing FX first)
-    + FX Chain Builder: Commit, Replace and Save now preserve exact chain order (instruments-on-top setting is bypassed for chain builder actions)
-    + Multi-Selection: Ctrl+Arrow keys to move cursor without changing selection
-    + Multi-Selection: Ctrl+Space to toggle individual item in/out of selection via keyboard
-    + Shortcuts Window: New popup showing all keyboard & mouse shortcuts (Settings menu > Shortcuts)
-    + Shortcuts: Escape now properly clears selection even when child window loses focus
-    + FX Chain Builder: Customizable accent color and background darkness via Main Settings > GUI > FX Chain Builder
-
-    0.3.2
-    + Multi-Selection: Ctrl+Click to toggle individual plugins in/out of selection
-    + Multi-Selection: Shift+Click for range selection between anchor and clicked plugin
-    + Multi-Selection: Ctrl+Shift+Click to extend range without clearing existing selection
-    + Multi-Selection: Shift+Arrow keys to extend selection from keyboard
-    + Multi-Selection: Ctrl+A to select all visible plugins in current view
-    + Multi-Selection: Escape to clear multi-selection
-    + Multi-Selection: Enter adds ALL selected plugins to track (wrapped in Undo Block)
-    + Multi-Selection: Right-click context menu for multi-selection (Add All to Track/New Track/Chain Builder/Favorites)
-    + Multi-Selection: Visual feedback - semi-transparent cyan fill for selected items, brighter border for cursor
+--[[ 
+    + Modern Cards now work in Normal layout view (Favorites, Custom sections)
+    + List Hover Screenshot: new option to show screenshot tooltip on hover in list view
+    + Loading overlay in screenshot window while projects are loading
+]]--        
+--------------------------------------------------------------------------
     + Multi-Selection: Selection count indicator "[N selected]" in toolbar area
     + Multi-Selection: Works across all views (Normal grid, Masonry, Showcase, Polaroid)
     + Navigation: Keyboard navigation (arrow keys) for ALL screenshot views (Normal grid, Masonry, Showcase, Polaroid)
@@ -1090,6 +1065,7 @@ function SetDefaultConfig()
         },
             
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
+        last_selected_project_path = "",
         show_project_info = show_project_info or true,
         show_project_col_dates = false,
         show_project_col_sizes = false,
@@ -1114,6 +1090,7 @@ function SetDefaultConfig()
         use_pagination = true,
         use_masonry_layout = false,
         use_modern_cards = false,
+        list_hover_screenshot = false,
         use_showcase_layout = false,
         use_polaroid_layout = false,
         show_favorites_on_top = true,
@@ -2903,6 +2880,33 @@ function LoadProjects()
     projects = get_all_projects()  
     filtered_projects = projects
     save_projects_info(projects)
+    if not selected_project and config and config.last_selected_project_path and config.last_selected_project_path ~= "" then
+        for _, p in ipairs(filtered_projects) do
+            if p.path == config.last_selected_project_path then
+                selected_project = p
+                local has_preview = r.file_exists(p.path .. "-PROX")
+                current_project_info = {
+                    path = p.path,
+                    name = p.name,
+                    has_preview = has_preview,
+                    length = 0,
+                    size = GetFileSize(p.path),
+                    folder_files = CountProjectFolderFiles(p.path),
+                    rpp_info = ParseRPPHeader(p.path)
+                }
+                break
+            end
+        end
+    end
+    projects_loading = false
+end
+
+projects_loading = false
+projects_loading_frame = 0
+
+function RequestLoadProjects()
+    projects_loading = true
+    projects_loading_frame = 2
 end
 
 load_projects_info()
@@ -9104,6 +9108,9 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, config.show_name_on_screenshot and "Hide Name on Screenshot" or "Show Name on Screenshot") then
                 config.show_name_on_screenshot = not config.show_name_on_screenshot; SaveConfig()
             end
+            if r.ImGui_MenuItem(ctx, "List Hover Screenshot", "", config.list_hover_screenshot) then
+                config.list_hover_screenshot = not config.list_hover_screenshot; SaveConfig()
+            end
             if r.ImGui_MenuItem(ctx, config.show_screenshot_scrollbar and "Hide Scrollbar" or "Show Scrollbar") then
                 config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar; SaveConfig()
             end
@@ -11019,7 +11026,7 @@ function ShowBrowserPanel()
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-        if r.ImGui_Selectable(ctx, "PROJECTS", is_sel) then
+        if r.ImGui_Selectable(ctx, show_media_browser and "PROJECTS ●" or "PROJECTS", is_sel) then
                 if not show_media_browser then
                     UpdateLastViewedFolder(selected_folder)
                     show_media_browser = true
@@ -11027,7 +11034,7 @@ function ShowBrowserPanel()
                     show_action_browser = false
                     show_scripts_browser = false
             SelectFolderExclusive("Projects")
-                    LoadProjects()
+                    RequestLoadProjects()
                 else
                     show_action_browser = false
                     show_media_browser = false
@@ -11048,7 +11055,7 @@ function ShowBrowserPanel()
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-        if r.ImGui_Selectable(ctx, "SEND/RECEIVE", is_sel) then
+        if r.ImGui_Selectable(ctx, show_sends_window and "SEND/RECEIVE ●" or "SEND/RECEIVE", is_sel) then
                 if not show_sends_window then
                     UpdateLastViewedFolder(selected_folder)
                     show_sends_window = true
@@ -11076,7 +11083,7 @@ function ShowBrowserPanel()
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-        if r.ImGui_Selectable(ctx, "ACTIONS", is_sel) then
+        if r.ImGui_Selectable(ctx, show_action_browser and "ACTIONS ●" or "ACTIONS", is_sel) then
                 if not show_action_browser then
                     UpdateLastViewedFolder(selected_folder)
                     show_action_browser = true
@@ -11104,7 +11111,8 @@ function ShowBrowserPanel()
         if chain_is_active then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00FF88FF)
         end
-        if r.ImGui_Selectable(ctx, "FX CHAIN BUILDER", config.show_chain_builder) then
+        local fcb_label_bp = config.show_chain_builder and "FX CHAIN BUILDER ●" or "FX CHAIN BUILDER"
+        if r.ImGui_Selectable(ctx, fcb_label_bp, config.show_chain_builder) then
             config.show_chain_builder = not config.show_chain_builder
             SaveConfig()
         end
@@ -11120,7 +11128,7 @@ function ShowBrowserPanel()
                         local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                         r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
                     end
-            if r.ImGui_Selectable(ctx, "SCRIPTS", is_sel) then
+            if r.ImGui_Selectable(ctx, show_scripts_browser and "SCRIPTS ●" or "SCRIPTS", is_sel) then
                         if not show_scripts_browser then
                             UpdateLastViewedFolder(selected_folder)
                             show_scripts_browser = true
@@ -12364,6 +12372,36 @@ function ScaleScreenshotSize(width, height, max_display_size)
     return display_width, display_height
 end
 
+local list_hover_texture_cache = {}
+
+function ShowListHoverScreenshot(plugin_name)
+    if not config.list_hover_screenshot then return end
+    if not r.ImGui_IsItemHovered(ctx) then return end
+    local safe_name = (plugin_name or ""):gsub("[^%w%s-]", "_")
+    local file = screenshot_path .. safe_name .. ".png"
+    local texture = list_hover_texture_cache[plugin_name]
+    if not texture then
+        if r.file_exists(file) then
+            texture = r.ImGui_CreateImage(file)
+            if texture then
+                r.ImGui_Attach(ctx, texture)
+                list_hover_texture_cache[plugin_name] = texture
+            end
+        end
+    end
+    if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+        local w, h = r.ImGui_Image_GetSize(texture)
+        if w and h then
+            local max_w = 300
+            local scale = max_w / w
+            local dw, dh = m_floor(w * scale), m_floor(h * scale)
+            r.ImGui_BeginTooltip(ctx)
+            r.ImGui_Image(ctx, texture, dw, dh)
+            r.ImGui_EndTooltip(ctx)
+        end
+    end
+end
+
 function DrawModernCardBackground(x, y, width, height)
 end
 
@@ -12749,6 +12787,17 @@ function HandleScreenshotNavigation(screenshots)
             screenshot_nav_index = new_idx
             screenshot_nav_anchor = new_idx
         end
+
+        if positions[new_idx] then
+            local sel_pos = positions[new_idx]
+            local scroll_y = r.ImGui_GetScrollY(ctx)
+            local win_h = r.ImGui_GetWindowHeight(ctx)
+            if sel_pos.y < scroll_y + 10 then
+                r.ImGui_SetScrollY(ctx, math.max(0, sel_pos.y - 10))
+            elseif sel_pos.y > scroll_y + win_h - display_size - 40 then
+                r.ImGui_SetScrollY(ctx, sel_pos.y - win_h + display_size + 40)
+            end
+        end
     end
 
     if screenshot_nav_index and positions[screenshot_nav_index] then
@@ -12780,15 +12829,6 @@ function HandleScreenshotNavigation(screenshots)
                     end
                 end
             end
-        end
-
-        local sel_pos = positions[screenshot_nav_index]
-        local scroll_y = r.ImGui_GetScrollY(ctx)
-        local win_h = r.ImGui_GetWindowHeight(ctx)
-        if sel_pos.y < scroll_y + 10 then
-            r.ImGui_SetScrollY(ctx, math.max(0, sel_pos.y - 10))
-        elseif sel_pos.y > scroll_y + win_h - display_size - 40 then
-            r.ImGui_SetScrollY(ctx, sel_pos.y - win_h + display_size + 40)
         end
     end
 end
@@ -14011,7 +14051,7 @@ function ShowScreenshotWindow()
             show_sends_window = false
             show_action_browser = false
             selected_folder = nil
-            LoadProjects()
+            RequestLoadProjects()
         elseif df == "Sends/Receives" then
             show_media_browser = false
             show_sends_window = true
@@ -14099,7 +14139,22 @@ function ShowScreenshotWindow()
 --------------------------------------------------------------------------------------
         -- PROJECTS GEDEELTE:
         local is_screenshot_branch = false
-        if show_scripts_browser then
+        if projects_loading and show_media_browser then
+            if not popped_view_stylevars then
+                r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
+            end
+            local aw, ah = r.ImGui_GetContentRegionAvail(ctx)
+            local msg = "Loading Projects..."
+            local tw, th = r.ImGui_CalcTextSize(ctx, msg)
+            r.ImGui_SetCursorPos(ctx, (aw - tw) * 0.5, ah * 0.45)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+            r.ImGui_Text(ctx, msg)
+            r.ImGui_PopStyleColor(ctx)
+            local dots = string.rep(".", math.floor(r.time_precise() * 3) % 4)
+            local dw = r.ImGui_CalcTextSize(ctx, dots)
+            r.ImGui_SetCursorPosX(ctx, (aw - dw) * 0.5)
+            r.ImGui_Text(ctx, dots)
+        elseif show_scripts_browser then
             popped_view_stylevars = RenderScriptsLauncherSection(popped_view_stylevars)
         elseif show_media_browser then
             local controls_vertical = ShowScreenshotControls()
@@ -14186,7 +14241,7 @@ function ShowScreenshotWindow()
                         PROJECTS_DIR = location
                         config.last_used_project_location = location
                         SaveConfig()
-                        LoadProjects()
+                        RequestLoadProjects()
                     end
                     
                     if r.ImGui_IsItemClicked(ctx, 1) then 
@@ -14197,7 +14252,7 @@ function ShowScreenshotWindow()
                         if r.ImGui_MenuItem(ctx, "Remove") then
                             table.remove(project_locations, i)
                             save_projects_info(projects)
-                            LoadProjects()
+                            RequestLoadProjects()
                         end
                         r.ImGui_EndPopup(ctx)
                     end
@@ -14212,7 +14267,7 @@ function ShowScreenshotWindow()
                 for i = 0, 4 do
                     if r.ImGui_Selectable(ctx, tostring(i)) then
                         max_depth = i
-                        LoadProjects()
+                        RequestLoadProjects()
                     end
                 end
                 r.ImGui_EndCombo(ctx)
@@ -14225,7 +14280,7 @@ function ShowScreenshotWindow()
                     path = path .. "\\"
                     table.insert(project_locations, path)
                     save_projects_info(projects)
-                    LoadProjects()
+                    RequestLoadProjects()
                 end
             end
             
@@ -14384,6 +14439,8 @@ function ShowScreenshotWindow()
 
                     if r.ImGui_Selectable(ctx, project.name, is_selected, r.ImGui_SelectableFlags_SpanAllColumns() | r.ImGui_SelectableFlags_AllowOverlap()) then
                         selected_project = project
+                        config.last_selected_project_path = project.path
+                        SaveConfig()
 
                         if has_preview then
                             local source = r.PCM_Source_CreateFromFile(project.path .. "-PROX")
@@ -15769,6 +15826,7 @@ function ShowScreenshotWindow()
                                     end
                                 end
                                 ShowPluginContextMenu(plugin_name, "favorites_list_ctx_" .. i)
+                                ShowListHoverScreenshot(plugin_name)
                                 end
                             end
                             r.ImGui_PopStyleVar(ctx)
@@ -15818,6 +15876,8 @@ function ShowScreenshotWindow()
                                                 local ntlx, ntly = r.ImGui_GetItemRectMin(ctx)
                                                 local nbrx, nbry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawNavSelectionBorder(i, ntlx, ntly, nbrx, nbry)
+                                                DrawModernCardBackground(ntlx, ntly, nbrx - ntlx, nbry - ntly)
+                                                DrawModernCardForeground(ntlx, ntly, nbrx - ntlx, nbry - ntly)
                                             end
                                             if IsPluginPinned and IsPluginPinned(plugin_name) then
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
@@ -16013,6 +16073,7 @@ function ShowScreenshotWindow()
                                         end
                                     end
                                     ShowPluginContextMenu(plugin_name, "custom_list_ctx_" .. i)
+                                    ShowListHoverScreenshot(plugin_name)
                                 end
                             end
                             r.ImGui_PopStyleVar(ctx)
@@ -16064,6 +16125,8 @@ function ShowScreenshotWindow()
                                                 local ntlx, ntly = r.ImGui_GetItemRectMin(ctx)
                                                 local nbrx, nbry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawNavSelectionBorder(i, ntlx, ntly, nbrx, nbry)
+                                                DrawModernCardBackground(ntlx, ntly, nbrx - ntlx, nbry - ntly)
+                                                DrawModernCardForeground(ntlx, ntly, nbrx - ntlx, nbry - ntly)
                                             end
                                             if pinned_set and pinned_set[plugin_name] then
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
@@ -16642,6 +16705,7 @@ function ShowScreenshotWindow()
                                         end
                                     end
                                     ShowPluginContextMenu(plugin_name, "folder_list_ctx_" .. i)
+                                    ShowListHoverScreenshot(plugin_name)
                                 end
                             end
                             r.ImGui_PopStyleVar(ctx)
@@ -16847,6 +16911,7 @@ function ShowScreenshotWindow()
                             end
                             
                             ShowPluginContextMenu(fx.name, "list_ctx_" .. i)
+                            ShowListHoverScreenshot(fx.name)
                         end
                     end
                     r.ImGui_PopStyleVar(ctx)
@@ -19315,7 +19380,7 @@ end
                     show_sends_window = false
                     show_action_browser = false
                     SelectFolderExclusive("Projects")
-                    LoadProjects()
+                    RequestLoadProjects()
                 else
                     show_action_browser = false
                     show_media_browser = false
@@ -19684,6 +19749,14 @@ function Main()
     
     SetRunningState(true)
     MaybeClearCaches()
+
+    if projects_loading then
+        if projects_loading_frame > 0 then
+            projects_loading_frame = projects_loading_frame - 1
+        else
+            LoadProjects()
+        end
+    end
     
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         InitializeImGuiContext()

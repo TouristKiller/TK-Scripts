@@ -128,3 +128,16 @@ current_filtered_fx = {}
 was_hidden = false
 unique_id_counter = 0
 pushed_main_styles = false
+
+chain_builder_plugins = {}
+chain_builder_chunks = {}
+masonry_selected_index = nil
+masonry_positions = {}
+screenshot_nav_index = nil
+screenshot_nav_positions = {}
+screenshot_nav_plugin_indices = {}
+screenshot_multi_selected = {}
+screenshot_nav_anchor = nil
+screenshot_nav_names = {}
+ab_snapshots = {}
+config_window_selected_tab = 1
