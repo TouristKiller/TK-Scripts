@@ -1,8 +1,19 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.9
+-- @version 0.7.0
 -- @changelog:
 --[[       
+v0.7.0:
++ Auto Progress: Sequential playback from selected item downward
++ Auto Progress disables loop mode when enabled
++ Filename bar above oscilloscope showing current/selected file
++ Resizable waveform preview with draggable divider (40-300px range)
++ Drag & drop insert position preview: edit cursor follows mouse position snapped to grid
++ Drag & drop: cursor restores to original position when drop is cancelled
++ Fixed scrollbar visibility with oscilloscope shown and hidden states
++ Settings, presets and save/load updated for auto_progress and waveform_preview_height
+
+v0.6.9:
 + Made Docking more stable and fixed various edge cases with it
 
 ]]--        
@@ -52,6 +63,7 @@ local playback = {
     state = "stopped",
     auto_play = true,
     loop_play = true,
+    auto_progress = false,
     loop_start = 0,
     loop_end = 0,
     current_pitch = 0,
@@ -164,7 +176,9 @@ local ui = {
     auto_source_location = "",
     auto_source_index = 0,
     image_viewer_open = false,
-    image_viewer_path = ""
+    image_viewer_path = "",
+    waveform_preview_height = 92,
+    is_dragging_waveform_divider = false,
 }
 
 -- Available fonts (cross-platform compatible)
@@ -2066,6 +2080,7 @@ local function save_options()
         local options = {
             auto_play = playback.auto_play,
             loop_play = playback.loop_play,
+            auto_progress = playback.auto_progress,
             use_original_speed = playback.use_original_speed,
             link_transport = playback.link_transport,
             link_start_from_editcursor = playback.link_start_from_editcursor,
@@ -2116,7 +2131,8 @@ local function save_options()
             show_spectral_view = waveform.show_spectral_view,
             auto_selected_category = ui.auto_selected_category,
             auto_source_location = ui.auto_source_location,
-            auto_source_index = ui.auto_source_index
+            auto_source_index = ui.auto_source_index,
+            waveform_preview_height = ui.waveform_preview_height
         }
         file:write(serialize(options))
         file:close()
@@ -2128,6 +2144,7 @@ local function get_settings_table()
     return {
         auto_play = playback.auto_play,
         loop_play = playback.loop_play,
+        auto_progress = playback.auto_progress,
         use_original_speed = playback.use_original_speed,
         link_transport = playback.link_transport,
         link_start_from_editcursor = playback.link_start_from_editcursor,
@@ -2157,7 +2174,8 @@ local function get_settings_table()
         button_height = ui_settings.button_height,
         visible_columns = ui_settings.visible_columns,
         show_spectral_view = waveform.show_spectral_view,
-        pitch_detection_enabled = ui.pitch_detection_enabled
+        pitch_detection_enabled = ui.pitch_detection_enabled,
+        waveform_preview_height = ui.waveform_preview_height
     }
 end
 
@@ -2166,6 +2184,7 @@ local function apply_settings_from_table(settings)
     
     playback.auto_play = settings.auto_play
     playback.loop_play = settings.loop_play
+    playback.auto_progress = settings.auto_progress or false
     playback.use_original_speed = settings.use_original_speed
     playback.link_transport = settings.link_transport or false
     playback.link_start_from_editcursor = settings.link_start_from_editcursor or false
@@ -2196,6 +2215,7 @@ local function apply_settings_from_table(settings)
     ui_settings.button_height = settings.button_height or 20
     ui_settings.visible_columns = settings.visible_columns or {name = true, size = true, date = true, duration = true, samplerate = true, bitdepth = true, channels = true}
     ui.pitch_detection_enabled = settings.pitch_detection_enabled ~= nil and settings.pitch_detection_enabled or true
+    ui.waveform_preview_height = settings.waveform_preview_height or 92
     
     font_objects = {}
     update_fonts()
@@ -2285,6 +2305,7 @@ local function load_options()
             file_location.last_collection_name = options.last_collection_name
             ui.show_oscilloscope = options.show_oscilloscope
             ui.waveform_grid_overlay = options.waveform_grid_overlay or false
+            ui.waveform_preview_height = options.waveform_preview_height or 92
             waveform.show_spectral_view = options.show_spectral_view or false
             if options.current_view_mode ~= "collections" and options.current_view_mode ~= "auto" then
                 file_location.flat_view = options.flat_view ~= nil and options.flat_view or false
@@ -2292,6 +2313,7 @@ local function load_options()
             file_location.saved_folder_flat_view = options.flat_view ~= nil and options.flat_view or false
             playback.auto_play = options.auto_play
             playback.loop_play = options.loop_play
+            playback.auto_progress = options.auto_progress or false
             playback.use_original_speed = options.use_original_speed
             playback.link_transport = options.link_transport or false
             playback.link_start_from_editcursor = options.link_start_from_editcursor or false
@@ -2369,6 +2391,7 @@ local function load_options()
                         file_location.saved_folder_flat_view = options2.flat_view ~= nil and options2.flat_view or false
                         playback.auto_play = options2.auto_play
                         playback.loop_play = options2.loop_play
+                        playback.auto_progress = options2.auto_progress or false
                         playback.use_original_speed = options2.use_original_speed
                         playback.link_transport = options2.link_transport or false
                         playback.preview_volume = options2.preview_volume
@@ -2406,6 +2429,7 @@ local function load_options()
                         ui.auto_selected_category = options2.auto_selected_category or "All"
                         ui.auto_source_location = options2.auto_source_location or ""
                         ui.auto_source_index = options2.auto_source_index or 0
+                        ui.waveform_preview_height = options2.waveform_preview_height or 92
                         if file_location.remember_last_location and options2.last_location_index then
                             file_location.selected_location_index = options2.last_location_index
                         end
@@ -3075,6 +3099,8 @@ local function presort_flat_files(flat)
     return flat
 end
 
+local advance_to_next_file
+
 local function set_track_color(track, color_hex)
     local color = tonumber(color_hex:gsub("#",""), 16)
     r.SetTrackColor(track, color)
@@ -3665,6 +3691,30 @@ local function play_media(file_path)
     start_playback(file_path)
 end
 
+advance_to_next_file = function()
+    if not ui.visible_files or #ui.visible_files == 0 then return false end
+    if ui.selected_index >= #ui.visible_files then
+        stop_playback(false)
+        return false
+    end
+    ui.selected_index = ui.selected_index + 1
+    playback.selected_file = ui.visible_files[ui.selected_index].name
+    waveform.selection_active = false
+    waveform.is_dragging = false
+    waveform.selection_start = 0
+    waveform.selection_end = 0
+    waveform.monitor_sel_start = 0
+    waveform.monitor_sel_end = 0
+    waveform.normalized_sel_start = 0
+    waveform.normalized_sel_end = 0
+    waveform.monitor_file_path = ""
+    waveform.play_cursor_position = 0
+    local next_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
+    playback.current_playing_file = next_path
+    play_media(next_path)
+    return true
+end
+
 local function monitor_transport_state()
     if not playback.link_transport then 
         return 
@@ -3848,16 +3898,37 @@ end
 local function handle_reaper_drop()
     local mouse_state = r.JS_Mouse_GetState(1)
     if mouse_state == 1 and insert_state.drop_file then
+        if not insert_state.is_dragging then
+            insert_state.saved_cursor_pos = r.GetCursorPosition()
+        end
         insert_state.is_dragging = true
-        insert_state.drop_track = r.GetTrackFromPoint(r.GetMousePosition())
+        local mx, my = r.GetMousePosition()
+        local track = r.GetTrackFromPoint(mx, my)
+        insert_state.drop_track = track
+        if track then
+            local arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 0x3E8)
+            if arrange then
+                local _, arr_left, _, arr_right, _ = r.JS_Window_GetRect(arrange)
+                local arrange_width = arr_right - arr_left
+                if arrange_width > 0 then
+                    local arrange_x = mx - arr_left
+                    local arr_start, arr_end = r.GetSet_ArrangeView2(0, false, 0, 0)
+                    local drop_time = arr_start + (arrange_x / arrange_width) * (arr_end - arr_start)
+                    local snapped_time = r.SnapToGrid(0, drop_time)
+                    r.SetEditCurPos(snapped_time, false, false)
+                end
+            end
+        end
     elseif mouse_state == 0 and insert_state.is_dragging then
         if insert_state.drop_file and insert_state.drop_track then
             insert_media_on_track(insert_state.drop_file, insert_state.drop_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch)
-        else
+        elseif insert_state.saved_cursor_pos then
+            r.SetEditCurPos(insert_state.saved_cursor_pos, false, false)
         end
         insert_state.is_dragging = false
         insert_state.drop_file = nil
         insert_state.drop_track = nil
+        insert_state.saved_cursor_pos = nil
     end
 end
 
@@ -6468,7 +6539,7 @@ local function loop()
         local left_panel_width = math.min(200, math.max(50, math.floor(window_width * 0.4)))
         local right_panel_width = math.max(100, window_width - left_panel_width - 10)
         if r.ImGui_BeginChild(ctx, "LeftControlPanel", left_panel_width, 0, r.ImGui_WindowFlags_None()) then
-            local LEFT_FOOTER_H = ui.show_oscilloscope and 228 or 100  
+            local LEFT_FOOTER_H = ui.show_oscilloscope and 260 or 120  
             local LEFT_HEADER_H = 0  
             local num_view_buttons = 3
             local header_button_width = (left_panel_width - (num_view_buttons * 2)) / num_view_buttons 
@@ -7401,10 +7472,47 @@ local function loop()
                 end
             end
             
+            local display_file = playback.current_playing_file ~= "" and playback.current_playing_file or playback.last_displayed_file
+            if not display_file or display_file == "" then
+                if ui.selected_index > 0 and ui.visible_files[ui.selected_index] then
+                    display_file = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path or ""
+                end
+            end
+            local fname = display_file and display_file:match("([^/\\]+)$") or ""
+            local bar_width = r.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_PushFont(ctx, small_font, small_font_size)
+            local bar_h = select(2, r.ImGui_CalcTextSize(ctx, "X")) + 4
+            local bar_draw = r.ImGui_GetWindowDrawList(ctx)
+            local bar_x, bar_y = r.ImGui_GetCursorScreenPos(ctx)
+            r.ImGui_DrawList_AddRectFilled(bar_draw,
+                bar_x, bar_y,
+                bar_x + bar_width, bar_y + bar_h,
+                r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, 0.3), 0)
+            if fname ~= "" then
+                local fname_w = r.ImGui_CalcTextSize(ctx, fname)
+                local max_tw = bar_width - 6
+                if fname_w > max_tw then
+                    while fname_w > max_tw and #fname > 4 do
+                        fname = fname:sub(1, #fname - 1)
+                        fname_w = r.ImGui_CalcTextSize(ctx, fname .. "...")
+                    end
+                    fname = fname .. "..."
+                    fname_w = r.ImGui_CalcTextSize(ctx, fname)
+                end
+                local fname_x = bar_x + (bar_width - fname_w) / 2
+                local fname_y = bar_y + 2
+                r.ImGui_DrawList_AddText(bar_draw, fname_x, fname_y,
+                    r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 0.8),
+                    fname)
+            end
+            r.ImGui_PopFont(ctx)
+            r.ImGui_Dummy(ctx, bar_width, bar_h)
+
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
             local pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
             local width = r.ImGui_GetContentRegionAvail(ctx)
-            local height = 120
+            local _, item_sp_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+            local height = 120 - bar_h - item_sp_y
             
             if ui.current_view_mode == "settings" then
                 local texture = LoadTexture(settings_image_path)
@@ -8036,6 +8144,9 @@ local function loop()
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         if r.ImGui_InvisibleButton(ctx, "##Loop", button_size, button_size) then
             playback.loop_play = not playback.loop_play
+            if playback.loop_play then
+                playback.auto_progress = false
+            end
             save_options()
         end
         local loop_color = playback.loop_play and active_color or (r.ImGui_IsItemHovered(ctx) and hover_color or normal_color)
@@ -8067,126 +8178,12 @@ local function loop()
         local available_width = r.ImGui_GetContentRegionAvail(ctx)
         local toggle_size = 12
         local toggle_spacing = 3
-        local buttons_width = small_button_width * 3 + 6  
         local transport_end_x = transport_start_x + available_width - toggle_size - toggle_spacing
         
         local button_line_y = r.ImGui_GetCursorPosY(ctx)
         
-        r.ImGui_PushFont(ctx, medium_font, medium_font_size)
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), 0.5, 0.5)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-        local auto_text_color = playback.auto_play and active_color or r.ImGui_ColorConvertDouble4ToU32(
-            ui_settings.text_brightness,
-            ui_settings.text_brightness,
-            ui_settings.text_brightness,
-            1.0
-        )
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), auto_text_color)
-        if r.ImGui_Button(ctx, "auto", small_button_width, small_button_height) then
-            playback.auto_play = not playback.auto_play
-            save_options()
-        end
-        r.ImGui_PopStyleColor(ctx, 4)
-        r.ImGui_PopStyleVar(ctx, 1)
-        r.ImGui_PopFont(ctx)
-        
-        r.ImGui_SameLine(ctx, 0, 0)
-        
-        r.ImGui_PushFont(ctx, medium_font, medium_font_size)
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), 0.5, 0.5)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-        local sync_text_color = playback.use_original_speed and r.ImGui_ColorConvertDouble4ToU32(
-            ui_settings.text_brightness,
-            ui_settings.text_brightness,
-            ui_settings.text_brightness,
-            1.0
-        ) or active_color
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sync_text_color)
-        if r.ImGui_Button(ctx, "sync", small_button_width, small_button_height) then
-            playback.use_original_speed = not playback.use_original_speed
-            playback.speed_manually_changed = true
-            playback.pending_sync_refresh = true
-            playback.last_sync_reference = nil
-            local rate_multiplier = playback.current_playrate or 1.0
-            local target_effective = rate_multiplier
-            local base_rate_override = nil
-
-            if not playback.use_original_speed then
-                base_rate_override = get_sync_base_rate()
-                if base_rate_override and base_rate_override > 0 then
-                    target_effective = base_rate_override * rate_multiplier
-                end
-            end
-
-            update_playrate(target_effective, base_rate_override)
-            save_options()
-        end
-        
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Sync playback speed\nRight-click for options")
-        end
-        
-        if r.ImGui_BeginPopupContextItem(ctx, "##SyncOptions") then
-            if r.ImGui_Checkbox(ctx, "Start at next measure", playback.sync_wait_for_next_measure) then
-                playback.sync_wait_for_next_measure = not playback.sync_wait_for_next_measure
-                save_options()
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "When enabled: Audio playback waits for the next measure when project is playing and sync is enabled")
-            end
-            r.ImGui_EndPopup(ctx)
-        end
-        
-        r.ImGui_PopStyleColor(ctx, 4)
-        r.ImGui_PopStyleVar(ctx, 1)
-        r.ImGui_PopFont(ctx)
-        
-        r.ImGui_SameLine(ctx, 0, 0)
-        
-        r.ImGui_PushFont(ctx, medium_font, medium_font_size)
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), 0.5, 0.5)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-        local link_text_color = playback.link_transport and active_color or r.ImGui_ColorConvertDouble4ToU32(
-            ui_settings.text_brightness,
-            ui_settings.text_brightness,
-            ui_settings.text_brightness,
-            1.0
-        )
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), link_text_color)
-        if r.ImGui_Button(ctx, "link", small_button_width, small_button_height) then
-            playback.link_transport = not playback.link_transport
-            save_options()
-        end
-        
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Link transport\nRight-click for options")
-        end
-        
-        if r.ImGui_BeginPopupContextItem(ctx, "##LinkOptions") then
-            local start_from_cursor = playback.link_start_from_editcursor
-            if r.ImGui_Checkbox(ctx, "Start arrange from edit cursor", start_from_cursor) then
-                playback.link_start_from_editcursor = not playback.link_start_from_editcursor
-                save_options()
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "When enabled: Arrange starts from current edit cursor position\nWhen disabled: Arrange starts at same position as media preview")
-            end
-            r.ImGui_EndPopup(ctx)
-        end
-        
-        r.ImGui_PopStyleColor(ctx, 4)
-        r.ImGui_PopStyleVar(ctx, 1)
-        r.ImGui_PopFont(ctx)
-        
         r.ImGui_SetCursorPos(ctx, transport_end_x, button_line_y)
         
-        local toggle_size = 12
         local toggle_x, toggle_y = r.ImGui_GetCursorScreenPos(ctx)
         if r.ImGui_InvisibleButton(ctx, "##OscilloscopeToggle", toggle_size, toggle_size) then
             ui.show_oscilloscope = not ui.show_oscilloscope
@@ -8206,6 +8203,114 @@ local function loop()
                 center_x, center_y + toggle_size * 0.3,
                 line_color, 1.5)
         end
+
+        local opt_available = r.ImGui_GetContentRegionAvail(ctx)
+        local opt_btn_count = 4
+        local opt_btn_width = math.floor(opt_available / opt_btn_count)
+        local inactive_text = r.ImGui_ColorConvertDouble4ToU32(
+            ui_settings.text_brightness,
+            ui_settings.text_brightness,
+            ui_settings.text_brightness,
+            1.0
+        )
+
+        r.ImGui_PushFont(ctx, medium_font, medium_font_size)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), 0.5, 0.5)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), playback.auto_play and active_color or inactive_text)
+        if r.ImGui_Button(ctx, "auto", opt_btn_width, small_button_height) then
+            playback.auto_play = not playback.auto_play
+            save_options()
+        end
+        r.ImGui_PopStyleColor(ctx, 1)
+
+        r.ImGui_SameLine(ctx, 0, 0)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), (not playback.use_original_speed) and active_color or inactive_text)
+        if r.ImGui_Button(ctx, "sync", opt_btn_width, small_button_height) then
+            playback.use_original_speed = not playback.use_original_speed
+            playback.speed_manually_changed = true
+            playback.pending_sync_refresh = true
+            playback.last_sync_reference = nil
+            local rate_multiplier = playback.current_playrate or 1.0
+            local target_effective = rate_multiplier
+            local base_rate_override = nil
+
+            if not playback.use_original_speed then
+                base_rate_override = get_sync_base_rate()
+                if base_rate_override and base_rate_override > 0 then
+                    target_effective = base_rate_override * rate_multiplier
+                end
+            end
+
+            update_playrate(target_effective, base_rate_override)
+            save_options()
+        end
+        r.ImGui_PopStyleColor(ctx, 1)
+        
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Sync playback speed\nRight-click for options")
+        end
+        
+        if r.ImGui_BeginPopupContextItem(ctx, "##SyncOptions") then
+            if r.ImGui_Checkbox(ctx, "Start at next measure", playback.sync_wait_for_next_measure) then
+                playback.sync_wait_for_next_measure = not playback.sync_wait_for_next_measure
+                save_options()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "When enabled: Audio playback waits for the next measure when project is playing and sync is enabled")
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+
+        r.ImGui_SameLine(ctx, 0, 0)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), playback.link_transport and active_color or inactive_text)
+        if r.ImGui_Button(ctx, "link", opt_btn_width, small_button_height) then
+            playback.link_transport = not playback.link_transport
+            save_options()
+        end
+        r.ImGui_PopStyleColor(ctx, 1)
+        
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Link transport\nRight-click for options")
+        end
+        
+        if r.ImGui_BeginPopupContextItem(ctx, "##LinkOptions") then
+            local start_from_cursor = playback.link_start_from_editcursor
+            if r.ImGui_Checkbox(ctx, "Start arrange from edit cursor", start_from_cursor) then
+                playback.link_start_from_editcursor = not playback.link_start_from_editcursor
+                save_options()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "When enabled: Arrange starts from current edit cursor position\nWhen disabled: Arrange starts at same position as media preview")
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+
+        r.ImGui_SameLine(ctx, 0, 0)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), playback.auto_progress and active_color or inactive_text)
+        if r.ImGui_Button(ctx, "prog", opt_btn_width, small_button_height) then
+            playback.auto_progress = not playback.auto_progress
+            if playback.auto_progress then
+                playback.loop_play = false
+                if playback.playing_preview then
+                    r.CF_Preview_SetValue(playback.playing_preview, "B_LOOP", 0)
+                end
+            end
+            save_options()
+        end
+        r.ImGui_PopStyleColor(ctx, 1)
+
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Auto progress: play next file when current ends")
+        end
+
+        r.ImGui_PopStyleColor(ctx, 3)
+        r.ImGui_PopStyleVar(ctx, 1)
+        r.ImGui_PopFont(ctx)
+
         r.ImGui_Separator(ctx)
 
         local available_width = r.ImGui_GetContentRegionAvail(ctx)
@@ -8441,7 +8546,7 @@ local function loop()
         r.ImGui_Dummy(ctx, 3, 0)
         r.ImGui_SameLine(ctx)
         if r.ImGui_BeginChild(ctx, "RightFileBrowserPanel", right_panel_width - 5, 0) then
-            local FOOTER_H = 100
+            local FOOTER_H = ui.waveform_preview_height + 12
             local topbar_start_x = r.ImGui_GetCursorPosX(ctx)
             local quit_button_size = 20
             local shortcuts_button_size = 20
@@ -9487,10 +9592,32 @@ local function loop()
             if scrollbar_pushed then
                 r.ImGui_PopStyleVar(ctx, 1)
             end
-            
-            r.ImGui_Separator(ctx)
+
+            local divider_w = r.ImGui_GetContentRegionAvail(ctx)
+            local divider_h = 5
+            local div_x, div_y = r.ImGui_GetCursorScreenPos(ctx)
+            r.ImGui_InvisibleButton(ctx, "##waveform_divider", divider_w, divider_h)
+            local div_draw = r.ImGui_GetWindowDrawList(ctx)
+            local div_hovered = r.ImGui_IsItemHovered(ctx)
+            local div_active = r.ImGui_IsItemActive(ctx)
+            if div_hovered or div_active then
+                r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS())
+            end
+            local div_col = div_active and 0xFFFFFFAA or (div_hovered and 0xFFFFFF66 or 0xFFFFFF22)
+            r.ImGui_DrawList_AddLine(div_draw, div_x + 4, div_y + 2, div_x + divider_w - 4, div_y + 2, div_col, 1)
+            if div_active then
+                ui.is_dragging_waveform_divider = true
+                local _, dy = r.ImGui_GetMouseDelta(ctx)
+                if dy ~= 0 then
+                    ui.waveform_preview_height = math.max(40, math.min(300, ui.waveform_preview_height - dy))
+                end
+            elseif ui.is_dragging_waveform_divider then
+                ui.is_dragging_waveform_divider = false
+                save_options()
+            end
+
             local footer_width = r.ImGui_GetContentRegionAvail(ctx)
-            local footer_height = 92
+            local footer_height = ui.waveform_preview_height
             local ruler_height = 15
             local waveform_height = footer_height - ruler_height
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -10235,13 +10362,29 @@ local function loop()
     if playback.playing_preview and not playback.is_paused and waveform.monitor_sel_start and waveform.monitor_sel_end and math.abs(waveform.monitor_sel_end - waveform.monitor_sel_start) > 0.01 and not playback.loop_play then
         local ok, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
         if ok and pos >= waveform.monitor_sel_end then
-            stop_playback(false)
+            if playback.auto_progress then
+                advance_to_next_file()
+            else
+                stop_playback(false)
+            end
         end
     elseif playback.playing_preview and not playback.is_paused and waveform.monitor_sel_start and waveform.monitor_sel_end and math.abs(waveform.monitor_sel_end - waveform.monitor_sel_start) > 0.01 and playback.loop_play then
         local ok, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
         if ok and pos >= waveform.monitor_sel_end then
             r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", waveform.monitor_sel_start)
             playback.prev_play_cursor = waveform.monitor_sel_start
+        end
+    elseif playback.playing_preview and not playback.is_paused and not playback.loop_play and playback.auto_progress then
+        local ok_pos, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
+        local ok_len, len = r.CF_Preview_GetValue(playback.playing_preview, "D_LENGTH")
+        if ok_pos and ok_len and len > 0 and pos >= len - 0.05 then
+            advance_to_next_file()
+        end
+    end
+    if (playback.is_video_playback or playback.is_midi_playback) and not playback.is_paused and playback.auto_progress and not playback.loop_play then
+        local reaper_state = r.GetPlayState()
+        if reaper_state == 0 and playback.video_preview_item then
+            advance_to_next_file()
         end
     end
     draw_category_manager()
