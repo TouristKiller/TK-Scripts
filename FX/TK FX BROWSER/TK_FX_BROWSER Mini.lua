@@ -1,9 +1,13 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.4.0
+-- @version 0.5.0
 -- @changelog:
 --[[ 
-    + Added "FX List Keep Ratio" option for Screenshot Window info panel thumbnails
+    + Added track name header bar in browser panel with navigation arrows, scroll wheel and right-click context menu
+    + Removed duplicate track header from info panel (now unified in browser panel)
+    + INFO/BROWSER toggle button now colors with track color and auto-contrast text
+    + Added Numpad Enter support alongside regular Enter
+    + Added "Add to Input FX" option in right-click context menu
 ]]--        
 --------------------------------------------------------------------------
    
@@ -596,6 +600,7 @@ chain_builder_chunks = chain_builder_chunks or {}
 chain_builder_hovered = false
 info_trackfx_drop_hovered = false
 info_itemfx_drop_hovered = false
+info_inputfx_drop_hovered = false
 masonry_selected_index = masonry_selected_index or nil
 masonry_positions = masonry_positions or {}
 screenshot_nav_index = screenshot_nav_index or nil
@@ -906,6 +911,7 @@ function SetDefaultConfig()
         plugin_type_priority = { "CLAP", "VST3", "VST", "JS" },
         screenshot_delay = 0.5,
         close_after_adding_fx = false,
+        hide_after_insert = false,
         folder_specific_sizes = {},
         include_x86_bridged = false,
         hide_default_titlebar_menu_items = false,
@@ -1009,6 +1015,7 @@ function SetDefaultConfig()
         always_search_all = false,
         show_track_fx_thumbnails = false,
         show_item_fx_thumbnails = false,
+        show_input_fx_thumbnails = false,
         info_fxlist_keep_aspect_ratio = false,
     } 
 end
@@ -1872,6 +1879,7 @@ function AddFXToTrack(track, plugin_name, preserve_order)
         if selected_folder == "Current Track FX" or selected_folder == "Current Project FX" then
             if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
         end
+        if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
     end
 
     return fx_index or -1
@@ -4392,6 +4400,8 @@ function ShowConfigWindow()
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.open_floating_after_adding = r.ImGui_Checkbox(ctx, "Open FX floating after adding", config.open_floating_after_adding)
             r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.hide_after_insert = r.ImGui_Checkbox(ctx, "Hide browser after inserting FX", config.hide_after_insert)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.include_x86_bridged = r.ImGui_Checkbox(ctx, "Include x86 bridged plugins", config.include_x86_bridged)
             r.ImGui_Separator(ctx)
             r.ImGui_Dummy(ctx, 0, 5)
@@ -4684,10 +4694,10 @@ function AddFXToItem(fx_name)
     local fx_index = r.TakeFX_AddByName(take, fx_name, -1000 - dest_index)
     
     if fx_index and fx_index >= 0 then
-        -- Show floating window if configured
         if config and config.open_floating_after_adding then
-            r.TakeFX_Show(take, fx_index, 3) -- 3 = open floating
+            r.TakeFX_Show(take, fx_index, 3)
         end
+        if config and config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
         return fx_index, take
     end
     return -1
@@ -7502,6 +7512,109 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 end
             end
 
+            if next(config.custom_folders) then
+                r.ImGui_Separator(ctx)
+                if r.ImGui_BeginMenu(ctx, "Add All to Custom Folder") then
+                    local function ShowMultiCustomFolderMenu(folders, path_prefix)
+                        path_prefix = path_prefix or ""
+                        local sorted_folder_names = {}
+                        for folder_name, folder_content in pairs(folders) do
+                            if type(folder_name) == "string" and type(folder_content) == "table" then
+                                table.insert(sorted_folder_names, folder_name)
+                            end
+                        end
+                        table.sort(sorted_folder_names, function(a, b) return a:lower() < b:lower() end)
+
+                        for _, folder_name in ipairs(sorted_folder_names) do
+                            local folder_content = folders[folder_name]
+                            local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+                            local has_subfolders = HasSubfolders(folder_content)
+                            local plugin_count = #GetFolderPlugins(folder_content)
+
+                            if has_subfolders then
+                                if r.ImGui_BeginMenu(ctx, folder_name) then
+                                    if r.ImGui_MenuItem(ctx, "[Add here] (" .. plugin_count .. ")") then
+                                        local target = config.custom_folders
+                                        if path_prefix ~= "" then
+                                            for folder in path_prefix:gmatch("[^/]+") do
+                                                target = target[folder]
+                                                if not target then break end
+                                            end
+                                        end
+                                        if target and target[folder_name] then
+                                            local target_folder = target[folder_name]
+                                            local names = GetMultiSelectedPluginNames()
+                                            local added_count = 0
+                                            for _, pname in ipairs(names) do
+                                                local already_exists = false
+                                                for k, v in pairs(target_folder) do
+                                                    if type(k) == "number" and v == pname then
+                                                        already_exists = true
+                                                        break
+                                                    end
+                                                end
+                                                if not already_exists then
+                                                    local max_index = 0
+                                                    for k in pairs(target_folder) do
+                                                        if type(k) == "number" and k > max_index then max_index = k end
+                                                    end
+                                                    target_folder[max_index + 1] = pname
+                                                    added_count = added_count + 1
+                                                end
+                                            end
+                                            SaveCustomFolders()
+                                            if added_count > 0 then
+                                                r.ShowMessageBox(added_count .. " plugin(s) added to " .. folder_name, "Success", 0)
+                                            else
+                                                r.ShowMessageBox("All plugins already exist in " .. folder_name, "Info", 0)
+                                            end
+                                        end
+                                    end
+                                    r.ImGui_Separator(ctx)
+                                    ShowMultiCustomFolderMenu(folder_content, full_path)
+                                    r.ImGui_EndMenu(ctx)
+                                end
+                            else
+                                if r.ImGui_MenuItem(ctx, folder_name .. " (" .. plugin_count .. ")") then
+                                    local target = config.custom_folders
+                                    if path_prefix ~= "" then
+                                        for folder in path_prefix:gmatch("[^/]+") do
+                                            target = target[folder]
+                                            if not target then break end
+                                        end
+                                    end
+                                    if target and target[folder_name] then
+                                        local target_folder = target[folder_name]
+                                        local names = GetMultiSelectedPluginNames()
+                                        local added_count = 0
+                                        for _, pname in ipairs(names) do
+                                            local already_exists = false
+                                            for k, v in pairs(target_folder) do
+                                                if type(k) == "number" and v == pname then
+                                                    already_exists = true
+                                                    break
+                                                end
+                                            end
+                                            if not already_exists then
+                                                local max_index = 0
+                                                for k in pairs(target_folder) do
+                                                    if type(k) == "number" and k > max_index then max_index = k end
+                                                end
+                                                target_folder[max_index + 1] = pname
+                                                added_count = added_count + 1
+                                            end
+                                        end
+                                        SaveCustomFolders()
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    ShowMultiCustomFolderMenu(config.custom_folders)
+                    r.ImGui_EndMenu(ctx)
+                end
+            end
+
             r.ImGui_Separator(ctx)
             if r.ImGui_MenuItem(ctx, "Clear Selection") then
                 screenshot_multi_selected = {}
@@ -7596,6 +7709,16 @@ function ShowPluginContextMenu(plugin_name, menu_id)
             end
             if r.ImGui_MenuItem(ctx, "Add to All Tracks") then
                 AddPluginToAllTracks(plugin_name)
+            end
+            if r.ImGui_MenuItem(ctx, "Add to Input FX") then
+                r.Undo_BeginBlock()
+                local fx_index = r.TrackFX_AddByName(TRACK, plugin_name, true, -1)
+                if fx_index and fx_index >= 0 and config.open_floating_after_adding then
+                    r.TrackFX_Show(TRACK, fx_index + 0x1000000, 3)
+                end
+                LAST_USED_FX = plugin_name
+                r.Undo_EndBlock("Add " .. plugin_name .. " to Input FX", -1)
+                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
         end
         
@@ -9092,6 +9215,9 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, "Item FX Thumbnails", "", config.show_item_fx_thumbnails) then
                 config.show_item_fx_thumbnails = not config.show_item_fx_thumbnails; SaveConfig()
             end
+            if r.ImGui_MenuItem(ctx, "Input FX Thumbnails", "", config.show_input_fx_thumbnails) then
+                config.show_input_fx_thumbnails = not config.show_input_fx_thumbnails; SaveConfig()
+            end
             r.ImGui_EndMenu(ctx)
         end
 
@@ -9551,6 +9677,9 @@ function LoadTemplate(template_path)
         r.TrackList_AdjustWindows(false)
         if config.close_after_adding_fx then
             SHOULD_CLOSE_SCRIPT = true
+        end
+        if config.hide_after_insert then
+            SHOULD_HIDE_BROWSER = true
         end
     else
         r.ShowConsoleMsg("Template file not found: " .. full_path .. "\n")
@@ -10386,6 +10515,7 @@ function ShowBrowserPanel()
     browser_panel_show_info = browser_panel_show_info or false
     info_trackfx_drop_hovered = false
     info_itemfx_drop_hovered = false
+    info_inputfx_drop_hovered = false
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     r.ImGui_BeginChild(ctx, "BrowserSection", config.browser_panel_width, -1)
     local section_pos_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -10478,6 +10608,194 @@ function ShowBrowserPanel()
     end
     end
     r.ImGui_EndChild(ctx)
+
+    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+        local bt_track_num = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") or 0
+        local bt_color, bt_text_color = GetTrackColorAndTextColor(TRACK)
+        local bt_h = 22
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), bt_color)
+        local bt_open = r.ImGui_BeginChild(ctx, "BrowserTrackHeader", -1, bt_h)
+        local bt_text_hovered = false
+        if bt_open then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), bt_text_color)
+            local _, bt_tn = r.GetTrackName(TRACK)
+            local bt_name = bt_tn or "Master Track"
+            local bt_num_str
+            if bt_track_num == 0 then
+                bt_num_str = "Master"
+                bt_name = "Master Track"
+            else
+                bt_num_str = tostring(math.floor(bt_track_num))
+            end
+            local bt_full = string.format("%s: %s", bt_num_str, bt_name)
+            local bt_text_h = r.ImGui_GetTextLineHeight(ctx)
+            local bt_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            local bt_arrow_w = r.ImGui_CalcTextSize(ctx, "<") + 12
+            local bt_total_tracks = r.CountTracks(0)
+            local bt_text_zone = bt_avail_w - (bt_arrow_w + 4) * 2 - 8
+            local bt_display = bt_full
+            local bt_tw = r.ImGui_CalcTextSize(ctx, bt_display)
+            if bt_tw > bt_text_zone then
+                while #bt_display > 1 and r.ImGui_CalcTextSize(ctx, bt_display .. "...") > bt_text_zone do
+                    bt_display = bt_display:sub(1, #bt_display - 1)
+                end
+                bt_display = bt_display .. "..."
+                bt_tw = r.ImGui_CalcTextSize(ctx, bt_display)
+            end
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFFFFFF30)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFFFFFF50)
+            r.ImGui_SetCursorPos(ctx, 4, (bt_h - bt_text_h) * 0.5 - 2)
+            if r.ImGui_Button(ctx, "<##bt_prev_track", bt_arrow_w, bt_text_h + 4) then
+                local idx = math.floor(bt_track_num)
+                if idx <= 0 then
+                    if bt_total_tracks > 0 then
+                        local new_track = r.GetTrack(0, bt_total_tracks - 1)
+                        if new_track then r.SetOnlyTrackSelected(new_track); TRACK = new_track end
+                    end
+                else
+                    local new_idx = idx - 2
+                    if new_idx < 0 then
+                        r.SetOnlyTrackSelected(r.GetMasterTrack(0)); TRACK = r.GetMasterTrack(0)
+                    else
+                        local new_track = r.GetTrack(0, new_idx)
+                        if new_track then r.SetOnlyTrackSelected(new_track); TRACK = new_track end
+                    end
+                end
+            end
+            r.ImGui_SetCursorPos(ctx, (bt_avail_w - bt_tw) * 0.5, (bt_h - bt_text_h) * 0.5)
+            r.ImGui_Text(ctx, bt_display)
+            bt_text_hovered = r.ImGui_IsItemHovered(ctx)
+            r.ImGui_SetCursorPos(ctx, bt_avail_w - bt_arrow_w - 4, (bt_h - bt_text_h) * 0.5 - 2)
+            if r.ImGui_Button(ctx, ">##bt_next_track", bt_arrow_w, bt_text_h + 4) then
+                local idx = math.floor(bt_track_num)
+                local new_track
+                if idx <= 0 then
+                    if bt_total_tracks > 0 then new_track = r.GetTrack(0, 0) end
+                elseif idx >= bt_total_tracks then
+                    new_track = r.GetMasterTrack(0)
+                else
+                    new_track = r.GetTrack(0, idx)
+                end
+                if new_track then r.SetOnlyTrackSelected(new_track); TRACK = new_track end
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleColor(ctx, 1)
+        end
+        r.ImGui_EndChild(ctx)
+        if r.ImGui_IsItemHovered(ctx) then
+            local wheel = r.ImGui_GetMouseWheel(ctx)
+            if wheel ~= 0 then
+                local idx = m_floor(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
+                local tc = r.CountTracks(0)
+                local new_track
+                if wheel > 0 then
+                    if idx <= 0 then new_track = r.GetTrack(0, tc - 1)
+                    elseif idx == 1 then new_track = r.GetMasterTrack(0)
+                    else new_track = r.GetTrack(0, idx - 2) end
+                else
+                    if idx <= 0 then if tc > 0 then new_track = r.GetTrack(0, 0) end
+                    elseif idx >= tc then new_track = r.GetMasterTrack(0)
+                    else new_track = r.GetTrack(0, idx) end
+                end
+                if new_track then r.SetOnlyTrackSelected(new_track); TRACK = new_track end
+            end
+        end
+        r.ImGui_PopStyleColor(ctx, 1)
+        if bt_open and bt_text_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
+            r.ImGui_OpenPopup(ctx, "BrowserTrackHeaderCtx")
+        end
+        if r.ImGui_BeginPopup(ctx, "BrowserTrackHeaderCtx") then
+            if r.ImGui_BeginMenu(ctx, "Color Picker") then
+                local cur_color = r.GetMediaTrackInfo_Value(TRACK, "I_CUSTOMCOLOR")
+                local init_col = 0x808080FF
+                if cur_color ~= 0 then
+                    local cr, cg, cb = r.ColorFromNative(cur_color & 0xFFFFFF)
+                    init_col = r.ImGui_ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, 1)
+                end
+                info_track_header_color = info_track_header_color or init_col
+                local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
+                local ch_c, nc = r.ImGui_ColorEdit4(ctx, "##bt_hdr_track_col", info_track_header_color, flags)
+                if ch_c then info_track_header_color = nc end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Apply##bt_hdr_col_apply") then
+                    local rd, g, b = r.ImGui_ColorConvertU32ToDouble4(info_track_header_color)
+                    local native = r.ColorToNative(m_floor(rd*255), m_floor(g*255), m_floor(b*255)) | 0x1000000
+                    r.Undo_BeginBlock()
+                    r.SetMediaTrackInfo_Value(TRACK, "I_CUSTOMCOLOR", native)
+                    r.Undo_EndBlock("Set track color", -1)
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+            if r.ImGui_BeginMenu(ctx, "Rename Track") then
+                info_track_rename_buf = info_track_rename_buf or ""
+                r.ImGui_SetNextItemWidth(ctx, 200)
+                local enter, new_val = r.ImGui_InputText(ctx, "##bt_hdr_rename", info_track_rename_buf, r.ImGui_InputTextFlags_EnterReturnsTrue())
+                info_track_rename_buf = new_val
+                if enter and new_val ~= "" then
+                    r.Undo_BeginBlock()
+                    r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", new_val, true)
+                    r.Undo_EndBlock("Rename track", -1)
+                    info_track_rename_buf = ""
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+            if r.ImGui_MenuItem(ctx, "Duplicate Track") then
+                r.Undo_BeginBlock()
+                r.SetOnlyTrackSelected(TRACK)
+                r.Main_OnCommand(40062, 0)
+                r.Undo_EndBlock("Duplicate track", -1)
+            end
+            if r.ImGui_MenuItem(ctx, "Delete Track") then
+                r.Undo_BeginBlock()
+                r.SetOnlyTrackSelected(TRACK)
+                r.Main_OnCommand(40005, 0)
+                TRACK = r.GetSelectedTrack(0, 0) or r.GetMasterTrack(0)
+                r.Undo_EndBlock("Delete track", -1)
+            end
+            if r.ImGui_MenuItem(ctx, "Add New Track") then
+                r.Undo_BeginBlock()
+                local idx = m_floor(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
+                r.InsertTrackAtIndex(idx, true)
+                local new_tr = r.GetTrack(0, idx)
+                if new_tr then r.SetOnlyTrackSelected(new_tr); TRACK = new_tr end
+                r.Undo_EndBlock("Add new track", -1)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Show/Hide Envelope") then
+                r.SetOnlyTrackSelected(TRACK)
+                r.Main_OnCommand(41151, 0)
+            end
+            if r.ImGui_MenuItem(ctx, "Toggle Envelope in Lanes") then
+                r.SetOnlyTrackSelected(TRACK)
+                r.Main_OnCommand(40891, 0)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Move Track Up") then
+                r.SetOnlyTrackSelected(TRACK)
+                r.Main_OnCommand(43647, 0)
+            end
+            if r.ImGui_MenuItem(ctx, "Move Track Down") then
+                r.SetOnlyTrackSelected(TRACK)
+                r.Main_OnCommand(43648, 0)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Go to First Track") then
+                local first = r.GetTrack(0, 0)
+                if first then r.SetOnlyTrackSelected(first); TRACK = first end
+            end
+            if r.ImGui_MenuItem(ctx, "Go to Last Track") then
+                local tc = r.CountTracks(0)
+                if tc > 0 then
+                    local last = r.GetTrack(0, tc - 1)
+                    if last then r.SetOnlyTrackSelected(last); TRACK = last end
+                end
+            end
+            r.ImGui_EndPopup(ctx)
+        end
+    end
 
     local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
     local toggle_button_height = 22
@@ -11151,14 +11469,6 @@ function ShowBrowserPanel()
             
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
                 local track_num = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") or 0
-                local track_color_u32, text_color_u32 = GetTrackColorAndTextColor(TRACK)
-                local header_h = 32
-                
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), track_color_u32)
-                local header_open = r.ImGui_BeginChild(ctx, "InfoTrackHeader", -1, header_h)
-                local header_text_hovered = false
-                if header_open then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color_u32)
                 local _, tn = r.GetTrackName(TRACK)
                 track_name = tn or "Master Track"
                 if track_num == 0 then
@@ -11167,216 +11477,6 @@ function ShowBrowserPanel()
                 else
                     track_num_display = tostring(math.floor(track_num))
                 end
-                local header_text = string.format("%s: %s", track_num_display, track_name)
-                local text_height = r.ImGui_GetTextLineHeight(ctx)
-                local header_avail_width = r.ImGui_GetContentRegionAvail(ctx)
-                
-                local arrow_w = r.ImGui_CalcTextSize(ctx, "<") + 12
-                local total_track_count = r.CountTracks(0)
-                local text_zone = header_avail_width - (arrow_w + 4) * 2 - 8
-                
-                local display_text = header_text
-                local text_width = r.ImGui_CalcTextSize(ctx, display_text)
-                if text_width > text_zone then
-                    local dots_w = r.ImGui_CalcTextSize(ctx, "...")
-                    while #display_text > 1 and r.ImGui_CalcTextSize(ctx, display_text .. "...") > text_zone do
-                        display_text = display_text:sub(1, #display_text - 1)
-                    end
-                    display_text = display_text .. "..."
-                    text_width = r.ImGui_CalcTextSize(ctx, display_text)
-                end
-                
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFFFFFF30)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFFFFFF50)
-                
-                r.ImGui_SetCursorPos(ctx, 4, (header_h - text_height) * 0.5 - 2)
-                if r.ImGui_Button(ctx, "<##info_prev_track", arrow_w, text_height + 4) then
-                    local idx = math.floor(track_num)
-                    if idx <= 0 then
-                        if total_track_count > 0 then
-                            local new_track = r.GetTrack(0, total_track_count - 1)
-                            if new_track then
-                                r.SetOnlyTrackSelected(new_track)
-                                TRACK = new_track
-                            end
-                        end
-                    else
-                        local new_idx = idx - 2
-                        if new_idx < 0 then
-                            r.SetOnlyTrackSelected(r.GetMasterTrack(0))
-                            TRACK = r.GetMasterTrack(0)
-                        else
-                            local new_track = r.GetTrack(0, new_idx)
-                            if new_track then
-                                r.SetOnlyTrackSelected(new_track)
-                                TRACK = new_track
-                            end
-                        end
-                    end
-                end
-                
-                r.ImGui_SetCursorPos(ctx, (header_avail_width - text_width) * 0.5, (header_h - text_height) * 0.5)
-                r.ImGui_Text(ctx, display_text)
-                header_text_hovered = r.ImGui_IsItemHovered(ctx)
-                
-                r.ImGui_SetCursorPos(ctx, header_avail_width - arrow_w - 4, (header_h - text_height) * 0.5 - 2)
-                if r.ImGui_Button(ctx, ">##info_next_track", arrow_w, text_height + 4) then
-                    local idx = math.floor(track_num)
-                    local new_track
-                    if idx <= 0 then
-                        if total_track_count > 0 then
-                            new_track = r.GetTrack(0, 0)
-                        end
-                    elseif idx >= total_track_count then
-                        new_track = r.GetMasterTrack(0)
-                    else
-                        new_track = r.GetTrack(0, idx)
-                    end
-                    if new_track then
-                        r.SetOnlyTrackSelected(new_track)
-                        TRACK = new_track
-                    end
-                end
-                
-                r.ImGui_PopStyleColor(ctx, 3)
-                r.ImGui_PopStyleColor(ctx)
-                r.ImGui_EndChild(ctx)
-                if r.ImGui_IsItemHovered(ctx) then
-                    local wheel = r.ImGui_GetMouseWheel(ctx)
-                    if wheel ~= 0 then
-                        local idx = m_floor(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
-                        local tc = r.CountTracks(0)
-                        local new_track
-                        if wheel > 0 then
-                            if idx <= 0 then
-                                new_track = r.GetTrack(0, tc - 1)
-                            elseif idx == 1 then
-                                new_track = r.GetMasterTrack(0)
-                            else
-                                new_track = r.GetTrack(0, idx - 2)
-                            end
-                        else
-                            if idx <= 0 then
-                                if tc > 0 then new_track = r.GetTrack(0, 0) end
-                            elseif idx >= tc then
-                                new_track = r.GetMasterTrack(0)
-                            else
-                                new_track = r.GetTrack(0, idx)
-                            end
-                        end
-                        if new_track then
-                            r.SetOnlyTrackSelected(new_track)
-                            TRACK = new_track
-                        end
-                    end
-                end
-                end
-                r.ImGui_PopStyleColor(ctx)
-                if header_open and header_text_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
-                    r.ImGui_OpenPopup(ctx, "InfoTrackHeaderCtx")
-                end
-                if r.ImGui_BeginPopup(ctx, "InfoTrackHeaderCtx") then
-                    if r.ImGui_BeginMenu(ctx, "Color Picker") then
-                        local cur_color = r.GetMediaTrackInfo_Value(TRACK, "I_CUSTOMCOLOR")
-                        local init_col = 0x808080FF
-                        if cur_color ~= 0 then
-                            local cr, cg, cb = r.ColorFromNative(cur_color & 0xFFFFFF)
-                            init_col = r.ImGui_ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, 1)
-                        end
-                        info_track_header_color = info_track_header_color or init_col
-                        local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
-                        local ch_c, nc = r.ImGui_ColorEdit4(ctx, "##hdr_track_col", info_track_header_color, flags)
-                        if ch_c then info_track_header_color = nc end
-                        r.ImGui_SameLine(ctx)
-                        if r.ImGui_Button(ctx, "Apply##hdr_col_apply") then
-                            local rd, g, b = r.ImGui_ColorConvertU32ToDouble4(info_track_header_color)
-                            local native = r.ColorToNative(m_floor(rd*255), m_floor(g*255), m_floor(b*255)) | 0x1000000
-                            r.Undo_BeginBlock()
-                            r.SetMediaTrackInfo_Value(TRACK, "I_CUSTOMCOLOR", native)
-                            r.Undo_EndBlock("Set track color", -1)
-                            r.ImGui_CloseCurrentPopup(ctx)
-                        end
-                        r.ImGui_EndMenu(ctx)
-                    end
-                    if r.ImGui_BeginMenu(ctx, "Rename Track") then
-                        info_track_rename_buf = info_track_rename_buf or ""
-                        r.ImGui_SetNextItemWidth(ctx, 200)
-                        local enter, new_val = r.ImGui_InputText(ctx, "##hdr_rename", info_track_rename_buf, r.ImGui_InputTextFlags_EnterReturnsTrue())
-                        info_track_rename_buf = new_val
-                        if enter and new_val ~= "" then
-                            r.Undo_BeginBlock()
-                            r.GetSetMediaTrackInfo_String(TRACK, "P_NAME", new_val, true)
-                            r.Undo_EndBlock("Rename track", -1)
-                            info_track_rename_buf = ""
-                            r.ImGui_CloseCurrentPopup(ctx)
-                        end
-                        r.ImGui_EndMenu(ctx)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Duplicate Track") then
-                        r.Undo_BeginBlock()
-                        r.SetOnlyTrackSelected(TRACK)
-                        r.Main_OnCommand(40062, 0)
-                        r.Undo_EndBlock("Duplicate track", -1)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Delete Track") then
-                        r.Undo_BeginBlock()
-                        r.SetOnlyTrackSelected(TRACK)
-                        r.Main_OnCommand(40005, 0)
-                        TRACK = r.GetSelectedTrack(0, 0) or r.GetMasterTrack(0)
-                        r.Undo_EndBlock("Delete track", -1)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Add New Track") then
-                        r.Undo_BeginBlock()
-                        local idx = m_floor(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
-                        r.InsertTrackAtIndex(idx, true)
-                        local new_tr = r.GetTrack(0, idx)
-                        if new_tr then
-                            r.SetOnlyTrackSelected(new_tr)
-                            TRACK = new_tr
-                        end
-                        r.Undo_EndBlock("Add new track", -1)
-                    end
-                    r.ImGui_Separator(ctx)
-                    if r.ImGui_MenuItem(ctx, "Show/Hide Envelope") then
-                        r.SetOnlyTrackSelected(TRACK)
-                        r.Main_OnCommand(41151, 0)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Toggle Envelope in Lanes") then
-                        r.SetOnlyTrackSelected(TRACK)
-                        r.Main_OnCommand(40891, 0)
-                    end
-                    r.ImGui_Separator(ctx)
-                    if r.ImGui_MenuItem(ctx, "Move Track Up") then
-                        r.SetOnlyTrackSelected(TRACK)
-                        r.Main_OnCommand(43647, 0)
-                    end
-                    if r.ImGui_MenuItem(ctx, "Move Track Down") then
-                        r.SetOnlyTrackSelected(TRACK)
-                        r.Main_OnCommand(43648, 0)
-                    end
-                    r.ImGui_Separator(ctx)
-                    if r.ImGui_MenuItem(ctx, "Go to First Track") then
-                        local first = r.GetTrack(0, 0)
-                        if first then
-                            r.SetOnlyTrackSelected(first)
-                            TRACK = first
-                        end
-                    end
-                    if r.ImGui_MenuItem(ctx, "Go to Last Track") then
-                        local tc = r.CountTracks(0)
-                        if tc > 0 then
-                            local last = r.GetTrack(0, tc - 1)
-                            if last then
-                                r.SetOnlyTrackSelected(last)
-                                TRACK = last
-                            end
-                        end
-                    end
-                    r.ImGui_EndPopup(ctx)
-                end
-                
-                r.ImGui_Dummy(ctx, 0, 3)
                 
                 local ic = r.CountTrackMediaItems(TRACK) or 0
                 item_count_display = tostring(ic)
@@ -11641,7 +11741,9 @@ function ShowBrowserPanel()
                                     if thumb_h > 120 then thumb_h = 120 end
                                 end
                                 local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+                                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
                                 local img_clicked = r.ImGui_ImageButton(ctx, "tfx_" .. i, tfx_thumb_tex, thumb_avail_w, thumb_h)
+                                r.ImGui_PopStyleVar(ctx)
                                 local dl = r.ImGui_GetWindowDrawList(ctx)
                                 if tfx_bypassed then
                                     r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + thumb_avail_w, cy + thumb_h, 0x00000088)
@@ -11987,7 +12089,9 @@ function ShowBrowserPanel()
                                         if thumb_h > 120 then thumb_h = 120 end
                                     end
                                     local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+                                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
                                     local img_clicked = r.ImGui_ImageButton(ctx, "ifx_" .. i, ifx_thumb_tex, ifx_avail_w, thumb_h)
+                                    r.ImGui_PopStyleVar(ctx)
                                     local dl = r.ImGui_GetWindowDrawList(ctx)
                                     if ifx_bypassed then
                                         r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + ifx_avail_w, cy + thumb_h, 0x00000088)
@@ -12181,6 +12285,175 @@ function ShowBrowserPanel()
                 else
                     r.ImGui_Text(ctx, "Item FX: - (no selected item)")
                 end
+
+                local rec_count = r.TrackFX_GetRecCount(TRACK)
+                r.ImGui_Dummy(ctx, 0, 4)
+                r.ImGui_Separator(ctx)
+                local rfx_zone_sx, rfx_zone_sy = r.ImGui_GetCursorScreenPos(ctx)
+                local rfx_zone_w = r.ImGui_GetContentRegionAvail(ctx)
+                r.ImGui_Text(ctx, string.format("Input FX (%d):", rec_count))
+                if rec_count > 0 then
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, config.show_input_fx_thumbnails and 4 or 2)
+                    local rfx_avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                    for i = 0, rec_count - 1 do
+                        local rfx_idx = i + 0x1000000
+                        local ok, rfx_name_raw = r.TrackFX_GetFXName(TRACK, rfx_idx, "")
+                        if ok and rfx_name_raw ~= "" then
+                            local rfx_name = rfx_name_raw
+                            if config.clean_plugin_names or config.remove_manufacturer_names then
+                                rfx_name = GetDisplayPluginName(rfx_name)
+                            end
+                            local rfx_bypassed = not r.TrackFX_GetEnabled(TRACK, rfx_idx)
+                            local rfx_color_count = 0
+                            if rfx_bypassed then
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF)
+                                rfx_color_count = 1
+                            end
+                            local rfx_thumb_tex = config.show_input_fx_thumbnails and LoadInfoFxScreenshot(rfx_name_raw) or nil
+                            local open_inputfx_ctx = false
+                            if rfx_thumb_tex then
+                                r.ImGui_PushID(ctx, "info_inputfx_thumb_" .. i)
+                                local tw, th = r.ImGui_Image_GetSize(rfx_thumb_tex)
+                                local thumb_h = m_floor(rfx_avail_w * (th / tw))
+                                if not config.info_fxlist_keep_aspect_ratio then
+                                    if thumb_h > 120 then thumb_h = 120 end
+                                end
+                                local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+                                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, 0)
+                                local img_clicked = r.ImGui_ImageButton(ctx, "rfx_" .. i, rfx_thumb_tex, rfx_avail_w, thumb_h)
+                                r.ImGui_PopStyleVar(ctx)
+                                local dl = r.ImGui_GetWindowDrawList(ctx)
+                                if rfx_bypassed then
+                                    r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + rfx_avail_w, cy + thumb_h, 0x00000088)
+                                end
+                                local line_h = r.ImGui_GetTextLineHeight(ctx)
+                                local bar_h = line_h + 4
+                                local bar_y = cy + thumb_h - bar_h
+                                r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + rfx_avail_w, cy + thumb_h, 0x000000B0)
+                                local name_w = r.ImGui_CalcTextSize(ctx, rfx_name)
+                                local name_x = cx + m_floor((rfx_avail_w - name_w) * 0.5)
+                                r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, rfx_name)
+                                local slot_label = "I" .. tostring(i + 1)
+                                local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
+                                r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
+                                r.ImGui_DrawList_AddText(dl, cx + 3, cy + 1, 0x00FF88FF, slot_label)
+                                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                    r.ImGui_SetDragDropPayload(ctx, "INFO_INPUTFX_DRAG", tostring(i))
+                                    r.ImGui_Text(ctx, rfx_name)
+                                    r.ImGui_EndDragDropSource(ctx)
+                                end
+                                if r.ImGui_BeginDragDropTarget(ctx) then
+                                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_INPUTFX_DRAG")
+                                    if rv then
+                                        local src = tonumber(payload)
+                                        if src and src ~= i then
+                                            local dest = i
+                                            if src < dest then dest = dest + 1 end
+                                            r.Undo_BeginBlock()
+                                            r.TrackFX_CopyToTrack(TRACK, src + 0x1000000, TRACK, dest + 0x1000000, true)
+                                            r.Undo_EndBlock("Reorder Input FX", -1)
+                                        end
+                                    end
+                                    r.ImGui_EndDragDropTarget(ctx)
+                                end
+                                if img_clicked then
+                                    if r.TrackFX_GetFloatingWindow(TRACK, rfx_idx) then
+                                        r.TrackFX_Show(TRACK, rfx_idx, 2)
+                                    else
+                                        r.TrackFX_Show(TRACK, rfx_idx, 3)
+                                    end
+                                end
+                                if r.ImGui_IsItemHovered(ctx) then
+                                    r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
+                                end
+                                if r.ImGui_IsItemClicked(ctx, 1) then
+                                    open_inputfx_ctx = true
+                                end
+                                r.ImGui_PopID(ctx)
+                            else
+                                local clicked = r.ImGui_Selectable(ctx, rfx_name .. "##info_inputfx" .. i, false, r.ImGui_SelectableFlags_AllowDoubleClick())
+                                if clicked then
+                                    if r.TrackFX_GetFloatingWindow(TRACK, rfx_idx) then
+                                        r.TrackFX_Show(TRACK, rfx_idx, 2)
+                                    else
+                                        r.TrackFX_Show(TRACK, rfx_idx, 3)
+                                    end
+                                end
+                                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                    r.ImGui_SetDragDropPayload(ctx, "INFO_INPUTFX_DRAG", tostring(i))
+                                    r.ImGui_Text(ctx, rfx_name)
+                                    r.ImGui_EndDragDropSource(ctx)
+                                end
+                                if r.ImGui_BeginDragDropTarget(ctx) then
+                                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "INFO_INPUTFX_DRAG")
+                                    if rv then
+                                        local src = tonumber(payload)
+                                        if src and src ~= i then
+                                            local dest = i
+                                            if src < dest then dest = dest + 1 end
+                                            r.Undo_BeginBlock()
+                                            r.TrackFX_CopyToTrack(TRACK, src + 0x1000000, TRACK, dest + 0x1000000, true)
+                                            r.Undo_EndBlock("Reorder Input FX", -1)
+                                        end
+                                    end
+                                    r.ImGui_EndDragDropTarget(ctx)
+                                end
+                                if r.ImGui_IsItemHovered(ctx) then
+                                    r.ImGui_SetTooltip(ctx, "Click to toggle floating window | Drag to reorder | Right-click for more options")
+                                end
+                                if r.ImGui_IsItemClicked(ctx, 1) then
+                                    r.ImGui_OpenPopup(ctx, "InfoInputFXCtx_" .. i)
+                                end
+                            end
+                            if open_inputfx_ctx then
+                                r.ImGui_OpenPopup(ctx, "InfoInputFXCtx_" .. i)
+                            end
+                            if rfx_color_count > 0 then r.ImGui_PopStyleColor(ctx, rfx_color_count) end
+                            if r.ImGui_BeginPopup(ctx, "InfoInputFXCtx_" .. i) then
+                                local is_bypassed = not r.TrackFX_GetEnabled(TRACK, rfx_idx)
+                                if r.ImGui_MenuItem(ctx, is_bypassed and "Enable" or "Bypass") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_SetEnabled(TRACK, rfx_idx, is_bypassed)
+                                    r.Undo_EndBlock(is_bypassed and "Enable Input FX" or "Bypass Input FX", -1)
+                                end
+                                r.ImGui_Separator(ctx)
+                                if r.ImGui_MenuItem(ctx, "Float Window") then
+                                    r.TrackFX_Show(TRACK, rfx_idx, 3)
+                                end
+                                r.ImGui_Separator(ctx)
+                                if i > 0 and r.ImGui_MenuItem(ctx, "Move Up") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_CopyToTrack(TRACK, rfx_idx, TRACK, (i - 1) + 0x1000000, true)
+                                    r.Undo_EndBlock("Move Input FX Up", -1)
+                                end
+                                if i < rec_count - 1 and r.ImGui_MenuItem(ctx, "Move Down") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_CopyToTrack(TRACK, rfx_idx, TRACK, (i + 2) + 0x1000000, true)
+                                    r.Undo_EndBlock("Move Input FX Down", -1)
+                                end
+                                r.ImGui_Separator(ctx)
+                                if r.ImGui_MenuItem(ctx, "Delete") then
+                                    r.Undo_BeginBlock()
+                                    r.TrackFX_Delete(TRACK, rfx_idx)
+                                    r.Undo_EndBlock("Delete Input FX", -1)
+                                end
+                                r.ImGui_EndPopup(ctx)
+                            end
+                        end
+                    end
+                    r.ImGui_PopStyleVar(ctx)
+                end
+                local _, rfx_zone_ey = r.ImGui_GetCursorScreenPos(ctx)
+                if rfx_zone_ey - rfx_zone_sy < 20 then rfx_zone_ey = rfx_zone_sy + 20 end
+                if dragging_fx_name then
+                    local mx, my = r.ImGui_GetMousePos(ctx)
+                    if mx >= rfx_zone_sx and mx <= rfx_zone_sx + rfx_zone_w and my >= rfx_zone_sy and my <= rfx_zone_ey then
+                        info_inputfx_drop_hovered = true
+                        local dl = r.ImGui_GetWindowDrawList(ctx)
+                        r.ImGui_DrawList_AddRectFilled(dl, rfx_zone_sx, rfx_zone_sy, rfx_zone_sx + rfx_zone_w, rfx_zone_ey, 0x00FF8820, 3)
+                        r.ImGui_DrawList_AddRect(dl, rfx_zone_sx, rfx_zone_sy, rfx_zone_sx + rfx_zone_w, rfx_zone_ey, 0x00FF8860, 3)
+                    end
+                end
             else
                 r.ImGui_Text(ctx, "Tags: -")
                 r.ImGui_Dummy(ctx, 0, 6)
@@ -12189,6 +12462,9 @@ function ShowBrowserPanel()
                 r.ImGui_Dummy(ctx, 0, 4)
                 r.ImGui_Separator(ctx)
                 r.ImGui_Text(ctx, "Item FX: -")
+                r.ImGui_Dummy(ctx, 0, 4)
+                r.ImGui_Separator(ctx)
+                r.ImGui_Text(ctx, "Input FX: -")
             end
         end
         if info_open then
@@ -12248,9 +12524,26 @@ function ShowBrowserPanel()
         r.ImGui_PopStyleColor(ctx, 3)
     end
 
-    local toggle_label = browser_panel_show_info and "Browser" or "Info"
+    local toggle_label = browser_panel_show_info and "BROWSER" or "INFO"
+    local toggle_has_track_color = false
+    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+        local tc_u32, tt_u32 = GetTrackColorAndTextColor(TRACK)
+        local tr = ((tc_u32 >> 24) & 0xFF)
+        local tg = ((tc_u32 >> 16) & 0xFF)
+        local tb = ((tc_u32 >> 8) & 0xFF)
+        local hover_u32 = (math.min(255, tr + 25) << 24) | (math.min(255, tg + 25) << 16) | (math.min(255, tb + 25) << 8) | 0xFF
+        local active_u32 = (math.min(255, tr + 40) << 24) | (math.min(255, tg + 40) << 16) | (math.min(255, tb + 40) << 8) | 0xFF
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), tc_u32)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), hover_u32)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), active_u32)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), tt_u32)
+        toggle_has_track_color = true
+    end
     if r.ImGui_Button(ctx, toggle_label, -1, 20) then
         browser_panel_show_info = not browser_panel_show_info
+    end
+    if toggle_has_track_color then
+        r.ImGui_PopStyleColor(ctx, 4)
     end
     if r.ImGui_IsItemHovered(ctx) then
         r.ImGui_SetTooltip(ctx, browser_panel_show_info and "Switch to Plugin Browser" or "Switch to Track Info Panel")
@@ -12770,7 +13063,7 @@ function HandleScreenshotNavigation(screenshots)
     end
 
     if screenshot_nav_index and positions[screenshot_nav_index] then
-        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_KeypadEnter()) then
             local multi_count = GetMultiSelectedCount()
             if multi_count > 1 then
                 local names = GetMultiSelectedPluginNames()
@@ -17782,7 +18075,7 @@ function FilterBox()
     end
     r.ImGui_PopItemWidth(ctx)
     r.ImGui_SameLine(ctx)
-    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_KeypadEnter()) then
         if FILTER == "" then
             if last_viewed_folder then
                 r.ImGui_SetScrollY(ctx, 0)
@@ -18170,7 +18463,7 @@ end
         r.ImGui_EndChild(ctx)
     
     
-        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_KeypadEnter()) then
             if ADDFX_Sel_Entry and ADDFX_Sel_Entry > 0 and ADDFX_Sel_Entry <= #filtered_fx then
                 local fx_index = AddFXToTrack(TRACK, filtered_fx[ADDFX_Sel_Entry].name)
                 LAST_USED_FX = filtered_fx[ADDFX_Sel_Entry].name
@@ -18742,44 +19035,42 @@ function ShowTrackFX()
                 local is_enabled = r.TrackFX_GetEnabled(TRACK, i)                
                 local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"                
                 r.ImGui_PushID(ctx, i)
-                r.ImGui_BeginGroup(ctx)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
-                if r.ImGui_Button(ctx, "##updown", 14, 14) then
-                    if i > 0 then
-                        r.TrackFX_CopyToTrack(TRACK, i, TRACK, i - 1, true)
-                    end
-                    r.ImGui_SetNextWindowFocus(ctx)
-                end
-                if r.ImGui_IsItemHovered(ctx) and config.show_tooltips then
-                    r.ImGui_SetTooltip(ctx, "Left click up / Right click down")
-                end
-                if r.ImGui_IsItemClicked(ctx, 1) and i < fx_count - 1 then
-                    r.TrackFX_CopyToTrack(TRACK, i, TRACK, i + 1, true)
-                    r.ImGui_SetNextWindowFocus(ctx)
-                end
-                r.ImGui_PopStyleColor(ctx, 3)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-                r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)               
                 if not is_enabled or track_bypassed then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)  -- Grijze kleur voor gebypaste plugins
-                end               
-                if r.ImGui_Button(ctx, display_name, 0, 14) then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                end
+                if r.ImGui_Selectable(ctx, display_name .. "##trackfx_" .. i) then
                     if is_open then
                         r.TrackFX_Show(TRACK, i, 2)
                     else
                         r.TrackFX_Show(TRACK, i, 3)
                     end
-                end               
+                end
                 if not is_enabled or track_bypassed then
                     r.ImGui_PopStyleColor(ctx)
-                end                
-                r.ImGui_PopStyleColor(ctx, 3)
-                if r.ImGui_BeginPopupContextItem(ctx) then
+                end
+                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                    r.ImGui_SetDragDropPayload(ctx, "MAIN_TRACKFX_DRAG", tostring(i))
+                    r.ImGui_Text(ctx, fx_name)
+                    r.ImGui_EndDragDropSource(ctx)
+                end
+                if r.ImGui_BeginDragDropTarget(ctx) then
+                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "MAIN_TRACKFX_DRAG")
+                    if rv then
+                        local src = tonumber(payload)
+                        if src and src ~= i then
+                            local dest = i
+                            if src < dest then dest = dest + 1 end
+                            r.Undo_BeginBlock()
+                            r.TrackFX_CopyToTrack(TRACK, src, TRACK, dest, true)
+                            r.Undo_EndBlock("Reorder Track FX", -1)
+                        end
+                    end
+                    r.ImGui_EndDragDropTarget(ctx)
+                end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "TrackFXCtx_" .. i)
+                end
+                if r.ImGui_BeginPopup(ctx, "TrackFXCtx_" .. i) then
                     if r.ImGui_MenuItem(ctx, "Delete") then
                         r.TrackFX_Delete(TRACK, i)
                         if config.selected_folder == "Current Track FX" or config.selected_folder == "Current Project FX" then
@@ -18819,8 +19110,7 @@ function ShowTrackFX()
                         end
                     end
                     r.ImGui_EndPopup(ctx)
-                end               
-                r.ImGui_EndGroup(ctx)
+                end
                 r.ImGui_PopID(ctx)
             end
         else
@@ -18873,49 +19163,42 @@ function ShowItemFX()
                 local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"
 
                 r.ImGui_PushID(ctx, i)
-                r.ImGui_BeginGroup(ctx)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00FF00FF)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00DD00FF)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF0000FF)
-                if r.ImGui_Button(ctx, "##updown", 13, 13) then
-                    if i > 0 then
-                        r.TakeFX_CopyToTake(take, i, take, i - 1, true)
-                    end
-                    r.ImGui_SetNextWindowFocus(ctx)
-                end
-                if r.ImGui_IsItemHovered(ctx) and config.show_tooltips then
-                    r.ImGui_SetTooltip(ctx, "Left click up / Right click down")
-                end
-                if r.ImGui_IsItemClicked(ctx, 1) and i < fx_count - 1 then
-                    r.TakeFX_CopyToTake(take, i, take, i + 1, true)
-                    r.ImGui_SetNextWindowFocus(ctx)
-                end
-                r.ImGui_PopStyleColor(ctx, 3)
-
-                r.ImGui_SameLine(ctx)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
-                r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - 3)
-
                 if not is_enabled then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
                 end
-
-                if r.ImGui_Button(ctx, display_name, 0, 13) then
+                if r.ImGui_Selectable(ctx, display_name .. "##itemfx_" .. i) then
                     if is_open then
                         r.TakeFX_Show(take, i, 2)
                     else
                         r.TakeFX_Show(take, i, 3)
                     end
                 end
-
                 if not is_enabled then
                     r.ImGui_PopStyleColor(ctx)
                 end
-                r.ImGui_PopStyleColor(ctx, 3)
-
-                if r.ImGui_BeginPopupContextItem(ctx) then
+                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                    r.ImGui_SetDragDropPayload(ctx, "MAIN_ITEMFX_DRAG", tostring(i))
+                    r.ImGui_Text(ctx, fx_name)
+                    r.ImGui_EndDragDropSource(ctx)
+                end
+                if r.ImGui_BeginDragDropTarget(ctx) then
+                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "MAIN_ITEMFX_DRAG")
+                    if rv then
+                        local src = tonumber(payload)
+                        if src and src ~= i then
+                            local dest = i
+                            if src < dest then dest = dest + 1 end
+                            r.Undo_BeginBlock()
+                            r.TakeFX_CopyToTake(take, src, take, dest, true)
+                            r.Undo_EndBlock("Reorder Item FX", -1)
+                        end
+                    end
+                    r.ImGui_EndDragDropTarget(ctx)
+                end
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "ItemFXCtx_" .. i)
+                end
+                if r.ImGui_BeginPopup(ctx, "ItemFXCtx_" .. i) then
                     if r.ImGui_MenuItem(ctx, "Delete") then
                         r.TakeFX_Delete(take, i)
                     end
@@ -18933,8 +19216,6 @@ function ShowItemFX()
                     end
                     r.ImGui_EndPopup(ctx)
                 end
-
-                r.ImGui_EndGroup(ctx)
                 r.ImGui_PopID(ctx)
             end
         else
@@ -19608,6 +19889,11 @@ end
 
 -- Centralized drag & drop handling function
 function HandleDragAndDrop()
+    if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+        dragging_fx_name = nil
+        potential_drag_fx_name = nil
+        return
+    end
     if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
         if config.show_chain_builder and chain_builder_hovered then
             table.insert(chain_builder_plugins, dragging_fx_name)
@@ -19624,6 +19910,7 @@ function HandleDragAndDrop()
             AddFXToTrack(TRACK, dragging_fx_name)
             r.Undo_EndBlock("Add FX to Track", -1)
             LAST_USED_FX = dragging_fx_name
+            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             dragging_fx_name = nil
             potential_drag_fx_name = nil
             info_trackfx_drop_hovered = false
@@ -19638,11 +19925,25 @@ function HandleDragAndDrop()
                     r.TakeFX_AddByName(take, dragging_fx_name, 1)
                     r.Undo_EndBlock("Add FX to Item", -1)
                     LAST_USED_FX = dragging_fx_name
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
                 end
             end
             dragging_fx_name = nil
             potential_drag_fx_name = nil
             info_itemfx_drop_hovered = false
+            return
+        end
+        if info_inputfx_drop_hovered and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+            r.Undo_BeginBlock()
+            r.TrackFX_AddByName(TRACK, dragging_fx_name, true, -1)
+            r.Undo_EndBlock("Add FX to Input FX", -1)
+            LAST_USED_FX = dragging_fx_name
+            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+            if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
+            dragging_fx_name = nil
+            potential_drag_fx_name = nil
+            info_inputfx_drop_hovered = false
             return
         end
         local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
@@ -19653,6 +19954,8 @@ function HandleDragAndDrop()
                 if take then
                     r.TakeFX_AddByName(take, dragging_fx_name, 1)
                     LAST_USED_FX = dragging_fx_name
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
                 end
             end
         else
@@ -19671,6 +19974,7 @@ function HandleDragAndDrop()
                 if config.open_floating_after_adding and fx_index and fx_index >= 0 then
                     r.TrackFX_Show(track, fx_index, 3)
                 end
+                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
         end
         dragging_fx_name = nil
@@ -19944,7 +20248,7 @@ if not should_show_main_window then
         local changed, new_name = r.ImGui_InputText(ctx, "New Name (Alias)", rename_plugin_new_name, 256)
         if changed then rename_plugin_new_name = new_name end
         
-        if r.ImGui_Button(ctx, "Save", 120) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) then
+        if r.ImGui_Button(ctx, "Save", 120) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_KeypadEnter()) then
             if rename_plugin_new_name == "" or rename_plugin_new_name == rename_plugin_target then
                 plugin_aliases[rename_plugin_target] = nil
             else
@@ -20010,7 +20314,12 @@ if not should_show_main_window then
         SetRunningState(false)
         return
     end
-    
+
+    if SHOULD_HIDE_BROWSER then
+        r.SetExtState("TK_FX_BROWSER_MINI", "visibility", "hidden", true)
+        SHOULD_HIDE_BROWSER = false
+    end
+
     collectgarbage("step", 200)
     r.defer(Main)
     return
