@@ -1,12 +1,9 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.5.6
+-- @version 2.5.7
 -- @changelog:
 --[[ 
-    + Modern Cards now work in Normal layout view (all sections)
-    + Show Name on Screenshot now works in Normal layout view (all sections)
-    + List Hover Screenshot: new option to show screenshot tooltip on hover in list view
-    + Loading overlay in screenshot window while projects are loading
+    + Visual improvements and adde I/O section
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -861,14 +858,28 @@ function SetDefaultConfig()
         browser_segment_custom_folders_visible = true,
         browser_segment_main_categories_visible = true,
         browser_segment_utilities_visible = true,
+        browser_segment_favorites_enabled = true,
+        browser_segment_custom_folders_enabled = true,
+        browser_segment_main_categories_enabled = true,
+        browser_segment_utilities_enabled = true,
         main_segment_tags_visible = true,
+        main_segment_io_visible = false,
         main_segment_plugins_visible = true,
         main_segment_utilities_visible = true,
         main_segment_trackfx_visible = true,
         main_segment_itemfx_visible = true,
         main_segment_meter_visible = true,
         main_segment_buttons_visible = true,
+        main_section_tags_enabled = true,
+        main_section_io_enabled = true,
+        main_section_plugins_enabled = true,
+        main_section_utilities_enabled = true,
+        main_section_trackfx_enabled = true,
+        main_section_itemfx_enabled = true,
+        main_section_meter_enabled = true,
+        main_section_buttons_enabled = true,
         show_chain_builder = false,
+        show_chain_builder_button = true,
         chain_builder_plugins = {},
         chain_builder_color = 0x00FF88FF,
         chain_builder_darkness = 0.10,
@@ -3118,13 +3129,13 @@ function ShowPluginManagerTab()
     if #filtered_plugins == 0 or type(filtered_plugins[1]) ~= 'table' or not filtered_plugins[1].name then
         InitializeFilteredPlugins()
     end
-    if r.ImGui_Button(ctx, "Update Plugin List", 110) then
+    if r.ImGui_Button(ctx, "Update Plugin List", 140) then
         FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
     end
     r.ImGui_SameLine(ctx)
 
     local toggle_label = config.show_missing_screenshots_only and "show all" or "missing screenshots"
-    if r.ImGui_Button(ctx, toggle_label, 120, 20) then
+    if r.ImGui_Button(ctx, toggle_label, 140, 20) then
         config.show_missing_screenshots_only = not config.show_missing_screenshots_only
 
         filtered_plugins = {}
@@ -3204,9 +3215,9 @@ function ShowPluginManagerTab()
         table.sort(filtered_plugins, function(a, b) return GetLowerName(a.name) < GetLowerName(b.name) end)
     end
     
-    r.ImGui_Text(ctx, string.format(" | Total plugins: %d", #PLUGIN_LIST))
-    r.ImGui_SameLine(ctx)
-    r.ImGui_Text(ctx, string.format(" | Shown plugins: %d", #filtered_plugins))
+    r.ImGui_Text(ctx, string.format("Total: %d", #PLUGIN_LIST))
+    r.ImGui_SameLine(ctx, 0, 15)
+    r.ImGui_Text(ctx, string.format("Shown: %d", #filtered_plugins))
     if config.show_missing_screenshots_only then
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, START_SELECTED and "STOP" or "Make Shots (Selected)") then
@@ -3410,16 +3421,15 @@ function ShowConfigWindow()
     
     -- Scale config window based on font size (11 is default)
     local font_scale = (config.font_size or 11) / 11
-    local window_width = math.floor(480 * font_scale)
-    -- Height only scales up, not down (minimum is base size)
-    local base_height = 680
+    local window_width = math.floor(640 * font_scale)
+    local base_height = 600
     local window_height = font_scale > 1.0 and math.floor(base_height * font_scale) or base_height
 
     local column1_width = math.floor(10 * font_scale)
-    local column2_width = math.floor(120 * font_scale)
-    local column3_width = math.floor(250 * font_scale)
-    local column4_width = math.floor(360 * font_scale)
-    local slider_width = math.floor(110 * font_scale)
+    local column2_width = math.floor(170 * font_scale)
+    local column3_width = math.floor(330 * font_scale)
+    local column4_width = math.floor(490 * font_scale)
+    local slider_width = math.floor(140 * font_scale)
     
     r.ImGui_SetNextWindowSize(ctx, window_width, window_height, r.ImGui_Cond_Always())
     r.ImGui_SetNextWindowSizeConstraints(ctx, window_width, window_height, window_width, window_height)
@@ -3432,11 +3442,6 @@ function ShowConfigWindow()
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
-        
-        -- Info message about shared settings
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFAA00FF)  -- Orange color
-        r.ImGui_TextWrapped(ctx, "Note: Settings are shared between TK FX BROWSER and Mini versions")
-        r.ImGui_PopStyleColor(ctx)
         
         r.ImGui_Separator(ctx)
         if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
@@ -3748,6 +3753,34 @@ function ShowConfigWindow()
             if changed5 then config.custom_folder_level_colors[5] = new_col5; SaveConfig() end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 5+ Folder Color") end
 
+            r.ImGui_Dummy(ctx, 0, 8)
+
+            NewSection("FX CHAIN BUILDER:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Color")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            local cb_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
+            local cb_changed, cb_new_col = r.ImGui_ColorEdit4(ctx, "##ChainBuilderColor", config.chain_builder_color or 0x00FF88FF, cb_flags)
+            if cb_changed then
+                config.chain_builder_color = cb_new_col
+                SaveConfig()
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "FX Chain Builder accent color") end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Darkness")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local dk_changed, dk_new = r.ImGui_SliderDouble(ctx, "##ChainDarkness", config.chain_builder_darkness or 0.10, 0.02, 0.5, "%.2f")
+            if dk_changed then
+                config.chain_builder_darkness = dk_new
+                SaveConfig()
+            end
+            r.ImGui_PopItemWidth(ctx)
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Background darkness intensity for chain builder") end
+
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
             r.ImGui_Separator(ctx)
             local button_width = (window_width - 20) / 3
@@ -3832,154 +3865,71 @@ function ShowConfigWindow()
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.add_instruments_on_top = r.ImGui_Checkbox(ctx, "Add instruments at top", config.add_instruments_on_top)
-            r.ImGui_Dummy(ctx, 0, 5)
-
-           NewSection("LOCATIONS:")
-            -- FX Chains location
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            local changed_fx_use, use_fx_custom = r.ImGui_Checkbox(ctx, "custom FXChain folder", config.use_custom_fxchain_dir)
-            if changed_fx_use then
-                config.use_custom_fxchain_dir = use_fx_custom; SaveConfig()
-            end
-            r.ImGui_SameLine(ctx)
-            -- r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_PushItemWidth(ctx, 180)
-            local fx_dir = config.custom_fxchain_dir or ""
-            local changed_fx_dir, new_fx_dir = r.ImGui_InputText(ctx, "##fxchain_dir", fx_dir)
-            if changed_fx_dir then config.custom_fxchain_dir = new_fx_dir end
-            r.ImGui_PopItemWidth(ctx)
-            -- Keep buttons on the same line as input
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Browse…##fxchain") then
-                local rv, path = r.JS_Dialog_BrowseForFolder("Select FX Chains folder", ResolveFxChainsRoot())
-                if rv == 1 and path and path ~= '' then
-                    config.custom_fxchain_dir = path; SaveConfig()
-                end
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Reset##fxchain_reset") then
-                config.use_custom_fxchain_dir = false
-                config.custom_fxchain_dir = ""
-                SaveConfig()
-            end
-            if config.use_custom_fxchain_dir and (not config.custom_fxchain_dir or config.custom_fxchain_dir == '') then
-                r.ImGui_TextColored(ctx, 0xFF5A5AFF, "Please set a valid FX Chains folder")
-            end
-            do
-                local fx_root = ResolveFxChainsRoot()
-                local exists = PathExists(fx_root)
-                local color = exists and 0x55CC55FF or 0xFF5A5AFF
-                r.ImGui_SetCursorPosX(ctx, column1_width)
-                r.ImGui_Text(ctx, "FX Chains path:")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_TextColored(ctx, color, exists and "OK" or "Not found")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_Text(ctx, fx_root)
-            end
-
-            -- Track Templates location
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            local changed_tt_use, use_tt_custom = r.ImGui_Checkbox(ctx, "custom TT Folder", config.use_custom_template_dir)
-            if changed_tt_use then
-                config.use_custom_template_dir = use_tt_custom; SaveConfig()
-            end
-            r.ImGui_SameLine(ctx)
-            -- r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_PushItemWidth(ctx, 180)
-            local tt_dir = config.custom_template_dir or ""
-            local changed_tt_dir, new_tt_dir = r.ImGui_InputText(ctx, "##templ_dir", tt_dir)
-            if changed_tt_dir then config.custom_template_dir = new_tt_dir end
-            r.ImGui_PopItemWidth(ctx)
-            -- Keep buttons on the same line as input
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Browse…##templ") then
-                local rv, path = r.JS_Dialog_BrowseForFolder("Select Track Templates folder", ResolveTrackTemplatesRoot())
-                if rv == 1 and path and path ~= '' then
-                    config.custom_template_dir = path; SaveConfig()
-                end
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Reset##templ_reset") then
-                config.use_custom_template_dir = false
-                config.custom_template_dir = ""
-                SaveConfig()
-            end
-            if config.use_custom_template_dir and (not config.custom_template_dir or config.custom_template_dir == '') then
-                r.ImGui_TextColored(ctx, 0xFF5A5AFF, "Please set a valid Track Templates folder")
-            end
-            do
-                local tt_root = ResolveTrackTemplatesRoot()
-                local exists = PathExists(tt_root)
-                local color = exists and 0x55CC55FF or 0xFF5A5AFF
-                r.ImGui_SetCursorPosX(ctx, column1_width)
-                r.ImGui_Text(ctx, "Track Templates path:")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_TextColored(ctx, color, exists and "OK" or "Not found")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_Text(ctx, tt_root)
-            end
-            
-
-             r.ImGui_Dummy(ctx, 0, 8)
-
-            NewSection("FX CHAIN BUILDER:")
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            r.ImGui_Text(ctx, "Color")
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
-            local cb_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
-            local cb_changed, cb_new_col = r.ImGui_ColorEdit4(ctx, "##ChainBuilderColor", config.chain_builder_color or 0x00FF88FF, cb_flags)
-            if cb_changed then
-                config.chain_builder_color = cb_new_col
-                SaveConfig()
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "FX Chain Builder accent color") end
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_Text(ctx, "Darkness")
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            r.ImGui_PushItemWidth(ctx, slider_width)
-            local dk_changed, dk_new = r.ImGui_SliderDouble(ctx, "##ChainDarkness", config.chain_builder_darkness or 0.10, 0.02, 0.5, "%.2f")
-            if dk_changed then
-                config.chain_builder_darkness = dk_new
-                SaveConfig()
-            end
-            r.ImGui_PopItemWidth(ctx)
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Background darkness intensity for chain builder") end
+            _, config.show_chain_builder_button = r.ImGui_Checkbox(ctx, "FX Chain Builder", config.show_chain_builder_button)
+            r.ImGui_Dummy(ctx, 0, 5)
 
              r.ImGui_Dummy(ctx, 0, 8)
+
+            NewSection("BROWSER PANEL SECTIONS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.browser_segment_favorites_enabled = r.ImGui_Checkbox(ctx, "Favorites##bp", config.browser_segment_favorites_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.browser_segment_custom_folders_enabled = r.ImGui_Checkbox(ctx, "Custom Folders##bp", config.browser_segment_custom_folders_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.browser_segment_main_categories_enabled = r.ImGui_Checkbox(ctx, "Categories##bp", config.browser_segment_main_categories_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.browser_segment_utilities_enabled = r.ImGui_Checkbox(ctx, "Utilities##bp", config.browser_segment_utilities_enabled)
+
+            if not is_mini then
+            r.ImGui_Dummy(ctx, 0, 8)
+
+            NewSection("MAIN WINDOW SECTIONS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.main_section_tags_enabled = r.ImGui_Checkbox(ctx, "Tags##mw", config.main_section_tags_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.main_section_io_enabled = r.ImGui_Checkbox(ctx, "I/O##mw", config.main_section_io_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.main_section_plugins_enabled = r.ImGui_Checkbox(ctx, "Plugins##mw", config.main_section_plugins_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.main_section_utilities_enabled = r.ImGui_Checkbox(ctx, "Utilities##mw", config.main_section_utilities_enabled)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.main_section_trackfx_enabled = r.ImGui_Checkbox(ctx, "Track FX##mw", config.main_section_trackfx_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.main_section_itemfx_enabled = r.ImGui_Checkbox(ctx, "Item FX##mw", config.main_section_itemfx_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.main_section_meter_enabled = r.ImGui_Checkbox(ctx, "Meter##mw", config.main_section_meter_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.main_section_buttons_enabled = r.ImGui_Checkbox(ctx, "Buttons##mw", config.main_section_buttons_enabled)
+
+            r.ImGui_Dummy(ctx, 0, 8)
 
             NewSection("MAIN WINDOW OPTIONS:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.show_name_in_main_window = r.ImGui_Checkbox(ctx, "Show Plugin Names", config.show_name_in_main_window)
             r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.hideTopButtons = r.ImGui_Checkbox(ctx, "No Top Buttons", config.hideTopButtons)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            _, config.hideBottomButtons = r.ImGui_Checkbox(ctx, "No Bottom Buttons", config.hideBottomButtons)
-                        r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Show screenshots in Search", config.show_screenshot_in_search)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.show_tags = r.ImGui_Checkbox(ctx, "Show Tags", config.show_tags)
-             r.ImGui_SetCursorPosX(ctx, column1_width)
-             _, config.hideMeter = r.ImGui_Checkbox(ctx, "Hide Meter", config.hideMeter)
-            
-            r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
-            _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
-            r.ImGui_SameLine(ctx)
-            
+            _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Search Screenshots", config.show_screenshot_in_search)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
-
+            _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
             r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.allow_esc_close = r.ImGui_Checkbox(ctx, "ESC closes script", config.allow_esc_close)
-           
- 
+            end
+
             NewSection("SCREENSHOT WINDOW:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local changed, new_value = r.ImGui_Checkbox(ctx, "Show Window", config.show_screenshot_window)
@@ -4083,76 +4033,6 @@ function ShowConfigWindow()
 
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            r.ImGui_Text(ctx, "Default Folder:")
-            r.ImGui_SameLine(ctx, 0, 10)
-            r.ImGui_PushItemWidth(ctx, slider_width)
-            r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
-            local current_default_label = config.default_folder
-            if current_default_label == LAST_OPENED_SENTINEL then current_default_label = "Last opened folder" end
-            if r.ImGui_BeginCombo(ctx, "##Default Folder", current_default_label or "None") then
-                if r.ImGui_Selectable(ctx, "None", config.default_folder == nil) then
-                    config.default_folder = nil
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Last opened folder", config.default_folder == LAST_OPENED_SENTINEL) then
-                    config.default_folder = LAST_OPENED_SENTINEL
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Favorites", config.default_folder == "Favorites") then
-                    config.default_folder = "Favorites"
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Current Project FX", config.default_folder == "Current Project FX") then
-                    config.default_folder = "Current Project FX"
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Current Track FX", config.default_folder == "Current Track FX") then
-                    config.default_folder = "Current Track FX"
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Projects", config.default_folder == "Projects") then
-                    config.default_folder = "Projects"
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Sends/Receives", config.default_folder == "Sends/Receives") then
-                    config.default_folder = "Sends/Receives" 
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Actions", config.default_folder == "Actions") then
-                    config.default_folder = "Actions"
-                    SaveConfig()
-                end
-                for i = 1, #folders_category do
-                    local is_selected = (config.default_folder == folders_category[i].name)
-                    if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
-                        config.default_folder = folders_category[i].name
-                        SaveConfig()
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end  
-            if r.ImGui_IsItemHovered(ctx) then
-                local wheel_delta = r.ImGui_GetMouseWheel(ctx)
-                if wheel_delta ~= 0 then
-                    local options = { nil, LAST_OPENED_SENTINEL, "Favorites", "Current Project FX", "Current Track FX", "Projects", "Sends/Receives", "Actions" }
-                    for i = 1, #folders_category do options[#options+1] = folders_category[i].name end
-                    local current_index = 1
-                    for i, opt in ipairs(options) do
-                        if opt == config.default_folder then current_index = i; break end
-                    end
-                   
-                    local new_index = current_index - wheel_delta
-                    if new_index < 1 then new_index = 1 end
-                    if new_index > #options then new_index = #options end
-                    config.default_folder = options[new_index]
-                    SaveConfig()
-                end
-            end
-
-            r.ImGui_PopItemWidth(ctx)
-
-            r.ImGui_Dummy(ctx, 0, 5)
-            r.ImGui_SetCursorPosX(ctx, column1_width)
 
             local function RefreshAfterTypePriorityChange()
                 RequestClearScreenshotCache()
@@ -4226,7 +4106,77 @@ function ShowConfigWindow()
                 end
                 new_search_performed = true
             end
-            local ap_changed, ap_val = r.ImGui_Checkbox(ctx, "Type Priority:  ", config.apply_type_priority)
+
+            r.ImGui_Text(ctx, "Default Folder:")
+            r.ImGui_SameLine(ctx, 0, 10)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
+            local current_default_label = config.default_folder
+            if current_default_label == LAST_OPENED_SENTINEL then current_default_label = "Last opened folder" end
+            if r.ImGui_BeginCombo(ctx, "##Default Folder", current_default_label or "None") then
+                if r.ImGui_Selectable(ctx, "None", config.default_folder == nil) then
+                    config.default_folder = nil
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Last opened folder", config.default_folder == LAST_OPENED_SENTINEL) then
+                    config.default_folder = LAST_OPENED_SENTINEL
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Favorites", config.default_folder == "Favorites") then
+                    config.default_folder = "Favorites"
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Current Project FX", config.default_folder == "Current Project FX") then
+                    config.default_folder = "Current Project FX"
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Current Track FX", config.default_folder == "Current Track FX") then
+                    config.default_folder = "Current Track FX"
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Projects", config.default_folder == "Projects") then
+                    config.default_folder = "Projects"
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Sends/Receives", config.default_folder == "Sends/Receives") then
+                    config.default_folder = "Sends/Receives" 
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Actions", config.default_folder == "Actions") then
+                    config.default_folder = "Actions"
+                    SaveConfig()
+                end
+                for i = 1, #folders_category do
+                    local is_selected = (config.default_folder == folders_category[i].name)
+                    if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
+                        config.default_folder = folders_category[i].name
+                        SaveConfig()
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end  
+            if r.ImGui_IsItemHovered(ctx) then
+                local wheel_delta = r.ImGui_GetMouseWheel(ctx)
+                if wheel_delta ~= 0 then
+                    local options = { nil, LAST_OPENED_SENTINEL, "Favorites", "Current Project FX", "Current Track FX", "Projects", "Sends/Receives", "Actions" }
+                    for i = 1, #folders_category do options[#options+1] = folders_category[i].name end
+                    local current_index = 1
+                    for i, opt in ipairs(options) do
+                        if opt == config.default_folder then current_index = i; break end
+                    end
+                   
+                    local new_index = current_index - wheel_delta
+                    if new_index < 1 then new_index = 1 end
+                    if new_index > #options then new_index = #options end
+                    config.default_folder = options[new_index]
+                    SaveConfig()
+                end
+            end
+
+            r.ImGui_PopItemWidth(ctx)
+
+            r.ImGui_SameLine(ctx, 0, 15)
+            local ap_changed, ap_val = r.ImGui_Checkbox(ctx, "Type Priority", config.apply_type_priority)
             if ap_changed then
                 config.apply_type_priority = ap_val
                 SaveConfig()
@@ -4238,7 +4188,7 @@ function ShowConfigWindow()
 
             local types_all = {"CLAP","VST3","VST","JS","AU","LV2"}
             local function drawTypeComboInline(idx)
-                r.ImGui_PushItemWidth(ctx, 83)
+                r.ImGui_PushItemWidth(ctx, 70)
                 local current = config.plugin_type_priority[idx] or types_all[idx]
                 if r.ImGui_BeginCombo(ctx, "##TP"..idx, current) then
                     for _, t in ipairs(types_all) do
@@ -4253,15 +4203,14 @@ function ShowConfigWindow()
                 end
                 r.ImGui_PopItemWidth(ctx)
             end
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 8)
             drawTypeComboInline(1)
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 2)
             drawTypeComboInline(2)
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 2)
             drawTypeComboInline(3)
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 2)
             drawTypeComboInline(4)
-            
 
             
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
@@ -4579,6 +4528,107 @@ function ShowConfigWindow()
         end
         if r.ImGui_BeginTabItem(ctx, "PLUGIN MANAGER") then
             ShowPluginManagerTab()
+            r.ImGui_EndTabItem(ctx)
+        end
+
+        if r.ImGui_BeginTabItem(ctx, "PATHS") then
+            r.ImGui_Dummy(ctx, 0, 5)
+            NewSection("FX CHAINS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local changed_fx_use, use_fx_custom = r.ImGui_Checkbox(ctx, "custom FXChain folder", config.use_custom_fxchain_dir)
+            if changed_fx_use then
+                config.use_custom_fxchain_dir = use_fx_custom; SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 180)
+            local fx_dir = config.custom_fxchain_dir or ""
+            local changed_fx_dir, new_fx_dir = r.ImGui_InputText(ctx, "##fxchain_dir", fx_dir)
+            if changed_fx_dir then config.custom_fxchain_dir = new_fx_dir end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Browse…##fxchain") then
+                local rv, path = r.JS_Dialog_BrowseForFolder("Select FX Chains folder", ResolveFxChainsRoot())
+                if rv == 1 and path and path ~= '' then
+                    config.custom_fxchain_dir = path; SaveConfig()
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset##fxchain_reset") then
+                config.use_custom_fxchain_dir = false
+                config.custom_fxchain_dir = ""
+                SaveConfig()
+            end
+            if config.use_custom_fxchain_dir and (not config.custom_fxchain_dir or config.custom_fxchain_dir == '') then
+                r.ImGui_TextColored(ctx, 0xFF5A5AFF, "Please set a valid FX Chains folder")
+            end
+            do
+                local fx_root = ResolveFxChainsRoot()
+                local exists = PathExists(fx_root)
+                local color = exists and 0x55CC55FF or 0xFF5A5AFF
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+                r.ImGui_Text(ctx, "FX Chains path:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_TextColored(ctx, color, exists and "OK" or "Not found")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_Text(ctx, fx_root)
+            end
+
+            r.ImGui_Dummy(ctx, 0, 8)
+            NewSection("TRACK TEMPLATES:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local changed_tt_use, use_tt_custom = r.ImGui_Checkbox(ctx, "custom TT Folder", config.use_custom_template_dir)
+            if changed_tt_use then
+                config.use_custom_template_dir = use_tt_custom; SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 180)
+            local tt_dir = config.custom_template_dir or ""
+            local changed_tt_dir, new_tt_dir = r.ImGui_InputText(ctx, "##templ_dir", tt_dir)
+            if changed_tt_dir then config.custom_template_dir = new_tt_dir end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Browse…##templ") then
+                local rv, path = r.JS_Dialog_BrowseForFolder("Select Track Templates folder", ResolveTrackTemplatesRoot())
+                if rv == 1 and path and path ~= '' then
+                    config.custom_template_dir = path; SaveConfig()
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset##templ_reset") then
+                config.use_custom_template_dir = false
+                config.custom_template_dir = ""
+                SaveConfig()
+            end
+            if config.use_custom_template_dir and (not config.custom_template_dir or config.custom_template_dir == '') then
+                r.ImGui_TextColored(ctx, 0xFF5A5AFF, "Please set a valid Track Templates folder")
+            end
+            do
+                local tt_root = ResolveTrackTemplatesRoot()
+                local exists = PathExists(tt_root)
+                local color = exists and 0x55CC55FF or 0xFF5A5AFF
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+                r.ImGui_Text(ctx, "Track Templates path:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_TextColored(ctx, color, exists and "OK" or "Not found")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_Text(ctx, tt_root)
+            end
+
+            r.ImGui_SetCursorPosY(ctx, window_height - 30)
+            r.ImGui_Separator(ctx)
+            local button_width = (window_width - 20) / 3
+            if r.ImGui_Button(ctx, "Save", button_width, 20) then
+                SaveConfig()
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset", button_width, 20) then
+                ResetConfig()
+            end
             r.ImGui_EndTabItem(ctx)
         end
 
@@ -7960,7 +8010,7 @@ function ShowPluginContextMenuInline(plugin_name)
         if r.ImGui_MenuItem(ctx, "Rename Plugin (Alias)") then
             renaming_plugin_name = plugin_name
             renaming_new_name = plugin_aliases[plugin_name] or plugin_name
-            show_rename_popup = true
+            show_plugin_rename_popup = true
         end
 
         if next(config.custom_folders) then
@@ -9460,6 +9510,13 @@ function ShowScreenshotControls()
             r.ImGui_SetTooltip(ctx, "Reload all config, ratings, custom folders, scripts launcher, and tags from files")
         end
         r.ImGui_Separator(ctx)
+        if r.ImGui_MenuItem(ctx, "Update Plugins") then
+            FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+        end
+        if r.ImGui_MenuItem(ctx, "Shortcuts") then
+            show_shortcuts_window = true
+        end
+        r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
         if r.ImGui_MenuItem(ctx, "Close Window") then config.show_screenshot_window = false; SaveConfig() end
         r.ImGui_EndPopup(ctx)
@@ -10828,6 +10885,7 @@ function ShowBrowserPanel()
     local content_open = r.ImGui_BeginChild(ctx, "BrowserContent", -1, content_h)
     if content_open then
         -- SEGMENT 1: FAVORITES + PROJECT FX
+        if config.browser_segment_favorites_enabled then
         if DrawCollapseHeader("FAVORITES", config.browser_segment_favorites_visible, "Show Favorites & Project FX", "Hide Favorites & Project FX") then
             config.browser_segment_favorites_visible = not config.browser_segment_favorites_visible
             SaveConfig()
@@ -10943,8 +11001,10 @@ function ShowBrowserPanel()
             r.ImGui_PopStyleColor(ctx, 3)
             r.ImGui_PopStyleVar(ctx)
         end
+        end
 
         if config.show_custom_folders then
+            if config.browser_segment_custom_folders_enabled then
             if DrawCollapseHeader("CUSTOM", config.browser_segment_custom_folders_visible, "Show Custom Folders", "Hide Custom Folders") then
                 config.browser_segment_custom_folders_visible = not config.browser_segment_custom_folders_visible
                 SaveConfig()
@@ -10967,9 +11027,10 @@ function ShowBrowserPanel()
                     r.ImGui_SetTooltip(ctx, "Create a new custom folder")
                 end
             end
+            end
         end
 
-        -- SEGMENT 3: Categories / Folders / Chains / Templates
+        if config.browser_segment_main_categories_enabled then
         if DrawCollapseHeader("CATEGORIES", config.browser_segment_main_categories_visible, "Show Plugin Categories", "Hide Plugin Categories") then
             config.browser_segment_main_categories_visible = not config.browser_segment_main_categories_visible
             SaveConfig()
@@ -11267,8 +11328,9 @@ function ShowBrowserPanel()
             end
         end
         end
+        end
 
-        -- SEGMENT 4: Utilities (Container, Video Processor, Projects, Media, Scripts, Recent)
+        if config.browser_segment_utilities_enabled then
         if DrawCollapseHeader("UTILITIES", config.browser_segment_utilities_visible, "Show Utilities", "Hide Utilities") then
             config.browser_segment_utilities_visible = not config.browser_segment_utilities_visible
             SaveConfig()
@@ -11423,6 +11485,7 @@ function ShowBrowserPanel()
                 LaunchTKNotes()
             end
         end
+        if config.show_chain_builder_button then
         local chain_is_active = config.show_chain_builder
         if chain_is_active then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00FF88FF)
@@ -11434,6 +11497,7 @@ function ShowBrowserPanel()
         end
         if chain_is_active then
             r.ImGui_PopStyleColor(ctx)
+        end
         end
                 if config.show_scripts then
                     local is_sel = (selected_folder == "Scripts" and show_scripts_browser)
@@ -11470,6 +11534,8 @@ function ShowBrowserPanel()
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
         end
+        end
+
         end
 
     end
@@ -11768,30 +11834,7 @@ function ShowBrowserPanel()
             r.ImGui_Text(ctx, "Items: " .. item_count_display .. item_type_suffix)
             
             if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                local ic = tonumber(item_count_display) or 0
-                local track_type = "Empty"
-                if ic > 0 then
-                    local has_midi, has_audio = false, false
-                    for i = 0, ic - 1 do
-                        local item = r.GetTrackMediaItem(TRACK, i)
-                        if item then
-                            local take = r.GetActiveTake(item)
-                            if take then
-                                local src = r.GetMediaItemTake_Source(take)
-                                if src then
-                                    local s_type = r.GetMediaSourceType(src, "") or ""
-                                    if s_type:upper() == "MIDI" then has_midi = true else has_audio = true end
-                                    if has_midi and has_audio then break end
-                                end
-                            end
-                        end
-                    end
-                    if has_midi and not has_audio then track_type = "MIDI"
-                    elseif has_audio and not has_midi then track_type = "Audio"
-                    elseif has_audio and has_midi then track_type = "Mixed"
-                    end
-                end
-                r.ImGui_Text(ctx, "Type: " .. track_type)
+                r.ImGui_Text(ctx, "Type: " .. GetTrackType(TRACK))
                 
                 r.ImGui_Dummy(ctx, 0, 3)
                 r.ImGui_Separator(ctx)
@@ -17457,10 +17500,10 @@ function FilterBox()
     local sort_mode = config.sort_mode or "score" -- "score", "alphabet", "rating", "type"
 
     local top_buttons_height = 5
-    local tags_height = config.show_tags and current_tag_window_height or 0
-    local meter_height = config.hideMeter and 0 or 90
+    local tags_height = (config.main_section_tags_enabled and config.main_segment_tags_visible) and current_tag_window_height or 0
+    local meter_height = (config.main_section_meter_enabled and config.main_segment_meter_visible) and 90 or 0
     local meter_spacing = 5
-    local bottom_buttons_height = config.hideBottomButtons and 0 or 70
+    local bottom_buttons_height = (config.main_section_buttons_enabled and config.main_segment_buttons_visible) and 70 or 0
     local volume_slider_height = config.hideVolumeSlider and 0 or 40
     
     local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
@@ -17709,7 +17752,7 @@ end
     end
 
     local window_height = r.ImGui_GetWindowHeight(ctx)
-    local bottom_buttons_height = config.hideBottomButtons and 0 or 70
+    local bottom_buttons_height = (config.main_section_buttons_enabled and config.main_segment_buttons_visible) and 70 or 0
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 10
     if #filtered_fx ~= 0 then
     local popupp_open = r.ImGui_BeginChild(ctx, "##popupp", -1, search_results_max_height)
@@ -18180,8 +18223,392 @@ function CalculateButtonWidths(total_width, num_buttons, spacing)
     return available_width / num_buttons
 end
 
+function GetInputTypeName(rec_input)
+    if rec_input < 0 then return "No Input", "none", 0, 0 end
+    if rec_input >= 4096 then
+        local midi_channel = rec_input & 31
+        local midi_device = (rec_input >> 5) & 127
+        return "MIDI", "midi", midi_channel, midi_device
+    end
+    local is_stereo = (rec_input & 1024) ~= 0
+    local channel = rec_input & 1023
+    if is_stereo then
+        return "Stereo", "stereo", channel, 0
+    else
+        return "Mono", "mono", channel, 0
+    end
+end
+
+function SetTrackInput(track, input_type, channel, midi_device)
+    local rec_input = -1
+    if input_type == "mono" then
+        rec_input = channel
+    elseif input_type == "stereo" then
+        rec_input = 1024 + channel
+    elseif input_type == "midi" then
+        rec_input = 4096 + ((midi_device or 63) << 5) + channel
+    end
+    r.SetMediaTrackInfo_Value(track, "I_RECINPUT", rec_input)
+end
+
+function GetAudioInputList()
+    local inputs = {}
+    local retval, num_str = r.GetAudioDeviceInfo("NINPUTS", "")
+    local num_hw = retval and tonumber(num_str) or 0
+    for i = 0, num_hw - 1 do
+        local ret, name = r.GetAudioDeviceInfo("INPUT" .. i, "")
+        local input_name = (ret and name and name ~= "") and name or ("Input " .. (i + 1))
+        table.insert(inputs, {channel = i, name = input_name})
+    end
+    return inputs
+end
+
+function GetRecModeName(rec_mode)
+    local modes = {
+        [0] = "Input",
+        [1] = "Output (Stereo)",
+        [2] = "Disabled",
+        [3] = "Output (Stereo, Latency Comp)",
+        [4] = "Output (MIDI)",
+        [5] = "Output (Mono)",
+        [6] = "Output (Mono, Latency Comp)",
+        [7] = "MIDI Overdub",
+        [8] = "MIDI Replace",
+        [9] = "MIDI Touch-Replace",
+        [10] = "Output (Multichannel)",
+        [16] = "Input (Force Mono)",
+        [17] = "Input (Force Stereo)",
+    }
+    return modes[rec_mode] or ("Mode " .. rec_mode)
+end
+
+function GetRecMonName(rec_mon)
+    if rec_mon == 0 then return "Off"
+    elseif rec_mon == 1 then return "Normal"
+    elseif rec_mon == 2 then return "Not when playing"
+    end
+    return "Unknown"
+end
+
+function GetAutoModeName(auto_mode)
+    local modes = {
+        [0] = "Trim/Read",
+        [1] = "Read",
+        [2] = "Touch",
+        [3] = "Write",
+        [4] = "Latch",
+        [5] = "Latch Preview",
+    }
+    return modes[auto_mode] or ("Mode " .. auto_mode)
+end
+
+function DrawIOSection()
+    if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then return end
+    local window_width = r.ImGui_GetContentRegionAvail(ctx)
+    local spacing = 3
+    local label_w = 55
+
+    local rec_input = math.floor(r.GetMediaTrackInfo_Value(TRACK, "I_RECINPUT"))
+    local rec_mode = math.floor(r.GetMediaTrackInfo_Value(TRACK, "I_RECMODE"))
+    local rec_mon = math.floor(r.GetMediaTrackInfo_Value(TRACK, "I_RECMON"))
+    local auto_mode = math.floor(r.GetMediaTrackInfo_Value(TRACK, "I_AUTOMODE"))
+    local phase = r.GetMediaTrackInfo_Value(TRACK, "B_PHASE")
+    local nchan = math.floor(r.GetMediaTrackInfo_Value(TRACK, "I_NCHAN"))
+    local type_label, current_type, current_channel, current_midi_device = GetInputTypeName(rec_input)
+    local audio_inputs = GetAudioInputList()
+
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 2)
+
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_Text(ctx, "Type")
+    r.ImGui_SameLine(ctx, label_w)
+    r.ImGui_PushItemWidth(ctx, window_width - label_w)
+    local type_names = {"No Input", "Mono", "Stereo", "MIDI"}
+    local type_values = {"none", "mono", "stereo", "midi"}
+    local current_type_idx = 0
+    for i, v in ipairs(type_values) do
+        if v == current_type then current_type_idx = i - 1; break end
+    end
+    local type_changed, new_type_idx = r.ImGui_Combo(ctx, "##IOType", current_type_idx, table.concat(type_names, "\0") .. "\0")
+    if type_changed then
+        local new_type = type_values[new_type_idx + 1]
+        if new_type == "mono" or new_type == "stereo" then
+            SetTrackInput(TRACK, new_type, audio_inputs[1] and audio_inputs[1].channel or 0, 0)
+        elseif new_type == "midi" then
+            SetTrackInput(TRACK, "midi", 0, 63)
+        else
+            r.SetMediaTrackInfo_Value(TRACK, "I_RECINPUT", -1)
+        end
+    end
+    r.ImGui_PopItemWidth(ctx)
+
+    if current_type == "mono" then
+        r.ImGui_AlignTextToFramePadding(ctx)
+        r.ImGui_Text(ctx, "Input")
+        r.ImGui_SameLine(ctx, label_w)
+        r.ImGui_PushItemWidth(ctx, window_width - label_w)
+        local ch_names, ch_values = {}, {}
+        for _, inp in ipairs(audio_inputs) do
+            table.insert(ch_names, inp.name)
+            table.insert(ch_values, inp.channel)
+        end
+        if #ch_names == 0 then ch_names = {"No inputs"}; ch_values = {0} end
+        local cur_idx = 0
+        for i, ch in ipairs(ch_values) do
+            if ch == current_channel then cur_idx = i - 1; break end
+        end
+        local ch_changed, new_idx = r.ImGui_Combo(ctx, "##IOMonoCh", cur_idx, table.concat(ch_names, "\0") .. "\0")
+        if ch_changed then SetTrackInput(TRACK, "mono", ch_values[new_idx + 1], 0) end
+        r.ImGui_PopItemWidth(ctx)
+
+    elseif current_type == "stereo" then
+        r.ImGui_AlignTextToFramePadding(ctx)
+        r.ImGui_Text(ctx, "Input")
+        r.ImGui_SameLine(ctx, label_w)
+        r.ImGui_PushItemWidth(ctx, window_width - label_w)
+        local pair_names, pair_values = {}, {}
+        for i = 1, #audio_inputs, 2 do
+            if audio_inputs[i + 1] then
+                table.insert(pair_names, audio_inputs[i].name .. " / " .. audio_inputs[i + 1].name)
+                table.insert(pair_values, audio_inputs[i].channel)
+            end
+        end
+        if #pair_names == 0 then pair_names = {"No pairs"}; pair_values = {0} end
+        local cur_idx = 0
+        for i, ch in ipairs(pair_values) do
+            if ch == current_channel then cur_idx = i - 1; break end
+        end
+        local pair_changed, new_idx = r.ImGui_Combo(ctx, "##IOStereoPair", cur_idx, table.concat(pair_names, "\0") .. "\0")
+        if pair_changed then SetTrackInput(TRACK, "stereo", pair_values[new_idx + 1], 0) end
+        r.ImGui_PopItemWidth(ctx)
+
+    elseif current_type == "midi" then
+        r.ImGui_AlignTextToFramePadding(ctx)
+        r.ImGui_Text(ctx, "Dev")
+        r.ImGui_SameLine(ctx, label_w)
+        r.ImGui_PushItemWidth(ctx, window_width - label_w)
+        local dev_names, dev_ids = {"All"}, {63}
+        local num_midi = r.GetNumMIDIInputs()
+        for i = 0, num_midi - 1 do
+            local retval, name = r.GetMIDIInputName(i, "")
+            if retval then
+                table.insert(dev_names, (name and name ~= "") and name or ("MIDI Device " .. (i + 1)))
+                table.insert(dev_ids, i)
+            end
+        end
+        local cur_dev_idx = 0
+        for i, dev_id in ipairs(dev_ids) do
+            if dev_id == current_midi_device then cur_dev_idx = i - 1; break end
+        end
+        local dev_changed, new_dev_idx = r.ImGui_Combo(ctx, "##IOMIDIDev", cur_dev_idx, table.concat(dev_names, "\0") .. "\0")
+        if dev_changed then SetTrackInput(TRACK, "midi", current_channel, dev_ids[new_dev_idx + 1] or 63) end
+        r.ImGui_PopItemWidth(ctx)
+
+        r.ImGui_AlignTextToFramePadding(ctx)
+        r.ImGui_Text(ctx, "Ch")
+        r.ImGui_SameLine(ctx, label_w)
+        r.ImGui_PushItemWidth(ctx, window_width - label_w)
+        local midi_ch_names = {"All"}
+        for i = 1, 16 do table.insert(midi_ch_names, tostring(i)) end
+        local cur_midi_ch = current_channel > 16 and 0 or current_channel
+        local ch_changed, new_ch = r.ImGui_Combo(ctx, "##IOMIDICh", cur_midi_ch, table.concat(midi_ch_names, "\0") .. "\0")
+        if ch_changed then SetTrackInput(TRACK, "midi", new_ch, current_midi_device) end
+        r.ImGui_PopItemWidth(ctx)
+    end
+
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_Text(ctx, "Rec")
+    r.ImGui_SameLine(ctx, label_w)
+    r.ImGui_PushItemWidth(ctx, window_width - label_w)
+    if r.ImGui_BeginCombo(ctx, "##IORecMode", GetRecModeName(rec_mode)) then
+        local rec_modes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 17}
+        for _, mode in ipairs(rec_modes) do
+            if r.ImGui_Selectable(ctx, GetRecModeName(mode), rec_mode == mode) then
+                r.SetMediaTrackInfo_Value(TRACK, "I_RECMODE", mode)
+            end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
+
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_Text(ctx, "Mon")
+    r.ImGui_SameLine(ctx, label_w)
+    r.ImGui_PushItemWidth(ctx, window_width - label_w)
+    if r.ImGui_BeginCombo(ctx, "##IOMonitor", GetRecMonName(rec_mon)) then
+        for m = 0, 2 do
+            if r.ImGui_Selectable(ctx, GetRecMonName(m), rec_mon == m) then
+                r.SetMediaTrackInfo_Value(TRACK, "I_RECMON", m)
+            end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
+
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_Text(ctx, "Auto")
+    r.ImGui_SameLine(ctx, label_w)
+    r.ImGui_PushItemWidth(ctx, (window_width - label_w) * 0.65 - spacing)
+    if r.ImGui_BeginCombo(ctx, "##IOAutoMode", GetAutoModeName(auto_mode)) then
+        for mode = 0, 5 do
+            if r.ImGui_Selectable(ctx, GetAutoModeName(mode), auto_mode == mode) then
+                r.SetMediaTrackInfo_Value(TRACK, "I_AUTOMODE", mode)
+            end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
+
+    r.ImGui_SameLine(ctx, 0, spacing)
+    local phase_active = phase ~= 0
+    if phase_active then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF4444FF)
+    end
+    local remaining_w = (window_width - label_w) * 0.35
+    if r.ImGui_Button(ctx, "Phase##io", remaining_w) then
+        r.SetMediaTrackInfo_Value(TRACK, "B_PHASE", phase_active and 0 or 1)
+    end
+    if phase_active then
+        r.ImGui_PopStyleColor(ctx)
+    end
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Invert phase / polarity")
+    end
+
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_Text(ctx, "Chan")
+    r.ImGui_SameLine(ctx, label_w)
+    r.ImGui_PushItemWidth(ctx, window_width - label_w)
+    local chan_options = {2, 4, 6, 8, 10, 12, 16, 24, 32, 64}
+    local chan_label = tostring(nchan) .. " ch"
+    if r.ImGui_BeginCombo(ctx, "##IOChan", chan_label) then
+        for _, ch in ipairs(chan_options) do
+            if r.ImGui_Selectable(ctx, tostring(ch) .. " ch", nchan == ch) then
+                r.SetMediaTrackInfo_Value(TRACK, "I_NCHAN", ch)
+            end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
+
+    local send_count = r.GetTrackNumSends(TRACK, 0)
+    local recv_count = r.GetTrackNumSends(TRACK, -1)
+    local hw_out_count = r.GetTrackNumSends(TRACK, 1)
+    local parent_send = r.GetMediaTrackInfo_Value(TRACK, "B_MAINSEND")
+    local output_label = parent_send == 1 and "Master" or "None"
+    if hw_out_count > 0 then
+        output_label = output_label .. " + " .. hw_out_count .. " HW"
+    end
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_Text(ctx, "Out")
+    r.ImGui_SameLine(ctx, label_w)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xAAAAAAFF)
+    r.ImGui_Text(ctx, output_label)
+    r.ImGui_PopStyleColor(ctx)
+    if send_count > 0 or recv_count > 0 then
+        r.ImGui_SameLine(ctx)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x88AAFFFF)
+        r.ImGui_Text(ctx, "  S:" .. send_count .. " R:" .. recv_count)
+        r.ImGui_PopStyleColor(ctx)
+    end
+
+    local rec_fx_count = r.TrackFX_GetRecCount(TRACK)
+    if rec_fx_count > 0 then
+        r.ImGui_Spacing(ctx)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFCC66FF)
+        r.ImGui_Text(ctx, "Input FX (" .. rec_fx_count .. ")")
+        r.ImGui_PopStyleColor(ctx)
+        r.ImGui_Separator(ctx)
+        local row_h = r.ImGui_GetTextLineHeight(ctx)
+        for i = 0, rec_fx_count - 1 do
+            local fx_idx = i + 0x1000000
+            local retval, fx_name = r.TrackFX_GetFXName(TRACK, fx_idx, "")
+            local is_enabled = r.TrackFX_GetEnabled(TRACK, fx_idx)
+            local is_open = r.TrackFX_GetFloatingWindow(TRACK, fx_idx)
+            local display_name = is_enabled and fx_name or fx_name .. " (Bypassed)"
+
+            r.ImGui_PushID(ctx, "iofx_" .. i)
+            r.ImGui_BeginGroup(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+            if not is_enabled then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+            end
+            if r.ImGui_Button(ctx, display_name, 0, row_h) then
+                if is_open then
+                    r.TrackFX_Show(TRACK, fx_idx, 2)
+                else
+                    r.TrackFX_Show(TRACK, fx_idx, 3)
+                end
+            end
+            if not is_enabled then
+                r.ImGui_PopStyleColor(ctx)
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_BeginPopupContextItem(ctx) then
+                if r.ImGui_MenuItem(ctx, is_enabled and "Bypass" or "Enable") then
+                    r.TrackFX_SetEnabled(TRACK, fx_idx, not is_enabled)
+                end
+                if r.ImGui_MenuItem(ctx, "Delete") then
+                    r.TrackFX_Delete(TRACK, fx_idx)
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+            r.ImGui_EndGroup(ctx)
+            r.ImGui_PopID(ctx)
+        end
+    end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Separator(ctx)
+    local _, trk_chunk = r.GetTrackStateChunk(TRACK, "", false)
+    local is_frozen = trk_chunk:find("\nFREEZE ") ~= nil
+    local freeze_w = (window_width - spacing) * 0.5
+    if is_frozen then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4488CCFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x55AADDFF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x66BBEEFF)
+    end
+    if r.ImGui_Button(ctx, is_frozen and "Frozen" or "Freeze##io", freeze_w, 0) then
+        if not is_frozen then
+            r.Undo_BeginBlock()
+            r.SetOnlyTrackSelected(TRACK)
+            r.Main_OnCommand(41223, 0)
+            r.Undo_EndBlock("Freeze track", -1)
+        end
+    end
+    if is_frozen then
+        r.ImGui_PopStyleColor(ctx, 3)
+    end
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, is_frozen and "Track is frozen" or "Freeze track to stereo")
+    end
+    r.ImGui_SameLine(ctx, 0, spacing)
+    if is_frozen then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xCC6622FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xDD8833FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xEE9944FF)
+    end
+    if r.ImGui_Button(ctx, "Unfreeze##io", freeze_w, 0) then
+        if is_frozen then
+            r.Undo_BeginBlock()
+            r.SetOnlyTrackSelected(TRACK)
+            r.Main_OnCommand(41644, 0)
+            r.Undo_EndBlock("Unfreeze track", -1)
+        end
+    end
+    if is_frozen then
+        r.ImGui_PopStyleColor(ctx, 3)
+    end
+    if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, is_frozen and "Unfreeze track" or "Track is not frozen")
+    end
+
+    r.ImGui_PopStyleVar(ctx)
+end
+
 function DrawBottomButtons()
-    if not config.hideBottomButtons then
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local track_info_width = math.max(window_width - 10, 125)
@@ -18397,7 +18824,6 @@ function DrawBottomButtons()
         r.ImGui_SetTooltip(ctx, "Arm selected Track")
     end
     
-    end
 end
 
 -- Content-only version of ShowTrackFX for main window toggle
@@ -19171,20 +19597,20 @@ function GetTrackType(track)
             end
         end
     end
-    local track_type = ""
+    local track_type = "Normal"
     if is_folder then
-        track_type = "Folder "
+        track_type = "Folder"
     elseif is_child then
-        track_type = "Child "
+        track_type = "Child"
     end
     if audio_count > 0 and midi_count > 0 then
-        return track_type .. "Mixed"
+        return track_type .. " - Mixed"
     elseif midi_count > 0 then
-        return track_type .. "MIDI"
+        return track_type .. " - MIDI"
     elseif audio_count > 0 then
-        return track_type .. "Audio"
+        return track_type .. " - Audio"
     else
-        return track_type .. "Empty"
+        return track_type .. " - Empty"
     end
 end
 
@@ -19193,7 +19619,7 @@ function CalculateTopHeight(config)
     local height = 0
 
     height = height + 50  -- track info header
-    if config.show_tags then height = height + 65 end
+    if config.main_section_tags_enabled and config.main_segment_tags_visible then height = height + 65 end
     return height
 end
 
@@ -19218,11 +19644,11 @@ end
 
 function CalculateBottomSectionHeight(config)
     local height = 0
-    if not config.hideBottomButtons then height = height + 70 end
+    if config.main_section_buttons_enabled and config.main_segment_buttons_visible then height = height + 70 end
     if not config.hideVolumeSlider then
         height = height + 40
     end
-    if not config.hideMeter then height = height + 90 end
+    if config.main_section_meter_enabled and config.main_segment_meter_visible then height = height + 90 end
     return height
 end
 
@@ -19598,6 +20024,7 @@ function DrawUtilitiesSection()
                 LaunchTKNotes()
             end
         end
+        if config.show_chain_builder_button then
         local chain_is_active_mini = config.show_chain_builder
         if chain_is_active_mini then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00FF88FF)
@@ -19610,6 +20037,7 @@ function DrawUtilitiesSection()
         end
         if chain_is_active_mini then
             r.ImGui_PopStyleColor(ctx)
+        end
         end
 
         if config.show_scripts then
@@ -19647,12 +20075,12 @@ function DrawUtilitiesSection()
 end
 
 function DrawMainTrackFXPanel(show_item_fx)
-    local meter_header_h = 22
-    local meter_content_h = (config.main_segment_meter_visible and not config.hideMeter) and 90 or 0
-    local buttons_header_h = 22
-    local vol_h = (not config.hideBottomButtons and not config.hideVolumeSlider) and 45 or 0
-    local btn_h = (not config.hideBottomButtons) and 70 or 0
-    local buttons_content_h = config.main_segment_buttons_visible and (vol_h + btn_h) or 0
+    local meter_header_h = config.main_section_meter_enabled and 22 or 0
+    local meter_content_h = (config.main_section_meter_enabled and config.main_segment_meter_visible) and 90 or 0
+    local buttons_header_h = config.main_section_buttons_enabled and 22 or 0
+    local vol_h = (not config.hideVolumeSlider) and 45 or 0
+    local btn_h = 70
+    local buttons_content_h = (config.main_section_buttons_enabled and config.main_segment_buttons_visible) and (vol_h + btn_h) or 0
     local below_h = meter_header_h + meter_content_h + buttons_header_h + buttons_content_h + 10
     local current_y = r.ImGui_GetCursorPosY(ctx)
     local window_h = r.ImGui_GetWindowHeight(ctx)
@@ -20293,6 +20721,12 @@ if visible then
                     r.ImGui_EndGroup(ctx)
                     --r.ImGui_PopStyleVar(ctx)
                     if not config.hide_default_titlebar_menu_items then
+                        if r.ImGui_MenuItem(ctx, "Rename Track") then
+                            show_rename_popup = true
+                            new_track_name = GetTrackName(TRACK)
+                            keep_context_menu_open = false
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
                         if r.ImGui_MenuItem(ctx, "Color Picker") then
                             show_color_picker = true
                             keep_context_menu_open = false
@@ -20323,41 +20757,6 @@ if visible then
                         if r.ImGui_MenuItem(ctx, "Go to Last Track") then
                             local last_track = r.GetTrack(0, r.GetNumTracks() - 1)
                             if last_track then r.SetOnlyTrackSelected(last_track) end
-                        end
-                        r.ImGui_Separator(ctx)
-                        r.ImGui_Text(ctx, "3rd party: " )
-                        local send_buddy_id = r.NamedCommandLookup("_RS39115aaa5f19081d275c9a8dbdf990de23d6d9fa")
-                        
-                        if r.ImGui_MenuItem(ctx, "Send Buddy (Oded)") then
-                            if send_buddy_id ~= 0 then
-                                r.Main_OnCommand(send_buddy_id, 0)
-                            else
-                                r.ShowMessageBox("Send Buddy (Oded) is not installed. Install this action to use this function.", "Action not found", 0)
-                            end
-                        end
-                        local track_snapshot_id = r.NamedCommandLookup("_RSf9d888b66c9bb4971001d0788a38a00a930ad499")
-                        if r.ImGui_MenuItem(ctx, "Track Snapshot (daniellumertz)") then
-                            if track_snapshot_id ~= 0 then
-                                r.Main_OnCommand(track_snapshot_id, 0)
-                            else
-                                r.ShowMessageBox("Track Snapshot (daniellumertz) is not installed. Install this action to use this function.", "Action not found", 0)
-                            end
-                        end
-                        local track_icon_selector_id = r.NamedCommandLookup("_RSd166add798d24704e0ae7dfd5a50848258c1a3e9")
-                        if r.ImGui_MenuItem(ctx, "Track Icon Selector (Reapertips)") then
-                            if track_icon_selector_id ~= 0 then
-                                r.Main_OnCommand(track_icon_selector_id, 0)
-                            else
-                                r.ShowMessageBox("Track Icon Selector (Reapertips) is not installed. Install this action to use this function.", "Action not found", 0)
-                            end
-                        end
-                        local track_icon_selector_id = r.NamedCommandLookup("_RS4466532563f07c099f8ec22b9b79e819e0d3f3d4")
-                        if r.ImGui_MenuItem(ctx, "Paranormal FX Router (Sexan)") then
-                            if track_icon_selector_id ~= 0 then
-                                r.Main_OnCommand(track_icon_selector_id, 0)
-                            else
-                                r.ShowMessageBox("Paranormal FX Router (Sexan) is not installed. Install this action to use this function.", "Action not found", 0)
-                            end
                         end
                         r.ImGui_Separator(ctx)
                     end
@@ -20526,11 +20925,12 @@ if visible then
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx)
             
+            if config.main_section_tags_enabled then
             if DrawCollapseHeader("TAGS", config.main_segment_tags_visible, "Show Tags", "Hide Tags") then
                 config.main_segment_tags_visible = not config.main_segment_tags_visible
                 SaveConfig()
             end
-            if config.main_segment_tags_visible and config.show_tags and TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
+            if config.main_segment_tags_visible and TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
                 local tagsection_open = r.ImGui_BeginChild(ctx, "TagSection", track_info_width, 45)
                 if tagsection_open then
                     current_tag_window_height = r.ImGui_GetWindowHeight(ctx) + 20
@@ -21283,6 +21683,7 @@ if visible then
                 end
             
             end
+            end
             if WANT_REFRESH then
                 WANT_REFRESH = nil
                 UpdateChainsTrackTemplates(CAT)
@@ -21290,6 +21691,16 @@ if visible then
             if show_confirm_clear then
                 ShowConfirmClearPopup()
             end
+            if config.main_section_io_enabled then
+            if DrawCollapseHeader("I/O", config.main_segment_io_visible, "Show Input/Output", "Hide Input/Output") then
+                config.main_segment_io_visible = not config.main_segment_io_visible
+                SaveConfig()
+            end
+            if config.main_segment_io_visible then
+                DrawIOSection()
+            end
+            end
+            if config.main_section_plugins_enabled then
             if DrawCollapseHeader("PLUGINS", config.main_segment_plugins_visible, "Show Plugins", "Hide Plugins") then
                 config.main_segment_plugins_visible = not config.main_segment_plugins_visible
                 SaveConfig()
@@ -21300,6 +21711,8 @@ if visible then
                     DrawPluginMenus()
                 end
             end
+            end
+            if config.main_section_utilities_enabled then
             if DrawCollapseHeader("UTILITIES", config.main_segment_utilities_visible, "Show Utilities", "Hide Utilities") then
                 config.main_segment_utilities_visible = not config.main_segment_utilities_visible
                 SaveConfig()
@@ -21307,6 +21720,8 @@ if visible then
             if config.main_segment_utilities_visible then
                 DrawUtilitiesSection()
             end
+            end
+            if config.main_section_trackfx_enabled or config.main_section_itemfx_enabled then
             local tfx_clicked, tfx_rclicked = DrawCollapseHeaderHalf("TRACK FX", config.main_segment_trackfx_visible, "Show Track FX", "Hide Track FX", true, config.main_trackfx_thumbnail_view)
             if tfx_clicked then
                 config.main_segment_trackfx_visible = not config.main_segment_trackfx_visible
@@ -21332,19 +21747,24 @@ if visible then
             elseif config.main_segment_itemfx_visible then
                 DrawMainTrackFXPanel(true)
             end
+            end
+            if config.main_section_meter_enabled then
             if DrawCollapseHeader("METER", config.main_segment_meter_visible, "Show Meter", "Hide Meter") then
                 config.main_segment_meter_visible = not config.main_segment_meter_visible
                 SaveConfig()
             end
-            if config.main_segment_meter_visible and not config.hideMeter then
+            if config.main_segment_meter_visible then
                 DrawMeterModule.DrawMeter(r, ctx, config, TRACK, TinyFont)
             end
+            end
+            if config.main_section_buttons_enabled then
             if DrawCollapseHeader("BUTTONS", config.main_segment_buttons_visible, "Show Buttons", "Hide Buttons") then
                 config.main_segment_buttons_visible = not config.main_segment_buttons_visible
                 SaveConfig()
             end
             if config.main_segment_buttons_visible then
                 DrawBottomButtons()
+            end
             end
         else
             r.ImGui_Text(ctx, "NO TRACK SELECTED")
@@ -21632,9 +22052,9 @@ if visible then
         r.ImGui_EndPopup(ctx)
     end
 
-    if show_rename_popup then
+    if show_plugin_rename_popup then
         r.ImGui_OpenPopup(ctx, "Rename Plugin Alias")
-        show_rename_popup = false
+        show_plugin_rename_popup = false
     end
 
     if r.ImGui_BeginPopupModal(ctx, "Rename Plugin Alias", nil, r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_TopMost()) then
@@ -21690,6 +22110,8 @@ if visible then
     if config.enable_drag_add_fx then
         DrawDragOverlay()
     end
+
+    DrawShortcutsWindow()
     
     if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         r.ImGui_PopFont(ctx)

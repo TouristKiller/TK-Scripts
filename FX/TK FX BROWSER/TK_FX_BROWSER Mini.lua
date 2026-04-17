@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.8
+-- @version 0.3.9
 -- @changelog:
 --[[ 
     + Modern Cards now work in Normal layout view (Favorites, Custom sections)
@@ -135,7 +135,9 @@ end
 local SCRIPT_VERSION
 local function GetScriptVersion()
     if SCRIPT_VERSION then return SCRIPT_VERSION end
-    local f = io.open(script_path .. "TK_FX_BROWSER.lua", "r")
+    local info = debug.getinfo(1, "S")
+    local src = info and info.source and info.source:match("^@(.+)$")
+    local f = src and io.open(src, "r")
     if f then
         for i = 1, 50 do
             local l = f:read("*l"); if not l then break end
@@ -3359,16 +3361,15 @@ function ShowConfigWindow()
     
     -- Scale config window based on font size (11 is default)
     local font_scale = (config.font_size or 11) / 11
-    local window_width = math.floor(480 * font_scale)
-    -- Height only scales up, not down (minimum is base size)
-    local base_height = 550
+    local window_width = math.floor(640 * font_scale)
+    local base_height = 600
     local window_height = font_scale > 1.0 and math.floor(base_height * font_scale) or base_height
 
     local column1_width = math.floor(10 * font_scale)
-    local column2_width = math.floor(120 * font_scale)
-    local column3_width = math.floor(250 * font_scale)
-    local column4_width = math.floor(360 * font_scale)
-    local slider_width = math.floor(110 * font_scale)
+    local column2_width = math.floor(170 * font_scale)
+    local column3_width = math.floor(330 * font_scale)
+    local column4_width = math.floor(490 * font_scale)
+    local slider_width = math.floor(140 * font_scale)
     
     r.ImGui_SetNextWindowSize(ctx, window_width, window_height, r.ImGui_Cond_Always())
     r.ImGui_SetNextWindowSizeConstraints(ctx, window_width, window_height, window_width, window_height)
@@ -3382,13 +3383,9 @@ function ShowConfigWindow()
             r.ImGui_PopFont(ctx)
         end
         
-        -- Info message about shared settings
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFAA00FF)  -- Orange color
-        r.ImGui_TextWrapped(ctx, "Note: Settings are shared between TK FX BROWSER and Mini versions")
-        r.ImGui_PopStyleColor(ctx)
-        
         r.ImGui_Separator(ctx)
         if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
+
             if r.ImGui_BeginTabItem(ctx, "GUI") then
             NewSection("GUI:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -3523,6 +3520,25 @@ function ShowConfigWindow()
             r.ImGui_PushItemWidth(ctx, slider_width)
             _, config.dropdown_menu_length = r.ImGui_SliderInt(ctx, "##Dropdown Length", config.dropdown_menu_length, 5, 75)
             r.ImGui_PopItemWidth(ctx)
+            
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Submenu Width")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_submenu, new_submenu = r.ImGui_SliderInt(ctx, "##SubmenuWidth", config.submenu_width or 160, 100, 300)
+            if changed_submenu then config.submenu_width = new_submenu end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "FX List Width")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_fxlist, new_fxlist = r.ImGui_SliderInt(ctx, "##FXListWidth", config.fx_list_width or 280, 150, 500)
+            if changed_fxlist then config.fx_list_width = new_fxlist end
+            r.ImGui_PopItemWidth(ctx)
+            
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Tab Color")
             r.ImGui_SameLine(ctx)
@@ -3698,7 +3714,9 @@ function ShowConfigWindow()
             if changed5 then config.custom_folder_level_colors[5] = new_col5; SaveConfig() end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 5+ Folder Color") end
 
-            NewSection("FX Chain Builder:")
+            r.ImGui_Dummy(ctx, 0, 8)
+
+            NewSection("FX CHAIN BUILDER:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Color")
             r.ImGui_SameLine(ctx)
@@ -3808,98 +3826,61 @@ function ShowConfigWindow()
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.add_instruments_on_top = r.ImGui_Checkbox(ctx, "Add instruments at top", config.add_instruments_on_top)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.show_chain_builder_button = r.ImGui_Checkbox(ctx, "FX Chain Builder", config.show_chain_builder_button)
             r.ImGui_Dummy(ctx, 0, 5)
 
-           NewSection("LOCATIONS:")
-            -- FX Chains location
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            local changed_fx_use, use_fx_custom = r.ImGui_Checkbox(ctx, "custom FXChain folder", config.use_custom_fxchain_dir)
-            if changed_fx_use then
-                config.use_custom_fxchain_dir = use_fx_custom; SaveConfig()
-            end
-            r.ImGui_SameLine(ctx)
-            -- r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_PushItemWidth(ctx, 180)
-            local fx_dir = config.custom_fxchain_dir or ""
-            local changed_fx_dir, new_fx_dir = r.ImGui_InputText(ctx, "##fxchain_dir", fx_dir)
-            if changed_fx_dir then config.custom_fxchain_dir = new_fx_dir end
-            r.ImGui_PopItemWidth(ctx)
-            -- Keep buttons on the same line as input
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Browse…##fxchain") then
-                local rv, path = r.JS_Dialog_BrowseForFolder("Select FX Chains folder", ResolveFxChainsRoot())
-                if rv == 1 and path and path ~= '' then
-                    config.custom_fxchain_dir = path; SaveConfig()
-                end
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Reset##fxchain_reset") then
-                config.use_custom_fxchain_dir = false
-                config.custom_fxchain_dir = ""
-                SaveConfig()
-            end
-            if config.use_custom_fxchain_dir and (not config.custom_fxchain_dir or config.custom_fxchain_dir == '') then
-                r.ImGui_TextColored(ctx, 0xFF5A5AFF, "Please set a valid FX Chains folder")
-            end
-            do
-                local fx_root = ResolveFxChainsRoot()
-                local exists = PathExists(fx_root)
-                local color = exists and 0x55CC55FF or 0xFF5A5AFF
-                r.ImGui_SetCursorPosX(ctx, column1_width)
-                r.ImGui_Text(ctx, "FX Chains path:")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_TextColored(ctx, color, exists and "OK" or "Not found")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_Text(ctx, fx_root)
-            end
+             r.ImGui_Dummy(ctx, 0, 8)
 
-            -- Track Templates location
+            NewSection("BROWSER PANEL SECTIONS:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
-            local changed_tt_use, use_tt_custom = r.ImGui_Checkbox(ctx, "custom TT Folder", config.use_custom_template_dir)
-            if changed_tt_use then
-                config.use_custom_template_dir = use_tt_custom; SaveConfig()
-            end
+            _, config.browser_segment_favorites_enabled = r.ImGui_Checkbox(ctx, "Favorites##bp", config.browser_segment_favorites_enabled)
             r.ImGui_SameLine(ctx)
-            -- r.ImGui_SetCursorPosX(ctx, column3_width)
-            r.ImGui_PushItemWidth(ctx, 180)
-            local tt_dir = config.custom_template_dir or ""
-            local changed_tt_dir, new_tt_dir = r.ImGui_InputText(ctx, "##templ_dir", tt_dir)
-            if changed_tt_dir then config.custom_template_dir = new_tt_dir end
-            r.ImGui_PopItemWidth(ctx)
-            -- Keep buttons on the same line as input
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.browser_segment_custom_folders_enabled = r.ImGui_Checkbox(ctx, "Custom Folders##bp", config.browser_segment_custom_folders_enabled)
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Browse…##templ") then
-                local rv, path = r.JS_Dialog_BrowseForFolder("Select Track Templates folder", ResolveTrackTemplatesRoot())
-                if rv == 1 and path and path ~= '' then
-                    config.custom_template_dir = path; SaveConfig()
-                end
-            end
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.browser_segment_main_categories_enabled = r.ImGui_Checkbox(ctx, "Categories##bp", config.browser_segment_main_categories_enabled)
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Reset##templ_reset") then
-                config.use_custom_template_dir = false
-                config.custom_template_dir = ""
-                SaveConfig()
-            end
-            if config.use_custom_template_dir and (not config.custom_template_dir or config.custom_template_dir == '') then
-                r.ImGui_TextColored(ctx, 0xFF5A5AFF, "Please set a valid Track Templates folder")
-            end
-            do
-                local tt_root = ResolveTrackTemplatesRoot()
-                local exists = PathExists(tt_root)
-                local color = exists and 0x55CC55FF or 0xFF5A5AFF
-                r.ImGui_SetCursorPosX(ctx, column1_width)
-                r.ImGui_Text(ctx, "Track Templates path:")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_TextColored(ctx, color, exists and "OK" or "Not found")
-                r.ImGui_SameLine(ctx)
-                r.ImGui_Text(ctx, tt_root)
-            end
-            
-
-            r.ImGui_Dummy(ctx, 0, 8)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.browser_segment_utilities_enabled = r.ImGui_Checkbox(ctx, "Utilities##bp", config.browser_segment_utilities_enabled)
 
             NewSection("SCREENSHOT WINDOW:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
+            local changed, new_value = r.ImGui_Checkbox(ctx, "Show Window", config.show_screenshot_window)
+            if changed then
+                config.show_screenshot_window = new_value
+                RequestClearScreenshotCache()
+            end
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            local dock_changed, new_dock_value = r.ImGui_Checkbox(ctx, "Dock", config.dock_screenshot_window)
+            if dock_changed then
+                local main_dock_id = r.ImGui_GetWindowDockID(ctx)
+                if main_dock_id == 0 then
+                    config.dock_screenshot_window = new_dock_value
+                    config.show_screenshot_window = true
+                else
+                    config.dock_screenshot_window = false
+                end
+                SaveConfig()
+            end
+            
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            local dock_side_changed, new_dock_side = r.ImGui_Checkbox(ctx, "Dock Left", config.dock_screenshot_left)
+            if dock_side_changed then
+                local main_dock_id = r.ImGui_GetWindowDockID(ctx)
+                if main_dock_id == 0 then
+                    config.dock_screenshot_left = new_dock_side
+                    config.show_screenshot_window = true
+                end
+                SaveConfig()
+            end  
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
             local single_selected = not config.add_fx_with_double_click
             if r.ImGui_RadioButton(ctx, "Single Click##AddFXMode", single_selected) then
                 config.add_fx_with_double_click = false
@@ -3907,12 +3888,6 @@ function ShowConfigWindow()
             end
             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click on its screenshot.")
-            end
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
-            if r.ImGui_RadioButton(ctx, "Double Click##AddFXMode", config.add_fx_with_double_click) then
-                config.add_fx_with_double_click = true
-                SaveConfig()
             end
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -3924,11 +3899,15 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.remove_manufacturer_names = r.ImGui_Checkbox(ctx, "Hide Developer", config.remove_manufacturer_names)
-            
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            if r.ImGui_RadioButton(ctx, "Double Click##AddFXMode", config.add_fx_with_double_click) then
+                config.add_fx_with_double_click = true
+                SaveConfig()
+            end
+             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click.")
             end
-            -- r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local fg_changed, fg_val = r.ImGui_Checkbox(ctx, "Flicker Guard", config.flicker_guard_enabled)
             if fg_changed then
@@ -3948,7 +3927,6 @@ function ShowConfigWindow()
 
 
 
-            --r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local rses_changed, rses_val = r.ImGui_Checkbox(ctx, "Respect Plugin Manager Search Exclusions", config.respect_search_exclusions_in_screenshots)
             if rses_changed then
@@ -3966,76 +3944,6 @@ function ShowConfigWindow()
             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "When enabled, screenshots will automatically resize to fit the window.")
             end
-
-            r.ImGui_Dummy(ctx, 0, 5)
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            r.ImGui_Text(ctx, "Default Folder:")
-            r.ImGui_SameLine(ctx, 0, 10)
-            r.ImGui_PushItemWidth(ctx, slider_width)
-            r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
-            local current_default_label = config.default_folder
-            if current_default_label == LAST_OPENED_SENTINEL then current_default_label = "Last opened folder" end
-            if r.ImGui_BeginCombo(ctx, "##Default Folder", current_default_label or "None") then
-                if r.ImGui_Selectable(ctx, "None", config.default_folder == nil) then
-                    config.default_folder = nil
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Last opened folder", config.default_folder == LAST_OPENED_SENTINEL) then
-                    config.default_folder = LAST_OPENED_SENTINEL
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Favorites", config.default_folder == "Favorites") then
-                    config.default_folder = "Favorites"
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Current Project FX", config.default_folder == "Current Project FX") then
-                    config.default_folder = "Current Project FX"
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Current Track FX", config.default_folder == "Current Track FX") then
-                    config.default_folder = "Current Track FX"
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Projects", config.default_folder == "Projects") then
-                    config.default_folder = "Projects"
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Sends/Receives", config.default_folder == "Sends/Receives") then
-                    config.default_folder = "Sends/Receives" 
-                    SaveConfig()
-                end
-                if r.ImGui_Selectable(ctx, "Actions", config.default_folder == "Actions") then
-                    config.default_folder = "Actions"
-                    SaveConfig()
-                end
-                for i = 1, #folders_category do
-                    local is_selected = (config.default_folder == folders_category[i].name)
-                    if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
-                        config.default_folder = folders_category[i].name
-                        SaveConfig()
-                    end
-                end
-                r.ImGui_EndCombo(ctx)
-            end  
-            if r.ImGui_IsItemHovered(ctx) then
-                local wheel_delta = r.ImGui_GetMouseWheel(ctx)
-                if wheel_delta ~= 0 then
-                    local options = { nil, LAST_OPENED_SENTINEL, "Favorites", "Current Project FX", "Current Track FX", "Projects", "Sends/Receives", "Actions" }
-                    for i = 1, #folders_category do options[#options+1] = folders_category[i].name end
-                    local current_index = 1
-                    for i, opt in ipairs(options) do
-                        if opt == config.default_folder then current_index = i; break end
-                    end
-                   
-                    local new_index = current_index - wheel_delta
-                    if new_index < 1 then new_index = 1 end
-                    if new_index > #options then new_index = #options end
-                    config.default_folder = options[new_index]
-                    SaveConfig()
-                end
-            end
-
-            r.ImGui_PopItemWidth(ctx)
 
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -4112,7 +4020,77 @@ function ShowConfigWindow()
                 end
                 new_search_performed = true
             end
-            local ap_changed, ap_val = r.ImGui_Checkbox(ctx, "Type Priority:  ", config.apply_type_priority)
+
+            r.ImGui_Text(ctx, "Default Folder:")
+            r.ImGui_SameLine(ctx, 0, 10)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            r.ImGui_SetNextWindowSizeConstraints(ctx, 0, 0, FLT_MAX, config.dropdown_menu_length * r.ImGui_GetTextLineHeightWithSpacing(ctx))
+            local current_default_label = config.default_folder
+            if current_default_label == LAST_OPENED_SENTINEL then current_default_label = "Last opened folder" end
+            if r.ImGui_BeginCombo(ctx, "##Default Folder", current_default_label or "None") then
+                if r.ImGui_Selectable(ctx, "None", config.default_folder == nil) then
+                    config.default_folder = nil
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Last opened folder", config.default_folder == LAST_OPENED_SENTINEL) then
+                    config.default_folder = LAST_OPENED_SENTINEL
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Favorites", config.default_folder == "Favorites") then
+                    config.default_folder = "Favorites"
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Current Project FX", config.default_folder == "Current Project FX") then
+                    config.default_folder = "Current Project FX"
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Current Track FX", config.default_folder == "Current Track FX") then
+                    config.default_folder = "Current Track FX"
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Projects", config.default_folder == "Projects") then
+                    config.default_folder = "Projects"
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Sends/Receives", config.default_folder == "Sends/Receives") then
+                    config.default_folder = "Sends/Receives" 
+                    SaveConfig()
+                end
+                if r.ImGui_Selectable(ctx, "Actions", config.default_folder == "Actions") then
+                    config.default_folder = "Actions"
+                    SaveConfig()
+                end
+                for i = 1, #folders_category do
+                    local is_selected = (config.default_folder == folders_category[i].name)
+                    if r.ImGui_Selectable(ctx, folders_category[i].name, is_selected) then
+                        config.default_folder = folders_category[i].name
+                        SaveConfig()
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end  
+            if r.ImGui_IsItemHovered(ctx) then
+                local wheel_delta = r.ImGui_GetMouseWheel(ctx)
+                if wheel_delta ~= 0 then
+                    local options = { nil, LAST_OPENED_SENTINEL, "Favorites", "Current Project FX", "Current Track FX", "Projects", "Sends/Receives", "Actions" }
+                    for i = 1, #folders_category do options[#options+1] = folders_category[i].name end
+                    local current_index = 1
+                    for i, opt in ipairs(options) do
+                        if opt == config.default_folder then current_index = i; break end
+                    end
+                   
+                    local new_index = current_index - wheel_delta
+                    if new_index < 1 then new_index = 1 end
+                    if new_index > #options then new_index = #options end
+                    config.default_folder = options[new_index]
+                    SaveConfig()
+                end
+            end
+
+            r.ImGui_PopItemWidth(ctx)
+
+            r.ImGui_SameLine(ctx, 0, 15)
+            local ap_changed, ap_val = r.ImGui_Checkbox(ctx, "Type Priority", config.apply_type_priority)
             if ap_changed then
                 config.apply_type_priority = ap_val
                 SaveConfig()
@@ -4124,7 +4102,7 @@ function ShowConfigWindow()
 
             local types_all = {"CLAP","VST3","VST","JS","AU","LV2"}
             local function drawTypeComboInline(idx)
-                r.ImGui_PushItemWidth(ctx, 83)
+                r.ImGui_PushItemWidth(ctx, 70)
                 local current = config.plugin_type_priority[idx] or types_all[idx]
                 if r.ImGui_BeginCombo(ctx, "##TP"..idx, current) then
                     for _, t in ipairs(types_all) do
@@ -4139,15 +4117,14 @@ function ShowConfigWindow()
                 end
                 r.ImGui_PopItemWidth(ctx)
             end
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 8)
             drawTypeComboInline(1)
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 2)
             drawTypeComboInline(2)
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 2)
             drawTypeComboInline(3)
-            r.ImGui_SameLine(ctx)
+            r.ImGui_SameLine(ctx, 0, 2)
             drawTypeComboInline(4)
-            
 
             
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
@@ -4465,6 +4442,107 @@ function ShowConfigWindow()
         end
         if r.ImGui_BeginTabItem(ctx, "PLUGIN MANAGER") then
             ShowPluginManagerTab()
+            r.ImGui_EndTabItem(ctx)
+        end
+
+        if r.ImGui_BeginTabItem(ctx, "PATHS") then
+            r.ImGui_Dummy(ctx, 0, 5)
+            NewSection("FX CHAINS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local changed_fx_use, use_fx_custom = r.ImGui_Checkbox(ctx, "custom FXChain folder", config.use_custom_fxchain_dir)
+            if changed_fx_use then
+                config.use_custom_fxchain_dir = use_fx_custom; SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 180)
+            local fx_dir = config.custom_fxchain_dir or ""
+            local changed_fx_dir, new_fx_dir = r.ImGui_InputText(ctx, "##fxchain_dir", fx_dir)
+            if changed_fx_dir then config.custom_fxchain_dir = new_fx_dir end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Browse…##fxchain") then
+                local rv, path = r.JS_Dialog_BrowseForFolder("Select FX Chains folder", ResolveFxChainsRoot())
+                if rv == 1 and path and path ~= '' then
+                    config.custom_fxchain_dir = path; SaveConfig()
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset##fxchain_reset") then
+                config.use_custom_fxchain_dir = false
+                config.custom_fxchain_dir = ""
+                SaveConfig()
+            end
+            if config.use_custom_fxchain_dir and (not config.custom_fxchain_dir or config.custom_fxchain_dir == '') then
+                r.ImGui_TextColored(ctx, 0xFF5A5AFF, "Please set a valid FX Chains folder")
+            end
+            do
+                local fx_root = ResolveFxChainsRoot()
+                local exists = PathExists(fx_root)
+                local color = exists and 0x55CC55FF or 0xFF5A5AFF
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+                r.ImGui_Text(ctx, "FX Chains path:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_TextColored(ctx, color, exists and "OK" or "Not found")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_Text(ctx, fx_root)
+            end
+
+            r.ImGui_Dummy(ctx, 0, 8)
+            NewSection("TRACK TEMPLATES:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local changed_tt_use, use_tt_custom = r.ImGui_Checkbox(ctx, "custom TT Folder", config.use_custom_template_dir)
+            if changed_tt_use then
+                config.use_custom_template_dir = use_tt_custom; SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_PushItemWidth(ctx, 180)
+            local tt_dir = config.custom_template_dir or ""
+            local changed_tt_dir, new_tt_dir = r.ImGui_InputText(ctx, "##templ_dir", tt_dir)
+            if changed_tt_dir then config.custom_template_dir = new_tt_dir end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Browse…##templ") then
+                local rv, path = r.JS_Dialog_BrowseForFolder("Select Track Templates folder", ResolveTrackTemplatesRoot())
+                if rv == 1 and path and path ~= '' then
+                    config.custom_template_dir = path; SaveConfig()
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset##templ_reset") then
+                config.use_custom_template_dir = false
+                config.custom_template_dir = ""
+                SaveConfig()
+            end
+            if config.use_custom_template_dir and (not config.custom_template_dir or config.custom_template_dir == '') then
+                r.ImGui_TextColored(ctx, 0xFF5A5AFF, "Please set a valid Track Templates folder")
+            end
+            do
+                local tt_root = ResolveTrackTemplatesRoot()
+                local exists = PathExists(tt_root)
+                local color = exists and 0x55CC55FF or 0xFF5A5AFF
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+                r.ImGui_Text(ctx, "Track Templates path:")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_TextColored(ctx, color, exists and "OK" or "Not found")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_Text(ctx, tt_root)
+            end
+
+            r.ImGui_SetCursorPosY(ctx, window_height - 30)
+            r.ImGui_Separator(ctx)
+            local button_width = (window_width - 20) / 3
+            if r.ImGui_Button(ctx, "Save", button_width, 20) then
+                SaveConfig()
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset", button_width, 20) then
+                ResetConfig()
+            end
             r.ImGui_EndTabItem(ctx)
         end
 

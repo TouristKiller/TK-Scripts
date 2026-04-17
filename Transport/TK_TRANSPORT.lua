@@ -1,8 +1,12 @@
--- @description TK_TRANSPORT
+﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.9.4
+-- @version 1.9.5
 -- @changelog 
 --[[
+  v1.9.5:
+  + Added: New feature or improvement for version 1.9.5
+  + Fixed: Bug fix or improvement for version 1.9.5
+
   v1.9.4:
   + Added: Configurable transport button order (reorder via up/down arrows in settings)
   + Added: Optional button background for transport buttons (color, hover, active, padding, rounding, border)
