@@ -1,11 +1,9 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.3.9
+-- @version 0.4.0
 -- @changelog:
 --[[ 
-    + Modern Cards now work in Normal layout view (Favorites, Custom sections)
-    + List Hover Screenshot: new option to show screenshot tooltip on hover in list view
-    + Loading overlay in screenshot window while projects are loading
+    + Added "FX List Keep Ratio" option for Screenshot Window info panel thumbnails
 ]]--        
 --------------------------------------------------------------------------
    
@@ -1011,6 +1009,7 @@ function SetDefaultConfig()
         always_search_all = false,
         show_track_fx_thumbnails = false,
         show_item_fx_thumbnails = false,
+        info_fxlist_keep_aspect_ratio = false,
     } 
 end
 local config = SetDefaultConfig()    
@@ -3944,6 +3943,8 @@ function ShowConfigWindow()
             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "When enabled, screenshots will automatically resize to fit the window.")
             end
+            r.ImGui_SameLine(ctx)
+            _, config.info_fxlist_keep_aspect_ratio = r.ImGui_Checkbox(ctx, "FX List Keep Ratio", config.info_fxlist_keep_aspect_ratio)
 
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -11636,7 +11637,9 @@ function ShowBrowserPanel()
                                 r.ImGui_PushID(ctx, "info_trackfx_thumb_" .. i)
                                 local tw, th = r.ImGui_Image_GetSize(tfx_thumb_tex)
                                 local thumb_h = m_floor(thumb_avail_w * (th / tw))
-                                if thumb_h > 120 then thumb_h = 120 end
+                                if not config.info_fxlist_keep_aspect_ratio then
+                                    if thumb_h > 120 then thumb_h = 120 end
+                                end
                                 local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
                                 local img_clicked = r.ImGui_ImageButton(ctx, "tfx_" .. i, tfx_thumb_tex, thumb_avail_w, thumb_h)
                                 local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -11980,7 +11983,9 @@ function ShowBrowserPanel()
                                     r.ImGui_PushID(ctx, "info_itemfx_thumb_" .. i)
                                     local tw, th = r.ImGui_Image_GetSize(ifx_thumb_tex)
                                     local thumb_h = m_floor(ifx_avail_w * (th / tw))
-                                    if thumb_h > 120 then thumb_h = 120 end
+                                    if not config.info_fxlist_keep_aspect_ratio then
+                                        if thumb_h > 120 then thumb_h = 120 end
+                                    end
                                     local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
                                     local img_clicked = r.ImGui_ImageButton(ctx, "ifx_" .. i, ifx_thumb_tex, ifx_avail_w, thumb_h)
                                     local dl = r.ImGui_GetWindowDrawList(ctx)

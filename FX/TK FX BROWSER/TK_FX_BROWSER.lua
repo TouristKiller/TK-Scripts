@@ -1,9 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.5.7
+-- @version 2.5.9
 -- @changelog:
 --[[ 
-    + Visual improvements and adde I/O section
+    + Added "FX List Keep Ratio" option for Main Window Track/Item FX thumbnails
+    + Added "FX List Keep Ratio" option for Screenshot Window info panel thumbnails
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -1010,6 +1011,8 @@ function SetDefaultConfig()
         show_item_fx_thumbnails = false,
         main_trackfx_thumbnail_view = false,
         main_itemfx_thumbnail_view = false,
+        fxlist_keep_aspect_ratio = false,
+        info_fxlist_keep_aspect_ratio = false,
         allow_esc_close = true,
     } 
 end
@@ -3923,6 +3926,9 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.fxlist_keep_aspect_ratio = r.ImGui_Checkbox(ctx, "FX List Keep Ratio##mw", config.fxlist_keep_aspect_ratio)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
             r.ImGui_SameLine(ctx)
@@ -4030,6 +4036,8 @@ function ShowConfigWindow()
             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "When enabled, screenshots will automatically resize to fit the window.")
             end
+            r.ImGui_SameLine(ctx)
+            _, config.info_fxlist_keep_aspect_ratio = r.ImGui_Checkbox(ctx, "FX List Keep Ratio##sw", config.info_fxlist_keep_aspect_ratio)
 
             r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -6266,7 +6274,7 @@ function ShowPluginScreenshot()
             if width and height then
                 local display_width = config.screenshot_display_size
                 local display_height = display_width * (height / width)
-                local max_height = display_width * 1.2 -- 120% van de ingestelde breedte
+                local max_height = display_width * 1.2
                
                 if display_height > max_height then
                     display_height = max_height
@@ -12030,7 +12038,9 @@ function ShowBrowserPanel()
                                 r.ImGui_PushID(ctx, "info_trackfx_thumb_" .. i)
                                 local tw, th = r.ImGui_Image_GetSize(tfx_thumb_tex)
                                 local thumb_h = m_floor(thumb_avail_w * (th / tw))
-                                if thumb_h > 120 then thumb_h = 120 end
+                                if not config.info_fxlist_keep_aspect_ratio then
+                                    if thumb_h > 120 then thumb_h = 120 end
+                                end
                                 local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
                                 local img_clicked = r.ImGui_ImageButton(ctx, "tfx_" .. i, tfx_thumb_tex, thumb_avail_w, thumb_h)
                                 local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -12374,7 +12384,9 @@ function ShowBrowserPanel()
                                     r.ImGui_PushID(ctx, "info_itemfx_thumb_" .. i)
                                     local tw, th = r.ImGui_Image_GetSize(ifx_thumb_tex)
                                     local thumb_h = m_floor(ifx_avail_w * (th / tw))
-                                    if thumb_h > 120 then thumb_h = 120 end
+                                    if not config.info_fxlist_keep_aspect_ratio then
+                                        if thumb_h > 120 then thumb_h = 120 end
+                                    end
                                     local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
                                     local img_clicked = r.ImGui_ImageButton(ctx, "ifx_" .. i, ifx_thumb_tex, ifx_avail_w, thumb_h)
                                     local dl = r.ImGui_GetWindowDrawList(ctx)
@@ -19081,10 +19093,13 @@ function ShowTrackFXContentThumbnail()
             r.ImGui_PushID(ctx, "main_trackfx_thumb_" .. i)
             if thumb_tex then
                 local tw, th = r.ImGui_Image_GetSize(thumb_tex)
+                local thumb_w = avail_w
                 local thumb_h = m_floor(avail_w * (th / tw))
-                if thumb_h > 120 then thumb_h = 120 end
+                if not config.fxlist_keep_aspect_ratio then
+                    if thumb_h > 120 then thumb_h = 120 end
+                end
                 local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
-                local img_clicked = r.ImGui_ImageButton(ctx, "mtfx_" .. i, thumb_tex, avail_w, thumb_h)
+                local img_clicked = r.ImGui_ImageButton(ctx, "mtfx_" .. i, thumb_tex, thumb_w, thumb_h)
                 local dl = r.ImGui_GetWindowDrawList(ctx)
                 if is_bypassed then
                     r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + thumb_h, 0x00000088)
@@ -19232,10 +19247,13 @@ function ShowItemFXContentThumbnail()
             r.ImGui_PushID(ctx, "main_itemfx_thumb_" .. i)
             if thumb_tex then
                 local tw, th = r.ImGui_Image_GetSize(thumb_tex)
+                local thumb_w = avail_w
                 local thumb_h = m_floor(avail_w * (th / tw))
-                if thumb_h > 120 then thumb_h = 120 end
+                if not config.fxlist_keep_aspect_ratio then
+                    if thumb_h > 120 then thumb_h = 120 end
+                end
                 local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
-                local img_clicked = r.ImGui_ImageButton(ctx, "mifx_" .. i, thumb_tex, avail_w, thumb_h)
+                local img_clicked = r.ImGui_ImageButton(ctx, "mifx_" .. i, thumb_tex, thumb_w, thumb_h)
                 local dl = r.ImGui_GetWindowDrawList(ctx)
                 if not is_enabled then
                     r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + thumb_h, 0x00000088)

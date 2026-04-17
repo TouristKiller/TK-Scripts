@@ -1,24 +1,9 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.6.8
+-- @version 0.6.9
 -- @changelog:
 --[[       
-+ AUTO: Replaced AI database module (ai_sample_module) with pure Lua keyword categorizer (tk_filename_categorizer)
-+ AUTO: Instant filename/folder-based classification, no external database needed
-+ AUTO: Category buttons with color indicators and file counts
-+ PERFORMANCE: Startup optimized from ~10s to ~0.4s using fast Lua cache (loadfile)
-+ PERFORMANCE: Folder switch optimized from ~4s to ~0.3s (removed redundant JSON parse, added presort)
-+ PERFORMANCE: Auto tab switch optimized (category cache preserved across tab switches)
-+ PERFORMANCE: Category counts cached instead of recalculated every frame
-+ PERFORMANCE: Category filter results cached for repeated frame draws
-+ FOLDERS: Drag & drop reorder support for folder buttons
-+ FOLDERS: Move Up/Down now correctly tracks selected folder index
-+ AUTO: Source dropdown moved above categories for better workflow
-+ AUTO: Source dropdown themed consistently with rest of UI
-+ SORT: Sort column and direction remembered across folder/view switches
-+ INSERT: Peak files now correctly built for selection-based inserts (shift+click & drag)
-+ INSERT: Shift+click now uses unified insert_media_on_track function
-+ FIX: save_fast_cache forward declaration to prevent nil error when adding folders
++ Made Docking more stable and fixed various edge cases with it
 
 ]]--        
 --------------------------------------------------------------------------
@@ -5870,8 +5855,8 @@ local function draw_file_list()
                     r.ImGui_PopStyleColor(ctx, 3)  
                 end
                 
-                r.ImGui_EndChild(ctx)
             end
+            r.ImGui_EndChild(ctx)
             r.ImGui_PopStyleVar(ctx, 2) 
         end
 end
@@ -6286,7 +6271,7 @@ local function draw_progress_window()
     
     r.ImGui_SetNextWindowSize(ctx, 400, 0)
     
-    local viewport = r.ImGui_GetWindowViewport(ctx)
+    local viewport = r.ImGui_GetMainViewport(ctx)
     local center_x, center_y = r.ImGui_Viewport_GetCenter(viewport)
     r.ImGui_SetNextWindowPos(ctx, center_x, center_y, r.ImGui_Cond_Appearing(), 0.5, 0.5)
     
@@ -6375,7 +6360,6 @@ local function loop()
     r.ImGui_PushFont(ctx, normal_font, font_size)
     reaper.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
     local window_height = calculate_window_height()
-    reaper.ImGui_SetNextWindowSizeConstraints(ctx, 140, window_height, 16384, window_height)
     local has_files = (file_location.current_files and #file_location.current_files > 0) or (file_location.flat_view and search_filter.cached_flat_files and #search_filter.cached_flat_files > 0)
     if has_files then
         if file_location.flat_view then
@@ -6424,7 +6408,9 @@ local function loop()
         r.ImGui_SetNextWindowPos(ctx, ui.window_x, ui.window_y, r.ImGui_Cond_FirstUseEver())
         ui.position_applied = true
     end
-    r.ImGui_SetNextWindowSizeConstraints(ctx, 650, 400, 9999, 9999)
+    if not ui.was_docked then
+        r.ImGui_SetNextWindowSizeConstraints(ctx, 650, 400, 9999, 9999)
+    end
     r.ImGui_SetNextWindowSize(ctx, 650, 400, r.ImGui_Cond_FirstUseEver())
     
     r.ImGui_SetNextWindowBgAlpha(ctx, ui_settings.window_opacity)
@@ -6457,32 +6443,30 @@ local function loop()
     local visible, open = r.ImGui_Begin(ctx, 'TK Media Browser', true,
     r.ImGui_WindowFlags_NoTitleBar())
     
-    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
-        open = false
-    end
-    if visible and not r.ImGui_IsPopupOpen(ctx, '', r.ImGui_PopupFlags_AnyPopupId()) then
-        handle_keyboard_navigation()
-    end
-    if r.ImGui_IsWindowDocked(ctx) then
-        local current_width = r.ImGui_GetWindowWidth(ctx)
-        r.ImGui_SetWindowSize(ctx, current_width, calculate_window_height())
-    end
-    if ui.remember_window_position and not r.ImGui_IsWindowDocked(ctx) then
-        local new_x, new_y = r.ImGui_GetWindowPos(ctx)
-        if math.abs(new_x - ui.window_x) > 1 or math.abs(new_y - ui.window_y) > 1 then
-            ui.window_x = new_x
-            ui.window_y = new_y
-            local current_time = r.time_precise()
-            if current_time - ui.last_move_time > 0.5 then
-                save_options()
-                ui.last_move_time = current_time
+    if visible then
+        ui.was_docked = r.ImGui_IsWindowDocked(ctx)
+        
+        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+            open = false
+        end
+        if not r.ImGui_IsPopupOpen(ctx, '', r.ImGui_PopupFlags_AnyPopupId()) then
+            handle_keyboard_navigation()
+        end
+        if ui.remember_window_position and not r.ImGui_IsWindowDocked(ctx) then
+            local new_x, new_y = r.ImGui_GetWindowPos(ctx)
+            if math.abs(new_x - ui.window_x) > 1 or math.abs(new_y - ui.window_y) > 1 then
+                ui.window_x = new_x
+                ui.window_y = new_y
+                local current_time = r.time_precise()
+                if current_time - ui.last_move_time > 0.5 then
+                    save_options()
+                    ui.last_move_time = current_time
+                end
             end
         end
-    end
-    if visible then
-        local left_panel_width = 200
         local window_width = r.ImGui_GetContentRegionAvail(ctx)
-        local right_panel_width = math.max(200, window_width - left_panel_width - 10)
+        local left_panel_width = math.min(200, math.max(50, math.floor(window_width * 0.4)))
+        local right_panel_width = math.max(100, window_width - left_panel_width - 10)
         if r.ImGui_BeginChild(ctx, "LeftControlPanel", left_panel_width, 0, r.ImGui_WindowFlags_None()) then
             local LEFT_FOOTER_H = ui.show_oscilloscope and 228 or 100  
             local LEFT_HEADER_H = 0  
@@ -7276,13 +7260,13 @@ local function loop()
             r.ImGui_PopStyleVar(ctx, 1)
         end
         
+        end
         r.ImGui_EndChild(ctx)
         
         if ui_settings.hide_scrollbar then
             r.ImGui_PopStyleVar(ctx, 1)
         end
         
-        end
         if ui.show_oscilloscope then
             r.ImGui_Separator(ctx)
         end
@@ -8447,8 +8431,8 @@ local function loop()
             r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0x888888FF, text)
         end
         r.ImGui_Dummy(ctx, width, height)
-        r.ImGui_EndChild(ctx)
         end
+        r.ImGui_EndChild(ctx)
         r.ImGui_SameLine(ctx)
         local draw_list = r.ImGui_GetWindowDrawList(ctx)
         local x, y = r.ImGui_GetCursorScreenPos(ctx)
@@ -10204,41 +10188,42 @@ local function loop()
         
         r.ImGui_EndChild(ctx)
         
-        if cache_mgmt.scan_message ~= "" then
-            local viewport_center_x, viewport_center_y = r.ImGui_Viewport_GetCenter(r.ImGui_GetWindowViewport(ctx))
-            r.ImGui_SetNextWindowPos(ctx, viewport_center_x, viewport_center_y, r.ImGui_Cond_Always(), 0.5, 0.5)
+        r.ImGui_End(ctx)
+    end
+    
+    if cache_mgmt.scan_message ~= "" then
+        local viewport = r.ImGui_GetMainViewport(ctx)
+        local viewport_center_x, viewport_center_y = r.ImGui_Viewport_GetCenter(viewport)
+        r.ImGui_SetNextWindowPos(ctx, viewport_center_x, viewport_center_y, r.ImGui_Cond_Always(), 0.5, 0.5)
+        
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 20, 15)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x000000E6)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x404040FF)
+        
+        local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | 
+                     r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoScrollbar() |
+                     r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_AlwaysAutoResize()
+        
+        local notif_visible = r.ImGui_Begin(ctx, "##CacheNotification", true, flags)
+        if notif_visible then
+            local message_color = cache_mgmt.scan_message:match("up%-to%-date") and 0x00FF00FF or 
+                                 (cache_mgmt.scan_message:match("new") or cache_mgmt.scan_message:match("modified") or cache_mgmt.scan_message:match("removed")) and 0x00AAFFFF or 
+                                 0xFFFFFFFF
             
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8)
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 20, 15)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x000000E6)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x404040FF)
-            
-            local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | 
-                         r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoScrollbar() |
-                         r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_AlwaysAutoResize()
-            
-            if r.ImGui_Begin(ctx, "##CacheNotification", true, flags) then
-                local message_color = cache_mgmt.scan_message:match("up%-to%-date") and 0x00FF00FF or 
-                                     (cache_mgmt.scan_message:match("new") or cache_mgmt.scan_message:match("modified") or cache_mgmt.scan_message:match("removed")) and 0x00AAFFFF or 
-                                     0xFFFFFFFF
-                
-                r.ImGui_PushFont(ctx, normal_font, 11)
-                r.ImGui_TextColored(ctx, message_color, cache_mgmt.scan_message)
-                r.ImGui_PopFont(ctx)
-                
-                r.ImGui_End(ctx)
-            end
-            
-            r.ImGui_PopStyleColor(ctx, 2)
-            r.ImGui_PopStyleVar(ctx, 2)
-            
-            if cache_mgmt.message_timer and os.time() - cache_mgmt.message_timer > 3 then
-                cache_mgmt.scan_message = ""
-                cache_mgmt.message_timer = nil
-            end
+            r.ImGui_PushFont(ctx, normal_font, 11)
+            r.ImGui_TextColored(ctx, message_color, cache_mgmt.scan_message)
+            r.ImGui_PopFont(ctx)
+            r.ImGui_End(ctx)
         end
         
-        r.ImGui_End(ctx)
+        r.ImGui_PopStyleColor(ctx, 2)
+        r.ImGui_PopStyleVar(ctx, 2)
+        
+        if cache_mgmt.message_timer and os.time() - cache_mgmt.message_timer > 3 then
+            cache_mgmt.scan_message = ""
+            cache_mgmt.message_timer = nil
+        end
     end
     
     draw_progress_window()
