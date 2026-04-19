@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.6.0" author="TouristKiller" time="2026-04-17T23:40:00Z">
+    <version name="2.6.1" author="TouristKiller" time="2026-04-19T13:15:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -46,17 +46,43 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[    
-+ Added track name header bar in browser panel with navigation arrows, scroll wheel and right-click context menu
-+ Removed duplicate track header from info panel (now unified in browser panel)
-+ INFO/BROWSER toggle button now colors with track color and auto-contrast text
-+ Added Numpad Enter support alongside regular Enter
-+ Added "Add to Input FX" option in right-click context menu (MAXI + Mini)
-+ Added Input FX enable/disable checkbox in config window
-+ Removed Input FX from I/O section (now in dedicated tab)
-+ Changed thumbnail indicator in headers from grid icon to filled/outline circle
-+ Added Input FX section to Info Panel with thumbnails, drag & drop reorder, context menu and drop zone
-+ Replaced green reorder buttons with drag & drop reorder in Track FX and Item FX lists
-+ Fixed Buttons and Meter checkboxes overlapping in View tab settings
+ v2.6.1:
+    + Added click-on-empty-area behavior in screenshot window to clear current selection
+    + Added "Remove All from Custom Folder" to multi-select right-click menu
+    + Added drag & drop plugin assignment to custom folders and native folders from screenshot and list views
+    + Added multi-select drag support for folder drops (drops all selected plugins when dragging one selected item)
+    + Added visual folder drop highlighting while dragging plugins over folder entries
+    + Added full list view interaction parity with screenshot view (multi-select, keyboard nav, context actions)
+    + Added shared list renderer across favorites/custom/folder/search list views for consistent behavior
+    + Added list-mode support for multi-select context workflows (Track FX, Item FX, Chain Builder related actions)
+    + Added external toggle support for Screenshot Window via ExtState (for global shortcut)
+    + Fixed texture load queue overflow cleanup stripping plugin data for folders with >500 plugins
+    + Fixed keep_set cap too small for large native folders causing textures to be pruned every frame
+    + Fixed lazy loading deadlock when all loaded items fit in window without scrollbar (scroll trigger never fired)
+    + Added lazy loading to native folder screenshot grid view (loads in batches instead of all at once)
+    + Added drag & drop reorder for native folders in browser panel (writes order to reaper-fxfolders.ini)
+    + Added "Sort Folders A-Z" option in native folder right-click context menu
+    + Folder display order now respects reaper-fxfolders.ini index order (pinned folders remain on top)
+    + Added native REAPER FX folder management (create, rename, delete) via reaper-fxfolders.ini
+    + Added smart folder support with query-based auto-matching (and/or/not, "exact match")
+    + Added smart folder create/edit popup with live preview of matching plugins
+    + Added "Add to Native Folder" and "Remove from Native Folder" in plugin right-click menu
+    + Added "Add All to Native Folder" and "Remove All from Native Folder" in multi-select menu
+    + Added Create/Edit/Delete Smart Folder options in plugin right-click and multi-select menus
+    + Added right-click context menu on native folders in browser panel (rename, edit smart, delete, create)
+    + Added right-click context menu on native folders in folder dropdown (rename, edit smart, delete, create)
+    + Added INI parse caching for native folders to prevent slow context menu performance
+    + Fixed ImGui_Attach maximum object limit error by using ImGui_Detach when removing textures from cache
+    + Added max limit (50) and eviction to list_hover_texture_cache
+    + Added cleanup for info_fx_texture_cache and list_hover_texture_cache in ClearScreenshotCache
+    + Fixed LoadProjectCover not detaching old cover texture before loading new one
+    + Fixed texture assertion crash (tex->TexID < m_textures.size) by attaching textures to context
+    + Added SafeImage wrapper for all texture rendering calls
+    + Added drag & drop support in list mode (parity with screenshot mode)
+    + Fixed ImGui nav focus stealing from search results popup
+    + Removed unwanted blue nav highlight borders from screenshot window
+    + Browser panel search box now supports keyboard navigation to screenshots when screenshot search is hidden
+    + Fixed Type Priority deduplication incorrectly merging channel variants (Mono/Stereo/2ch/4ch) into one entry
 ]]></changelog>
     </version>
     </reapack>
@@ -84,6 +110,15 @@
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER_TOGGLE_BOTH.lua</source>
                 <changelog><![CDATA[           
 + Initial release - Toggle visibility of both TK FX BROWSER and Mini windows simultaneously
+]]></changelog>
+    </version>
+    </reapack>
+
+    <reapack name="TK_FX_BROWSER_TOGGLE_SCREENSHOT_WINDOW.lua" type="script" desc="TK FX BROWSER - Toggle Screenshot Window">
+    <version name="1.0" author="TouristKiller" time="2026-04-19T13:15:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_FX_BROWSER_TOGGLE_SCREENSHOT_WINDOW.lua</source>
+                <changelog><![CDATA[           
++ Initial release - Toggle Screenshot Window panel via ExtState (works as global shortcut)
 ]]></changelog>
     </version>
     </reapack>

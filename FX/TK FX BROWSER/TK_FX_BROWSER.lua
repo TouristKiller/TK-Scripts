@@ -1,8 +1,46 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.6.0
+-- @version 2.6.1
 -- @changelog:
 --[[ 
+  v2.6.1:
+    + Added click-on-empty-area behavior in screenshot window to clear current selection
+    + Added "Remove All from Custom Folder" to multi-select right-click menu
+    + Added drag & drop plugin assignment to custom folders and native folders from screenshot and list views
+    + Added multi-select drag support for folder drops (drops all selected plugins when dragging one selected item)
+    + Added visual folder drop highlighting while dragging plugins over folder entries
+    + Added full list view interaction parity with screenshot view (multi-select, keyboard nav, context actions)
+    + Added shared list renderer across favorites/custom/folder/search list views for consistent behavior
+    + Added list-mode support for multi-select context workflows (Track FX, Item FX, Chain Builder related actions)
+    + Added external toggle support for Screenshot Window via ExtState (for global shortcut)
+    + Fixed texture load queue overflow cleanup stripping plugin data for folders with >500 plugins
+    + Fixed keep_set cap too small for large native folders causing textures to be pruned every frame
+    + Fixed lazy loading deadlock when all loaded items fit in window without scrollbar (scroll trigger never fired)
+    + Added lazy loading to native folder screenshot grid view (loads in batches instead of all at once)
+    + Added drag & drop reorder for native folders in browser panel (writes order to reaper-fxfolders.ini)
+    + Added "Sort Folders A-Z" option in native folder right-click context menu
+    + Folder display order now respects reaper-fxfolders.ini index order (pinned folders remain on top)
+    + Added native REAPER FX folder management (create, rename, delete) via reaper-fxfolders.ini
+    + Added smart folder support with query-based auto-matching (and/or/not, "exact match")
+    + Added smart folder create/edit popup with live preview of matching plugins
+    + Added "Add to Native Folder" and "Remove from Native Folder" in plugin right-click menu
+    + Added "Add All to Native Folder" and "Remove All from Native Folder" in multi-select menu
+    + Added Create/Edit/Delete Smart Folder options in plugin right-click and multi-select menus
+    + Added right-click context menu on native folders in browser panel (rename, edit smart, delete, create)
+    + Added right-click context menu on native folders in folder dropdown (rename, edit smart, delete, create)
+    + Added INI parse caching for native folders to prevent slow context menu performance
+    + Fixed ImGui_Attach maximum object limit error by using ImGui_Detach when removing textures from cache
+    + Added max limit (50) and eviction to list_hover_texture_cache
+    + Added cleanup for info_fx_texture_cache and list_hover_texture_cache in ClearScreenshotCache
+    + Fixed LoadProjectCover not detaching old cover texture before loading new one
+    + Fixed texture assertion crash (tex->TexID < m_textures.size) by attaching textures to context
+    + Added SafeImage wrapper for all texture rendering calls
+    + Added drag & drop support in list mode (parity with screenshot mode)
+    + Fixed ImGui nav focus stealing from search results popup
+    + Removed unwanted blue nav highlight borders from screenshot window
+    + Browser panel search box now supports keyboard navigation to screenshots when screenshot search is hidden
+    + Fixed Type Priority deduplication incorrectly merging channel variants (Mono/Stereo/2ch/4ch) into one entry
+  v2.6.0:
     + Added track name header bar in browser panel with navigation arrows, scroll wheel and right-click context menu
     + Removed duplicate track header from info panel (now unified in browser panel)
     + INFO/BROWSER toggle button now colors with track color and auto-contrast text
@@ -531,12 +569,100 @@ if not BuildScreenshotIndex then function BuildScreenshotIndex() end end
 dragging_fx_name = dragging_fx_name or nil
 potential_drag_fx_name = potential_drag_fx_name or nil
 drag_start_x, drag_start_y = drag_start_x or 0, drag_start_y or 0
+
+function HandleListItemDrag(plugin_name)
+    if not config.enable_drag_add_fx then return end
+    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) then
+        potential_drag_fx_name = plugin_name
+        drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+    end
+    if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx, 0) then
+        local mx, my = r.ImGui_GetMousePos(ctx)
+        if math.abs(mx - drag_start_x) > 3 or math.abs(my - drag_start_y) > 3 then
+            dragging_fx_name = plugin_name
+            potential_drag_fx_name = nil
+        end
+    end
+    if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx, 0) then
+        potential_drag_fx_name = nil
+    end
+end
+
+function GetDraggedPluginNames()
+    local plugins = GetMultiSelectedPluginNames(screenshot_search_results)
+    local dragged_is_selected = false
+    if dragging_fx_name and plugins and #plugins > 0 then
+        for i = 1, #plugins do
+            if plugins[i] == dragging_fx_name then
+                dragged_is_selected = true
+                break
+            end
+        end
+    end
+    if dragged_is_selected and plugins and #plugins > 0 then
+        return plugins
+    end
+    local single = {}
+    if dragging_fx_name then
+        single[#single + 1] = dragging_fx_name
+    end
+    return single
+end
+
+function AddPluginsToCustomFolderByPath(folder_path, plugin_names)
+    if not folder_path or folder_path == "" or not plugin_names or #plugin_names == 0 then return false end
+    local parts = {}
+    for part in folder_path:gmatch("[^/]+") do parts[#parts + 1] = part end
+    if #parts == 0 then return false end
+    local target = config.custom_folders
+    for i = 1, #parts do
+        if not target or type(target) ~= "table" then return false end
+        target = target[parts[i]]
+    end
+    if not target or type(target) ~= "table" then return false end
+    local added = 0
+    for _, plugin_name in ipairs(plugin_names) do
+        local already_exists = false
+        for k, v in pairs(target) do
+            if type(k) == "number" and v == plugin_name then
+                already_exists = true
+                break
+            end
+        end
+        if not already_exists then
+            local max_index = 0
+            for k in pairs(target) do
+                if type(k) == "number" and k > max_index then max_index = k end
+            end
+            target[max_index + 1] = plugin_name
+            added = added + 1
+        end
+    end
+    if added > 0 then
+        SaveCustomFolders()
+    end
+    return added > 0
+end
+
+function CheckFolderDropTarget(folder_path, folder_type)
+    if not dragging_fx_name then return end
+    local ix, iy = r.ImGui_GetItemRectMin(ctx)
+    local ix2, iy2 = r.ImGui_GetItemRectMax(ctx)
+    local mx, my = r.ImGui_GetMousePos(ctx)
+    if mx >= ix and mx <= ix2 and my >= iy and my <= iy2 then
+        drag_drop_target_folder = { type = folder_type, path = folder_path }
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        r.ImGui_DrawList_AddRectFilled(dl, ix, iy, ix2, iy2, 0x44FF88AA, 3)
+    end
+end
+
 chain_builder_plugins = chain_builder_plugins or {}
 chain_builder_chunks = chain_builder_chunks or {}
 chain_builder_hovered = false
 info_trackfx_drop_hovered = false
 info_itemfx_drop_hovered = false
 info_inputfx_drop_hovered = false
+drag_drop_target_folder = nil
 browser_panel_show_info = browser_panel_show_info or false
 info_fx_texture_cache = info_fx_texture_cache or {}
 info_btn_prev_folder = info_btn_prev_folder or nil
@@ -1030,6 +1156,7 @@ function SetDefaultConfig()
         fxlist_keep_aspect_ratio = false,
         info_fxlist_keep_aspect_ratio = false,
         allow_esc_close = true,
+        view_mode = "screenshots",
     } 
 end
 local config = SetDefaultConfig()    
@@ -1326,6 +1453,8 @@ function LoadConfig()
     end
 end
 LoadConfig()
+
+view_mode = config.view_mode or "screenshots"
 
 if config and type(config.chain_builder_plugins) == 'table' and #config.chain_builder_plugins > 0 then
     chain_builder_plugins = config.chain_builder_plugins
@@ -1820,10 +1949,9 @@ function NormalizePluginNameForMatch(name)
     if cached then return cached end
     
     local result = name:lower()
-    result = result:gsub('^vst3i?:%s*',''):gsub('^vsti?:%s*',''):gsub('^vst3:%s*',''):gsub('^vst:%s*',''):gsub('^js:%s*',''):gsub('^clapi?:%s*',''):gsub('^clap:%s*',''):gsub('^lv2:%s*','')
-    result = result:gsub('%s*%(%d+%s*ch%)$',''):gsub('%s*%(%d+in%s*%d+out%)$','')
+    result = result:gsub('^vst3i?:%s*',''):gsub('^vsti?:%s*',''):gsub('^vst3:%s*',''):gsub('^vst:%s*',''):gsub('^js:%s*',''):gsub('^jsfx:%s*',''):gsub('^clapi?:%s*',''):gsub('^clap:%s*',''):gsub('^au:%s*',''):gsub('^lv2:%s*','')
     result = StripX86Markers(result)
-    result = CleanPluginName(result)
+    result = result:gsub('%s+$','')
     result = result:gsub('%s+',' ')
     result = result:gsub('[^%w]+','')
     
@@ -2407,6 +2535,523 @@ end
 LoadCustomFolders()
 
 -------------------------------------------------------------
+-- NATIVE FX FOLDERS (reaper-fxfolders.ini)
+-------------------------------------------------------------
+local native_folders_ini_path = r.GetResourcePath() .. os_separator .. "reaper-fxfolders.ini"
+
+local native_fx_reverse_lookup = nil
+local native_fx_normalized_lookup = nil
+
+local _nf_cache_folders_list = nil
+local _nf_cache_folder_data = nil
+local _nf_cache_nb_folders = nil
+local _nf_cache_names = nil
+
+local function InvalidateNativeFolderCache()
+    _nf_cache_folders_list = nil
+    _nf_cache_folder_data = nil
+    _nf_cache_nb_folders = nil
+    _nf_cache_names = nil
+end
+
+function BuildNativeFxReverseLookup()
+    native_fx_reverse_lookup = {}
+    native_fx_normalized_lookup = {}
+    for i = 0, math.huge do
+        local retval, name, ident = r.EnumInstalledFX(i)
+        if not retval then break end
+        native_fx_reverse_lookup[name] = ident
+        local norm = name:lower()
+        norm = norm:gsub("^vst3?i?:%s*", "")
+        norm = norm:gsub("^js:%s*", "")
+        norm = norm:gsub("^clap:%s*", "")
+        norm = norm:gsub("^lv2:%s*", "")
+        norm = norm:gsub("^au:%s*", "")
+        if norm ~= "" and not native_fx_normalized_lookup[norm] then
+            native_fx_normalized_lookup[norm] = name
+        end
+    end
+end
+
+function ResolveNativeFxName(plugin_name)
+    if not plugin_name or plugin_name == "" then return nil end
+    if not native_fx_reverse_lookup then
+        BuildNativeFxReverseLookup()
+    end
+    if native_fx_reverse_lookup[plugin_name] then
+        return plugin_name
+    end
+    if plugin_aliases then
+        for raw, alias in pairs(plugin_aliases) do
+            if alias == plugin_name and native_fx_reverse_lookup[raw] then
+                return raw
+            end
+        end
+    end
+    local norm = plugin_name:lower()
+    norm = norm:gsub("^vst3?i?:%s*", "")
+    norm = norm:gsub("^js:%s*", "")
+    norm = norm:gsub("^clap:%s*", "")
+    norm = norm:gsub("^lv2:%s*", "")
+    norm = norm:gsub("^au:%s*", "")
+    return native_fx_normalized_lookup and native_fx_normalized_lookup[norm] or nil
+end
+
+function GetNativeFxIdentifier(plugin_name)
+    if not native_fx_reverse_lookup then
+        BuildNativeFxReverseLookup()
+    end
+    return native_fx_reverse_lookup[plugin_name]
+end
+
+function GetNativeFxType(plugin_name)
+    if plugin_name:match("^VST3?i?: ") then return "3" end
+    if plugin_name:match("^JS:") or plugin_name:match("^JS: ") then return "2" end
+    if plugin_name:match("^CLAP") then return "7" end
+    if plugin_name:match("^LV2") then return "1" end
+    if plugin_name:match("^AU") then return "5" end
+    return nil
+end
+
+function ParseNativeFoldersINI()
+    if _nf_cache_folders_list then
+        return _nf_cache_folders_list, _nf_cache_folder_data, _nf_cache_nb_folders
+    end
+
+    local f = io.open(native_folders_ini_path, "r")
+    if not f then return {}, {} end
+    local content = f:read("*all")
+    f:close()
+
+    local folders_list = {}
+    local folder_data = {}
+    local current_section = nil
+    local nb_folders = 0
+
+    for line in content:gmatch("[^\r\n]+") do
+        local section = line:match("^%[(.-)%]")
+        if section then
+            current_section = section
+        elseif current_section == "Folders" then
+            local id = line:match("^Id(%d+)=(%d+)")
+            local name_id, name_val = line:match("^Name(%d+)=(.+)")
+            local nb = line:match("^NbFolders=(%d+)")
+            if nb then nb_folders = tonumber(nb) end
+            if name_id and name_val then
+                folders_list[tonumber(name_id)] = name_val
+            end
+        elseif current_section and current_section:match("^Folder%d+$") then
+            local folder_idx = tonumber(current_section:match("^Folder(%d+)$"))
+            if not folder_data[folder_idx] then
+                folder_data[folder_idx] = { items = {}, types = {}, nb = 0 }
+            end
+            local item_id, item_val = line:match("^Item(%d+)=(.+)")
+            local type_id, type_val = line:match("^Type(%d+)=(.+)")
+            local nb_val = line:match("^Nb=(%d+)")
+            if item_id and item_val then
+                folder_data[folder_idx].items[tonumber(item_id)] = item_val
+            end
+            if type_id and type_val then
+                folder_data[folder_idx].types[tonumber(type_id)] = type_val
+            end
+            if nb_val then
+                folder_data[folder_idx].nb = tonumber(nb_val)
+            end
+        end
+    end
+
+    _nf_cache_folders_list = folders_list
+    _nf_cache_folder_data = folder_data
+    _nf_cache_nb_folders = nb_folders
+
+    return folders_list, folder_data, nb_folders
+end
+
+function WriteNativeFoldersINI(folders_list, folder_data, nb_folders)
+    local f = io.open(native_folders_ini_path, "r")
+    if not f then return false end
+    local content = f:read("*all")
+    f:close()
+
+    local pre_sections = {}
+    local current_section = nil
+    local skip = false
+
+    for line in content:gmatch("[^\r\n]+") do
+        local section = line:match("^%[(.-)%]")
+        if section then
+            if section == "Folders" or section:match("^Folder%d+$") then
+                skip = true
+            else
+                skip = false
+                pre_sections[#pre_sections + 1] = line
+            end
+            current_section = section
+        elseif not skip then
+            pre_sections[#pre_sections + 1] = line
+        end
+    end
+
+    local out = {}
+    for _, line in ipairs(pre_sections) do
+        out[#out + 1] = line
+    end
+    out[#out + 1] = ""
+
+    local max_folder_idx = -1
+    for idx, _ in pairs(folder_data) do
+        if idx > max_folder_idx then max_folder_idx = idx end
+    end
+
+    for idx = 0, max_folder_idx do
+        if folder_data[idx] then
+            local fd = folder_data[idx]
+            out[#out + 1] = "[Folder" .. idx .. "]"
+            for i = 0, fd.nb - 1 do
+                if fd.items[i] then
+                    out[#out + 1] = "Item" .. i .. "=" .. fd.items[i]
+                end
+            end
+            out[#out + 1] = "Nb=" .. fd.nb
+            for i = 0, fd.nb - 1 do
+                if fd.types[i] then
+                    out[#out + 1] = "Type" .. i .. "=" .. fd.types[i]
+                end
+            end
+            out[#out + 1] = ""
+        end
+    end
+
+    out[#out + 1] = "[Folders]"
+    local id_counter = 0
+    for idx = 0, max_folder_idx do
+        if folder_data[idx] then
+            out[#out + 1] = "Id" .. id_counter .. "=" .. idx
+            id_counter = id_counter + 1
+        end
+    end
+
+    local sorted_names = {}
+    for idx, name in pairs(folders_list) do
+        sorted_names[#sorted_names + 1] = { idx = idx, name = name }
+    end
+    table.sort(sorted_names, function(a, b) return a.idx < b.idx end)
+    for _, entry in ipairs(sorted_names) do
+        out[#out + 1] = "Name" .. entry.idx .. "=" .. entry.name
+    end
+    out[#out + 1] = "NbFolders=" .. id_counter
+    out[#out + 1] = ""
+
+    local wf = io.open(native_folders_ini_path, "w")
+    if not wf then return false end
+    wf:write(table.concat(out, "\n"))
+    wf:close()
+    InvalidateNativeFolderCache()
+    return true
+end
+
+function GetNativeFolderNames()
+    if _nf_cache_names then return _nf_cache_names end
+    local folders_list = ParseNativeFoldersINI()
+    local names = {}
+    for idx, name in pairs(folders_list) do
+        names[#names + 1] = { idx = idx, name = name }
+    end
+    table.sort(names, function(a, b) return a.name:lower() < b.name:lower() end)
+    _nf_cache_names = names
+    return names
+end
+
+function GetNativeFolderNamesInOrder()
+    local folders_list = ParseNativeFoldersINI()
+    local names = {}
+    for idx, name in pairs(folders_list) do
+        names[#names + 1] = { idx = idx, name = name }
+    end
+    table.sort(names, function(a, b) return a.idx < b.idx end)
+    return names
+end
+
+function ReorderNativeFolders(ordered_names)
+    local folders_list, folder_data = ParseNativeFoldersINI()
+    local name_to_old_idx = {}
+    for idx, name in pairs(folders_list) do
+        name_to_old_idx[name] = idx
+    end
+    local new_folders_list = {}
+    local new_folder_data = {}
+    local count = 0
+    for _, name in ipairs(ordered_names) do
+        local old_idx = name_to_old_idx[name]
+        if old_idx ~= nil and folder_data[old_idx] then
+            new_folders_list[count] = name
+            new_folder_data[count] = folder_data[old_idx]
+            count = count + 1
+        end
+    end
+    WriteNativeFoldersINI(new_folders_list, new_folder_data)
+    RefreshAfterNativeFolderChange()
+end
+
+function SortNativeFoldersAlphabetically()
+    local names_ordered = GetNativeFolderNamesInOrder()
+    table.sort(names_ordered, function(a, b) return a.name:lower() < b.name:lower() end)
+    local ordered = {}
+    for _, entry in ipairs(names_ordered) do
+        ordered[#ordered + 1] = entry.name
+    end
+    ReorderNativeFolders(ordered)
+end
+
+function CreateNativeFolder(folder_name)
+    local folders_list, folder_data, nb_folders = ParseNativeFoldersINI()
+
+    local next_idx = 0
+    for idx, _ in pairs(folder_data) do
+        if idx >= next_idx then next_idx = idx + 1 end
+    end
+    for idx, _ in pairs(folders_list) do
+        if idx >= next_idx then next_idx = idx + 1 end
+    end
+
+    folders_list[next_idx] = folder_name
+    folder_data[next_idx] = { items = {}, types = {}, nb = 0 }
+
+    if WriteNativeFoldersINI(folders_list, folder_data, nb_folders + 1) then
+        return next_idx
+    end
+    return nil
+end
+
+function AddPluginToNativeFolder(folder_idx, plugin_name)
+    local folders_list, folder_data = ParseNativeFoldersINI()
+    if not folder_data[folder_idx] then return false end
+
+    local native_name = ResolveNativeFxName(plugin_name)
+    if not native_name then return false end
+
+    local ident = GetNativeFxIdentifier(native_name)
+    if not ident then return false end
+
+    local fx_type = GetNativeFxType(native_name)
+    if not fx_type then return false end
+
+    local fd = folder_data[folder_idx]
+
+    for i = 0, fd.nb - 1 do
+        if fd.items[i] == ident then
+            return false
+        end
+    end
+
+    local new_idx = fd.nb
+    fd.items[new_idx] = ident
+    fd.types[new_idx] = fx_type
+    fd.nb = fd.nb + 1
+
+    return WriteNativeFoldersINI(folders_list, folder_data)
+end
+
+function RemovePluginFromNativeFolder(folder_idx, plugin_name)
+    local folders_list, folder_data = ParseNativeFoldersINI()
+    if not folder_data[folder_idx] then return false end
+
+    local native_name = ResolveNativeFxName(plugin_name)
+    if not native_name then return false end
+
+    local ident = GetNativeFxIdentifier(native_name)
+    if not ident then return false end
+
+    local fd = folder_data[folder_idx]
+    local remove_idx = nil
+    for i = 0, fd.nb - 1 do
+        if fd.items[i] == ident then
+            remove_idx = i
+            break
+        end
+    end
+    if not remove_idx then return false end
+
+    local new_items = {}
+    local new_types = {}
+    local new_nb = 0
+    for i = 0, fd.nb - 1 do
+        if i ~= remove_idx then
+            new_items[new_nb] = fd.items[i]
+            new_types[new_nb] = fd.types[i]
+            new_nb = new_nb + 1
+        end
+    end
+    fd.items = new_items
+    fd.types = new_types
+    fd.nb = new_nb
+
+    return WriteNativeFoldersINI(folders_list, folder_data)
+end
+
+function DeleteNativeFolder(folder_idx)
+    local folders_list, folder_data = ParseNativeFoldersINI()
+    if not folder_data[folder_idx] then return false end
+
+    folder_data[folder_idx] = nil
+    folders_list[folder_idx] = nil
+
+    return WriteNativeFoldersINI(folders_list, folder_data)
+end
+
+function RenameNativeFolder(folder_idx, new_name)
+    local folders_list, folder_data = ParseNativeFoldersINI()
+    if not folders_list[folder_idx] then return false end
+    folders_list[folder_idx] = new_name
+    return WriteNativeFoldersINI(folders_list, folder_data)
+end
+
+function RefreshAfterNativeFolderChange()
+    InvalidateNativeFolderCache()
+    local old_plugin_list = PLUGIN_LIST
+    FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+    PLUGIN_LIST = old_plugin_list or FX_LIST_TEST
+    initFoldersCategory()
+end
+
+show_native_folder_create_popup = show_native_folder_create_popup or false
+new_native_folder_name = new_native_folder_name or ""
+new_native_folder_for_plugin = new_native_folder_for_plugin or nil
+
+show_smart_folder_popup = show_smart_folder_popup or false
+smart_folder_edit_name = smart_folder_edit_name or ""
+smart_folder_edit_query = smart_folder_edit_query or ""
+smart_folder_edit_idx = smart_folder_edit_idx or nil
+smart_folder_preview_results = smart_folder_preview_results or {}
+smart_folder_preview_dirty = smart_folder_preview_dirty or false
+
+show_delete_native_folder_popup = show_delete_native_folder_popup or false
+pending_delete_native_folder_idx = pending_delete_native_folder_idx or nil
+pending_delete_native_folder_name = pending_delete_native_folder_name or ""
+
+show_rename_native_folder_popup = show_rename_native_folder_popup or false
+rename_native_folder_idx = rename_native_folder_idx or nil
+rename_native_folder_name = rename_native_folder_name or ""
+
+_nf_ctx_folder_name = nil
+_nf_ctx_folder_idx = nil
+
+local smart_folder_magic = {
+    ["not"] = { ' and ', ' not %s:find("%s") ' },
+    ["or"]  = { ' or ', ' %s:find("%s") ' },
+    ["and"] = { ' and ', '%s:find("%s") ' },
+}
+
+function EvaluateSmartFolderQuery(query_string)
+    if not query_string or query_string == "" then return {} end
+
+    local smart_string = query_string
+    local smart_terms = {}
+    local SMART_FX = {}
+
+    for exact in smart_string:gmatch('"(.-)"') do
+        smart_string = smart_string:gsub(exact, '_schwa_magic_' .. exact:gsub(' ', '|||'))
+    end
+    smart_string = smart_string:gsub('"', '')
+
+    for term in smart_string:gmatch("([^%s]+)") do
+        term = term:lower():gsub('[%(%)%.%+%-%*%?%[%]%^%$%%]', '%%%1')
+        if term:find('_schwa_magic_') then
+            term = term:gsub('_schwa_magic_', '')
+            if term:find('|||') then
+                term = '(' .. term:gsub('|||', ' ') .. ')'
+            else
+                term = '%A' .. term .. '%A'
+            end
+        end
+        smart_terms[#smart_terms + 1] = term
+    end
+
+    if #smart_terms == 0 then return {} end
+
+    local code_gen = { "for i = 1, #PLUGIN_LIST do\nlocal target = PLUGIN_LIST[i]:lower()", "" }
+    local add_magic
+    for i = 1, #smart_terms do
+        if smart_folder_magic[smart_terms[i]] then
+            add_magic = i > 1 and (smart_folder_magic[smart_terms[i]][1] .. smart_folder_magic[smart_terms[i]][2]) or smart_folder_magic[smart_terms[i]][2]
+        else
+            if add_magic then
+                code_gen[2] = code_gen[2] .. add_magic:format("target", smart_terms[i])
+                add_magic = nil
+            else
+                code_gen[2] = i > 1 and code_gen[2] .. " and " .. (' %s:find("%s")'):format("target", smart_terms[i]) or
+                    code_gen[2] .. (' %s:find("%s")'):format("target", smart_terms[i])
+            end
+        end
+    end
+
+    code_gen[2] = 'if ' .. code_gen[2] .. ' then'
+    code_gen[#code_gen + 1] = 'SMART_FX[#SMART_FX+1] = PLUGIN_LIST[i]\nend\nend\n'
+
+    local code_str = table.concat(code_gen, "\n")
+    local func_env = {
+        SMART_FX = SMART_FX,
+        PLUGIN_LIST = PLUGIN_LIST,
+        string = string,
+    }
+
+    local func, err = load(code_str, "SmartFolderPreview", "t", func_env)
+    if func then
+        local status, err2 = pcall(func)
+        if err2 then return {} end
+    end
+    return SMART_FX
+end
+
+function CreateNativeSmartFolder(folder_name, query_string)
+    local folders_list, folder_data = ParseNativeFoldersINI()
+
+    local next_idx = 0
+    for idx, _ in pairs(folder_data) do
+        if idx >= next_idx then next_idx = idx + 1 end
+    end
+    for idx, _ in pairs(folders_list) do
+        if idx >= next_idx then next_idx = idx + 1 end
+    end
+
+    folders_list[next_idx] = folder_name
+    folder_data[next_idx] = {
+        items = { [0] = query_string },
+        types = { [0] = "1048576" },
+        nb = 1
+    }
+
+    if WriteNativeFoldersINI(folders_list, folder_data) then
+        return next_idx
+    end
+    return nil
+end
+
+function UpdateNativeSmartFolder(folder_idx, query_string)
+    local folders_list, folder_data = ParseNativeFoldersINI()
+    if not folder_data[folder_idx] then return false end
+
+    folder_data[folder_idx].items = { [0] = query_string }
+    folder_data[folder_idx].types = { [0] = "1048576" }
+    folder_data[folder_idx].nb = 1
+
+    return WriteNativeFoldersINI(folders_list, folder_data)
+end
+
+function IsNativeSmartFolder(folder_idx)
+    local _, folder_data = ParseNativeFoldersINI()
+    if not folder_data or not folder_data[folder_idx] then return false end
+    return folder_data[folder_idx].types[0] == "1048576"
+end
+
+function GetNativeSmartFolderQuery(folder_idx)
+    local _, folder_data = ParseNativeFoldersINI()
+    if not folder_data or not folder_data[folder_idx] then return nil end
+    if folder_data[folder_idx].types[0] ~= "1048576" then return nil end
+    return folder_data[folder_idx].items[0]
+end
+
+-------------------------------------------------------------
 -- RATING
 function LoadPluginRatings()
     local file = io.open(plugin_ratings_path, "r")
@@ -2671,6 +3316,12 @@ end
 
 function DrawDragOverlay()
     if dragging_fx_name then
+        local dragged_plugins = GetDraggedPluginNames()
+        local dragged_count = dragged_plugins and #dragged_plugins or 0
+        local drag_label = dragging_fx_name
+        if dragged_count > 1 then
+            drag_label = tostring(dragged_count) .. " plugins"
+        end
         local imx, imy = r.ImGui_GetMousePos(ctx)
         local sx, sy = r.GetMousePosition()
         local t = select(1, r.GetTrackFromPoint(sx, sy))
@@ -2688,7 +3339,7 @@ function DrawDragOverlay()
         r.ImGui_SetNextWindowPos(ctx, rel_x, rel_y, r.ImGui_Cond_Always())
         local flags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs()
         if r.ImGui_Begin(ctx, '##drag_overlay', true, flags) then
-            r.ImGui_Text(ctx, '➡ ' .. dragging_fx_name)
+            r.ImGui_Text(ctx, '➡ ' .. drag_label)
             if shift then
                 r.ImGui_Text(ctx, 'Add to Item (SHIFT)')
             else
@@ -2962,31 +3613,32 @@ function ClearScreenshotCache(periodic_cleanup)
             end
         end
         for _, key in ipairs(to_remove) do
-            if search_texture_cache[key] and r.ImGui_DestroyImage then
-                r.ImGui_DestroyImage(ctx, search_texture_cache[key])
+            if search_texture_cache[key] then
+                r.ImGui_Detach(ctx, search_texture_cache[key])
             end
             search_texture_cache[key] = nil
             texture_last_used[key] = nil
             texture_load_queue[key] = nil
         end
-        
-        -- DON'T cleanup FX chain texture cache during periodic cleanup
-        -- Only cleanup on full clear
     else
-    
-        if r.ImGui_DestroyImage then
-            for key, texture in pairs(search_texture_cache) do
-                r.ImGui_DestroyImage(ctx, texture)
-            end
-            -- Cleanup FX chain texture cache only on full clear
-            for fx_name, texture in pairs(fx_chain_texture_cache) do
-                r.ImGui_DestroyImage(ctx, texture)
-            end
+        for key, texture in pairs(search_texture_cache or {}) do
+            r.ImGui_Detach(ctx, texture)
+        end
+        for fx_name, texture in pairs(fx_chain_texture_cache or {}) do
+            r.ImGui_Detach(ctx, texture)
+        end
+        for fx_name, texture in pairs(info_fx_texture_cache or {}) do
+            r.ImGui_Detach(ctx, texture)
+        end
+        for k, tex in pairs(list_hover_texture_cache or {}) do
+            r.ImGui_Detach(ctx, tex)
         end
         search_texture_cache = {}
         texture_last_used = {}
         texture_load_queue = {}
         fx_chain_texture_cache = {}
+        info_fx_texture_cache = {}
+        list_hover_texture_cache = {}
     end
 end
 
@@ -2996,6 +3648,16 @@ function initFoldersCategory()
         if CAT_TEST[i].name == "FOLDERS" then
             folders_category = CAT_TEST[i].list
             break
+        end
+    end
+    local ini_names = GetNativeFolderNamesInOrder and GetNativeFolderNamesInOrder() or {}
+    for _, entry in ipairs(ini_names) do
+        local found = false
+        for _, fc in ipairs(folders_category) do
+            if fc.name == entry.name then found = true break end
+        end
+        if not found then
+            folders_category[#folders_category + 1] = { name = entry.name, fx = {} }
         end
     end
 end
@@ -4830,10 +5492,20 @@ end
 function LoadTexture(file)
     if type(file) ~= 'string' then return nil end
     local texture = r.ImGui_CreateImage(file)
-    if texture == nil then
+    if texture then
+        r.ImGui_Attach(ctx, texture)
+    else
         tex_log("Failed to load texture: " .. file)
     end
     return texture
+end
+
+function SafeImage(ctx, texture, w, h)
+    if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+        r.ImGui_Image(ctx, texture, w, h)
+        return true
+    end
+    return false
 end
     
 function LoadSearchTexture(file, plugin_name)
@@ -4874,19 +5546,22 @@ end
         -- Keep only newest 250 entries
         local sorted_queue = {}
         for k, v in pairs(texture_load_queue) do
-            t_insert(sorted_queue, {key = k, time = v.queued_at or 0})
+            t_insert(sorted_queue, {key = k, data = v, time = v.queued_at or 0})
         end
-        t_sort(sorted_queue, function(a,b) return a.time > b.time end) -- Newest first
+        t_sort(sorted_queue, function(a,b) return a.time > b.time end)
         texture_load_queue = {}
         for i = 1, m_min(250, #sorted_queue) do
             local entry = sorted_queue[i]
-            texture_load_queue[entry.key] = {queued_at = entry.time}
+            texture_load_queue[entry.key] = entry.data
         end
     end
    
     local VISIBLE_BUFFER = 30
     local keep_set = {}
     local cap = (loaded_items_count or ITEMS_PER_BATCH or 30) + VISIBLE_BUFFER
+    if selected_folder and type(current_filtered_fx) == 'table' then
+        cap = m_max(cap, #current_filtered_fx)
+    end
 
     if selected_folder and type(current_filtered_fx) == 'table' and #current_filtered_fx > 0 then
         for i = 1, m_min(cap, #current_filtered_fx) do
@@ -4942,6 +5617,7 @@ end
             if r.file_exists(file) then
                 local texture = r.ImGui_CreateImage(file)
                 if texture then
+                    r.ImGui_Attach(ctx, texture)
                     search_texture_cache[unique_key] = texture
                     texture_last_used[unique_key] = current_time
                     textures_loaded = textures_loaded + 1
@@ -4967,8 +5643,8 @@ end
             end
         end
         for _, key in ipairs(textures_to_remove) do
-            if r.ImGui_DestroyImage and search_texture_cache[key] then
-                r.ImGui_DestroyImage(ctx, search_texture_cache[key])
+            if search_texture_cache[key] then
+                r.ImGui_Detach(ctx, search_texture_cache[key])
             end
             search_texture_cache[key] = nil
             texture_last_used[key] = nil
@@ -5311,9 +5987,16 @@ function HandleMultiSelectClick(i, screenshots)
         end
         screenshot_nav_index = i
     else
-        screenshot_multi_selected = {}
-        screenshot_nav_index = i
-        screenshot_nav_anchor = i
+        if GetMultiSelectedCount() > 1 and screenshot_multi_selected[i] then
+            screenshot_nav_index = i
+            if not screenshot_nav_anchor then
+                screenshot_nav_anchor = i
+            end
+        else
+            screenshot_multi_selected = {}
+            screenshot_nav_index = i
+            screenshot_nav_anchor = i
+        end
     end
 end
 
@@ -5339,8 +6022,8 @@ function HandleScreenshotNavigation(screenshots)
         end
     end
 
-    if r.ImGui_IsAnyItemActive(ctx) then return end
-    if not r.ImGui_IsWindowFocused(ctx, r.ImGui_FocusedFlags_ChildWindows()) then return end
+    if r.ImGui_IsAnyItemActive(ctx) and not screenshot_nav_index then return end
+    if not screenshot_nav_index and not r.ImGui_IsWindowFocused(ctx, r.ImGui_FocusedFlags_ChildWindows()) then return end
 
     local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
     local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
@@ -6350,7 +7033,7 @@ function ShowPluginScreenshot()
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
                    
                 if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
-                    r.ImGui_Image(ctx, screenshot_texture, display_width, display_height)
+                    SafeImage(ctx, screenshot_texture, display_width, display_height)
                        
                     if show_name then
                         local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
@@ -6683,6 +7366,7 @@ function LoadInfoFxScreenshot(fx_name)
         if r.ImGui_ValidatePtr(info_fx_texture_cache[fx_name], 'ImGui_Image*') then
             return info_fx_texture_cache[fx_name]
         else
+            r.ImGui_Detach(ctx, info_fx_texture_cache[fx_name])
             info_fx_texture_cache[fx_name] = nil
         end
     end
@@ -6799,8 +7483,7 @@ function ShowFxChainPreview(chain_path, chain_name)
             end
             
             -- Draw first FX (full size)
-            if first_screenshot and r.ImGui_ValidatePtr(first_screenshot, 'ImGui_Image*') then
-                r.ImGui_Image(ctx, first_screenshot, display_width, first_height)
+            if SafeImage(ctx, first_screenshot, display_width, first_height) then
                 
                 -- Draw simplified plugin name under first screenshot
                 local simple_name = SimplifyPluginName(first_fx)
@@ -6831,7 +7514,7 @@ function ShowFxChainPreview(chain_path, chain_name)
                         local sw, sh = r.ImGui_Image_GetSize(screenshot)
                         if sw and sh then
                             local actual_small_height = small_width * (sh / sw)
-                            r.ImGui_Image(ctx, screenshot, small_width, actual_small_height)
+                            SafeImage(ctx, screenshot, small_width, actual_small_height)
                         else
                             DrawNoScreenshotPlaceholder(small_width, small_height, "No Image")
                         end
@@ -6925,7 +7608,7 @@ function ShowFxChainPreview(chain_path, chain_name)
                     local sw, sh = r.ImGui_Image_GetSize(screenshot)
                     if sw and sh then
                         local actual_height = small_width * (sh / sw)
-                        r.ImGui_Image(ctx, screenshot, small_width, actual_height)
+                        SafeImage(ctx, screenshot, small_width, actual_height)
                     else
                         DrawNoScreenshotPlaceholder(small_width, small_height, "No Image")
                     end
@@ -6964,12 +7647,11 @@ function ShowFxChainPreview(chain_path, chain_name)
 end
 
 function LoadChainFxScreenshot(fx_name)
-    -- Check if we already have this texture cached
     if fx_chain_texture_cache[fx_name] then
         if r.ImGui_ValidatePtr(fx_chain_texture_cache[fx_name], 'ImGui_Image*') then
             return fx_chain_texture_cache[fx_name]
         else
-            -- Texture was destroyed, remove from cache
+            r.ImGui_Detach(ctx, fx_chain_texture_cache[fx_name])
             fx_chain_texture_cache[fx_name] = nil
         end
     end
@@ -7474,13 +8156,15 @@ function LoadProjectCover(project_path)
     if project_cover_loaded_for == project_path then return end
     project_cover_loaded_for = project_path
     if project_cover_texture and r.ImGui_ValidatePtr(project_cover_texture, 'ImGui_Image*') then
-        project_cover_texture = nil
+        r.ImGui_Detach(ctx, project_cover_texture)
     end
+    project_cover_texture = nil
     local cover = GetProjectCoverPath(project_path)
     if cover then
         project_cover_texture = r.ImGui_CreateImage(cover)
-    else
-        project_cover_texture = nil
+        if project_cover_texture then
+            r.ImGui_Attach(ctx, project_cover_texture)
+        end
     end
 end
 
@@ -7992,6 +8676,193 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                     ShowMultiCustomFolderMenu(config.custom_folders)
                     r.ImGui_EndMenu(ctx)
                 end
+                if r.ImGui_BeginMenu(ctx, "Remove All from Custom Folder") then
+                    local names = GetMultiSelectedPluginNames()
+                    local function CollectFoldersWithSelectedPlugins(folders, path_prefix, results)
+                        path_prefix = path_prefix or ""
+                        results = results or {}
+                        for folder_name, folder_content in pairs(folders) do
+                            if folder_name ~= "__folder_marker__" and type(folder_content) == "table" then
+                                local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+                                local has_any = false
+                                for k, v in pairs(folder_content) do
+                                    if type(k) == "number" and type(v) == "string" then
+                                        for _, pname in ipairs(names) do
+                                            if v == pname then
+                                                has_any = true
+                                                break
+                                            end
+                                        end
+                                    end
+                                    if has_any then break end
+                                end
+                                if has_any then
+                                    results[#results + 1] = full_path
+                                end
+                                CollectFoldersWithSelectedPlugins(folder_content, full_path, results)
+                            end
+                        end
+                        return results
+                    end
+
+                    local matched_folders = CollectFoldersWithSelectedPlugins(config.custom_folders, "", {})
+                    table.sort(matched_folders, function(a, b) return a:lower() < b:lower() end)
+
+                    if #matched_folders > 0 then
+                        for _, folder_path in ipairs(matched_folders) do
+                            if r.ImGui_MenuItem(ctx, folder_path) then
+                                local target = config.custom_folders
+                                for folder in folder_path:gmatch("[^/]+") do
+                                    target = target[folder]
+                                    if not target then break end
+                                end
+                                if target then
+                                    local removed_count = 0
+                                    for k, v in pairs(target) do
+                                        if type(k) == "number" and type(v) == "string" then
+                                            for _, pname in ipairs(names) do
+                                                if v == pname then
+                                                    target[k] = nil
+                                                    removed_count = removed_count + 1
+                                                    break
+                                                end
+                                            end
+                                        end
+                                    end
+                                    if removed_count > 0 then
+                                        SaveCustomFolders()
+                                        if selected_folder and IsCustomFolder(selected_folder) then
+                                            local plugins = GetCustomFolderPlugins(selected_folder, config.custom_folders)
+                                            screenshot_search_results = {}
+                                            for _, p in ipairs(plugins) do
+                                                table.insert(screenshot_search_results, {name = p})
+                                            end
+                                            ClearScreenshotCache()
+                                        end
+                                        r.ShowMessageBox(removed_count .. " plugin(s) removed from " .. folder_path, "Success", 0)
+                                    else
+                                        r.ShowMessageBox("No selected plugins found in " .. folder_path, "Info", 0)
+                                    end
+                                end
+                            end
+                        end
+                    else
+                        r.ImGui_MenuItem(ctx, "(none of the selected plugins in custom folders)", nil, false, false)
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
+            end
+
+            r.ImGui_Separator(ctx)
+
+            if r.ImGui_BeginMenu(ctx, "Add All to Native Folder") then
+                local native_folders = GetNativeFolderNames()
+                for _, entry in ipairs(native_folders) do
+                    if r.ImGui_MenuItem(ctx, entry.name) then
+                        local names = GetMultiSelectedPluginNames()
+                        local added = 0
+                        for _, pname in ipairs(names) do
+                            if AddPluginToNativeFolder(entry.idx, pname) then added = added + 1 end
+                        end
+                        if added > 0 then RefreshAfterNativeFolderChange() end
+                    end
+                end
+                r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "Create New Native Folder...") then
+                    show_native_folder_create_popup = true
+                    new_native_folder_for_plugin = nil
+                    new_native_folder_name = ""
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+
+            if r.ImGui_BeginMenu(ctx, "Remove All from Native Folder") then
+                local native_folders = GetNativeFolderNames()
+                local names = GetMultiSelectedPluginNames()
+                local _, folder_data = ParseNativeFoldersINI()
+                local found_any = false
+                for _, entry in ipairs(native_folders) do
+                    local fd = folder_data[entry.idx]
+                    if fd then
+                        local has_any = false
+                        for _, pname in ipairs(names) do
+                            local ident = GetNativeFxIdentifier(pname)
+                            if ident then
+                                for i = 0, fd.nb - 1 do
+                                    if fd.items[i] == ident then has_any = true break end
+                                end
+                            end
+                            if has_any then break end
+                        end
+                        if has_any then
+                            found_any = true
+                            if r.ImGui_MenuItem(ctx, entry.name) then
+                                local removed = 0
+                                for _, pname in ipairs(names) do
+                                    if RemovePluginFromNativeFolder(entry.idx, pname) then removed = removed + 1 end
+                                end
+                                if removed > 0 then RefreshAfterNativeFolderChange() end
+                            end
+                        end
+                    end
+                end
+                if not found_any then
+                    r.ImGui_MenuItem(ctx, "(none of the selected plugins in native folders)", nil, false, false)
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+
+            if r.ImGui_MenuItem(ctx, "Create New Native Folder...") then
+                show_native_folder_create_popup = true
+                new_native_folder_for_plugin = nil
+                new_native_folder_name = ""
+            end
+
+            if r.ImGui_MenuItem(ctx, "Create Smart Folder...") then
+                show_smart_folder_popup = true
+                smart_folder_edit_idx = nil
+                smart_folder_edit_name = ""
+                smart_folder_edit_query = ""
+                smart_folder_preview_results = {}
+            end
+
+            if r.ImGui_BeginMenu(ctx, "Edit Smart Folder") then
+                local native_folders = GetNativeFolderNames()
+                local found_smart = false
+                for _, entry in ipairs(native_folders) do
+                    if IsNativeSmartFolder(entry.idx) then
+                        found_smart = true
+                        if r.ImGui_MenuItem(ctx, entry.name) then
+                            show_smart_folder_popup = true
+                            smart_folder_edit_idx = entry.idx
+                            smart_folder_edit_name = entry.name
+                            smart_folder_edit_query = GetNativeSmartFolderQuery(entry.idx) or ""
+                            smart_folder_preview_dirty = true
+                        end
+                    end
+                end
+                if not found_smart then
+                    r.ImGui_MenuItem(ctx, "(no smart folders)", nil, false, false)
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+
+            if r.ImGui_BeginMenu(ctx, "Delete Native Folder") then
+                local native_folders = GetNativeFolderNames()
+                if #native_folders > 0 then
+                    for _, entry in ipairs(native_folders) do
+                        local label = entry.name
+                        if IsNativeSmartFolder(entry.idx) then label = label .. "  [smart]" end
+                        if r.ImGui_MenuItem(ctx, label) then
+                            pending_delete_native_folder_idx = entry.idx
+                            pending_delete_native_folder_name = entry.name
+                            show_delete_native_folder_popup = true
+                        end
+                    end
+                else
+                    r.ImGui_MenuItem(ctx, "(no native folders)", nil, false, false)
+                end
+                r.ImGui_EndMenu(ctx)
             end
 
             r.ImGui_Separator(ctx)
@@ -8318,6 +9189,121 @@ function ShowPluginContextMenuInline(plugin_name)
                 end
             end
         end
+
+        r.ImGui_Separator(ctx)
+        if r.ImGui_BeginMenu(ctx, "Add to Native Folder") then
+            local native_folders = GetNativeFolderNames()
+            for _, entry in ipairs(native_folders) do
+                if r.ImGui_MenuItem(ctx, entry.name) then
+                    if AddPluginToNativeFolder(entry.idx, plugin_name) then
+                        RefreshAfterNativeFolderChange()
+                    else
+                        r.ShowMessageBox("Plugin kon niet worden toegevoegd.\nMogelijk bestaat het al in deze folder of is het type niet ondersteund.", "Info", 0)
+                    end
+                end
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Create New Native Folder...") then
+                show_native_folder_create_popup = true
+                new_native_folder_for_plugin = plugin_name
+                new_native_folder_name = ""
+            end
+            if r.ImGui_MenuItem(ctx, "Create Smart Folder...") then
+                show_smart_folder_popup = true
+                smart_folder_edit_idx = nil
+                smart_folder_edit_name = ""
+                smart_folder_edit_query = ""
+                smart_folder_preview_results = {}
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+
+        if r.ImGui_BeginMenu(ctx, "Remove from Native Folder") then
+            local native_folders = GetNativeFolderNames()
+            local ident = GetNativeFxIdentifier(plugin_name)
+            local found_any = false
+            if ident then
+                local _, folder_data = ParseNativeFoldersINI()
+                for _, entry in ipairs(native_folders) do
+                    local fd = folder_data[entry.idx]
+                    if fd then
+                        local in_folder = false
+                        for i = 0, fd.nb - 1 do
+                            if fd.items[i] == ident then
+                                in_folder = true
+                                break
+                            end
+                        end
+                        if in_folder then
+                            found_any = true
+                            if r.ImGui_MenuItem(ctx, entry.name) then
+                                if RemovePluginFromNativeFolder(entry.idx, plugin_name) then
+                                    RefreshAfterNativeFolderChange()
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if not found_any then
+                r.ImGui_MenuItem(ctx, "(not in any native folder)", nil, false, false)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+
+        if r.ImGui_MenuItem(ctx, "Create New Native Folder...") then
+            show_native_folder_create_popup = true
+            new_native_folder_for_plugin = plugin_name
+            new_native_folder_name = ""
+        end
+
+        if r.ImGui_MenuItem(ctx, "Create Smart Folder...") then
+            show_smart_folder_popup = true
+            smart_folder_edit_idx = nil
+            smart_folder_edit_name = ""
+            smart_folder_edit_query = ""
+            smart_folder_preview_results = {}
+        end
+
+        if r.ImGui_BeginMenu(ctx, "Edit Smart Folder") then
+            local native_folders = GetNativeFolderNames()
+            local found_smart = false
+            for _, entry in ipairs(native_folders) do
+                if IsNativeSmartFolder(entry.idx) then
+                    found_smart = true
+                    if r.ImGui_MenuItem(ctx, entry.name) then
+                        show_smart_folder_popup = true
+                        smart_folder_edit_idx = entry.idx
+                        smart_folder_edit_name = entry.name
+                        smart_folder_edit_query = GetNativeSmartFolderQuery(entry.idx) or ""
+                        smart_folder_preview_dirty = true
+                    end
+                end
+            end
+            if not found_smart then
+                r.ImGui_MenuItem(ctx, "(no smart folders)", nil, false, false)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+
+        if r.ImGui_BeginMenu(ctx, "Delete Native Folder") then
+            local native_folders = GetNativeFolderNames()
+            if #native_folders > 0 then
+                for _, entry in ipairs(native_folders) do
+                    local label = entry.name
+                    if IsNativeSmartFolder(entry.idx) then label = label .. "  [smart]" end
+                    if r.ImGui_MenuItem(ctx, label) then
+                        pending_delete_native_folder_idx = entry.idx
+                        pending_delete_native_folder_name = entry.name
+                        show_delete_native_folder_popup = true
+                    end
+                end
+            else
+                r.ImGui_MenuItem(ctx, "(no native folders)", nil, false, false)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+        r.ImGui_Separator(ctx)
 
         if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
             if r.ImGui_MenuItem(ctx, "Add to new track as send") then
@@ -8658,6 +9644,121 @@ function ShowFXContextMenu(plugin, menu_id)
             end
         end
 
+        r.ImGui_Separator(ctx)
+        if r.ImGui_BeginMenu(ctx, "Add to Native Folder") then
+            local native_folders = GetNativeFolderNames()
+            for _, entry in ipairs(native_folders) do
+                if r.ImGui_MenuItem(ctx, entry.name) then
+                    if AddPluginToNativeFolder(entry.idx, fx_name) then
+                        RefreshAfterNativeFolderChange()
+                    else
+                        r.ShowMessageBox("Plugin kon niet worden toegevoegd.\nMogelijk bestaat het al in deze folder of is het type niet ondersteund.", "Info", 0)
+                    end
+                end
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "Create New Native Folder...") then
+                show_native_folder_create_popup = true
+                new_native_folder_for_plugin = fx_name
+                new_native_folder_name = ""
+            end
+            if r.ImGui_MenuItem(ctx, "Create Smart Folder...") then
+                show_smart_folder_popup = true
+                smart_folder_edit_idx = nil
+                smart_folder_edit_name = ""
+                smart_folder_edit_query = ""
+                smart_folder_preview_results = {}
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+
+        if r.ImGui_BeginMenu(ctx, "Remove from Native Folder") then
+            local native_folders = GetNativeFolderNames()
+            local ident = GetNativeFxIdentifier(fx_name)
+            local found_any = false
+            if ident then
+                local _, folder_data = ParseNativeFoldersINI()
+                for _, entry in ipairs(native_folders) do
+                    local fd = folder_data[entry.idx]
+                    if fd then
+                        local in_folder = false
+                        for i = 0, fd.nb - 1 do
+                            if fd.items[i] == ident then
+                                in_folder = true
+                                break
+                            end
+                        end
+                        if in_folder then
+                            found_any = true
+                            if r.ImGui_MenuItem(ctx, entry.name) then
+                                if RemovePluginFromNativeFolder(entry.idx, fx_name) then
+                                    RefreshAfterNativeFolderChange()
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if not found_any then
+                r.ImGui_MenuItem(ctx, "(not in any native folder)", nil, false, false)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+
+        if r.ImGui_MenuItem(ctx, "Create New Native Folder...") then
+            show_native_folder_create_popup = true
+            new_native_folder_for_plugin = fx_name
+            new_native_folder_name = ""
+        end
+
+        if r.ImGui_MenuItem(ctx, "Create Smart Folder...") then
+            show_smart_folder_popup = true
+            smart_folder_edit_idx = nil
+            smart_folder_edit_name = ""
+            smart_folder_edit_query = ""
+            smart_folder_preview_results = {}
+        end
+
+        if r.ImGui_BeginMenu(ctx, "Edit Smart Folder") then
+            local native_folders = GetNativeFolderNames()
+            local found_smart = false
+            for _, entry in ipairs(native_folders) do
+                if IsNativeSmartFolder(entry.idx) then
+                    found_smart = true
+                    if r.ImGui_MenuItem(ctx, entry.name) then
+                        show_smart_folder_popup = true
+                        smart_folder_edit_idx = entry.idx
+                        smart_folder_edit_name = entry.name
+                        smart_folder_edit_query = GetNativeSmartFolderQuery(entry.idx) or ""
+                        smart_folder_preview_dirty = true
+                    end
+                end
+            end
+            if not found_smart then
+                r.ImGui_MenuItem(ctx, "(no smart folders)", nil, false, false)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+
+        if r.ImGui_BeginMenu(ctx, "Delete Native Folder") then
+            local native_folders = GetNativeFolderNames()
+            if #native_folders > 0 then
+                for _, entry in ipairs(native_folders) do
+                    local label = entry.name
+                    if IsNativeSmartFolder(entry.idx) then label = label .. "  [smart]" end
+                    if r.ImGui_MenuItem(ctx, label) then
+                        pending_delete_native_folder_idx = entry.idx
+                        pending_delete_native_folder_name = entry.name
+                        show_delete_native_folder_popup = true
+                    end
+                end
+            else
+                r.ImGui_MenuItem(ctx, "(no native folders)", nil, false, false)
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+        r.ImGui_Separator(ctx)
+
         r.ImGui_EndPopup(ctx)
     end
 end
@@ -8754,7 +9855,7 @@ function ShowFolderDropdown()
                     local is_selected = (selected_folder == folders_category[i].name)
                     if r.ImGui_Selectable(ctx, folders_category[i].name .. "##folder_" .. i, is_selected) then
                         SelectFolderExclusive(folders_category[i].name)
-                        browser_panel_selected = nil -- deselect category/developer/all plugins
+                        browser_panel_selected = nil
                         UpdateLastViewedFolder(selected_folder)
                         screenshot_search_results = nil
                         show_media_browser = false
@@ -8764,8 +9865,57 @@ function ShowFolderDropdown()
                         ClearScreenshotCache()
                         GetPluginsForFolder(selected_folder)
                     end
+                    if r.ImGui_IsItemClicked(ctx, 1) then
+                        _nf_ctx_folder_name = folders_category[i].name
+                        _nf_ctx_folder_idx = nil
+                        local nf = GetNativeFolderNames()
+                        for _, entry in ipairs(nf) do
+                            if entry.name == _nf_ctx_folder_name then _nf_ctx_folder_idx = entry.idx break end
+                        end
+                        r.ImGui_OpenPopup(ctx, "NativeFolderCtxMenu")
+                    end
                 end
             end
+
+            if r.ImGui_BeginPopup(ctx, "NativeFolderCtxMenu") then
+                if _nf_ctx_folder_idx then
+                    if r.ImGui_MenuItem(ctx, "Rename Folder") then
+                        show_rename_native_folder_popup = true
+                        rename_native_folder_idx = _nf_ctx_folder_idx
+                        rename_native_folder_name = _nf_ctx_folder_name or ""
+                    end
+                    local is_smart = IsNativeSmartFolder(_nf_ctx_folder_idx)
+                    if is_smart then
+                        if r.ImGui_MenuItem(ctx, "Edit Smart Folder") then
+                            show_smart_folder_popup = true
+                            smart_folder_edit_idx = _nf_ctx_folder_idx
+                            smart_folder_edit_name = _nf_ctx_folder_name
+                            smart_folder_edit_query = GetNativeSmartFolderQuery(_nf_ctx_folder_idx) or ""
+                            smart_folder_preview_dirty = true
+                        end
+                    end
+                    if r.ImGui_MenuItem(ctx, "Delete Folder") then
+                        pending_delete_native_folder_idx = _nf_ctx_folder_idx
+                        pending_delete_native_folder_name = _nf_ctx_folder_name
+                        show_delete_native_folder_popup = true
+                    end
+                end
+                r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "Create New Native Folder...") then
+                    show_native_folder_create_popup = true
+                    new_native_folder_for_plugin = nil
+                    new_native_folder_name = ""
+                end
+                if r.ImGui_MenuItem(ctx, "Create Smart Folder...") then
+                    show_smart_folder_popup = true
+                    smart_folder_edit_idx = nil
+                    smart_folder_edit_name = ""
+                    smart_folder_edit_query = ""
+                    smart_folder_preview_results = {}
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+
             r.ImGui_EndCombo(ctx)
      
         end
@@ -9109,7 +10259,7 @@ function ShowScreenshotControls()
                 screenshot_search_focus_requested = false
             end
             local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
-            if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) then
+            if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
                 screenshot_search_to_nav = true
             end
             r.ImGui_PopItemWidth(ctx)
@@ -9283,7 +10433,7 @@ function ShowScreenshotControls()
                 screenshot_search_focus_requested = false
             end
             local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
-            if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) then
+            if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
                 screenshot_search_to_nav = true
             end
             r.ImGui_PopItemWidth(ctx)
@@ -10198,6 +11348,10 @@ function DrawBrowserItems(tbl, main_cat_name)
             end
             r.ImGui_Unindent(ctx, 10)
 
+            if main_cat_name == "FOLDERS" then
+                CheckFolderDropTarget(subgroup_name, "native")
+            end
+
             if not tbl[i].current_page then tbl[i].current_page = 1 end
             local total_pages = math.ceil(#filtered_fx / ITEMS_PER_PAGE)
 
@@ -10211,6 +11365,8 @@ function DrawBrowserItems(tbl, main_cat_name)
                 if r.ImGui_MenuItem(ctx, toggle_label) then
                     local previous_mode = view_mode
                     view_mode = (view_mode == "screenshots" and "list" or "screenshots")
+                    config.view_mode = view_mode
+                    SaveConfig()
                     if view_mode == "screenshots" then
                         if previous_mode ~= "screenshots" then RequestClearScreenshotCache() end
                     else
@@ -10463,6 +11619,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             local tree_clicked = r.ImGui_IsItemClicked(ctx, 0)
             local tree_toggled = r.ImGui_IsItemToggledOpen(ctx)
             local tree_right_clicked = r.ImGui_IsItemClicked(ctx, 1)
+            CheckFolderDropTarget(full_path, "custom")
             local item_min_x, item_min_y = r.ImGui_GetItemRectMin(ctx)
             local line_h = r.ImGui_GetTextLineHeight(ctx)
             local text_w, text_h = r.ImGui_CalcTextSize(ctx, display_label)
@@ -10669,6 +11826,8 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             
             r.ImGui_PopFont(ctx)
 
+            CheckFolderDropTarget(full_path, "custom")
+
             if r.ImGui_IsItemClicked(ctx, 1) then
                 r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
             end
@@ -10688,6 +11847,8 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 if r.ImGui_MenuItem(ctx, toggle_label) then
                     local prev = view_mode
                     view_mode = (view_mode == "screenshots" and "list" or "screenshots")
+                    config.view_mode = view_mode
+                    SaveConfig()
                     if view_mode == "screenshots" and prev ~= "screenshots" then ClearScreenshotCache() end
                 end
                 if is_pinned then
@@ -11050,17 +12211,25 @@ function ShowBrowserPanel()
     info_trackfx_drop_hovered = false
     info_itemfx_drop_hovered = false
     info_inputfx_drop_hovered = false
+    drag_drop_target_folder = nil
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     r.ImGui_BeginChild(ctx, "BrowserSection", config.browser_panel_width, -1)
     local section_pos_y = r.ImGui_GetCursorScreenPos(ctx)
     local section_start_y = section_pos_y 
 
     -- Header
-    local header_open = r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 26 or 4)
+    local header_open = r.ImGui_BeginChild(ctx, "BrowserHeader", -1, config.show_browser_search and 26 or 4, 0, r.ImGui_WindowFlags_NoNavInputs())
     if header_open then
     if config.show_browser_search then
         r.ImGui_PushItemWidth(ctx, 70)
+        if screenshot_search_focus_requested and not (config.show_screenshot_search ~= false) then
+            r.ImGui_SetKeyboardFocusHere(ctx)
+            screenshot_search_focus_requested = false
+        end
         local changed_browser_search, new_browser_search = r.ImGui_InputTextWithHint(ctx, "##BrowserSearch", "Search...", browser_search_term)
+        if (config.show_screenshot_search == false) and r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
+            screenshot_search_to_nav = true
+        end
         r.ImGui_PopItemWidth(ctx)
         if browser_search_term ~= "" then
             r.ImGui_SameLine(ctx)
@@ -11354,6 +12523,8 @@ function ShowBrowserPanel()
                     if r.ImGui_MenuItem(ctx, toggle_label) then
                         local prev = view_mode
                         view_mode = (view_mode == "screenshots" and "list" or "screenshots")
+                        config.view_mode = view_mode
+                        SaveConfig()
                         if view_mode == "screenshots" and prev ~= "screenshots" then RequestClearScreenshotCache() end
                     end
                     if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
@@ -11610,20 +12781,38 @@ function ShowBrowserPanel()
                         local lst = EnsurePinnedList()
                         for k=#lst,1,-1 do if lst[k] == name then table.remove(lst, k); SaveConfig(); break end end
                     end
-                    local index_by_name = {}
-                    for idx=1,#CAT_TEST[i].list do index_by_name[CAT_TEST[i].list[idx].name] = idx end
-                    local order = {}
+
+                    local ini_ordered = GetNativeFolderNamesInOrder()
+                    local ini_name_set = {}
+                    for _, entry in ipairs(ini_ordered) do ini_name_set[entry.name] = true end
+
+                    local cat_by_name = {}
+                    for idx=1,#CAT_TEST[i].list do cat_by_name[CAT_TEST[i].list[idx].name] = idx end
+
+                    local display_order = {}
                     local pinned = EnsurePinnedList()
                     local pinned_set = {}
                     for _, name in ipairs(pinned) do
-                        local idx = index_by_name[name]
-                        if idx then table.insert(order, idx); pinned_set[name] = true end
+                        if cat_by_name[name] then
+                            display_order[#display_order + 1] = name
+                            pinned_set[name] = true
+                        end
+                    end
+                    for _, entry in ipairs(ini_ordered) do
+                        if not pinned_set[entry.name] and cat_by_name[entry.name] then
+                            display_order[#display_order + 1] = entry.name
+                        end
                     end
                     for idx=1,#CAT_TEST[i].list do
                         local nm = CAT_TEST[i].list[idx].name
-                        if not pinned_set[nm] then table.insert(order, idx) end
+                        if not ini_name_set[nm] and not pinned_set[nm] then
+                            display_order[#display_order + 1] = nm
+                        end
                     end
-                    for _, j in ipairs(order) do
+
+                    for disp_idx, folder_name in ipairs(display_order) do
+                        local j = cat_by_name[folder_name]
+                        if not j then goto continue_folder end
                         local show_folder = browser_search_term == ""
                         if not show_folder then
                             local term_l = browser_search_term:lower()
@@ -11640,9 +12829,8 @@ function ShowBrowserPanel()
                             end
                         end
                         if show_folder then
-                            r.ImGui_PushID(ctx, j)
+                            r.ImGui_PushID(ctx, "nf_" .. disp_idx)
                             r.ImGui_Indent(ctx, 10)
-                            local folder_name = CAT_TEST[i].list[j].name
                             local is_pinned = IsPinned(folder_name)
                             local header_text = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_name
                             
@@ -11656,6 +12844,40 @@ function ShowBrowserPanel()
                             end
                             r.ImGui_Selectable(ctx, header_text, folder_is_selected)
                             r.ImGui_Unindent(ctx, 10)
+
+                            if r.ImGui_IsMouseDragging(ctx, 0, 5.0) then
+                                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                                    r.ImGui_SetDragDropPayload(ctx, "NF_FOLDER_DRAG", folder_name)
+                                    r.ImGui_Text(ctx, folder_name)
+                                    r.ImGui_EndDragDropSource(ctx)
+                                end
+                            end
+                            if r.ImGui_BeginDragDropTarget(ctx) then
+                                local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "NF_FOLDER_DRAG")
+                                if rv and payload ~= folder_name then
+                                    local current_ini = GetNativeFolderNamesInOrder()
+                                    local new_order = {}
+                                    for _, entry in ipairs(current_ini) do
+                                        if entry.name ~= payload then
+                                            new_order[#new_order + 1] = entry.name
+                                        end
+                                    end
+                                    local insert_pos = nil
+                                    for k, nm in ipairs(new_order) do
+                                        if nm == folder_name then insert_pos = k break end
+                                    end
+                                    if insert_pos then
+                                        table.insert(new_order, insert_pos, payload)
+                                    else
+                                        new_order[#new_order + 1] = payload
+                                    end
+                                    ReorderNativeFolders(new_order)
+                                end
+                                r.ImGui_EndDragDropTarget(ctx)
+                            end
+
+                            CheckFolderDropTarget(folder_name, "native")
+
                             if r.ImGui_IsItemClicked(ctx, 0) then
                                 selected_folder = folder_name
                                 browser_panel_selected = nil 
@@ -11668,13 +12890,15 @@ function ShowBrowserPanel()
                                 ClearScreenshotCache()
                                 GetPluginsForFolder(folder_name)
                             elseif r.ImGui_IsItemClicked(ctx, 1) then
-                                r.ImGui_OpenPopup(ctx, "folder_browser_ctx_" .. j)
+                                r.ImGui_OpenPopup(ctx, "folder_browser_ctx_" .. disp_idx)
                             end
-                            if r.ImGui_BeginPopup(ctx, "folder_browser_ctx_" .. j) then
+                            if r.ImGui_BeginPopup(ctx, "folder_browser_ctx_" .. disp_idx) then
                                 local toggle_label = (view_mode == 'screenshots' and 'Show List' or 'Show Screenshots')
                                 if r.ImGui_MenuItem(ctx, toggle_label) then
                                     local prev = view_mode
                                     view_mode = (view_mode == 'screenshots' and 'list' or 'screenshots')
+                                    config.view_mode = view_mode
+                                    SaveConfig()
                                     if view_mode == 'screenshots' then
                                         if prev ~= 'screenshots' then ClearScreenshotCache() end
                                     else
@@ -11695,10 +12919,55 @@ function ShowBrowserPanel()
                                 if r.ImGui_MenuItem(ctx, 'Capture Folder Screenshots') then
                                     StartFolderScreenshots(folder_name)
                                 end
+                                r.ImGui_Separator(ctx)
+                                if r.ImGui_MenuItem(ctx, "Sort Folders A-Z") then
+                                    SortNativeFoldersAlphabetically()
+                                end
+                                r.ImGui_Separator(ctx)
+                                local nf_idx_for_ctx = nil
+                                local nf_list = GetNativeFolderNames()
+                                for _, entry in ipairs(nf_list) do
+                                    if entry.name == folder_name then nf_idx_for_ctx = entry.idx break end
+                                end
+                                if nf_idx_for_ctx then
+                                    if r.ImGui_MenuItem(ctx, "Rename Folder") then
+                                        show_rename_native_folder_popup = true
+                                        rename_native_folder_idx = nf_idx_for_ctx
+                                        rename_native_folder_name = folder_name
+                                    end
+                                    if IsNativeSmartFolder(nf_idx_for_ctx) then
+                                        if r.ImGui_MenuItem(ctx, "Edit Smart Folder") then
+                                            show_smart_folder_popup = true
+                                            smart_folder_edit_idx = nf_idx_for_ctx
+                                            smart_folder_edit_name = folder_name
+                                            smart_folder_edit_query = GetNativeSmartFolderQuery(nf_idx_for_ctx) or ""
+                                            smart_folder_preview_dirty = true
+                                        end
+                                    end
+                                    if r.ImGui_MenuItem(ctx, "Delete Folder") then
+                                        pending_delete_native_folder_idx = nf_idx_for_ctx
+                                        pending_delete_native_folder_name = folder_name
+                                        show_delete_native_folder_popup = true
+                                    end
+                                end
+                                r.ImGui_Separator(ctx)
+                                if r.ImGui_MenuItem(ctx, "Create New Native Folder...") then
+                                    show_native_folder_create_popup = true
+                                    new_native_folder_for_plugin = nil
+                                    new_native_folder_name = ""
+                                end
+                                if r.ImGui_MenuItem(ctx, "Create Smart Folder...") then
+                                    show_smart_folder_popup = true
+                                    smart_folder_edit_idx = nil
+                                    smart_folder_edit_name = ""
+                                    smart_folder_edit_query = ""
+                                    smart_folder_preview_results = {}
+                                end
                                 r.ImGui_EndPopup(ctx)
                             end
                             r.ImGui_PopID(ctx)
                         end
+                        ::continue_folder::
                     end
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
@@ -13110,7 +14379,7 @@ end
 
 function CheckScrollAndLoadMore(all_plugins)
     if not config.use_pagination and all_plugins and #all_plugins > ITEMS_PER_BATCH then
-        local ss_open = r.ImGui_BeginChild(ctx, "ScreenshotList")
+        local ss_open = r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0, 0, r.ImGui_WindowFlags_NoNavInputs())
         if ss_open then
             local current_scroll = r.ImGui_GetScrollY(ctx)
             local max_scroll = r.ImGui_GetScrollMaxY(ctx)
@@ -13203,6 +14472,132 @@ end
 local missing_context_plugin = nil
 
 local list_hover_texture_cache = {}
+local MAX_HOVER_TEXTURES = 50
+
+function RenderListViewItems(plugin_list, id_prefix, opts)
+    opts = opts or {}
+    local is_search = opts.is_search or false
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
+    ScreenshotNavReset()
+    local nav_items = {}
+    for i, raw_entry in ipairs(plugin_list) do
+        local plugin_name, is_fx_chain_item, is_separator_entry, separator_data
+        if is_search then
+            local fx = raw_entry
+            if fx.is_message then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF)
+                r.ImGui_TextWrapped(ctx, GetDisplayPluginName(fx.name))
+                r.ImGui_PopStyleColor(ctx)
+                goto list_continue
+            elseif fx.is_separator then
+                if fx.kind == 'chain_divider' and fx.label then
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                    r.ImGui_Text(ctx, "\xF0\x9F\x94\x97 " .. fx.label)
+                    r.ImGui_PopStyleColor(ctx)
+                    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click for options") end
+                    if r.ImGui_IsItemClicked(ctx, 1) then
+                        r.ImGui_OpenPopup(ctx, "chain_div_list_" .. id_prefix .. "_" .. i)
+                    end
+                    if ShowChainDividerContextMenu then ShowChainDividerContextMenu("chain_div_list_" .. id_prefix .. "_" .. i, fx) end
+                else
+                    local label = (fx.kind == 'pinned_end') and "--- Pinned End ---" or "--- Favorites End ---"
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                    r.ImGui_Text(ctx, label)
+                    r.ImGui_PopStyleColor(ctx)
+                end
+                goto list_continue
+            else
+                plugin_name = fx.name
+                is_fx_chain_item = fx.is_fx_chain_item
+            end
+        else
+            if raw_entry == "--Favorites End--" then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                r.ImGui_Text(ctx, "--- Favorites End ---")
+                r.ImGui_PopStyleColor(ctx)
+                goto list_continue
+            elseif raw_entry == "--Pinned End--" then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                r.ImGui_Text(ctx, "--- Pinned End ---")
+                r.ImGui_PopStyleColor(ctx)
+                goto list_continue
+            else
+                plugin_name = raw_entry
+            end
+        end
+
+        do
+            local display_name = GetDisplayPluginName(plugin_name)
+            local stars = GetStarsString(plugin_name)
+            local prefix = ""
+            if config.show_pinned_overlay and IsPluginPinned and IsPluginPinned(plugin_name) then
+                prefix = prefix .. "📌 "
+            end
+            if config.show_favorite_overlay and favorite_set and favorite_set[plugin_name] then
+                prefix = prefix .. "★ "
+            end
+
+            local is_selected = (screenshot_nav_index == i) or (screenshot_multi_selected[i] == true)
+            local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##" .. id_prefix .. "_" .. i, is_selected)
+
+            ScreenshotNavRegister(i, 1, 0, 0, plugin_name)
+            nav_items[#nav_items+1] = plugin_name
+
+            if not is_fx_chain_item then
+                if config.enable_drag_add_fx then
+                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) then
+                        potential_drag_fx_name = plugin_name
+                        drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                    end
+                    if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx, 0) then
+                        local mx, my = r.ImGui_GetMousePos(ctx)
+                        if math.abs(mx - drag_start_x) > 3 or math.abs(my - drag_start_y) > 3 then
+                            dragging_fx_name = plugin_name
+                            potential_drag_fx_name = nil
+                        end
+                    end
+                    if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx, 0) then
+                        potential_drag_fx_name = nil
+                    end
+                end
+
+                local do_add = false
+                if config.add_fx_with_double_click then
+                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                        HandleMultiSelectClick(i)
+                    end
+                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) and dragging_fx_name ~= plugin_name then
+                        do_add = true
+                    end
+                else
+                    if activated and dragging_fx_name ~= plugin_name then
+                        do_add = true
+                    end
+                end
+                if do_add then
+                    local target_track = GetTargetTrack()
+                    if target_track then
+                        local fx_index = AddFXToTrack(target_track, plugin_name)
+                        LAST_USED_FX = plugin_name
+                        if config.open_floating_after_adding and fx_index and fx_index >= 0 then
+                            r.TrackFX_Show(target_track, fx_index, 3)
+                        end
+                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                    end
+                end
+            end
+
+            ShowPluginContextMenu(plugin_name, id_prefix .. "_ctx_" .. i)
+            ShowListHoverScreenshot(plugin_name)
+            HandleListItemDrag(plugin_name)
+        end
+
+        ::list_continue::
+    end
+    r.ImGui_PopStyleVar(ctx)
+    HandleScreenshotNavigation(nav_items)
+end
 
 function ShowListHoverScreenshot(plugin_name)
     if not config.list_hover_screenshot then return end
@@ -13211,6 +14606,18 @@ function ShowListHoverScreenshot(plugin_name)
     local file = screenshot_path .. safe_name .. ".png"
     local texture = list_hover_texture_cache[plugin_name]
     if not texture then
+        local count = 0
+        for _ in pairs(list_hover_texture_cache) do count = count + 1 end
+        if count >= MAX_HOVER_TEXTURES then
+            for k, tex in pairs(list_hover_texture_cache) do
+                if k ~= plugin_name then
+                    r.ImGui_Detach(ctx, tex)
+                    list_hover_texture_cache[k] = nil
+                    count = count - 1
+                    if count < MAX_HOVER_TEXTURES / 2 then break end
+                end
+            end
+        end
         if r.file_exists(file) then
             texture = r.ImGui_CreateImage(file)
             if texture then
@@ -13226,7 +14633,7 @@ function ShowListHoverScreenshot(plugin_name)
             local scale = max_w / w
             local dw, dh = m_floor(w * scale), m_floor(h * scale)
             r.ImGui_BeginTooltip(ctx)
-            r.ImGui_Image(ctx, texture, dw, dh)
+            SafeImage(ctx, texture, dw, dh)
             r.ImGui_EndTooltip(ctx)
         end
     end
@@ -13589,7 +14996,7 @@ function DrawShowcaseLayout(screenshots, top_offset)
 
             if has_tex then
                 r.ImGui_SetCursorScreenPos(ctx, img_x, img_y)
-                r.ImGui_Image(ctx, texture, img_w, img_h)
+                SafeImage(ctx, texture, img_w, img_h)
                 r.ImGui_DrawList_AddRect(dl, img_x, img_y, img_x + img_w, img_y + img_h, 0x606080A0, 3, 0, 1)
             else
                 r.ImGui_DrawList_AddRectFilled(dl, img_x, img_y, img_x + img_w, img_y + img_h, 0x303050FF, 3)
@@ -13853,7 +15260,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
                     0x202020FF)
 
                 r.ImGui_SetCursorScreenPos(ctx, img_x + off_x, img_y + off_y)
-                r.ImGui_Image(ctx, texture, draw_w, draw_h)
+                SafeImage(ctx, texture, draw_w, draw_h)
             else
                 r.ImGui_DrawList_AddRectFilled(dl,
                     img_x, img_y,
@@ -13977,10 +15384,10 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
     
     local controls_vertical = ShowScreenshotControls()
     local cur_y = r.ImGui_GetCursorPosY(ctx)
-    r.ImGui_SetCursorPosY(ctx, cur_y - 3)
+    r.ImGui_SetCursorPosY(ctx, cur_y)
     r.ImGui_Separator(ctx)
     local cur_y2 = r.ImGui_GetCursorPosY(ctx)
-    r.ImGui_SetCursorPosY(ctx, cur_y2 - 4)
+    r.ImGui_SetCursorPosY(ctx, cur_y2 - 1)
     if controls_vertical then
         local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
         r.ImGui_Dummy(ctx, 0, line_height * 1.5)
@@ -14572,7 +15979,7 @@ function ShowScreenshotWindow()
     if visible then
         ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
-        r.ImGui_BeginChild(ctx, "ScreenshotSection", -1, -1)
+        r.ImGui_BeginChild(ctx, "ScreenshotSection", -1, -1, 0, r.ImGui_WindowFlags_NoNavInputs())
        
       
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
@@ -14619,10 +16026,10 @@ function ShowScreenshotWindow()
         elseif show_media_browser then
             local controls_vertical = ShowScreenshotControls()
             local cur_y = r.ImGui_GetCursorPosY(ctx)
-            r.ImGui_SetCursorPosY(ctx, cur_y - 3)
+            r.ImGui_SetCursorPosY(ctx, cur_y)
             r.ImGui_Separator(ctx)
             local cur_y2 = r.ImGui_GetCursorPosY(ctx)
-            r.ImGui_SetCursorPosY(ctx, cur_y2 - 4)
+            r.ImGui_SetCursorPosY(ctx, cur_y2 - 1)
             if controls_vertical then
                 local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_Dummy(ctx, 0, line_height * 1.5)
@@ -15247,7 +16654,7 @@ function ShowScreenshotWindow()
                 if has_cover then
                     local cover_x = cover_left and footer_start_x or (footer_start_x + content_avail_w - cover_w)
                     r.ImGui_SetCursorPos(ctx, cover_x, 4)
-                    r.ImGui_Image(ctx, project_cover_texture, cover_w, cover_h)
+                    SafeImage(ctx, project_cover_texture, cover_w, cover_h)
                 end
 
                 r.ImGui_EndChild(ctx)
@@ -15286,9 +16693,6 @@ function ShowScreenshotWindow()
 
                 r.ImGui_BeginChild(ctx, "SendsReceivesList", 0, available_height)
                     
-                    if show_routing_matrix and show_matrix_exclusive then
-                        ShowRoutingMatrix()
-                    else
                     -- SENDS SECTIE
                     r.ImGui_Text(ctx, "SENDS:")
                     
@@ -15588,7 +16992,6 @@ function ShowScreenshotWindow()
                             end
                             r.ImGui_EndPopup(ctx)
                         end
-                    end
                     r.ImGui_Dummy(ctx, 0, 10) 
                 
                 if show_routing_matrix then
@@ -15598,13 +17001,7 @@ function ShowScreenshotWindow()
             r.ImGui_Separator(ctx)
             if r.ImGui_Button(ctx, "Matrix View") then
                   show_routing_matrix = not show_routing_matrix
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, show_matrix_exclusive and "Normal" or "Exclusive") then
-                 show_matrix_exclusive = not show_matrix_exclusive
-             end
-                
-
+            end              
     end
 --------------------------------------------------------------------------------------
         -- ACTIONS GEDEELTE
@@ -15709,6 +17106,9 @@ function ShowScreenshotWindow()
         local cb_btn_active = cb_col(cb_dark * 2.8, 1.0)
         chain_builder_h = 163
         local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+        
+        r.ImGui_Dummy(ctx, 0, 4)
+        
         local dl = r.ImGui_GetWindowDrawList(ctx)
         local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
         r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + avail_w, cy + chain_builder_h, cb_bg, 3)
@@ -15728,7 +17128,7 @@ function ShowScreenshotWindow()
         local thumb_h = chain_area_h - 24 - pad * 2
         local thumb_w = thumb_h * 1.4
 
-        local chain_child_open = r.ImGui_BeginChild(ctx, "ChainBuilderStrip", avail_w, chain_area_h, 0, r.ImGui_WindowFlags_HorizontalScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
+        local chain_child_open = r.ImGui_BeginChild(ctx, "ChainBuilderStrip", avail_w, chain_area_h, 0, r.ImGui_WindowFlags_HorizontalScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoNavInputs())
         if chain_child_open then
             if r.ImGui_IsWindowHovered(ctx) then
                 local wheel = r.ImGui_GetMouseWheel(ctx)
@@ -16177,6 +17577,8 @@ function ShowScreenshotWindow()
         r.ImGui_Text(ctx, string.format("(%d)", #chain_builder_plugins))
         r.ImGui_PopStyleColor(ctx)
         r.ImGui_PopStyleVar(ctx)
+        
+        r.ImGui_Dummy(ctx, 0, 5)
     end
 
     local _multi_count = GetMultiSelectedCount()
@@ -16203,10 +17605,12 @@ function ShowScreenshotWindow()
             end
             local scroll_y = r.ImGui_GetScrollY(ctx)
             local scroll_max_y = r.ImGui_GetScrollMaxY(ctx)
-            if current_filtered_fx and not config.use_pagination and scroll_y > 0 and scroll_y/scroll_max_y > 0.8 and #current_filtered_fx > loaded_items_count then
-                loaded_items_count = loaded_items_count + ITEMS_PER_BATCH
-                for i = #screenshot_search_results + 1, math.min(loaded_items_count, #current_filtered_fx) do
-                    table.insert(screenshot_search_results, {name = current_filtered_fx[i]})
+            if current_filtered_fx and not config.use_pagination and #current_filtered_fx > loaded_items_count then
+                if scroll_max_y <= 0 or (scroll_y > 0 and scroll_y/scroll_max_y > 0.8) then
+                    loaded_items_count = loaded_items_count + ITEMS_PER_BATCH
+                    for i = #screenshot_search_results + 1, math.min(loaded_items_count, #current_filtered_fx) do
+                        table.insert(screenshot_search_results, {name = current_filtered_fx[i]})
+                    end
                 end
             end
             if folder_changed or new_search_performed then
@@ -16271,37 +17675,7 @@ function ShowScreenshotWindow()
                         r.ImGui_Text(ctx, "No Favorites match search.")
                     else
                         if view_mode == "list" then
-                            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
-                            for i, plugin_name in ipairs(filtered_plugins) do
-                                if plugin_name == "--Pinned End--" then
-                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                    r.ImGui_Text(ctx, "--- Pinned End ---")
-                                    r.ImGui_PopStyleColor(ctx)
-                                else
-                                    local display_name = GetDisplayPluginName(plugin_name)
-                                    local stars = GetStarsString(plugin_name)
-                                    local activated = r.ImGui_Selectable(ctx, display_name .. (stars ~= "" and "  " .. stars or "") .. "##fav_list_" .. i, false)
-                                local do_add = false
-                                if config.add_fx_with_double_click then
-                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-                                        do_add = true
-                                    end
-                                else
-                                    if activated then do_add = true end
-                                end
-                                if do_add then
-                                    local target_track = GetTargetTrack()
-                                    if target_track then
-                                        AddFXToTrack(target_track, plugin_name)
-                                        LAST_USED_FX = plugin_name
-                                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                                    end
-                                end
-                                ShowPluginContextMenu(plugin_name, "favorites_list_ctx_" .. i)
-                                ShowListHoverScreenshot(plugin_name)
-                                end
-                            end
-                            r.ImGui_PopStyleVar(ctx)
+                            RenderListViewItems(filtered_plugins, "favorites_list")
                         elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
@@ -16509,46 +17883,7 @@ function ShowScreenshotWindow()
                         r.ImGui_Text(ctx, "No Custom Folder plugins match search.")
                     else
                         if view_mode == "list" then
-                            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
-                            for i, plugin_name in ipairs(filtered_plugins) do
-                                if plugin_name == "--Favorites End--" then
-                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                    r.ImGui_Text(ctx, "--- Favorites End ---")
-                                    r.ImGui_PopStyleColor(ctx)
-                                elseif plugin_name == "--Pinned End--" then
-                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                    r.ImGui_Text(ctx, "--- Pinned End ---")
-                                    r.ImGui_PopStyleColor(ctx)
-                                else
-                                    local display_name = GetDisplayPluginName(plugin_name)
-                                    local stars = GetStarsString(plugin_name)
-                                    local prefix = ""
-                                    if config.show_pinned_overlay and IsPluginPinned and IsPluginPinned(plugin_name) then
-                                        prefix = prefix .. "📌 "
-                                    end
-                                    if config.show_favorite_overlay and favorite_set and favorite_set[plugin_name] then
-                                        prefix = prefix .. "★ "
-                                    end
-                                    local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##custom_list_" .. i, false)
-                                    local do_add = false
-                                    if config.add_fx_with_double_click then
-                                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx,0) then do_add = true end
-                                    else
-                                        if activated then do_add = true end
-                                    end
-                                    if do_add then
-                                        local target_track = GetTargetTrack()
-                                        if target_track then
-                                            AddFXToTrack(target_track, plugin_name)
-                                            LAST_USED_FX = plugin_name
-                                            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                                        end
-                                    end
-                                    ShowPluginContextMenu(plugin_name, "custom_list_ctx_" .. i)
-                                    ShowListHoverScreenshot(plugin_name)
-                                end
-                            end
-                            r.ImGui_PopStyleVar(ctx)
+                            RenderListViewItems(filtered_plugins, "custom_list")
                         elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
@@ -17072,55 +18407,19 @@ function ShowScreenshotWindow()
                     
                     if selected_folder and selected_folder ~= "Current Project FX" and selected_folder ~= "Current Track FX" then
                         if view_mode == "list" then
-                            -- LIST MODE VOOR STANDAARD FOLDERS
-                            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
-                            for i, plugin_name in ipairs(filtered_plugins) do
-                                if plugin_name == "--Favorites End--" then
-                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                    r.ImGui_Text(ctx, "--- Favorites End ---")
-                                    r.ImGui_PopStyleColor(ctx)
-                                elseif plugin_name == "--Pinned End--" then
-                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                    r.ImGui_Text(ctx, "--- Pinned End ---")
-                                    r.ImGui_PopStyleColor(ctx)
-                                else
-                                    local display_name = GetDisplayPluginName(plugin_name)
-                                    local stars = GetStarsString(plugin_name)
-                                    local prefix = ""
-                                    if config.show_pinned_overlay and IsPluginPinned and IsPluginPinned(plugin_name) then
-                                        prefix = prefix .. "📌 "
-                                    end
-                                    if config.show_favorite_overlay and favorite_set and favorite_set[plugin_name] then
-                                        prefix = prefix .. "★ "
-                                    end
-                                    local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##folder_list_" .. i, false)
-                                    local do_add = false
-                                    if config.add_fx_with_double_click then
-                                        if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-                                            do_add = true
-                                        end
-                                    else
-                                        if activated then do_add = true end
-                                    end
-                                    if do_add then
-                                        local target_track = GetTargetTrack()
-                                        if target_track then
-                                            AddFXToTrack(target_track, plugin_name)
-                                            LAST_USED_FX = plugin_name
-                                            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                                        end
-                                    end
-                                    ShowPluginContextMenu(plugin_name, "folder_list_ctx_" .. i)
-                                    ShowListHoverScreenshot(plugin_name)
-                                end
-                            end
-                            r.ImGui_PopStyleVar(ctx)
+                            RenderListViewItems(filtered_plugins, "folder_list")
                         else
                             local card_spacing = config.use_modern_cards and 12 or 0
                             local min_columns = math.floor(available_width / (display_size + card_spacing))
                             local actual_display_size = math.min(display_size, available_width / min_columns)
                             local num_columns = math.max(1, min_columns)
                             local column_width = available_width / num_columns
+
+                            if #filtered_plugins > loaded_items_count then
+                                local limited = {}
+                                for li = 1, loaded_items_count do limited[li] = filtered_plugins[li] end
+                                filtered_plugins = limited
+                            end
 
                             if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
                                 if filtered_plugins then
@@ -17261,67 +18560,7 @@ function ShowScreenshotWindow()
                     display_size = config.folder_specific_sizes["SearchResults"] or config.screenshot_window_size
                 end
                 if view_mode == "list" then
-                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 2, 2)
-                    for i, fx in ipairs(screenshot_search_results) do
-                        if fx.is_message then
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF)
-                            local msg_name = GetDisplayPluginName(fx.name)
-                            r.ImGui_TextWrapped(ctx, msg_name)
-                            r.ImGui_PopStyleColor(ctx)
-                        elseif fx.is_separator then
-                            if fx.kind == 'chain_divider' and fx.label then
-                                r.ImGui_Separator(ctx)
-                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
-                                r.ImGui_Text(ctx, "\xF0\x9F\x94\x97 " .. fx.label)
-                                r.ImGui_PopStyleColor(ctx)
-                                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click for options") end
-                                if r.ImGui_IsItemClicked(ctx, 1) then
-                                    r.ImGui_OpenPopup(ctx, "chain_div_list_" .. i)
-                                end
-                                ShowChainDividerContextMenu("chain_div_list_" .. i, fx)
-                            else
-                                local label = (fx.kind == 'pinned_end') and "--- Pinned End ---" or "--- Favorites End ---"
-                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
-                                r.ImGui_Text(ctx, label)
-                                r.ImGui_PopStyleColor(ctx)
-                            end
-                        else
-                            local display_name = GetDisplayPluginName(fx.name)
-                            local stars = GetStarsString(fx.name)
-                            local prefix = ""
-                            if config.show_pinned_overlay and IsPluginPinned and IsPluginPinned(fx.name) then
-                                prefix = prefix .. "📌 "
-                            end
-                            if config.show_favorite_overlay and favorite_set and favorite_set[fx.name] then
-                                prefix = prefix .. "★ "
-                            end
-                            local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##list_" .. i, false)
-                            
-                            -- Only add on click if not an FX chain item
-                            if not fx.is_fx_chain_item then
-                                local do_add = false
-                                if config.add_fx_with_double_click then
-                                    if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-                                        do_add = true
-                                    end
-                                else
-                                    if activated then do_add = true end
-                                end
-                                if do_add then
-                                    local plugin_name = fx.name
-                                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                        AddFXToTrack(TRACK, plugin_name)
-                                        LAST_USED_FX = plugin_name
-                                        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                                    end
-                                end
-                            end
-                            
-                            ShowPluginContextMenu(fx.name, "list_ctx_" .. i)
-                            ShowListHoverScreenshot(fx.name)
-                        end
-                    end
-                    r.ImGui_PopStyleVar(ctx)
+                    RenderListViewItems(screenshot_search_results, "search_list", { is_search = true })
                 else
                     if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
                         local plain_names = {}
@@ -17545,6 +18784,11 @@ function ShowScreenshotWindow()
                 end
             else
                 r.ImGui_Text(ctx, "Select a folder or enter a search term.")
+            end
+            if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsAnyItemHovered(ctx) then
+                screenshot_multi_selected = {}
+                screenshot_nav_index = nil
+                screenshot_nav_anchor = nil
             end
             r.ImGui_Dummy(ctx, 0, 0)
             if is_screenshot_branch then
@@ -18173,7 +19417,7 @@ end
     local bottom_buttons_height = (config.main_section_buttons_enabled and config.main_segment_buttons_visible) and 70 or 0
     local available_height = window_height - r.ImGui_GetCursorPosY(ctx) - bottom_buttons_height - 10
     if #filtered_fx ~= 0 then
-    local popupp_open = r.ImGui_BeginChild(ctx, "##popupp", -1, search_results_max_height)
+    local popupp_open = r.ImGui_BeginChild(ctx, "##popupp", -1, search_results_max_height, 0, r.ImGui_WindowFlags_NoNav())
     if popupp_open then
             if config.show_type_dividers then
                 
@@ -20850,9 +22094,41 @@ function HandleDragAndDrop()
         return
     end
     if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
+        if drag_drop_target_folder then
+            local plugins = GetDraggedPluginNames()
+            if drag_drop_target_folder.type == "custom" then
+                AddPluginsToCustomFolderByPath(drag_drop_target_folder.path, plugins)
+            elseif drag_drop_target_folder.type == "native" then
+                local nf = GetNativeFolderNames()
+                local folder_idx = nil
+                for _, entry in ipairs(nf) do
+                    if entry.name == drag_drop_target_folder.path then folder_idx = entry.idx break end
+                end
+                if folder_idx then
+                    local added = 0
+                    for _, pname in ipairs(plugins) do
+                        if AddPluginToNativeFolder(folder_idx, pname) then
+                            added = added + 1
+                        end
+                    end
+                    if added > 0 then
+                        RefreshAfterNativeFolderChange()
+                    else
+                        InvalidateNativeFolderCache()
+                    end
+                end
+            end
+            dragging_fx_name = nil
+            potential_drag_fx_name = nil
+            drag_drop_target_folder = nil
+            return
+        end
+        local plugins = GetDraggedPluginNames()
         if config.show_chain_builder and chain_builder_hovered then
-            table.insert(chain_builder_plugins, dragging_fx_name)
-            chain_builder_chunks[#chain_builder_plugins] = false
+            for _, pname in ipairs(plugins) do
+                table.insert(chain_builder_plugins, pname)
+                chain_builder_chunks[#chain_builder_plugins] = false
+            end
             config.chain_builder_plugins = chain_builder_plugins
             SaveConfig()
             dragging_fx_name = nil
@@ -20862,9 +22138,11 @@ function HandleDragAndDrop()
         end
         if info_trackfx_drop_hovered and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
             r.Undo_BeginBlock()
-            AddFXToTrack(TRACK, dragging_fx_name)
+            for _, pname in ipairs(plugins) do
+                AddFXToTrack(TRACK, pname)
+                LAST_USED_FX = pname
+            end
             r.Undo_EndBlock("Add FX to Track", -1)
-            LAST_USED_FX = dragging_fx_name
             if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             dragging_fx_name = nil
             potential_drag_fx_name = nil
@@ -20877,9 +22155,11 @@ function HandleDragAndDrop()
                 local take = r.GetActiveTake(item)
                 if take then
                     r.Undo_BeginBlock()
-                    r.TakeFX_AddByName(take, dragging_fx_name, 1)
+                    for _, pname in ipairs(plugins) do
+                        r.TakeFX_AddByName(take, pname, 1)
+                        LAST_USED_FX = pname
+                    end
                     r.Undo_EndBlock("Add FX to Item", -1)
-                    LAST_USED_FX = dragging_fx_name
                     if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                     if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
                     if config.hide_screenshot_after_insert then SHOULD_HIDE_SCREENSHOT = true end
@@ -20892,9 +22172,11 @@ function HandleDragAndDrop()
         end
         if info_inputfx_drop_hovered and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
             r.Undo_BeginBlock()
-            r.TrackFX_AddByName(TRACK, dragging_fx_name, true, -1)
+            for _, pname in ipairs(plugins) do
+                r.TrackFX_AddByName(TRACK, pname, true, -1)
+                LAST_USED_FX = pname
+            end
             r.Undo_EndBlock("Add FX to Input FX", -1)
-            LAST_USED_FX = dragging_fx_name
             if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
             if config.hide_screenshot_after_insert then SHOULD_HIDE_SCREENSHOT = true end
@@ -20909,8 +22191,10 @@ function HandleDragAndDrop()
             if item then
                 local take = r.GetActiveTake(item)
                 if take then
-                    r.TakeFX_AddByName(take, dragging_fx_name, 1)
-                    LAST_USED_FX = dragging_fx_name
+                    for _, pname in ipairs(plugins) do
+                        r.TakeFX_AddByName(take, pname, 1)
+                        LAST_USED_FX = pname
+                    end
                     if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                     if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
                     if config.hide_screenshot_after_insert then SHOULD_HIDE_SCREENSHOT = true end
@@ -20927,10 +22211,16 @@ function HandleDragAndDrop()
                 track = GetTargetTrack()
             end
             if track then
-                local fx_index = AddFXToTrack(track, dragging_fx_name)
-                LAST_USED_FX = dragging_fx_name
-                if config.open_floating_after_adding and fx_index and fx_index >= 0 then
-                    r.TrackFX_Show(track, fx_index, 3)
+                local last_fx_index = nil
+                for _, pname in ipairs(plugins) do
+                    local fx_index = AddFXToTrack(track, pname)
+                    LAST_USED_FX = pname
+                    if fx_index and fx_index >= 0 then
+                        last_fx_index = fx_index
+                    end
+                end
+                if config.open_floating_after_adding and last_fx_index and last_fx_index >= 0 then
+                    r.TrackFX_Show(track, last_fx_index, 3)
                 end
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
@@ -21108,6 +22398,13 @@ r.ImGui_SetNextWindowSizeConstraints(ctx, 140, min_window_height, 16384, 16384)
 handleDocking()
 EnsureWindowVisible()
 
+local toggle_ss = r.GetExtState("TK_FX_BROWSER", "toggle_screenshot_window")
+if toggle_ss == "1" then
+    r.DeleteExtState("TK_FX_BROWSER", "toggle_screenshot_window", false)
+    config.show_screenshot_window = not config.show_screenshot_window
+    SaveConfig()
+end
+
 -- Check visibility states
 local general_visibility = CheckVisibilityState()
 local should_show_main_window = ShouldShowMainWindow()
@@ -21183,6 +22480,14 @@ dock = r.ImGui_GetWindowDockID(ctx)
 if visible then
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
+    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_F9()) then
+        config.show_screenshot_window = not config.show_screenshot_window
+        SaveConfig()
+        if config.show_screenshot_window then
+            ClearScreenshotCache()
+            if selected_folder then GetPluginsForFolder(selected_folder) end
+        end
+    end
     if config.show_screenshot_window then
         ShowScreenshotWindow()
     end
@@ -22497,6 +23802,187 @@ if visible then
             r.ImGui_CloseCurrentPopup(ctx)
         end
         
+        r.ImGui_EndPopup(ctx)
+    end
+
+    if show_native_folder_create_popup then
+        r.ImGui_OpenPopup(ctx, "Create New Native Folder")
+        show_native_folder_create_popup = false
+    end
+
+    if r.ImGui_BeginPopupModal(ctx, "Create New Native Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Create new native REAPER folder")
+        if new_native_folder_for_plugin and new_native_folder_for_plugin ~= "" then
+            r.ImGui_Text(ctx, "Plugin: " .. new_native_folder_for_plugin)
+        end
+        r.ImGui_Separator(ctx)
+
+        r.ImGui_PushItemWidth(ctx, 250)
+        local changed, new_name = r.ImGui_InputTextWithHint(ctx, "##NewNativeFolderName", "Enter folder name", new_native_folder_name)
+        if changed then
+            new_native_folder_name = new_name
+        end
+        r.ImGui_PopItemWidth(ctx)
+
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Create", 100, 0) then
+            if new_native_folder_name ~= "" then
+                local new_idx = CreateNativeFolder(new_native_folder_name)
+                if new_idx then
+                    if new_native_folder_for_plugin and new_native_folder_for_plugin ~= "" then
+                        AddPluginToNativeFolder(new_idx, new_native_folder_for_plugin)
+                    end
+                    RefreshAfterNativeFolderChange()
+                end
+            end
+            new_native_folder_name = ""
+            new_native_folder_for_plugin = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            new_native_folder_name = ""
+            new_native_folder_for_plugin = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+
+        r.ImGui_EndPopup(ctx)
+    end
+
+    if show_smart_folder_popup then
+        local popup_name = smart_folder_edit_idx and "Edit Smart Folder" or "Create Smart Folder"
+        r.ImGui_OpenPopup(ctx, popup_name)
+        show_smart_folder_popup = false
+    end
+
+    local smart_popup_name = smart_folder_edit_idx and "Edit Smart Folder" or "Create Smart Folder"
+    if r.ImGui_BeginPopupModal(ctx, smart_popup_name, nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, smart_folder_edit_idx and "Edit smart folder query" or "Create a new smart folder")
+        r.ImGui_Separator(ctx)
+
+        r.ImGui_PushItemWidth(ctx, 350)
+        local name_changed, new_name = r.ImGui_InputTextWithHint(ctx, "##SmartFolderName", "Folder name", smart_folder_edit_name)
+        if name_changed then
+            smart_folder_edit_name = new_name
+        end
+
+        local query_changed, new_query = r.ImGui_InputTextWithHint(ctx, "##SmartFolderQuery", "e.g. comp and not multi", smart_folder_edit_query)
+        if query_changed then
+            smart_folder_edit_query = new_query
+            smart_folder_preview_dirty = true
+        end
+        r.ImGui_PopItemWidth(ctx)
+
+        r.ImGui_Spacing(ctx)
+        r.ImGui_TextDisabled(ctx, "Syntax: keywords separated by spaces (implicit AND)")
+        r.ImGui_TextDisabled(ctx, "Operators: and, or, not  |  Exact match: \"quoted words\"")
+
+        if smart_folder_preview_dirty then
+            smart_folder_preview_results = EvaluateSmartFolderQuery(smart_folder_edit_query)
+            smart_folder_preview_dirty = false
+        end
+
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Matching plugins: " .. #smart_folder_preview_results)
+
+        local avail_h = math.min(200, #smart_folder_preview_results * r.ImGui_GetTextLineHeightWithSpacing(ctx) + 8)
+        if avail_h < 30 then avail_h = 30 end
+        if r.ImGui_BeginChild(ctx, "##SmartPreview", 350, avail_h, 1) then
+            local max_show = math.min(#smart_folder_preview_results, 200)
+            for i = 1, max_show do
+                r.ImGui_Text(ctx, smart_folder_preview_results[i])
+            end
+            if #smart_folder_preview_results > 200 then
+                r.ImGui_TextDisabled(ctx, "... and " .. (#smart_folder_preview_results - 200) .. " more")
+            end
+            r.ImGui_EndChild(ctx)
+        end
+
+        r.ImGui_Separator(ctx)
+        local btn_label = smart_folder_edit_idx and "Save" or "Create"
+        if r.ImGui_Button(ctx, btn_label, 100, 0) then
+            if smart_folder_edit_name ~= "" and smart_folder_edit_query ~= "" then
+                if smart_folder_edit_idx then
+                    RenameNativeFolder(smart_folder_edit_idx, smart_folder_edit_name)
+                    UpdateNativeSmartFolder(smart_folder_edit_idx, smart_folder_edit_query)
+                else
+                    CreateNativeSmartFolder(smart_folder_edit_name, smart_folder_edit_query)
+                end
+                RefreshAfterNativeFolderChange()
+            end
+            smart_folder_edit_name = ""
+            smart_folder_edit_query = ""
+            smart_folder_edit_idx = nil
+            smart_folder_preview_results = {}
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            smart_folder_edit_name = ""
+            smart_folder_edit_query = ""
+            smart_folder_edit_idx = nil
+            smart_folder_preview_results = {}
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+
+        r.ImGui_EndPopup(ctx)
+    end
+
+    if show_rename_native_folder_popup then
+        r.ImGui_OpenPopup(ctx, "Rename Native Folder")
+        show_rename_native_folder_popup = false
+    end
+    if r.ImGui_BeginPopupModal(ctx, "Rename Native Folder", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Rename native folder")
+        r.ImGui_Separator(ctx)
+        r.ImGui_PushItemWidth(ctx, 300)
+        local changed, new_name = r.ImGui_InputText(ctx, "##RenameNativeFolder", rename_native_folder_name or "")
+        if changed then rename_native_folder_name = new_name end
+        r.ImGui_PopItemWidth(ctx)
+        r.ImGui_Spacing(ctx)
+        if r.ImGui_Button(ctx, "Rename", 100, 0) then
+            if rename_native_folder_idx and rename_native_folder_name ~= "" then
+                RenameNativeFolder(rename_native_folder_idx, rename_native_folder_name)
+                RefreshAfterNativeFolderChange()
+            end
+            rename_native_folder_idx = nil
+            rename_native_folder_name = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            rename_native_folder_idx = nil
+            rename_native_folder_name = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+
+    if show_delete_native_folder_popup then
+        r.ImGui_OpenPopup(ctx, "Delete Native Folder?")
+        show_delete_native_folder_popup = false
+    end
+    if r.ImGui_BeginPopupModal(ctx, "Delete Native Folder?", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, "Are you sure you want to delete this native folder?")
+        r.ImGui_Spacing(ctx)
+        r.ImGui_TextDisabled(ctx, pending_delete_native_folder_name or "")
+        r.ImGui_Spacing(ctx)
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Delete", 100, 0) then
+            if pending_delete_native_folder_idx then
+                DeleteNativeFolder(pending_delete_native_folder_idx)
+                RefreshAfterNativeFolderChange()
+            end
+            pending_delete_native_folder_idx = nil
+            pending_delete_native_folder_name = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            pending_delete_native_folder_idx = nil
+            pending_delete_native_folder_name = ""
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
         r.ImGui_EndPopup(ctx)
     end
 
