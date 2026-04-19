@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.6.4
+-- @version 2.6.5
 -- @changelog:
 --[[ 
   v2.6.2:
@@ -18518,24 +18518,15 @@ function ShowScreenshotWindow()
                             elseif config.use_showcase_layout then
                                 DrawShowcaseLayout(masonry_data)
                             elseif config.use_uniform_layout then
-                                for _, name in ipairs(missing) do
-                                    masonry_data[#masonry_data+1] = {name = name}
-                                end
                                 DrawUniformLayout(masonry_data)
                             elseif config.use_neon_layout then
-                                for _, name in ipairs(missing) do
-                                    masonry_data[#masonry_data+1] = {name = name}
-                                end
                                 DrawNeonLayout(masonry_data)
                             elseif config.use_vinyl_layout then
-                                for _, name in ipairs(missing) do
-                                    masonry_data[#masonry_data+1] = {name = name}
-                                end
                                 DrawVinylLayout(masonry_data)
                             else
                                 DrawMasonryLayout(masonry_data)
                             end
-                            if not config.use_uniform_layout and not config.use_neon_layout and not config.use_vinyl_layout then RenderMissingList(missing) end
+                            RenderMissingList(missing)
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             ApplyTopScreenshotSpacing()
@@ -18743,24 +18734,15 @@ function ShowScreenshotWindow()
                             elseif config.use_showcase_layout then
                                 DrawShowcaseLayout(masonry_data)
                             elseif config.use_uniform_layout then
-                                for _, name in ipairs(missing) do
-                                    masonry_data[#masonry_data+1] = {name = name}
-                                end
                                 DrawUniformLayout(masonry_data)
                             elseif config.use_neon_layout then
-                                for _, name in ipairs(missing) do
-                                    masonry_data[#masonry_data+1] = {name = name}
-                                end
                                 DrawNeonLayout(masonry_data)
                             elseif config.use_vinyl_layout then
-                                for _, name in ipairs(missing) do
-                                    masonry_data[#masonry_data+1] = {name = name}
-                                end
                                 DrawVinylLayout(masonry_data)
                             else
                                 DrawMasonryLayout(masonry_data)
                             end
-                            if not config.use_uniform_layout and not config.use_neon_layout and not config.use_vinyl_layout then RenderMissingList(missing) end
+                            RenderMissingList(missing)
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             ApplyTopScreenshotSpacing()
@@ -19295,24 +19277,15 @@ function ShowScreenshotWindow()
                                     elseif config.use_showcase_layout then
                                         DrawShowcaseLayout(masonry_data)
                                     elseif config.use_uniform_layout then
-                                        for _, name in ipairs(missing) do
-                                            masonry_data[#masonry_data+1] = {name = name}
-                                        end
                                         DrawUniformLayout(masonry_data)
                                     elseif config.use_neon_layout then
-                                        for _, name in ipairs(missing) do
-                                            masonry_data[#masonry_data+1] = {name = name}
-                                        end
                                         DrawNeonLayout(masonry_data)
                                     elseif config.use_vinyl_layout then
-                                        for _, name in ipairs(missing) do
-                                            masonry_data[#masonry_data+1] = {name = name}
-                                        end
                                         DrawVinylLayout(masonry_data)
                                     else
                                         DrawMasonryLayout(masonry_data)
                                     end
-                                    if not config.use_uniform_layout and not config.use_neon_layout and not config.use_vinyl_layout then RenderMissingList(missing) end
+                                    RenderMissingList(missing)
                                 end
                             else
                                 local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
@@ -19487,24 +19460,15 @@ function ShowScreenshotWindow()
                         elseif config.use_showcase_layout then
                             DrawShowcaseLayout(masonry_data, buttons_height)
                         elseif config.use_uniform_layout then
-                            for _, name in ipairs(missing) do
-                                masonry_data[#masonry_data+1] = {name = name}
-                            end
                             DrawUniformLayout(masonry_data, buttons_height)
                         elseif config.use_neon_layout then
-                            for _, name in ipairs(missing) do
-                                masonry_data[#masonry_data+1] = {name = name}
-                            end
                             DrawNeonLayout(masonry_data, buttons_height)
                         elseif config.use_vinyl_layout then
-                            for _, name in ipairs(missing) do
-                                masonry_data[#masonry_data+1] = {name = name}
-                            end
                             DrawVinylLayout(masonry_data, buttons_height)
                         else
                             DrawMasonryLayout(masonry_data, buttons_height)
                         end
-                        if not config.use_uniform_layout and not config.use_neon_layout and not config.use_vinyl_layout then RenderMissingList(missing) end
+                        RenderMissingList(missing)
                     else
                         local card_spacing = config.use_modern_cards and 12 or 0
                         local num_columns = math.max(1, math.floor(available_width / (display_size + card_spacing)))
