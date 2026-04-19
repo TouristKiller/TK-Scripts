@@ -1,8 +1,19 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.5.1
+-- @version 0.5.2
 -- @changelog:
 --[[ 
+  v0.5.2:
+    + Fixed screenshot window not receiving keyboard focus after Toggle Visibility external script
+    + Fixed main search stealing focus from screenshot searchbox on window appear
+    + Removed NoFocusOnAppearing flag so Mini window properly accepts input on open
+    + Replaced ImGui SetNextWindowFocus with OS-level JS_Window_SetForeground to avoid native nav-border artifacts
+    + Added Uniform layout: equal-sized cells with black background, grey border, 8px inset, left-aligned columns
+    + Fixed HasScreenshot returning boolean instead of file path (screenshots not loading)
+    + Fixed name-below-screenshot not showing (hidden_names table was always truthy)
+    + Fixed missing plugins not appearing in Uniform/Masonry views
+    + Added Linux support for Open Screenshots Folder (xdg-open)
+    + Added 3-frame focus sequencing (appear → OS focus → keyboard focus) for reliable input after toggle
   v0.5.1:
     + Added click-on-empty-area behavior in screenshot window to clear current selection
     + Added "Remove All from Custom Folder" to multi-select right-click menu
@@ -299,6 +310,7 @@ local function CheckVisibilityState()
   
     if last_visibility_state == "hidden" and visibility_state ~= "hidden" then
         ClearScreenshotCache()
+        screenshot_window_os_focus_needed = 3
         if selected_folder then
             GetPluginsForFolder(selected_folder)
         end
@@ -739,6 +751,7 @@ screenshot_multi_selected = screenshot_multi_selected or {}
 screenshot_nav_anchor = screenshot_nav_anchor or nil
 screenshot_nav_names = screenshot_nav_names or {}
 screenshot_search_focus_requested = true
+screenshot_window_os_focus_needed = 3
 screenshot_search_to_nav = false
 ab_snapshots = ab_snapshots or {}
 show_shortcuts_window = false
@@ -1114,6 +1127,7 @@ function SetDefaultConfig()
         list_hover_screenshot = false,
         use_showcase_layout = false,
         use_polaroid_layout = false,
+        use_uniform_layout = false,
         show_favorites_on_top = true,
         show_pinned_on_top = true,
         show_pinned_overlay = true,
@@ -2217,8 +2231,9 @@ function HasScreenshot(plugin_name)
     BuildScreenshotIndex()
     local norm = NormalizePluginNameForMatch(plugin_name)
     if screenshot_index_norm[norm] then 
-        screenshot_exists_cache[plugin_name] = true
-        return true 
+        local full_path = screenshot_path .. screenshot_index_norm[norm]
+        screenshot_exists_cache[plugin_name] = full_path
+        return full_path 
     end
     
     local stripped_x86 = StripX86Markers(plugin_name)
@@ -2235,9 +2250,12 @@ function HasScreenshot(plugin_name)
         if base and base ~= '' then
             local png = screenshot_path .. base .. '.png'
             local jpg = screenshot_path .. base .. '.jpg'
-            if r.file_exists(png) or r.file_exists(jpg) then 
-                screenshot_exists_cache[plugin_name] = true
-                return true 
+            if r.file_exists(png) then 
+                screenshot_exists_cache[plugin_name] = png
+                return png 
+            elseif r.file_exists(jpg) then
+                screenshot_exists_cache[plugin_name] = jpg
+                return jpg
             end
         end
     end
@@ -4011,7 +4029,7 @@ function OpenScreenshotsFolder()
     elseif os_name:match("OSX") then
         os.execute('open "' .. screenshot_path .. '"')
     else
-        reaper.ShowMessageBox("Unsupported OS", "Error", 0)
+        os.execute('xdg-open "' .. screenshot_path .. '" &')
     end
 end
 
@@ -10294,29 +10312,40 @@ function ShowScreenshotControls()
 
         -- LAYOUT MENU
         if r.ImGui_BeginMenu(ctx, "Layout") then
-            local is_normal = not config.use_masonry_layout and not config.use_showcase_layout and not config.use_polaroid_layout
+            local is_normal = not config.use_masonry_layout and not config.use_showcase_layout and not config.use_polaroid_layout and not config.use_uniform_layout
             if r.ImGui_MenuItem(ctx, "Normal", "", is_normal) then
                 config.use_masonry_layout = false
                 config.use_showcase_layout = false
                 config.use_polaroid_layout = false
+                config.use_uniform_layout = false
                 SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Masonry", "", config.use_masonry_layout) then
                 config.use_masonry_layout = true
                 config.use_showcase_layout = false
                 config.use_polaroid_layout = false
+                config.use_uniform_layout = false
                 SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Showcase", "", config.use_showcase_layout) then
                 config.use_masonry_layout = false
                 config.use_showcase_layout = true
                 config.use_polaroid_layout = false
+                config.use_uniform_layout = false
                 SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Polaroid", "", config.use_polaroid_layout) then
                 config.use_masonry_layout = false
                 config.use_showcase_layout = false
                 config.use_polaroid_layout = true
+                config.use_uniform_layout = false
+                SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Uniform", "", config.use_uniform_layout) then
+                config.use_masonry_layout = false
+                config.use_showcase_layout = false
+                config.use_polaroid_layout = false
+                config.use_uniform_layout = true
                 SaveConfig()
             end
             r.ImGui_Separator(ctx)
@@ -14827,7 +14856,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
     local gap = config.compact_screenshots and 8 or 16
     local num_columns = m_max(1, m_floor((available_width + gap) / (card_w + gap)))
     local total_w = num_columns * card_w + (num_columns - 1) * gap
-    local start_x = (available_width - total_w) * 0.5
+    local start_x = 0
 
     local dl = r.ImGui_GetWindowDrawList(ctx)
     local line_h = r.ImGui_GetTextLineHeight(ctx)
@@ -15065,6 +15094,217 @@ function DrawPolaroidLayout(screenshots, top_offset)
             column_heights[shortest_col] = cy + card_h + gap
         end
         ::polaroid_continue::
+    end
+
+    HandleScreenshotNavigation(screenshots)
+
+    local max_h = 0
+    for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
+    r.ImGui_SetCursorPosY(ctx, base_cy + max_h + (config.compact_screenshots and 4 or 12))
+end
+
+function DrawUniformLayout(screenshots, top_offset)
+    top_offset = top_offset or 0
+    local available_width = r.ImGui_GetContentRegionAvail(ctx)
+    local padding = 8
+    local usable_width = available_width - padding * 2
+    local cell_w = math.max(100, display_size)
+    local cell_ratio = 0.625
+    local cell_h = math.floor(cell_w * cell_ratio)
+    local gap = config.compact_screenshots and 6 or 10
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+    local show_name_below = config.show_name_in_screenshot_window and not config.show_name_on_hover_only and not config.show_name_on_screenshot
+    local label_h = show_name_below and (line_h + 8) or 0
+    local total_item_h = cell_h + label_h
+    local num_columns = math.max(1, math.floor((usable_width + gap) / (cell_w + gap)))
+    local total_w = num_columns * cell_w + (num_columns - 1) * gap
+    local start_x = padding
+
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+
+    if top_offset > 0 then r.ImGui_Dummy(ctx, 0, top_offset) end
+    if not top_screenshot_spacing_applied then
+        r.ImGui_Dummy(ctx, 0, 6)
+        top_screenshot_spacing_applied = true
+    end
+
+    local column_heights = {}
+    for c = 1, num_columns do column_heights[c] = 0 end
+    local base_sy = select(2, r.ImGui_GetCursorScreenPos(ctx))
+    local base_cy = r.ImGui_GetCursorPosY(ctx)
+
+    ScreenshotNavReset()
+
+    for i, fx in ipairs(screenshots) do
+        if fx.is_separator then
+            local max_h = 0
+            for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
+            r.ImGui_SetCursorPosY(ctx, base_cy + max_h)
+            local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
+            local thickness = config.compact_screenshots and 2 or 3
+            r.ImGui_DrawList_AddRectFilled(dl, sx + 2, sy, sx + available_width - 2, sy + thickness, 0x606060FF, 2)
+            if fx.kind == 'chain_divider' and fx.label then
+                r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 4)
+                r.ImGui_SetCursorPosY(ctx, base_cy + max_h + thickness + 2)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                r.ImGui_Text(ctx, "\xF0\x9F\x94\x97 " .. fx.label)
+                r.ImGui_PopStyleColor(ctx)
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click for options") end
+                if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "chain_div_ctx_u_" .. i) end
+                ShowChainDividerContextMenu("chain_div_ctx_u_" .. i, fx)
+                local sep_h = thickness + r.ImGui_GetTextLineHeightWithSpacing(ctx) + (config.compact_screenshots and 4 or 8)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_h end
+            elseif fx.kind == 'pinned_end' or fx.kind == 'favorites_end' then
+                local glyph = (fx.kind == 'pinned_end') and "\xF0\x9F\x93\x8C" or "\xE2\x98\x85"
+                r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 4)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+                r.ImGui_Text(ctx, glyph)
+                r.ImGui_PopStyleColor(ctx)
+                local sep_h = thickness + (config.compact_screenshots and 6 or 12)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_h end
+            else
+                local sep_h = thickness + (config.compact_screenshots and 6 or 12)
+                for c = 1, num_columns do column_heights[c] = max_h + sep_h end
+            end
+            goto uniform_continue
+        end
+        if fx.is_message then
+            local max_h = 0
+            for c = 1, num_columns do if column_heights[c] > max_h then max_h = column_heights[c] end end
+            r.ImGui_SetCursorPosY(ctx, base_cy + max_h)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF)
+            r.ImGui_TextWrapped(ctx, GetDisplayPluginName(fx.name))
+            r.ImGui_PopStyleColor(ctx)
+            local msg_h = r.ImGui_GetCursorPosY(ctx) - (base_cy + max_h)
+            for c = 1, num_columns do column_heights[c] = max_h + msg_h end
+            goto uniform_continue
+        end
+
+        do
+            local plugin_name = fx.name
+            local shortest_col = 1
+            for c = 2, num_columns do
+                if column_heights[c] < column_heights[shortest_col] then shortest_col = c end
+            end
+
+            local cx = start_x + (shortest_col - 1) * (cell_w + gap)
+            local cy = column_heights[shortest_col]
+            local sx_cell = select(1, r.ImGui_GetCursorScreenPos(ctx)) - r.ImGui_GetCursorPosX(ctx) + cx
+            local sy_cell = base_sy + cy
+            ScreenshotNavRegister(i, shortest_col, cx, base_cy + cy, plugin_name)
+
+            r.ImGui_DrawList_AddRectFilled(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, 0x000000FF, 4)
+            r.ImGui_DrawList_AddRect(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, 0x505050FF, 4, 0, 1.5)
+
+            local screenshot_file = HasScreenshot(plugin_name)
+            local texture, tex_w, tex_h, has_tex = nil, 0, 0, false
+            if screenshot_file then
+                texture = LoadSearchTexture(screenshot_file, plugin_name)
+                if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                    tex_w, tex_h = r.ImGui_Image_GetSize(texture)
+                    has_tex = tex_w and tex_h and tex_w > 0
+                end
+            end
+
+            if has_tex then
+                local inset = 8
+                local inner_w = cell_w - inset * 2
+                local inner_h = cell_h - inset * 2
+                local scale = math.min(inner_w / tex_w, inner_h / tex_h)
+                local draw_w = tex_w * scale
+                local draw_h = tex_h * scale
+                local off_x = inset + (inner_w - draw_w) * 0.5
+                local off_y = inset + (inner_h - draw_h) * 0.5
+                r.ImGui_SetCursorScreenPos(ctx, sx_cell + off_x, sy_cell + off_y)
+                SafeImage(ctx, texture, draw_w, draw_h)
+            else
+                local no_txt = "No Image"
+                local ntw = r.ImGui_CalcTextSize(ctx, no_txt)
+                r.ImGui_DrawList_AddText(dl, sx_cell + (cell_w - ntw) * 0.5, sy_cell + (cell_h - line_h) * 0.5, 0x606060FF, no_txt)
+            end
+
+            if IsPluginPinned and IsPluginPinned(plugin_name) then
+                DrawPinnedOverlayAt(sx_cell, sy_cell, cell_w, cell_h)
+            end
+            if favorite_set and favorite_set[plugin_name] then
+                DrawFavoriteOverlayAt(sx_cell, sy_cell, cell_w, cell_h)
+            end
+            DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+
+            r.ImGui_PushID(ctx, i)
+            r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
+            local clicked = r.ImGui_InvisibleButton(ctx, "##uniform_" .. i, cell_w, cell_h)
+            DrawNavSelectionBorder(i, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h)
+
+            if config.enable_drag_add_fx then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) then
+                    potential_drag_fx_name = plugin_name
+                    drag_start_x, drag_start_y = r.ImGui_GetMousePos(ctx)
+                end
+                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseDown(ctx, 0) then
+                    local dmx, dmy = r.ImGui_GetMousePos(ctx)
+                    if math.abs(dmx - drag_start_x) > 3 or math.abs(dmy - drag_start_y) > 3 then
+                        dragging_fx_name = plugin_name
+                        potential_drag_fx_name = nil
+                    end
+                end
+                if potential_drag_fx_name == plugin_name and r.ImGui_IsMouseReleased(ctx, 0) then
+                    potential_drag_fx_name = nil
+                end
+            end
+
+            local do_add = false
+            if config.add_fx_with_double_click then
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                    HandleMultiSelectClick(i)
+                end
+                if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) and dragging_fx_name ~= plugin_name then
+                    do_add = true
+                end
+            else
+                if clicked and dragging_fx_name ~= plugin_name then do_add = true end
+            end
+            if do_add then
+                local target_track = GetTargetTrack()
+                if target_track then
+                    AddFXToTrack(target_track, plugin_name)
+                    LAST_USED_FX = plugin_name
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                end
+            end
+
+            ShowPluginContextMenu(plugin_name, "uniform_" .. i)
+
+            local is_hovered = r.ImGui_IsItemHovered(ctx)
+            if is_hovered then
+                r.ImGui_DrawList_AddRect(dl, sx_cell - 1, sy_cell - 1, sx_cell + cell_w + 1, sy_cell + cell_h + 1, 0x4FC1E9FF, 4, 0, 2)
+            end
+
+            local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only and not config.show_name_on_screenshot
+            if show_name_text then
+                local display_name = GetDisplayPluginName(plugin_name)
+                local name_tw = r.ImGui_CalcTextSize(ctx, display_name)
+                if name_tw > cell_w then
+                    local truncated = display_name
+                    while r.ImGui_CalcTextSize(ctx, truncated .. "..") > cell_w and #truncated > 1 do
+                        truncated = truncated:sub(1, -2)
+                    end
+                    display_name = truncated .. ".."
+                    name_tw = r.ImGui_CalcTextSize(ctx, display_name)
+                end
+                local name_x = sx_cell + (cell_w - name_tw) * 0.5
+                r.ImGui_DrawList_AddText(dl, name_x, sy_cell + cell_h + 2, 0xC0C0C0FF, display_name)
+            end
+
+            if config.show_name_on_hover_only and is_hovered then
+                local stars = GetStarsString(plugin_name)
+                r.ImGui_SetTooltip(ctx, GetDisplayPluginName(plugin_name) .. (stars ~= "" and "\n" .. stars or ""))
+            end
+
+            r.ImGui_PopID(ctx)
+            column_heights[shortest_col] = cy + total_item_h + gap
+        end
+        ::uniform_continue::
     end
 
     HandleScreenshotNavigation(screenshots)
@@ -15639,7 +15879,6 @@ function ShowScreenshotWindow()
 
     local min_width = config[browser_panel_key] and total_min_width or screenshot_min_width
     local window_flags = r.ImGui_WindowFlags_NoTitleBar() |
-                    r.ImGui_WindowFlags_NoFocusOnAppearing() |
                     
                     r.ImGui_WindowFlags_NoScrollbar()
 
@@ -15660,6 +15899,17 @@ function ShowScreenshotWindow()
     
     local visible, open = r.ImGui_Begin(ctx, "Screenshots MINI##NoTitle", true, window_flags)
     if visible then
+        if screenshot_window_os_focus_needed and screenshot_window_os_focus_needed > 0 then
+            screenshot_window_os_focus_needed = screenshot_window_os_focus_needed - 1
+            if screenshot_window_os_focus_needed == 1 then
+                if r.JS_Window_Find then
+                    local hwnd = r.JS_Window_Find("Screenshots MINI", false)
+                    if hwnd then r.JS_Window_SetForeground(hwnd) end
+                end
+            elseif screenshot_window_os_focus_needed == 0 then
+                screenshot_search_focus_requested = true
+            end
+        end
         ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
         
@@ -17341,7 +17591,7 @@ function ShowScreenshotWindow()
                     else
                         if view_mode == "list" then
                             RenderListViewItems(filtered_plugins, "favorites_list")
-                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
+                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_uniform_layout then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
                             for _, plugin in ipairs(with_shot) do
@@ -17357,10 +17607,15 @@ function ShowScreenshotWindow()
                                 DrawPolaroidLayout(masonry_data)
                             elseif config.use_showcase_layout then
                                 DrawShowcaseLayout(masonry_data)
+                            elseif config.use_uniform_layout then
+                                for _, name in ipairs(missing) do
+                                    masonry_data[#masonry_data+1] = {name = name}
+                                end
+                                DrawUniformLayout(masonry_data)
                             else
                                 DrawMasonryLayout(masonry_data)
                             end
-                            RenderMissingList(missing)
+                            if not config.use_uniform_layout then RenderMissingList(missing) end
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             ApplyTopScreenshotSpacing()
@@ -17549,7 +17804,7 @@ function ShowScreenshotWindow()
                     else
                         if view_mode == "list" then
                             RenderListViewItems(filtered_plugins, "custom_list")
-                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
+                        elseif config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_uniform_layout then
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             local masonry_data = {}
                             
@@ -17566,10 +17821,15 @@ function ShowScreenshotWindow()
                                 DrawPolaroidLayout(masonry_data)
                             elseif config.use_showcase_layout then
                                 DrawShowcaseLayout(masonry_data)
+                            elseif config.use_uniform_layout then
+                                for _, name in ipairs(missing) do
+                                    masonry_data[#masonry_data+1] = {name = name}
+                                end
+                                DrawUniformLayout(masonry_data)
                             else
                                 DrawMasonryLayout(masonry_data)
                             end
-                            RenderMissingList(missing)
+                            if not config.use_uniform_layout then RenderMissingList(missing) end
                         else
                             local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                             ApplyTopScreenshotSpacing()
@@ -18152,7 +18412,7 @@ function ShowScreenshotWindow()
                                 filtered_plugins = limited
                             end
 
-                            if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
+                            if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_uniform_layout then
                                 if filtered_plugins then
                                     local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
                                     local masonry_data = {}
@@ -18169,10 +18429,15 @@ function ShowScreenshotWindow()
                                         DrawPolaroidLayout(masonry_data)
                                     elseif config.use_showcase_layout then
                                         DrawShowcaseLayout(masonry_data)
+                                    elseif config.use_uniform_layout then
+                                        for _, name in ipairs(missing) do
+                                            masonry_data[#masonry_data+1] = {name = name}
+                                        end
+                                        DrawUniformLayout(masonry_data)
                                     else
                                         DrawMasonryLayout(masonry_data)
                                     end
-                                    RenderMissingList(missing)
+                                    if not config.use_uniform_layout then RenderMissingList(missing) end
                                 end
                             else
                                 local with_shot, missing = SplitPluginsByScreenshot(filtered_plugins)
@@ -18292,7 +18557,7 @@ function ShowScreenshotWindow()
                 if view_mode == "list" then
                     RenderListViewItems(screenshot_search_results, "search_list", { is_search = true })
                 else
-                    if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout then
+                    if config.use_polaroid_layout or config.use_showcase_layout or config.use_masonry_layout or config.use_uniform_layout then
                         local plain_names = {}
                         local messages = {}
                         for _, fx in ipairs(screenshot_search_results) do
@@ -18344,10 +18609,15 @@ function ShowScreenshotWindow()
                             DrawPolaroidLayout(masonry_data, buttons_height)
                         elseif config.use_showcase_layout then
                             DrawShowcaseLayout(masonry_data, buttons_height)
+                        elseif config.use_uniform_layout then
+                            for _, name in ipairs(missing) do
+                                masonry_data[#masonry_data+1] = {name = name}
+                            end
+                            DrawUniformLayout(masonry_data, buttons_height)
                         else
                             DrawMasonryLayout(masonry_data, buttons_height)
                         end
-                        RenderMissingList(missing)
+                        if not config.use_uniform_layout then RenderMissingList(missing) end
                     else
                         local card_spacing = config.use_modern_cards and 12 or 0
                         local num_columns = math.max(1, math.floor(available_width / (display_size + card_spacing)))
@@ -19344,7 +19614,7 @@ function FilterBox()
     
     local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
     local search_results_max_height = window_height - total_ui_elements - 100
-    if r.ImGui_IsWindowAppearing(ctx) then
+    if r.ImGui_IsWindowAppearing(ctx) and not config.show_screenshot_window then
         r.ImGui_SetKeyboardFocusHere(ctx)
     end
     

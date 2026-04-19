@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.6.1" author="TouristKiller" time="2026-04-19T13:15:00Z">
+    <version name="2.6.2" author="TouristKiller" time="2026-04-19T19:25:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -46,6 +46,15 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[    
+ v2.6.2
+    + Fixed screenshot window not receiving keyboard focus after Toggle Visibility and Toggle Screenshot Window external scripts
+    + Fixed main search stealing focus from screenshot searchbox on window appear
+    + Replaced ImGui SetNextWindowFocus with OS-level JS_Window_SetForeground to avoid native nav-border artifacts
+    + Added 3-frame focus sequencing (appear → OS focus → keyboard focus) for reliable input after toggle
+    + Added Uniform layout: equal-sized cells with black background, grey border, 8px inset, left-aligned columns
+    + Fixed name-below-screenshot not showing (hidden_names table was always truthy)
+    + Fixed missing plugins not appearing in Uniform/Masonry views
+    + Added Linux support for Open Screenshots Folder (xdg-open)             
  v2.6.1:
     + Added click-on-empty-area behavior in screenshot window to clear current selection
     + Added "Remove All from Custom Folder" to multi-select right-click menu
