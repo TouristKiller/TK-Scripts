@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.5.3
+-- @version 0.5.4
 -- @changelog:
 --[[ 
   v0.5.2:
@@ -1124,10 +1124,16 @@ function SetDefaultConfig()
         use_pagination = true,
         use_masonry_layout = false,
         use_modern_cards = false,
+        show_type_overlay = false,
         list_hover_screenshot = false,
         use_showcase_layout = false,
         use_polaroid_layout = false,
         use_uniform_layout = false,
+        uniform_bg_color = 0x000000FF,
+        uniform_border_color = 0x505050FF,
+        uniform_hover_color = 0x4FC1E9FF,
+        uniform_name_color = 0xC0C0C0FF,
+        uniform_brightness = 100,
         use_neon_layout = false,
         use_vinyl_layout = false,
         show_favorites_on_top = true,
@@ -10379,8 +10385,15 @@ function ShowScreenshotControls()
                 SaveConfig()
             end
             r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, "\xE2\x9A\x99 Uniform Settings..") then
+                show_uniform_color_settings = true
+            end
+            r.ImGui_Separator(ctx)
             if r.ImGui_MenuItem(ctx, "Modern Cards", "", config.use_modern_cards) then
                 config.use_modern_cards = not config.use_modern_cards; SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Type Overlay", "", config.show_type_overlay) then
+                config.show_type_overlay = not config.show_type_overlay; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Compact View", "", config.compact_screenshots) then
                 config.compact_screenshots = not config.compact_screenshots; SaveConfig()
@@ -10464,6 +10477,56 @@ function ShowScreenshotControls()
         r.ImGui_EndPopup(ctx)
     end
     
+    if show_uniform_color_settings then
+        r.ImGui_OpenPopup(ctx, "UniformColorSettings")
+        show_uniform_color_settings = false
+    end
+    if r.ImGui_BeginPopup(ctx, "UniformColorSettings") then
+        r.ImGui_Text(ctx, "Uniform Layout Settings")
+        r.ImGui_Separator(ctx)
+
+        local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
+
+        r.ImGui_Text(ctx, "Background")
+        r.ImGui_SameLine(ctx, 160)
+        local changed_bg, new_bg = r.ImGui_ColorEdit4(ctx, "##uniform_bg", config.uniform_bg_color, flags)
+        if changed_bg then config.uniform_bg_color = new_bg; SaveConfig() end
+
+        r.ImGui_Text(ctx, "Border")
+        r.ImGui_SameLine(ctx, 160)
+        local changed_bd, new_bd = r.ImGui_ColorEdit4(ctx, "##uniform_border", config.uniform_border_color, flags)
+        if changed_bd then config.uniform_border_color = new_bd; SaveConfig() end
+
+        r.ImGui_Text(ctx, "Hover Border")
+        r.ImGui_SameLine(ctx, 160)
+        local changed_hv, new_hv = r.ImGui_ColorEdit4(ctx, "##uniform_hover", config.uniform_hover_color, flags)
+        if changed_hv then config.uniform_hover_color = new_hv; SaveConfig() end
+
+        r.ImGui_Text(ctx, "Name Color")
+        r.ImGui_SameLine(ctx, 160)
+        local changed_nm, new_nm = r.ImGui_ColorEdit4(ctx, "##uniform_name", config.uniform_name_color, flags)
+        if changed_nm then config.uniform_name_color = new_nm; SaveConfig() end
+
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Brightness")
+        r.ImGui_SameLine(ctx, 160)
+        r.ImGui_PushItemWidth(ctx, 120)
+        local changed_br, new_bright = r.ImGui_SliderInt(ctx, "##uniform_bright", config.uniform_brightness, 20, 200, "%d%%")
+        if changed_br then config.uniform_brightness = new_bright; SaveConfig() end
+        r.ImGui_PopItemWidth(ctx)
+
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Reset Defaults") then
+            config.uniform_bg_color = 0x000000FF
+            config.uniform_border_color = 0x505050FF
+            config.uniform_hover_color = 0x4FC1E9FF
+            config.uniform_name_color = 0xC0C0C0FF
+            config.uniform_brightness = 100
+            SaveConfig()
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+
     if show_type_order_popup then
         r.ImGui_OpenPopup(ctx, "TypeOrderPopup")
         show_type_order_popup = false
@@ -14547,6 +14610,7 @@ function DrawMasonryLayout(screenshots, top_offset)
                     if IsPluginPinned and IsPluginPinned(fx.name) then DrawPinnedOverlayAt(item_min_x, item_min_y, actual_w, actual_h) end
                     if favorite_set and favorite_set[fx.name] then DrawFavoriteOverlayAt(item_min_x, item_min_y, actual_w, actual_h) end
                     DrawNameOnScreenshot(item_min_x, item_min_y, actual_w, actual_h, fx.name)
+                    DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), item_min_x, item_min_y, actual_w, actual_h, fx.name)
 
                     DrawNavSelectionBorder(i, item_min_x, item_min_y, item_max_x, item_max_y)
 
@@ -14641,6 +14705,21 @@ local showcase_type_colors = {
     JS   = 0xFFCE54FF, AU  = 0xED5565FF, LV2  = 0xA0D468FF,
     OTHER = 0x888888FF
 }
+
+function DrawTypeBadgeOverlay(dl, x, y, w, h, plugin_name)
+    if not config.show_type_overlay then return end
+    local p_type = GetPluginType(plugin_name)
+    local badge_text = p_type
+    local badge_tw = r.ImGui_CalcTextSize(ctx, badge_text)
+    local px, py = 4, 2
+    local pad = 8
+    local bx = x + w - badge_tw - px * 2 - pad
+    local by = y + pad
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+    local badge_col = showcase_type_colors[p_type] or showcase_type_colors.OTHER
+    r.ImGui_DrawList_AddRectFilled(dl, bx, by, bx + badge_tw + px * 2, by + line_h + py * 2, badge_col, 4)
+    r.ImGui_DrawList_AddText(dl, bx + px, by + py, 0x000000DD, badge_text)
+end
 
 function DrawShowcaseLayout(screenshots, top_offset)
     top_offset = top_offset or 0
@@ -14763,6 +14842,7 @@ function DrawShowcaseLayout(screenshots, top_offset)
             if favorite_set and favorite_set[plugin_name] then
                 DrawFavoriteOverlayAt(img_x, img_y, img_w, img_h)
             end
+            DrawTypeBadgeOverlay(dl, img_x, img_y, img_w, img_h, plugin_name)
 
             local info_x = img_x + img_w + pad * 2
             local info_y = cursor_sy + pad + 2
@@ -15033,6 +15113,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
             if favorite_set and favorite_set[plugin_name] then
                 DrawFavoriteOverlayAt(img_x, img_y, photo_size, photo_size)
             end
+            DrawTypeBadgeOverlay(dl, img_x, img_y, photo_size, photo_size, plugin_name)
 
             local text_area_y = img_y + photo_size + 4
             local text_area_w = card_w - border_side * 2
@@ -15152,6 +15233,23 @@ function DrawUniformLayout(screenshots, top_offset)
 
     local dl = r.ImGui_GetWindowDrawList(ctx)
 
+    local bright = (config.uniform_brightness or 100) / 100
+    local function apply_brightness(color)
+        if bright == 1 then return color end
+        local ri = (color >> 24) & 0xFF
+        local gi = (color >> 16) & 0xFF
+        local bi = (color >> 8) & 0xFF
+        local ai = color & 0xFF
+        ri = math.min(255, math.floor(ri * bright + 0.5))
+        gi = math.min(255, math.floor(gi * bright + 0.5))
+        bi = math.min(255, math.floor(bi * bright + 0.5))
+        return (ri << 24) | (gi << 16) | (bi << 8) | ai
+    end
+    local u_bg = apply_brightness(config.uniform_bg_color or 0x000000FF)
+    local u_border = apply_brightness(config.uniform_border_color or 0x505050FF)
+    local u_hover = apply_brightness(config.uniform_hover_color or 0x4FC1E9FF)
+    local u_name = apply_brightness(config.uniform_name_color or 0xC0C0C0FF)
+
     if top_offset > 0 then r.ImGui_Dummy(ctx, 0, top_offset) end
     if not top_screenshot_spacing_applied then
         r.ImGui_Dummy(ctx, 0, 6)
@@ -15223,8 +15321,8 @@ function DrawUniformLayout(screenshots, top_offset)
             local sy_cell = base_sy + cy
             ScreenshotNavRegister(i, shortest_col, cx, base_cy + cy, plugin_name)
 
-            r.ImGui_DrawList_AddRectFilled(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, 0x000000FF, 4)
-            r.ImGui_DrawList_AddRect(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, 0x505050FF, 4, 0, 1.5)
+            r.ImGui_DrawList_AddRectFilled(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, u_bg, 4)
+            r.ImGui_DrawList_AddRect(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, u_border, 4, 0, 1.5)
 
             local screenshot_file = HasScreenshot(plugin_name)
             local texture, tex_w, tex_h, has_tex = nil, 0, 0, false
@@ -15260,6 +15358,7 @@ function DrawUniformLayout(screenshots, top_offset)
                 DrawFavoriteOverlayAt(sx_cell, sy_cell, cell_w, cell_h)
             end
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
 
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
@@ -15307,7 +15406,7 @@ function DrawUniformLayout(screenshots, top_offset)
 
             local is_hovered = r.ImGui_IsItemHovered(ctx)
             if is_hovered then
-                r.ImGui_DrawList_AddRect(dl, sx_cell - 1, sy_cell - 1, sx_cell + cell_w + 1, sy_cell + cell_h + 1, 0x4FC1E9FF, 4, 0, 2)
+                r.ImGui_DrawList_AddRect(dl, sx_cell - 1, sy_cell - 1, sx_cell + cell_w + 1, sy_cell + cell_h + 1, u_hover, 4, 0, 2)
             end
 
             local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only and not config.show_name_on_screenshot
@@ -15323,7 +15422,7 @@ function DrawUniformLayout(screenshots, top_offset)
                     name_tw = r.ImGui_CalcTextSize(ctx, display_name)
                 end
                 local name_x = sx_cell + (cell_w - name_tw) * 0.5
-                r.ImGui_DrawList_AddText(dl, name_x, sy_cell + cell_h + 2, 0xC0C0C0FF, display_name)
+                r.ImGui_DrawList_AddText(dl, name_x, sy_cell + cell_h + 2, u_name, display_name)
             end
 
             if config.show_name_on_hover_only and is_hovered then
@@ -15483,6 +15582,7 @@ function DrawNeonLayout(screenshots, top_offset)
                 DrawFavoriteOverlayAt(sx_cell, sy_cell, cell_w, cell_h)
             end
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
 
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
@@ -15695,6 +15795,7 @@ function DrawVinylLayout(screenshots, top_offset)
                 DrawFavoriteOverlayAt(sx_cell, sy_cell, cell_w, cell_h)
             end
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
 
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
@@ -18131,6 +18232,7 @@ function ShowScreenshotWindow()
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                                DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                             end
                                             if config.enable_drag_add_fx then
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -18356,6 +18458,7 @@ function ShowScreenshotWindow()
                                                 local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                                DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                             end
                                             if config.enable_drag_add_fx then
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -18560,6 +18663,7 @@ function ShowScreenshotWindow()
                                             DrawModernCardBackground(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y)
                                             DrawModernCardForeground(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y)
                                             DrawNameOnScreenshot(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y, plugin.fx_name)
+                                            DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y, plugin.fx_name)
                                             if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                                                 local payload_str = (plugin.is_master and "M" or tostring(plugin.track_number)) .. ":" .. tostring(plugin.fx_index)
                                                 r.ImGui_SetDragDropPayload(ctx, "PROJFX_SHOT_DRAG", payload_str)
@@ -18723,6 +18827,7 @@ function ShowScreenshotWindow()
                                     DrawModernCardBackground(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y)
                                     DrawModernCardForeground(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y)
                                     DrawNameOnScreenshot(item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y, fx.fx_name)
+                                    DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), item_min_x, item_min_y, item_max_x - item_min_x, item_max_y - item_min_y, fx.fx_name)
 
                                     if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                                         r.ImGui_SetDragDropPayload(ctx, "TRACKFX_SHOT_DRAG", tostring(fx.fx_index))
@@ -18972,6 +19077,7 @@ function ShowScreenshotWindow()
                                                     local tlx, tly = r.ImGui_GetItemRectMin(ctx)
                                                     local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                     DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                                    DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 end
                                                 local do_add = false
                                                 if config.enable_drag_add_fx then
@@ -19212,6 +19318,7 @@ function ShowScreenshotWindow()
                                             DrawFavoriteOverlayAt(tlx, tly, brx - tlx, bry - tly)
                                         end
                                         DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                        DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                         
                                         if not is_fx_chain_item then
                                             if config.enable_drag_add_fx then
