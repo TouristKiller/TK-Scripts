@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.5.5
+-- @version 0.5.6
 -- @changelog:
 --[[ 
   v0.5.2:
@@ -303,6 +303,7 @@ function _build_screenshot_signature()
 end
 
 local last_visibility_state = nil
+local main_search_focus_requested = false
 local function CheckVisibilityState()
     local visibility_state = r.GetExtState("TK_FX_BROWSER_MINI", "visibility")
     local is_visible = visibility_state ~= "hidden"
@@ -311,6 +312,9 @@ local function CheckVisibilityState()
     if last_visibility_state == "hidden" and visibility_state ~= "hidden" then
         ClearScreenshotCache()
         screenshot_window_os_focus_needed = 3
+        screenshot_search_focus_requested = true
+        screenshot_search_force_overwrite = true
+        main_search_focus_requested = true
         if selected_folder then
             GetPluginsForFolder(selected_folder)
         end
@@ -751,10 +755,15 @@ screenshot_multi_selected = screenshot_multi_selected or {}
 screenshot_nav_anchor = screenshot_nav_anchor or nil
 screenshot_nav_names = screenshot_nav_names or {}
 screenshot_search_focus_requested = true
+screenshot_search_blur_requested = false
+screenshot_search_replace_requested = false
+screenshot_search_force_overwrite = false
 screenshot_window_os_focus_needed = 3
 screenshot_search_to_nav = false
 ab_snapshots = ab_snapshots or {}
 show_shortcuts_window = false
+
+local ConsumeScreenshotSearchBlur
 
 -- Window state variables
 was_hidden = was_hidden or false
@@ -1134,6 +1143,9 @@ function SetDefaultConfig()
         uniform_hover_color = 0x4FC1E9FF,
         uniform_name_color = 0xC0C0C0FF,
         uniform_brightness = 100,
+        uniform_fuzzy_bg = false,
+        uniform_fuzzy_opacity = 0.45,
+        uniform_fuzzy_blur = 3,
         use_neon_layout = false,
         use_vinyl_layout = false,
         show_favorites_on_top = true,
@@ -2174,7 +2186,9 @@ function BuildScreenshotIndex(force)
         local base = fname:match('(.+)%.png$') or fname:match('(.+)%.jpg$') or fname:match('(.+)%.jpeg$')
         if base then
             local norm = NormalizePluginNameForMatch(base)
-            screenshot_index_norm[norm] = true
+            if not screenshot_index_norm[norm] then
+                screenshot_index_norm[norm] = fname
+            end
         end
         i = i + 1
     end
@@ -2238,8 +2252,9 @@ function HasScreenshot(plugin_name)
 
     BuildScreenshotIndex()
     local norm = NormalizePluginNameForMatch(plugin_name)
-    if screenshot_index_norm[norm] then 
-        local full_path = screenshot_path .. screenshot_index_norm[norm]
+    local indexed_file = screenshot_index_norm[norm]
+    if type(indexed_file) == 'string' and indexed_file ~= '' then 
+        local full_path = screenshot_path .. indexed_file
         screenshot_exists_cache[plugin_name] = full_path
         return full_path 
     end
@@ -8542,8 +8557,9 @@ function ShowPluginContextMenu(plugin_name, menu_id)
         if HasScreenshot(plugin_name) then
             if r.ImGui_MenuItem(ctx, "Remove Screenshot") then
                 local norm = NormalizePluginNameForMatch(plugin_name)
-                if screenshot_index_norm and screenshot_index_norm[norm] then
-                    local fpath = screenshot_path .. screenshot_index_norm[norm]
+                local indexed_file = screenshot_index_norm and screenshot_index_norm[norm]
+                if type(indexed_file) == 'string' and indexed_file ~= '' then
+                    local fpath = screenshot_path .. indexed_file
                     if r.file_exists(fpath) then
                         os.remove(fpath)
                     end
@@ -9836,13 +9852,23 @@ function ShowScreenshotControls()
             local search_width = r.ImGui_GetContentRegionAvail(ctx) - button_space
             
             r.ImGui_PushItemWidth(ctx, search_width)
+            local search_input_flags = 0
+            if screenshot_search_focus_requested and browser_search_term ~= "" then
+                search_input_flags = r.ImGui_InputTextFlags_AutoSelectAll()
+                screenshot_search_replace_requested = true
+            end
+            if screenshot_search_focus_requested and screenshot_search_force_overwrite and browser_search_term ~= "" then
+                browser_search_term = ""
+            end
             if screenshot_search_focus_requested then
                 r.ImGui_SetKeyboardFocusHere(ctx)
                 screenshot_search_focus_requested = false
+                screenshot_search_force_overwrite = false
             end
-            local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+            local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term, search_input_flags)
             if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
                 screenshot_search_to_nav = true
+                screenshot_search_blur_requested = true
             end
             r.ImGui_PopItemWidth(ctx)
             
@@ -9908,8 +9934,13 @@ function ShowScreenshotControls()
                 r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)")
             end
             r.ImGui_PopStyleColor(ctx, 4)
+            ConsumeScreenshotSearchBlur("##ScreenshotSearchBlurMain")
 
             if changed then
+                if screenshot_search_replace_requested and browser_search_term ~= "" and new_search:sub(1, #browser_search_term) == browser_search_term then
+                    new_search = new_search:sub(#browser_search_term + 1)
+                end
+                screenshot_search_replace_requested = false
                 browser_search_term = new_search
                 if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
                 
@@ -10021,13 +10052,23 @@ function ShowScreenshotControls()
         if show_screenshot_search then
             r.ImGui_SameLine(ctx)
             r.ImGui_PushItemWidth(ctx, 70)
+            local search_input_flags = 0
+            if screenshot_search_focus_requested and browser_search_term ~= "" then
+                search_input_flags = r.ImGui_InputTextFlags_AutoSelectAll()
+                screenshot_search_replace_requested = true
+            end
+            if screenshot_search_focus_requested and screenshot_search_force_overwrite and browser_search_term ~= "" then
+                browser_search_term = ""
+            end
             if screenshot_search_focus_requested then
                 r.ImGui_SetKeyboardFocusHere(ctx)
                 screenshot_search_focus_requested = false
+                screenshot_search_force_overwrite = false
             end
-            local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term)
+            local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term, search_input_flags)
             if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
                 screenshot_search_to_nav = true
+                screenshot_search_blur_requested = true
             end
             r.ImGui_PopItemWidth(ctx)
             local btn_color, btn_hover, btn_active, btn_text = GetButtonColors()
@@ -10092,8 +10133,13 @@ function ShowScreenshotControls()
             if r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)")
             end
+            ConsumeScreenshotSearchBlur("##ScreenshotSearchBlurCompact")
 
             if changed then
+                if screenshot_search_replace_requested and browser_search_term ~= "" and new_search:sub(1, #browser_search_term) == browser_search_term then
+                    new_search = new_search:sub(#browser_search_term + 1)
+                end
+                screenshot_search_replace_requested = false
                 browser_search_term = new_search
                 if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
                 
@@ -10516,12 +10562,33 @@ function ShowScreenshotControls()
         r.ImGui_PopItemWidth(ctx)
 
         r.ImGui_Separator(ctx)
+        local changed_fuzzy, new_fuzzy = r.ImGui_Checkbox(ctx, "Fuzzy Screenshot Background", config.uniform_fuzzy_bg)
+        if changed_fuzzy then config.uniform_fuzzy_bg = new_fuzzy; SaveConfig() end
+        if config.uniform_fuzzy_bg then
+            r.ImGui_Text(ctx, "Opacity")
+            r.ImGui_SameLine(ctx, 160)
+            r.ImGui_PushItemWidth(ctx, 120)
+            local changed_fo, new_fo = r.ImGui_SliderDouble(ctx, "##fuzzy_opacity", config.uniform_fuzzy_opacity or 0.45, 0.0, 1.0, "%.2f")
+            if changed_fo then config.uniform_fuzzy_opacity = new_fo; SaveConfig() end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_Text(ctx, "Blur Strength")
+            r.ImGui_SameLine(ctx, 160)
+            r.ImGui_PushItemWidth(ctx, 120)
+            local changed_bl, new_bl = r.ImGui_SliderInt(ctx, "##fuzzy_blur", config.uniform_fuzzy_blur or 3, 1, 16, "%d")
+            if changed_bl then config.uniform_fuzzy_blur = new_bl; SaveConfig() end
+            r.ImGui_PopItemWidth(ctx)
+        end
+
+        r.ImGui_Separator(ctx)
         if r.ImGui_Button(ctx, "Reset Defaults") then
             config.uniform_bg_color = 0x000000FF
             config.uniform_border_color = 0x505050FF
             config.uniform_hover_color = 0x4FC1E9FF
             config.uniform_name_color = 0xC0C0C0FF
             config.uniform_brightness = 100
+            config.uniform_fuzzy_bg = false
+            config.uniform_fuzzy_opacity = 0.45
+            config.uniform_fuzzy_blur = 3
             SaveConfig()
         end
         r.ImGui_EndPopup(ctx)
@@ -11690,13 +11757,23 @@ function ShowBrowserPanel()
     if header_open then
     if config.show_browser_search then
         r.ImGui_PushItemWidth(ctx, 70)
+        local search_input_flags = 0
+        if screenshot_search_focus_requested and not (config.show_screenshot_search ~= false) and browser_search_term ~= "" then
+            search_input_flags = r.ImGui_InputTextFlags_AutoSelectAll()
+            screenshot_search_replace_requested = true
+        end
+        if screenshot_search_focus_requested and screenshot_search_force_overwrite and not (config.show_screenshot_search ~= false) and browser_search_term ~= "" then
+            browser_search_term = ""
+        end
         if screenshot_search_focus_requested and not (config.show_screenshot_search ~= false) then
             r.ImGui_SetKeyboardFocusHere(ctx)
             screenshot_search_focus_requested = false
+            screenshot_search_force_overwrite = false
         end
-        local changed_browser_search, new_browser_search = r.ImGui_InputTextWithHint(ctx, "##BrowserSearch", "Search...", browser_search_term)
+        local changed_browser_search, new_browser_search = r.ImGui_InputTextWithHint(ctx, "##BrowserSearch", "Search...", browser_search_term, search_input_flags)
         if (config.show_screenshot_search == false) and r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
             screenshot_search_to_nav = true
+            screenshot_search_blur_requested = true
         end
         r.ImGui_PopItemWidth(ctx)
         local btn_color, btn_hover, btn_active, btn_text = GetButtonColors()
@@ -11712,6 +11789,10 @@ function ShowBrowserPanel()
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear search") end
         end
         if changed_browser_search then
+            if screenshot_search_replace_requested and browser_search_term ~= "" and new_browser_search:sub(1, #browser_search_term) == browser_search_term then
+                new_browser_search = new_browser_search:sub(#browser_search_term + 1)
+            end
+            screenshot_search_replace_requested = false
             browser_search_term = new_browser_search
             if config.always_search_all then
                 SearchAllPlugins()
@@ -11760,6 +11841,7 @@ function ShowBrowserPanel()
         end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Search all plugins (ignores folder selection)") end
         r.ImGui_PopStyleColor(ctx, 4)
+        ConsumeScreenshotSearchBlur("##ScreenshotSearchBlurHeader")
         
         -- Separator binnen header
         local cur_y = r.ImGui_GetCursorPosY(ctx)
@@ -14231,6 +14313,16 @@ function GetMultiSelectedPluginNames(screenshots)
     return names
 end
 
+ConsumeScreenshotSearchBlur = function(id)
+    if not screenshot_search_blur_requested then return end
+    screenshot_search_blur_requested = false
+    local cursor_x = r.ImGui_GetCursorPosX(ctx)
+    local cursor_y = r.ImGui_GetCursorPosY(ctx)
+    r.ImGui_SetKeyboardFocusHere(ctx)
+    r.ImGui_InvisibleButton(ctx, id, 1, 1)
+    r.ImGui_SetCursorPos(ctx, cursor_x, cursor_y)
+end
+
 function HandleMultiSelectClick(i, screenshots)
     local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
     local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
@@ -15322,7 +15414,6 @@ function DrawUniformLayout(screenshots, top_offset)
             ScreenshotNavRegister(i, shortest_col, cx, base_cy + cy, plugin_name)
 
             r.ImGui_DrawList_AddRectFilled(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, u_bg, 4)
-            r.ImGui_DrawList_AddRect(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, u_border, 4, 0, 1.5)
 
             local screenshot_file = HasScreenshot(plugin_name)
             local texture, tex_w, tex_h, has_tex = nil, 0, 0, false
@@ -15333,6 +15424,32 @@ function DrawUniformLayout(screenshots, top_offset)
                     has_tex = tex_w and tex_h and tex_w > 0
                 end
             end
+
+            if has_tex and config.uniform_fuzzy_bg and r.ImGui_DrawList_AddImage then
+                local cover_scale = math.max(cell_w / tex_w, cell_h / tex_h)
+                local cw = tex_w * cover_scale
+                local ch = tex_h * cover_scale
+                local cox = sx_cell + (cell_w - cw) * 0.5
+                local coy = sy_cell + (cell_h - ch) * 0.5
+                r.ImGui_DrawList_PushClipRect(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, true)
+                local blur_r = math.max(1, config.uniform_fuzzy_blur or 3)
+                local total_passes = blur_r * 4
+                local pass_alpha = math.max(8, math.floor(220 / total_passes + 0.5))
+                local tint = 0xFFFFFF00 | pass_alpha
+                for step = 1, blur_r do
+                    local d = step * 1.5
+                    r.ImGui_DrawList_AddImage(dl, texture, cox - d, coy,     cox + cw - d, coy + ch,     0, 0, 1, 1, tint)
+                    r.ImGui_DrawList_AddImage(dl, texture, cox + d, coy,     cox + cw + d, coy + ch,     0, 0, 1, 1, tint)
+                    r.ImGui_DrawList_AddImage(dl, texture, cox,     coy - d, cox + cw,     coy + ch - d, 0, 0, 1, 1, tint)
+                    r.ImGui_DrawList_AddImage(dl, texture, cox,     coy + d, cox + cw,     coy + ch + d, 0, 0, 1, 1, tint)
+                end
+                local opacity = math.floor(math.min(1, math.max(0, config.uniform_fuzzy_opacity or 0.45)) * 255 + 0.5)
+                local overlay_col = ((u_bg >> 8) << 8) | opacity
+                r.ImGui_DrawList_AddRectFilled(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, overlay_col, 4)
+                r.ImGui_DrawList_PopClipRect(dl)
+            end
+
+            r.ImGui_DrawList_AddRect(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, u_border, 4, 0, 1.5)
 
             if has_tex then
                 local inset = 8
@@ -20187,13 +20304,19 @@ function FilterBox()
     
     local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
     local search_results_max_height = window_height - total_ui_elements - 100
-    if r.ImGui_IsWindowAppearing(ctx) and not config.show_screenshot_window then
+    local should_focus_main_search = (main_search_focus_requested or r.ImGui_IsWindowAppearing(ctx)) and not config.show_screenshot_window
+    if should_focus_main_search then
         r.ImGui_SetKeyboardFocusHere(ctx)
+        main_search_focus_requested = false
     end
     
     r.ImGui_PushItemWidth(ctx, search_width)
+    local input_flags = 0
+    if should_focus_main_search and FILTER ~= "" then
+        input_flags = r.ImGui_InputTextFlags_AutoSelectAll()
+    end
     local changed
-    changed, FILTER = r.ImGui_InputTextWithHint(ctx, '##input', "SEARCH FX", FILTER)
+    changed, FILTER = r.ImGui_InputTextWithHint(ctx, '##input', "SEARCH FX", FILTER, input_flags)
     if changed then
     new_search_performed = true
     end

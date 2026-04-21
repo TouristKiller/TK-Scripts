@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER - Toggle Screenshot Window
 -- @author TouristKiller
--- @version 1.0
+-- @version 1.1
 -- @about Toggle the Screenshot Window panel of TK FX BROWSER (show/hide while keeping the browser running)
 
 local r = reaper

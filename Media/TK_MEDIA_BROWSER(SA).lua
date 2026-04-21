@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.7.0
+-- @version 0.7.1
 -- @changelog:
 --[[       
+v0.7.1:
++ Minor bug fixes and performance improvements
+
 v0.7.0:
 + Auto Progress: Sequential playback from selected item downward
 + Auto Progress disables loop mode when enabled
@@ -4891,6 +4894,14 @@ local function draw_file_list()
                                         load_collections()
                                     end
                                     
+                                    local insert_track = r.GetSelectedTrack(0, 0)
+                                    if insert_track then
+                                        if r.ImGui_MenuItem(ctx, "Insert at Edit Cursor") then
+                                            insert_media_on_track(file_path, insert_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch)
+                                        end
+                                        r.ImGui_Separator(ctx)
+                                    end
+
                                     if ui.current_view_mode == "collections" and file_location.selected_collection then
                                         if r.ImGui_MenuItem(ctx, "Remove from Collection") then
                                             for idx, f in ipairs(file_location.current_files) do
