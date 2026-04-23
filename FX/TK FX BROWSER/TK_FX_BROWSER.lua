@@ -1,66 +1,22 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.6.6
+-- @version 2.6.8
 -- @changelog:
 --[[ 
-  v2.6.2:
-    + Fixed screenshot window not receiving keyboard focus after Toggle Visibility and Toggle Screenshot Window external scripts
-    + Fixed main search stealing focus from screenshot searchbox on window appear
-    + Replaced ImGui SetNextWindowFocus with OS-level JS_Window_SetForeground to avoid native nav-border artifacts
-    + Added 3-frame focus sequencing (appear → OS focus → keyboard focus) for reliable input after toggle
-    + Added Uniform layout: equal-sized cells with black background, grey border, 8px inset, left-aligned columns
-    + Fixed name-below-screenshot not showing (hidden_names table was always truthy)
-    + Fixed missing plugins not appearing in Uniform/Masonry views
-    + Added Linux support for Open Screenshots Folder (xdg-open)
-  v2.6.1:
-    + Added click-on-empty-area behavior in screenshot window to clear current selection
-    + Added "Remove All from Custom Folder" to multi-select right-click menu
-    + Added drag & drop plugin assignment to custom folders and native folders from screenshot and list views
-    + Added multi-select drag support for folder drops (drops all selected plugins when dragging one selected item)
-    + Added visual folder drop highlighting while dragging plugins over folder entries
-    + Added full list view interaction parity with screenshot view (multi-select, keyboard nav, context actions)
-    + Added shared list renderer across favorites/custom/folder/search list views for consistent behavior
-    + Added list-mode support for multi-select context workflows (Track FX, Item FX, Chain Builder related actions)
-    + Added external toggle support for Screenshot Window via ExtState (for global shortcut)
-    + Fixed texture load queue overflow cleanup stripping plugin data for folders with >500 plugins
-    + Fixed keep_set cap too small for large native folders causing textures to be pruned every frame
-    + Fixed lazy loading deadlock when all loaded items fit in window without scrollbar (scroll trigger never fired)
-    + Added lazy loading to native folder screenshot grid view (loads in batches instead of all at once)
-    + Added drag & drop reorder for native folders in browser panel (writes order to reaper-fxfolders.ini)
-    + Added "Sort Folders A-Z" option in native folder right-click context menu
-    + Folder display order now respects reaper-fxfolders.ini index order (pinned folders remain on top)
-    + Added native REAPER FX folder management (create, rename, delete) via reaper-fxfolders.ini
-    + Added smart folder support with query-based auto-matching (and/or/not, "exact match")
-    + Added smart folder create/edit popup with live preview of matching plugins
-    + Added "Add to Native Folder" and "Remove from Native Folder" in plugin right-click menu
-    + Added "Add All to Native Folder" and "Remove All from Native Folder" in multi-select menu
-    + Added Create/Edit/Delete Smart Folder options in plugin right-click and multi-select menus
-    + Added right-click context menu on native folders in browser panel (rename, edit smart, delete, create)
-    + Added right-click context menu on native folders in folder dropdown (rename, edit smart, delete, create)
-    + Added INI parse caching for native folders to prevent slow context menu performance
-    + Fixed ImGui_Attach maximum object limit error by using ImGui_Detach when removing textures from cache
-    + Added max limit (50) and eviction to list_hover_texture_cache
-    + Added cleanup for info_fx_texture_cache and list_hover_texture_cache in ClearScreenshotCache
-    + Fixed LoadProjectCover not detaching old cover texture before loading new one
-    + Fixed texture assertion crash (tex->TexID < m_textures.size) by attaching textures to context
-    + Added SafeImage wrapper for all texture rendering calls
-    + Added drag & drop support in list mode (parity with screenshot mode)
-    + Fixed ImGui nav focus stealing from search results popup
-    + Removed unwanted blue nav highlight borders from screenshot window
-    + Browser panel search box now supports keyboard navigation to screenshots when screenshot search is hidden
-    + Fixed Type Priority deduplication incorrectly merging channel variants (Mono/Stereo/2ch/4ch) into one entry
-  v2.6.0:
-    + Added track name header bar in browser panel with navigation arrows, scroll wheel and right-click context menu
-    + Removed duplicate track header from info panel (now unified in browser panel)
-    + INFO/BROWSER toggle button now colors with track color and auto-contrast text
-    + Added Numpad Enter support alongside regular Enter
-    + Added "Add to Input FX" option in right-click context menu (MAXI + Mini)
-    + Added Input FX enable/disable checkbox in config window
-    + Removed Input FX from I/O section (now in dedicated tab)
-    + Changed thumbnail indicator in headers from grid icon to filled/outline circle
-    + Added Input FX section to Info Panel with thumbnails, drag & drop reorder, context menu and drop zone
-    + Replaced green reorder buttons with drag & drop reorder in Track FX and Item FX lists
-    + Fixed Buttons and Meter checkboxes overlapping in View tab settings
+    v2.6.8:
+        + Fuzzy search: "H Delay" finds "H-Delay (Waves)", "MS 20" finds "MS-20" (native-style matching)
+        + Fixed search box focus/highlight when toggling screenshot window via F9 or + button (docked and undocked)
+        + Fixed type sorting in screenshot search results (now properly sorts by VST3, CLAP, VST, JS, AU, LV2, OTHER)
+        + Fixed search box lag by removing blocking I/O in texture loading (queue-based only)
+        + Increased texture queue processing speed (25 textures/frame) for faster screenshot display
+        
+    v2.6.7:
+        + Added Rating Overlay toggle and star overlay in screenshot layouts
+        + Fixed screenshot/main-window name-below config keys being applied to the wrong view
+        + Added bypassed plugin name color in thumbnail overlays and name-below text
+        + Added separators between FX thumbnails in info panel and main window lists
+        + Moved pin and favorite overlays to bottom corners to avoid overlap with top overlays
+
 ]]--        
 --------------------------------------------------------------------------
 local r                     = reaper
@@ -129,6 +85,29 @@ local strip_x86_cache       = {} -- NEW
 local plugin_type_cache     = {}
 local type_priority_cache   = nil
 
+local fuzzy_norm_cache = {}
+local function FuzzyNormalize(s)
+    if not s then return "" end
+    local c = fuzzy_norm_cache[s]
+    if c then return c end
+    local n = s:lower():gsub("[%-_%.%s]+", "")
+    fuzzy_norm_cache[s] = n
+    return n
+end
+
+function FuzzyFind(haystack, needle)
+    if not needle or needle == "" then return true end
+    if not haystack then return false end
+    local n_l = needle:lower()
+    local h_l = haystack:lower()
+    if h_l:find(n_l, 1, true) then return true end
+    if n_l:find("[%-_%.%s]") then
+        local hs = FuzzyNormalize(haystack)
+        local ns = n_l:gsub("[%-_%.%s]+", "")
+        if ns ~= "" and hs:find(ns, 1, true) then return true end
+    end
+    return false
+end
 
 -- OPTIMALISATIE: Cache Command ID voor Notes
 local cached_notes_command_id = nil
@@ -290,11 +269,8 @@ local function CheckVisibilityState()
         ClearScreenshotCache()
         screenshot_window_os_focus_needed = 3
         screenshot_search_focus_requested = true
-        screenshot_search_force_overwrite = true
+        pending_clear_on_show = true
         main_search_focus_requested = true
-        if selected_folder then
-            GetPluginsForFolder(selected_folder)
-        end
     end
     
     last_visibility_state = visibility_state
@@ -501,9 +477,9 @@ function RefreshCurrentScreenshotView()
         local term_l = term:lower()
         
         local function MatchesSearch(raw_name)
-            if raw_name:lower():find(term_l, 1, true) then return true end
+            if FuzzyFind(raw_name, term_l) then return true end
             local alias = plugin_aliases[raw_name]
-            if alias and alias:lower():find(term_l, 1, true) then return true end
+            if alias and FuzzyFind(alias, term_l) then return true end
             return false
         end
 
@@ -697,8 +673,11 @@ screenshot_search_focus_requested = true
 screenshot_search_blur_requested = false
 screenshot_search_replace_requested = false
 screenshot_search_force_overwrite = false
+pending_clear_on_show = pending_clear_on_show or false
+screenshot_search_autoselect = screenshot_search_autoselect or false
 screenshot_window_os_focus_needed = 3
 screenshot_search_to_nav = false
+screenshot_folder_filter_suspended = screenshot_folder_filter_suspended or false
 ab_snapshots = ab_snapshots or {}
 show_shortcuts_window = false
 
@@ -714,6 +693,7 @@ was_docked_before_hide = was_docked_before_hide or false
 screenshot_search_results = screenshot_search_results or {}
 browser_panel_selected = browser_panel_selected or nil
 last_selected_folder_before_global = nil
+last_panel_before_global = nil
 
 -- FX Chain viewing in screenshot window
 current_fx_chain_path = current_fx_chain_path or nil
@@ -960,7 +940,7 @@ function SetDefaultConfig()
         use_global_screenshot_size = false,
         global_screenshot_size = 200,
         dropdown_menu_length = 20,
-        max_textures_per_frame = 15,
+        max_textures_per_frame = 25,
         max_cached_search_textures = 100,
         min_cached_textures = 25,
         texture_reload_delay = 2,
@@ -1071,6 +1051,8 @@ function SetDefaultConfig()
         show_name_in_screenshot_window = true,
         show_name_on_hover_only = false,
         show_name_on_screenshot = false,
+        show_name_below_screenshot = false,
+        show_name_below_main_window = false,
         show_name_in_main_window = true,
         clean_plugin_names = false, 
         remove_manufacturer_names = false, 
@@ -1135,6 +1117,7 @@ function SetDefaultConfig()
         use_masonry_layout = false,
         use_modern_cards = false,
         show_type_overlay = false,
+        show_rating_overlay = false,
         list_hover_screenshot = false,
         use_showcase_layout = false,
         use_polaroid_layout = false,
@@ -3865,11 +3848,11 @@ function ShowPluginManagerTab()
                 if search_filter == "" then
                     match = true
                 else
-                    if plugin:lower():find(term_l, 1, true) then
+                    if FuzzyFind(plugin, term_l) then
                         match = true
                     else
                         local alias = plugin_aliases[plugin]
-                        if alias and alias:lower():find(term_l, 1, true) then
+                        if alias and FuzzyFind(alias, term_l) then
                             match = true
                         end
                     end
@@ -3909,11 +3892,11 @@ function ShowPluginManagerTab()
             if search_filter == "" then
                 match = true
             else
-                if plugin:lower():find(term_l, 1, true) then
+                if FuzzyFind(plugin, term_l) then
                     match = true
                 else
                     local alias = plugin_aliases[plugin]
-                    if alias and alias:lower():find(term_l, 1, true) then
+                    if alias and FuzzyFind(alias, term_l) then
                         match = true
                     end
                 end
@@ -4649,6 +4632,9 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.allow_esc_close = r.ImGui_Checkbox(ctx, "ESC closes script", config.allow_esc_close)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.show_name_below_main_window = r.ImGui_Checkbox(ctx, "FX List Name Below##mw", config.show_name_below_main_window)
             end
 
             NewSection("SCREENSHOT WINDOW:")
@@ -4755,6 +4741,14 @@ function ShowConfigWindow()
             _, config.info_fxlist_keep_aspect_ratio = r.ImGui_Checkbox(ctx, "FX List Keep Ratio##sw", config.info_fxlist_keep_aspect_ratio)
 
             r.ImGui_Dummy(ctx, 0, 5)
+            r.ImGui_SameLine(ctx)
+            local snbs_ch, snbs_v = r.ImGui_Checkbox(ctx, "FX List Name Below##sw", config.show_name_below_screenshot)
+            if snbs_ch then config.show_name_below_screenshot = snbs_v; SaveConfig() end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show plugin name below Track/Item/Input FX thumbnails in the info panel instead of as an overlay.")
+            end
+
+            r.ImGui_Dummy(ctx, 0, 5)
             r.ImGui_SetCursorPosX(ctx, column1_width)
 
             local function RefreshAfterTypePriorityChange()
@@ -4768,7 +4762,7 @@ function ShowConfigWindow()
                         current_filtered_fx = GetFxListForSubgroup(browser_panel_selected) or {}
                         local filtered = {}
                         for _, p in ipairs(current_filtered_fx) do
-                            if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
+                            if FuzzyFind(p, term_l) then filtered[#filtered+1] = p end
                         end
                         if config.apply_type_priority then
                             filtered = DedupeByTypePriority(filtered)
@@ -4778,7 +4772,7 @@ function ShowConfigWindow()
                         local base = GetPluginsForFolder(selected_folder) or {}
                         local filtered = {}
                         for _, p in ipairs(base) do
-                            if p:lower():find(term_l, 1, true) then filtered[#filtered+1] = p end
+                            if FuzzyFind(p, term_l) then filtered[#filtered+1] = p end
                         end
                         if config.apply_type_priority then
                             filtered = DedupeByTypePriority(filtered)
@@ -4787,7 +4781,7 @@ function ShowConfigWindow()
                     else
                         local matches = {}
                         for _, plugin in ipairs(PLUGIN_LIST or {}) do
-                            if plugin:lower():find(term_l, 1, true) then matches[#matches+1] = plugin end
+                            if FuzzyFind(plugin, term_l) then matches[#matches+1] = plugin end
                         end
                         if config.apply_type_priority then
                             matches = DedupeByTypePriority(matches)
@@ -5002,7 +4996,7 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
             r.ImGui_PushItemWidth(ctx, slider_width)
-            _, config.max_textures_per_frame = r.ImGui_SliderInt(ctx, "##Max Textures/Frame", config.max_textures_per_frame, 1, 30)
+            _, config.max_textures_per_frame = r.ImGui_SliderInt(ctx, "##Max Textures/Frame", config.max_textures_per_frame, 1, 60)
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
@@ -5034,6 +5028,15 @@ function ShowConfigWindow()
             r.ImGui_PushItemWidth(ctx, slider_width)
             _, config.screenshot_delay = r.ImGui_SliderDouble(ctx, "##Screenshot Delay", config.screenshot_delay, 0.5, 5.0, "%.1f sec")
             r.ImGui_PopItemWidth(ctx)
+            r.ImGui_Dummy(ctx, 0, 3)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            if r.ImGui_Button(ctx, "Reset Performance Defaults") then
+                config.max_textures_per_frame      = 25
+                config.max_cached_search_textures  = 100
+                config.min_cached_textures         = 25
+                config.texture_reload_delay        = 2
+                config.screenshot_delay            = 0.5
+            end
             r.ImGui_Dummy(ctx, 0, 5)
             NewSection("BULK:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -5617,14 +5620,6 @@ end
         for i = 1, m_min(cap, #current_filtered_fx) do
             local name = current_filtered_fx[i]
             if type(name) == 'string' then keep_set[name] = true end
-        end
-    end
-    if next(keep_set) ~= nil then
-        for key, info in pairs(texture_load_queue) do
-            local pname = info and info.plugin
-            if not pname or not keep_set[pname] then
-                texture_load_queue[key] = nil
-            end
         end
     end
 
@@ -7079,12 +7074,12 @@ function ShowPluginScreenshot()
                     SafeImage(ctx, screenshot_texture, display_width, display_height)
                        
                     if show_name then
-                        local text_width = r.ImGui_CalcTextSize(ctx, current_hovered_plugin)
+                        local display_name = GetDisplayPluginName(current_hovered_plugin)
+                        local text_width = r.ImGui_CalcTextSize(ctx, display_name)
                         local text_pos_x = (display_width - text_width) * 0.5
                         local text_pos_y = display_height + 1
                            
                         r.ImGui_SetCursorPos(ctx, text_pos_x, text_pos_y)
-                        local display_name = GetDisplayPluginName(current_hovered_plugin)
                         r.ImGui_Text(ctx, display_name)
                         local stars = GetStarsString(current_hovered_plugin)
                         local stars_width = r.ImGui_CalcTextSize(ctx, stars)
@@ -10068,76 +10063,48 @@ local SortPlainPluginList
 
 function SortScreenshotResults()
     if screenshot_search_results and #screenshot_search_results > 0 then
-        -- When browsing a non-folder subgroup (ALL/DEVELOPER/CATEGORY), keep pinned-first and optional favorites-on-top
-        if browser_panel_selected then
-            local mode = (config and config.sort_mode) or screenshot_sort_mode or "alphabet"
-            local names = {}
-            for _, e in ipairs(screenshot_search_results) do
-                if type(e) == 'table' and e.name and not e.is_message then
-                    names[#names+1] = e.name
-                end
-            end
-            -- Partition
-            local pinned, favorites, others = {}, {}, {}
-            for _, n in ipairs(names) do
-                if IsPluginPinned and IsPluginPinned(n) then
-                    pinned[#pinned+1] = n
-                elseif favorite_set and favorite_set[n] then
-                    favorites[#favorites+1] = n
-                else
-                    others[#others+1] = n
-                end
-            end
-            SortPlainPluginList(pinned, mode)
-            if config and config.show_favorites_on_top then
-                SortPlainPluginList(favorites, mode)
-            end
-            SortPlainPluginList(others, mode)
-            local ordered = {}
-            
-            -- Add pinned plugins first if show_pinned_on_top is enabled
-            if config and config.show_pinned_on_top then
-                for _, n in ipairs(pinned) do ordered[#ordered+1] = {name = n} end
-                if #pinned > 0 and ((config and config.show_favorites_on_top and (#favorites>0 or #others>0)) or (not (config and config.show_favorites_on_top) and #others>0)) then
-                    ordered[#ordered+1] = { is_separator = true, kind = "pinned_end" }
-                end
-            end
-            
-            if config and config.show_favorites_on_top then
-                for _, n in ipairs(favorites) do ordered[#ordered+1] = {name = n} end
-                if #favorites > 0 and #others > 0 then
-                    ordered[#ordered+1] = { is_separator = true, kind = "favorites_end" }
-                end
-            else
-                for _, n in ipairs(favorites) do others[#others+1] = n end
-            end
-            
-            -- Add pinned plugins to others if show_pinned_on_top is disabled
-            if not (config and config.show_pinned_on_top) then
-                for _, n in ipairs(pinned) do others[#others+1] = n end
-            end
-            
-            for _, n in ipairs(others) do ordered[#ordered+1] = {name = n} end
-            screenshot_search_results = ordered
-            return
-        end
-
         local mode = (config and config.sort_mode) or screenshot_sort_mode or "alphabet"
-        if mode == "alphabet" then
-            t_sort(screenshot_search_results, function(a, b)
-                return GetLowerName(a.name) < GetLowerName(b.name)
-            end)
-        elseif mode == "rating" then
-            t_sort(screenshot_search_results, function(a, b)
-                local ra = plugin_ratings[a.name] or 0
-                local rb = plugin_ratings[b.name] or 0
-                if ra == rb then
-                    return GetLowerName(a.name) < GetLowerName(b.name)
-                else
-                    return ra > rb
-                end
-            end)
+        local names = {}
+        for _, e in ipairs(screenshot_search_results) do
+            if type(e) == 'table' and e.name and not e.is_message then
+                names[#names+1] = e.name
+            end
         end
+        local pinned, favorites, others = {}, {}, {}
+        for _, n in ipairs(names) do
+            if IsPluginPinned and IsPluginPinned(n) then
+                pinned[#pinned+1] = n
+            elseif favorite_set and favorite_set[n] then
+                favorites[#favorites+1] = n
+            else
+                others[#others+1] = n
+            end
+        end
+        SortPlainPluginList(pinned, mode)
+        if config and config.show_favorites_on_top then
+            SortPlainPluginList(favorites, mode)
+        end
+        SortPlainPluginList(others, mode)
+        local ordered = {}
+        if config and config.show_pinned_on_top then
+            for _, n in ipairs(pinned) do ordered[#ordered+1] = {name = n} end
+            if #pinned > 0 and ((config and config.show_favorites_on_top and (#favorites>0 or #others>0)) or (not (config and config.show_favorites_on_top) and #others>0)) then
+                ordered[#ordered+1] = { is_separator = true, kind = "pinned_end" }
+            end
+        end
+        if config and config.show_favorites_on_top then
+            for _, n in ipairs(favorites) do ordered[#ordered+1] = {name = n} end
+            if #favorites > 0 and #others > 0 then
+                ordered[#ordered+1] = { is_separator = true, kind = "favorites_end" }
+            end
+        else
+            for _, n in ipairs(favorites) do others[#others+1] = n end
+        end
+        if not (config and config.show_pinned_on_top) then
+            for _, n in ipairs(pinned) do others[#others+1] = n end
+        end
+        for _, n in ipairs(others) do ordered[#ordered+1] = {name = n} end
+        screenshot_search_results = ordered
     end
 end
 
@@ -10155,13 +10122,17 @@ function SearchAllPlugins()
     
     if selected_folder then
         last_selected_folder_before_global = selected_folder
+        last_panel_before_global = nil
+    elseif browser_panel_selected then
+        last_panel_before_global = browser_panel_selected
+        last_selected_folder_before_global = nil
     end
     
     local term_lower = term:lower()
     local matches = {}
     
     for _, plugin in ipairs(PLUGIN_LIST) do
-        if plugin:lower():find(term_lower, 1, true) then
+        if FuzzyFind(plugin, term_lower) then
             matches[#matches+1] = plugin
         end
     end
@@ -10194,6 +10165,27 @@ function ClearSearch()
     browser_search_term = ""
     search_warning_message = nil
     
+    if last_panel_before_global then
+        local sg = last_panel_before_global
+        last_panel_before_global = nil
+        browser_panel_selected = sg
+        selected_folder = nil
+        MarkForcedHeaderForSubgroup(sg)
+        current_filtered_fx = GetFxListForSubgroup(sg) or {}
+        if config.apply_type_priority then
+            current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
+        end
+        screenshot_search_results = {}
+        local cap = loaded_items_count or ITEMS_PER_BATCH or 30
+        for j = 1, math.min(cap, #current_filtered_fx) do
+            table.insert(screenshot_search_results, {name = current_filtered_fx[j]})
+        end
+        SortScreenshotResults()
+        RequestClearScreenshotCache()
+        new_search_performed = true
+        return
+    end
+
     if last_selected_folder_before_global then
         selected_folder = last_selected_folder_before_global
         last_selected_folder_before_global = nil
@@ -10299,19 +10291,18 @@ function ShowScreenshotControls()
             
             r.ImGui_PushItemWidth(ctx, search_width)
             local search_input_flags = 0
-            if screenshot_search_focus_requested and browser_search_term ~= "" then
+            if screenshot_search_autoselect then
                 search_input_flags = r.ImGui_InputTextFlags_AutoSelectAll()
-                screenshot_search_replace_requested = true
-            end
-            if screenshot_search_focus_requested and screenshot_search_force_overwrite and browser_search_term ~= "" then
-                browser_search_term = ""
             end
             if screenshot_search_focus_requested then
                 r.ImGui_SetKeyboardFocusHere(ctx)
                 screenshot_search_focus_requested = false
-                screenshot_search_force_overwrite = false
             end
             local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term, search_input_flags)
+            if screenshot_search_autoselect and r.ImGui_IsItemActive(ctx) then
+                screenshot_search_autoselect = false
+                screenshot_window_os_focus_needed = 0
+            end
             if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
                 screenshot_search_to_nav = true
                 screenshot_search_blur_requested = true
@@ -10372,6 +10363,7 @@ function ShowScreenshotControls()
             ConsumeScreenshotSearchBlur("##ScreenshotSearchBlurMain")
 
             if changed then
+                screenshot_folder_filter_suspended = false
                 if screenshot_search_replace_requested and browser_search_term ~= "" and new_search:sub(1, #browser_search_term) == browser_search_term then
                     new_search = new_search:sub(#browser_search_term + 1)
                 end
@@ -10410,12 +10402,13 @@ function ShowScreenshotControls()
                         local folder_to_search = browser_panel_selected or selected_folder
                         source_list = GetPluginsForFolder(folder_to_search)
                     end
+                    current_filtered_fx = {}
                     if source_list then
                         local count = 0
                         local term_l = browser_search_term:lower()
                         local matches = {}
                         for _, plugin in ipairs(source_list) do
-                            if plugin:lower():find(term_l, 1, true) then
+                            if FuzzyFind(plugin, term_l) then
                                 matches[#matches+1] = plugin
                             end
                         end
@@ -10459,6 +10452,7 @@ function ShowScreenshotControls()
                             for _, p in ipairs(others) do ordered[#ordered+1] = p end
                             matches = ordered
                         end
+                        current_filtered_fx = matches
                         for i = 1, math.min(MAX_RESULTS, #matches) do
                             screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
                         end
@@ -10488,19 +10482,18 @@ function ShowScreenshotControls()
             r.ImGui_SameLine(ctx)
             r.ImGui_PushItemWidth(ctx, 70)
             local search_input_flags = 0
-            if screenshot_search_focus_requested and browser_search_term ~= "" then
+            if screenshot_search_autoselect then
                 search_input_flags = r.ImGui_InputTextFlags_AutoSelectAll()
-                screenshot_search_replace_requested = true
-            end
-            if screenshot_search_focus_requested and screenshot_search_force_overwrite and browser_search_term ~= "" then
-                browser_search_term = ""
             end
             if screenshot_search_focus_requested then
                 r.ImGui_SetKeyboardFocusHere(ctx)
                 screenshot_search_focus_requested = false
-                screenshot_search_force_overwrite = false
             end
             local changed, new_search = r.ImGui_InputTextWithHint(ctx, "##ScreenshotSearch", "Search...", browser_search_term, search_input_flags)
+            if screenshot_search_autoselect and r.ImGui_IsItemActive(ctx) then
+                screenshot_search_autoselect = false
+                screenshot_window_os_focus_needed = 0
+            end
             if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
                 screenshot_search_to_nav = true
                 screenshot_search_blur_requested = true
@@ -10564,6 +10557,7 @@ function ShowScreenshotControls()
             ConsumeScreenshotSearchBlur("##ScreenshotSearchBlurCompact")
 
             if changed then
+                screenshot_folder_filter_suspended = false
                 if screenshot_search_replace_requested and browser_search_term ~= "" and new_search:sub(1, #browser_search_term) == browser_search_term then
                     new_search = new_search:sub(#browser_search_term + 1)
                 end
@@ -10604,12 +10598,13 @@ function ShowScreenshotControls()
                         local folder_to_search = browser_panel_selected or selected_folder
                         source_list = GetPluginsForFolder(folder_to_search)
                     end
+                    current_filtered_fx = {}
                     if source_list then
                         local count = 0
                         local term_l = browser_search_term:lower()
                         local matches = {}
                         for _, plugin in ipairs(source_list) do
-                            if plugin:lower():find(term_l, 1, true) then
+                            if FuzzyFind(plugin, term_l) then
                                 matches[#matches+1] = plugin
                             end
                         end
@@ -10657,6 +10652,7 @@ function ShowScreenshotControls()
                             for _, p in ipairs(others) do ordered[#ordered+1] = p end
                             matches = ordered
                         end
+                        current_filtered_fx = matches
 
                         for i = 1, math.min(MAX_RESULTS, #matches) do
                             screenshot_search_results[#screenshot_search_results+1] = { name = matches[i] }
@@ -10725,6 +10721,10 @@ function ShowScreenshotControls()
             end
             if r.ImGui_MenuItem(ctx, config.show_name_on_screenshot and "Hide Name on Screenshot" or "Show Name on Screenshot") then
                 config.show_name_on_screenshot = not config.show_name_on_screenshot; SaveConfig()
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_MenuItem(ctx, config.show_name_below_screenshot and "FX List: Hide Name Below" or "FX List: Show Name Below") then
+                config.show_name_below_screenshot = not config.show_name_below_screenshot; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "List Hover Screenshot", "", config.list_hover_screenshot) then
                 config.list_hover_screenshot = not config.list_hover_screenshot; SaveConfig()
@@ -10862,6 +10862,9 @@ function ShowScreenshotControls()
             end
             if r.ImGui_MenuItem(ctx, "Type Overlay", "", config.show_type_overlay) then
                 config.show_type_overlay = not config.show_type_overlay; SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, "Rating Overlay", "", config.show_rating_overlay) then
+                config.show_rating_overlay = not config.show_rating_overlay; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, "Compact View", "", config.compact_screenshots) then
                 config.compact_screenshots = not config.compact_screenshots; SaveConfig()
@@ -11607,9 +11610,8 @@ function DrawBrowserItems(tbl, main_cat_name)
                     -- Force texture reload for new page
                     for j = new_start, new_end do
                         local plugin_name = filtered_fx[j]
-                        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                        local screenshot_file = screenshot_path .. safe_name .. ".png"
-                        if r.file_exists(screenshot_file) then
+                        local screenshot_file = HasScreenshot(plugin_name)
+                        if screenshot_file then
                             local relative_path = screenshot_file:gsub(screenshot_path, "")
                             local unique_key = relative_path .. "_" .. plugin_name
                             -- Remove from cache to force reload
@@ -11647,9 +11649,8 @@ function DrawBrowserItems(tbl, main_cat_name)
                     -- Force texture reload for new page
                     for j = new_start, new_end do
                         local plugin_name = filtered_fx[j]
-                        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                        local screenshot_file = screenshot_path .. safe_name .. ".png"
-                        if r.file_exists(screenshot_file) then
+                        local screenshot_file = HasScreenshot(plugin_name)
+                        if screenshot_file then
                             local relative_path = screenshot_file:gsub(screenshot_path, "")
                             local unique_key = relative_path .. "_" .. plugin_name
                             -- Remove from cache to force reload
@@ -11840,7 +11841,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 local matches = {}
                 for k, plugin in pairs(folder_content) do
                     if type(k) == "number" and type(plugin) == "string" then
-                        if plugin:lower():find(term_l, 1, true) then
+                        if FuzzyFind(plugin, term_l) then
                             matches[#matches+1] = plugin
                         end
                     end
@@ -12000,7 +12001,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 local matches = {}
                 for k, plugin in pairs(folder_content) do
                     if type(k) == "number" and type(plugin) == "string" then
-                        if plugin:lower():find(term_l, 1, true) then
+                        if FuzzyFind(plugin, term_l) then
                             matches[#matches+1] = plugin
                         end
                     end
@@ -12414,20 +12415,19 @@ function ShowBrowserPanel()
     if config.show_browser_search then
         r.ImGui_PushItemWidth(ctx, 70)
         local search_input_flags = 0
-        if screenshot_search_focus_requested and not (config.show_screenshot_search ~= false) and browser_search_term ~= "" then
+        if screenshot_search_autoselect then
             search_input_flags = r.ImGui_InputTextFlags_AutoSelectAll()
-            screenshot_search_replace_requested = true
-        end
-        if screenshot_search_focus_requested and screenshot_search_force_overwrite and not (config.show_screenshot_search ~= false) and browser_search_term ~= "" then
-            browser_search_term = ""
         end
         if screenshot_search_focus_requested and not (config.show_screenshot_search ~= false) then
             r.ImGui_SetKeyboardFocusHere(ctx)
             screenshot_search_focus_requested = false
-            screenshot_search_force_overwrite = false
         end
         local changed_browser_search, new_browser_search = r.ImGui_InputTextWithHint(ctx, "##BrowserSearch", "Search...", browser_search_term, search_input_flags)
-        if (config.show_screenshot_search == false) and r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
+        if screenshot_search_autoselect and r.ImGui_IsItemActive(ctx) then
+            screenshot_search_autoselect = false
+            screenshot_window_os_focus_needed = 0
+        end
+        if r.ImGui_IsItemActive(ctx) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow()) and not screenshot_nav_index then
             screenshot_search_to_nav = true
             screenshot_search_blur_requested = true
         end
@@ -12440,6 +12440,7 @@ function ShowBrowserPanel()
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear search") end
         end
         if changed_browser_search then
+            screenshot_folder_filter_suspended = false
             if screenshot_search_replace_requested and browser_search_term ~= "" and new_browser_search:sub(1, #browser_search_term) == browser_search_term then
                 new_browser_search = new_browser_search:sub(#browser_search_term + 1)
             end
@@ -12447,6 +12448,8 @@ function ShowBrowserPanel()
             browser_search_term = new_browser_search
             if config.always_search_all then
                 SearchAllPlugins()
+            elseif browser_search_term ~= "" and browser_panel_selected then
+                RefreshCurrentScreenshotView()
             end
         end
         r.ImGui_SameLine(ctx)
@@ -12746,7 +12749,7 @@ function ShowBrowserPanel()
                     show_sends_window = false
                     show_action_browser = false
                     screenshot_search_results = {}
-                    local term_l = GetLowerName(browser_search_term)
+                    local term_l = GetLowerName(screenshot_folder_filter_suspended and "" or browser_search_term)
                     local matches = {}
                     for _, fav in ipairs(favorite_plugins) do
                         if GetLowerName(fav):find(term_l, 1, true) then
@@ -13019,16 +13022,16 @@ function ShowBrowserPanel()
                     for disp_idx, folder_name in ipairs(display_order) do
                         local j = cat_by_name[folder_name]
                         if not j then goto continue_folder end
-                        local show_folder = browser_search_term == ""
+                        local show_folder = screenshot_folder_filter_suspended or browser_search_term == ""
                         if not show_folder then
-                            local term_l = browser_search_term:lower()
+                            local term_l = (screenshot_folder_filter_suspended and "" or browser_search_term):lower()
                             for k = 1, #CAT_TEST[i].list[j].fx do
                                 local fx = CAT_TEST[i].list[j].fx[k]
-                                if fx:lower():find(term_l, 1, true) then
+                                if FuzzyFind(fx, term_l) then
                                     show_folder = true; break
                                 else
                                     local alias = plugin_aliases[fx]
-                                    if alias and alias:lower():find(term_l, 1, true) then
+                                    if alias and FuzzyFind(alias, term_l) then
                                         show_folder = true; break
                                     end
                                 end
@@ -13703,6 +13706,7 @@ function ShowBrowserPanel()
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, config.show_track_fx_thumbnails and 4 or 2)
                     local thumb_avail_w = r.ImGui_GetContentRegionAvail(ctx)
                     for i = 0, fx_count - 1 do
+                        if i > 0 then r.ImGui_Separator(ctx) end
                         local ok, fx_name_raw = r.TrackFX_GetFXName(TRACK, i, "")
                         if ok and fx_name_raw ~= "" then
                             local fx_name = fx_name_raw
@@ -13740,10 +13744,13 @@ function ShowBrowserPanel()
                                 local line_h = r.ImGui_GetTextLineHeight(ctx)
                                 local bar_h = line_h + 4
                                 local bar_y = cy + thumb_h - bar_h
-                                r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + thumb_avail_w, cy + thumb_h, 0x000000B0)
-                                local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
-                                local name_x = cx + m_floor((thumb_avail_w - name_w) * 0.5)
-                                r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, fx_name)
+                                local tfx_name_col = tfx_bypassed and 0xFFBB33FF or 0xFFFFFFFF
+                                if not config.show_name_below_screenshot then
+                                    r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + thumb_avail_w, cy + thumb_h, 0x000000B0)
+                                    local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                                    local name_x = cx + m_floor((thumb_avail_w - name_w) * 0.5)
+                                    r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, tfx_name_col, fx_name)
+                                end
                                 local slot_label = tostring(i + 1)
                                 local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
                                 r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
@@ -13788,6 +13795,14 @@ function ShowBrowserPanel()
                                 end
                                 if r.ImGui_IsItemClicked(ctx, 1) then
                                     open_trackfx_ctx = true
+                                end
+                                if config.show_name_below_screenshot then
+                                    local bname_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                                    local indent = math.floor((thumb_avail_w - bname_w) * 0.5)
+                                    if indent > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + indent) end
+                                    if tfx_bypassed then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF) end
+                                    r.ImGui_Text(ctx, fx_name)
+                                    if tfx_bypassed then r.ImGui_PopStyleColor(ctx) end
                                 end
                                 r.ImGui_PopID(ctx)
                             else
@@ -14057,6 +14072,7 @@ function ShowBrowserPanel()
                                 if config.clean_plugin_names or config.remove_manufacturer_names then
                                     ifx_name = GetDisplayPluginName(ifx_name)
                                 end
+                                if i > 0 then r.ImGui_Separator(ctx) end
                                 local ifx_bypassed = not r.TakeFX_GetEnabled(take, i)
                                 local ifx_offline = r.TakeFX_GetOffline(take, i)
                                 local ifx_color_count = 0
@@ -14088,10 +14104,13 @@ function ShowBrowserPanel()
                                     local line_h = r.ImGui_GetTextLineHeight(ctx)
                                     local bar_h = line_h + 4
                                     local bar_y = cy + thumb_h - bar_h
-                                    r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + ifx_avail_w, cy + thumb_h, 0x000000B0)
-                                    local name_w = r.ImGui_CalcTextSize(ctx, ifx_name)
-                                    local name_x = cx + m_floor((ifx_avail_w - name_w) * 0.5)
-                                    r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, ifx_name)
+                                    local ifx_name_col = ifx_bypassed and 0xFFBB33FF or 0xFFFFFFFF
+                                    if not config.show_name_below_screenshot then
+                                        r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + ifx_avail_w, cy + thumb_h, 0x000000B0)
+                                        local name_w = r.ImGui_CalcTextSize(ctx, ifx_name)
+                                        local name_x = cx + m_floor((ifx_avail_w - name_w) * 0.5)
+                                        r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, ifx_name_col, ifx_name)
+                                    end
                                     local slot_label = tostring(i + 1)
                                     local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
                                     r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
@@ -14136,6 +14155,14 @@ function ShowBrowserPanel()
                                     end
                                     if r.ImGui_IsItemClicked(ctx, 1) then
                                         open_itemfx_ctx = true
+                                    end
+                                    if config.show_name_below_screenshot then
+                                        local bname_w = r.ImGui_CalcTextSize(ctx, ifx_name)
+                                        local indent = math.floor((ifx_avail_w - bname_w) * 0.5)
+                                        if indent > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + indent) end
+                                        if ifx_bypassed then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF) end
+                                        r.ImGui_Text(ctx, ifx_name)
+                                        if ifx_bypassed then r.ImGui_PopStyleColor(ctx) end
                                     end
                                     r.ImGui_PopID(ctx)
                                 else
@@ -14285,6 +14312,7 @@ function ShowBrowserPanel()
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, config.show_input_fx_thumbnails and 4 or 2)
                     local rfx_avail_w = r.ImGui_GetContentRegionAvail(ctx)
                     for i = 0, rec_count - 1 do
+                        if i > 0 then r.ImGui_Separator(ctx) end
                         local rfx_idx = i + 0x1000000
                         local ok, rfx_name_raw = r.TrackFX_GetFXName(TRACK, rfx_idx, "")
                         if ok and rfx_name_raw ~= "" then
@@ -14318,10 +14346,13 @@ function ShowBrowserPanel()
                                 local line_h = r.ImGui_GetTextLineHeight(ctx)
                                 local bar_h = line_h + 4
                                 local bar_y = cy + thumb_h - bar_h
-                                r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + rfx_avail_w, cy + thumb_h, 0x000000B0)
-                                local name_w = r.ImGui_CalcTextSize(ctx, rfx_name)
-                                local name_x = cx + m_floor((rfx_avail_w - name_w) * 0.5)
-                                r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, rfx_name)
+                                local rfx_name_col = rfx_bypassed and 0xFFBB33FF or 0xFFFFFFFF
+                                if not config.show_name_below_screenshot then
+                                    r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + rfx_avail_w, cy + thumb_h, 0x000000B0)
+                                    local name_w = r.ImGui_CalcTextSize(ctx, rfx_name)
+                                    local name_x = cx + m_floor((rfx_avail_w - name_w) * 0.5)
+                                    r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, rfx_name_col, rfx_name)
+                                end
                                 local slot_label = "I" .. tostring(i + 1)
                                 local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
                                 r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
@@ -14357,6 +14388,14 @@ function ShowBrowserPanel()
                                 end
                                 if r.ImGui_IsItemClicked(ctx, 1) then
                                     open_inputfx_ctx = true
+                                end
+                                if config.show_name_below_screenshot then
+                                    local bname_w = r.ImGui_CalcTextSize(ctx, rfx_name)
+                                    local indent = math.floor((rfx_avail_w - bname_w) * 0.5)
+                                    if indent > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + indent) end
+                                    if rfx_bypassed then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF) end
+                                    r.ImGui_Text(ctx, rfx_name)
+                                    if rfx_bypassed then r.ImGui_PopStyleColor(ctx) end
                                 end
                                 r.ImGui_PopID(ctx)
                             else
@@ -14626,21 +14665,21 @@ end
 function DrawPinnedOverlayAt(tlx, tly, w, h)
     local dl = r.ImGui_GetWindowDrawList(ctx)
     local size = (config and config.overlay_icon_size) or 14
-    local pad = 5
-    local x2 = tlx + w - pad
-    local y1 = tly + pad
-    local x1 = x2 - size
-    local y2 = y1 + size
-    local head_col = 0xFFD700FF -- gold
+    local pad = 8
+    local x1 = tlx + pad
+    local y2 = tly + h - pad
+    local x2 = x1 + size
+    local y1 = y2 - size
+    local head_col = 0xFFD700FF
     local shadow_col = 0x00000088
     r.ImGui_DrawList_AddRectFilled(dl, x1+1, y1+1, x2+1, y2+1, shadow_col, 2)
     r.ImGui_DrawList_AddRectFilled(dl, x1,   y1,   x2,   y2,   head_col, 2)
     local stem_w = math.max(2, math.floor(size * 0.2))
     local stem_h = math.floor(size * 0.7)
     local sx1 = x1 + math.floor(size * 0.5) - math.floor(stem_w * 0.5)
-    local sy1 = y2 - math.floor(stem_w * 0.5)
     local sx2 = sx1 + stem_w
-    local sy2 = sy1 + stem_h
+    local sy2 = y1 + math.floor(stem_w * 0.5)
+    local sy1 = sy2 - stem_h
     r.ImGui_DrawList_AddRectFilled(dl, sx1+1, sy1+1, sx2+1, sy2+1, shadow_col, 1)
     r.ImGui_DrawList_AddRectFilled(dl, sx1,   sy1,   sx2,   sy2,   head_col, 1)
 end
@@ -14650,14 +14689,13 @@ function DrawFavoriteOverlayAt(tlx, tly, w, h)
     if not config.show_favorite_overlay then return end
     local dl = r.ImGui_GetWindowDrawList(ctx)
     local size = (config and config.overlay_icon_size) or 14
-    local pad = 5
-    local x1 = tlx + pad
-    local y1 = tly + pad
-    local x2 = x1 + size
-    local y2 = y1 + size
+    local pad = 8
+    local x2 = tlx + w - pad
+    local y2 = tly + h - pad
+    local x1 = x2 - size
+    local y1 = y2 - size
     local badge_col = 0xFFD700FF 
     local shadow_col = 0x00000088
-    
     local rounding = math.floor(size * 0.5)
     r.ImGui_DrawList_AddRectFilled(dl, x1+1, y1+1, x2+1, y2+1, shadow_col, rounding)
     r.ImGui_DrawList_AddRectFilled(dl, x1,   y1,   x2,   y2,   badge_col, rounding)
@@ -14919,6 +14957,24 @@ function DrawTypeBadgeOverlay(dl, x, y, w, h, plugin_name)
     r.ImGui_DrawList_AddText(dl, bx + px, by + py, 0x000000DD, badge_text)
 end
 
+function DrawRatingOverlay(dl, x, y, w, h, plugin_name)
+    if not config.show_rating_overlay then return end
+    local rating = plugin_ratings[plugin_name] or 0
+    if rating == 0 then return end
+    local stars = ""
+    for i = 1, rating do stars = stars .. "★" end
+    local pad = 8
+    local px, py = 4, 2
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+    local tw = r.ImGui_CalcTextSize(ctx, stars)
+    local bx = x + pad
+    local by = y + pad
+    local shadow_col = 0x000000AA
+    r.ImGui_DrawList_AddRectFilled(dl, bx, by, bx + tw + px * 2 + 1, by + line_h + py * 2 + 1, shadow_col, 3)
+    r.ImGui_DrawList_AddRectFilled(dl, bx, by, bx + tw + px * 2, by + line_h + py * 2, 0x000000B0, 3)
+    r.ImGui_DrawList_AddText(dl, bx + px, by + py, 0xFFD700FF, stars)
+end
+
 function DrawMasonryLayout(screenshots, top_offset)
     top_offset = top_offset or 0  -- Default to 0 if not provided
     
@@ -15025,6 +15081,7 @@ function DrawMasonryLayout(screenshots, top_offset)
                     if favorite_set and favorite_set[fx.name] then DrawFavoriteOverlayAt(item_min_x, item_min_y, actual_w, actual_h) end
                     DrawNameOnScreenshot(item_min_x, item_min_y, actual_w, actual_h, fx.name)
                     DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), item_min_x, item_min_y, actual_w, actual_h, fx.name)
+                    DrawRatingOverlay(r.ImGui_GetWindowDrawList(ctx), item_min_x, item_min_y, actual_w, actual_h, fx.name)
                     DrawNavSelectionBorder(i, item_min_x, item_min_y, item_max_x, item_max_y)
 
                     if config.enable_drag_add_fx then
@@ -15234,6 +15291,7 @@ function DrawShowcaseLayout(screenshots, top_offset)
                 DrawFavoriteOverlayAt(img_x, img_y, img_w, img_h)
             end
             DrawTypeBadgeOverlay(dl, img_x, img_y, img_w, img_h, plugin_name)
+            DrawRatingOverlay(dl, img_x, img_y, img_w, img_h, plugin_name)
 
             local info_x = img_x + img_w + pad * 2
             local info_y = cursor_sy + pad + 2
@@ -15504,6 +15562,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
                 DrawFavoriteOverlayAt(img_x, img_y, photo_size, photo_size)
             end
             DrawTypeBadgeOverlay(dl, img_x, img_y, photo_size, photo_size, plugin_name)
+            DrawRatingOverlay(dl, img_x, img_y, photo_size, photo_size, plugin_name)
 
             local text_area_y = img_y + photo_size + 4
             local text_area_w = card_w - border_side * 2
@@ -15614,7 +15673,7 @@ function DrawUniformLayout(screenshots, top_offset)
     local cell_h = math.floor(cell_w * cell_ratio)
     local gap = config.compact_screenshots and 6 or 10
     local line_h = r.ImGui_GetTextLineHeight(ctx)
-    local show_name_below = config.show_name_in_screenshot_window and not config.show_name_on_hover_only and not config.show_name_on_screenshot
+    local show_name_below = config.show_name_in_screenshot_window and not config.show_name_on_hover_only and (not config.show_name_on_screenshot or config.show_name_below_screenshot)
     local label_h = show_name_below and (line_h + 8) or 0
     local total_item_h = cell_h + label_h
     local num_columns = math.max(1, math.floor((usable_width + gap) / (cell_w + gap)))
@@ -15791,6 +15850,7 @@ function DrawUniformLayout(screenshots, top_offset)
             end
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            DrawRatingOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
 
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
@@ -15841,7 +15901,7 @@ function DrawUniformLayout(screenshots, top_offset)
                 r.ImGui_DrawList_AddRect(dl, sx_cell - 1, sy_cell - 1, sx_cell + cell_w + 1, sy_cell + cell_h + 1, u_hover, 4, 0, 2)
             end
 
-            local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only and not config.show_name_on_screenshot
+            local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only and (not config.show_name_on_screenshot or config.show_name_below_screenshot)
             if show_name_text then
                 local display_name = GetDisplayPluginName(plugin_name)
                 local name_tw = r.ImGui_CalcTextSize(ctx, display_name)
@@ -15895,7 +15955,7 @@ function DrawNeonLayout(screenshots, top_offset)
     local cell_h = math.floor(cell_w * cell_ratio)
     local gap = config.compact_screenshots and 6 or 10
     local line_h = r.ImGui_GetTextLineHeight(ctx)
-    local show_name_below = config.show_name_in_screenshot_window and not config.show_name_on_hover_only and not config.show_name_on_screenshot
+    local show_name_below = config.show_name_in_screenshot_window and not config.show_name_on_hover_only and (not config.show_name_on_screenshot or config.show_name_below_screenshot)
     local label_h = show_name_below and (line_h + 8) or 0
     local total_item_h = cell_h + label_h
     local num_columns = math.max(1, math.floor((usable_width + gap) / (cell_w + gap)))
@@ -16015,6 +16075,7 @@ function DrawNeonLayout(screenshots, top_offset)
             end
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            DrawRatingOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
 
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
@@ -16067,7 +16128,7 @@ function DrawNeonLayout(screenshots, top_offset)
                 r.ImGui_DrawList_AddRect(dl, sx_cell - 1, sy_cell - 1, sx_cell + cell_w + 1, sy_cell + cell_h + 1, colors.border, 4, 0, 2.5)
             end
 
-            local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only and not config.show_name_on_screenshot
+            local show_name_text = config.show_name_in_screenshot_window and not config.hidden_names[plugin_name] and not config.show_name_on_hover_only and (not config.show_name_on_screenshot or config.show_name_below_screenshot)
             if show_name_text then
                 local display_name = GetDisplayPluginName(plugin_name)
                 local name_tw = r.ImGui_CalcTextSize(ctx, display_name)
@@ -16871,7 +16932,6 @@ function ShowScreenshotWindow()
 
     local min_width = config[browser_panel_key] and total_min_width or screenshot_min_width
     local window_flags = r.ImGui_WindowFlags_NoTitleBar() |
-                    r.ImGui_WindowFlags_NoFocusOnAppearing() |
                     
                     r.ImGui_WindowFlags_NoScrollbar()
 
@@ -16907,15 +16967,18 @@ function ShowScreenshotWindow()
     local visible, open = r.ImGui_Begin(ctx, "Screenshots##NoTitle", true, window_flags)
     if visible then
         if screenshot_window_os_focus_needed and screenshot_window_os_focus_needed > 0 then
+            if config.dock_screenshot_window then
+                r.ImGui_SetWindowFocus(ctx)
+            end
             screenshot_window_os_focus_needed = screenshot_window_os_focus_needed - 1
             if screenshot_window_os_focus_needed == 1 then
-                if r.JS_Window_Find then
+                if not config.dock_screenshot_window and r.JS_Window_Find then
                     local hwnd = r.JS_Window_Find("Screenshots", false)
                     if hwnd then r.JS_Window_SetForeground(hwnd) end
                 end
             elseif screenshot_window_os_focus_needed == 0 then
                 screenshot_search_focus_requested = true
-                screenshot_search_force_overwrite = true
+                screenshot_search_autoselect = (browser_search_term ~= "")
             end
         end
         ShowBrowserPanel()
@@ -18001,13 +18064,13 @@ function ShowScreenshotWindow()
    
     local folder_match_count = nil
     local active_folder_for_tip = browser_panel_selected or selected_folder
-    if (not search_warning_message) and browser_search_term ~= "" and active_folder_for_tip then
+    if (not search_warning_message) and browser_search_term ~= "" and not screenshot_folder_filter_suspended and active_folder_for_tip then
         local folder_plugins = current_filtered_fx and #current_filtered_fx > 0 and current_filtered_fx or GetPluginsForFolder(active_folder_for_tip)
         if folder_plugins then
             local cnt = 0
             local term = browser_search_term:lower()
             for _, p in ipairs(folder_plugins) do
-                if p:lower():find(term, 1, true) then
+                if FuzzyFind(p, term) then
                     cnt = cnt + 1
                     if cnt >= 3 then break end -- we hoeven alleen te weten of het <3 blijft
                 end
@@ -18025,6 +18088,21 @@ function ShowScreenshotWindow()
                 local win_w = r.ImGui_GetWindowWidth(ctx)
                 r.ImGui_SetCursorPosX(ctx, (win_w - text_w) * 0.5)
                 r.ImGui_Text(ctx, tip_text)
+            r.ImGui_EndChild(ctx)
+            r.ImGui_PopStyleColor(ctx, 2)
+        end
+
+        local has_search = browser_search_term and browser_search_term ~= ""
+        local no_results = has_search and (not screenshot_search_results or #screenshot_search_results == 0)
+        if no_results then
+            local msg = 'No results for "' .. browser_search_term .. '"'
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF6666FF)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x330000FF)
+            r.ImGui_BeginChild(ctx, "NoResultsBanner", -1, 22)
+                local text_w = r.ImGui_CalcTextSize(ctx, msg)
+                local win_w = r.ImGui_GetWindowWidth(ctx)
+                r.ImGui_SetCursorPosX(ctx, (win_w - text_w) * 0.5)
+                r.ImGui_Text(ctx, msg)
             r.ImGui_EndChild(ctx)
             r.ImGui_PopStyleColor(ctx, 2)
         end
@@ -18524,9 +18602,15 @@ function ShowScreenshotWindow()
 
     local _multi_count = GetMultiSelectedCount()
     if _multi_count > 1 then
-        r.ImGui_SameLine(ctx)
+        local _controls_layout = config.screenshot_controls_layout or "horizontal"
+        local _controls_auto_vertical = (_controls_layout == "auto" and r.ImGui_GetContentRegionAvail(ctx) < 300)
+        local _controls_are_vertical = (_controls_layout == "vertical" or _controls_auto_vertical)
+        local _sel_text = string.format("[%d selected]", _multi_count)
+        if not _controls_are_vertical then
+            r.ImGui_SameLine(ctx)
+        end
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00BFFFCC)
-        r.ImGui_Text(ctx, string.format("[%d selected]", _multi_count))
+        r.ImGui_Text(ctx, _sel_text)
         r.ImGui_PopStyleColor(ctx)
     end
 
@@ -18546,6 +18630,7 @@ function ShowScreenshotWindow()
             end
             local scroll_y = r.ImGui_GetScrollY(ctx)
             local scroll_max_y = r.ImGui_GetScrollMaxY(ctx)
+            screenshot_search_results = screenshot_search_results or {}
             if current_filtered_fx and not config.use_pagination and #current_filtered_fx > loaded_items_count then
                 if scroll_max_y <= 0 or (scroll_y > 0 and scroll_y/scroll_max_y > 0.8) then
                     loaded_items_count = loaded_items_count + ITEMS_PER_BATCH
@@ -18571,9 +18656,9 @@ function ShowScreenshotWindow()
                 if selected_folder == "Favorites" then
                     filtered_plugins = favorite_plugins
                     local pinned, others = {}, {}
-                    local term = browser_search_term:lower()
+                    local term = (screenshot_folder_filter_suspended and "" or browser_search_term):lower()
                     for _, plugin in ipairs(filtered_plugins) do
-                        if plugin:lower():find(term, 1, true) then
+                        if FuzzyFind(plugin, term) then
                             if IsPluginPinned and IsPluginPinned(plugin) then pinned[#pinned+1] = plugin else others[#others+1] = plugin end
                         end
                     end
@@ -18657,8 +18742,7 @@ function ShowScreenshotWindow()
                                     if column > 0 then r.ImGui_SameLine(ctx, 0, card_horiz_spacing) end
                                     local nav_cy = r.ImGui_GetCursorPosY(ctx)
                                     r.ImGui_BeginGroup(ctx)
-                                    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                                    local screenshot_file = screenshot_path .. safe_name .. ".png"
+                                    local screenshot_file = HasScreenshot(plugin_name)
                                     local texture = LoadSearchTexture(screenshot_file, plugin_name)
                                     if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                         local w, h = r.ImGui_Image_GetSize(texture)
@@ -18755,7 +18839,7 @@ function ShowScreenshotWindow()
                     filtered_plugins = GetPluginsFromCustomFolder(selected_folder or "") or {}
                     local display_plugins = {}
                     if config.show_favorites_on_top then
-                        local term_l = GetLowerName(browser_search_term)
+                        local term_l = GetLowerName(screenshot_folder_filter_suspended and "" or browser_search_term)
                         local pinned, favorites, regular = {}, {}, {}
                         for _, plugin in ipairs(filtered_plugins) do
                             if GetLowerName(plugin):find(term_l, 1, true) then
@@ -18792,7 +18876,7 @@ function ShowScreenshotWindow()
                         for _, p in ipairs(regular) do display_plugins[#display_plugins+1] = p end
                     else
                         -- show_favorites_on_top is false: still check pinned-on-top setting
-                        local term_l = GetLowerName(browser_search_term)
+                        local term_l = GetLowerName(screenshot_folder_filter_suspended and "" or browser_search_term)
                         local pinned, others = {}, {}
                         for _, plugin in ipairs(filtered_plugins) do
                             if GetLowerName(plugin):find(term_l,1,true) then
@@ -18873,8 +18957,7 @@ function ShowScreenshotWindow()
                                     if column > 0 then r.ImGui_SameLine(ctx, 0, card_horiz_spacing) end
                                     local nav_cy = r.ImGui_GetCursorPosY(ctx)
                                     r.ImGui_BeginGroup(ctx)
-                                    local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                                    local screenshot_file = screenshot_path .. safe_name .. ".png"
+                                    local screenshot_file = HasScreenshot(plugin_name)
                                     local texture = LoadSearchTexture(screenshot_file, plugin_name)
                                     if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                         local w, h = r.ImGui_Image_GetSize(texture)
@@ -18968,7 +19051,7 @@ function ShowScreenshotWindow()
                     filtered_plugins = GetCurrentProjectFX()
                     local display_plugins = {}
                     for _, fx in ipairs(filtered_plugins) do
-                        if fx.fx_name:lower():find(browser_search_term:lower(), 1, true) then
+                        if FuzzyFind(fx.fx_name, (screenshot_folder_filter_suspended and "" or browser_search_term):lower()) then
                             table.insert(display_plugins, fx)
                         end
                     end
@@ -19157,7 +19240,7 @@ function ShowScreenshotWindow()
                     filtered_plugins = GetCurrentTrackFX()
                     local display_plugins = {}
                     for _, fx in ipairs(filtered_plugins) do
-                        if fx.fx_name:lower():find(browser_search_term:lower(), 1, true) then
+                        if FuzzyFind(fx.fx_name, (screenshot_folder_filter_suspended and "" or browser_search_term):lower()) then
                             table.insert(display_plugins, fx)
                         end
                     end
@@ -19284,7 +19367,7 @@ function ShowScreenshotWindow()
                                         local pinned = {}
                                         local favorites = {}
                                         local regular = {}
-                                        local term_l = GetLowerName(browser_search_term)
+                                        local term_l = GetLowerName(screenshot_folder_filter_suspended and "" or browser_search_term)
                                         for _, plugin in ipairs(filtered_plugins) do
                                             if GetLowerName(plugin):find(term_l, 1, true) then
                                                 if pinned_set[plugin] then
@@ -19315,7 +19398,7 @@ function ShowScreenshotWindow()
                                         for _, plugin in ipairs(regular) do display_plugins[#display_plugins+1] = plugin end
                                     else
                                         -- show_favorites_on_top is false: still check pinned-on-top setting
-                                        local term_l = GetLowerName(browser_search_term)
+                                        local term_l = GetLowerName(screenshot_folder_filter_suspended and "" or browser_search_term)
                                         local pinned, others = {}, {}
                                         for _, plugin in ipairs(filtered_plugins) do
                                             if GetLowerName(plugin):find(term_l, 1, true) then
@@ -19417,8 +19500,7 @@ function ShowScreenshotWindow()
                                         if column > 0 then r.ImGui_SameLine(ctx, 0, card_horiz_spacing) end
                                         local nav_cy = r.ImGui_GetCursorPosY(ctx)
                                         r.ImGui_BeginGroup(ctx)
-                                        local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                                        local screenshot_file = screenshot_path .. safe_name .. ".png"
+                                        local screenshot_file = HasScreenshot(plugin_name)
                                         local texture = LoadSearchTexture(screenshot_file, plugin_name)
                                         if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                             local width, height = r.ImGui_Image_GetSize(texture)
@@ -19653,9 +19735,8 @@ function ShowScreenshotWindow()
                             if column > 0 then r.ImGui_SameLine(ctx, 0, card_horiz_spacing) end
                             local nav_cy = r.ImGui_GetCursorPosY(ctx)
                             r.ImGui_BeginGroup(ctx)
-                            local safe_name = plugin_name:gsub("[^%w%s-]", "_")
-                            local screenshot_file = screenshot_path .. safe_name .. ".png"
-                            if r.file_exists(screenshot_file) then
+                            local screenshot_file = HasScreenshot(plugin_name)
+                            if screenshot_file then
                                 local texture = LoadSearchTexture(screenshot_file, plugin_name)
                                 if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
                                     local width, height = r.ImGui_Image_GetSize(texture)
@@ -21646,6 +21727,7 @@ function ShowTrackFXContentThumbnail()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
     for i = 0, fx_count - 1 do
+        if i > 0 then r.ImGui_Separator(ctx) end
         local ok, fx_name_raw = r.TrackFX_GetFXName(TRACK, i, "")
         if ok and fx_name_raw ~= "" then
             local fx_name = fx_name_raw
@@ -21674,10 +21756,13 @@ function ShowTrackFXContentThumbnail()
                 local line_h = r.ImGui_GetTextLineHeight(ctx)
                 local bar_h = line_h + 4
                 local bar_y = cy + thumb_h - bar_h
-                r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + avail_w, cy + thumb_h, 0x000000B0)
-                local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
-                local name_x = cx + m_floor((avail_w - name_w) * 0.5)
-                r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, fx_name)
+                local mw_tfx_name_col = is_bypassed and 0xFFBB33FF or 0xFFFFFFFF
+                if not config.show_name_below_main_window then
+                    r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + avail_w, cy + thumb_h, 0x000000B0)
+                    local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                    local name_x = cx + m_floor((avail_w - name_w) * 0.5)
+                    r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, mw_tfx_name_col, fx_name)
+                end
                 local slot_label = tostring(i + 1)
                 local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
                 r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
@@ -21710,6 +21795,14 @@ function ShowTrackFXContentThumbnail()
                 end
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "MainTrackFXThumbCtx_" .. i)
+                end
+                if config.show_name_below_main_window then
+                    local bname_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                    local indent = math.floor((avail_w - bname_w) * 0.5)
+                    if indent > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + indent) end
+                    if is_bypassed then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF) end
+                    r.ImGui_Text(ctx, fx_name)
+                    if is_bypassed then r.ImGui_PopStyleColor(ctx) end
                 end
             else
                 if is_bypassed then
@@ -21863,6 +21956,7 @@ function ShowInputFXContentThumbnail()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
     for i = 0, rec_count - 1 do
+        if i > 0 then r.ImGui_Separator(ctx) end
         local fx_idx = i + 0x1000000
         local ok, fx_name_raw = r.TrackFX_GetFXName(TRACK, fx_idx, "")
         if ok and fx_name_raw ~= "" then
@@ -21892,10 +21986,13 @@ function ShowInputFXContentThumbnail()
                 local line_h = r.ImGui_GetTextLineHeight(ctx)
                 local bar_h = line_h + 4
                 local bar_y = cy + thumb_h - bar_h
-                r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + avail_w, cy + thumb_h, 0x000000B0)
-                local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
-                local name_x = cx + m_floor((avail_w - name_w) * 0.5)
-                r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, fx_name)
+                local mw_rfx_name_col = is_bypassed and 0xFFBB33FF or 0xFFFFFFFF
+                if not config.show_name_below_main_window then
+                    r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + avail_w, cy + thumb_h, 0x000000B0)
+                    local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                    local name_x = cx + m_floor((avail_w - name_w) * 0.5)
+                    r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, mw_rfx_name_col, fx_name)
+                end
                 local slot_label = "I" .. tostring(i + 1)
                 local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
                 r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
@@ -21929,6 +22026,14 @@ function ShowInputFXContentThumbnail()
                 end
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "MainInputFXThumbCtx_" .. i)
+                end
+                if config.show_name_below_main_window then
+                    local bname_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                    local indent = math.floor((avail_w - bname_w) * 0.5)
+                    if indent > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + indent) end
+                    if is_bypassed then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF) end
+                    r.ImGui_Text(ctx, fx_name)
+                    if is_bypassed then r.ImGui_PopStyleColor(ctx) end
                 end
             else
                 if is_bypassed then
@@ -22003,6 +22108,7 @@ function ShowItemFXContentThumbnail()
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
     for i = 0, fx_count - 1 do
+        if i > 0 then r.ImGui_Separator(ctx) end
         local ok, fx_name_raw = r.TakeFX_GetFXName(take, i, "")
         if ok and fx_name_raw ~= "" then
             local fx_name = fx_name_raw
@@ -22030,10 +22136,13 @@ function ShowItemFXContentThumbnail()
                 local line_h = r.ImGui_GetTextLineHeight(ctx)
                 local bar_h = line_h + 4
                 local bar_y = cy + thumb_h - bar_h
-                r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + avail_w, cy + thumb_h, 0x000000B0)
-                local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
-                local name_x = cx + m_floor((avail_w - name_w) * 0.5)
-                r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, 0xFFFFFFFF, fx_name)
+                local mw_ifx_name_col = (not is_enabled) and 0xFFBB33FF or 0xFFFFFFFF
+                if not config.show_name_below_main_window then
+                    r.ImGui_DrawList_AddRectFilled(dl, cx, bar_y, cx + avail_w, cy + thumb_h, 0x000000B0)
+                    local name_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                    local name_x = cx + m_floor((avail_w - name_w) * 0.5)
+                    r.ImGui_DrawList_AddText(dl, name_x, bar_y + 2, mw_ifx_name_col, fx_name)
+                end
                 local slot_label = tostring(i + 1)
                 local slot_tw = r.ImGui_CalcTextSize(ctx, slot_label)
                 r.ImGui_DrawList_AddRectFilled(dl, cx, cy, cx + slot_tw + 6, cy + 14, 0x000000B0, 3)
@@ -22066,6 +22175,14 @@ function ShowItemFXContentThumbnail()
                 end
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "MainItemFXThumbCtx_" .. i)
+                end
+                if config.show_name_below_main_window then
+                    local bname_w = r.ImGui_CalcTextSize(ctx, fx_name)
+                    local indent = math.floor((avail_w - bname_w) * 0.5)
+                    if indent > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + indent) end
+                    if not is_enabled then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFBB33FF) end
+                    r.ImGui_Text(ctx, fx_name)
+                    if not is_enabled then r.ImGui_PopStyleColor(ctx) end
                 end
             else
                 if not is_enabled then
@@ -23386,6 +23503,28 @@ end
 
 -- Check visibility states
 local general_visibility = CheckVisibilityState()
+if pending_clear_on_show then
+    pending_clear_on_show = false
+    local saved_term = browser_search_term
+    if not selected_folder and not browser_panel_selected then
+        if last_selected_folder_before_global then
+            selected_folder = last_selected_folder_before_global
+            last_selected_folder_before_global = nil
+        elseif last_panel_before_global then
+            browser_panel_selected = last_panel_before_global
+            last_panel_before_global = nil
+        end
+    end
+    current_filtered_fx = nil
+    if saved_term ~= "" and config.always_search_all then
+        SearchAllPlugins()
+    else
+        RefreshCurrentScreenshotView()
+    end
+    screenshot_search_autoselect = (saved_term ~= "")
+    screenshot_folder_filter_suspended = false
+    _last_screenshot_signature = _build_screenshot_signature()
+end
 local should_show_main_window = ShouldShowMainWindow()
 
 if not general_visibility then
@@ -23453,21 +23592,14 @@ if not should_show_main_window then
     return
 end
 
-local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoScrollbar())
+local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoScrollbar() | (config.show_screenshot_window and r.ImGui_WindowFlags_NoFocusOnAppearing() or 0))
 dock = r.ImGui_GetWindowDockID(ctx)
 
 if visible then
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
     local main_window_width = r.ImGui_GetWindowWidth(ctx)
     if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_F9()) then
-        config.show_screenshot_window = not config.show_screenshot_window
-        SaveConfig()
-        if config.show_screenshot_window then
-            screenshot_search_focus_requested = true
-            screenshot_search_force_overwrite = true
-            ClearScreenshotCache()
-            if selected_folder then GetPluginsForFolder(selected_folder) end
-        end
+        r.SetExtState("TK_FX_BROWSER", "toggle_screenshot_window", "1", false)
     end
     if config.show_screenshot_window then
         ShowScreenshotWindow()
@@ -23497,14 +23629,7 @@ if visible then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_SetCursorPos(ctx, 0, 0)
                 if DrawIconButton("plus", 20) then
-                    config.show_screenshot_window = not config.show_screenshot_window
-                    if config.show_screenshot_window then
-                        screenshot_search_focus_requested = true
-                        screenshot_search_force_overwrite = true
-                    end
-                    SaveConfig()
-                    ClearScreenshotCache()
-                    GetPluginsForFolder(selected_folder)
+                    r.SetExtState("TK_FX_BROWSER", "toggle_screenshot_window", "1", false)
                 end             
                 local window_width = r.ImGui_GetWindowWidth(ctx)                          
                 
