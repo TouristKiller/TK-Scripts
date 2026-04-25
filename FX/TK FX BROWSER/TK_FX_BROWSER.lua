@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.7.1
+-- @version 2.7.2
 -- @changelog:
 --[[ 
+    v2.7.2:
+        + Fixed Max's screenshot window reopening when clicking a folder in Mini (SaveConfig no longer writes Mini's forced show_screenshot_window/hide_main_window into the shared config.json)
+
     v2.7.1:
         + Settings window: "Cancel" button renamed to "Close" (X in titlebar now also closes the Settings window)
 

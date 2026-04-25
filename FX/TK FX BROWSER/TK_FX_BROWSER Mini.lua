@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.6.1
+-- @version 0.6.2
 -- @changelog:
 --[[ 
+    v0.6.2:
+        + Fixed Max's screenshot window reopening when clicking a folder in Mini (SaveConfig no longer writes Mini's forced show_screenshot_window/hide_main_window into the shared config.json)
+
     v0.6.1:
         + Settings window: "Cancel" button renamed to "Close" (X in titlebar now also closes the Settings window)
 
@@ -1238,23 +1241,26 @@ function SaveConfig()
     local pinned_plugins_backup = config.pinned_plugins
     local pinned_subgroups_backup = config.pinned_subgroups
     local pinned_custom_subfolders_backup = config.pinned_custom_subfolders
-    
+    local show_screenshot_window_backup = config.show_screenshot_window
+    local hide_main_window_backup = config.hide_main_window
+
     config.custom_folders = nil
     config.pinned_plugins = nil
     config.pinned_subgroups = nil
     config.pinned_custom_subfolders = nil
-    
+    config.show_screenshot_window = nil
+    config.hide_main_window = nil
+
     -- First encode to JSON (if this fails, we don't touch the file)
     local success, json_string = pcall(json.encode, config)
-    
+
     -- Restore all data immediately
     config.custom_folders = custom_folders_backup
     config.pinned_plugins = pinned_plugins_backup
     config.pinned_subgroups = pinned_subgroups_backup
     config.pinned_custom_subfolders = pinned_custom_subfolders_backup
-    
-    -- Restore custom_folders immediately
-    config.custom_folders = custom_folders_backup
+    config.show_screenshot_window = show_screenshot_window_backup
+    config.hide_main_window = hide_main_window_backup
     
     if not success then
         r.ShowConsoleMsg("Error: Could not encode config to JSON: " .. tostring(json_string) .. "\n")
