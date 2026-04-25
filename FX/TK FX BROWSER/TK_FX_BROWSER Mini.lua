@@ -1,8 +1,13 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.5.9
+-- @version 0.6.0
 -- @changelog:
 --[[ 
+    v0.6.0:
+        + Fixed persistent "No Image" placeholders when Max had hidden its screenshot window (synced config.show_screenshot_window=false blocked Mini's texture queue)
+        + Removed redundant texture-queue visibility gate in Mini (texture loading is already gated by render paths)
+        + LoadConfig now forces show_screenshot_window=true in Mini to self-heal old/synced configs
+
     v0.5.9:
         + Added "Clear Search on Toggle" option (VIEW tab) to clear search field when the script is toggled visible
         + Fixed "No Image" placeholders / empty Current Track FX when Max browser was not running (texture queue gate)
@@ -1482,6 +1487,7 @@ function LoadConfig()
         end
 
         config.include_x86_bridged = true
+        config.show_screenshot_window = true
         
         -- Ensure font_size has a default value
         if not config.font_size then
@@ -5438,8 +5444,6 @@ function LoadSearchTexture(file, plugin_name)
 end
 
     local function ProcessTextureLoadQueue()
-    
-    if not (show_screenshot_window or (config and config.show_screenshot_window)) then return end
     if not texture_load_queue or next(texture_load_queue) == nil then return end
    
     -- PERFORMANCE: Limit queue size to prevent disk I/O bottleneck

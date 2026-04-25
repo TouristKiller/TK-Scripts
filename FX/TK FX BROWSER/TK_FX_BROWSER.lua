@@ -1,8 +1,12 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.6.9
+-- @version 2.7.0
 -- @changelog:
 --[[ 
+    v2.7.0:
+        + Companion release for Mini v0.6.0 (fixes "No Image" issue in Mini caused by synced show_screenshot_window state)
+        + No functional changes in Max
+
     v2.6.9:
         + Added "Clear Search on Toggle" option (VIEW tab) to clear search field when window/screenshot view is toggled
         + Settings: reordered VIEW tab sections and unified spacing between sections
