@@ -214,7 +214,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.9.5" author="TouristKiller" time="2026-04-17T15:00:00Z">
+        <version name="1.9.6" author="TouristKiller" time="2026-04-25T15:40:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -228,6 +228,9 @@
             <source main="main" file="TK_MIXER_ONLY.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_MIXER_ONLY.lua</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/Images/knob01.png</source>
             <changelog><![CDATA[
+   v1.9.6:
+  + Fixed: Tempo drag not working on macOS (replaced JS_Mouse_SetPosition cursor-warp logic with ImGui_GetMouseDragDelta, which avoids the Cocoa mouse event suppression after CGWarpMouseCursorPosition)
+
    v1.9.4:
   + Added: Configurable transport button order (reorder via up/down arrows in settings)
   + Added: Optional button background for transport buttons (color, hover, active, padding, rounding, border)

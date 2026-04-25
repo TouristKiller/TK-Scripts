@@ -1,11 +1,10 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.9.5
+-- @version 1.9.6
 -- @changelog 
 --[[
-  v1.9.5:
-  + Added: New feature or improvement for version 1.9.5
-  + Fixed: Bug fix or improvement for version 1.9.5
+  v1.9.6:
+  + Fixed: Tempo drag not working on macOS (replaced JS_Mouse_SetPosition cursor-warp logic with ImGui_GetMouseDragDelta, which avoids the Cocoa mouse event suppression after CGWarpMouseCursorPosition)
 
   v1.9.4:
   + Added: Configurable transport button order (reorder via up/down arrows in settings)
@@ -20866,54 +20865,40 @@ function ShowTempo(main_window_width, main_window_height)
  tempo_drag.dragging = true
  tempo_drag.start_value = tempo
  tempo_drag.accumulated_delta = 0
-
- if reaper.GetMousePosition then
- tempo_drag.mouse_anchor_x, tempo_drag.mouse_anchor_y = reaper.GetMousePosition()
- tempo_drag.last_mouse_y = tempo_drag.mouse_anchor_y
+ if reaper.ImGui_ResetMouseDragDelta then
+ reaper.ImGui_ResetMouseDragDelta(ctx, 0)
  end
-
  if reaper.JS_Mouse_SetCursor then
- reaper.JS_Mouse_SetCursor(reaper.JS_Mouse_LoadCursor(0)) 
+ reaper.JS_Mouse_SetCursor(reaper.JS_Mouse_LoadCursor(0))
  end
  end
 
- if (not settings.edit_mode) and tempo_drag.dragging and reaper.GetMousePosition then
- local _, current_mouse_y = reaper.GetMousePosition()
-if tempo_drag.last_mouse_y then
- local mouse_delta_y = current_mouse_y - tempo_drag.last_mouse_y
- if math.abs(mouse_delta_y) > 0 then
- local sensitivity = 5 
- tempo_drag.accumulated_delta = tempo_drag.accumulated_delta + (-mouse_delta_y / sensitivity)
+ if (not settings.edit_mode) and tempo_drag.dragging and reaper.ImGui_IsMouseDown(ctx, 0) then
+ local _, dy = reaper.ImGui_GetMouseDragDelta(ctx, 0)
+ if reaper.ImGui_ResetMouseDragDelta then
+ reaper.ImGui_ResetMouseDragDelta(ctx, 0)
+ end
+ if dy and dy ~= 0 then
+ local sensitivity = 5
+ tempo_drag.accumulated_delta = tempo_drag.accumulated_delta + (-dy / sensitivity)
  local adjusted_tempo = math.floor(tempo_drag.start_value + tempo_drag.accumulated_delta + 0.5)
  adjusted_tempo = math.max(1, math.min(590, adjusted_tempo))
+ if adjusted_tempo ~= math.floor(tempo + 0.5) then
  reaper.CSurf_OnTempoChange(adjusted_tempo)
+ tempo_drag.start_value = adjusted_tempo
+ tempo_drag.accumulated_delta = 0
  end
-end
- if reaper.JS_Mouse_SetPosition and tempo_drag.mouse_anchor_x then
- reaper.JS_Mouse_SetPosition(tempo_drag.mouse_anchor_x, tempo_drag.mouse_anchor_y)
- local _, verify_y = reaper.GetMousePosition()
- if math.abs(verify_y - tempo_drag.mouse_anchor_y) <= 2 then
-  tempo_drag.last_mouse_y = tempo_drag.mouse_anchor_y
- else
-  tempo_drag.last_mouse_y = current_mouse_y
  end
- else
- tempo_drag.last_mouse_y = current_mouse_y
+ if reaper.ImGui_SetMouseCursor and reaper.ImGui_MouseCursor_ResizeNS then
+ reaper.ImGui_SetMouseCursor(ctx, reaper.ImGui_MouseCursor_ResizeNS())
  end
  end
 
- if (not settings.edit_mode) and not reaper.ImGui_IsMouseDown(ctx, 0) then
- if tempo_drag.dragging then
- if reaper.JS_Mouse_SetCursor then
- reaper.JS_Mouse_SetCursor(reaper.JS_Mouse_LoadCursor(32512)) 
- end
- if tempo_drag.mouse_anchor_x and tempo_drag.mouse_anchor_y and reaper.JS_Mouse_SetPosition then
- reaper.JS_Mouse_SetPosition(tempo_drag.mouse_anchor_x, tempo_drag.mouse_anchor_y)
- end
- end
+ if (not settings.edit_mode) and tempo_drag.dragging and not reaper.ImGui_IsMouseDown(ctx, 0) then
  tempo_drag.dragging = false
- tempo_drag.last_mouse_y = nil
- tempo_drag.mouse_anchor_x, tempo_drag.mouse_anchor_y = nil, nil
+ if reaper.JS_Mouse_SetCursor then
+ reaper.JS_Mouse_SetCursor(reaper.JS_Mouse_LoadCursor(32512))
+ end
  end
 
  if (not settings.edit_mode) and tempo_button_right_click then
