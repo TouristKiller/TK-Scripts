@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.6.0
+-- @version 0.6.1
 -- @changelog:
 --[[ 
+    v0.6.1:
+        + Settings window: "Cancel" button renamed to "Close" (X in titlebar now also closes the Settings window)
+
     v0.6.0:
         + Fixed persistent "No Image" placeholders when Max had hidden its screenshot window (synced config.show_screenshot_window=false blocked Mini's texture queue)
         + Removed redundant texture-queue visibility gate in Mini (texture loading is already gated by render paths)
@@ -4493,7 +4496,7 @@ function ShowConfigWindow()
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
                 config_open = false
             end
             r.ImGui_SameLine(ctx)
@@ -4835,7 +4838,7 @@ function ShowConfigWindow()
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
                 config_open = false
             end
             r.ImGui_SameLine(ctx)
@@ -5134,7 +5137,7 @@ function ShowConfigWindow()
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
                 config_open = false
             end
             r.ImGui_SameLine(ctx)
@@ -5231,7 +5234,7 @@ function ShowConfigWindow()
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
                 config_open = false
             end
             r.ImGui_SameLine(ctx)
@@ -5243,7 +5246,7 @@ function ShowConfigWindow()
 r.ImGui_PopStyleColor(ctx, 2)
 r.ImGui_End(ctx)
 end
-return config_open
+return config_open and open
 end
 
 function EnsureTrackIconsFolderExists()

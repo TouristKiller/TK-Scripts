@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.7.0
+-- @version 2.7.1
 -- @changelog:
 --[[ 
+    v2.7.1:
+        + Settings window: "Cancel" button renamed to "Close" (X in titlebar now also closes the Settings window)
+
     v2.7.0:
         + Companion release for Mini v0.6.0 (fixes "No Image" issue in Mini caused by synced show_screenshot_window state)
         + No functional changes in Max
@@ -4548,7 +4551,7 @@ function ShowConfigWindow()
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
                 config_open = false
             end
             r.ImGui_SameLine(ctx)
@@ -4976,7 +4979,7 @@ function ShowConfigWindow()
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
                 config_open = false
             end
             r.ImGui_SameLine(ctx)
@@ -5278,7 +5281,7 @@ function ShowConfigWindow()
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
                 config_open = false
             end
             r.ImGui_SameLine(ctx)
@@ -5375,7 +5378,7 @@ function ShowConfigWindow()
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
                 config_open = false
             end
             r.ImGui_SameLine(ctx)
@@ -5387,7 +5390,7 @@ function ShowConfigWindow()
 r.ImGui_PopStyleColor(ctx, 2)
 r.ImGui_End(ctx)
 end
-return config_open
+return config_open and open
 end
 
 function EnsureTrackIconsFolderExists()
