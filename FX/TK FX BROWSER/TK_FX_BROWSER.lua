@@ -1,8 +1,18 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.6.8
+-- @version 2.6.9
 -- @changelog:
 --[[ 
+    v2.6.9:
+        + Added "Clear Search on Toggle" option (VIEW tab) to clear search field when window/screenshot view is toggled
+        + Settings: reordered VIEW tab sections and unified spacing between sections
+        + Settings: replaced Single/Double Click radios with single "Add on Double Click" checkbox
+        + Settings: repositioned FX List Keep Ratio and FX List Name Below in SCREENSHOT WINDOW
+        + Settings: removed redundant "Auto Resize Screenshots" entry (gear menu still has it)
+        + Settings: removed "Include x86 bridged plugins" checkbox (now always enabled)
+        + Gear menu: removed "Debug Window" and "Sync All Data" entries (no longer needed)
+        + Gear menu: aligned layout with Mini (Update Plugins / Open Main Settings / Shortcuts / Notes / Close Window)
+
     v2.6.8:
         + Fuzzy search: "H Delay" finds "H-Delay (Waves)", "MS 20" finds "MS-20" (native-style matching)
         + Fixed search box focus/highlight when toggling screenshot window via F9 or + button (docked and undocked)
@@ -271,6 +281,10 @@ local function CheckVisibilityState()
         screenshot_search_focus_requested = true
         pending_clear_on_show = true
         main_search_focus_requested = true
+        if config and config.clear_search_on_toggle then
+            browser_search_term = ""
+            if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+        end
     end
     
     last_visibility_state = visibility_state
@@ -1045,7 +1059,7 @@ function SetDefaultConfig()
         hide_after_insert = false,
         hide_screenshot_after_insert = false,
         folder_specific_sizes = {},
-        include_x86_bridged = false,
+        include_x86_bridged = true,
         hide_default_titlebar_menu_items = false,
         add_instruments_on_top = false, 
         show_name_in_screenshot_window = true,
@@ -1151,6 +1165,7 @@ function SetDefaultConfig()
         show_missing_screenshots_only = false, 
         bulk_selected_folder = nil, 
         add_fx_with_double_click = false, 
+        clear_search_on_toggle = false,
         show_missing_list = true, 
         respect_search_exclusions_in_screenshots = false, 
         flicker_guard_enabled = true,
@@ -1178,6 +1193,7 @@ local config = SetDefaultConfig()
 _G.config = config 
 local window_alpha_int = math.floor(config.window_alpha * 100)  
 local display_name_cache = {}
+local last_config_stamp = r.GetExtState("TK_FX_BROWSER_SYNC", "config_changed")
 
 function ClearPerformanceCaches()
     normalized_name_cache = {}
@@ -1259,6 +1275,9 @@ function SaveConfig()
         file:write(json_string)
         file:close()
         ClearPerformanceCaches()
+        local stamp = "MAX|" .. tostring(r.time_precise())
+        r.SetExtState("TK_FX_BROWSER_SYNC", "config_changed", stamp, false)
+        last_config_stamp = stamp
     else
         r.ShowConsoleMsg("Error: Could not open config.json for writing\n")
     end
@@ -1456,6 +1475,8 @@ function LoadConfig()
         if loaded_config.flicker_guard_enabled == nil then
             config.flicker_guard_enabled = false
         end
+
+        config.include_x86_bridged = true
         
         -- Ensure font_size has a default value
         if not config.font_size then
@@ -4106,15 +4127,14 @@ end
 
 function ShowConfigWindow()
     local function NewSection(title)
-        r.ImGui_Spacing(ctx)
+        r.ImGui_Dummy(ctx, 0, 10)
         r.ImGui_PushFont(ctx, NormalFont, config.font_size)
         r.ImGui_Text(ctx, title)
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
         end
-
         r.ImGui_Separator(ctx)
-        r.ImGui_Spacing(ctx)
+        r.ImGui_Dummy(ctx, 0, 4)
     end
     local config_open = true
     
@@ -4143,8 +4163,26 @@ function ShowConfigWindow()
         end
         
         r.ImGui_Separator(ctx)
-        if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
-            if r.ImGui_BeginTabItem(ctx, "GUI") then
+        do
+            local _tabs = {"GUI","VIEW","SCREENSHOTS","PLUGIN MANAGER","PATHS"}
+            _G.settings_active_tab = _G.settings_active_tab or "GUI"
+            local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
+            local spacing = 4
+            local btn_w = (avail_w - spacing*(#_tabs-1)) / #_tabs
+            for i, _tname in ipairs(_tabs) do
+                if i > 1 then r.ImGui_SameLine(ctx, nil, spacing) end
+                local _active = (_G.settings_active_tab == _tname)
+                if _active then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4A6FA5FF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A7FB5FF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x6A8FC5FF)
+                end
+                if r.ImGui_Button(ctx, _tname, btn_w, 24) then _G.settings_active_tab = _tname end
+                if _active then r.ImGui_PopStyleColor(ctx, 3) end
+            end
+        end
+        r.ImGui_Spacing(ctx)
+        if _G.settings_active_tab == "GUI" then
             NewSection("GUI:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Background")
@@ -4168,6 +4206,27 @@ function ShowConfigWindow()
                 window_alpha_int = new_alpha_int
                 config.window_alpha = window_alpha_int / 100
                 config.background_color = r.ImGui_ColorConvertDouble4ToU32(config.background_gray/255, config.background_gray/255, config.background_gray/255, config.window_alpha)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Border Size")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_border_size, new_border_size = r.ImGui_SliderInt(ctx, "##BorderSize", config.window_border_size, 0, 5)
+            if changed_border_size then
+                config.window_border_size = new_border_size
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Border Color")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local changed_border_color, new_border_gray = r.ImGui_SliderInt(ctx, "##BorderColor", config.window_border_gray, 0, 255)
+            if changed_border_color then
+                config.window_border_gray = new_border_gray
             end
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -4386,7 +4445,6 @@ function ShowConfigWindow()
             end
 
             -- NEW SECTION FOR CUSTOM FOLDERS APPEARANCE
-            r.ImGui_Dummy(ctx, 0, 10)
             NewSection("CUSTOM FOLDERS APPEARANCE:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local changed_upper, new_upper = r.ImGui_Checkbox(ctx, "Force Uppercase", config.custom_folder_force_uppercase)
@@ -4452,7 +4510,6 @@ function ShowConfigWindow()
             if changed5 then config.custom_folder_level_colors[5] = new_col5; SaveConfig() end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 5+ Folder Color") end
 
-            r.ImGui_Dummy(ctx, 0, 8)
 
             NewSection("FX CHAIN BUILDER:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -4485,7 +4542,6 @@ function ShowConfigWindow()
             local button_width = (window_width - 20) / 3
             if r.ImGui_Button(ctx, "Save", button_width, 20) then
                 SaveConfig()
-                config_open = false
             end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
@@ -4496,11 +4552,7 @@ function ShowConfigWindow()
                 ResetConfig()
             end
 
-            r.ImGui_EndTabItem(ctx)
-            end
-
-            if r.ImGui_BeginTabItem(ctx, "VIEW") then
-            r.ImGui_Dummy(ctx, 0, 5)
+        elseif _G.settings_active_tab == "VIEW" then
             NewSection("OVERALL VIEW OPTIONS:")
             local changed, new_value
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -4567,75 +4619,11 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
             _, config.show_chain_builder_button = r.ImGui_Checkbox(ctx, "FX Chain Builder", config.show_chain_builder_button)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.clear_search_on_toggle = r.ImGui_Checkbox(ctx, "Clear Search on Toggle", config.clear_search_on_toggle)
             r.ImGui_Dummy(ctx, 0, 5)
 
-             r.ImGui_Dummy(ctx, 0, 8)
-
-            NewSection("BROWSER PANEL SECTIONS:")
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.browser_segment_favorites_enabled = r.ImGui_Checkbox(ctx, "Favorites##bp", config.browser_segment_favorites_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
-            _, config.browser_segment_custom_folders_enabled = r.ImGui_Checkbox(ctx, "Custom Folders##bp", config.browser_segment_custom_folders_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.browser_segment_main_categories_enabled = r.ImGui_Checkbox(ctx, "Categories##bp", config.browser_segment_main_categories_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            _, config.browser_segment_utilities_enabled = r.ImGui_Checkbox(ctx, "Utilities##bp", config.browser_segment_utilities_enabled)
-
-            if not is_mini then
-            r.ImGui_Dummy(ctx, 0, 8)
-
-            NewSection("MAIN WINDOW SECTIONS:")
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.main_section_tags_enabled = r.ImGui_Checkbox(ctx, "Tags##mw", config.main_section_tags_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
-            _, config.main_section_io_enabled = r.ImGui_Checkbox(ctx, "I/O##mw", config.main_section_io_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.main_section_plugins_enabled = r.ImGui_Checkbox(ctx, "Plugins##mw", config.main_section_plugins_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            _, config.main_section_utilities_enabled = r.ImGui_Checkbox(ctx, "Utilities##mw", config.main_section_utilities_enabled)
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.main_section_trackfx_enabled = r.ImGui_Checkbox(ctx, "Track FX##mw", config.main_section_trackfx_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
-            _, config.main_section_itemfx_enabled = r.ImGui_Checkbox(ctx, "Item FX##mw", config.main_section_itemfx_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.main_section_inputfx_enabled = r.ImGui_Checkbox(ctx, "Input FX##mw", config.main_section_inputfx_enabled)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            _, config.main_section_meter_enabled = r.ImGui_Checkbox(ctx, "Meter##mw", config.main_section_meter_enabled)
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.main_section_buttons_enabled = r.ImGui_Checkbox(ctx, "Buttons##mw", config.main_section_buttons_enabled)
-
-            r.ImGui_Dummy(ctx, 0, 8)
-
-            NewSection("MAIN WINDOW OPTIONS:")
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.show_name_in_main_window = r.ImGui_Checkbox(ctx, "Show Plugin Names", config.show_name_in_main_window)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column2_width)
-            _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Search Screenshots", config.show_screenshot_in_search)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            _, config.fxlist_keep_aspect_ratio = r.ImGui_Checkbox(ctx, "FX List Keep Ratio##mw", config.fxlist_keep_aspect_ratio)
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.allow_esc_close = r.ImGui_Checkbox(ctx, "ESC closes script", config.allow_esc_close)
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column4_width)
-            _, config.show_name_below_main_window = r.ImGui_Checkbox(ctx, "FX List Name Below##mw", config.show_name_below_main_window)
-            end
 
             NewSection("SCREENSHOT WINDOW:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -4672,18 +4660,17 @@ function ShowConfigWindow()
             end  
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column4_width)
-            local single_selected = not config.add_fx_with_double_click
-            if r.ImGui_RadioButton(ctx, "Single Click##AddFXMode", single_selected) then
-                config.add_fx_with_double_click = false
+            local dc_changed, dc_val = r.ImGui_Checkbox(ctx, "Add on Double Click", config.add_fx_with_double_click)
+            if dc_changed then
+                config.add_fx_with_double_click = dc_val
                 SaveConfig()
             end
             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click on its screenshot.")
+                r.ImGui_SetTooltip(ctx, "When enabled, adding a plugin requires a double click. Otherwise a single click.")
             end
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.show_name_in_screenshot_window = r.ImGui_Checkbox(ctx, "Show Names", config.show_name_in_screenshot_window)
-            r.ImGui_SameLine(ctx)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
             _, config.clean_plugin_names = r.ImGui_Checkbox(ctx, "Clean Plugin Names", config.clean_plugin_names)
@@ -4692,14 +4679,7 @@ function ShowConfigWindow()
             _, config.remove_manufacturer_names = r.ImGui_Checkbox(ctx, "Hide Developer", config.remove_manufacturer_names)
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column4_width)
-            if r.ImGui_RadioButton(ctx, "Double Click##AddFXMode", config.add_fx_with_double_click) then
-                config.add_fx_with_double_click = true
-                SaveConfig()
-            end
-             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Choose whether adding a plugin requires a single or double click.")
-            end
-            -- r.ImGui_SameLine(ctx)
+            _, config.info_fxlist_keep_aspect_ratio = r.ImGui_Checkbox(ctx, "FX List Keep Ratio##sw", config.info_fxlist_keep_aspect_ratio)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local fg_changed, fg_val = r.ImGui_Checkbox(ctx, "Flicker Guard", config.flicker_guard_enabled)
             if fg_changed then
@@ -4716,6 +4696,13 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
              r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.show_favorites_on_top = r.ImGui_Checkbox(ctx, "Favorites On Top", config.show_favorites_on_top)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            local snbs_ch, snbs_v = r.ImGui_Checkbox(ctx, "FX List Name Below##sw", config.show_name_below_screenshot)
+            if snbs_ch then config.show_name_below_screenshot = snbs_v; SaveConfig() end
+            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Show plugin name below Track/Item/Input FX thumbnails in the info panel instead of as an overlay.")
+            end
 
 
 
@@ -4729,23 +4716,6 @@ function ShowConfigWindow()
             end
             if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "When enabled, plugins you excluded from search in Plugin Manager won't appear in the screenshot window.")
-            end
-
-            r.ImGui_SameLine(ctx)
-            r.ImGui_SetCursorPosX(ctx, column3_width)
-            _, config.resize_screenshots_with_window = r.ImGui_Checkbox(ctx, "Auto Resize Screenshots", config.resize_screenshots_with_window)
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "When enabled, screenshots will automatically resize to fit the window.")
-            end
-            r.ImGui_SameLine(ctx)
-            _, config.info_fxlist_keep_aspect_ratio = r.ImGui_Checkbox(ctx, "FX List Keep Ratio##sw", config.info_fxlist_keep_aspect_ratio)
-
-            r.ImGui_Dummy(ctx, 0, 5)
-            r.ImGui_SameLine(ctx)
-            local snbs_ch, snbs_v = r.ImGui_Checkbox(ctx, "FX List Name Below##sw", config.show_name_below_screenshot)
-            if snbs_ch then config.show_name_below_screenshot = snbs_v; SaveConfig() end
-            if config.show_tooltips and r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Show plugin name below Track/Item/Input FX thumbnails in the info panel instead of as an overlay.")
             end
 
             r.ImGui_Dummy(ctx, 0, 5)
@@ -4930,12 +4900,76 @@ function ShowConfigWindow()
             drawTypeComboInline(4)
 
             
+            NewSection("BROWSER PANEL SECTIONS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.browser_segment_favorites_enabled = r.ImGui_Checkbox(ctx, "Favorites##bp", config.browser_segment_favorites_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.browser_segment_custom_folders_enabled = r.ImGui_Checkbox(ctx, "Custom Folders##bp", config.browser_segment_custom_folders_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.browser_segment_main_categories_enabled = r.ImGui_Checkbox(ctx, "Categories##bp", config.browser_segment_main_categories_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.browser_segment_utilities_enabled = r.ImGui_Checkbox(ctx, "Utilities##bp", config.browser_segment_utilities_enabled)
+
+            if not is_mini then
+
+            NewSection("MAIN WINDOW OPTIONS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.show_name_in_main_window = r.ImGui_Checkbox(ctx, "Show Plugin Names", config.show_name_in_main_window)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.show_screenshot_in_search = r.ImGui_Checkbox(ctx, "Search Screenshots", config.show_screenshot_in_search)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.hideVolumeSlider = r.ImGui_Checkbox(ctx, "Hide Volume Slider", config.hideVolumeSlider)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.fxlist_keep_aspect_ratio = r.ImGui_Checkbox(ctx, "FX List Keep Ratio##mw", config.fxlist_keep_aspect_ratio)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.hide_default_titlebar_menu_items = r.ImGui_Checkbox(ctx, "Hide Default Titlebar Menu Items", config.hide_default_titlebar_menu_items)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.allow_esc_close = r.ImGui_Checkbox(ctx, "ESC closes script", config.allow_esc_close)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.show_name_below_main_window = r.ImGui_Checkbox(ctx, "FX List Name Below##mw", config.show_name_below_main_window)
+            NewSection("MAIN WINDOW SECTIONS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.main_section_tags_enabled = r.ImGui_Checkbox(ctx, "Tags##mw", config.main_section_tags_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.main_section_io_enabled = r.ImGui_Checkbox(ctx, "I/O##mw", config.main_section_io_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.main_section_plugins_enabled = r.ImGui_Checkbox(ctx, "Plugins##mw", config.main_section_plugins_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.main_section_utilities_enabled = r.ImGui_Checkbox(ctx, "Utilities##mw", config.main_section_utilities_enabled)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.main_section_trackfx_enabled = r.ImGui_Checkbox(ctx, "Track FX##mw", config.main_section_trackfx_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.main_section_itemfx_enabled = r.ImGui_Checkbox(ctx, "Item FX##mw", config.main_section_itemfx_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.main_section_inputfx_enabled = r.ImGui_Checkbox(ctx, "Input FX##mw", config.main_section_inputfx_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            _, config.main_section_meter_enabled = r.ImGui_Checkbox(ctx, "Meter##mw", config.main_section_meter_enabled)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            _, config.main_section_buttons_enabled = r.ImGui_Checkbox(ctx, "Buttons##mw", config.main_section_buttons_enabled)
+
+            r.ImGui_Dummy(ctx, 0, 8)
+
+            end
+
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
             r.ImGui_Separator(ctx)
             local button_width = (window_width - 20) / 3
             if r.ImGui_Button(ctx, "Save", button_width, 20) then
                 SaveConfig()
-                config_open = false
             end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
@@ -4945,10 +4979,7 @@ function ShowConfigWindow()
             if r.ImGui_Button(ctx, "Reset", button_width, 20) then
                 ResetConfig()
             end
-            r.ImGui_EndTabItem(ctx)
-            end
-
-            if r.ImGui_BeginTabItem(ctx, "SCREENSHOTS") then
+        elseif _G.settings_active_tab == "SCREENSHOTS" then
             NewSection("SETTINGS:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "X Offset")
@@ -4989,7 +5020,6 @@ function ShowConfigWindow()
             r.ImGui_PushItemWidth(ctx, slider_width)
             _, config.screenshot_display_size = r.ImGui_SliderInt(ctx, "##Display Size", config.screenshot_display_size, 100, 500)
             r.ImGui_PopItemWidth(ctx)
-            r.ImGui_Dummy(ctx, 0, 5)
             NewSection("PERFORMANCE:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Max Textures/Frame")
@@ -5037,7 +5067,6 @@ function ShowConfigWindow()
                 config.texture_reload_delay        = 2
                 config.screenshot_delay            = 0.5
             end
-            r.ImGui_Dummy(ctx, 0, 5)
             NewSection("BULK:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             changed, config.bulk_screenshot_vst = r.ImGui_Checkbox(ctx, "VST Plugins", config.bulk_screenshot_vst)
@@ -5207,8 +5236,6 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column3_width)
             _, config.hide_screenshot_after_insert = r.ImGui_Checkbox(ctx, "Hide screenshot window after inserting FX", config.hide_screenshot_after_insert)
-            r.ImGui_SetCursorPosX(ctx, column1_width)
-            _, config.include_x86_bridged = r.ImGui_Checkbox(ctx, "Include x86 bridged plugins", config.include_x86_bridged)
             r.ImGui_Separator(ctx)
             r.ImGui_Dummy(ctx, 0, 5)
 
@@ -5245,7 +5272,6 @@ function ShowConfigWindow()
             local button_width = (window_width - 20) / 3
             if r.ImGui_Button(ctx, "Save", button_width, 20) then
                 SaveConfig()
-                config_open = false
             end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
@@ -5255,15 +5281,9 @@ function ShowConfigWindow()
             if r.ImGui_Button(ctx, "Reset", button_width, 20) then
                 ResetConfig()
             end
-            r.ImGui_EndTabItem(ctx)
-        end
-        if r.ImGui_BeginTabItem(ctx, "PLUGIN MANAGER") then
+        elseif _G.settings_active_tab == "PLUGIN MANAGER" then
             ShowPluginManagerTab()
-            r.ImGui_EndTabItem(ctx)
-        end
-
-        if r.ImGui_BeginTabItem(ctx, "PATHS") then
-            r.ImGui_Dummy(ctx, 0, 5)
+        elseif _G.settings_active_tab == "PATHS" then
             NewSection("FX CHAINS:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local changed_fx_use, use_fx_custom = r.ImGui_Checkbox(ctx, "custom FXChain folder", config.use_custom_fxchain_dir)
@@ -5304,7 +5324,6 @@ function ShowConfigWindow()
                 r.ImGui_Text(ctx, fx_root)
             end
 
-            r.ImGui_Dummy(ctx, 0, 8)
             NewSection("TRACK TEMPLATES:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local changed_tt_use, use_tt_custom = r.ImGui_Checkbox(ctx, "custom TT Folder", config.use_custom_template_dir)
@@ -5350,7 +5369,6 @@ function ShowConfigWindow()
             local button_width = (window_width - 20) / 3
             if r.ImGui_Button(ctx, "Save", button_width, 20) then
                 SaveConfig()
-                config_open = false
             end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Cancel", button_width, 20) then
@@ -5360,11 +5378,7 @@ function ShowConfigWindow()
             if r.ImGui_Button(ctx, "Reset", button_width, 20) then
                 ResetConfig()
             end
-            r.ImGui_EndTabItem(ctx)
         end
-
-r.ImGui_EndTabBar(ctx)
-end
 
 r.ImGui_PopStyleColor(ctx, 2)
 r.ImGui_End(ctx)
@@ -10908,36 +10922,21 @@ function ShowScreenshotControls()
         end
 
         r.ImGui_Separator(ctx)
-        
-        -- DEBUG WINDOW
-        if r.ImGui_MenuItem(ctx, "Debug Window", "", config.show_debug_window) then
-            config.show_debug_window = not config.show_debug_window
-            SaveConfig()
-        end
-        
-        r.ImGui_Separator(ctx)
-        if r.ImGui_MenuItem(ctx, "Sync All Data") then
-            LoadConfig()
-            LoadPinned()
-            LoadPluginRatings()
-            LoadCustomFolders()
-            LoadScriptsLauncher()
-            LoadTags()
-            ClearPerformanceCaches()
-            DebugLog("Manual sync all data triggered")
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Reload all config, ratings, custom folders, scripts launcher, and tags from files")
-        end
-        r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Update Plugins") then
             FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+            PLUGIN_LIST = FX_LIST_TEST
+            BuildPluginCache()
+            ClearPerformanceCaches()
+            InitializeFilteredPlugins()
+            DebugLog("Manual plugin list update triggered")
         end
-        if r.ImGui_MenuItem(ctx, "Shortcuts") then
-            show_shortcuts_window = true
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Re-scan and update the installed plugin list")
         end
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
+        if r.ImGui_MenuItem(ctx, "Shortcuts") then show_shortcuts_window = true end
+        if r.ImGui_MenuItem(ctx, "Notes") then LaunchTKNotes() end
         if r.ImGui_MenuItem(ctx, "Close Window") then config.show_screenshot_window = false; SaveConfig() end
         r.ImGui_EndPopup(ctx)
     end
@@ -23326,9 +23325,22 @@ local last_fx_count = -1
 -----------------------------------------------------------------------------------------
 function Main()
     local frame_start = r.time_precise()
-    
+
     SetRunningState(true)
     MaybeClearCaches()
+
+    do
+        local stamp = r.GetExtState("TK_FX_BROWSER_SYNC", "config_changed")
+        if stamp ~= "" and stamp ~= last_config_stamp then
+            last_config_stamp = stamp
+            local source = stamp:match("^([^|]+)")
+            if source ~= "MAX" then
+                LoadConfig()
+                window_alpha_int = math.floor((config.window_alpha or 1) * 100)
+                needs_font_update = true
+            end
+        end
+    end
 
     if projects_loading then
         if projects_loading_frame > 0 then
@@ -23497,6 +23509,10 @@ if toggle_ss == "1" then
         screenshot_window_os_focus_needed = 3
         screenshot_search_focus_requested = true
         screenshot_search_force_overwrite = true
+        if config.clear_search_on_toggle then
+            browser_search_term = ""
+            if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+        end
     end
     SaveConfig()
 end
