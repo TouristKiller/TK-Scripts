@@ -1,8 +1,18 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.7.1
+-- @version 0.7.3
 -- @changelog:
 --[[       
+v0.7.3:
++ Quick-toggle filter icons placed right after the Start button (audio waveform, MIDI note, video, image)
++ Fixed: filter icons could be pushed off-screen by right-aligned positioning
+
+v0.7.2:
++ File Type Filters: globally show/hide Audio, MIDI, Video and Image files via Settings popup
++ Quick-toggle filter icons (audio waveform, MIDI note, video, image) in the top-right of the file list
++ Filters apply instantly without rescanning the cache
++ Filter state is saved in options and presets
+
 v0.7.1:
 + Minor bug fixes and performance improvements
 
@@ -344,7 +354,12 @@ local ui_settings = {
         date = false,
         time = false,
         umid = false
-    }
+    },
+
+    filter_audio = true,
+    filter_midi = true,
+    filter_video = false,
+    filter_image = false
 }
 
 local FOLDER_ICON = ""
@@ -936,9 +951,9 @@ local function save_file_cache_progressive(location, files, start_index)
         cache_mgmt.scan_message = string.format("Done! %d files found", #files)
         cache_mgmt.message_timer = os.time()
         
-        search_filter.cached_flat_files = files
+        search_filter.cached_flat_files = filter_visible_files(files)
         search_filter.cached_location = location
-        search_filter.filtered_files = files
+        search_filter.filtered_files = search_filter.cached_flat_files
         return
     end
     
@@ -1065,6 +1080,83 @@ local supported_extensions = {
     [".png"] = true, [".gif"] = true, [".bmp"] = true, [".mp4"] = true,
     [".mov"] = true, [".avi"] = true, [".wmv"] = true, [".mkv"] = true
 }
+
+ext_groups = {
+    wav  = "audio", mp3  = "audio", aif  = "audio", aiff = "audio",
+    flac = "audio", ogg  = "audio", wma  = "audio", m4a  = "audio",
+    mid  = "midi",  midi = "midi",
+    mp4  = "video", mov  = "video", avi  = "video", wmv  = "video", mkv = "video",
+    jpg  = "image", jpeg = "image", png  = "image", gif  = "image", bmp = "image"
+}
+
+function get_ext_group(filename)
+    if not filename then return nil end
+    local ext = string.lower(string.match(filename, "%.([^%.]+)$") or "")
+    if ext == "" then return nil end
+    return ext_groups[ext]
+end
+
+function is_file_visible(filename)
+    local g = get_ext_group(filename)
+    if not g then return false end
+    if g == "audio" then return ui_settings.filter_audio end
+    if g == "midi"  then return ui_settings.filter_midi end
+    if g == "video" then return ui_settings.filter_video end
+    if g == "image" then return ui_settings.filter_image end
+    return false
+end
+
+function filter_visible_files(list)
+    if ui_settings.filter_audio and ui_settings.filter_midi
+        and ui_settings.filter_video and ui_settings.filter_image then
+        return list
+    end
+    local out = {}
+    for i = 1, #list do
+        local entry = list[i]
+        local name = type(entry) == "table" and entry.name or nil
+        if name and is_file_visible(name) then
+            out[#out + 1] = entry
+        end
+    end
+    return out
+end
+
+function tk_draw_filter_icon(dl, kind, x, y, size, col)
+    local cx = x + size * 0.5
+    local cy = y + size * 0.5
+    if kind == "audio" then
+        local steps = 18
+        local prev_x, prev_y = x, cy
+        for i = 1, steps do
+            local t = i / steps
+            local nx = x + t * size
+            local ny = cy + math.sin(t * math.pi * 2) * (size * 0.30)
+            r.ImGui_DrawList_AddLine(dl, prev_x, prev_y, nx, ny, col, 1.5)
+            prev_x, prev_y = nx, ny
+        end
+    elseif kind == "midi" then
+        r.ImGui_DrawList_AddCircleFilled(dl, x + size * 0.32, y + size * 0.72, size * 0.18, col)
+        r.ImGui_DrawList_AddLine(dl, x + size * 0.50, y + size * 0.72, x + size * 0.50, y + size * 0.18, col, 1.6)
+        r.ImGui_DrawList_AddLine(dl, x + size * 0.50, y + size * 0.18, x + size * 0.84, y + size * 0.32, col, 1.6)
+        r.ImGui_DrawList_AddLine(dl, x + size * 0.50, y + size * 0.36, x + size * 0.84, y + size * 0.50, col, 1.6)
+    elseif kind == "video" then
+        local pad = size * 0.14
+        r.ImGui_DrawList_AddRect(dl, x + pad, y + pad, x + size - pad, y + size - pad, col, 2, nil, 1.4)
+        r.ImGui_DrawList_AddTriangleFilled(dl,
+            cx - size * 0.12, cy - size * 0.18,
+            cx - size * 0.12, cy + size * 0.18,
+            cx + size * 0.20, cy, col)
+    elseif kind == "image" then
+        local pad = size * 0.14
+        r.ImGui_DrawList_AddRect(dl, x + pad, y + pad, x + size - pad, y + size - pad, col, 2, nil, 1.4)
+        r.ImGui_DrawList_AddCircleFilled(dl, x + size * 0.70, y + size * 0.34, size * 0.08, col)
+        r.ImGui_DrawList_AddTriangle(dl,
+            x + pad + 1,           y + size - pad - 1,
+            x + size * 0.50,       y + size * 0.46,
+            x + size - pad - 1,    y + size - pad - 1, col, 1.5)
+    end
+end
 
 local tree_cache = {
     cache = {}  
@@ -1422,9 +1514,9 @@ local function refresh_file_cache(location)
     local updated_files = incremental_update_cache(location)
     
     if updated_files then
-        search_filter.cached_flat_files = updated_files
+        search_filter.cached_flat_files = filter_visible_files(updated_files)
         search_filter.cached_location = location
-        search_filter.filtered_files = updated_files
+        search_filter.filtered_files = search_filter.cached_flat_files
     else
         os.remove(cache_file)
         search_filter.cached_location = ""
@@ -2135,11 +2227,29 @@ local function save_options()
             auto_selected_category = ui.auto_selected_category,
             auto_source_location = ui.auto_source_location,
             auto_source_index = ui.auto_source_index,
-            waveform_preview_height = ui.waveform_preview_height
+            waveform_preview_height = ui.waveform_preview_height,
+            filter_audio = ui_settings.filter_audio,
+            filter_midi = ui_settings.filter_midi,
+            filter_video = ui_settings.filter_video,
+            filter_image = ui_settings.filter_image
         }
         file:write(serialize(options))
         file:close()
     end
+end
+
+function apply_filter_change()
+    search_filter.cached_flat_files = {}
+    search_filter.cached_location = ""
+    search_filter.filtered_files = {}
+    tree_cache.cache = {}
+    category_cache = {}
+    cached_cat_counts = {}
+    cached_cat_counts_loc = ""
+    cached_cat_filter = {}
+    cached_cat_filter_key = ""
+    clear_sort_cache()
+    save_options()
 end
 
 -- Preset management functions
@@ -2178,7 +2288,11 @@ local function get_settings_table()
         visible_columns = ui_settings.visible_columns,
         show_spectral_view = waveform.show_spectral_view,
         pitch_detection_enabled = ui.pitch_detection_enabled,
-        waveform_preview_height = ui.waveform_preview_height
+        waveform_preview_height = ui.waveform_preview_height,
+        filter_audio = ui_settings.filter_audio,
+        filter_midi = ui_settings.filter_midi,
+        filter_video = ui_settings.filter_video,
+        filter_image = ui_settings.filter_image
     }
 end
 
@@ -2219,6 +2333,10 @@ local function apply_settings_from_table(settings)
     ui_settings.visible_columns = settings.visible_columns or {name = true, size = true, date = true, duration = true, samplerate = true, bitdepth = true, channels = true}
     ui.pitch_detection_enabled = settings.pitch_detection_enabled ~= nil and settings.pitch_detection_enabled or true
     ui.waveform_preview_height = settings.waveform_preview_height or 92
+    if settings.filter_audio ~= nil then ui_settings.filter_audio = settings.filter_audio end
+    if settings.filter_midi  ~= nil then ui_settings.filter_midi  = settings.filter_midi  end
+    if settings.filter_video ~= nil then ui_settings.filter_video = settings.filter_video end
+    if settings.filter_image ~= nil then ui_settings.filter_image = settings.filter_image end
     
     font_objects = {}
     update_fonts()
@@ -2310,6 +2428,10 @@ local function load_options()
             ui.waveform_grid_overlay = options.waveform_grid_overlay or false
             ui.waveform_preview_height = options.waveform_preview_height or 92
             waveform.show_spectral_view = options.show_spectral_view or false
+            if options.filter_audio ~= nil then ui_settings.filter_audio = options.filter_audio end
+            if options.filter_midi  ~= nil then ui_settings.filter_midi  = options.filter_midi  end
+            if options.filter_video ~= nil then ui_settings.filter_video = options.filter_video end
+            if options.filter_image ~= nil then ui_settings.filter_image = options.filter_image end
             if options.current_view_mode ~= "collections" and options.current_view_mode ~= "auto" then
                 file_location.flat_view = options.flat_view ~= nil and options.flat_view or false
             end
@@ -2789,18 +2911,20 @@ local function build_visible_files_list(items, path, result)
     result = result or {}
     for _, item in ipairs(items) do
         if not item.is_dir then
-            local full_path
-            if path:sub(-1) == sep then
-                full_path = path .. item.name
-            else
-                full_path = path .. sep .. item.name
+            if is_file_visible(item.name) then
+                local full_path
+                if path:sub(-1) == sep then
+                    full_path = path .. item.name
+                else
+                    full_path = path .. sep .. item.name
+                end
+                table.insert(result, {
+                    name = item.name,
+                    path = full_path,
+                    full_path = full_path,
+                    parent_folder = path:match("([^/\\]+)$") or ""
+                })
             end
-            table.insert(result, {
-                name = item.name,
-                path = full_path,
-                full_path = full_path,
-                parent_folder = path:match("([^/\\]+)$") or ""
-            })
         else
             if item.items then
                 build_visible_files_list(item.items, path .. sep .. item.name, result)
@@ -2946,13 +3070,13 @@ local function get_flat_file_list(location)
         clear_sort_cache()  
         local fast_files = load_fast_cache(location)
         if fast_files then
-            search_filter.cached_flat_files = fast_files
+            search_filter.cached_flat_files = filter_visible_files(fast_files)
             search_filter.cached_location = location
             search_filter.filtered_files = search_filter.cached_flat_files
         else
             local files, timestamps, cache_time, metadata = load_file_cache(location)
             if files then
-                search_filter.cached_flat_files = files
+                search_filter.cached_flat_files = filter_visible_files(files)
                 search_filter.cached_location = location
                 search_filter.filtered_files = search_filter.cached_flat_files
                 if not cache_mgmt.loading_files then
@@ -4754,9 +4878,11 @@ local function draw_file_list()
                                 return true
                             end
                         else
-                            local name_lower = item.name_lower or string.lower(item.name)
-                            if string.find(name_lower, search_lower, 1, true) then
-                                return true
+                            if is_file_visible(item.name) then
+                                local name_lower = item.name_lower or string.lower(item.name)
+                                if string.find(name_lower, search_lower, 1, true) then
+                                    return true
+                                end
                             end
                         end
                     end
@@ -4819,8 +4945,8 @@ local function draw_file_list()
                                 end
                             end
                         else
-                            local show_file = true
-                            if search_lower ~= "" then
+                            local show_file = is_file_visible(item.name)
+                            if show_file and search_lower ~= "" then
                                 local name_lower = string.lower(item.name)
                                 show_file = string.find(name_lower, search_lower) ~= nil
                             end
@@ -9059,6 +9185,40 @@ local function loop()
                 
                 r.ImGui_PopStyleVar(ctx, 1)
                 r.ImGui_PopStyleColor(ctx, 3)
+
+                do
+                    local icon_size = 16
+                    local gap = 4
+                    r.ImGui_SameLine(ctx, 0, 12)
+
+                    local dl = r.ImGui_GetWindowDrawList(ctx)
+                    local accent_color = hsv_to_color(ui_settings.accent_hue, 0.9, 1.0)
+                    local dim_color = r.ImGui_ColorConvertDouble4ToU32(0.45, 0.45, 0.45, 1.0)
+                    local hover_color = hsv_to_color(ui_settings.accent_hue, 0.6, 1.0)
+
+                    local filters_seq = {
+                        {key = "filter_audio", kind = "audio", tip = "Toggle Audio files (wav, mp3, aif, aiff, flac, ogg, wma, m4a)"},
+                        {key = "filter_midi",  kind = "midi",  tip = "Toggle MIDI files (mid, midi)"},
+                        {key = "filter_video", kind = "video", tip = "Toggle Video files (mp4, mov, avi, wmv, mkv)"},
+                        {key = "filter_image", kind = "image", tip = "Toggle Image files (jpg, jpeg, png, gif, bmp)"}
+                    }
+
+                    for i, f in ipairs(filters_seq) do
+                        if i > 1 then r.ImGui_SameLine(ctx, 0, gap) end
+                        local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+                        if r.ImGui_InvisibleButton(ctx, "##tk_ftype_" .. f.kind, icon_size, icon_size) then
+                            ui_settings[f.key] = not ui_settings[f.key]
+                            apply_filter_change()
+                        end
+                        local hovered = r.ImGui_IsItemHovered(ctx)
+                        if hovered then
+                            r.ImGui_SetTooltip(ctx, f.tip)
+                        end
+                        local active = ui_settings[f.key]
+                        local col = active and (hovered and hover_color or accent_color) or dim_color
+                        tk_draw_filter_icon(dl, f.kind, cx, cy, icon_size, col)
+                    end
+                end
             end
         end
         
@@ -9343,6 +9503,49 @@ local function loop()
                         r.ImGui_SetTooltip(ctx, "Show real-time pitch detection during audio playback in the waveform view.\nDisplays the detected musical note and frequency.")
                     end
                     
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
+                    r.ImGui_SeparatorText(ctx, "File Type Filters")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+
+                    local f_audio_changed, f_audio_new = r.ImGui_Checkbox(ctx, "Audio##ftype", ui_settings.filter_audio)
+                    if f_audio_changed then
+                        ui_settings.filter_audio = f_audio_new
+                        apply_filter_change()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Show audio files: wav, mp3, aif, aiff, flac, ogg, wma, m4a")
+                    end
+                    r.ImGui_SameLine(ctx)
+                    local f_midi_changed, f_midi_new = r.ImGui_Checkbox(ctx, "MIDI##ftype", ui_settings.filter_midi)
+                    if f_midi_changed then
+                        ui_settings.filter_midi = f_midi_new
+                        apply_filter_change()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Show MIDI files: mid, midi")
+                    end
+                    r.ImGui_SameLine(ctx)
+                    local f_video_changed, f_video_new = r.ImGui_Checkbox(ctx, "Video##ftype", ui_settings.filter_video)
+                    if f_video_changed then
+                        ui_settings.filter_video = f_video_new
+                        apply_filter_change()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Show video files: mp4, mov, avi, wmv, mkv")
+                    end
+                    r.ImGui_SameLine(ctx)
+                    local f_image_changed, f_image_new = r.ImGui_Checkbox(ctx, "Images##ftype", ui_settings.filter_image)
+                    if f_image_changed then
+                        ui_settings.filter_image = f_image_new
+                        apply_filter_change()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Show image files: jpg, jpeg, png, gif, bmp")
+                    end
+
                     r.ImGui_Spacing(ctx)
                     r.ImGui_Spacing(ctx)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)

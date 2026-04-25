@@ -311,24 +311,25 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.7.1" author="TouristKiller" time="2026-04-21T14:00:00Z">
+        <version name="0.7.3" author="TouristKiller" time="2026-04-25T13:40:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
-+ v0.6.9:
-+ Made Docking more stable and fixed various edge cases with it
+v0.7.3:
++ Quick-toggle filter icons placed right after the Start button (audio waveform, MIDI note, video, image)
++ Fixed: filter icons could be pushed off-screen by right-aligned positioning
 
-+ v0.7.0:
-+ Auto Progress: Sequential playback from selected item downward
-+ Auto Progress disables loop mode when enabled
-+ Filename bar above oscilloscope showing current/selected file
-+ Resizable waveform preview with draggable divider (40-300px range)
-+ Drag & drop insert position preview: edit cursor follows mouse position snapped to grid
-+ Drag & drop: cursor restores to original position when drop is cancelled
-+ Fixed scrollbar visibility with oscilloscope shown and hidden states
-+ Settings, presets and save/load updated for auto_progress and waveform_preview_height
+v0.7.2:
++ File Type Filters: globally show/hide Audio, MIDI, Video and Image files via Settings popup
++ Quick-toggle filter icons (audio waveform, MIDI note, video, image) in the top-right of the file list
++ Filters apply instantly without rescanning the cache
++ Filter state is saved in options and presets
+
+v0.7.1:
++ Minor bug fixes and performance improvements
+
      ]]></changelog>
         </version>
     </reapack>
