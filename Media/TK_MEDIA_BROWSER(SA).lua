@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.7.3
+-- @version 0.7.4
 -- @changelog:
 --[[       
 v0.7.3:
@@ -6649,7 +6649,7 @@ local function loop()
     ))
     
     local visible, open = r.ImGui_Begin(ctx, 'TK Media Browser', true,
-    r.ImGui_WindowFlags_NoTitleBar())
+    r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
     
     if visible then
         ui.was_docked = r.ImGui_IsWindowDocked(ctx)
@@ -9569,7 +9569,6 @@ local function loop()
                     
                     ch1, val1 = r.ImGui_Checkbox(ctx, "Size##col", ui_settings.visible_columns.size)
                     if ch1 then ui_settings.visible_columns.size = val1; save_options() end
-                    r.ImGui_SameLine(ctx, 440)
                     
                     ch1, val1 = r.ImGui_Checkbox(ctx, "Duration##col", ui_settings.visible_columns.duration)
                     if ch1 then ui_settings.visible_columns.duration = val1; save_options() end
