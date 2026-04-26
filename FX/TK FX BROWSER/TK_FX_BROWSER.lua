@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.7.3
+-- @version 2.7.4
 -- @changelog:
 --[[ 
     v2.7.3:
@@ -16585,6 +16585,7 @@ function DrawVinylLayout(screenshots, top_offset)
             end
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            DrawRatingOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             if fx.shortcut then DrawShortcutBadgeOverlay(dl, sx_cell, sy_cell, fx.shortcut, plugin_name) end
 
             r.ImGui_PushID(ctx, i)
@@ -19409,6 +19410,7 @@ function ShowScreenshotWindow()
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                                DrawRatingOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 RenderScreenshotShortcut(plugin_name, tlx, tly)
                                             end
                                             if config.enable_drag_add_fx then
@@ -19625,6 +19627,7 @@ function ShowScreenshotWindow()
                                                 local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                 DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                                DrawRatingOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 RenderScreenshotShortcut(plugin_name, tlx, tly)
                                             end
                                             if config.enable_drag_add_fx then
@@ -20169,6 +20172,7 @@ function ShowScreenshotWindow()
                                                     local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                                     DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                     DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                                    DrawRatingOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 end
                                                 if config.enable_drag_add_fx then
                                                     if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -20405,6 +20409,7 @@ function ShowScreenshotWindow()
                                             local brx, bry = r.ImGui_GetItemRectMax(ctx)
                                             DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                             DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                            DrawRatingOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                         end
                                         
                                         if not is_fx_chain_item then

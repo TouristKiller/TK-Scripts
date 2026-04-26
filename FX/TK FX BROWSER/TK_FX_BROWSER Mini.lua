@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.6.3
+-- @version 0.6.4
 -- @changelog:
 --[[ 
     v0.6.3:
@@ -12265,6 +12265,7 @@ function ShowBrowserPanel()
     local content_open = r.ImGui_BeginChild(ctx, "BrowserContent", -1, content_h)
     if content_open then
         -- SEGMENT 1: FAVORITES + PROJECT FX
+        if config.browser_segment_favorites_enabled then
         if DrawCollapseHeader("FAVORITES", config.browser_segment_favorites_visible, "Show Favorites & Project FX", "Hide Favorites & Project FX") then
             config.browser_segment_favorites_visible = not config.browser_segment_favorites_visible
             SaveConfig()
@@ -12379,8 +12380,10 @@ function ShowBrowserPanel()
             r.ImGui_PopStyleColor(ctx, 3)
             r.ImGui_PopStyleVar(ctx)
         end
+        end
 
         if config.show_custom_folders then
+            if config.browser_segment_custom_folders_enabled then
             if DrawCollapseHeader("CUSTOM", config.browser_segment_custom_folders_visible, "Show Custom Folders", "Hide Custom Folders") then
                 config.browser_segment_custom_folders_visible = not config.browser_segment_custom_folders_visible
                 SaveConfig()
@@ -12403,9 +12406,11 @@ function ShowBrowserPanel()
                     r.ImGui_SetTooltip(ctx, "Create a new custom folder")
                 end
             end
+            end
         end
 
         -- SEGMENT 3: Categories / Folders / Chains / Templates
+        if config.browser_segment_main_categories_enabled then
         if DrawCollapseHeader("CATEGORIES", config.browser_segment_main_categories_visible, "Show Plugin Categories", "Hide Plugin Categories") then
             config.browser_segment_main_categories_visible = not config.browser_segment_main_categories_visible
             SaveConfig()
@@ -12791,8 +12796,10 @@ function ShowBrowserPanel()
             end
         end
         end
+        end
 
         -- SEGMENT 4: Utilities (Container, Video Processor, Projects, Media, Scripts, Recent)
+        if config.browser_segment_utilities_enabled then
         if DrawCollapseHeader("UTILITIES", config.browser_segment_utilities_visible, "Show Utilities", "Hide Utilities") then
             config.browser_segment_utilities_visible = not config.browser_segment_utilities_visible
             SaveConfig()
@@ -12995,6 +13002,7 @@ function ShowBrowserPanel()
                 AddFXToTrack(TRACK, LAST_USED_FX)
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
             end
+        end
         end
         end
 
