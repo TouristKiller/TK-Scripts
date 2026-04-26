@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.7.2" author="TouristKiller" time="2026-04-25T17:16:15Z">
+    <version name="2.7.3" author="TouristKiller" time="2026-04-26T15:30:15Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -46,56 +46,24 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[    
- v2.7.2:
-    + Updated changelog format
- v2.7.1:
-    + Settings window: "Cancel" button renamed to "Close" (X in titlebar now also closes the Settings window)
- v2.6.2
-    + Fixed screenshot window not receiving keyboard focus after Toggle Visibility and Toggle Screenshot Window external scripts
-    + Fixed main search stealing focus from screenshot searchbox on window appear
-    + Replaced ImGui SetNextWindowFocus with OS-level JS_Window_SetForeground to avoid native nav-border artifacts
-    + Added 3-frame focus sequencing (appear → OS focus → keyboard focus) for reliable input after toggle
-    + Added Uniform layout: equal-sized cells with black background, grey border, 8px inset, left-aligned columns
-    + Fixed name-below-screenshot not showing (hidden_names table was always truthy)
-    + Fixed missing plugins not appearing in Uniform/Masonry views
-    + Added Linux support for Open Screenshots Folder (xdg-open)             
- v2.6.1:
-    + Added click-on-empty-area behavior in screenshot window to clear current selection
-    + Added "Remove All from Custom Folder" to multi-select right-click menu
-    + Added drag & drop plugin assignment to custom folders and native folders from screenshot and list views
-    + Added multi-select drag support for folder drops (drops all selected plugins when dragging one selected item)
-    + Added visual folder drop highlighting while dragging plugins over folder entries
-    + Added full list view interaction parity with screenshot view (multi-select, keyboard nav, context actions)
-    + Added shared list renderer across favorites/custom/folder/search list views for consistent behavior
-    + Added list-mode support for multi-select context workflows (Track FX, Item FX, Chain Builder related actions)
-    + Added external toggle support for Screenshot Window via ExtState (for global shortcut)
-    + Fixed texture load queue overflow cleanup stripping plugin data for folders with >500 plugins
-    + Fixed keep_set cap too small for large native folders causing textures to be pruned every frame
-    + Fixed lazy loading deadlock when all loaded items fit in window without scrollbar (scroll trigger never fired)
-    + Added lazy loading to native folder screenshot grid view (loads in batches instead of all at once)
-    + Added drag & drop reorder for native folders in browser panel (writes order to reaper-fxfolders.ini)
-    + Added "Sort Folders A-Z" option in native folder right-click context menu
-    + Folder display order now respects reaper-fxfolders.ini index order (pinned folders remain on top)
-    + Added native REAPER FX folder management (create, rename, delete) via reaper-fxfolders.ini
-    + Added smart folder support with query-based auto-matching (and/or/not, "exact match")
-    + Added smart folder create/edit popup with live preview of matching plugins
-    + Added "Add to Native Folder" and "Remove from Native Folder" in plugin right-click menu
-    + Added "Add All to Native Folder" and "Remove All from Native Folder" in multi-select menu
-    + Added Create/Edit/Delete Smart Folder options in plugin right-click and multi-select menus
-    + Added right-click context menu on native folders in browser panel (rename, edit smart, delete, create)
-    + Added right-click context menu on native folders in folder dropdown (rename, edit smart, delete, create)
-    + Added INI parse caching for native folders to prevent slow context menu performance
-    + Fixed ImGui_Attach maximum object limit error by using ImGui_Detach when removing textures from cache
-    + Added max limit (50) and eviction to list_hover_texture_cache
-    + Added cleanup for info_fx_texture_cache and list_hover_texture_cache in ClearScreenshotCache
-    + Fixed LoadProjectCover not detaching old cover texture before loading new one
-    + Fixed texture assertion crash (tex->TexID < m_textures.size) by attaching textures to context
-    + Added SafeImage wrapper for all texture rendering calls
-    + Added drag & drop support in list mode (parity with screenshot mode)
-    + Fixed ImGui nav focus stealing from search results popup
-    + Removed unwanted blue nav highlight borders from screenshot window
-    + Browser panel search box now supports keyboard navigation to screenshots when screenshot search is hidden
-    + Fixed Type Priority deduplication incorrectly merging channel variants (Mono/Stereo/2ch/4ch) into one entry
+    v2.7.3/0.6.3:
+        + Screenshot Shortcuts: badge changes color based on window focus (green = active, dim grey = window/search not focused) so it's visually clear when keypresses will be handled by the browser
+        + Screenshot Shortcuts: type 1-9 / 0 / Q-M to instantly add the visible plugin from custom folders / Favorites / Recent (Settings > Enable Screenshot Shortcuts, off by default)
+        + Custom folder tabs: virtual "All" tab to clear the folder filter (Settings > Show 'All' Tab)
+        + Custom folder tabs: virtual "Favorites" tab showing all favorite plugins (Settings > Show 'Favorites' Tab)
+        + Custom folder tabs: virtual "Recent" tab showing recently added plugins, kept in insertion order with most recent first (Settings > Show 'Recent' Tab, capacity recent_max)
+        + Recent: persisted to recent_plugins.txt; populated automatically when a plugin is inserted via AddFXToTrack
+        + Custom folder tabs: virtual tabs (All/Favorites/Recent) now scroll along inside the overflow scroll child, so a narrow window keeps room for the regular folder tabs
+        + Custom folder tabs: optional breadcrumb row for nested folders (Top > Sub > SubSub) with clickable segments instead of multiple stacked rows (Settings > Breadcrumb Nested Tabs)
+        + Search: multi-token AND-match (e.g. "oz dyn" finds "Ozone Dynamics", "pro q" finds "FabFilter Pro-Q"); token order does not matter
+        + Custom folder tabs: optional tab row above screenshots with subfolder support and per-level colors (Settings > Custom Folders Appearance)
+        + Custom folder tabs: "+" button at the start of the tab row to add a new top-level folder
+        + Custom folder tabs: drop plugins directly onto a tab to add them to that folder
+        + Custom folder tabs: right-click context menu (same as in browser panel) for Add/Rename/Move/Delete/Pin/Capture
+        + Custom folder tabs: optional plugin count badge per tab (Settings > Show Plugin Count on Tabs)
+        + Custom folder tabs: optional horizontal scroll mode with arrow buttons instead of wrapping (Settings > Tabs Overflow Scroll)
+        + Screenshot capture: fixed black strip at the bottom of plugin screenshots (height now also subtracts srcy offset)
+        + Folder context menu: now follows the main Text Color setting instead of inheriting the colored tab/tree color
 ]]></changelog>
     </version>
     </reapack>

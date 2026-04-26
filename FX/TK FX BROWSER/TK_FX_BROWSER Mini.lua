@@ -1,8 +1,27 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.6.2
+-- @version 0.6.3
 -- @changelog:
 --[[ 
+    v0.6.3:
+        + Screenshot Shortcuts: badge changes color based on window focus (green = active, dim grey = window/search not focused) so it's visually clear when keypresses will be handled by the browser
+        + Screenshot Shortcuts: type 1-9 / 0 / Q-M to instantly add the visible plugin from custom folders / Favorites / Recent (Settings > Enable Screenshot Shortcuts, off by default)
+        + Custom folder tabs: virtual "All" tab to clear the folder filter (Settings > Show 'All' Tab)
+        + Custom folder tabs: virtual "Favorites" tab showing all favorite plugins (Settings > Show 'Favorites' Tab)
+        + Custom folder tabs: virtual "Recent" tab showing recently added plugins, kept in insertion order with most recent first (Settings > Show 'Recent' Tab, capacity recent_max)
+        + Recent: persisted to recent_plugins.txt; populated automatically when a plugin is inserted via AddFXToTrack
+        + Custom folder tabs: virtual tabs (All/Favorites/Recent) now scroll along inside the overflow scroll child, so a narrow window keeps room for the regular folder tabs
+        + Custom folder tabs: optional breadcrumb row for nested folders (Top > Sub > SubSub) with clickable segments instead of multiple stacked rows (Settings > Breadcrumb Nested Tabs)
+        + Search: multi-token AND-match (e.g. "oz dyn" finds "Ozone Dynamics", "pro q" finds "FabFilter Pro-Q"); token order does not matter
+        + Custom folder tabs: optional tab row above screenshots with subfolder support and per-level colors (Settings > Custom Folders Appearance)
+        + Custom folder tabs: "+" button at the start of the tab row to add a new top-level folder
+        + Custom folder tabs: drop plugins directly onto a tab to add them to that folder
+        + Custom folder tabs: right-click context menu (same as in browser panel) for Add/Rename/Move/Delete/Pin/Capture
+        + Custom folder tabs: optional plugin count badge per tab (Settings > Show Plugin Count on Tabs)
+        + Custom folder tabs: optional horizontal scroll mode with arrow buttons instead of wrapping (Settings > Tabs Overflow Scroll)
+        + Screenshot capture: fixed black strip at the bottom of plugin screenshots (height now also subtracts srcy offset)
+        + Folder context menu: now follows the main Text Color setting instead of inheriting the colored tab/tree color
+
     v0.6.2:
         + Fixed Max's screenshot window reopening when clicking a folder in Mini (SaveConfig no longer writes Mini's forced show_screenshot_window/hide_main_window into the shared config.json)
 
@@ -150,7 +169,19 @@ function FuzzyFind(haystack, needle)
     local n_l = needle:lower()
     local h_l = haystack:lower()
     if h_l:find(n_l, 1, true) then return true end
-    if n_l:find("[%-_%.%s]") then
+    if n_l:find("%s") then
+        local h_norm = FuzzyNormalize(haystack)
+        for tok in n_l:gmatch("%S+") do
+            local t = tok:gsub("[%-_%.]+", "")
+            if t ~= "" then
+                if not h_l:find(tok, 1, true) and not h_norm:find(t, 1, true) then
+                    return false
+                end
+            end
+        end
+        return true
+    end
+    if n_l:find("[%-_%.]") then
         local hs = FuzzyNormalize(haystack)
         local ns = n_l:gsub("[%-_%.%s]+", "")
         if ns ~= "" and hs:find(ns, 1, true) then return true end
@@ -1175,6 +1206,16 @@ function SetDefaultConfig()
         pinned_subgroups = {},
         pinned_custom_subfolders = {},
         show_custom_folders = true,
+        show_custom_folder_tabs = false,
+        custom_folder_tabs_show_nested = true,
+        show_tab_plugin_count = true,
+        custom_folder_tabs_overflow_scroll = false,
+        show_tab_all = true,
+        show_tab_favorites = false,
+        show_tab_recent = false,
+        recent_max = 30,
+        custom_folder_tabs_breadcrumb = false,
+        show_screenshot_shortcuts = false,
         hide_custom_dropdown = false,
         show_screenshot_search = true,
         show_browser_search = true, 
@@ -1916,6 +1957,123 @@ function MoveFolderTo(source_path, target_path)
     return true
 end
 
+function IsCustomPinned(full_path)
+    if not config.pinned_custom_subfolders then return false end
+    for _, p in ipairs(config.pinned_custom_subfolders) do if p == full_path then return true end end
+    return false
+end
+
+function PinCustom(full_path)
+    config.pinned_custom_subfolders = config.pinned_custom_subfolders or {}
+    if not IsCustomPinned(full_path) then
+        table.insert(config.pinned_custom_subfolders, full_path)
+        SavePinned()
+    end
+end
+
+function UnpinCustom(full_path)
+    if not config.pinned_custom_subfolders then return end
+    for i = #config.pinned_custom_subfolders, 1, -1 do
+        if config.pinned_custom_subfolders[i] == full_path then
+            table.remove(config.pinned_custom_subfolders, i)
+            SavePinned()
+            break
+        end
+    end
+end
+
+function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
+    local menu_text_color = config.text_color or r.ImGui_ColorConvertDouble4ToU32((config.text_gray or 200)/255, (config.text_gray or 200)/255, (config.text_gray or 200)/255, 1)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), menu_text_color)
+    if r.ImGui_MenuItem(ctx, "Add Subfolder") then
+        show_add_subfolder_popup = true
+        selected_folder_for_subfolder = full_path
+        selected_folder_name = folder_name
+        new_subfolder_name = ""
+    end
+    if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
+        show_create_parent_folder_popup = true
+        selected_folder_for_parent = full_path
+        selected_folder_name = folder_name
+    end
+    local toggle_label = (view_mode == "screenshots" and "Show List" or "Show Screenshots")
+    if r.ImGui_MenuItem(ctx, toggle_label) then
+        local prev = view_mode
+        view_mode = (view_mode == "screenshots" and "list" or "screenshots")
+        config.view_mode = view_mode
+        SaveConfig()
+        if view_mode == "screenshots" and prev ~= "screenshots" then ClearScreenshotCache() end
+    end
+    local is_pinned = IsCustomPinned(full_path)
+    if is_pinned then
+        if r.ImGui_MenuItem(ctx, "Unpin Folder") then UnpinCustom(full_path) end
+    else
+        if r.ImGui_MenuItem(ctx, "Pin Folder") then PinCustom(full_path) end
+    end
+    if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
+        StartFolderScreenshots(full_path)
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Rename Folder") then
+        show_rename_folder_popup = true
+        folder_to_rename = folder_name
+        folder_to_rename_path = path_prefix
+        new_folder_name_for_rename = folder_name
+    end
+    if r.ImGui_BeginMenu(ctx, "Move to Folder...") then
+        if r.ImGui_MenuItem(ctx, "[Root Level]") then
+            if MoveFolderTo(full_path, "") then
+                if selected_folder == full_path then
+                    selected_folder = folder_name
+                end
+            end
+        end
+        r.ImGui_Separator(ctx)
+        local available_targets = CollectAllFolderPaths(config.custom_folders, "", full_path, {})
+        for _, target_path in ipairs(available_targets) do
+            if r.ImGui_MenuItem(ctx, target_path) then
+                if MoveFolderTo(full_path, target_path) then
+                    if selected_folder == full_path then
+                        selected_folder = target_path .. "/" .. folder_name
+                    end
+                end
+            end
+        end
+        if #available_targets == 0 then
+            r.ImGui_TextDisabled(ctx, "No other folders available")
+        end
+        r.ImGui_EndMenu(ctx)
+    end
+    if r.ImGui_MenuItem(ctx, "Delete Folder") then
+        local result = r.MB("Are you sure you want to delete '" .. folder_name .. "' and all its plugins?", "Confirm Delete", 4)
+        if result == 6 then
+            if path_prefix == "" then
+                config.custom_folders[folder_name] = nil
+            else
+                local target = config.custom_folders
+                local path_parts = {}
+                for part in path_prefix:gmatch("[^/]+") do
+                    table.insert(path_parts, part)
+                end
+                for i = 1, #path_parts do
+                    target = target[path_parts[i]]
+                    if not target then break end
+                end
+                if target then
+                    target[folder_name] = nil
+                end
+            end
+            SaveCustomFolders()
+            if selected_folder == full_path then
+                selected_folder = nil
+                screenshot_search_results = {}
+            end
+            r.ShowMessageBox("Folder '" .. folder_name .. "' deleted", "Success", 0)
+        end
+    end
+    r.ImGui_PopStyleColor(ctx)
+end
+
 function CleanPluginName(name)
     if not name or name == '' then return name end
     
@@ -2069,6 +2227,7 @@ function AddFXToTrack(track, plugin_name, preserve_order)
     end
     
     if fx_index and fx_index >= 0 and not START and not START_SELECTED and not IS_CAPTURING_SCREENSHOT then
+        if AddToRecent then AddToRecent(plugin_name) end
         if selected_folder == "Current Track FX" or selected_folder == "Current Project FX" then
             if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
         end
@@ -3555,6 +3714,139 @@ function LoadFavorites()
 end
 LoadFavorites()
 
+recent_plugins = recent_plugins or {}
+function SaveRecent()
+    local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
+    local file = io.open(script_path .. "recent_plugins.txt", "w")
+    if file then
+        for _, name in ipairs(recent_plugins) do
+            file:write(name .. "\n")
+        end
+        file:close()
+    end
+end
+function LoadRecent()
+    local script_path = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
+    local file = io.open(script_path .. "recent_plugins.txt", "r")
+    if file then
+        for line in file:lines() do
+            if line and line ~= "" then
+                table.insert(recent_plugins, line)
+            end
+        end
+        file:close()
+    end
+end
+LoadRecent()
+function AddToRecent(plugin_name)
+    if not plugin_name or plugin_name == "" then return end
+    for i = #recent_plugins, 1, -1 do
+        if recent_plugins[i] == plugin_name then
+            table.remove(recent_plugins, i)
+        end
+    end
+    table.insert(recent_plugins, 1, plugin_name)
+    local cap = (config and config.recent_max) or 30
+    while #recent_plugins > cap do
+        table.remove(recent_plugins)
+    end
+    SaveRecent()
+end
+
+SCREENSHOT_SHORTCUT_KEYS = {"1","2","3","4","5","6","7","8","9","0",
+    "Q","W","E","R","T","Y","U","I","O","P",
+    "A","S","D","F","G","H","J","K","L",
+    "Z","X","C","V","B","N","M"}
+SCREENSHOT_SHORTCUT_KEY_ENUMS = nil
+local function BuildShortcutKeyEnums()
+    if SCREENSHOT_SHORTCUT_KEY_ENUMS then return SCREENSHOT_SHORTCUT_KEY_ENUMS end
+    local m = {}
+    m["0"] = r.ImGui_Key_0()
+    m["1"] = r.ImGui_Key_1()
+    m["2"] = r.ImGui_Key_2()
+    m["3"] = r.ImGui_Key_3()
+    m["4"] = r.ImGui_Key_4()
+    m["5"] = r.ImGui_Key_5()
+    m["6"] = r.ImGui_Key_6()
+    m["7"] = r.ImGui_Key_7()
+    m["8"] = r.ImGui_Key_8()
+    m["9"] = r.ImGui_Key_9()
+    for c = string.byte("A"), string.byte("Z") do
+        local ch = string.char(c)
+        local fname = "ImGui_Key_" .. ch
+        if r[fname] then m[ch] = r[fname]() end
+    end
+    SCREENSHOT_SHORTCUT_KEY_ENUMS = m
+    return m
+end
+screenshot_shortcut_map = screenshot_shortcut_map or {}
+function ResetShortcutMap()
+    for k in pairs(screenshot_shortcut_map) do screenshot_shortcut_map[k] = nil end
+end
+function GetShortcutLabel(idx)
+    if not idx or idx < 1 then return nil end
+    return SCREENSHOT_SHORTCUT_KEYS[idx]
+end
+function RegisterShortcut(idx, plugin_name)
+    local label = GetShortcutLabel(idx)
+    if not label or not plugin_name or plugin_name == "" then return nil end
+    screenshot_shortcut_map[label] = plugin_name
+    return label
+end
+function IsShortcutContextEligible()
+    if not config or not config.show_screenshot_shortcuts then return false end
+    if browser_panel_selected ~= nil then return false end
+    local sf = selected_folder
+    if sf == "Current Track FX" or sf == "Current Project FX" then return false end
+    if type(browser_search_term) == "string" and browser_search_term ~= "" then return false end
+    return true
+end
+
+screenshot_shortcut_frame_idx = 0
+function RenderScreenshotShortcut(plugin_name, tlx, tly)
+    if not IsShortcutContextEligible() then return nil end
+    screenshot_shortcut_frame_idx = screenshot_shortcut_frame_idx + 1
+    local label = RegisterShortcut(screenshot_shortcut_frame_idx, plugin_name)
+    if label and tlx and tly then
+        DrawShortcutBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, label, plugin_name)
+    end
+    return label
+end
+function NextScreenshotShortcutLabel(plugin_name)
+    if not IsShortcutContextEligible() then return nil end
+    screenshot_shortcut_frame_idx = screenshot_shortcut_frame_idx + 1
+    return RegisterShortcut(screenshot_shortcut_frame_idx, plugin_name)
+end
+
+function HandleScreenshotShortcutInput()
+    if not config or not config.show_screenshot_shortcuts then return end
+    if not screenshot_shortcuts_window_focused then return end
+    if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then return end
+    if r.ImGui_IsAnyItemActive(ctx) then return end
+    if r.ImGui_GetKeyMods(ctx) ~= 0 then return end
+    if not screenshot_shortcut_map then return end
+    local enums = BuildShortcutKeyEnums()
+    if not enums then return end
+    for _, key in ipairs(SCREENSHOT_SHORTCUT_KEYS) do
+        local plugin_name = screenshot_shortcut_map[key]
+        if plugin_name and plugin_name ~= "" then
+            local enum = enums[key]
+            if enum and r.ImGui_IsKeyPressed(ctx, enum, false) then
+                local target_track = GetTargetTrack and GetTargetTrack() or TRACK
+                if target_track then
+                    local fx_index = AddFXToTrack(target_track, plugin_name)
+                    LAST_USED_FX = plugin_name
+                    if config.open_floating_after_adding and fx_index and fx_index >= 0 then
+                        r.TrackFX_Show(target_track, fx_index, 3)
+                    end
+                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                end
+                return
+            end
+        end
+    end
+end
+
 function SaveTags()
     local tags_data = {
         tracks = track_tags,
@@ -4022,6 +4314,9 @@ function GetPluginsForFolder(folder_name)
     if folder_name == "Favorites" then
         return DedupeByTypePriority(favorite_plugins or {})
     end
+    if folder_name == "Recent" then
+        return DedupeByTypePriority(recent_plugins or {})
+    end
     if folder_name == "Current Track FX" then
         local list = {}
         local track_fx = GetCurrentTrackFX() or {}
@@ -4467,6 +4762,54 @@ function ShowConfigWindow()
             local changed5, new_col5 = r.ImGui_ColorEdit4(ctx, "##L5Col", col5, flags)
             if changed5 then config.custom_folder_level_colors[5] = new_col5; SaveConfig() end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 5+ Folder Color") end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local cft_changed, cft_new = r.ImGui_Checkbox(ctx, "Show as Tabs above Screenshots", config.show_custom_folder_tabs)
+            if cft_changed then config.show_custom_folder_tabs = cft_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show top-level custom folders as clickable tabs above the screenshot area") end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            local cftn_changed, cftn_new = r.ImGui_Checkbox(ctx, "Tabs Show Subfolders", config.custom_folder_tabs_show_nested)
+            if cftn_changed then config.custom_folder_tabs_show_nested = cftn_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "When a top-level folder is selected, show its subfolders as a second row of tabs") end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local cfbc_changed, cfbc_new = r.ImGui_Checkbox(ctx, "Breadcrumb Nested Tabs", config.custom_folder_tabs_breadcrumb)
+            if cfbc_changed then config.custom_folder_tabs_breadcrumb = cfbc_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show nested folder hierarchy as a single breadcrumb row (Top > Sub > SubSub) instead of multiple rows") end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local tpc_changed, tpc_new = r.ImGui_Checkbox(ctx, "Show Plugin Count on Tabs", config.show_tab_plugin_count)
+            if tpc_changed then config.show_tab_plugin_count = tpc_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show the number of plugins inside each folder as a badge on the tab") end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            local cfto_changed, cfto_new = r.ImGui_Checkbox(ctx, "Tabs Overflow Scroll", config.custom_folder_tabs_overflow_scroll)
+            if cfto_changed then config.custom_folder_tabs_overflow_scroll = cfto_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "When tabs don't fit: scroll horizontally with arrow buttons instead of wrapping to a new line") end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local sta_changed, sta_new = r.ImGui_Checkbox(ctx, "Show 'All' Tab", config.show_tab_all)
+            if sta_changed then config.show_tab_all = sta_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show an 'All' button at the start of the tab row to clear the folder filter") end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            local stf_changed, stf_new = r.ImGui_Checkbox(ctx, "Show 'Favorites' Tab", config.show_tab_favorites)
+            if stf_changed then config.show_tab_favorites = stf_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show a virtual 'Favorites' tab containing all favorite plugins") end
+
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            local str_changed, str_new = r.ImGui_Checkbox(ctx, "Show 'Recent' Tab", config.show_tab_recent)
+            if str_changed then config.show_tab_recent = str_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show a virtual 'Recent' tab containing recently added plugins") end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local sks_changed, sks_new = r.ImGui_Checkbox(ctx, "Enable Screenshot Shortcuts", config.show_screenshot_shortcuts)
+            if sks_changed then config.show_screenshot_shortcuts = sks_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show keyboard shortcut badges (1-9, 0, Q-M) on visible screenshots in custom folders / Favorites / Recent.\nPress the displayed key to instantly add the plugin to the target track.\nDisabled while the search box is focused.") end
 
 
             NewSection("FX CHAIN BUILDER:")
@@ -5830,7 +6173,7 @@ function CaptureScreenshot(plugin_name, fx_index)
         local retval, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
         local w, h = right - left, bottom - top
         local offset = plugin_name:match("^JS") and 0 or config.capture_height_offset
-        h = h - offset
+        h = h - offset - config.srcy
         log_to_file("Capturing screenshot for plugin: " .. plugin_name)
         if not IsOSX() then
             local srcDC = r.JS_GDI_GetClientDC(hwnd)
@@ -5973,7 +6316,7 @@ function CaptureExistingFX(track, fx_index)
                 local w, h = right - left, bottom - top
                 
                 local offset = fx_name:match("^JS") and 0 or config.capture_height_offset
-                h = h - offset
+                h = h - offset - config.srcy
 
                 log_to_file("Capturing screenshot for existing FX: " .. fx_name)
                 if not IsOSX() then
@@ -11569,97 +11912,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
             end
             if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
-                if r.ImGui_MenuItem(ctx, "Add Subfolder") then
-                    show_add_subfolder_popup = true
-                    selected_folder_for_subfolder = full_path
-                    selected_folder_name = folder_name
-                    new_subfolder_name = ""
-                end
-                if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
-                    show_create_parent_folder_popup = true
-                    selected_folder_for_parent = full_path
-                    selected_folder_name = folder_name
-                end
-                local toggle_label = (view_mode == "screenshots" and "Show List" or "Show Screenshots")
-                if r.ImGui_MenuItem(ctx, toggle_label) then
-                    local prev = view_mode
-                    view_mode = (view_mode == "screenshots" and "list" or "screenshots")
-                    config.view_mode = view_mode
-                    SaveConfig()
-                    if view_mode == "screenshots" and prev ~= "screenshots" then ClearScreenshotCache() end
-                end
-                if is_pinned then
-                    if r.ImGui_MenuItem(ctx, "Unpin Folder") then UnpinCustom(full_path) end
-                else
-                    if r.ImGui_MenuItem(ctx, "Pin Folder") then PinCustom(full_path) end
-                end
-                if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-                    StartFolderScreenshots(full_path)
-                end
-                r.ImGui_Separator(ctx)
-                if r.ImGui_MenuItem(ctx, "Rename Folder") then
-                    show_rename_folder_popup = true
-                    folder_to_rename = folder_name
-                    folder_to_rename_path = path_prefix
-                    new_folder_name_for_rename = folder_name
-                end
-                if r.ImGui_BeginMenu(ctx, "Move to Folder...") then
-                    if r.ImGui_MenuItem(ctx, "[Root Level]") then
-                        if MoveFolderTo(full_path, "") then
-                            if selected_folder == full_path then
-                                selected_folder = folder_name
-                            end
-                        end
-                    end
-                    r.ImGui_Separator(ctx)
-                    local available_targets = CollectAllFolderPaths(config.custom_folders, "", full_path, {})
-                    for _, target_path in ipairs(available_targets) do
-                        if r.ImGui_MenuItem(ctx, target_path) then
-                            if MoveFolderTo(full_path, target_path) then
-                                if selected_folder == full_path then
-                                    selected_folder = target_path .. "/" .. folder_name
-                                end
-                            end
-                        end
-                    end
-                    if #available_targets == 0 then
-                        r.ImGui_TextDisabled(ctx, "No other folders available")
-                    end
-                    r.ImGui_EndMenu(ctx)
-                end
-                if r.ImGui_MenuItem(ctx, "Delete Folder") then
-                    local result = r.MB("Are you sure you want to delete '" .. folder_name .. "' and all its plugins?", "Confirm Delete", 4)
-                    if result == 6 then -- Yes
-                        -- Navigate to parent and remove this folder
-                        if path_prefix == "" then
-                            -- Root level folder
-                            config.custom_folders[folder_name] = nil
-                        else
-                            -- Nested folder - navigate to parent
-                            local target = config.custom_folders
-                            local path_parts = {}
-                            for part in path_prefix:gmatch("[^/]+") do
-                                table.insert(path_parts, part)
-                            end
-                            for i = 1, #path_parts do
-                                target = target[path_parts[i]]
-                                if not target then break end
-                            end
-                            if target then
-                                target[folder_name] = nil
-                            end
-                        end
-                        SaveCustomFolders()
-                        
-                        -- Clear selection if deleted folder was selected
-                        if selected_folder == full_path then
-                            selected_folder = nil
-                            screenshot_search_results = {}
-                        end
-                        
-                        r.ShowMessageBox("Folder '" .. folder_name .. "' deleted", "Success", 0)
-                    end
-                end
+                DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
                 r.ImGui_EndPopup(ctx)
             end
             
@@ -14042,6 +14295,8 @@ function RenderListViewItems(plugin_list, id_prefix, opts)
             if config.show_favorite_overlay and favorite_set and favorite_set[plugin_name] then
                 prefix = prefix .. "★ "
             end
+            local _list_sc = NextScreenshotShortcutLabel(plugin_name)
+            if _list_sc then prefix = prefix .. "[" .. _list_sc .. "] " end
 
             local is_selected = (screenshot_nav_index == i) or (screenshot_multi_selected[i] == true)
             local activated = r.ImGui_Selectable(ctx, prefix .. display_name .. (stars ~= "" and "  " .. stars or "") .. "##" .. id_prefix .. "_" .. i, is_selected)
@@ -14234,6 +14489,34 @@ function DrawNameOnScreenshot(tlx, tly, w, h, name)
         local stars_x = tlx + math.floor((w - stars_w) * 0.5)
         r.ImGui_DrawList_AddText(dl, stars_x, bar_y + pad_y + line_h + 2, 0xFFD700FF, stars)
     end
+end
+
+function DrawShortcutBadgeOverlay(dl, tlx, tly, label, plugin_name)
+    if not label or label == "" then return end
+    dl = dl or r.ImGui_GetWindowDrawList(ctx)
+    local pad_x = 5
+    local pad_y = 2
+    local tw, th = r.ImGui_CalcTextSize(ctx, label)
+    local x_off = 8
+    if plugin_name and config and config.show_rating_overlay then
+        local rating = plugin_ratings and plugin_ratings[plugin_name] or 0
+        if rating > 0 then
+            local stars = string.rep("★", rating)
+            local rtw = r.ImGui_CalcTextSize(ctx, stars)
+            x_off = 8 + rtw + 4 * 2 + 1 + 4
+        end
+    end
+    local x1 = tlx + x_off
+    local y1 = tly + 8
+    local x2 = x1 + tw + pad_x * 2
+    local y2 = y1 + th + pad_y * 2
+    local focused = screenshot_shortcuts_window_focused
+    local fill_col = focused and 0x1F8B4CE8 or 0x000000A0
+    local border_col = focused and 0x6CFFB0FF or 0x80808060
+    local text_col = focused and 0xFFFFFFFF or 0xC0C0C0A0
+    r.ImGui_DrawList_AddRectFilled(dl, x1, y1, x2, y2, fill_col, 3)
+    r.ImGui_DrawList_AddRect(dl, x1, y1, x2, y2, border_col, 3)
+    r.ImGui_DrawList_AddText(dl, x1 + pad_x, y1 + pad_y, text_col, label)
 end
 
 function DrawHorizontalSeparatorBar(thickness, color)
@@ -14699,6 +14982,7 @@ function DrawMasonryLayout(screenshots, top_offset)
                     DrawNameOnScreenshot(item_min_x, item_min_y, actual_w, actual_h, fx.name)
                     DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), item_min_x, item_min_y, actual_w, actual_h, fx.name)
                     DrawRatingOverlay(r.ImGui_GetWindowDrawList(ctx), item_min_x, item_min_y, actual_w, actual_h, fx.name)
+                    if fx.shortcut then DrawShortcutBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), item_min_x, item_min_y, fx.shortcut, fx.name) end
 
                     DrawNavSelectionBorder(i, item_min_x, item_min_y, item_max_x, item_max_y)
 
@@ -14948,6 +15232,7 @@ function DrawShowcaseLayout(screenshots, top_offset)
             end
             DrawTypeBadgeOverlay(dl, img_x, img_y, img_w, img_h, plugin_name)
             DrawRatingOverlay(dl, img_x, img_y, img_w, img_h, plugin_name)
+            if fx.shortcut then DrawShortcutBadgeOverlay(dl, img_x, img_y, fx.shortcut, plugin_name) end
 
             local info_x = img_x + img_w + pad * 2
             local info_y = cursor_sy + pad + 2
@@ -15219,6 +15504,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
             end
             DrawTypeBadgeOverlay(dl, img_x, img_y, photo_size, photo_size, plugin_name)
             DrawRatingOverlay(dl, img_x, img_y, photo_size, photo_size, plugin_name)
+            if fx.shortcut then DrawShortcutBadgeOverlay(dl, img_x, img_y, fx.shortcut, plugin_name) end
 
             local text_area_y = img_y + photo_size + 4
             local text_area_w = card_w - border_side * 2
@@ -15490,6 +15776,7 @@ function DrawUniformLayout(screenshots, top_offset)
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawRatingOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            if fx.shortcut then DrawShortcutBadgeOverlay(dl, sx_cell, sy_cell, fx.shortcut, plugin_name) end
 
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
@@ -15715,6 +16002,7 @@ function DrawNeonLayout(screenshots, top_offset)
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawRatingOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            if fx.shortcut then DrawShortcutBadgeOverlay(dl, sx_cell, sy_cell, fx.shortcut, plugin_name) end
 
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
@@ -15929,6 +16217,7 @@ function DrawVinylLayout(screenshots, top_offset)
             DrawNameOnScreenshot(sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawTypeBadgeOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
             DrawRatingOverlay(dl, sx_cell, sy_cell, cell_w, cell_h, plugin_name)
+            if fx.shortcut then DrawShortcutBadgeOverlay(dl, sx_cell, sy_cell, fx.shortcut, plugin_name) end
 
             r.ImGui_PushID(ctx, i)
             r.ImGui_SetCursorScreenPos(ctx, sx_cell, sy_cell)
@@ -18221,6 +18510,332 @@ function ShowScreenshotWindow()
         r.ImGui_PopStyleColor(ctx)
     end
 
+    if config.show_custom_folder_tabs and type(config.custom_folders) == "table" then
+        local function CollectTopLevelNames(tbl)
+            local names = {}
+            for n, _ in pairs(tbl) do
+                if n ~= "__folder_marker__" and type(n) == "string" then
+                    names[#names + 1] = n
+                end
+            end
+            table.sort(names, function(a, b) return a:lower() < b:lower() end)
+            return names
+        end
+        local function ResolveCustomNode(full_path)
+            if not full_path or full_path == "" then return nil end
+            local node = config.custom_folders
+            for part in full_path:gmatch("[^/]+") do
+                if type(node) ~= "table" then return nil end
+                node = node[part]
+            end
+            return node
+        end
+        local function HasSubfolders(node)
+            if type(node) ~= "table" then return false end
+            for k, v in pairs(node) do
+                if k ~= "__folder_marker__" and type(k) == "string" and type(v) == "table" then
+                    return true
+                end
+            end
+            return false
+        end
+        local level_colors = config.custom_folder_level_colors or {}
+        local default_text = config.custom_folder_text_color or r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
+        local function LevelColor(d)
+            local idx = math.min(d, #level_colors)
+            if idx < 1 then idx = 1 end
+            return level_colors[idx] or default_text
+        end
+        cftab_scroll_pending = cftab_scroll_pending or {}
+        local function DrawTabRow(names, depth, parent_path)
+            if #names == 0 and depth ~= 1 then return end
+            local scroll_mode = config.custom_folder_tabs_overflow_scroll
+            local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            local spacing = 4
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), spacing, spacing)
+
+            local function DrawPlus()
+                local plus_w = 22
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+                if r.ImGui_Button(ctx, "+##cftab_add_root", plus_w, 0) then
+                    show_add_root_folder_popup = true
+                    new_root_folder_name = ""
+                    r.ImGui_OpenPopup(ctx, "Add Custom Folder")
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Create a new custom folder")
+                end
+                return plus_w
+            end
+
+            local function DrawVirtualTabs(initial_sameline)
+                local total_w = 0
+                local first = true
+                local function DrawVirtualTab(label, target, tooltip)
+                    if first then
+                        if initial_sameline then
+                            r.ImGui_SameLine(ctx)
+                            total_w = total_w + spacing
+                        end
+                    else
+                        r.ImGui_SameLine(ctx)
+                        total_w = total_w + spacing
+                    end
+                    first = false
+                    local is_active = (selected_folder == target)
+                    if is_active then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4A6FA5FF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A7FB5FF)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3A5F95FF)
+                    end
+                    local txt_w = r.ImGui_CalcTextSize(ctx, label)
+                    local btn_w = txt_w + 16
+                    if r.ImGui_Button(ctx, label .. "##cftab_virt_" .. target, btn_w, 0) then
+                        if target == "__ALL__" then
+                            SelectFolderExclusive(nil)
+                        else
+                            if is_active then
+                                SelectFolderExclusive(nil)
+                            else
+                                SelectFolderExclusive(target)
+                            end
+                        end
+                    end
+                    if is_active then r.ImGui_PopStyleColor(ctx, 3) end
+                    if tooltip and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, tooltip) end
+                    total_w = total_w + btn_w
+                end
+
+                if config.show_tab_all then
+                    DrawVirtualTab("All", "__ALL__", "Show all plugins (clear folder filter)")
+                end
+                if config.show_tab_favorites then
+                    local cnt = favorite_plugins and #favorite_plugins or 0
+                    local lbl = "\xE2\x98\x85 Favorites" .. (config.show_tab_plugin_count and cnt > 0 and (" (" .. cnt .. ")") or "")
+                    DrawVirtualTab(lbl, "Favorites", "Plugins marked as favorite")
+                end
+                if config.show_tab_recent then
+                    local cnt = recent_plugins and #recent_plugins or 0
+                    local lbl = "Recent" .. (config.show_tab_plugin_count and cnt > 0 and (" (" .. cnt .. ")") or "")
+                    DrawVirtualTab(lbl, "Recent", "Recently added plugins")
+                end
+                return total_w
+            end
+
+            local function DrawTab(i, name, row_w_in)
+                local row_w = row_w_in
+                local full_path = (parent_path == "" or parent_path == nil) and name or (parent_path .. "/" .. name)
+                local label = config.custom_folder_force_uppercase and name:upper() or name
+                local display_label = label
+                if config.show_tab_plugin_count then
+                    local node = ResolveCustomNode(full_path)
+                    local plugin_count = 0
+                    if type(node) == "table" then
+                        for k, v in pairs(node) do
+                            if type(k) == "number" and type(v) == "string" then
+                                plugin_count = plugin_count + 1
+                            end
+                        end
+                    end
+                    if plugin_count > 0 then
+                        display_label = label .. " (" .. plugin_count .. ")"
+                    end
+                end
+                local btn_label = display_label .. "##cftab_" .. depth .. "_" .. i
+                local txt_w = r.ImGui_CalcTextSize(ctx, display_label)
+                local btn_w = txt_w + 16
+                local need_sameline = (depth == 1 or i > 1)
+                if need_sameline then
+                    if scroll_mode or (row_w + btn_w + spacing <= avail_w) then
+                        r.ImGui_SameLine(ctx)
+                        row_w = row_w + spacing
+                    else
+                        row_w = 0
+                    end
+                end
+                local sel_now = selected_folder
+                local is_sel = (sel_now == full_path)
+                local is_ancestor = false
+                if not is_sel and type(sel_now) == "string" then
+                    if sel_now:sub(1, #full_path + 1) == full_path .. "/" then
+                        is_ancestor = true
+                    end
+                end
+                local txt_col = LevelColor(depth)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), txt_col)
+                if is_sel then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4A6FA5FF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A7FB5FF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3A5F95FF)
+                elseif is_ancestor then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x35507AFF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x456088FF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x2A4068FF)
+                end
+                if r.ImGui_Button(ctx, btn_label, btn_w, 0) then
+                    if is_sel then
+                        SelectFolderExclusive(nil)
+                    else
+                        SelectFolderExclusive(full_path)
+                    end
+                end
+                CheckFolderDropTarget(full_path, "custom")
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
+                end
+                if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
+                    DrawCustomFolderContextMenu(name, parent_path or "", full_path)
+                    r.ImGui_EndPopup(ctx)
+                end
+                if is_sel or is_ancestor then r.ImGui_PopStyleColor(ctx, 3) end
+                r.ImGui_PopStyleColor(ctx)
+                row_w = row_w + btn_w
+                return row_w
+            end
+
+            if scroll_mode then
+                local arrow_w = 20
+                local btn_h = r.ImGui_GetFrameHeight(ctx)
+                local child_id = "cftab_scroll_" .. depth .. "_" .. (parent_path or "")
+                local outer_used = 0
+                if depth == 1 then
+                    outer_used = outer_used + DrawPlus() + spacing
+                    r.ImGui_SameLine(ctx)
+                end
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+                if r.ImGui_Button(ctx, "<##" .. child_id, arrow_w, btn_h) then
+                    cftab_scroll_pending[child_id] = (cftab_scroll_pending[child_id] or 0) - 100
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
+                r.ImGui_SameLine(ctx)
+                local child_w = avail_w - outer_used - arrow_w*2 - spacing*2
+                if child_w < 50 then child_w = 50 end
+                local visible = r.ImGui_BeginChild(ctx, child_id, child_w, btn_h + 4, 0, r.ImGui_WindowFlags_HorizontalScrollbar() | r.ImGui_WindowFlags_NoScrollbar())
+                if visible then
+                    if cftab_scroll_pending[child_id] then
+                        r.ImGui_SetScrollX(ctx, r.ImGui_GetScrollX(ctx) + cftab_scroll_pending[child_id])
+                        cftab_scroll_pending[child_id] = nil
+                    end
+                    local row_w = 0
+                    if depth == 1 then
+                        row_w = row_w + DrawVirtualTabs(false)
+                    end
+                    for i, name in ipairs(names) do
+                        row_w = DrawTab(i, name, row_w)
+                    end
+                    r.ImGui_EndChild(ctx)
+                end
+                r.ImGui_SameLine(ctx)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
+                if r.ImGui_Button(ctx, ">##" .. child_id, arrow_w, btn_h) then
+                    cftab_scroll_pending[child_id] = (cftab_scroll_pending[child_id] or 0) + 100
+                end
+                r.ImGui_PopStyleColor(ctx, 3)
+            else
+                local row_w = 0
+                if depth == 1 then
+                    row_w = DrawPlus()
+                    row_w = row_w + DrawVirtualTabs(true)
+                end
+                for i, name in ipairs(names) do
+                    row_w = DrawTab(i, name, row_w)
+                end
+            end
+            r.ImGui_PopStyleVar(ctx)
+        end
+
+        local top_names = CollectTopLevelNames(config.custom_folders)
+        do
+            DrawTabRow(top_names, 1, "")
+
+            local _sel_snap = selected_folder
+            if config.custom_folder_tabs_show_nested and _sel_snap and type(_sel_snap) == "string"
+               and _sel_snap ~= "Favorites" and _sel_snap ~= "Recent" and _sel_snap ~= "Current Track FX" and _sel_snap ~= "Current Project FX" then
+                local active_top = _sel_snap:match("^([^/]+)")
+                if active_top and config.custom_folders[active_top] then
+                    if config.custom_folder_tabs_breadcrumb then
+                        local segments = {}
+                        for seg in (_sel_snap .. "/"):gmatch("([^/]+)/") do
+                            segments[#segments+1] = seg
+                        end
+                        if #segments >= 2 then
+                            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
+                            local accum_path = ""
+                            for i, seg in ipairs(segments) do
+                                accum_path = (i == 1) and seg or (accum_path .. "/" .. seg)
+                                if i > 1 then
+                                    r.ImGui_SameLine(ctx)
+                                    r.ImGui_TextDisabled(ctx, ">")
+                                    r.ImGui_SameLine(ctx)
+                                end
+                                local seg_label = config.custom_folder_force_uppercase and seg:upper() or seg
+                                local is_last = (i == #segments)
+                                local txt_col = LevelColor(i)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), txt_col)
+                                if is_last then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4A6FA5FF)
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A7FB5FF)
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3A5F95FF)
+                                end
+                                if r.ImGui_Button(ctx, seg_label .. "##bc_" .. i, 0, 0) then
+                                    SelectFolderExclusive(accum_path)
+                                end
+                                if is_last then r.ImGui_PopStyleColor(ctx, 3) end
+                                r.ImGui_PopStyleColor(ctx)
+                            end
+                            r.ImGui_PopStyleVar(ctx)
+                            local node = ResolveCustomNode(_sel_snap)
+                            if HasSubfolders(node) then
+                                local sub_names = CollectTopLevelNames(node)
+                                if #sub_names > 0 then
+                                    DrawTabRow(sub_names, #segments + 1, _sel_snap)
+                                end
+                            end
+                        else
+                            local node = ResolveCustomNode(active_top)
+                            if HasSubfolders(node) then
+                                local sub_names = CollectTopLevelNames(node)
+                                if #sub_names > 0 then
+                                    DrawTabRow(sub_names, 2, active_top)
+                                end
+                            end
+                        end
+                    else
+                        local current_depth = 1
+                        local current_path = active_top
+                        while true do
+                            local node = ResolveCustomNode(current_path)
+                            if not HasSubfolders(node) then break end
+                            local sub_names = CollectTopLevelNames(node)
+                            if #sub_names == 0 then break end
+                            DrawTabRow(sub_names, current_depth + 1, current_path)
+                            if _sel_snap:sub(1, #current_path + 1) == current_path .. "/" then
+                                local rest = _sel_snap:sub(#current_path + 2)
+                                local next_part = rest:match("^([^/]+)")
+                                if next_part then
+                                    current_path = current_path .. "/" .. next_part
+                                    current_depth = current_depth + 1
+                                else
+                                    break
+                                end
+                            else
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            r.ImGui_Dummy(ctx, 0, 4)
+        end
+    end
+
     r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0, 0, r.ImGui_WindowFlags_NoNavInputs())
             if config.flicker_guard_enabled then
                 local now = r.time_precise()
@@ -18259,9 +18874,19 @@ function ShowScreenshotWindow()
 
             if selected_folder then
                 local filtered_plugins = {}
+                screenshot_shortcut_frame_idx = 0
+                if IsShortcutContextEligible() then
+                    ResetShortcutMap()
+                    local flags = r.ImGui_FocusedFlags_RootAndChildWindows() | r.ImGui_FocusedFlags_NoPopupHierarchy()
+                    local win_focused = r.ImGui_IsWindowFocused(ctx, flags)
+                    local item_active = r.ImGui_IsAnyItemActive(ctx)
+                    screenshot_shortcuts_window_focused = win_focused and not item_active
+                else
+                    screenshot_shortcuts_window_focused = false
+                end
                 
-                if selected_folder == "Favorites" then
-                    filtered_plugins = favorite_plugins
+                if selected_folder == "Favorites" or selected_folder == "Recent" then
+                    filtered_plugins = (selected_folder == "Recent") and recent_plugins or favorite_plugins
                     local pinned, others = {}, {}
                     local term = (screenshot_folder_filter_suspended and "" or browser_search_term):lower()
                     for _, plugin in ipairs(filtered_plugins) do
@@ -18273,8 +18898,10 @@ function ShowScreenshotWindow()
                         pinned = DedupeByTypePriority(pinned)
                         others = DedupeByTypePriority(others)
                     end
-                    SortPlainPluginList(pinned, config.sort_mode)
-                    SortPlainPluginList(others, config.sort_mode)
+                    if selected_folder ~= "Recent" then
+                        SortPlainPluginList(pinned, config.sort_mode)
+                        SortPlainPluginList(others, config.sort_mode)
+                    end
                     local display_plugins = {}
                     
                     -- Add pinned plugins first if show_pinned_on_top is enabled
@@ -18284,7 +18911,9 @@ function ShowScreenshotWindow()
                     else
                         -- Add pinned plugins to others if show_pinned_on_top is disabled
                         for _, p in ipairs(pinned) do others[#others+1] = p end
-                        SortPlainPluginList(others, config.sort_mode)
+                        if selected_folder ~= "Recent" then
+                            SortPlainPluginList(others, config.sort_mode)
+                        end
                     end
                     
                     for _, p in ipairs(others) do display_plugins[#display_plugins+1] = p end
@@ -18305,7 +18934,7 @@ function ShowScreenshotWindow()
                     end
 
                     if #filtered_plugins == 0 then
-                        r.ImGui_Text(ctx, "No Favorites match search.")
+                        r.ImGui_Text(ctx, (selected_folder == "Recent") and "No Recent plugins match search." or "No Favorites match search.")
                     else
                         if view_mode == "list" then
                             RenderListViewItems(filtered_plugins, "favorites_list")
@@ -18318,7 +18947,7 @@ function ShowScreenshotWindow()
                                 elseif plugin == "--Pinned End--" then
                                     masonry_data[#masonry_data+1] = {is_separator = true, label = "--- Pinned End ---"}
                                 else
-                                    masonry_data[#masonry_data+1] = {name = plugin}
+                                    masonry_data[#masonry_data+1] = {name = plugin, shortcut = NextScreenshotShortcutLabel(plugin)}
                                 end
                             end
                             if config.use_polaroid_layout then
@@ -18379,6 +19008,7 @@ function ShowScreenshotWindow()
                                                 DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 DrawRatingOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                                RenderScreenshotShortcut(plugin_name, tlx, tly)
                                             end
                                             if config.enable_drag_add_fx then
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -18534,7 +19164,7 @@ function ShowScreenshotWindow()
                                 elseif plugin == "--Pinned End--" then
                                     masonry_data[#masonry_data+1] = { is_separator = true, kind = "pinned_end" }
                                 else
-                                    masonry_data[#masonry_data+1] = { name = plugin }
+                                    masonry_data[#masonry_data+1] = { name = plugin, shortcut = NextScreenshotShortcutLabel(plugin) }
                                 end
                             end
                             if config.use_polaroid_layout then
@@ -18596,6 +19226,7 @@ function ShowScreenshotWindow()
                                                 DrawNameOnScreenshot(tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 DrawTypeBadgeOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
                                                 DrawRatingOverlay(r.ImGui_GetWindowDrawList(ctx), tlx, tly, brx - tlx, bry - tly, plugin_name)
+                                                RenderScreenshotShortcut(plugin_name, tlx, tly)
                                             end
                                             if config.enable_drag_add_fx then
                                                 if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx,0) then
@@ -22678,6 +23309,7 @@ if not should_show_main_window then
         SHOULD_HIDE_BROWSER = false
     end
 
+    HandleScreenshotShortcutInput()
     collectgarbage("step", 200)
     r.defer(Main)
     return
