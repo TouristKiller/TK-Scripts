@@ -122,6 +122,7 @@ selected_plugin = nil
 browser_search_term = ""
 current_open_folder = nil
 ITEMS_PER_BATCH = 30
+ITEMS_PER_PAGE = 30
 loaded_items_count = ITEMS_PER_BATCH
 last_scroll_position = 0
 current_filtered_fx = {} 

@@ -1,8 +1,12 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.7.5
+-- @version 2.7.6
 -- @changelog:
 --[[ 
+    v2.7.6:
+        + Set Double Click as default for adding plugins
+        + Pagination for FOLDERS and Custom Folders: when Pagination is enabled, FOLDERS and Custom Folder entries now show page navigation arrows (< page/total >) just like category folders
+
     v2.7.3:
         + Screenshot Shortcuts: badge changes color based on window focus (green = active, dim grey = window/search not focused) so it's visually clear when keypresses will be handled by the browser
         + Screenshot Shortcuts: type 1-9 / 0 / Q-M to instantly add the visible plugin from custom folders / Favorites / Recent (Settings > Enable Screenshot Shortcuts, off by default)
@@ -735,6 +739,7 @@ screenshot_search_to_nav = false
 screenshot_folder_filter_suspended = screenshot_folder_filter_suspended or false
 ab_snapshots = ab_snapshots or {}
 show_shortcuts_window = false
+folder_page_state = folder_page_state or {}
 
 local ConsumeScreenshotSearchBlur
 
@@ -1168,7 +1173,8 @@ function SetDefaultConfig()
         screenshot_section_width = screenshot_section_width or 600, 
         script_thumb_size = 120,
         show_script_labels = true,
-        use_pagination = true,
+        use_pagination = false,
+        compact_screenshots = true,
         use_masonry_layout = false,
         use_modern_cards = false,
         show_type_overlay = false,
@@ -1176,7 +1182,7 @@ function SetDefaultConfig()
         list_hover_screenshot = false,
         use_showcase_layout = false,
         use_polaroid_layout = false,
-        use_uniform_layout = false,
+        use_uniform_layout = true,
         uniform_bg_color = 0x000000FF,
         uniform_border_color = 0x505050FF,
         uniform_hover_color = 0x4FC1E9FF,
@@ -1215,7 +1221,7 @@ function SetDefaultConfig()
         enable_drag_add_fx = true, 
         show_missing_screenshots_only = false, 
         bulk_selected_folder = nil, 
-        add_fx_with_double_click = false, 
+        add_fx_with_double_click = true, 
         clear_search_on_toggle = false,
         show_missing_list = true, 
         respect_search_exclusions_in_screenshots = false, 
@@ -10411,6 +10417,7 @@ function ShowFolderDropdown()
                         show_sends_window = false
                         show_action_browser = false
                         show_scripts_browser = false
+                        folder_page_state[folders_category[i].name] = 1
                         ClearScreenshotCache()
                         GetPluginsForFolder(selected_folder)
                     end
@@ -10422,6 +10429,26 @@ function ShowFolderDropdown()
                             if entry.name == _nf_ctx_folder_name then _nf_ctx_folder_idx = entry.idx break end
                         end
                         r.ImGui_OpenPopup(ctx, "NativeFolderCtxMenu")
+                    end
+                    if config.use_pagination and view_mode ~= "list" then
+                        local total = #(GetPluginsForFolder(folders_category[i].name) or {})
+                        local total_pages = math.max(1, math.ceil(total / ITEMS_PER_PAGE))
+                        if total_pages > 1 then
+                            local page = folder_page_state[folders_category[i].name] or 1
+                            r.ImGui_Indent(ctx, 20)
+                            if r.ImGui_Button(ctx, "<##fp_" .. i, 15, 15) then
+                                folder_page_state[folders_category[i].name] = page > 1 and page - 1 or total_pages
+                                if is_selected then RequestClearScreenshotCache() end
+                            end
+                            r.ImGui_SameLine(ctx)
+                            r.ImGui_Text(ctx, string.format("%d/%d", page, total_pages))
+                            r.ImGui_SameLine(ctx)
+                            if r.ImGui_Button(ctx, ">##fn_" .. i, 15, 15) then
+                                folder_page_state[folders_category[i].name] = page < total_pages and page + 1 or 1
+                                if is_selected then RequestClearScreenshotCache() end
+                            end
+                            r.ImGui_Unindent(ctx, 20)
+                        end
                     end
                 end
             end
@@ -11877,7 +11904,37 @@ function DrawTrackTemplates(tbl, path)
     end
 end
 
-local ITEMS_PER_PAGE = 30
+local function ApplyFolderPaginationSlice(plugins, folder_key)
+    local total = #plugins
+    local total_pages = math.max(1, math.ceil(total / ITEMS_PER_PAGE))
+    local page = math.min(folder_page_state[folder_key] or 1, total_pages)
+    folder_page_state[folder_key] = page
+    local start_idx = (page - 1) * ITEMS_PER_PAGE + 1
+    local end_idx = math.min(start_idx + ITEMS_PER_PAGE - 1, total)
+    local sliced = {}
+    for k = start_idx, end_idx do sliced[#sliced+1] = plugins[k] end
+    return sliced, total
+end
+
+local function DrawFolderPaginationUI(folder_key, total_count)
+    local total_pages = math.max(1, math.ceil(total_count / ITEMS_PER_PAGE))
+    if total_pages <= 1 then return end
+    local page = folder_page_state[folder_key] or 1
+    r.ImGui_Dummy(ctx, 0, 4)
+    r.ImGui_Indent(ctx, 20)
+    if r.ImGui_Button(ctx, "<##fp_" .. folder_key, 15, 15) then
+        folder_page_state[folder_key] = page > 1 and page - 1 or total_pages
+        RequestClearScreenshotCache()
+    end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_Text(ctx, string.format("%d/%d", page, total_pages))
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, ">##fn_" .. folder_key, 15, 15) then
+        folder_page_state[folder_key] = page < total_pages and page + 1 or 1
+        RequestClearScreenshotCache()
+    end
+    r.ImGui_Unindent(ctx, 20)
+end
 
 function DrawBrowserItems(tbl, main_cat_name)
     local function EnsurePinnedList(cat)
@@ -12492,6 +12549,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 show_sends_window = false
                 show_action_browser = false
                 screenshot_search_results = {}
+                folder_page_state[full_path] = 1
                 local term_l = browser_search_term:lower()
                 local matches = {}
                 for k, plugin in pairs(folder_content) do
@@ -12512,6 +12570,31 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             r.ImGui_PopStyleColor(ctx)
             
             r.ImGui_PopFont(ctx)
+
+            if config.use_pagination and view_mode ~= "list" then
+                local cf_plugins = GetPluginsFromCustomFolder(full_path) or {}
+                local cf_total = 0
+                for k, v in pairs(cf_plugins) do
+                    if type(k) == "number" and type(v) == "string" then cf_total = cf_total + 1 end
+                end
+                local cf_pages = math.max(1, math.ceil(cf_total / ITEMS_PER_PAGE))
+                if cf_pages > 1 then
+                    local page = folder_page_state[full_path] or 1
+                    r.ImGui_Indent(ctx, 20)
+                    if r.ImGui_Button(ctx, "<##cfp_" .. full_path, 15, 15) then
+                        folder_page_state[full_path] = page > 1 and page - 1 or cf_pages
+                        if is_selected then RequestClearScreenshotCache() end
+                    end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, string.format("%d/%d", page, cf_pages))
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, ">##cfn_" .. full_path, 15, 15) then
+                        folder_page_state[full_path] = page < cf_pages and page + 1 or 1
+                        if is_selected then RequestClearScreenshotCache() end
+                    end
+                    r.ImGui_Unindent(ctx, 20)
+                end
+            end
 
             CheckFolderDropTarget(full_path, "custom")
 
@@ -13501,6 +13584,7 @@ function ShowBrowserPanel()
                                 show_media_browser = false
                                 show_sends_window = false
                                 show_action_browser = false
+                                folder_page_state[folder_name] = 1
                                 ClearScreenshotCache()
                                 GetPluginsForFolder(folder_name)
                             elseif r.ImGui_IsItemClicked(ctx, 1) then
@@ -13578,6 +13662,26 @@ function ShowBrowserPanel()
                                     smart_folder_preview_results = {}
                                 end
                                 r.ImGui_EndPopup(ctx)
+                            end
+                            if config.use_pagination and view_mode ~= "list" then
+                                local total = #(GetPluginsForFolder(folder_name) or {})
+                                local total_pages = math.max(1, math.ceil(total / ITEMS_PER_PAGE))
+                                if total_pages > 1 then
+                                    local page = folder_page_state[folder_name] or 1
+                                    r.ImGui_Indent(ctx, 30)
+                                    if r.ImGui_Button(ctx, "<##fp2_" .. disp_idx, 15, 15) then
+                                        folder_page_state[folder_name] = page > 1 and page - 1 or total_pages
+                                        if selected_folder == folder_name then RequestClearScreenshotCache() end
+                                    end
+                                    r.ImGui_SameLine(ctx)
+                                    r.ImGui_Text(ctx, string.format("%d/%d", page, total_pages))
+                                    r.ImGui_SameLine(ctx)
+                                    if r.ImGui_Button(ctx, ">##fn2_" .. disp_idx, 15, 15) then
+                                        folder_page_state[folder_name] = page < total_pages and page + 1 or 1
+                                        if selected_folder == folder_name then RequestClearScreenshotCache() end
+                                    end
+                                    r.ImGui_Unindent(ctx, 30)
+                                end
                             end
                             r.ImGui_PopID(ctx)
                         end
@@ -19695,6 +19799,11 @@ function ShowScreenshotWindow()
                         end
                     end
 
+                    local custom_total_count = nil
+                    if config.use_pagination and view_mode ~= "list" then
+                        filtered_plugins, custom_total_count = ApplyFolderPaginationSlice(filtered_plugins, selected_folder)
+                    end
+
                     if #filtered_plugins == 0 then
                         r.ImGui_Text(ctx, "No Custom Folder plugins match search.")
                     else
@@ -20239,7 +20348,10 @@ function ShowScreenshotWindow()
                             local num_columns = math.max(1, min_columns)
                             local column_width = available_width / num_columns
 
-                            if #filtered_plugins > loaded_items_count then
+                            local folder_total_count = nil
+                            if config.use_pagination then
+                                filtered_plugins, folder_total_count = ApplyFolderPaginationSlice(filtered_plugins, selected_folder)
+                            elseif #filtered_plugins > loaded_items_count then
                                 local limited = {}
                                 for k = 1, loaded_items_count do limited[k] = filtered_plugins[k] end
                                 filtered_plugins = limited
