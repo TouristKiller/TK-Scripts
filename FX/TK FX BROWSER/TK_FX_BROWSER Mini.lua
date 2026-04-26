@@ -1,8 +1,17 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.6.6
+-- @version 0.6.7
 -- @changelog:
 --[[ 
+    v0.6.7:
+        + Current Track FX & Current Project FX: now support Showcase / Polaroid / Uniform / Neon / Vinyl layouts (List and Masonry remain disabled). Click opens/closes the floating FX window of that plugin.
+        + Drag & Drop: visual target marker on cursor (green = track, orange = item, red = no target) with track number and track/item name shown in the drag tooltip
+        + Drag & Drop: SHIFT-drop now adds FX to the item under the cursor instead of the first selected item (drop now matches the marker)
+        + Drag & Drop: red marker (no track / no item under cursor) now cancels the drop instead of falling back to the selected track/item
+        + Drag & Drop: SHIFT-drop wrapped in an Undo block ("Add FX to Item")
+        + Search: fuzzy find for Actions and Projects (multi-token, order-independent matching)
+        + Search: 150ms debounce on Actions and Projects searches to remove typing lag
+
     v0.6.6:
         + Set Double Click as default for adding plugins
         + Pagination for FOLDERS and Custom Folders: when Pagination is enabled, FOLDERS and Custom Folder entries now show page navigation arrows (< page/total >) just like category folders
@@ -444,6 +453,8 @@ local CreateSmartMarker
 local last_action_search_term = nil
 local last_show_categories = nil
 local last_show_only_active = nil
+local _action_search_change_time = 0.0
+local _action_search_debounce_ms = 150
 
 function RenderActionsSection()
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
@@ -451,7 +462,10 @@ function RenderActionsSection()
     local button_w = button_h
             r.ImGui_PushItemWidth(ctx, avail_w - (button_w * 2) - 10)
     local changed, new_term = r.ImGui_InputTextWithHint(ctx, "##ActionSearch", "SEARCH ACTIONS", action_search_term or "")
-    if changed then action_search_term = new_term end
+    if changed then
+        action_search_term = new_term
+        _action_search_change_time = r.time_precise()
+    end
     r.ImGui_PopItemWidth(ctx)
     r.ImGui_SameLine(ctx)
     if r.ImGui_Button(ctx, show_categories and "C" or "A", button_w, button_h) then
@@ -468,10 +482,11 @@ function RenderActionsSection()
     local list_h = window_h - cur_y - footer
     local action_child_open = r.ImGui_BeginChild(ctx, "ActionList", 0, list_h)
     if action_child_open then
-        if cached_actions_list == nil or 
-           action_search_term ~= last_action_search_term or 
-           show_categories ~= last_show_categories or 
-           show_only_active ~= last_show_only_active then
+        local now_t = r.time_precise()
+        local term_changed = (action_search_term ~= last_action_search_term)
+        local other_changed = (show_categories ~= last_show_categories) or (show_only_active ~= last_show_only_active)
+        local debounce_ready = (now_t - _action_search_change_time) * 1000.0 >= _action_search_debounce_ms
+        if cached_actions_list == nil or other_changed or (term_changed and debounce_ready) then
            
             cached_actions_list = {}
             if show_categories then
@@ -485,7 +500,7 @@ function RenderActionsSection()
             else
                 for _, action in ipairs(allActions) do
                     local state = r.GetToggleCommandState(action.id)
-                    local matches = (not action_search_term or action_search_term == "") or action.name:lower():find((action_search_term or ""):lower(), 1, true)
+                    local matches = (not action_search_term or action_search_term == "") or FuzzyFind(action.name, action_search_term)
                     if matches and (not show_only_active or state == 1) then
                         table.insert(cached_actions_list, {type="action", action=action})
                     end
@@ -2243,6 +2258,22 @@ function AddFXToTrack(track, plugin_name, preserve_order)
     return fx_index or -1
 end
 
+_layout_fx_click_override = _layout_fx_click_override or nil
+
+function _LayoutPerformAddOrAction(plugin_name)
+    if _layout_fx_click_override then
+        local handled = _layout_fx_click_override(plugin_name)
+        if handled then return true end
+    end
+    local target_track = GetTargetTrack()
+    if target_track then
+        AddFXToTrack(target_track, plugin_name)
+        LAST_USED_FX = plugin_name
+        if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+    end
+    return false
+end
+
 function RestoreChainBuilderChunk(track, fx_idx, saved_chunk)
     if not track or not saved_chunk or fx_idx < 0 then return false end
     local _, chunk = r.GetTrackStateChunk(track, "", false)
@@ -3473,42 +3504,102 @@ function DrawIconButton(icon_type, size, custom_color)
 end
 
 function DrawDragOverlay()
-    if dragging_fx_name then
-        local dragged_plugins = GetDraggedPluginNames()
-        local dragged_count = dragged_plugins and #dragged_plugins or 0
-        local drag_label = dragging_fx_name
-        if dragged_count > 1 then
-            drag_label = tostring(dragged_count) .. " plugins"
-        end
-        local imx, imy = r.ImGui_GetMousePos(ctx)
-        local sx, sy = r.GetMousePosition()
-        local t = select(1, r.GetTrackFromPoint(sx, sy))
-        local track_name = "(geen track)"
-        if t then
-            local ok; ok, track_name = r.GetSetMediaTrackInfo_String(t, 'P_NAME', '', false)
-            if not ok or track_name == '' then track_name = 'Track' end
-        end
-        local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
-        local vp = r.ImGui_GetMainViewport(ctx)
-        local vp_x, vp_y = r.ImGui_Viewport_GetPos(vp)
-        local rel_x = imx - vp_x + 18
-        local rel_y = imy - vp_y + 18
-        r.ImGui_SetNextWindowBgAlpha(ctx, 0.38)
-        r.ImGui_SetNextWindowPos(ctx, rel_x, rel_y, r.ImGui_Cond_Always())
-        local flags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs()
-        if r.ImGui_Begin(ctx, '##drag_overlay', true, flags) then
-            r.ImGui_Text(ctx, '➡ ' .. drag_label)
-            if shift then
-                r.ImGui_Text(ctx, 'Add to Item (SHIFT)')
-            else
-                r.ImGui_Text(ctx, 'Track: ' .. track_name)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFF88)
-                r.ImGui_Text(ctx, 'Hold SHIFT = Add to Item')
-                r.ImGui_PopStyleColor(ctx)
+    if not dragging_fx_name then return end
+
+    local dragged_plugins = GetDraggedPluginNames()
+    local dragged_count = dragged_plugins and #dragged_plugins or 0
+    local drag_label = dragging_fx_name
+    if dragged_count > 1 then
+        drag_label = tostring(dragged_count) .. " plugins"
+    end
+
+    local imx, imy = r.ImGui_GetMousePos(ctx)
+    local sx, sy = r.GetMousePosition()
+    local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
+
+    local target_type, target_name, target_color
+    if shift then
+        local item = r.GetItemFromPoint and r.GetItemFromPoint(sx, sy, false) or nil
+        if item then
+            local take = r.GetActiveTake(item)
+            local nm = "Item"
+            if take then
+                local _, tn = r.GetSetMediaItemTakeInfo_String(take, 'P_NAME', '', false)
+                if tn and tn ~= '' then nm = tn end
             end
-            r.ImGui_Text(ctx, 'Release to add')
-            r.ImGui_End(ctx)
+            local itrack = r.GetMediaItemTrack(item)
+            local tnum = itrack and math.floor(r.GetMediaTrackInfo_Value(itrack, 'IP_TRACKNUMBER') or 0) or 0
+            if tnum > 0 then
+                target_type = string.format("ITEM (Track %d)", tnum)
+            else
+                target_type = "ITEM"
+            end
+            target_name = nm
+            target_color = 0xFFA040FF
+        else
+            target_type = "—"
+            target_name = "(no item)"
+            target_color = 0xFF4040FF
         end
+    else
+        local t = select(1, r.GetTrackFromPoint(sx, sy))
+        if t then
+            local ok, tn = r.GetSetMediaTrackInfo_String(t, 'P_NAME', '', false)
+            if not ok or tn == '' then tn = 'Track' end
+            local tnum = math.floor(r.GetMediaTrackInfo_Value(t, 'IP_TRACKNUMBER') or 0)
+            if tnum > 0 then
+                target_type = string.format("TRACK %d", tnum)
+            else
+                target_type = "MASTER"
+            end
+            target_name = tn
+            target_color = 0x40C040FF
+        else
+            target_type = "—"
+            target_name = "(no track)"
+            target_color = 0xFF4040FF
+        end
+    end
+
+    local vp = r.ImGui_GetMainViewport(ctx)
+    local vp_x, vp_y = r.ImGui_Viewport_GetPos(vp)
+
+    local marker_radius = 28
+    local marker_pad = 10
+    local marker_size = (marker_radius + marker_pad) * 2
+    r.ImGui_SetNextWindowPos(ctx, imx - vp_x - (marker_radius + marker_pad), imy - vp_y - (marker_radius + marker_pad), r.ImGui_Cond_Always())
+    r.ImGui_SetNextWindowSize(ctx, marker_size, marker_size, r.ImGui_Cond_Always())
+    r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
+    local mflags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs() | r.ImGui_WindowFlags_NoBackground()
+    if r.ImGui_Begin(ctx, '##drag_marker', true, mflags) then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local cx, cy = imx, imy
+        local fill_col = (target_color & 0xFFFFFF00) | 0x44
+        r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, marker_radius, fill_col, 0)
+        r.ImGui_DrawList_AddCircle(dl, cx, cy, marker_radius, target_color, 0, 3.0)
+        r.ImGui_DrawList_AddCircle(dl, cx, cy, marker_radius - 6, target_color, 0, 1.5)
+        r.ImGui_DrawList_AddLine(dl, cx - marker_radius * 0.55, cy, cx + marker_radius * 0.55, cy, target_color, 2.0)
+        r.ImGui_DrawList_AddLine(dl, cx, cy - marker_radius * 0.55, cx, cy + marker_radius * 0.55, target_color, 2.0)
+        r.ImGui_End(ctx)
+    end
+
+    local rel_x = imx - vp_x + (marker_radius + marker_pad + 4)
+    local rel_y = imy - vp_y + (marker_radius + marker_pad + 4)
+    r.ImGui_SetNextWindowBgAlpha(ctx, 0.38)
+    r.ImGui_SetNextWindowPos(ctx, rel_x, rel_y, r.ImGui_Cond_Always())
+    local flags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs()
+    if r.ImGui_Begin(ctx, '##drag_overlay', true, flags) then
+        r.ImGui_Text(ctx, '➡ ' .. drag_label)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), target_color)
+        r.ImGui_Text(ctx, target_type .. ': ' .. target_name)
+        r.ImGui_PopStyleColor(ctx)
+        if not shift then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFF88)
+            r.ImGui_Text(ctx, 'Hold SHIFT = Add to Item')
+            r.ImGui_PopStyleColor(ctx)
+        end
+        r.ImGui_Text(ctx, 'Release to add')
+        r.ImGui_End(ctx)
     end
 end
 
@@ -8590,7 +8681,7 @@ function SearchActions(search_term)
     for category, actions in pairs(categories) do
         filteredActions[category] = {}
         for _, action in ipairs(actions) do
-            if action and action.name and action.name:lower():find(search_term:lower(), 1, true) then
+            if action and action.name and FuzzyFind(action.name, search_term) then
                 local state = reaper.GetToggleCommandState(action.id)
                 action.state = state
                 table.insert(filteredActions[category], action)
@@ -15565,12 +15656,7 @@ function DrawShowcaseLayout(screenshots, top_offset)
                 end
             end
             if do_add then
-                local target_track = GetTargetTrack()
-                if target_track then
-                    AddFXToTrack(target_track, plugin_name)
-                    LAST_USED_FX = plugin_name
-                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                end
+                _LayoutPerformAddOrAction(plugin_name)
             end
 
             ShowPluginContextMenu(plugin_name, "showcase_" .. i)
@@ -15828,12 +15914,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
                 end
             end
             if do_add then
-                local target_track = GetTargetTrack()
-                if target_track then
-                    AddFXToTrack(target_track, plugin_name)
-                    LAST_USED_FX = plugin_name
-                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                end
+                _LayoutPerformAddOrAction(plugin_name)
             end
 
             ShowPluginContextMenu(plugin_name, "polaroid_" .. i)
@@ -16069,12 +16150,7 @@ function DrawUniformLayout(screenshots, top_offset)
                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
             end
             if do_add then
-                local target_track = GetTargetTrack()
-                if target_track then
-                    AddFXToTrack(target_track, plugin_name)
-                    LAST_USED_FX = plugin_name
-                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                end
+                _LayoutPerformAddOrAction(plugin_name)
             end
 
             ShowPluginContextMenu(plugin_name, "uniform_" .. i)
@@ -16295,12 +16371,7 @@ function DrawNeonLayout(screenshots, top_offset)
                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
             end
             if do_add then
-                local target_track = GetTargetTrack()
-                if target_track then
-                    AddFXToTrack(target_track, plugin_name)
-                    LAST_USED_FX = plugin_name
-                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                end
+                _LayoutPerformAddOrAction(plugin_name)
             end
 
             ShowPluginContextMenu(plugin_name, "neon_" .. i)
@@ -16510,12 +16581,7 @@ function DrawVinylLayout(screenshots, top_offset)
                 if clicked and dragging_fx_name ~= plugin_name then do_add = true end
             end
             if do_add then
-                local target_track = GetTargetTrack()
-                if target_track then
-                    AddFXToTrack(target_track, plugin_name)
-                    LAST_USED_FX = plugin_name
-                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                end
+                _LayoutPerformAddOrAction(plugin_name)
             end
 
             ShowPluginContextMenu(plugin_name, "vinyl_" .. i)
@@ -17216,9 +17282,14 @@ function ShowScreenshotWindow()
             local changed, new_search_term = r.ImGui_InputTextWithHint(ctx, "##ProjectSearch", "SEARCH PROJECTS", project_search_term)
             if changed then
                 project_search_term = new_search_term
+                _project_search_change_time = r.time_precise()
+                _project_search_pending = true
+            end
+            if _project_search_pending and (r.time_precise() - (_project_search_change_time or 0)) * 1000.0 >= 150 then
+                _project_search_pending = false
                 filtered_projects = {}
                 for _, project in ipairs(projects) do
-                    if project.name:lower():find(project_search_term:lower(), 1, true) then
+                    if FuzzyFind(project.name, project_search_term) then
                         table.insert(filtered_projects, project)
                     end
                 end
@@ -19565,6 +19636,106 @@ function ShowScreenshotWindow()
                     end
                     
                     if #filtered_plugins > 0 then
+                        if config.use_polaroid_layout or config.use_showcase_layout or config.use_uniform_layout or config.use_neon_layout or config.use_vinyl_layout then
+                            local groups = {}
+                            local order = {}
+                            for _, plugin in ipairs(filtered_plugins) do
+                                local key
+                                if plugin.is_master then
+                                    key = "master_track"
+                                else
+                                    key = (plugin.track_number or "?") .. "_" .. (plugin.track_name or "")
+                                end
+                                if not groups[key] then
+                                    groups[key] = {plugins = {}, sample = plugin}
+                                    order[#order+1] = key
+                                end
+                                groups[key].plugins[#groups[key].plugins+1] = plugin
+                            end
+                            for _, key in ipairs(order) do
+                                local g = groups[key]
+                                local sample = g.sample
+                                local hdr_track = nil
+                                if sample.is_master then
+                                    hdr_track = r.GetMasterTrack(0)
+                                else
+                                    hdr_track = r.GetTrack(0, (sample.track_number or 1) - 1)
+                                end
+                                local hdr_color, hdr_text_color
+                                if sample.is_master then
+                                    hdr_color, hdr_text_color = 0x404040FF, 0xFFFFFFFF
+                                else
+                                    hdr_color, hdr_text_color = GetTrackColorAndTextColor(hdr_track)
+                                end
+                                r.ImGui_Separator(ctx)
+                                local _tmp_popped_stylevars_grp = false
+                                if not popped_view_stylevars then r.ImGui_PopStyleVar(ctx, 2); _tmp_popped_stylevars_grp = true end
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), hdr_color)
+                                local _hdr_grp_open = r.ImGui_BeginChild(ctx, "ProjFXGrpHdr_" .. key, -1, 22)
+                                r.ImGui_PopStyleColor(ctx)
+                                if _hdr_grp_open then
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+                                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hdr_text_color)
+                                    local label
+                                    if sample.is_master then
+                                        label = "Master Track"
+                                    else
+                                        label = string.format("Track %d: %s", sample.track_number or 0, sample.track_name ~= '' and sample.track_name or 'Unnamed')
+                                    end
+                                    if r.ImGui_Button(ctx, label, -1, 20) then
+                                        if hdr_track then r.SetOnlyTrackSelected(hdr_track) end
+                                    end
+                                    r.ImGui_PopStyleColor(ctx, 4)
+                                    r.ImGui_EndChild(ctx)
+                                end
+                                if _tmp_popped_stylevars_grp then
+                                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
+                                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
+                                end
+                                local name_to_fx = {}
+                                local masonry_data = {}
+                                for _, p in ipairs(g.plugins) do
+                                    if p.fx_name and HasScreenshot(p.fx_name) then
+                                        name_to_fx[p.fx_name] = p
+                                        masonry_data[#masonry_data+1] = {name = p.fx_name, shortcut = NextScreenshotShortcutLabel(p.fx_name)}
+                                    end
+                                end
+                                local prev_override = _layout_fx_click_override
+                                _layout_fx_click_override = function(plugin_name)
+                                    local p = name_to_fx[plugin_name]
+                                    if not p or not p.fx_index or p.fx_index < 0 then return false end
+                                    local trk
+                                    if p.is_master then
+                                        trk = r.GetMasterTrack(0)
+                                    else
+                                        trk = r.GetTrack(0, (p.track_number or 1) - 1)
+                                    end
+                                    if trk and r.ValidatePtr(trk, "MediaTrack*") then
+                                        local is_open = r.TrackFX_GetFloatingWindow(trk, p.fx_index)
+                                        r.TrackFX_Show(trk, p.fx_index, is_open and 2 or 3)
+                                        return true
+                                    end
+                                    return false
+                                end
+                                r.ImGui_PushID(ctx, "ProjFXGrp_" .. key)
+                                if config.use_polaroid_layout then
+                                    DrawPolaroidLayout(masonry_data)
+                                elseif config.use_showcase_layout then
+                                    DrawShowcaseLayout(masonry_data)
+                                elseif config.use_uniform_layout then
+                                    DrawUniformLayout(masonry_data)
+                                elseif config.use_neon_layout then
+                                    DrawNeonLayout(masonry_data)
+                                elseif config.use_vinyl_layout then
+                                    DrawVinylLayout(masonry_data)
+                                end
+                                r.ImGui_PopID(ctx)
+                                _layout_fx_click_override = prev_override
+                            end
+                            goto skip_current_project_fx_render
+                        end
                         local current_track_identifier = nil
                         local column_width = available_width / num_columns
 
@@ -19778,6 +19949,7 @@ function ShowScreenshotWindow()
                     else
                         r.ImGui_Text(ctx, "No Plugins in Selected Folder.")
                     end
+                    ::skip_current_project_fx_render::
 
                 elseif selected_folder == "Current Track FX" then
                     filtered_plugins = GetCurrentTrackFX()
@@ -19827,6 +19999,47 @@ function ShowScreenshotWindow()
                         end
                     end
 
+
+                    -- ALTERNATIEVE LAYOUTS VOOR CURRENT TRACK FX (lijst/masonry uitgesloten)
+                    if config.use_polaroid_layout or config.use_showcase_layout or config.use_uniform_layout or config.use_neon_layout or config.use_vinyl_layout then
+                        local name_to_fx = {}
+                        local with_shot = {}
+                        for _, fx in ipairs(filtered_plugins) do
+                            if fx and fx.fx_name then
+                                name_to_fx[fx.fx_name] = fx
+                                if HasScreenshot(fx.fx_name) then
+                                    with_shot[#with_shot+1] = fx.fx_name
+                                end
+                            end
+                        end
+                        local masonry_data = {}
+                        for _, pname in ipairs(with_shot) do
+                            masonry_data[#masonry_data+1] = {name = pname, shortcut = NextScreenshotShortcutLabel(pname)}
+                        end
+                        local prev_override = _layout_fx_click_override
+                        _layout_fx_click_override = function(plugin_name)
+                            local fx = name_to_fx[plugin_name]
+                            if fx and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") and fx.fx_index and fx.fx_index >= 0 then
+                                local is_open = r.TrackFX_GetFloatingWindow(TRACK, fx.fx_index)
+                                r.TrackFX_Show(TRACK, fx.fx_index, is_open and 2 or 3)
+                                return true
+                            end
+                            return false
+                        end
+                        if config.use_polaroid_layout then
+                            DrawPolaroidLayout(masonry_data)
+                        elseif config.use_showcase_layout then
+                            DrawShowcaseLayout(masonry_data)
+                        elseif config.use_uniform_layout then
+                            DrawUniformLayout(masonry_data)
+                        elseif config.use_neon_layout then
+                            DrawNeonLayout(masonry_data)
+                        elseif config.use_vinyl_layout then
+                            DrawVinylLayout(masonry_data)
+                        end
+                        _layout_fx_click_override = prev_override
+                        goto skip_current_track_fx_render
+                    end
 
                     -- NORMALE LAYOUT VOOR CURRENT TRACK FX (MASONRY UITGEZET)
                     local available_width = r.ImGui_GetContentRegionAvail(ctx)
@@ -23174,14 +23387,17 @@ function HandleDragAndDrop()
         end
         local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
         if shift then
-            local item = r.GetSelectedMediaItem(0,0)
+            local sx, sy = r.GetMousePosition()
+            local item = r.GetItemFromPoint and r.GetItemFromPoint(sx, sy, false) or nil
             if item then
                 local take = r.GetActiveTake(item)
                 if take then
+                    r.Undo_BeginBlock()
                     for _, pname in ipairs(plugins) do
                         r.TakeFX_AddByName(take, pname, 1)
                         LAST_USED_FX = pname
                     end
+                    r.Undo_EndBlock("Add FX to Item", -1)
                     if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
                     if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
                 end
@@ -23189,13 +23405,6 @@ function HandleDragAndDrop()
         else
             local sx, sy = r.GetMousePosition()
             local track = select(1, r.GetTrackFromPoint(sx, sy))
-            if not track then
-                local ix, iy = r.ImGui_GetMousePos(ctx)
-                track = select(1, r.GetTrackFromPoint(ix, iy))
-            end
-            if not track then
-                track = GetTargetTrack()
-            end
             if track then
                 local last_fx_index = nil
                 for _, pname in ipairs(plugins) do
