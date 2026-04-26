@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.7.4
+-- @version 0.7.5
 -- @changelog:
 --[[       
 v0.7.3:
@@ -6637,7 +6637,12 @@ local function loop()
         0.0
     )
     
+    local main_window_padding_x, main_window_padding_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_WindowPadding())
+    if ui.was_docked then
+        main_window_padding_x = 0
+    end
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), main_window_padding_x, main_window_padding_y)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), window_bg_color)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), child_bg_color)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), window_bg_color)
@@ -8683,7 +8688,12 @@ local function loop()
         r.ImGui_Dummy(ctx, 3, 0)
         r.ImGui_SameLine(ctx)
         if r.ImGui_BeginChild(ctx, "RightFileBrowserPanel", right_panel_width - 5, 0) then
-            local FOOTER_H = ui.waveform_preview_height + 12
+            local divider_h = 5
+            local _, item_sp_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+            local _, frame_pad_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_FramePadding())
+            local _, win_pad_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_WindowPadding())
+            local footer_extra_h = math.ceil(item_sp_y + frame_pad_y + (win_pad_y * 0.5) + 2)
+            local FOOTER_H = ui.waveform_preview_height + divider_h + footer_extra_h
             local topbar_start_x = r.ImGui_GetCursorPosX(ctx)
             local quit_button_size = 20
             local shortcuts_button_size = 20
@@ -9807,7 +9817,6 @@ local function loop()
             end
 
             local divider_w = r.ImGui_GetContentRegionAvail(ctx)
-            local divider_h = 5
             local div_x, div_y = r.ImGui_GetCursorScreenPos(ctx)
             r.ImGui_InvisibleButton(ctx, "##waveform_divider", divider_w, divider_h)
             local div_draw = r.ImGui_GetWindowDrawList(ctx)
@@ -10570,7 +10579,7 @@ local function loop()
     monitor_transport_state()
     
     r.ImGui_PopStyleColor(ctx, 4)
-    r.ImGui_PopStyleVar(ctx, 1)
+    r.ImGui_PopStyleVar(ctx, 2)
     
     if playback.playing_preview and not playback.is_paused and waveform.monitor_sel_start and waveform.monitor_sel_end and math.abs(waveform.monitor_sel_end - waveform.monitor_sel_start) > 0.01 and not playback.loop_play then
         local ok, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")

@@ -1,6 +1,6 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.6.4
+-- @version 0.6.5
 -- @changelog:
 --[[ 
     v0.6.3:
@@ -4379,6 +4379,137 @@ function OpenScreenshotsFolder()
     end
 end
 
+local function ImportThemeFromMediaBrowser()
+    local options_path = r.GetResourcePath() .. "/Scripts/TK_media_browser_options.txt"
+    local f = io.open(options_path, "r")
+    if not f then return false end
+    local content = f:read("*a")
+    f:close()
+    local fn = load("return " .. content)
+    if not fn then return false end
+    local ok, options = pcall(fn)
+    if not ok or type(options) ~= "table" then return false end
+
+    local function to_gray(v)
+        if type(v) ~= "number" then return nil end
+        return math.max(0, math.min(255, math.floor(v * 255 + 0.5)))
+    end
+
+    local bg_gray = to_gray(options.window_bg_brightness)
+    if bg_gray then
+        config.background_gray = bg_gray
+        config.dropdown_bg_gray = math.max(0, math.min(255, bg_gray + 6))
+    end
+
+    if type(options.window_opacity) == "number" then
+        config.window_alpha = math.max(0, math.min(1, options.window_opacity))
+        window_alpha_int = math.floor(config.window_alpha * 100)
+    end
+
+    local text_gray = to_gray(options.text_brightness)
+    if text_gray then
+        config.text_gray = text_gray
+    end
+
+    local border_gray = to_gray(options.grid_brightness)
+    if border_gray then
+        config.window_border_gray = border_gray
+    end
+
+    local btn_gray = to_gray(options.button_brightness)
+    if btn_gray then
+        local btn_hover_gray = math.max(0, math.min(255, btn_gray + 20))
+        local btn_active_gray = math.max(0, math.min(255, btn_gray + 40))
+
+        config.button_background_gray = btn_gray
+        config.button_hover_gray = btn_hover_gray
+
+        config.frame_bg_gray = btn_gray
+        config.frame_bg_hover_gray = btn_hover_gray
+        config.frame_bg_active_gray = btn_active_gray
+
+        config.tab_gray = btn_gray
+        config.tab_hovered_gray = btn_hover_gray
+    end
+
+    local btn_text_gray = to_gray(options.button_text_brightness)
+    if btn_text_gray then
+        config.slider_grab_gray = math.max(0, math.min(255, math.floor(btn_text_gray * 0.75)))
+        config.slider_active_gray = math.max(0, math.min(255, math.floor(btn_text_gray * 0.90)))
+    end
+
+    config.background_color = r.ImGui_ColorConvertDouble4ToU32(config.background_gray/255, config.background_gray/255, config.background_gray/255, config.window_alpha)
+    config.dropdown_bg_color = r.ImGui_ColorConvertDouble4ToU32(config.dropdown_bg_gray/255, config.dropdown_bg_gray/255, config.dropdown_bg_gray/255, 1)
+    config.text_color = r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1)
+
+    config.button_background_color = r.ImGui_ColorConvertDouble4ToU32(config.button_background_gray/255, config.button_background_gray/255, config.button_background_gray/255, 1)
+    config.button_hover_color = r.ImGui_ColorConvertDouble4ToU32(config.button_hover_gray/255, config.button_hover_gray/255, config.button_hover_gray/255, 1)
+
+    config.frame_bg_color = r.ImGui_ColorConvertDouble4ToU32(config.frame_bg_gray/255, config.frame_bg_gray/255, config.frame_bg_gray/255, 1)
+    config.frame_bg_hover_color = r.ImGui_ColorConvertDouble4ToU32(config.frame_bg_hover_gray/255, config.frame_bg_hover_gray/255, config.frame_bg_hover_gray/255, 1)
+    config.frame_bg_active_color = r.ImGui_ColorConvertDouble4ToU32(config.frame_bg_active_gray/255, config.frame_bg_active_gray/255, config.frame_bg_active_gray/255, 1)
+
+    config.slider_grab_color = r.ImGui_ColorConvertDouble4ToU32(config.slider_grab_gray/255, config.slider_grab_gray/255, config.slider_grab_gray/255, 1)
+    config.slider_active_color = r.ImGui_ColorConvertDouble4ToU32(config.slider_active_gray/255, config.slider_active_gray/255, config.slider_active_gray/255, 1)
+
+    config.tab_color = r.ImGui_ColorConvertDouble4ToU32(config.tab_gray/255, config.tab_gray/255, config.tab_gray/255, 1)
+    config.tab_hovered_color = r.ImGui_ColorConvertDouble4ToU32(config.tab_hovered_gray/255, config.tab_hovered_gray/255, config.tab_hovered_gray/255, 1)
+
+    if type(options.selected_font) == "string" then
+        for i, font_name in ipairs(TKFXfonts) do
+            if font_name == options.selected_font then
+                config.selected_font = i
+                needs_font_update = true
+                break
+            end
+        end
+    end
+    SaveConfig()
+    return true
+end
+
+local function ResetThemeToDefaults()
+    local defaults = SetDefaultConfig()
+    local keys = {
+        "window_alpha",
+        "window_border_size",
+        "window_border_gray",
+        "text_gray",
+        "background_gray",
+        "background_color",
+        "button_background_gray",
+        "button_background_color",
+        "button_hover_gray",
+        "button_hover_color",
+        "frame_bg_gray",
+        "frame_bg_color",
+        "frame_bg_hover_gray",
+        "frame_bg_hover_color",
+        "frame_bg_active_gray",
+        "frame_bg_active_color",
+        "slider_grab_gray",
+        "slider_grab_color",
+        "slider_active_gray",
+        "slider_active_color",
+        "dropdown_bg_gray",
+        "dropdown_bg_color",
+        "tab_gray",
+        "tab_color",
+        "tab_hovered_gray",
+        "tab_hovered_color",
+        "selected_font",
+        "font_size",
+        "custom_folder_use_default_font",
+        "custom_folder_font_size"
+    }
+    for _, key in ipairs(keys) do
+        config[key] = defaults[key]
+    end
+    window_alpha_int = math.floor((config.window_alpha or 0.9) * 100)
+    needs_font_update = true
+    SaveConfig()
+end
+
 function ShowConfigWindow()
     local function NewSection(title)
         r.ImGui_Dummy(ctx, 0, 10)
@@ -4438,6 +4569,7 @@ function ShowConfigWindow()
         r.ImGui_Spacing(ctx)
         if _G.settings_active_tab == "GUI" then
             NewSection("GUI:")
+            r.ImGui_Dummy(ctx, 0, 6)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Background")
             r.ImGui_SameLine(ctx)
@@ -4678,6 +4810,18 @@ function ShowConfigWindow()
                 config.custom_folder_use_default_font = new_use_default
                 needs_font_update = true
                 SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            if r.ImGui_Button(ctx, "Import TK Media Brws") then
+                if not ImportThemeFromMediaBrowser() then
+                    r.ShowMessageBox("TK_media_browser_options.txt not found or invalid.", "Import failed", 0)
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            if r.ImGui_Button(ctx, "Reset Theme") then
+                ResetThemeToDefaults()
             end
             if not config.custom_folder_use_default_font then
                 r.ImGui_SameLine(ctx)
