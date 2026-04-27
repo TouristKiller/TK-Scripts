@@ -1,6 +1,6 @@
 -- @description TK_Arrange_Background_Presets
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.3.0
 -- @changelog
 --[[   + Initial version. ]]--
 
