@@ -807,6 +807,17 @@ v1.7.0:
             <source file="paint_json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/paint_json.lua</source>
         </version>
     </reapack>
+
+    <reapack name="TK_Arrange_Background_Presets.lua" type="script" desc="TK Arrange Background Presets">
+        <version name="1.2.0" author="TouristKiller" time="2026-04-28T01:20:00Z">
+            <changelog><![CDATA[
++ Initial release
++ English UI labels
++ Grid color support per preset
+]]></changelog>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Arrange_Background_Presets.lua</source>
+        </version>
+    </reapack>
 </category>
 
  <category name="Requests">
