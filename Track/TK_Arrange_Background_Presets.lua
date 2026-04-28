@@ -1,6 +1,6 @@
 -- @description TK_Arrange_Background_Presets
 -- @author TouristKiller
--- @version 1.4.0
+-- @version 1.5.0
 -- @changelog
 --[[   + Initial version. ]]--
 
@@ -471,6 +471,14 @@ local function generate_preset_script(index)
   L[#L+1] = '  return r.ColorToNative(tonumber(clean:sub(1,2),16), tonumber(clean:sub(3,4),16), tonumber(clean:sub(5,6),16))'
   L[#L+1] = 'end'
   L[#L+1] = ''
+  L[#L+1] = 'local _, _, _sec, _cmd = r.get_action_context()'
+  L[#L+1] = "local _prev_cmd = tonumber(r.GetExtState('TK_ABP', 'active_cmd')) or 0"
+  L[#L+1] = "local _prev_sec = tonumber(r.GetExtState('TK_ABP', 'active_sec')) or 0"
+  L[#L+1] = 'if _prev_cmd ~= 0 and _prev_cmd ~= _cmd then'
+  L[#L+1] = '  r.SetToggleCommandState(_prev_sec, _prev_cmd, 0)'
+  L[#L+1] = '  r.RefreshToolbar2(_prev_sec, _prev_cmd)'
+  L[#L+1] = 'end'
+  L[#L+1] = ''
   L[#L+1] = 'r.Undo_BeginBlock()'
   L[#L+1] = 'r.PreventUIRefresh(1)'
   local col = preset.colors.col_arrangebg or '#000000'
@@ -503,6 +511,10 @@ local function generate_preset_script(index)
   end
   L[#L+1] = 'r.PreventUIRefresh(-1)'
   L[#L+1] = "r.Undo_EndBlock('Apply preset: " .. safe_label .. "', -1)"
+  L[#L+1] = 'r.SetToggleCommandState(_sec, _cmd, 1)'
+  L[#L+1] = 'r.RefreshToolbar2(_sec, _cmd)'
+  L[#L+1] = "r.SetExtState('TK_ABP', 'active_cmd', tostring(_cmd), true)"
+  L[#L+1] = "r.SetExtState('TK_ABP', 'active_sec', tostring(_sec), true)"
   local file = io.open(filename, 'w')
   if not file then
     set_message('Could not write script file.', 0xE07A7AFF)
