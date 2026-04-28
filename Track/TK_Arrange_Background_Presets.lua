@@ -1,6 +1,6 @@
 -- @description TK_Arrange_Background_Presets
 -- @author TouristKiller
--- @version 1.3.0
+-- @version 1.4.0
 -- @changelog
 --[[   + Initial version. ]]--
 
@@ -18,7 +18,7 @@ local preset_file = script_path .. 'TK_Arrange_Background_Presets.json'
 local ctx = r.ImGui_CreateContext('TK Arrange BG Presets')
 
 local WINDOW_TITLE = 'TK Arrange BG Presets'
-local WINDOW_DEFAULTS = {x = 140, y = 140, w = 700, h = 700}
+local WINDOW_DEFAULTS = {x = 140, y = 140, w = 700, h = 660}
 
 local BACKGROUND_FIELDS = {
   {key = 'col_arrangebg', label = 'Arrange background'},
@@ -451,6 +451,69 @@ local function save_editor_changes()
   set_message('Preset saved.', 0x9AD27AFF)
 end
 
+local function generate_preset_script(index)
+  local preset = state.data.presets[index]
+  if not preset then return end
+  local name = preset.name or ('Preset ' .. index)
+  local safe_name = name:gsub('[^%w%s%-_]', ''):gsub('%s+', '_')
+  local safe_label = name:gsub("'", '')
+  local filename = script_path .. 'TK_ABP_Apply_' .. safe_name .. '.lua'
+  local L = {}
+  L[#L+1] = '-- @description TK Apply preset: ' .. name
+  L[#L+1] = '-- @author TouristKiller'
+  L[#L+1] = '-- @version 1.0'
+  L[#L+1] = ''
+  L[#L+1] = 'local r = reaper'
+  L[#L+1] = ''
+  L[#L+1] = 'local function hex_to_native(hex)'
+  L[#L+1] = "  local clean = (hex or ''):gsub('%s+', ''):upper()"
+  L[#L+1] = "  if clean:sub(1,1) == '#' then clean = clean:sub(2) end"
+  L[#L+1] = '  return r.ColorToNative(tonumber(clean:sub(1,2),16), tonumber(clean:sub(3,4),16), tonumber(clean:sub(5,6),16))'
+  L[#L+1] = 'end'
+  L[#L+1] = ''
+  L[#L+1] = 'r.Undo_BeginBlock()'
+  L[#L+1] = 'r.PreventUIRefresh(1)'
+  local col = preset.colors.col_arrangebg or '#000000'
+  L[#L+1] = "r.SetThemeColor('col_arrangebg', hex_to_native('" .. col .. "'), 0)"
+  if preset.apply_tracks then
+    for i = 2, #BACKGROUND_FIELDS do
+      local key = BACKGROUND_FIELDS[i].key
+      local c = preset.colors[key] or '#000000'
+      L[#L+1] = "r.SetThemeColor('" .. key .. "', hex_to_native('" .. c .. "'), 0)"
+    end
+  end
+  if preset.apply_grid then
+    for _, field in ipairs(GRID_FIELDS) do
+      local c = preset.colors[field.key] or '#000000'
+      L[#L+1] = "r.SetThemeColor('" .. field.key .. "', hex_to_native('" .. c .. "'), 0)"
+    end
+  end
+  L[#L+1] = 'r.TrackList_AdjustWindows(false)'
+  L[#L+1] = 'r.UpdateTimeline()'
+  L[#L+1] = 'r.UpdateArrange()'
+  if preset.apply_tracks then
+    for _, field in ipairs(DIVIDER_FIELDS) do
+      local c = preset.colors[field.key] or '#000000'
+      L[#L+1] = "r.SetThemeColor('" .. field.key .. "', hex_to_native('" .. c .. "'), 0)"
+    end
+    L[#L+1] = 'r.ThemeLayout_RefreshAll()'
+    L[#L+1] = 'r.TrackList_AdjustWindows(false)'
+    L[#L+1] = 'r.UpdateTimeline()'
+    L[#L+1] = 'r.UpdateArrange()'
+  end
+  L[#L+1] = 'r.PreventUIRefresh(-1)'
+  L[#L+1] = "r.Undo_EndBlock('Apply preset: " .. safe_label .. "', -1)"
+  local file = io.open(filename, 'w')
+  if not file then
+    set_message('Could not write script file.', 0xE07A7AFF)
+    return
+  end
+  file:write(table.concat(L, '\n') .. '\n')
+  file:close()
+  r.AddRemoveReaScript(true, 0, filename, true)
+  set_message('Script generated & added to action list: TK_ABP_Apply_' .. safe_name .. '.lua', 0x9AD27AFF)
+end
+
 local function draw_color_row(field)
   local value = state.editor.colors[field.key] or '#000000'
   local valid = hex_to_native(value) ~= nil
@@ -488,11 +551,11 @@ local function draw_left_panel(height)
         sync_editor_from_selected()
       end
     end
-    r.ImGui_Dummy(ctx, 0, 8)
-    if r.ImGui_Button(ctx, 'New preset', -1, 28) then
+    r.ImGui_Dummy(ctx, 0, 4)
+    if r.ImGui_Button(ctx, 'New preset', -1, 22) then
       add_preset()
     end
-    if r.ImGui_Button(ctx, 'Delete preset', -1, 28) then
+    if r.ImGui_Button(ctx, 'Delete preset', -1, 22) then
       delete_selected_preset()
     end
   end
@@ -525,50 +588,50 @@ local function draw_right_panel(height)
     if changed_grid then
       state.editor.apply_grid = apply_grid
     end
-    r.ImGui_Dummy(ctx, 0, 6)
+    r.ImGui_Dummy(ctx, 0, 4)
     r.ImGui_Text(ctx, 'Background colors')
     r.ImGui_Separator(ctx)
     for _, field in ipairs(BACKGROUND_FIELDS) do
       draw_color_row(field)
     end
-    r.ImGui_Dummy(ctx, 0, 6)
+    r.ImGui_Dummy(ctx, 0, 4)
     r.ImGui_Text(ctx, 'Grid colors')
     r.ImGui_Separator(ctx)
     for _, field in ipairs(GRID_FIELDS) do
       draw_color_row(field)
     end
-    r.ImGui_Dummy(ctx, 0, 6)
+    r.ImGui_Dummy(ctx, 0, 4)
     r.ImGui_Text(ctx, 'Track divider lines')
     r.ImGui_Separator(ctx)
     for _, field in ipairs(DIVIDER_FIELDS) do
       draw_color_row(field)
     end
-    r.ImGui_Dummy(ctx, 0, 8)
+    r.ImGui_Dummy(ctx, 0, 4)
     r.ImGui_Text(ctx, 'Actions')
     r.ImGui_Separator(ctx)
-    if r.ImGui_Button(ctx, 'Apply', row2_w, 30) then
+    if r.ImGui_Button(ctx, 'Apply', row2_w, 24) then
       apply_selected_preset()
     end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, 'Save changes', row2_w, 30) then
+    if r.ImGui_Button(ctx, 'Save changes', row2_w, 24) then
       save_editor_changes()
     end
-    if r.ImGui_Button(ctx, 'Set as toggle A', row3_w, 28) then
+    if r.ImGui_Button(ctx, 'Set as toggle A', row3_w, 22) then
       set_toggle_slot('a')
     end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, 'Set as toggle B', row3_w, 28) then
+    if r.ImGui_Button(ctx, 'Set as toggle B', row3_w, 22) then
       set_toggle_slot('b')
     end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, 'Toggle A/B', row3_w, 28) then
+    if r.ImGui_Button(ctx, 'Toggle A/B', row3_w, 22) then
       toggle_a_b()
     end
-    if r.ImGui_Button(ctx, 'Read current colors', row2_w, 28) then
+    if r.ImGui_Button(ctx, 'Read current colors', row2_w, 22) then
       save_current_to_selected()
     end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, 'Reset theme defaults', row2_w, 28) then
+    if r.ImGui_Button(ctx, 'Reset theme defaults', row2_w, 22) then
       local ok = run_action('TK Arrange Background Presets - Reset', function()
         reset_theme_colors()
         return true
@@ -579,8 +642,11 @@ local function draw_right_panel(height)
         set_message('Reset failed.', 0xE07A7AFF)
       end
     end
-    r.ImGui_Dummy(ctx, 0, 8)
+    if r.ImGui_Button(ctx, 'Generate script', -1, 22) then
+      generate_preset_script(state.selected)
+    end
     if state.message ~= '' then
+      r.ImGui_Dummy(ctx, 0, 4)
       r.ImGui_TextColored(ctx, state.message_color, state.message)
     end
   end
