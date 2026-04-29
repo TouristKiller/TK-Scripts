@@ -186,7 +186,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.9.6" author="TouristKiller" time="2026-04-25T15:40:00Z">
+        <version name="1.9.7" author="TouristKiller" time="2026-04-29T16:20:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -194,29 +194,45 @@
             <source file="custom_buttons.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/custom_buttons.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
             <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
-            <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_VU_Meter.jsfx</source>
-            <source type="effect" file="TK_ChannelStrip.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_ChannelStrip.jsfx</source>
-            <source type="effect" file="TK_Trim.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_Trim.jsfx</source>
-            <source main="main" file="TK_MIXER_ONLY.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_MIXER_ONLY.lua</source>
-            <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/Images/knob01.png</source>
             <changelog><![CDATA[
-   v1.9.6:
-  + Fixed: Tempo drag not working on macOS (replaced JS_Mouse_SetPosition cursor-warp logic with ImGui_GetMouseDragDelta, which avoids the Cocoa mouse event suppression after CGWarpMouseCursorPosition)
+    v1.9.7:
+    + Removed: MIXER (this is now a standalone script - TK_Mixer)
 
-   v1.9.4:
-  + Added: Configurable transport button order (reorder via up/down arrows in settings)
-  + Added: Optional button background for transport buttons (color, hover, active, padding, rounding, border)
-  + Added: Separate icon color setting for graphic transport buttons
-  + Added: Extra width (horizontal padding) control for transport button backgrounds
-  + Fixed: Arrow icons (rewind/forward) now properly centered within button area
-  + Fixed: Equal spacing between transport buttons when background is enabled
-  + Refactored: Graphic and text mode rendering now use a single data-driven loop
+    v1.9.6:
+    + Fixed: Tempo drag not working on macOS (replaced JS_Mouse_SetPosition cursor-warp logic with ImGui_GetMouseDragDelta, which avoids the Cocoa mouse event suppression after CGWarpMouseCursorPosition)
+
+    v1.9.4:
+    + Added: Configurable transport button order (reorder via up/down arrows in settings)
+    + Added: Optional button background for transport buttons (color, hover, active, padding, rounding, border)
+    + Added: Separate icon color setting for graphic transport buttons
+    + Added: Extra width (horizontal padding) control for transport button backgrounds
+    + Fixed: Arrow icons (rewind/forward) now properly centered within button area
+    + Fixed: Equal spacing between transport buttons when background is enabled
+    + Refactored: Graphic and text mode rendering now use a single data-driven loop
 ]]></changelog>
         </version>
     </reapack>
 </category>
 
-
+<category name="Mixer">
+    <reapack name="TK_Mixer.lua" type="script" desc="TK Mixer">
+        <version name="1.0.0" author="TouristKiller" time="2026-04-29T16:20:00Z">
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer.lua</source>
+            <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/json.lua</source>
+            <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/icon_browser.lua</source>
+            <source type="effect" file="TK_ChannelStrip.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_ChannelStrip.jsfx</source>
+            <source type="effect" file="TK_Trim.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Trim.jsfx</source>
+            <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_VU_Meter.jsfx</source>
+            <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/Images/knob01.png</source>
+            <changelog><![CDATA[
+   v1.0.0:
+  + Initial standalone release
+  + Extracted from TK_TRANSPORT for independent use
+  + All mixer functionality preserved: VU meters, Compressor, Limiter, EQ, FX slots, Meters, Sidebar, Parameters
+]]></changelog>
+        </version>
+    </reapack>
+</category>
 
 
  <category name="Tools">
