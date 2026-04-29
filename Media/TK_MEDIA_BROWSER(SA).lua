@@ -1,8 +1,20 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.7.5
+-- @version 0.7.7
 -- @changelog:
 --[[       
+v0.7.7:
++ Saved Searches: save the current search (text + file-type filters + active location/collection + view mode) under a name
++ New "Searches" tab in the view-mode grid with list of saved searches
++ Right-click context menu on a saved search: Apply / Rename / Update with current search / Delete
++ "S" button next to the search bar to quickly save the current search
++ "X" button next to the search bar to instantly clear the search term
++ Applying a saved search restores the search term in the search bar
++ Fixed: search field had no effect in folder browse mode (latent bug)
++ Fixed: applying a saved search showed all files instead of the filtered results
++ Fixed: ImGui PopID error when deleting a saved search via the context menu
++ Fixed: in tree mode the sample played twice (once on mouse press, once on release)
+
 v0.7.3:
 + Quick-toggle filter icons placed right after the Start button (audio waveform, MIDI note, video, image)
 + Fixed: filter icons could be pushed off-screen by right-aligned positioning
@@ -235,6 +247,16 @@ local function clear_sort_cache()
     search_filter.last_sort_direction = 0
     search_filter._presorted = false
 end
+
+local saved_searches = {
+    items = {},
+    renaming_index = nil,
+    renaming_initialized = false,
+    pending_save_popup = false,
+    pending_save_name = "",
+    pending_commit = false,
+    previous_view_mode = nil
+}
 
 -- Cache Management
 local cache_mgmt = {
@@ -2593,8 +2615,147 @@ local function add_to_search_history(term)
     end
     save_search_history()
 end
+
+function save_saved_searches()
+    local file = io.open(r.GetResourcePath() .. "/Scripts/TK_media_browser_searches.txt", "w")
+    if file then
+        file:write(serialize(saved_searches.items))
+        file:close()
+    end
+end
+
+function load_saved_searches()
+    local file = io.open(r.GetResourcePath() .. "/Scripts/TK_media_browser_searches.txt", "r")
+    if not file then return end
+    local content = file:read("*all")
+    file:close()
+    if not content or content == "" then return end
+    local chunk = load("return " .. content)
+    if not chunk then return end
+    local ok, data = pcall(chunk)
+    if ok and type(data) == "table" then
+        saved_searches.items = data
+    end
+end
+
+function search_name_exists(name, except_index)
+    for i, item in ipairs(saved_searches.items) do
+        if i ~= except_index and item.name == name then
+            return true
+        end
+    end
+    return false
+end
+
+function snapshot_current_search(name)
+    local effective_mode = ui.current_view_mode
+    if effective_mode == "searches" then
+        effective_mode = saved_searches.previous_view_mode or "folders"
+    end
+    local entry = {
+        name = name,
+        created = os.date("%Y-%m-%d %H:%M:%S"),
+        search_term = search_filter.search_term or "",
+        filters = {
+            audio = ui_settings.filter_audio,
+            midi  = ui_settings.filter_midi,
+            video = ui_settings.filter_video,
+            image = ui_settings.filter_image
+        },
+        view_mode = effective_mode,
+        location = nil,
+        location_index = nil,
+        collection = nil,
+        auto_category = nil,
+        flat_view = file_location.flat_view
+    }
+    if effective_mode == "folders" then
+        if ui.current_view_mode == "folders" then
+            entry.location = file_location.current_location
+            entry.location_index = file_location.selected_location_index
+        else
+            entry.location = file_location.last_folder_location
+            entry.location_index = file_location.last_folder_index
+            entry.flat_view = file_location.saved_folder_flat_view
+        end
+    elseif effective_mode == "collections" then
+        if ui.current_view_mode == "collections" then
+            entry.collection = file_location.selected_collection
+        else
+            entry.collection = file_location.last_collection_name
+        end
+    elseif effective_mode == "auto" then
+        entry.location = ui.auto_source_location
+        entry.location_index = ui.auto_source_index
+        entry.auto_category = ui.auto_selected_category
+    end
+    return entry
+end
+
+function add_saved_search(name)
+    name = (name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if name == "" then return false, "Empty name" end
+    if search_name_exists(name) then return false, "Name already exists" end
+    table.insert(saved_searches.items, snapshot_current_search(name))
+    save_saved_searches()
+    return true
+end
+
+function delete_saved_search(index)
+    if not saved_searches.items[index] then return end
+    table.remove(saved_searches.items, index)
+    save_saved_searches()
+end
+
+function rename_saved_search(index, new_name)
+    new_name = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if new_name == "" then return false, "Empty name" end
+    if not saved_searches.items[index] then return false, "Not found" end
+    if search_name_exists(new_name, index) then return false, "Name already exists" end
+    saved_searches.items[index].name = new_name
+    save_saved_searches()
+    return true
+end
+
+function recompute_search_filtered()
+    search_filter.filtered_files = {}
+    if not file_location.flat_view then
+        return
+    end
+    if search_filter.search_term == "" then
+        search_filter.filtered_files = search_filter.cached_flat_files
+        return
+    end
+    local search_lower = string.lower(search_filter.search_term)
+    if ui.current_view_mode == "collections" then
+        for _, file in ipairs(search_filter.cached_flat_files) do
+            local name_lower = file.name_lower or string.lower(file.name)
+            if string.find(name_lower, search_lower, 1, true) then
+                table.insert(search_filter.filtered_files, file)
+            end
+        end
+    else
+        for _, file in ipairs(search_filter.cached_flat_files) do
+            local name_lower = file.name_lower or string.lower(file.name)
+            local parent_lower = string.lower(file.parent_folder or "")
+            if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
+                table.insert(search_filter.filtered_files, file)
+            end
+        end
+    end
+end
+
+function find_location_index(path)
+    if not path or path == "" then return nil end
+    for i, loc in ipairs(file_location.locations) do
+        if loc == path then return i end
+    end
+    return nil
+end
+
 load_options()
 load_search_history()
+load_saved_searches()
 
 update_fonts()
 playback.pending_sync_refresh = true
@@ -3224,6 +3385,103 @@ local function presort_flat_files(flat)
         search_filter.last_sort_direction = 0
     end
     return flat
+end
+
+function apply_saved_search(index)
+    local item = saved_searches.items[index]
+    if not item then return end
+    saved_searches.renaming_index = nil
+
+    if item.filters then
+        if item.filters.audio ~= nil then ui_settings.filter_audio = item.filters.audio end
+        if item.filters.midi  ~= nil then ui_settings.filter_midi  = item.filters.midi  end
+        if item.filters.video ~= nil then ui_settings.filter_video = item.filters.video end
+        if item.filters.image ~= nil then ui_settings.filter_image = item.filters.image end
+    end
+
+    local target_mode = item.view_mode or "folders"
+
+    if target_mode == "folders" then
+        local idx = find_location_index(item.location) or item.location_index
+        if idx and file_location.locations[idx] then
+            ui.current_view_mode = "folders"
+            ui.show_collection_section = false
+            file_location.selected_location_index = idx
+            file_location.current_location = file_location.locations[idx]
+            file_location.last_folder_location = file_location.current_location
+            file_location.last_folder_index = idx
+            local want_flat = item.flat_view
+            if (item.search_term or "") ~= "" then want_flat = true end
+            file_location.flat_view = want_flat ~= nil and want_flat or false
+            file_location.saved_folder_flat_view = file_location.flat_view
+            file_location.current_files = read_directory_recursive(file_location.current_location, false)
+            search_filter.cached_flat_files = {}
+            search_filter.cached_location = ""
+            if file_location.flat_view then
+                local flat = get_flat_file_list(file_location.current_location)
+                if flat then
+                    presort_flat_files(flat)
+                    search_filter.cached_flat_files = flat
+                    search_filter.cached_location = file_location.current_location
+                end
+            end
+        end
+    elseif target_mode == "collections" then
+        if item.collection then
+            ui.current_view_mode = "collections"
+            ui.show_collection_section = true
+            load_collections()
+            file_location.selected_collection = item.collection
+            file_location.last_collection_name = item.collection
+            file_location.selected_category = "All"
+            local db_data = load_collection(item.collection)
+            if db_data then
+                local items = get_collection_items_by_category(item.collection, file_location.selected_category)
+                file_location.current_files = {}
+                search_filter.cached_flat_files = {}
+                for _, it in ipairs(items) do
+                    local file_entry = {
+                        name = it.path:match("([^/\\]+)$"),
+                        full_path = it.path,
+                        is_dir = false
+                    }
+                    table.insert(file_location.current_files, file_entry)
+                    table.insert(search_filter.cached_flat_files, file_entry)
+                end
+                file_location.current_location = "Collection: " .. item.collection
+                search_filter.cached_location = file_location.current_location
+                file_location.flat_view = true
+            end
+        end
+    elseif target_mode == "auto" then
+        local idx = find_location_index(item.location) or item.location_index
+        if idx and file_location.locations[idx] then
+            ui.current_view_mode = "auto"
+            ui.show_collection_section = false
+            ui.auto_source_location = file_location.locations[idx]
+            ui.auto_source_index = idx
+            file_location.current_location = file_location.locations[idx]
+            file_location.selected_location_index = idx
+            ui.auto_selected_category = item.auto_category or "All"
+            file_location.flat_view = true
+            local flat = get_flat_file_list(file_location.current_location)
+            presort_flat_files(flat)
+            search_filter.cached_flat_files = flat
+            search_filter.cached_location = file_location.current_location
+            category_cache = {}
+            cached_cat_filter = {}
+            cached_cat_filter_key = ""
+            build_category_counts(flat)
+        end
+    end
+
+    search_filter.search_term = item.search_term or ""
+    recompute_search_filtered()
+    clear_sort_cache()
+    if search_filter.search_term ~= "" then
+        add_to_search_history(search_filter.search_term)
+    end
+    save_options()
 end
 
 local advance_to_next_file
@@ -4952,9 +5210,9 @@ local function draw_file_list()
                             end
                             if show_file then
                                 local file_path = path .. sep .. item.name
-                                if item.name == playback.selected_file then
+                                local did_push_text = (item.name == playback.selected_file)
+                                if did_push_text then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-                                    ui_settings.pushed_color = 1
                                 end
                                 if r.ImGui_Selectable(ctx, icon .. " " .. item.name, item.name == playback.selected_file) then
                                     if not playback.auto_play and playback.current_playing_file ~= file_path then
@@ -5010,7 +5268,7 @@ local function draw_file_list()
                                         end
                                     end
                                     
-                                    if playback.auto_play then
+                                    if playback.auto_play and not r.ImGui_IsMouseDown(ctx, 0) then
                                         play_media(file_path)
                                     end
                                 end
@@ -5194,9 +5452,8 @@ local function draw_file_list()
                                     r.ImGui_EndPopup(ctx)
                                 end
                                 
-                                if ui_settings.pushed_color > 0 then
+                                if did_push_text then
                                     r.ImGui_PopStyleColor(ctx)
-                                    ui_settings.pushed_color = 0
                                 end
                                 handle_drag_drop(file_path)
                             end
@@ -5255,8 +5512,22 @@ local function draw_file_list()
                         if file_location.current_location ~= search_filter.cached_location or #search_filter.cached_flat_files == 0 then
                             flat_files = get_flat_file_list(file_location.current_location)
                             presort_flat_files(flat_files)
+                            search_filter.cached_flat_files = flat_files
+                            search_filter.cached_location = file_location.current_location
                         else
                             flat_files = search_filter.cached_flat_files
+                        end
+                        if search_filter.search_term ~= "" then
+                            local search_lower = string.lower(search_filter.search_term)
+                            local searched = {}
+                            for _, file in ipairs(flat_files) do
+                                local name_lower = file.name_lower or string.lower(file.name)
+                                local parent_lower = string.lower(file.parent_folder or "")
+                                if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
+                                    table.insert(searched, file)
+                                end
+                            end
+                            flat_files = searched
                         end
                         search_filter.filtered_files = flat_files
                     end
@@ -5288,9 +5559,9 @@ local function draw_file_list()
                         1.0
                     )
                     
-                    local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0, 0.4)  
-                    local accent_hover_color = hsv_to_color(ui_settings.accent_hue, 0.8, 1.0, 0.3)  
-                    local accent_active_color = hsv_to_color(ui_settings.accent_hue, 1.0, 0.8, 0.5)  
+                    local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0, 0.62)
+                    local accent_hover_color = r.ImGui_ColorConvertDouble4ToU32(0.34, 0.34, 0.34, 0.55)
+                    local accent_active_color = hsv_to_color(ui_settings.accent_hue, 1.0, 0.85, 0.78)
                     
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TableHeaderBg(), header_bg_color)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TableRowBg(), row_bg_1)
@@ -5625,10 +5896,9 @@ local function draw_file_list()
                                 
                                 local is_multi_selected = is_file_selected(file.full_path)
                                 local is_single_selected = file.full_path == playback.current_playing_file
-                                
-                                if is_single_selected or is_multi_selected then
+                                local did_push_text = (is_single_selected or is_multi_selected)
+                                if did_push_text then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-                                    ui_settings.pushed_color = 1
                                 end
                                 
                                 if r.ImGui_Selectable(ctx, icon .. " " .. display_name .. "##" .. file.full_path, is_single_selected or is_multi_selected, r.ImGui_SelectableFlags_SpanAllColumns()) then
@@ -5909,9 +6179,8 @@ local function draw_file_list()
                                     r.ImGui_EndPopup(ctx)
                                 end
                                 
-                                if ui_settings.pushed_color > 0 then
-                                    r.ImGui_PopStyleColor(ctx, ui_settings.pushed_color)
-                                    ui_settings.pushed_color = 0
+                                if did_push_text then
+                                    r.ImGui_PopStyleColor(ctx)
                                 end
                                 handle_drag_drop(file.full_path)
                                 if ui_settings.visible_columns.category then
@@ -6046,13 +6315,13 @@ local function draw_file_list()
                         r.ImGui_ListClipper_End(ui.list_clipper)
                         
                         r.ImGui_EndTable(ctx)
-                        r.ImGui_PopStyleVar(ctx, 1)  
-                        r.ImGui_PopStyleColor(ctx, 6)  
                     end
+                    r.ImGui_PopStyleVar(ctx, 1)  
+                    r.ImGui_PopStyleColor(ctx, 6)  
                 else
-                    local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0, 0.4)  
-                    local accent_hover_color = hsv_to_color(ui_settings.accent_hue, 0.8, 1.0, 0.3)  
-                    local accent_active_color = hsv_to_color(ui_settings.accent_hue, 1.0, 0.8, 0.5)  
+                    local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0, 0.62)
+                    local accent_hover_color = r.ImGui_ColorConvertDouble4ToU32(0.34, 0.34, 0.34, 0.55)
+                    local accent_active_color = hsv_to_color(ui_settings.accent_hue, 1.0, 0.85, 0.78)
 
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), accent_color)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), accent_hover_color)
@@ -6683,8 +6952,7 @@ local function loop()
         if r.ImGui_BeginChild(ctx, "LeftControlPanel", left_panel_width, 0, r.ImGui_WindowFlags_None()) then
             local LEFT_FOOTER_H = ui.show_oscilloscope and 260 or 120  
             local LEFT_HEADER_H = 0  
-            local num_view_buttons = 3
-            local header_button_width = (left_panel_width - (num_view_buttons * 2)) / num_view_buttons 
+            local header_button_width = (left_panel_width - 2) / 2
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
             
             local button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
@@ -6794,8 +7062,6 @@ local function loop()
                 ui_settings.pushed_color = 0
             end
             
-            r.ImGui_SameLine(ctx, 0, 2)
-            
             if ui.current_view_mode == "auto" then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_color)
                 ui_settings.pushed_color = 1
@@ -6847,6 +7113,38 @@ local function loop()
                     build_category_counts(flat)
                 end
                 
+                save_options()
+            end
+            if ui_settings.pushed_color > 0 then
+                r.ImGui_PopStyleColor(ctx, 1)
+                ui_settings.pushed_color = 0
+            end
+
+            r.ImGui_SameLine(ctx, 0, 2)
+
+            if ui.current_view_mode == "searches" then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_color)
+                ui_settings.pushed_color = 1
+            end
+            if r.ImGui_Button(ctx, "Searches", header_button_width, LEFT_HEADER_H) then
+                if ui.current_view_mode == "folders" and file_location.current_location ~= "" then
+                    file_location.last_folder_location = file_location.current_location
+                    file_location.last_folder_index = file_location.selected_location_index
+                    file_location.saved_folder_flat_view = file_location.flat_view
+                end
+                if ui.current_view_mode == "collections" and file_location.selected_collection then
+                    file_location.last_collection_name = file_location.selected_collection
+                end
+                if ui.current_view_mode ~= "searches" then
+                    saved_searches.previous_view_mode = ui.current_view_mode
+                end
+                if search_filter.last_sort_column >= 0 then
+                    search_filter.remembered_sort_column = search_filter.last_sort_column
+                    search_filter.remembered_sort_direction = search_filter.last_sort_direction
+                end
+                clear_sort_cache()
+                ui.current_view_mode = "searches"
+                ui.show_collection_section = false
                 save_options()
             end
             if ui_settings.pushed_color > 0 then
@@ -7472,7 +7770,130 @@ local function loop()
             r.ImGui_PopStyleColor(ctx, 3)
             r.ImGui_PopStyleVar(ctx, 1)
         end
-        
+
+        if ui.current_view_mode == "searches" then
+            local total_width = reaper.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+
+            local unselected_button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
+            local button_text_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_text_brightness, ui_settings.button_text_brightness, ui_settings.button_text_brightness, 1.0)
+            local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
+            local accent_hover_color = hsv_to_color(ui_settings.accent_hue, 0.8, 1.0)
+            local accent_active_color = hsv_to_color(ui_settings.accent_hue, 1.0, 0.8)
+
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), accent_hover_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), accent_active_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), button_text_color)
+
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), unselected_button_color)
+            if r.ImGui_Button(ctx, "+ Save current search", total_width, ui_settings.button_height) then
+                local retval, new_name = r.GetUserInputs("Save Search", 1, "Name:,extrawidth=200", "")
+                if retval then
+                    local trimmed = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    if trimmed == "" then
+                        r.ShowMessageBox("Please enter a name", "Save Search", 0)
+                    else
+                        local ok, err = add_saved_search(trimmed)
+                        if not ok then
+                            r.ShowMessageBox(err or "Could not save search", "Save Search", 0)
+                        end
+                    end
+                end
+            end
+            r.ImGui_PopStyleColor(ctx, 1)
+
+            r.ImGui_Spacing(ctx)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Spacing(ctx)
+
+            if #saved_searches.items == 0 then
+                local muted = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness * 0.6, ui_settings.text_brightness * 0.6, ui_settings.text_brightness * 0.6, 1.0)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), muted)
+                r.ImGui_TextWrapped(ctx, "No saved searches yet. Type a query in the search box, then click '+ Save current search'.")
+                r.ImGui_PopStyleColor(ctx, 1)
+            end
+
+            local mode_icon = { folders = "[F]", collections = "[C]", auto = "[A]", searches = "[S]" }
+
+            for i, item in ipairs(saved_searches.items) do
+                r.ImGui_PushID(ctx, "saved_search_" .. i)
+                local is_renaming = (saved_searches.renaming_index == i)
+                if is_renaming then
+                    if not saved_searches.renaming_initialized then
+                        ui_settings.rename_inline_text = item.name
+                        saved_searches.renaming_initialized = true
+                    end
+                    r.ImGui_PushItemWidth(ctx, total_width - 260)
+                    local enter_pressed, new_inline = r.ImGui_InputText(ctx, "##saved_search_rename", ui_settings.rename_inline_text, r.ImGui_InputTextFlags_EnterReturnsTrue())
+                    ui_settings.rename_inline_text = new_inline
+                    r.ImGui_PopItemWidth(ctx)
+                    r.ImGui_SameLine(ctx)
+                    local trimmed = ui_settings.rename_inline_text:gsub("^%s+", ""):gsub("%s+$", "")
+                    local ok_disabled = (trimmed == "")
+                    if ok_disabled then r.ImGui_BeginDisabled(ctx, true) end
+                    local ok_clicked = r.ImGui_Button(ctx, "OK", 120, ui_settings.button_height)
+                    if ok_disabled then r.ImGui_EndDisabled(ctx) end
+                    r.ImGui_SameLine(ctx)
+                    local cancel_clicked = r.ImGui_Button(ctx, "Cancel", 120, ui_settings.button_height)
+                    if (ok_clicked or enter_pressed) and not ok_disabled then
+                        if trimmed ~= item.name then
+                            local ok, err = rename_saved_search(i, trimmed)
+                            if not ok then
+                                r.ShowMessageBox(err or "Rename failed", "Rename", 0)
+                            end
+                        end
+                        saved_searches.renaming_index = nil
+                        saved_searches.renaming_initialized = false
+                        ui_settings.rename_inline_text = ""
+                    elseif cancel_clicked then
+                        saved_searches.renaming_index = nil
+                        saved_searches.renaming_initialized = false
+                        ui_settings.rename_inline_text = ""
+                    end
+                else
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), unselected_button_color)
+                    local prefix = mode_icon[item.view_mode or "folders"] or "[?]"
+                    local term_preview = (item.search_term ~= nil and item.search_term ~= "") and item.search_term or "(no text)"
+                    local label = prefix .. " " .. item.name .. "  -  " .. term_preview
+                    if r.ImGui_Button(ctx, label, total_width, ui_settings.button_height) then
+                        apply_saved_search(i)
+                    end
+                    r.ImGui_PopStyleColor(ctx, 1)
+
+                    if r.ImGui_BeginPopupContextItem(ctx) then
+                        if r.ImGui_MenuItem(ctx, "Apply") then
+                            apply_saved_search(i)
+                        end
+                        if r.ImGui_MenuItem(ctx, "Rename") then
+                            saved_searches.renaming_index = i
+                            saved_searches.renaming_initialized = false
+                        end
+                        if r.ImGui_MenuItem(ctx, "Update with current search") then
+                            local updated = snapshot_current_search(item.name)
+                            saved_searches.items[i] = updated
+                            save_saved_searches()
+                        end
+                        r.ImGui_Separator(ctx)
+                        local delete_clicked = false
+                        if r.ImGui_MenuItem(ctx, "Delete") then
+                            delete_clicked = true
+                        end
+                        r.ImGui_EndPopup(ctx)
+                        if delete_clicked then
+                            delete_saved_search(i)
+                            r.ImGui_PopID(ctx)
+                            break
+                        end
+                    end
+                end
+                r.ImGui_PopID(ctx)
+                ::continue_saved_search_loop::
+            end
+
+            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PopStyleVar(ctx, 1)
+        end
+
         end
         r.ImGui_EndChild(ctx)
         
@@ -8840,6 +9261,45 @@ local function loop()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), accent_color)  
             if r.ImGui_ArrowButton(ctx, "##SearchHistory", r.ImGui_Dir_Down()) then
                 r.ImGui_OpenPopup(ctx, "SearchHistoryPopup")
+            end
+            r.ImGui_PopStyleColor(ctx, 4)
+            r.ImGui_PopStyleVar(ctx, 1)
+
+            r.ImGui_SameLine(ctx, 0, 0)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), accent_color)
+            if r.ImGui_Button(ctx, "X##SearchClear", ui_settings.button_height, ui_settings.button_height) then
+                search_filter.search_term = ""
+                clear_sort_cache()
+                if file_location.flat_view then
+                    search_filter.filtered_files = search_filter.cached_flat_files
+                end
+            end
+            r.ImGui_PopStyleColor(ctx, 4)
+            r.ImGui_PopStyleVar(ctx, 1)
+
+            r.ImGui_SameLine(ctx, 0, 0)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), accent_color)
+            if r.ImGui_Button(ctx, "S##SearchSave", ui_settings.button_height, ui_settings.button_height) then
+                local retval, new_name = r.GetUserInputs("Save Search", 1, "Name:,extrawidth=200", "")
+                if retval then
+                    local trimmed = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    if trimmed == "" then
+                        r.ShowMessageBox("Please enter a name", "Save Search", 0)
+                    else
+                        local ok, err = add_saved_search(trimmed)
+                        if not ok then
+                            r.ShowMessageBox(err or "Could not save search", "Save Search", 0)
+                        end
+                    end
+                end
             end
             r.ImGui_PopStyleColor(ctx, 4)
             r.ImGui_PopStyleVar(ctx, 1)

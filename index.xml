@@ -302,24 +302,23 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.7.5" author="TouristKiller" time="2026-04-26T17:20:15Z">
+        <version name="0.7.7" author="TouristKiller" time="2026-04-29T20:30:15Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
-v0.7.3:
-+ Quick-toggle filter icons placed right after the Start button (audio waveform, MIDI note, video, image)
-+ Fixed: filter icons could be pushed off-screen by right-aligned positioning
-
-v0.7.2:
-+ File Type Filters: globally show/hide Audio, MIDI, Video and Image files via Settings popup
-+ Quick-toggle filter icons (audio waveform, MIDI note, video, image) in the top-right of the file list
-+ Filters apply instantly without rescanning the cache
-+ Filter state is saved in options and presets
-
-v0.7.1:
-+ Minor bug fixes and performance improvements
+v0.7.7:
++ Saved Searches: save the current search (text + file-type filters + active location/collection + view mode) under a name
++ New "Searches" tab in the view-mode grid with list of saved searches
++ Right-click context menu on a saved search: Apply / Rename / Update with current search / Delete
++ "S" button next to the search bar to quickly save the current search
++ "X" button next to the search bar to instantly clear the search term
++ Applying a saved search restores the search term in the search bar
++ Fixed: search field had no effect in folder browse mode (latent bug)
++ Fixed: applying a saved search showed all files instead of the filtered results
++ Fixed: ImGui PopID error when deleting a saved search via the context menu
++ Fixed: in tree mode the sample played twice (once on mouse press, once on release)
 
      ]]></changelog>
         </version>
