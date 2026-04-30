@@ -1,8 +1,18 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.7.7
+-- @version 2.7.8
 -- @changelog:
 --[[ 
+    v2.7.8:
+        + Projects: per-project Preview Manager (right-click project > Manage Previews...). Play/Stop, Set Active and Delete each preview file individually. Active preview is persisted per project in project_preview_active.json.
+        + Projects: support multiple preview files per project (extensions wav, mp3, flac, ogg). Newest is default active when no override is set.
+        + Projects: new "Make Preview > Custom audio file..." option to import an existing audio file (wav/mp3/flac/ogg/aif/aiff) as the project preview.
+        + Projects info footer: cover area is now a square with letterbox fit and a "No Image" placeholder when no cover is set.
+        + Projects info footer: removed the "\xE2\x97\x8F Preview" text line and reordered Play / Volume / Progressbar for a cleaner layout.
+        + Projects toolbar: removed the global "C" cleanup button and the entire pending-deletes queue. Cleanup is now per file via the Preview Manager.
+        + Projects: search bar widened (one button slot reclaimed) after removing the C button.
+        + Projects: ported the Save preset dropdown to the Mini variant for parity.
+
     v2.7.7:
         + Current Track FX & Current Project FX: now support Showcase / Polaroid / Uniform / Neon / Vinyl layouts (List and Masonry remain disabled). Click opens/closes the floating FX window of that plugin.
         + Drag & Drop: visual target marker on cursor (green = track, orange = item, red = no target) with track number and track/item name shown in the drag tooltip
@@ -97,6 +107,7 @@ local screenshot_path       = script_path .. "Screenshots" .. os_separator
 local script_thumbs_path    = script_path .. "ScriptThumbnails" .. os_separator
 local project_covers_path   = script_path .. "ProjectCovers" .. os_separator
 local project_comments_path = script_path .. "project_comments.json"
+local project_preview_active_path = script_path .. "project_preview_active.json"
 StartBulkScreenshot         = function() end
 local DrawMeterModule       = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars             = dofile(script_path .. "TKFXBVariables.lua")
@@ -527,6 +538,7 @@ _search_debounce_ms = 120
 
 function MarkScreenshotsDirty()
     _screenshots_dirty = true
+    if InvalidateFolderCountCache then InvalidateFolderCountCache() end
 end
 
 function RequestClearScreenshotCache()
@@ -1141,6 +1153,7 @@ function SetDefaultConfig()
         show_tags = true,
         hideMeter = false,
         show_screenshot_scrollbar = true,
+        show_folder_info_bar = true,
         show_type_dividers = false,
         sort_alphabetically = false,
         screenshot_view_type = 1,
@@ -3440,6 +3453,9 @@ local TKFXfonts = {
 
 
 function exit()
+    if projects and #projects > 0 then
+        pcall(save_projects_info, projects)
+    end
     if ctx then
         
         if r.ImGui_ValidatePtr(NormalFont, 'ImGui_Resource*') then
@@ -3671,11 +3687,15 @@ function UpdateFonts()
     if r.ImGui_ValidatePtr(CustomFolderFont, 'ImGui_Resource*') then
         r.ImGui_Detach(ctx, CustomFolderFont)
     end
+    if InfoBarFont and r.ImGui_ValidatePtr(InfoBarFont, 'ImGui_Resource*') then
+        r.ImGui_Detach(ctx, InfoBarFont)
+    end
 
     
     NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size)
     TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size - 2)
     LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size + 4)
+    InfoBarFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
     -- Custom folder font (can be independent size)
     local cfs = config.custom_folder_use_default_font and config.font_size or (config.custom_folder_font_size or config.font_size)
     CustomFolderFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], cfs)
@@ -3683,17 +3703,20 @@ function UpdateFonts()
     r.ImGui_Attach(ctx, NormalFont)
     r.ImGui_Attach(ctx, TinyFont)
     r.ImGui_Attach(ctx, LargeFont)
+    r.ImGui_Attach(ctx, InfoBarFont)
     r.ImGui_Attach(ctx, CustomFolderFont)
 end
 
 NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size)
 TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size - 2)
 LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size + 4)
+InfoBarFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], 12)
 CustomFolderFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.custom_folder_use_default_font and config.font_size or (config.custom_folder_font_size or config.font_size))
 
 r.ImGui_Attach(ctx, NormalFont)
 r.ImGui_Attach(ctx, LargeFont)
 r.ImGui_Attach(ctx, TinyFont)
+r.ImGui_Attach(ctx, InfoBarFont)
 r.ImGui_Attach(ctx, CustomFolderFont)
 
 ---------------------------------------------------------------------
@@ -3727,14 +3750,56 @@ function load_projects_info()
                     local location = line:match("^LOC|(.*)")
                     table.insert(project_locations, location)
                 elseif section == "projects" then
-                    local name, path = line:match("([^|]+)|(.+)")
-                    if name and path then
-                        table.insert(projects, {name = name, path = path})
+                    local fields = {}
+                    for f in (line .. "|"):gmatch("([^|]*)|") do
+                        fields[#fields + 1] = f
+                    end
+                    if #fields >= 2 and fields[1] ~= "" and fields[2] ~= "" then
+                        local p = { name = fields[1], path = fields[2] }
+                        if fields[3] and fields[3] ~= "" then p.cached_size = tonumber(fields[3]) end
+                        if fields[4] and fields[4] ~= "" then p.cached_date = fields[4] end
+                        if fields[5] and fields[5] ~= "" then p.cached_media = tonumber(fields[5]) end
+                        local bpm = fields[6] and tonumber(fields[6]) or nil
+                        local sr  = fields[7] and tonumber(fields[7]) or nil
+                        local tc  = fields[8] and tonumber(fields[8]) or nil
+                        if bpm or sr or tc then
+                            p.cached_rpp_info = { bpm = bpm, samplerate = sr, track_count = tc or 0 }
+                        end
+                        if fields[9] and fields[9] ~= "" then
+                            p.cached_cover = (fields[9] == "1")
+                        end
+                        if fields[10] and fields[10] ~= "" then
+                            p.cached_length = tonumber(fields[10])
+                        end
+                        table.insert(projects, p)
                     end
                 end
             end
         end
         file:close()
+        filtered_projects = projects
+    end
+end
+
+function RestoreLastSelectedProject()
+    if selected_project then return end
+    if not (config and config.last_selected_project_path and config.last_selected_project_path ~= "") then return end
+    for _, p in ipairs(filtered_projects or {}) do
+        if p.path == config.last_selected_project_path then
+            selected_project = p
+            local prev_path = GetProjectPreviewPath(p.path)
+            local has_preview = prev_path ~= nil
+            current_project_info = {
+                path = p.path,
+                name = p.name,
+                has_preview = has_preview,
+                length = 0,
+                size = p.cached_size or GetFileSize(p.path),
+                folder_files = p.cached_media or CountProjectFolderFiles(p.path),
+                rpp_info = p.cached_rpp_info or ParseRPPHeader(p.path)
+            }
+            break
+        end
     end
 end
 
@@ -3792,39 +3857,78 @@ function save_projects_info(projects)
         
         file:write("[PROJECTS]\n")
         for _, project in ipairs(projects) do
-            file:write(string.format("%s|%s\n", project.name, project.path))
+            local name = (project.name or ""):gsub("|", " ")
+            local size = project.cached_size and tostring(project.cached_size) or ""
+            local date = project.cached_date or ""
+            local media = project.cached_media and tostring(project.cached_media) or ""
+            local bpm = (project.cached_rpp_info and project.cached_rpp_info.bpm) and tostring(project.cached_rpp_info.bpm) or ""
+            local sr  = (project.cached_rpp_info and project.cached_rpp_info.samplerate) and tostring(project.cached_rpp_info.samplerate) or ""
+            local tc  = (project.cached_rpp_info and project.cached_rpp_info.track_count) and tostring(project.cached_rpp_info.track_count) or ""
+            local cover = ""
+            if project.cached_cover ~= nil then cover = project.cached_cover and "1" or "0" end
+            local length = project.cached_length and tostring(project.cached_length) or ""
+            file:write(string.format("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n",
+                name, project.path, size, date, media, bpm, sr, tc, cover, length))
         end
-        
-        
         
         file:close()
     end
 end
 
-function LoadProjects()
-    projects = {}  
-    filtered_projects = {} 
-    projects = get_all_projects()  
-    filtered_projects = projects
-    save_projects_info(projects)
-    if not selected_project and config and config.last_selected_project_path and config.last_selected_project_path ~= "" then
-        for _, p in ipairs(filtered_projects) do
-            if p.path == config.last_selected_project_path then
-                selected_project = p
-                local has_preview = r.file_exists(p.path .. "-PROX")
-                current_project_info = {
-                    path = p.path,
-                    name = p.name,
-                    has_preview = has_preview,
-                    length = 0,
-                    size = GetFileSize(p.path),
-                    folder_files = CountProjectFolderFiles(p.path),
-                    rpp_info = ParseRPPHeader(p.path)
-                }
-                break
+function WarmProjectMetadataCache(list)
+    if not list then return end
+    for _, p in ipairs(list) do
+        if not p.cached_size then p.cached_size = GetFileSize(p.path) end
+        if not p.cached_media then p.cached_media = CountProjectFolderFiles(p.path) end
+        if not p.cached_rpp_info then p.cached_rpp_info = ParseRPPHeader(p.path) or {} end
+        if not p.cached_date then
+            if r.JS_File_Stat then
+                local retval, _, _, _, datetime = r.JS_File_Stat(p.path)
+                p.cached_date = (retval and datetime) or ""
+            else
+                p.cached_date = ""
+            end
+        end
+        if p.cached_cover == nil then
+            p.cached_cover = GetProjectCoverPath(p.path) ~= nil
+        end
+        if p.cached_length == nil then
+            local prev_path = GetProjectPreviewPath(p.path)
+            if prev_path then
+                local src = r.PCM_Source_CreateFromFile(prev_path)
+                p.cached_length = src and r.GetMediaSourceLength(src) or 0
+                if src and r.PCM_Source_Destroy then pcall(r.PCM_Source_Destroy, src) end
+            else
+                p.cached_length = 0
             end
         end
     end
+end
+
+function LoadProjects()
+    local prev_meta = {}
+    if projects then
+        for _, p in ipairs(projects) do
+            if p.path then prev_meta[p.path] = p end
+        end
+    end
+    projects = {}
+    filtered_projects = {}
+    projects = get_all_projects()
+    for _, p in ipairs(projects) do
+        local prev = prev_meta[p.path]
+        if prev then
+            p.cached_size = prev.cached_size
+            p.cached_media = prev.cached_media
+            p.cached_rpp_info = prev.cached_rpp_info
+            p.cached_date = prev.cached_date
+            p.cached_cover = prev.cached_cover
+            p.cached_length = prev.cached_length
+        end
+    end
+    filtered_projects = projects
+    save_projects_info(projects)
+    RestoreLastSelectedProject()
     projects_loading = false
 end
 
@@ -3834,6 +3938,21 @@ projects_loading_frame = 0
 function RequestLoadProjects()
     projects_loading = true
     projects_loading_frame = 2
+end
+
+function ProjectsCacheIsComplete()
+    return projects and #projects > 0
+end
+
+function EnsureProjectsLoaded()
+    if projects and #projects > 0 then
+        if not filtered_projects or #filtered_projects == 0 then
+            filtered_projects = projects
+        end
+        RestoreLastSelectedProject()
+        return
+    end
+    RequestLoadProjects()
 end
 
 load_projects_info()
@@ -3902,6 +4021,226 @@ function AddToRecent(plugin_name)
         table.remove(recent_plugins)
     end
     SaveRecent()
+end
+
+function FindOpenProjectByPath(project_path)
+    if not project_path then return nil end
+    local norm_target = project_path:gsub("\\", "/"):lower()
+    local idx = 0
+    repeat
+        local proj, projfn = r.EnumProjects(idx)
+        if proj and projfn and projfn ~= "" then
+            local norm = projfn:gsub("\\", "/"):lower()
+            if norm == norm_target then return proj end
+        end
+        idx = idx + 1
+    until not proj
+    return nil
+end
+
+function FindRenderedFileByPrefix(dir, prefix)
+    if not dir or dir == "" then return nil end
+    local idx = 0
+    while true do
+        local f = r.EnumerateFiles(dir, idx)
+        if not f then return nil end
+        if f:sub(1, #prefix) == prefix then
+            return dir .. f
+        end
+        idx = idx + 1
+    end
+end
+
+function DoMakeProjectPreview(project_path, mode, range_s, range_e)
+    local was_open = FindOpenProjectByPath(project_path) ~= nil
+
+    if mode == "timesel" then
+        if not was_open then
+            r.ShowMessageBox(
+                "Open the project first and set a time selection before making a time-selection preview.",
+                "Make Preview", 0)
+            return
+        end
+        local proj_check = FindOpenProjectByPath(project_path)
+        local s_, e_ = r.GetSet_LoopTimeRange2(proj_check, false, false, 0, 0, false)
+        if not s_ or not e_ or e_ <= s_ then
+            r.ShowMessageBox(
+                "No time selection set in the project. Set a time selection first.",
+                "Make Preview", 0)
+            return
+        end
+        range_s, range_e = s_, e_
+    end
+
+    if not was_open then
+        r.Main_OnCommand(41929, 0)
+        r.Main_openProject(project_path)
+    end
+
+    if mode == "full" then
+        local proj = FindOpenProjectByPath(project_path)
+        if proj then r.SelectProjectInstance(proj) end
+        r.Main_OnCommand(42332, 0)
+        if not was_open then r.Main_OnCommand(40860, 0) end
+        return
+    end
+
+    local proj = FindOpenProjectByPath(project_path)
+    if not proj then
+        if not was_open then r.Main_OnCommand(40860, 0) end
+        return
+    end
+    r.SelectProjectInstance(proj)
+
+    if not range_s or not range_e or range_e <= range_s then
+        if not was_open then r.Main_OnCommand(40860, 0) end
+        return
+    end
+
+    r.GetSet_LoopTimeRange2(proj, true, false, range_s, range_e, false)
+
+    if r.CF_Preview_StopAll then r.CF_Preview_StopAll() end
+    ReleaseCurrentPreview()
+    collectgarbage("collect")
+
+    local proj_dir = project_path:match("(.*[/\\])") or ""
+    local proj_name = project_path:match("([^/\\]+)%.rpp$") or "preview"
+    local stamp = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
+    local pattern = proj_name .. ".tkprev." .. stamp
+    local out_path = proj_dir .. pattern .. ".wav"
+
+    local old_bounds = r.GetSetProjectInfo(proj, 'RENDER_BOUNDSFLAG', 0, false)
+    local old_settings = r.GetSetProjectInfo(proj, 'RENDER_SETTINGS', 0, false)
+    local _, old_file = r.GetSetProjectInfo_String(proj, 'RENDER_FILE', '', false)
+    local _, old_pattern = r.GetSetProjectInfo_String(proj, 'RENDER_PATTERN', '', false)
+
+    r.GetSetProjectInfo(proj, 'RENDER_BOUNDSFLAG', 2, true)
+    r.GetSetProjectInfo(proj, 'RENDER_SETTINGS', 0, true)
+    r.GetSetProjectInfo_String(proj, 'RENDER_FILE', proj_dir, true)
+    r.GetSetProjectInfo_String(proj, 'RENDER_PATTERN', pattern, true)
+
+    r.Main_OnCommand(42230, 0)
+
+    r.GetSetProjectInfo(proj, 'RENDER_BOUNDSFLAG', old_bounds, true)
+    r.GetSetProjectInfo(proj, 'RENDER_SETTINGS', old_settings, true)
+    r.GetSetProjectInfo_String(proj, 'RENDER_FILE', old_file, true)
+    r.GetSetProjectInfo_String(proj, 'RENDER_PATTERN', old_pattern, true)
+
+    if type(filtered_projects) == "table" then
+        for _, p in ipairs(filtered_projects) do
+            if p.path == project_path then p.cached_length = nil end
+        end
+    end
+    if type(projects) == "table" then
+        for _, p in ipairs(projects) do
+            if p.path == project_path then p.cached_length = nil end
+        end
+    end
+
+    local newest_path = out_path
+    if not r.file_exists(newest_path) then
+        newest_path = GetProjectPreviewPath(project_path) or out_path
+    end
+
+    ClearActivePreviewFilename(project_path)
+
+    if selected_project and selected_project.path == project_path then
+        if r.file_exists(newest_path) then
+            ReleaseCurrentPreview()
+            local source = r.PCM_Source_CreateFromFile(newest_path)
+            if source then
+                current_preview = r.CF_CreatePreview(source)
+                r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume or 1.0)
+                current_source = source
+                if current_project_info then
+                    current_project_info.has_preview = true
+                    current_project_info.length = r.GetMediaSourceLength(source) or 0
+                end
+            end
+        end
+    end
+
+    if not was_open then
+        r.Main_OnCommand(40860, 0)
+    end
+end
+
+function DoMakeProjectPreviewCustom(project_path)
+    if not project_path then return end
+    if not r.JS_Dialog_BrowseForOpenFiles then
+        r.ShowMessageBox("js_ReaScriptAPI required for file dialog.", "Make Preview", 0)
+        return
+    end
+    local rv, file = r.JS_Dialog_BrowseForOpenFiles(
+        "Choose Audio File for Preview", "", "",
+        "Audio files\0*.wav;*.mp3;*.flac;*.ogg;*.aif;*.aiff\0All files\0*.*\0", false)
+    if not rv or not file or file == "" then return end
+    local ext = file:match("%.([^%.\\/]+)$")
+    if not ext then
+        r.ShowMessageBox("Could not determine file extension.", "Make Preview", 0)
+        return
+    end
+    ext = ext:lower()
+    local allowed = { wav = true, mp3 = true, flac = true, ogg = true, aif = true, aiff = true }
+    if not allowed[ext] then
+        r.ShowMessageBox("Unsupported audio format: " .. ext, "Make Preview", 0)
+        return
+    end
+    local proj_dir = project_path:match("(.*[/\\])") or ""
+    local proj_name = project_path:match("([^/\\]+)%.rpp$") or "preview"
+    local stamp = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
+    local out_path = proj_dir .. proj_name .. ".tkprev." .. stamp .. "." .. ext
+
+    local fin = io.open(file, "rb")
+    if not fin then
+        r.ShowMessageBox("Could not read source file.", "Make Preview", 0)
+        return
+    end
+    local fout = io.open(out_path, "wb")
+    if not fout then
+        fin:close()
+        r.ShowMessageBox("Could not write to project folder.", "Make Preview", 0)
+        return
+    end
+    while true do
+        local chunk = fin:read(1024 * 1024)
+        if not chunk then break end
+        fout:write(chunk)
+    end
+    fin:close()
+    fout:close()
+
+    if r.CF_Preview_StopAll then r.CF_Preview_StopAll() end
+    ReleaseCurrentPreview()
+    collectgarbage("collect")
+
+    ClearActivePreviewFilename(project_path)
+
+    if type(filtered_projects) == "table" then
+        for _, p in ipairs(filtered_projects) do
+            if p.path == project_path then p.cached_length = nil end
+        end
+    end
+    if type(projects) == "table" then
+        for _, p in ipairs(projects) do
+            if p.path == project_path then p.cached_length = nil end
+        end
+    end
+
+    if selected_project and selected_project.path == project_path then
+        if r.file_exists(out_path) then
+            local source = r.PCM_Source_CreateFromFile(out_path)
+            if source then
+                current_preview = r.CF_CreatePreview(source)
+                r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume or 1.0)
+                current_source = source
+                if current_project_info then
+                    current_project_info.has_preview = true
+                    current_project_info.length = r.GetMediaSourceLength(source) or 0
+                end
+            end
+        end
+    end
 end
 
 SCREENSHOT_SHORTCUT_KEYS = {"1","2","3","4","5","6","7","8","9","0",
@@ -4199,6 +4538,90 @@ function GetCurrentTrackFX()
     return fx_list
 end
 
+_folder_count_cache = _folder_count_cache or {}
+_folder_count_cache_dirty = _folder_count_cache_dirty or false
+
+function InvalidateFolderCountCache()
+    _folder_count_cache = {}
+end
+
+function BuildFolderBreadcrumbLabel(folder)
+    if not folder or folder == '' then return '' end
+    if folder == "Current Track FX" then
+        if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
+            local _, tname = r.GetTrackName(TRACK, "")
+            local tnum = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") or 0
+            if tname and tname ~= '' then
+                return string.format("Current Track FX  ›  Track %d: %s", tnum, tname)
+            end
+        end
+        return "Current Track FX"
+    end
+    if folder:find("/") then
+        local parts = {}
+        for seg in (folder .. "/"):gmatch("([^/]+)/") do
+            parts[#parts+1] = seg
+        end
+        return table.concat(parts, "  ›  ")
+    end
+    return folder
+end
+
+function GetFolderPluginCounts(folder)
+    if not folder or folder == '' then return 0, 0 end
+    local live = (folder == "Current Track FX") or (folder == "Current Project FX")
+    if not live then
+        local cached = _folder_count_cache[folder]
+        if cached then return cached.with, cached.total end
+    end
+    local plugins
+    if folder == "Current Track FX" then
+        local list = GetCurrentTrackFX() or {}
+        plugins = {}
+        for _, fx in ipairs(list) do plugins[#plugins+1] = fx.fx_name end
+    elseif folder == "Current Project FX" then
+        local list = GetCurrentProjectFX() or {}
+        plugins = {}
+        for _, fx in ipairs(list) do plugins[#plugins+1] = fx.fx_name end
+    else
+        plugins = GetPluginsForFolder(folder) or {}
+    end
+    local total = #plugins
+    local with_shot = 0
+    for i = 1, total do
+        if HasScreenshot(plugins[i]) then with_shot = with_shot + 1 end
+    end
+    if not live then
+        _folder_count_cache[folder] = {with = with_shot, total = total}
+    end
+    return with_shot, total
+end
+
+function DrawFolderInfoBar()
+    if not config.show_folder_info_bar then return end
+    local folder = selected_folder
+    if not folder or folder == '' then return end
+    local label = BuildFolderBreadcrumbLabel(folder)
+    local with_shot, total = GetFolderPluginCounts(folder)
+    local count_text = string.format("%d / %d", with_shot, total)
+    local sep = "   \xE2\x80\xA2   "
+    local full_text = label .. sep .. count_text
+    r.ImGui_Separator(ctx)
+    if InfoBarFont and r.ImGui_ValidatePtr(InfoBarFont, 'ImGui_Resource*') then
+        r.ImGui_PushFont(ctx, InfoBarFont)
+    end
+    local start_x = r.ImGui_GetCursorPosX(ctx)
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local text_w = r.ImGui_CalcTextSize(ctx, full_text)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xAAAAAAFF)
+    r.ImGui_SetCursorPosX(ctx, start_x + math.max(0, (avail_w - text_w) * 0.5))
+    r.ImGui_Text(ctx, full_text)
+    r.ImGui_PopStyleColor(ctx)
+    if InfoBarFont and r.ImGui_ValidatePtr(InfoBarFont, 'ImGui_Resource*') then
+        r.ImGui_PopFont(ctx)
+    end
+end
+
 
 local search_filter = ""
 local search_filter_pending = ""
@@ -4485,9 +4908,7 @@ function GetPluginsForFolder(folder_name)
     return DedupeByTypePriority(list)
     end
 
-    if folder_name:find("/") then
-        return DedupeByTypePriority(GetPluginsFromCustomFolder(folder_name))
-    elseif config.custom_folders and config.custom_folders[folder_name] then
+    if config.custom_folders and config.custom_folders[folder_name] then
         local folder_content = config.custom_folders[folder_name]
         local plugins = {}
         for k, v in pairs(folder_content) do
@@ -4515,6 +4936,10 @@ function GetPluginsForFolder(folder_name)
                 break
             end
         end
+    end
+
+    if folder_name:find("/") then
+        return DedupeByTypePriority(GetPluginsFromCustomFolder(folder_name))
     end
     return {}
 end
@@ -8790,6 +9215,106 @@ function CountProjectFolderFiles(project_path)
     return count - 1
 end
 
+function GetProjectPreviewPath(project_path)
+    if not project_path then return nil end
+    local dir = project_path:match("(.*[/\\])") or ""
+    local proj_name = project_path:match("([^/\\]+)%.rpp$")
+    if dir ~= "" and proj_name then
+        local prefix = proj_name .. ".tkprev."
+        local allowed_ext = { wav = true, mp3 = true, flac = true, ogg = true }
+        local override = GetActivePreviewFilename(project_path)
+        if override and override:sub(1, #prefix) == prefix then
+            local ov_full = dir .. override
+            if r.file_exists(ov_full) then return ov_full end
+        end
+        local newest, newest_score = nil, -1
+        local i = 0
+        repeat
+            local f = r.EnumerateFiles(dir, i)
+            local ext = f and f:match("%.([^%.]+)$")
+            if f and f:sub(1, #prefix) == prefix and ext and allowed_ext[ext:lower()] then
+                local full = dir .. f
+                local stamp_part = f:sub(#prefix + 1, -(#ext + 2))
+                local ts = tonumber(stamp_part:match("^(%d+)")) or 0
+                local mtime = 0
+                if r.JS_File_Stat then
+                    local rv, _, _, mt = r.JS_File_Stat(full)
+                    if rv then mtime = tonumber(mt) or 0 end
+                end
+                local score = ts * 1e9 + mtime
+                if score >= newest_score then
+                    newest = full
+                    newest_score = score
+                end
+            end
+            i = i + 1
+        until not f
+        if newest then return newest end
+    end
+    local prox = project_path .. "-PROX"
+    if r.file_exists(prox) then return prox end
+    return nil
+end
+
+function ReleaseCurrentPreview()
+    if current_preview and r.CF_Preview_Stop then
+        pcall(r.CF_Preview_Stop, current_preview)
+    end
+    if current_source and r.PCM_Source_Destroy then
+        pcall(r.PCM_Source_Destroy, current_source)
+    end
+    current_preview = nil
+    current_source = nil
+    collectgarbage("collect")
+end
+
+local function TryDeleteFile(fp)
+    if not r.file_exists(fp) then return true end
+    return os.remove(fp) ~= nil
+end
+
+function DeletePreviewFile(project_path, full_path)
+    if not full_path then return false end
+    local norm_full = full_path:gsub("\\", "/"):lower()
+    local current_full = nil
+    if current_source then
+        local ok, fn = pcall(r.GetMediaSourceFileName, current_source, "")
+        if ok and fn then current_full = fn:gsub("\\", "/"):lower() end
+    end
+    if current_full == norm_full then
+        if r.CF_Preview_StopAll then r.CF_Preview_StopAll() end
+        ReleaseCurrentPreview()
+        collectgarbage("collect")
+        collectgarbage("collect")
+    end
+    local ok = TryDeleteFile(full_path)
+    if ok then
+        local peaks = full_path .. ".reapeaks"
+        if r.file_exists(peaks) then TryDeleteFile(peaks) end
+    end
+    if project_path then
+        local basename = full_path:match("[^/\\]+$") or ""
+        if GetActivePreviewFilename(project_path) == basename then
+            ClearActivePreviewFilename(project_path)
+        end
+        if type(filtered_projects) == "table" then
+            for _, p in ipairs(filtered_projects) do
+                if p.path == project_path then p.cached_length = nil end
+            end
+        end
+        if type(projects) == "table" then
+            for _, p in ipairs(projects) do
+                if p.path == project_path then p.cached_length = nil end
+            end
+        end
+        if current_project_info and current_project_info.path == project_path then
+            local newest = GetProjectPreviewPath(project_path)
+            current_project_info.has_preview = newest ~= nil
+        end
+    end
+    return ok
+end
+
 function GetProjectCoverPath(project_path)
     local safe_name = project_path:match("([^/\\]+)%.rpp$") or ""
     safe_name = safe_name:gsub("[^%w%s-]", "_")
@@ -8860,6 +9385,7 @@ function FormatDuration(seconds)
 end
 
 local project_comments = {}
+local project_preview_active = {}
 
 local function LoadProjectComments()
     local f = io.open(project_comments_path, "r")
@@ -8878,7 +9404,44 @@ local function SaveProjectComments()
     end
 end
 
+local function LoadProjectPreviewActive()
+    local f = io.open(project_preview_active_path, "r")
+    if f then
+        local content = f:read("*a")
+        f:close()
+        project_preview_active = json.decode(content) or {}
+    end
+end
+
+local function SaveProjectPreviewActive()
+    local f = io.open(project_preview_active_path, "w")
+    if f then
+        f:write(json.encode(project_preview_active))
+        f:close()
+    end
+end
+
+function GetActivePreviewFilename(project_path)
+    if not project_path then return nil end
+    local v = project_preview_active[project_path]
+    if v and v ~= "" then return v end
+    return nil
+end
+
+function SetActivePreviewFilename(project_path, basename)
+    if not project_path then return end
+    project_preview_active[project_path] = basename
+    SaveProjectPreviewActive()
+end
+
+function ClearActivePreviewFilename(project_path)
+    if not project_path then return end
+    project_preview_active[project_path] = nil
+    SaveProjectPreviewActive()
+end
+
 LoadProjectComments()
+LoadProjectPreviewActive()
 
 local rpp_header_cache = {}
 
@@ -11362,6 +11925,9 @@ function ShowScreenshotControls()
             end
             if r.ImGui_MenuItem(ctx, config.show_screenshot_scrollbar and "Hide Scrollbar" or "Show Scrollbar") then
                 config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar; SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, config.show_folder_info_bar and "Hide Folder Info Bar" or "Show Folder Info Bar") then
+                config.show_folder_info_bar = not config.show_folder_info_bar; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, config[browser_panel_key] and "Hide Browser Panel" or "Show Browser Panel") then
                 config[browser_panel_key] = not config[browser_panel_key]; SaveConfig()
@@ -17510,7 +18076,7 @@ function ShowScreenshotWindow()
             show_sends_window = false
             show_action_browser = false
             selected_folder = nil
-            RequestLoadProjects()
+            EnsureProjectsLoaded()
         elseif df == "Sends/Receives" then
             show_media_browser = false
             show_sends_window = true
@@ -17654,8 +18220,9 @@ function ShowScreenshotWindow()
                 r.ImGui_Dummy(ctx, 0, line_height * 1.5)
             end
             local window_width = r.ImGui_GetContentRegionAvail(ctx)
+            local btn_w, btn_h = 20, 20
 
-            r.ImGui_PushItemWidth(ctx, window_width - 55)
+            r.ImGui_PushItemWidth(ctx, window_width - (btn_w + 4) * 3 + 1)
             local changed, new_search_term = r.ImGui_InputTextWithHint(ctx, "##ProjectSearch", "SEARCH PROJECTS", project_search_term)
             if changed then
                 project_search_term = new_search_term
@@ -17673,13 +18240,20 @@ function ShowScreenshotWindow()
             end
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "\xE2\x98\xB0", button_width, button_height) then
+            if r.ImGui_Button(ctx, "\xE2\x98\xB0", btn_w, btn_h) then
                 r.ImGui_OpenPopup(ctx, "##ProjectColumnsMenu")
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "i", button_width, button_height) then
+            if r.ImGui_Button(ctx, "i", btn_w, btn_h) then
                 config.show_project_info = not config.show_project_info
                 SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "R", btn_w, btn_h) then
+                RequestLoadProjects()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Refresh project list (rescan folders)")
             end
 
             if r.ImGui_BeginPopup(ctx, "##ProjectColumnsMenu") then
@@ -17724,8 +18298,8 @@ function ShowScreenshotWindow()
                 if col_changed then SaveConfig() end
                 r.ImGui_EndPopup(ctx)
             end
-            local window_width = r.ImGui_GetWindowWidth(ctx)
-            r.ImGui_PushItemWidth(ctx, window_width - 55) 
+            local window_width = r.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_PushItemWidth(ctx, window_width - 63)
             if r.ImGui_BeginCombo(ctx, "##Project Locations", PROJECTS_DIR) then
                 for i, location in ipairs(project_locations) do
                     if r.ImGui_Selectable(ctx, location) then
@@ -17765,7 +18339,7 @@ function ShowScreenshotWindow()
             end
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "+", 12, 18) then
+            if r.ImGui_Button(ctx, "+", 20, 20) then
                 local rv, path = r.JS_Dialog_BrowseForFolder("Select Project Folder", r.GetProjectPath())
                 if rv and path then
                     path = path .. "\\"
@@ -17855,6 +18429,7 @@ function ShowScreenshotWindow()
                             if r.file_exists(p.path .. "-PROX") then
                                 local src = r.PCM_Source_CreateFromFile(p.path .. "-PROX")
                                 p.cached_length = src and r.GetMediaSourceLength(src) or 0
+                                if src and r.PCM_Source_Destroy then pcall(r.PCM_Source_Destroy, src) end
                             else
                                 p.cached_length = 0
                             end
@@ -17913,7 +18488,8 @@ function ShowScreenshotWindow()
                     r.ImGui_TableNextRow(ctx)
                     r.ImGui_TableNextColumn(ctx)
 
-                    local has_preview = r.file_exists(project.path .. "-PROX")
+                    local preview_path = GetProjectPreviewPath(project.path)
+                    local has_preview = preview_path ~= nil
                     local has_cover = GetProjectCoverPath(project.path) ~= nil
 
                     if has_preview then
@@ -17933,14 +18509,12 @@ function ShowScreenshotWindow()
                         config.last_selected_project_path = project.path
                         SaveConfig()
 
+                        ReleaseCurrentPreview()
                         if has_preview then
-                            local source = r.PCM_Source_CreateFromFile(project.path .. "-PROX")
+                            local source = r.PCM_Source_CreateFromFile(preview_path)
                             current_preview = r.CF_CreatePreview(source)
                             r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
                             current_source = source
-                        else
-                            current_preview = nil
-                            current_source = nil
                         end
 
                         current_project_info = {
@@ -17982,9 +18556,10 @@ function ShowScreenshotWindow()
                         r.ImGui_TableNextColumn(ctx)
                         if project.cached_length == nil then
                             if has_preview then
-                                local src = r.PCM_Source_CreateFromFile(project.path .. "-PROX")
+                                local src = r.PCM_Source_CreateFromFile(preview_path)
                                 if src then
                                     project.cached_length = r.GetMediaSourceLength(src)
+                                    if r.PCM_Source_Destroy then pcall(r.PCM_Source_Destroy, src) end
                                 else
                                     project.cached_length = 0
                                 end
@@ -18082,29 +18657,22 @@ function ShowScreenshotWindow()
                             r.Main_openProject(project.path)
                         end
                         
-                        if r.ImGui_MenuItem(ctx, "Make Preview") then
-                            local project_already_open = false
-                            local proj_idx = 0
-                            repeat
-                                local proj = r.EnumProjects(proj_idx)
-                                if proj then
-                                    local path = r.GetProjectPathEx(proj)
-                                    if path == project.path then
-                                        project_already_open = true
-                                        break
-                                    end
-                                end
-                                proj_idx = proj_idx + 1
-                            until not proj
-                            
-                            if not project_already_open then
-                                r.Main_OnCommand(41929, 0)
-                                r.Main_openProject(project.path)
-                                r.Main_OnCommand(42332, 0)
-                                r.Main_OnCommand(40860, 0)
-                            else
-                                r.Main_OnCommand(42332, 0)
+                        if r.ImGui_BeginMenu(ctx, "Make Preview") then
+                            if r.ImGui_MenuItem(ctx, "Full project") then
+                                DoMakeProjectPreview(project.path, "full")
                             end
+                            if r.ImGui_MenuItem(ctx, "Time selection") then
+                                DoMakeProjectPreview(project.path, "timesel")
+                            end
+                            if r.ImGui_MenuItem(ctx, "Custom audio file...") then
+                                DoMakeProjectPreviewCustom(project.path)
+                            end
+                            r.ImGui_EndMenu(ctx)
+                        end
+
+                        if r.ImGui_MenuItem(ctx, "Manage Previews...") then
+                            manage_previews_target_path = project.path
+                            manage_previews_open_request = true
                         end
                     
                         if r.ImGui_BeginMenu(ctx, "Play Project Audio") then
@@ -18163,6 +18731,111 @@ function ShowScreenshotWindow()
                 r.ImGui_EndTable(ctx)
                 end
             r.ImGui_EndChild(ctx)
+
+            if manage_previews_open_request then
+                manage_previews_open_request = nil
+                r.ImGui_OpenPopup(ctx, "##ManagePreviews")
+            end
+            if r.ImGui_BeginPopup(ctx, "##ManagePreviews") then
+                local target = manage_previews_target_path
+                if target then
+                    local dir = target:match("(.*[/\\])") or ""
+                    local proj_name = target:match("([^/\\]+)%.rpp$") or ""
+                    local prefix = proj_name .. ".tkprev."
+                    local allowed_ext = { wav = 1, mp3 = 1, flac = 1, ogg = 1 }
+                    r.ImGui_Text(ctx, "Previews: " .. proj_name)
+                    r.ImGui_Separator(ctx)
+                    local list = {}
+                    if dir ~= "" and proj_name ~= "" then
+                        local i = 0
+                        repeat
+                            local f = r.EnumerateFiles(dir, i)
+                            local ext = f and f:match("%.([^%.]+)$")
+                            if f and f:sub(1, #prefix) == prefix and ext and allowed_ext[ext:lower()] then
+                                local full = dir .. f
+                                local stamp_part = f:sub(#prefix + 1, -(#ext + 2))
+                                local ts = tonumber(stamp_part:match("^(%d+)")) or 0
+                                local mtime = 0
+                                if r.JS_File_Stat then
+                                    local rv, _, _, mt = r.JS_File_Stat(full)
+                                    if rv then mtime = tonumber(mt) or 0 end
+                                end
+                                list[#list + 1] = { name = f, full = full, ts = ts, mtime = mtime, score = ts * 1e9 + mtime }
+                            end
+                            i = i + 1
+                        until not f
+                    end
+                    table.sort(list, function(a, b) return a.score > b.score end)
+                    local override = GetActivePreviewFilename(target)
+                    local active_basename
+                    if override then
+                        for _, e in ipairs(list) do
+                            if e.name == override then active_basename = override break end
+                        end
+                    end
+                    if not active_basename and #list > 0 then
+                        active_basename = list[1].name
+                    end
+
+                    local current_full_norm
+                    if current_source then
+                        local ok, fn = pcall(r.GetMediaSourceFileName, current_source, "")
+                        if ok and fn then current_full_norm = fn:gsub("\\", "/"):lower() end
+                    end
+
+                    if #list == 0 then
+                        r.ImGui_TextDisabled(ctx, "(no preview files)")
+                    end
+                    for idx, e in ipairs(list) do
+                        r.ImGui_PushID(ctx, idx)
+                        local marker = (e.name == active_basename) and "* " or "  "
+                        local label_color = (e.name == active_basename) and 0xFFD37AFF or 0xCCCCCCFF
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), label_color)
+                        r.ImGui_Text(ctx, marker .. e.name)
+                        r.ImGui_PopStyleColor(ctx)
+
+                        local is_playing_this = current_full_norm == e.full:gsub("\\", "/"):lower() and current_preview ~= nil
+                        if is_playing_this then
+                            if r.ImGui_Button(ctx, "Stop##stop", 50, 0) then
+                                if r.CF_Preview_StopAll then r.CF_Preview_StopAll() end
+                                ReleaseCurrentPreview()
+                            end
+                        else
+                            if r.ImGui_Button(ctx, "Play##play", 50, 0) then
+                                if r.CF_Preview_StopAll then r.CF_Preview_StopAll() end
+                                ReleaseCurrentPreview()
+                                local source = r.PCM_Source_CreateFromFile(e.full)
+                                if source then
+                                    current_preview = r.CF_CreatePreview(source)
+                                    r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
+                                    current_source = source
+                                    r.CF_Preview_Play(current_preview)
+                                end
+                            end
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "Set Active##act", 80, 0) then
+                            SetActivePreviewFilename(target, e.name)
+                            if current_project_info and current_project_info.path == target then
+                                current_project_info.has_preview = true
+                            end
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "Delete##del", 60, 0) then
+                            local res = r.ShowMessageBox("Delete preview file?\n\n" .. e.name, "Confirm", 4)
+                            if res == 6 then
+                                DeletePreviewFile(target, e.full)
+                            end
+                        end
+                        r.ImGui_PopID(ctx)
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_Button(ctx, "Close", 80, 0) then
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
             if config.show_project_info then
                 r.ImGui_Separator(ctx)
                 local info_footer_h = 195
@@ -18179,13 +18852,10 @@ function ShowScreenshotWindow()
                     LoadProjectCover(current_project_info.path)
                     r.ImGui_Spacing(ctx)
 
-                    if show_project_cover and project_cover_texture and r.ImGui_ValidatePtr(project_cover_texture, 'ImGui_Image*') then
-                        local iw, ih = r.ImGui_Image_GetSize(project_cover_texture)
-                        if iw and ih and iw > 0 and ih > 0 then
-                            has_cover = true
-                            cover_h = info_footer_h - 8
-                            cover_w = math.floor(iw * (cover_h / ih))
-                        end
+                    if show_project_cover then
+                        has_cover = true
+                        cover_h = info_footer_h - 8
+                        cover_w = cover_h
                     end
 
                     local cover_left = has_cover and (config.project_cover_align or "right") == "left"
@@ -18212,13 +18882,6 @@ function ShowScreenshotWindow()
                         if ri.samplerate then r.ImGui_Text(ctx, tostring(ri.samplerate) .. " Hz") end
                         if ri.track_count > 0 then r.ImGui_Text(ctx, tostring(ri.track_count) .. " tracks") end
                     end
-                    if current_project_info.has_preview then
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x50FA7BFF)
-                        r.ImGui_Text(ctx, "\xE2\x97\x8F Preview")
-                        r.ImGui_PopStyleColor(ctx)
-                    else
-                        r.ImGui_Text(ctx, "\xE2\x97\x8B No preview")
-                    end
                     r.ImGui_PopStyleColor(ctx)
 
                     r.ImGui_EndGroup(ctx)
@@ -18231,19 +18894,41 @@ function ShowScreenshotWindow()
                     playback_x = footer_start_x + cover_w + 10
                 end
 
-                r.ImGui_SetCursorPos(ctx, playback_x, info_footer_h - playback_h)
+                local position, length = 0, 0
+                local progress = 0
+                if current_preview then
+                    local rv1, pos = r.CF_Preview_GetValue(current_preview, "D_POSITION")
+                    local rv2, len = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
+                    if pos and len and len > 0 then
+                        position = pos
+                        length = len
+                        progress = pos / len
+                    end
+                end
+                local bar_label = length > 0 and string.format("%.1fs / %.1fs", position, length) or ""
+                r.ImGui_SetCursorPos(ctx, playback_x, info_footer_h - 42)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x1E1E1EFF)
+                r.ImGui_ProgressBar(ctx, progress, playback_w, 14, bar_label)
+                r.ImGui_PopStyleColor(ctx)
+
+                r.ImGui_SetCursorPos(ctx, playback_x, info_footer_h - 24)
 
                 local is_playing = current_preview and select(2, r.CF_Preview_GetValue(current_preview, "B_PLAY"))
                 if r.ImGui_Button(ctx, is_playing and "\xE2\x96\xA0 Stop" or "\xE2\x96\xB6 Play", 70, 0) then
                     if is_playing then
                         r.CF_Preview_StopAll()
-                        current_preview = nil
+                        ReleaseCurrentPreview()
                     else
                         if selected_project then
-                            local source = r.PCM_Source_CreateFromFile(selected_project.path .. "-PROX")
-                            current_preview = r.CF_CreatePreview(source)
-                            r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
-                            r.CF_Preview_Play(current_preview)
+                            local sel_preview = GetProjectPreviewPath(selected_project.path)
+                            if sel_preview then
+                                ReleaseCurrentPreview()
+                                local source = r.PCM_Source_CreateFromFile(sel_preview)
+                                current_preview = r.CF_CreatePreview(source)
+                                current_source = source
+                                r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
+                                r.CF_Preview_Play(current_preview)
+                            end
                         end
                     end
                 end
@@ -18258,27 +18943,38 @@ function ShowScreenshotWindow()
                 end
                 r.ImGui_PopItemWidth(ctx)
 
-                local position, length = 0, 0
-                local progress = 0
-                if current_preview then
-                    local rv1, pos = r.CF_Preview_GetValue(current_preview, "D_POSITION")
-                    local rv2, len = r.CF_Preview_GetValue(current_preview, "D_LENGTH")
-                    if pos and len and len > 0 then
-                        position = pos
-                        length = len
-                        progress = pos / len
-                    end
-                end
-                local bar_label = length > 0 and string.format("%.1fs / %.1fs", position, length) or ""
-                r.ImGui_SetCursorPosX(ctx, playback_x)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x1E1E1EFF)
-                r.ImGui_ProgressBar(ctx, progress, playback_w, 14, bar_label)
-                r.ImGui_PopStyleColor(ctx)
-
                 if has_cover then
                     local cover_x = cover_left and footer_start_x or (footer_start_x + content_avail_w - cover_w)
                     r.ImGui_SetCursorPos(ctx, cover_x, 4)
-                    SafeImage(ctx, project_cover_texture, cover_w, cover_h)
+                    local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
+                    local dl = r.ImGui_GetWindowDrawList(ctx)
+                    r.ImGui_DrawList_AddRectFilled(dl, sx, sy, sx + cover_w, sy + cover_h, 0x000000FF)
+                    r.ImGui_DrawList_AddRect(dl, sx, sy, sx + cover_w, sy + cover_h, 0x444444FF)
+                    local img_valid = project_cover_texture and r.ImGui_ValidatePtr(project_cover_texture, 'ImGui_Image*')
+                    local img_w, img_h = 0, 0
+                    if img_valid then
+                        local iw, ih = r.ImGui_Image_GetSize(project_cover_texture)
+                        if iw and ih and iw > 0 and ih > 0 then
+                            local s = math.min(cover_w / iw, cover_h / ih)
+                            img_w = math.floor(iw * s)
+                            img_h = math.floor(ih * s)
+                        else
+                            img_valid = false
+                        end
+                    end
+                    if img_valid and img_w > 0 and img_h > 0 then
+                        local ox = math.floor((cover_w - img_w) / 2)
+                        local oy = math.floor((cover_h - img_h) / 2)
+                        r.ImGui_SetCursorPos(ctx, cover_x + ox, 4 + oy)
+                        SafeImage(ctx, project_cover_texture, img_w, img_h)
+                    else
+                        local txt = "No Image"
+                        local tw, th = r.ImGui_CalcTextSize(ctx, txt)
+                        r.ImGui_SetCursorPos(ctx, cover_x + math.floor((cover_w - tw) / 2), 4 + math.floor((cover_h - th) / 2))
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                        r.ImGui_Text(ctx, txt)
+                        r.ImGui_PopStyleColor(ctx)
+                    end
                 end
 
                 r.ImGui_EndChild(ctx)
@@ -19560,7 +20256,8 @@ function ShowScreenshotWindow()
         end
     end
 
-    r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0, 0, r.ImGui_WindowFlags_NoNavInputs())
+    local _info_bar_h = (config.show_folder_info_bar and selected_folder and selected_folder ~= '') and 24 or 0
+    r.ImGui_BeginChild(ctx, "ScreenshotList", 0, _info_bar_h > 0 and -_info_bar_h or 0, 0, r.ImGui_WindowFlags_NoNavInputs())
             if config.flicker_guard_enabled then
                 local now = r.time_precise()
                 local sig = _build_screenshot_signature()
@@ -20068,11 +20765,44 @@ function ShowScreenshotWindow()
                                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), hdr_color)
                                 local _hdr_grp_open = r.ImGui_BeginChild(ctx, "ProjFXGrpHdr_" .. key, -1, 22)
                                 r.ImGui_PopStyleColor(ctx)
+                                local _grp_is_collapsed
+                                if sample.is_master then
+                                    _grp_is_collapsed = master_track_collapsed or false
+                                else
+                                    _grp_is_collapsed = collapsed_tracks[sample.track_number] or false
+                                end
                                 if _hdr_grp_open then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hdr_text_color)
+                                    if r.ImGui_Button(ctx, (_grp_is_collapsed and "+" or "-") .. "##ProjGrpCollapse_" .. key, 20, 20) then
+                                        if sample.is_master then
+                                            master_track_collapsed = not _grp_is_collapsed
+                                        else
+                                            collapsed_tracks[sample.track_number] = not _grp_is_collapsed
+                                        end
+                                        if _grp_is_collapsed then
+                                            ClearScreenshotCache()
+                                            GetPluginsForFolder(selected_folder)
+                                        end
+                                        _grp_is_collapsed = not _grp_is_collapsed
+                                    end
+                                    if r.ImGui_IsItemClicked(ctx, 1) then
+                                        all_tracks_collapsed = not all_tracks_collapsed
+                                        for j = 1, r.CountTracks(0) do
+                                            collapsed_tracks[j] = all_tracks_collapsed
+                                        end
+                                        master_track_collapsed = all_tracks_collapsed
+                                        ClearScreenshotCache()
+                                        GetPluginsForFolder(selected_folder)
+                                        if sample.is_master then
+                                            _grp_is_collapsed = master_track_collapsed
+                                        else
+                                            _grp_is_collapsed = collapsed_tracks[sample.track_number] or false
+                                        end
+                                    end
+                                    r.ImGui_SameLine(ctx)
                                     local label
                                     if sample.is_master then
                                         label = "Master Track"
@@ -20088,6 +20818,9 @@ function ShowScreenshotWindow()
                                 if _tmp_popped_stylevars_grp then
                                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
                                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 0)
+                                end
+                                if _grp_is_collapsed then
+                                    goto _proj_fx_grp_continue
                                 end
                                 local name_to_fx = {}
                                 local masonry_data = {}
@@ -20128,6 +20861,7 @@ function ShowScreenshotWindow()
                                 end
                                 r.ImGui_PopID(ctx)
                                 _layout_fx_click_override = prev_override
+                                ::_proj_fx_grp_continue::
                             end
                             goto skip_current_project_fx_render
                         end
@@ -20958,6 +21692,9 @@ function ShowScreenshotWindow()
             r.ImGui_Dummy(ctx, 0, 0)
             if is_screenshot_branch then
                 r.ImGui_EndChild(ctx) 
+                if _info_bar_h and _info_bar_h > 0 then
+                    DrawFolderInfoBar()
+                end
             end
             end
         if not popped_view_stylevars then r.ImGui_PopStyleVar(ctx, 2) end
@@ -24462,6 +25199,8 @@ function Main()
             LoadProjects()
         end
     end
+
+    if tk_pending_deletes then tk_pending_deletes = nil end
     
     if not ctx or not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         InitializeImGuiContext()
