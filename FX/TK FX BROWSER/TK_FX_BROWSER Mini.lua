@@ -1,8 +1,18 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.6.8
+-- @version 0.6.9
 -- @changelog:
 --[[ 
+    v0.6.9:
+        + Projects: new Producer Metadata editor (right-click project > Edit Metadata...). Music fields (Artist/Album/Title/Genre/Year/Comment) editable, with optional sync to RPP RENDER_METADATA when the project is active.
+        + Projects: organization fields stored in sidecar project_metadata.json (Status: Idea/Tracking/Mixing/Mastering/Released, Rating 0-5, Client, Type: Single/Album/EP/Demo/Sound Design/Score/Other, Deadline, Tags).
+        + Projects info footer: now shows Status (color-coded), Rating (stars), Type, Artist - Title, Album/Year/Genre and Tags. Technical info combined on a single line.
+        + Projects: shared module TKFXBProjectMeta.lua (used by both Standard and Mini variants).
+        + Projects: cover fallbacks. ProjectCovers/ still has highest priority; then automatic lookup of [projectname].png/jpg, cover.*, folder.*, front.*, artwork.* in the project folder, with first image in the folder as last resort.
+        + RPP parser extended: now also reads AUTHOR, NOTES block and RENDER_METADATA block (all ID3:* fields).
+        + Projects toolbar: R (refresh) button now also invalidates per-project caches (RPP info, cover, size, length, files, date) and the metadata cache, so edits to RPP/sidecar are picked up without a script restart.
+        + Projects table: new optional metadata columns (toggle via the columns menu): Status (color-coded), Rating (stars), Type, Artist, Title, Genre, Year, Client, Deadline, Tags. Each column is sortable.
+
     v0.6.8:
         + Projects: per-project Preview Manager (right-click project > Manage Previews...). Play/Stop, Set Active and Delete each preview file individually. Active preview is persisted per project in project_preview_active.json.
         + Projects: support multiple preview files per project (extensions wav, mp3, flac, ogg). Newest is default active when no override is set.
@@ -1197,6 +1207,16 @@ function SetDefaultConfig()
         show_project_col_bpm = false,
         show_project_col_samplerate = false,
         show_project_col_tracks = false,
+        show_project_col_status = false,
+        show_project_col_rating = false,
+        show_project_col_type = false,
+        show_project_col_artist = false,
+        show_project_col_title = false,
+        show_project_col_genre = false,
+        show_project_col_year = false,
+        show_project_col_client = false,
+        show_project_col_deadline = false,
+        show_project_col_tags = false,
         project_sort_column = "name",
         project_sort_ascending = true,
         show_project_cover = true,
@@ -8767,6 +8787,34 @@ function GetProjectCoverPath(project_path)
     if r.file_exists(png) then return png end
     local jpg = project_covers_path .. safe_name .. ".jpg"
     if r.file_exists(jpg) then return jpg end
+
+    local proj_dir = project_path:match("(.*[/\\])") or ""
+    if proj_dir ~= "" then
+        local raw_name = project_path:match("([^/\\]+)%.rpp$") or ""
+        local fallbacks = {
+            raw_name .. ".png", raw_name .. ".jpg", raw_name .. ".jpeg",
+            "cover.png", "cover.jpg", "cover.jpeg",
+            "folder.png", "folder.jpg", "folder.jpeg",
+            "front.png",  "front.jpg",  "front.jpeg",
+            "artwork.png", "artwork.jpg", "artwork.jpeg",
+        }
+        for _, fname in ipairs(fallbacks) do
+            local p = proj_dir .. fname
+            if r.file_exists(p) then return p end
+        end
+        local i = 0
+        repeat
+            local f = r.EnumerateFiles(proj_dir, i)
+            if f then
+                local low = f:lower()
+                if low:match("%.png$") or low:match("%.jpg$") or low:match("%.jpeg$") then
+                    return proj_dir .. f
+                end
+            end
+            i = i + 1
+        until not f
+    end
+
     return nil
 end
 
@@ -8900,6 +8948,13 @@ end
 
 LoadProjectComments()
 LoadProjectPreviewActive()
+
+local TKFXBProjectMeta = dofile(script_path .. "TKFXBProjectMeta.lua")
+TKFXBProjectMeta.Init({
+    ctx = ctx,
+    json = json,
+    sidecar_path = script_path .. "project_metadata.json",
+})
 
 local rpp_header_cache = {}
 
@@ -17760,10 +17815,24 @@ function ShowScreenshotWindow()
             end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "R", btn_w, btn_h) then
+                if projects then
+                    for _, p in ipairs(projects) do
+                        p.cached_rpp_info = nil
+                        p.cached_cover = nil
+                        p.cached_size = nil
+                        p.cached_media = nil
+                        p.cached_length = nil
+                        p.cached_date = nil
+                    end
+                end
+                project_cover_loaded_for = nil
+                if TKFXBProjectMeta and TKFXBProjectMeta.InvalidateCache then
+                    TKFXBProjectMeta.InvalidateCache()
+                end
                 RequestLoadProjects()
             end
             if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Refresh project list (rescan folders)")
+                r.ImGui_SetTooltip(ctx, "Refresh project list (rescan folders + metadata)")
             end
 
             if r.ImGui_BeginPopup(ctx, "##ProjectColumnsMenu") then
@@ -17786,6 +17855,27 @@ function ShowScreenshotWindow()
                 rv, config.show_project_col_samplerate = r.ImGui_Checkbox(ctx, "Sample Rate", config.show_project_col_samplerate)
                 if rv then col_changed = true end
                 rv, config.show_project_col_tracks = r.ImGui_Checkbox(ctx, "Tracks", config.show_project_col_tracks)
+                if rv then col_changed = true end
+                r.ImGui_SeparatorText(ctx, "Metadata")
+                rv, config.show_project_col_status = r.ImGui_Checkbox(ctx, "Status", config.show_project_col_status)
+                if rv then col_changed = true end
+                rv, config.show_project_col_rating = r.ImGui_Checkbox(ctx, "Rating", config.show_project_col_rating)
+                if rv then col_changed = true end
+                rv, config.show_project_col_type = r.ImGui_Checkbox(ctx, "Type", config.show_project_col_type)
+                if rv then col_changed = true end
+                rv, config.show_project_col_artist = r.ImGui_Checkbox(ctx, "Artist", config.show_project_col_artist)
+                if rv then col_changed = true end
+                rv, config.show_project_col_title = r.ImGui_Checkbox(ctx, "Title", config.show_project_col_title)
+                if rv then col_changed = true end
+                rv, config.show_project_col_genre = r.ImGui_Checkbox(ctx, "Genre", config.show_project_col_genre)
+                if rv then col_changed = true end
+                rv, config.show_project_col_year = r.ImGui_Checkbox(ctx, "Year", config.show_project_col_year)
+                if rv then col_changed = true end
+                rv, config.show_project_col_client = r.ImGui_Checkbox(ctx, "Client", config.show_project_col_client)
+                if rv then col_changed = true end
+                rv, config.show_project_col_deadline = r.ImGui_Checkbox(ctx, "Deadline", config.show_project_col_deadline)
+                if rv then col_changed = true end
+                rv, config.show_project_col_tags = r.ImGui_Checkbox(ctx, "Tags", config.show_project_col_tags)
                 if rv then col_changed = true end
                 r.ImGui_Separator(ctx)
                 local cover_rv, new_cover = r.ImGui_Checkbox(ctx, "Cover Image", show_project_cover)
@@ -17874,6 +17964,16 @@ function ShowScreenshotWindow()
                 if config.show_project_col_bpm then num_columns = num_columns + 1 end
                 if config.show_project_col_samplerate then num_columns = num_columns + 1 end
                 if config.show_project_col_tracks then num_columns = num_columns + 1 end
+                if config.show_project_col_status then num_columns = num_columns + 1 end
+                if config.show_project_col_rating then num_columns = num_columns + 1 end
+                if config.show_project_col_type then num_columns = num_columns + 1 end
+                if config.show_project_col_artist then num_columns = num_columns + 1 end
+                if config.show_project_col_title then num_columns = num_columns + 1 end
+                if config.show_project_col_genre then num_columns = num_columns + 1 end
+                if config.show_project_col_year then num_columns = num_columns + 1 end
+                if config.show_project_col_client then num_columns = num_columns + 1 end
+                if config.show_project_col_deadline then num_columns = num_columns + 1 end
+                if config.show_project_col_tags then num_columns = num_columns + 1 end
                 local table_flags = r.ImGui_TableFlags_ScrollY()
                     | r.ImGui_TableFlags_Resizable()
                     | r.ImGui_TableFlags_RowBg()
@@ -17910,6 +18010,37 @@ function ShowScreenshotWindow()
                 if config.show_project_col_comment then
                     r.ImGui_TableSetupColumn(ctx, "Comment", 0, 2)
                 end
+                if config.show_project_col_status then
+                    r.ImGui_TableSetupColumn(ctx, "Status", 0, 1)
+                end
+                if config.show_project_col_rating then
+                    r.ImGui_TableSetupColumn(ctx, "Rating", 0, 1)
+                end
+                if config.show_project_col_type then
+                    r.ImGui_TableSetupColumn(ctx, "Type", 0, 1)
+                end
+                if config.show_project_col_artist then
+                    r.ImGui_TableSetupColumn(ctx, "Artist", 0, 1.5)
+                end
+                if config.show_project_col_title then
+                    r.ImGui_TableSetupColumn(ctx, "Title", 0, 1.5)
+                end
+                if config.show_project_col_genre then
+                    r.ImGui_TableSetupColumn(ctx, "Genre", 0, 1)
+                end
+                if config.show_project_col_year then
+                    r.ImGui_TableSetupColumn(ctx, "Year", 0, 0.6)
+                end
+                if config.show_project_col_client then
+                    r.ImGui_TableSetupColumn(ctx, "Client", 0, 1.2)
+                end
+                if config.show_project_col_deadline then
+                    r.ImGui_TableSetupColumn(ctx, "Deadline", 0, 1)
+                end
+                if config.show_project_col_tags then
+                    r.ImGui_TableSetupColumn(ctx, "Tags", 0, 2)
+                end
+                r.ImGui_TableSetupScrollFreeze(ctx, 0, 1)
                 r.ImGui_TableHeadersRow(ctx)
 
                 local need_sort, has_specs = r.ImGui_TableNeedSort(ctx)
@@ -17926,6 +18057,16 @@ function ShowScreenshotWindow()
                         if config.show_project_col_tracks then table.insert(col_names, "tracks") end
                         if config.show_project_col_dates then table.insert(col_names, "date") end
                         if config.show_project_col_comment then table.insert(col_names, "comment") end
+                        if config.show_project_col_status then table.insert(col_names, "status") end
+                        if config.show_project_col_rating then table.insert(col_names, "rating") end
+                        if config.show_project_col_type then table.insert(col_names, "type") end
+                        if config.show_project_col_artist then table.insert(col_names, "artist") end
+                        if config.show_project_col_title then table.insert(col_names, "title") end
+                        if config.show_project_col_genre then table.insert(col_names, "genre") end
+                        if config.show_project_col_year then table.insert(col_names, "year") end
+                        if config.show_project_col_client then table.insert(col_names, "client") end
+                        if config.show_project_col_deadline then table.insert(col_names, "deadline") end
+                        if config.show_project_col_tags then table.insert(col_names, "tags") end
 
                         project_sort_column = col_names[col_idx + 1] or "name"
                         project_sort_ascending = sort_dir == r.ImGui_SortDirection_Ascending()
@@ -17986,6 +18127,20 @@ function ShowScreenshotWindow()
                             va, vb = (a.cached_rpp_info and a.cached_rpp_info.samplerate) or 0, (b.cached_rpp_info and b.cached_rpp_info.samplerate) or 0
                         elseif sc == "tracks" then
                             va, vb = (a.cached_rpp_info and a.cached_rpp_info.track_count) or 0, (b.cached_rpp_info and b.cached_rpp_info.track_count) or 0
+                        elseif sc == "status" or sc == "type" or sc == "artist" or sc == "title" or sc == "genre" or sc == "year" or sc == "client" or sc == "deadline" then
+                            local da = TKFXBProjectMeta and TKFXBProjectMeta.GetDisplay(a.path, a.cached_rpp_info) or {}
+                            local db = TKFXBProjectMeta and TKFXBProjectMeta.GetDisplay(b.path, b.cached_rpp_info) or {}
+                            local key = sc
+                            if sc == "type" then key = "project_type" end
+                            va, vb = (da[key] or ""):lower(), (db[key] or ""):lower()
+                        elseif sc == "rating" then
+                            local da = TKFXBProjectMeta and TKFXBProjectMeta.GetDisplay(a.path, a.cached_rpp_info) or {}
+                            local db = TKFXBProjectMeta and TKFXBProjectMeta.GetDisplay(b.path, b.cached_rpp_info) or {}
+                            va, vb = da.rating or 0, db.rating or 0
+                        elseif sc == "tags" then
+                            local da = TKFXBProjectMeta and TKFXBProjectMeta.GetDisplay(a.path, a.cached_rpp_info) or {}
+                            local db = TKFXBProjectMeta and TKFXBProjectMeta.GetDisplay(b.path, b.cached_rpp_info) or {}
+                            va, vb = table.concat(da.tags or {}, " "):lower(), table.concat(db.tags or {}, " "):lower()
                         else
                             va, vb = a.name:lower(), b.name:lower()
                         end
@@ -18157,7 +18312,94 @@ function ShowScreenshotWindow()
                         end
                         r.ImGui_PopItemWidth(ctx)
                     end
-                    
+
+                    local _meta_needed = config.show_project_col_status or config.show_project_col_rating
+                        or config.show_project_col_type or config.show_project_col_artist or config.show_project_col_title
+                        or config.show_project_col_genre or config.show_project_col_year or config.show_project_col_client
+                        or config.show_project_col_deadline or config.show_project_col_tags
+                    if _meta_needed and TKFXBProjectMeta then
+                        if not project.cached_rpp_info then
+                            project.cached_rpp_info = ParseRPPHeader(project.path) or {}
+                        end
+                        local md = TKFXBProjectMeta.GetDisplay(project.path, project.cached_rpp_info)
+                        if config.show_project_col_status then
+                            r.ImGui_TableNextColumn(ctx)
+                            local status_colors = {
+                                Idea = 0x7AA2F7FF, Tracking = 0xE0AF68FF, Mixing = 0xBB9AF7FF,
+                                Mastering = 0xF7768EFF, Released = 0x9ECE6AFF,
+                            }
+                            local col = status_colors[md.status] or 0x999999FF
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col)
+                            r.ImGui_Text(ctx, md.status ~= "" and md.status or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_rating then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xE0AF68FF)
+                            local rt = md.rating or 0
+                            if rt > 0 then
+                                r.ImGui_Text(ctx, string.rep("\xE2\x98\x85", rt) .. string.rep("\xE2\x98\x86", 5 - rt))
+                            else
+                                r.ImGui_Text(ctx, "-")
+                            end
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_type then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x9ECE6AFF)
+                            r.ImGui_Text(ctx, md.project_type ~= "" and md.project_type or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_artist then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xCCCCCCFF)
+                            r.ImGui_Text(ctx, md.artist ~= "" and md.artist or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_title then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xCCCCCCFF)
+                            r.ImGui_Text(ctx, md.title ~= "" and md.title or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_genre then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                            r.ImGui_Text(ctx, md.genre ~= "" and md.genre or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_year then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                            r.ImGui_Text(ctx, md.year ~= "" and md.year or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_client then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                            r.ImGui_Text(ctx, md.client ~= "" and md.client or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_deadline then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x999999FF)
+                            r.ImGui_Text(ctx, md.deadline ~= "" and md.deadline or "-")
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if config.show_project_col_tags then
+                            r.ImGui_TableNextColumn(ctx)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                            if md.tags and #md.tags > 0 then
+                                local parts = {}
+                                for _, t in ipairs(md.tags) do parts[#parts + 1] = "#" .. t end
+                                r.ImGui_Text(ctx, table.concat(parts, " "))
+                            else
+                                r.ImGui_Text(ctx, "-")
+                            end
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                    end
+
                     if r.ImGui_BeginPopup(ctx, "ProjectContextMenu_" .. i) then
                         if r.ImGui_MenuItem(ctx, "Open Project") then
                             open_project(project.path)
@@ -18167,7 +18409,11 @@ function ShowScreenshotWindow()
                             r.Main_OnCommand(41929, 0)
                             r.Main_openProject(project.path)
                         end
-                        
+
+                        if r.ImGui_MenuItem(ctx, "Edit Metadata...") then
+                            TKFXBProjectMeta.OpenEditor(project)
+                        end
+
                         if r.ImGui_BeginMenu(ctx, "Make Preview") then
                             if r.ImGui_MenuItem(ctx, "Full project") then
                                 DoMakeProjectPreview(project.path, "full")
@@ -18245,6 +18491,8 @@ function ShowScreenshotWindow()
                 r.ImGui_EndTable(ctx)
                 end
             r.ImGui_EndChild(ctx)
+
+            TKFXBProjectMeta.DrawEditor()
 
             if manage_previews_open_request then
                 manage_previews_open_request = nil
@@ -18384,17 +18632,87 @@ function ShowScreenshotWindow()
                     r.ImGui_Text(ctx, current_project_info.name)
                     r.ImGui_PopStyleColor(ctx)
 
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
-                    r.ImGui_Text(ctx, FormatFileSize(current_project_info.size))
-                    if current_project_info.has_preview then
-                        r.ImGui_Text(ctx, FormatDuration(current_project_info.length))
+                    local meta = TKFXBProjectMeta.GetDisplay(current_project_info.path, current_project_info.rpp_info)
+
+                    if meta.status ~= "" or meta.rating > 0 or meta.project_type ~= "" then
+                        local status_colors = {
+                            Idea      = 0x7AA2F7FF,
+                            Tracking  = 0xE0AF68FF,
+                            Mixing    = 0xBB9AF7FF,
+                            Mastering = 0xF7768EFF,
+                            Released  = 0x9ECE6AFF,
+                        }
+                        local first = true
+                        local function sep()
+                            if first then first = false else
+                                r.ImGui_SameLine(ctx, 0, 6)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x555555FF)
+                                r.ImGui_Text(ctx, "|")
+                                r.ImGui_PopStyleColor(ctx)
+                                r.ImGui_SameLine(ctx, 0, 6)
+                            end
+                        end
+                        if meta.status ~= "" then
+                            sep()
+                            local col = status_colors[meta.status] or 0xAAAAAAFF
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col)
+                            r.ImGui_Text(ctx, meta.status)
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if meta.rating > 0 then
+                            sep()
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xE0AF68FF)
+                            r.ImGui_Text(ctx, string.rep("*", meta.rating))
+                            r.ImGui_PopStyleColor(ctx)
+                        end
+                        if meta.project_type ~= "" then
+                            sep()
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x9ECE6AFF)
+                            r.ImGui_Text(ctx, meta.project_type)
+                            r.ImGui_PopStyleColor(ctx)
+                        end
                     end
-                    r.ImGui_Text(ctx, tostring(current_project_info.folder_files) .. " files")
-                    if current_project_info.rpp_info then
-                        local ri = current_project_info.rpp_info
-                        if ri.bpm then r.ImGui_Text(ctx, tostring(ri.bpm) .. " BPM") end
-                        if ri.samplerate then r.ImGui_Text(ctx, tostring(ri.samplerate) .. " Hz") end
-                        if ri.track_count > 0 then r.ImGui_Text(ctx, tostring(ri.track_count) .. " tracks") end
+
+                    if meta.artist ~= "" or meta.title ~= "" then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xDDDDDDFF)
+                        local left = meta.artist
+                        if meta.title ~= "" then
+                            left = (left ~= "" and (left .. " - ") or "") .. meta.title
+                        end
+                        r.ImGui_Text(ctx, left)
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+
+                    if meta.album ~= "" or meta.year ~= "" or meta.genre ~= "" then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                        local parts = {}
+                        if meta.album ~= "" then parts[#parts + 1] = meta.album end
+                        if meta.year  ~= "" then parts[#parts + 1] = meta.year end
+                        if meta.genre ~= "" then parts[#parts + 1] = meta.genre end
+                        r.ImGui_Text(ctx, table.concat(parts, "  -  "))
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+
+                    if meta.tags and #meta.tags > 0 then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+                        r.ImGui_Text(ctx, "#" .. table.concat(meta.tags, " #"))
+                        r.ImGui_PopStyleColor(ctx)
+                    end
+
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                    do
+                        local parts = { FormatFileSize(current_project_info.size) }
+                        if current_project_info.has_preview then
+                            parts[#parts + 1] = FormatDuration(current_project_info.length)
+                        end
+                        parts[#parts + 1] = tostring(current_project_info.folder_files) .. " files"
+                        if current_project_info.rpp_info then
+                            local ri = current_project_info.rpp_info
+                            if ri.bpm then parts[#parts + 1] = tostring(ri.bpm) .. " BPM" end
+                            if ri.samplerate then parts[#parts + 1] = tostring(ri.samplerate) .. " Hz" end
+                            if ri.track_count and ri.track_count > 0 then parts[#parts + 1] = tostring(ri.track_count) .. " tracks" end
+                        end
+                        r.ImGui_Text(ctx, table.concat(parts, "  -  "))
                     end
                     r.ImGui_PopStyleColor(ctx)
 

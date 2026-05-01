@@ -33,10 +33,11 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.7.8" author="TouristKiller" time="2026-04-30T22:00:15Z">
+    <version name="2.7.9" author="TouristKiller" time="2026-05-01T21:55:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
+    <source file="TKFXBProjectMeta.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBProjectMeta.lua</source>
     <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/json.lua</source>
     <source main="main" file="TK_NOTES.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES.lua</source>
     <source main="main" file="TK_FX_BROWSER Mini.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER%20Mini.lua</source>
@@ -46,15 +47,16 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[    
-    v2.7.8/0.6.8:
-        + Projects: per-project Preview Manager (right-click project > Manage Previews...). Play/Stop, Set Active and Delete each preview file individually. Active preview is persisted per project in project_preview_active.json.
-        + Projects: support multiple preview files per project (extensions wav, mp3, flac, ogg). Newest is default active when no override is set.
-        + Projects: new "Make Preview > Custom audio file..." option to import an existing audio file (wav/mp3/flac/ogg/aif/aiff) as the project preview.
-        + Projects info footer: cover area is now a square with letterbox fit and a "No Image" placeholder when no cover is set.
-        + Projects info footer: removed the "\xE2\x97\x8F Preview" text line and reordered Play / Volume / Progressbar for a cleaner layout.
-        + Projects toolbar: removed the global "C" cleanup button and the entire pending-deletes queue. Cleanup is now per file via the Preview Manager.
-        + Projects: search bar widened (one button slot reclaimed) after removing the C button.
-        + Projects: ported the Save preset dropdown from the main version (parity).
+    v2.7.9/0.6.9:
+        + Projects: new Producer Metadata editor (right-click project > Edit Metadata...). Music fields (Artist/Album/Title/Genre/Year/Comment) editable, with optional sync to RPP RENDER_METADATA when the project is active.
+        + Projects: organization fields stored in sidecar project_metadata.json (Status: Idea/Tracking/Mixing/Mastering/Released, Rating 0-5, Client, Type: Single/Album/EP/Demo/Sound Design/Score/Other, Deadline, Tags).
+        + Projects info footer: now shows Status (color-coded), Rating (stars), Type, Artist - Title, Album/Year/Genre and Tags. Technical info combined on a single line.
+        + Projects: shared module TKFXBProjectMeta.lua (used by both Standard and Mini variants).
+        + Projects: cover fallbacks. ProjectCovers/ still has highest priority; then automatic lookup of [projectname].png/jpg, cover.*, folder.*, front.*, artwork.* in the project folder, with first image in the folder as last resort.
+        + RPP parser extended: now also reads AUTHOR, NOTES block and RENDER_METADATA block (all ID3:* fields).
+        + Projects toolbar: R (refresh) button now also invalidates per-project caches (RPP info, cover, size, length, files, date) and the metadata cache, so edits to RPP/sidecar are picked up without a script restart.
+        + Projects table: new optional metadata columns (toggle via the columns menu): Status (color-coded), Rating (stars), Type, Artist, Title, Genre, Year, Client, Deadline, Tags. Each column is sortable.
+        + Projects table: header row is now frozen so it remains visible while scrolling.
 ]]></changelog>
     </version>
     </reapack>
