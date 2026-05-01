@@ -1,9 +1,9 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.7.8
+-- @version 0.7.9
 -- @changelog:
 --[[
-v0.7.8:
+v0.7.9:
 + Cartridge sampler integration: right-click an audio file -> "Add to new track with Cartridge" or "Load sample to focused Cartridge" (active waveform selection is applied as trim)
 + Pitch detection: real-time tunable stability/update/sensitivity sliders + Fast/Balanced/Smooth presets in Settings
 + Stability: fixed ImGui_EndChild assertion crash that could occur on view-mode switches (gear/shortcuts buttons)
