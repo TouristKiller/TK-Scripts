@@ -293,18 +293,27 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.7.7" author="TouristKiller" time="2026-04-29T20:30:15Z">
+        <version name="0.7.8" author="TouristKiller" time="2026-05-01T21:00:15Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
-v0.7.7:
-+ Saved Searches: save the current search (text + file-type filters + active location/collection + view mode) under a name
-+ New "Searches" tab in the view-mode grid with list of saved searches
-+ Right-click context menu on a saved search: Apply / Rename / Update with current search / Delete
-+ "S" button next to the search bar to quickly save the current search
-+ "X" button next to the search bar to instantly clear the search term
+v0.7.8:
++ Cartridge sampler integration: right-click an audio file -> "Add to new track with Cartridge" or "Load sample to focused Cartridge" (active waveform selection is applied as trim)
++ Pitch detection: real-time tunable stability/update/sensitivity sliders + Fast/Balanced/Smooth presets in Settings
++ Stability: fixed ImGui_EndChild assertion crash that could occur on view-mode switches (gear/shortcuts buttons)
++ Collections and Saved Searches now support 3 levels: Group / Subgroup / Sub-subgroup
++ Header context menu: "New sub-subgroup..." on a subgroup, full rename/move/delete on a sub-subgroup
++ Save Search dialog: extra "Sub-subgroup (optional)" field
++ Item context menu: "Move to sub-subgroup" submenu
++ Color picker: "Use gradient" (group + subgroup) and "Inherit parent color" (subgroup + sub-subgroup)
++ Saved searches inherit the effective color of their (sub-)subgroup, including gradient
++ Empty subgroups now stay visible after creation
+]]></changelog>
+        </version>
+    </reapack>
+    
 + Applying a saved search restores the search term in the search bar
 + Fixed: search field had no effect in folder browse mode (latent bug)
 + Fixed: applying a saved search showed all files instead of the filtered results

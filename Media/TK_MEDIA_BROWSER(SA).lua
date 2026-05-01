@@ -1,8 +1,20 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.7.7
+-- @version 0.7.8
 -- @changelog:
---[[       
+--[[
+v0.7.8:
++ Cartridge sampler integration: right-click an audio file -> "Add to new track with Cartridge" or "Load sample to focused Cartridge" (active waveform selection is applied as trim)
++ Pitch detection: real-time tunable stability/update/sensitivity sliders + Fast/Balanced/Smooth presets in Settings
++ Stability: fixed ImGui_EndChild assertion crash that could occur on view-mode switches (gear/shortcuts buttons)
++ Collections and Saved Searches now support 3 levels: Group / Subgroup / Sub-subgroup
++ Header context menu: "New sub-subgroup..." on a subgroup, full rename/move/delete on a sub-subgroup
++ Save Search dialog: extra "Sub-subgroup (optional)" field
++ Item context menu: "Move to sub-subgroup" submenu
++ Color picker: "Use gradient" (group + subgroup) and "Inherit parent color" (subgroup + sub-subgroup)
++ Saved searches inherit the effective color of their (sub-)subgroup, including gradient
++ Empty subgroups now stay visible after creation
+
 v0.7.7:
 + Saved Searches: save the current search (text + file-type filters + active location/collection + view mode) under a name
 + New "Searches" tab in the view-mode grid with list of saved searches
@@ -64,6 +76,7 @@ r.RecursiveCreateDirectory(cache_dir, 0)
 r.RecursiveCreateDirectory(collections_dir, 0)
 r.RecursiveCreateDirectory(presets_dir, 0)
 local ctx = r.ImGui_CreateContext('TK Media Browser')
+
 local font_size = 13
 local medium_font_size = 11  
 local small_font_size = 9
@@ -121,28 +134,30 @@ local file_location = {
     selected_location_index = 1,
     remember_last_location = true,
     current_files = {},
-    collections = {},
-    selected_collection = nil,
     last_folder_location = "",
     last_folder_index = 1,
-    last_collection_name = nil,
     selected_files = {},
     last_selected_index = nil,
     flat_view = false,
     saved_folder_flat_view = false,
-    collection_restored = false,
-    selected_category = "All",
-    show_category_manager = false,
-    new_category_name = "",
     custom_folder_names = {},  
     custom_folder_colors = {},
-    custom_collection_colors = {},
     rename_popup_location = nil,
     rename_popup_initialized = false,
     renaming_location = nil,
     renaming_initialized = false,
-    renaming_collection = nil,
-    renaming_collection_initialized = false
+    collections_tree = {
+        items = {},
+        group_meta = {},
+        subgroup_meta = {},
+        subgroup2_meta = {},
+        group_order = {},
+        subgroup_order = {},
+        subgroup2_order = {}
+    },
+    collections_selected_group = nil,
+    collections_selected_subgroup = nil,
+    collections_selected_subgroup2 = nil
 }
 
 -- Waveform & Visualization
@@ -192,7 +207,6 @@ local ui = {
     selected_index = 1,
     show_oscilloscope = true,
     waveform_grid_overlay = false,
-    show_collection_section = false,
     current_view_mode = "folders",  
     list_clipper = nil,
     scroll_to_top = false,
@@ -340,6 +354,12 @@ local ui_settings = {
     use_numaplayer = false,
     numaplayer_preset = "",
     use_selected_track_for_midi = false,
+    saved_search_no_jump = true,
+    pitch_stability_time_sec = 0.6,
+    pitch_update_interval_sec = 0.2,
+    pitch_consistency_tolerance = 0.15,
+    pitch_history_size = 5,
+    pitch_note_change_tolerance = 0.05,
     
     pushed_color = 0,
     audio_buffer = {},
@@ -1701,213 +1721,6 @@ local function clear_all_cache_files()
     return deleted_count
 end
 
-local function load_collections()
-    file_location.collections = {}
-    local i = 0
-    repeat
-        local file = reaper.EnumerateFiles(collections_dir, i)
-        if file and file:match("%.json$") then
-            local db_name = file:gsub("%.json$", "")
-            table.insert(file_location.collections, db_name)
-        end
-        i = i + 1
-    until not file
-    return file_location.collections
-end
-
-local function save_collection(db_name, data)
-    local db_file = collections_dir .. db_name .. ".json"
-    local file = io.open(db_file, "w")
-    if file then
-        file:write(json.encode(data))
-        file:close()
-        return true
-    end
-    return false
-end
-
-local function load_collection(db_name)
-    local db_file = collections_dir .. db_name .. ".json"
-    local file = io.open(db_file, "r")
-    if file then
-        local content = file:read("*all")
-        file:close()
-        local data = json.decode(content)
-        return data
-    end
-    return nil
-end
-
-local function create_new_collection(db_name)
-    local data = {
-        name = db_name,
-        created = os.date("%Y-%m-%d %H:%M:%S"),
-        categories = {},
-        items = {}
-    }
-    return save_collection(db_name, data)
-end
-
-local function add_category_to_collection(db_name, category_name)
-    local db = load_collection(db_name)
-    if db then
-        db.categories = db.categories or {}
-        for _, cat in ipairs(db.categories) do
-            if cat == category_name then
-                return false
-            end
-        end
-        table.insert(db.categories, category_name)
-        return save_collection(db_name, db)
-    end
-    return false
-end
-
-local function remove_category_from_collection(db_name, category_name)
-    local db = load_collection(db_name)
-    if db then
-        for i, cat in ipairs(db.categories or {}) do
-            if cat == category_name then
-                table.remove(db.categories, i)
-                break
-            end
-        end
-        for _, item in ipairs(db.items) do
-            if item.categories then
-                for i = #item.categories, 1, -1 do
-                    if item.categories[i] == category_name then
-                        table.remove(item.categories, i)
-                    end
-                end
-            end
-        end
-        return save_collection(db_name, db)
-    end
-    return false
-end
-
-local function get_collection_items_by_category(db_name, category_filter)
-    local db = load_collection(db_name)
-    if not db then return {} end
-    
-    if not category_filter or category_filter == "" or category_filter == "All" then
-        return db.items
-    end
-    
-    local filtered = {}
-    for _, item in ipairs(db.items) do
-        if item.categories then
-            for _, cat in ipairs(item.categories) do
-                if cat == category_filter then
-                    table.insert(filtered, item)
-                    break
-                end
-            end
-        end
-    end
-    return filtered
-end
-
-local function delete_collection(db_name)
-    local db_file = collections_dir .. db_name .. ".json"
-    return os.remove(db_file)
-end
-
-local function rename_collection(old_name, new_name)
-    for _, db in ipairs(file_location.collections) do
-        if db == new_name then
-            return false, "Collection with this name already exists"
-        end
-    end
-    
-    if new_name:match('[<>:"/\\|?*]') then
-        return false, "Collection name contains invalid characters"
-    end
-    
-    local old_file = collections_dir .. old_name .. ".json"
-    local new_file = collections_dir .. new_name .. ".json"
-    
-    local db_data = load_collection(old_name)
-    if not db_data then
-        return false, "Could not load collection"
-    end
-    
-    db_data.name = new_name
-    
-    if not save_collection(new_name, db_data) then
-        return false, "Could not save collection with new name"
-    end
-    
-    if not os.remove(old_file) then
-        os.remove(new_file)
-        return false, "Could not remove old collection file"
-    end
-    
-    if file_location.selected_collection == old_name then
-        file_location.selected_collection = new_name
-    end
-    if file_location.last_collection_name == old_name then
-        file_location.last_collection_name = new_name
-    end
-    
-    load_collections()
-    
-    if file_location.selected_collection == new_name then
-        local items = get_collection_items_by_category(new_name, file_location.selected_category)
-        file_location.current_files = {}
-        search_filter.cached_flat_files = {}
-        for _, item in ipairs(items) do
-            local file_entry = {
-                name = item.path:match("([^/\\]+)$"),
-                full_path = item.path,
-                is_dir = false
-            }
-            table.insert(file_location.current_files, file_entry)
-            table.insert(search_filter.cached_flat_files, file_entry)
-        end
-        file_location.current_location = "Collection: " .. new_name
-        search_filter.cached_location = file_location.current_location
-        search_filter.filtered_files = search_filter.cached_flat_files
-    end
-    
-    return true, "Collection renamed successfully"
-end
-
-local function add_file_to_collection(db_name, file_path, categories)
-    local db = load_collection(db_name)
-    if db then
-        for _, item in ipairs(db.items) do
-            if item.path == file_path then
-                if categories and #categories > 0 then
-                    item.categories = categories
-                    return save_collection(db_name, db)
-                end
-                return true
-            end
-        end
-        
-        local new_item = {
-            path = file_path,
-            added = os.date("%Y-%m-%d %H:%M:%S")
-        }
-        if categories and #categories > 0 then
-            new_item.categories = categories
-        end
-        table.insert(db.items, new_item)
-        return save_collection(db_name, db)
-    end
-    return false
-end
-
-local function remove_file_from_collection(db_name, index)
-    local db = load_collection(db_name)
-    if db and db.items[index] then
-        table.remove(db.items, index)
-        return save_collection(db_name, db)
-    end
-    return false
-end
-
 local function is_file_selected(file_path)
     for _, selected_path in ipairs(file_location.selected_files) do
         if selected_path == file_path then
@@ -1947,42 +1760,6 @@ local function select_file_range(start_index, end_index, files_list)
     end
 end
 
-local function add_multiple_files_to_collection(db_name, file_paths, categories)
-    local db = load_collection(db_name)
-    if db then
-        local added_count = 0
-        for _, file_path in ipairs(file_paths) do
-            local already_exists = false
-            for _, item in ipairs(db.items) do
-                if item.path == file_path then
-                    already_exists = true
-                    if categories and #categories > 0 then
-                        item.categories = categories
-                    end
-                    break
-                end
-            end
-            
-            if not already_exists then
-                local new_item = {
-                    path = file_path,
-                    added = os.date("%Y-%m-%d %H:%M:%S")
-                }
-                if categories and #categories > 0 then
-                    new_item.categories = categories
-                end
-                table.insert(db.items, new_item)
-                added_count = added_count + 1
-            end
-        end
-        
-        if added_count > 0 or (categories and #categories > 0) then
-            save_collection(db_name, db)
-        end
-        return added_count
-    end
-    return 0
-end
 local function read_directory_recursive(root_path)
     local cached, timestamps, cache_time = load_file_cache(root_path)
     if cached then
@@ -2209,12 +1986,9 @@ local function save_options()
             last_location_index = file_location.selected_location_index,
             show_oscilloscope = ui.show_oscilloscope,
             waveform_grid_overlay = ui.waveform_grid_overlay,
-            show_collection_section = ui.show_collection_section,
             current_view_mode = ui.current_view_mode,
-            selected_collection = file_location.selected_collection,
             last_folder_location = file_location.last_folder_location,
             last_folder_index = file_location.last_folder_index,
-            last_collection_name = file_location.last_collection_name,
             flat_view = file_location.flat_view,
             remember_window_position = ui.remember_window_position,
             window_x = ui.window_x,
@@ -2243,7 +2017,6 @@ local function save_options()
             pitch_detection_enabled = ui.pitch_detection_enabled,
             custom_folder_names = file_location.custom_folder_names,
             custom_folder_colors = file_location.custom_folder_colors,
-            custom_collection_colors = file_location.custom_collection_colors,
             visible_columns = ui_settings.visible_columns,
             show_spectral_view = waveform.show_spectral_view,
             auto_selected_category = ui.auto_selected_category,
@@ -2253,7 +2026,13 @@ local function save_options()
             filter_audio = ui_settings.filter_audio,
             filter_midi = ui_settings.filter_midi,
             filter_video = ui_settings.filter_video,
-            filter_image = ui_settings.filter_image
+            filter_image = ui_settings.filter_image,
+            saved_search_no_jump = ui_settings.saved_search_no_jump,
+            pitch_stability_time_sec = ui_settings.pitch_stability_time_sec,
+            pitch_update_interval_sec = ui_settings.pitch_update_interval_sec,
+            pitch_consistency_tolerance = ui_settings.pitch_consistency_tolerance,
+            pitch_history_size = ui_settings.pitch_history_size,
+            pitch_note_change_tolerance = ui_settings.pitch_note_change_tolerance
         }
         file:write(serialize(options))
         file:close()
@@ -2439,13 +2218,10 @@ local function load_options()
         if chunk then
             local ok, options = pcall(chunk)
             if not ok then options = nil end
-            ui.show_collection_section = options.show_collection_section or false
             ui.current_view_mode = options.current_view_mode or "folders"
             if ui.current_view_mode == "ai_samples" then ui.current_view_mode = "auto" end
-            file_location.selected_collection = options.selected_collection
             file_location.last_folder_location = options.last_folder_location or ""
             file_location.last_folder_index = options.last_folder_index or 1
-            file_location.last_collection_name = options.last_collection_name
             ui.show_oscilloscope = options.show_oscilloscope
             ui.waveform_grid_overlay = options.waveform_grid_overlay or false
             ui.waveform_preview_height = options.waveform_preview_height or 92
@@ -2454,6 +2230,12 @@ local function load_options()
             if options.filter_midi  ~= nil then ui_settings.filter_midi  = options.filter_midi  end
             if options.filter_video ~= nil then ui_settings.filter_video = options.filter_video end
             if options.filter_image ~= nil then ui_settings.filter_image = options.filter_image end
+            if options.saved_search_no_jump ~= nil then ui_settings.saved_search_no_jump = options.saved_search_no_jump end
+            if options.pitch_stability_time_sec    ~= nil then ui_settings.pitch_stability_time_sec    = options.pitch_stability_time_sec    end
+            if options.pitch_update_interval_sec   ~= nil then ui_settings.pitch_update_interval_sec   = options.pitch_update_interval_sec   end
+            if options.pitch_consistency_tolerance ~= nil then ui_settings.pitch_consistency_tolerance = options.pitch_consistency_tolerance end
+            if options.pitch_history_size          ~= nil then ui_settings.pitch_history_size          = options.pitch_history_size          end
+            if options.pitch_note_change_tolerance ~= nil then ui_settings.pitch_note_change_tolerance = options.pitch_note_change_tolerance end
             if options.current_view_mode ~= "collections" and options.current_view_mode ~= "auto" then
                 file_location.flat_view = options.flat_view ~= nil and options.flat_view or false
             end
@@ -2503,7 +2285,6 @@ local function load_options()
             ui.pitch_detection_enabled = options.pitch_detection_enabled ~= nil and options.pitch_detection_enabled or true
             file_location.custom_folder_names = options.custom_folder_names or {}
             file_location.custom_folder_colors = options.custom_folder_colors or {}
-            file_location.custom_collection_colors = options.custom_collection_colors or {}
             if options.visible_columns then
                 ui_settings.visible_columns = options.visible_columns
             end
@@ -2523,13 +2304,10 @@ local function load_options()
                 if chunk2 then
                     local ok2, options2 = pcall(chunk2)
                     if ok2 and options2 then
-                        ui.show_collection_section = options2.show_collection_section or false
                         ui.current_view_mode = options2.current_view_mode or "folders"
                         if ui.current_view_mode == "ai_samples" then ui.current_view_mode = "auto" end
-                        file_location.selected_collection = options2.selected_collection
                         file_location.last_folder_location = options2.last_folder_location or ""
                         file_location.last_folder_index = options2.last_folder_index or 1
-                        file_location.last_collection_name = options2.last_collection_name
                         ui.show_oscilloscope = options2.show_oscilloscope
                         ui.waveform_grid_overlay = options2.waveform_grid_overlay or false
                         if options2.current_view_mode ~= "collections" and options2.current_view_mode ~= "auto" then
@@ -2619,7 +2397,17 @@ end
 function save_saved_searches()
     local file = io.open(r.GetResourcePath() .. "/Scripts/TK_media_browser_searches.txt", "w")
     if file then
-        file:write(serialize(saved_searches.items))
+        local payload = {
+            version = 2,
+            items = saved_searches.items,
+            group_meta = saved_searches.group_meta or {},
+            subgroup_meta = saved_searches.subgroup_meta or {},
+            subgroup2_meta = saved_searches.subgroup2_meta or {},
+            group_order = saved_searches.group_order or {},
+            subgroup_order = saved_searches.subgroup_order or {},
+            subgroup2_order = saved_searches.subgroup2_order or {},
+        }
+        file:write(serialize(payload))
         file:close()
     end
 end
@@ -2633,9 +2421,1317 @@ function load_saved_searches()
     local chunk = load("return " .. content)
     if not chunk then return end
     local ok, data = pcall(chunk)
-    if ok and type(data) == "table" then
-        saved_searches.items = data
+    if not (ok and type(data) == "table") then return end
+
+    if data.items and type(data.items) == "table" then
+        saved_searches.items           = data.items
+        saved_searches.group_meta      = data.group_meta or {}
+        saved_searches.subgroup_meta   = data.subgroup_meta or {}
+        saved_searches.subgroup2_meta  = data.subgroup2_meta or {}
+        saved_searches.group_order     = data.group_order or {}
+        saved_searches.subgroup_order  = data.subgroup_order or {}
+        saved_searches.subgroup2_order = data.subgroup2_order or {}
+    else
+        saved_searches.items           = data
+        saved_searches.group_meta      = {}
+        saved_searches.subgroup_meta   = {}
+        saved_searches.subgroup2_meta  = {}
+        saved_searches.group_order     = {}
+        saved_searches.subgroup_order  = {}
+        saved_searches.subgroup2_order = {}
     end
+
+    for _, it in ipairs(saved_searches.items) do
+        if type(it.group) ~= "string" or it.group == "" then
+            it.group = "Uncategorized"
+        end
+        if it.subgroup ~= nil and (type(it.subgroup) ~= "string" or it.subgroup == "") then
+            it.subgroup = nil
+        end
+        if it.subgroup2 ~= nil and (type(it.subgroup2) ~= "string" or it.subgroup2 == "") then
+            it.subgroup2 = nil
+        end
+    end
+end
+
+function _ss_ensure_group_order(group)
+    saved_searches.group_order = saved_searches.group_order or {}
+    for _, g in ipairs(saved_searches.group_order) do
+        if g == group then return end
+    end
+    if group == "Uncategorized" then
+        table.insert(saved_searches.group_order, group)
+    else
+        local insert_at = #saved_searches.group_order + 1
+        for idx, g in ipairs(saved_searches.group_order) do
+            if g == "Uncategorized" then insert_at = idx break end
+        end
+        table.insert(saved_searches.group_order, insert_at, group)
+    end
+end
+
+function _ss_ensure_subgroup_order(group, sub)
+    saved_searches.subgroup_order = saved_searches.subgroup_order or {}
+    saved_searches.subgroup_order[group] = saved_searches.subgroup_order[group] or {}
+    for _, s in ipairs(saved_searches.subgroup_order[group]) do
+        if s == sub then return end
+    end
+    table.insert(saved_searches.subgroup_order[group], sub)
+end
+
+function _ss_ensure_subgroup2_order(group, sub, sub2)
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    local key = group .. "::" .. sub
+    saved_searches.subgroup2_order[key] = saved_searches.subgroup2_order[key] or {}
+    for _, s2 in ipairs(saved_searches.subgroup2_order[key]) do
+        if s2 == sub2 then return end
+    end
+    table.insert(saved_searches.subgroup2_order[key], sub2)
+end
+
+function get_saved_search_group_color(group)
+    local m = saved_searches.group_meta and saved_searches.group_meta[group]
+    return m and m.color or nil
+end
+
+function set_saved_search_group_color(group, color)
+    saved_searches.group_meta = saved_searches.group_meta or {}
+    saved_searches.group_meta[group] = saved_searches.group_meta[group] or {}
+    saved_searches.group_meta[group].color = color
+    save_saved_searches()
+end
+
+function get_saved_search_subgroup_color(group, sub)
+    local key = group .. "::" .. sub
+    local m = saved_searches.subgroup_meta and saved_searches.subgroup_meta[key]
+    return m and m.color or nil
+end
+
+function set_saved_search_subgroup_color(group, sub, color)
+    saved_searches.subgroup_meta = saved_searches.subgroup_meta or {}
+    local key = group .. "::" .. sub
+    saved_searches.subgroup_meta[key] = saved_searches.subgroup_meta[key] or {}
+    saved_searches.subgroup_meta[key].color = color
+    save_saved_searches()
+end
+
+function get_saved_search_subgroup2_color(group, sub, sub2)
+    local key = group .. "::" .. sub .. "::" .. sub2
+    local m = saved_searches.subgroup2_meta and saved_searches.subgroup2_meta[key]
+    return m and m.color or nil
+end
+
+function set_saved_search_subgroup2_color(group, sub, sub2, color)
+    saved_searches.subgroup2_meta = saved_searches.subgroup2_meta or {}
+    local key = group .. "::" .. sub .. "::" .. sub2
+    saved_searches.subgroup2_meta[key] = saved_searches.subgroup2_meta[key] or {}
+    saved_searches.subgroup2_meta[key].color = color
+    save_saved_searches()
+end
+
+function move_saved_search_group(group, dir)
+    local order = saved_searches.group_order or {}
+    local idx
+    for i, g in ipairs(order) do if g == group then idx = i break end end
+    if not idx then return end
+    local target = idx + dir
+    if target < 1 or target > #order then return end
+    order[idx], order[target] = order[target], order[idx]
+    save_saved_searches()
+end
+
+function move_saved_search_subgroup(group, sub, dir)
+    saved_searches.subgroup_order = saved_searches.subgroup_order or {}
+    local order = saved_searches.subgroup_order[group] or {}
+    local idx
+    for i, s in ipairs(order) do if s == sub then idx = i break end end
+    if not idx then return end
+    local target = idx + dir
+    if target < 1 or target > #order then return end
+    order[idx], order[target] = order[target], order[idx]
+    save_saved_searches()
+end
+
+function move_saved_search_subgroup2(group, sub, sub2, dir)
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    local key = group .. "::" .. sub
+    local order = saved_searches.subgroup2_order[key] or {}
+    local idx
+    for i, s2 in ipairs(order) do if s2 == sub2 then idx = i break end end
+    if not idx then return end
+    local target = idx + dir
+    if target < 1 or target > #order then return end
+    order[idx], order[target] = order[target], order[idx]
+    save_saved_searches()
+end
+
+function get_saved_search_groups()
+    local seen, list = {}, {}
+    for _, it in ipairs(saved_searches.items) do
+        local g = it.group or "Uncategorized"
+        if not seen[g] then
+            seen[g] = true
+            list[#list+1] = g
+        end
+    end
+    saved_searches.group_order = saved_searches.group_order or {}
+    for _, g in ipairs(saved_searches.group_order) do
+        if not seen[g] then
+            seen[g] = true
+            list[#list+1] = g
+        end
+    end
+    if not seen["Uncategorized"] then
+        list[#list+1] = "Uncategorized"
+        seen["Uncategorized"] = true
+    end
+    for _, g in ipairs(list) do _ss_ensure_group_order(g) end
+    local order_idx = {}
+    for i, g in ipairs(saved_searches.group_order) do order_idx[g] = i end
+    table.sort(list, function(a, b)
+        return (order_idx[a] or 1e9) < (order_idx[b] or 1e9)
+    end)
+    return list
+end
+
+function get_saved_search_subgroups(group)
+    local seen, list = {}, {}
+    for _, it in ipairs(saved_searches.items) do
+        if (it.group or "Uncategorized") == group and it.subgroup and it.subgroup ~= "" then
+            if not seen[it.subgroup] then
+                seen[it.subgroup] = true
+                list[#list+1] = it.subgroup
+            end
+        end
+    end
+    saved_searches.subgroup_order = saved_searches.subgroup_order or {}
+    local order = saved_searches.subgroup_order[group] or {}
+    for _, s in ipairs(order) do
+        if not seen[s] then
+            seen[s] = true
+            list[#list+1] = s
+        end
+    end
+    for _, s in ipairs(list) do _ss_ensure_subgroup_order(group, s) end
+    local order_idx = {}
+    for i, s in ipairs(saved_searches.subgroup_order[group] or {}) do order_idx[s] = i end
+    table.sort(list, function(a, b)
+        return (order_idx[a] or 1e9) < (order_idx[b] or 1e9)
+    end)
+    return list
+end
+
+function get_saved_search_subgroups2(group, sub)
+    local seen, list = {}, {}
+    for _, it in ipairs(saved_searches.items) do
+        if (it.group or "Uncategorized") == group and it.subgroup == sub and it.subgroup2 and it.subgroup2 ~= "" then
+            if not seen[it.subgroup2] then
+                seen[it.subgroup2] = true
+                list[#list+1] = it.subgroup2
+            end
+        end
+    end
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    local key = group .. "::" .. sub
+    local order = saved_searches.subgroup2_order[key] or {}
+    for _, s2 in ipairs(order) do
+        if not seen[s2] then
+            seen[s2] = true
+            list[#list+1] = s2
+        end
+    end
+    for _, s2 in ipairs(list) do _ss_ensure_subgroup2_order(group, sub, s2) end
+    local order_idx = {}
+    for i, s2 in ipairs(saved_searches.subgroup2_order[key] or {}) do order_idx[s2] = i end
+    table.sort(list, function(a, b)
+        return (order_idx[a] or 1e9) < (order_idx[b] or 1e9)
+    end)
+    return list
+end
+
+function get_saved_searches_in(group, subgroup, subgroup2)
+    local out = {}
+    for i, it in ipairs(saved_searches.items) do
+        local g = it.group or "Uncategorized"
+        local sg = it.subgroup
+        local sg2 = it.subgroup2
+        if g == group and (sg or "") == (subgroup or "") and (sg2 or "") == (subgroup2 or "") then
+            out[#out+1] = { index = i, item = it }
+        end
+    end
+    return out
+end
+
+function move_saved_search(index, new_group, new_subgroup, new_subgroup2)
+    local it = saved_searches.items[index]
+    if not it then return false end
+    if type(new_group) ~= "string" or new_group == "" then new_group = "Uncategorized" end
+    if new_subgroup == "" then new_subgroup = nil end
+    if new_subgroup2 == "" or new_subgroup == nil then new_subgroup2 = nil end
+    it.group = new_group
+    it.subgroup = new_subgroup
+    it.subgroup2 = new_subgroup2
+    save_saved_searches()
+    return true
+end
+
+function rename_saved_search_group(old_name, new_name)
+    new_name = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if new_name == "" then return false, "Empty name" end
+    if old_name == new_name then return true end
+    for _, it in ipairs(saved_searches.items) do
+        if (it.group or "Uncategorized") == old_name then
+            it.group = new_name
+        end
+    end
+    saved_searches.group_meta = saved_searches.group_meta or {}
+    if saved_searches.group_meta[old_name] then
+        saved_searches.group_meta[new_name] = saved_searches.group_meta[old_name]
+        saved_searches.group_meta[old_name] = nil
+    end
+    saved_searches.group_order = saved_searches.group_order or {}
+    for i, g in ipairs(saved_searches.group_order) do
+        if g == old_name then saved_searches.group_order[i] = new_name break end
+    end
+    saved_searches.subgroup_order = saved_searches.subgroup_order or {}
+    if saved_searches.subgroup_order[old_name] then
+        saved_searches.subgroup_order[new_name] = saved_searches.subgroup_order[old_name]
+        saved_searches.subgroup_order[old_name] = nil
+    end
+    saved_searches.subgroup_meta = saved_searches.subgroup_meta or {}
+    local renamed = {}
+    for k, v in pairs(saved_searches.subgroup_meta) do
+        local g, s = k:match("^(.-)::(.+)$")
+        if g == old_name then
+            renamed[new_name .. "::" .. s] = v
+        else
+            renamed[k] = v
+        end
+    end
+    saved_searches.subgroup_meta = renamed
+
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    local s2_order_renamed = {}
+    for k, v in pairs(saved_searches.subgroup2_order) do
+        local g, s = k:match("^(.-)::(.+)$")
+        if g == old_name then
+            s2_order_renamed[new_name .. "::" .. s] = v
+        else
+            s2_order_renamed[k] = v
+        end
+    end
+    saved_searches.subgroup2_order = s2_order_renamed
+
+    saved_searches.subgroup2_meta = saved_searches.subgroup2_meta or {}
+    local s2_meta_renamed = {}
+    for k, v in pairs(saved_searches.subgroup2_meta) do
+        local g, s, s2 = k:match("^(.-)::(.-)::(.+)$")
+        if g == old_name then
+            s2_meta_renamed[new_name .. "::" .. s .. "::" .. s2] = v
+        else
+            s2_meta_renamed[k] = v
+        end
+    end
+    saved_searches.subgroup2_meta = s2_meta_renamed
+
+    save_saved_searches()
+    return true
+end
+
+function rename_saved_search_subgroup(group, old_name, new_name)
+    new_name = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if new_name == "" then return false, "Empty name" end
+    if old_name == new_name then return true end
+    for _, it in ipairs(saved_searches.items) do
+        if (it.group or "Uncategorized") == group and it.subgroup == old_name then
+            it.subgroup = new_name
+        end
+    end
+    saved_searches.subgroup_meta = saved_searches.subgroup_meta or {}
+    local old_key = group .. "::" .. old_name
+    local new_key = group .. "::" .. new_name
+    if saved_searches.subgroup_meta[old_key] then
+        saved_searches.subgroup_meta[new_key] = saved_searches.subgroup_meta[old_key]
+        saved_searches.subgroup_meta[old_key] = nil
+    end
+    saved_searches.subgroup_order = saved_searches.subgroup_order or {}
+    local order = saved_searches.subgroup_order[group]
+    if order then
+        for i, s in ipairs(order) do
+            if s == old_name then order[i] = new_name break end
+        end
+    end
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    if saved_searches.subgroup2_order[old_key] then
+        saved_searches.subgroup2_order[new_key] = saved_searches.subgroup2_order[old_key]
+        saved_searches.subgroup2_order[old_key] = nil
+    end
+    saved_searches.subgroup2_meta = saved_searches.subgroup2_meta or {}
+    local prefix = old_key .. "::"
+    local s2_renamed = {}
+    for k, v in pairs(saved_searches.subgroup2_meta) do
+        if k:sub(1, #prefix) == prefix then
+            s2_renamed[new_key .. "::" .. k:sub(#prefix + 1)] = v
+        else
+            s2_renamed[k] = v
+        end
+    end
+    saved_searches.subgroup2_meta = s2_renamed
+    save_saved_searches()
+    return true
+end
+
+function rename_saved_search_subgroup2(group, sub, old_name, new_name)
+    new_name = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if new_name == "" then return false, "Empty name" end
+    if old_name == new_name then return true end
+    for _, it in ipairs(saved_searches.items) do
+        if (it.group or "Uncategorized") == group and it.subgroup == sub and it.subgroup2 == old_name then
+            it.subgroup2 = new_name
+        end
+    end
+    saved_searches.subgroup2_meta = saved_searches.subgroup2_meta or {}
+    local old_key = group .. "::" .. sub .. "::" .. old_name
+    local new_key = group .. "::" .. sub .. "::" .. new_name
+    if saved_searches.subgroup2_meta[old_key] then
+        saved_searches.subgroup2_meta[new_key] = saved_searches.subgroup2_meta[old_key]
+        saved_searches.subgroup2_meta[old_key] = nil
+    end
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    local order = saved_searches.subgroup2_order[group .. "::" .. sub]
+    if order then
+        for i, s2 in ipairs(order) do
+            if s2 == old_name then order[i] = new_name break end
+        end
+    end
+    save_saved_searches()
+    return true
+end
+
+function delete_saved_search_group(group, mode)
+    if group == "Uncategorized" and mode ~= "delete_items" then
+        for _, it in ipairs(saved_searches.items) do
+            if (it.group or "Uncategorized") == "Uncategorized" then
+                it.subgroup = nil
+                it.subgroup2 = nil
+            end
+        end
+        save_saved_searches()
+        return
+    end
+    if mode == "delete_items" then
+        for i = #saved_searches.items, 1, -1 do
+            if (saved_searches.items[i].group or "Uncategorized") == group then
+                table.remove(saved_searches.items, i)
+            end
+        end
+    else
+        for _, it in ipairs(saved_searches.items) do
+            if (it.group or "Uncategorized") == group then
+                it.group = "Uncategorized"
+                it.subgroup = nil
+                it.subgroup2 = nil
+            end
+        end
+    end
+    saved_searches.group_meta = saved_searches.group_meta or {}
+    saved_searches.group_meta[group] = nil
+    saved_searches.group_order = saved_searches.group_order or {}
+    for i = #saved_searches.group_order, 1, -1 do
+        if saved_searches.group_order[i] == group then
+            table.remove(saved_searches.group_order, i)
+        end
+    end
+    saved_searches.subgroup_order = saved_searches.subgroup_order or {}
+    saved_searches.subgroup_order[group] = nil
+    saved_searches.subgroup_meta = saved_searches.subgroup_meta or {}
+    local prefix = group .. "::"
+    for k in pairs(saved_searches.subgroup_meta) do
+        if k:sub(1, #prefix) == prefix then
+            saved_searches.subgroup_meta[k] = nil
+        end
+    end
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    for k in pairs(saved_searches.subgroup2_order) do
+        if k:sub(1, #prefix) == prefix then
+            saved_searches.subgroup2_order[k] = nil
+        end
+    end
+    saved_searches.subgroup2_meta = saved_searches.subgroup2_meta or {}
+    for k in pairs(saved_searches.subgroup2_meta) do
+        if k:sub(1, #prefix) == prefix then
+            saved_searches.subgroup2_meta[k] = nil
+        end
+    end
+    save_saved_searches()
+end
+
+function delete_saved_search_subgroup(group, subgroup, mode)
+    if mode == "delete_items" then
+        for i = #saved_searches.items, 1, -1 do
+            local it = saved_searches.items[i]
+            if (it.group or "Uncategorized") == group and it.subgroup == subgroup then
+                table.remove(saved_searches.items, i)
+            end
+        end
+    else
+        for _, it in ipairs(saved_searches.items) do
+            if (it.group or "Uncategorized") == group and it.subgroup == subgroup then
+                it.subgroup = nil
+                it.subgroup2 = nil
+            end
+        end
+    end
+    saved_searches.subgroup_meta = saved_searches.subgroup_meta or {}
+    saved_searches.subgroup_meta[group .. "::" .. subgroup] = nil
+    saved_searches.subgroup_order = saved_searches.subgroup_order or {}
+    local order = saved_searches.subgroup_order[group]
+    if order then
+        for i = #order, 1, -1 do
+            if order[i] == subgroup then table.remove(order, i) end
+        end
+    end
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    saved_searches.subgroup2_order[group .. "::" .. subgroup] = nil
+    saved_searches.subgroup2_meta = saved_searches.subgroup2_meta or {}
+    local prefix2 = group .. "::" .. subgroup .. "::"
+    for k in pairs(saved_searches.subgroup2_meta) do
+        if k:sub(1, #prefix2) == prefix2 then
+            saved_searches.subgroup2_meta[k] = nil
+        end
+    end
+    save_saved_searches()
+end
+
+function delete_saved_search_subgroup2(group, subgroup, subgroup2, mode)
+    if mode == "delete_items" then
+        for i = #saved_searches.items, 1, -1 do
+            local it = saved_searches.items[i]
+            if (it.group or "Uncategorized") == group and it.subgroup == subgroup and it.subgroup2 == subgroup2 then
+                table.remove(saved_searches.items, i)
+            end
+        end
+    else
+        for _, it in ipairs(saved_searches.items) do
+            if (it.group or "Uncategorized") == group and it.subgroup == subgroup and it.subgroup2 == subgroup2 then
+                it.subgroup2 = nil
+            end
+        end
+    end
+    saved_searches.subgroup2_meta = saved_searches.subgroup2_meta or {}
+    saved_searches.subgroup2_meta[group .. "::" .. subgroup .. "::" .. subgroup2] = nil
+    saved_searches.subgroup2_order = saved_searches.subgroup2_order or {}
+    local order = saved_searches.subgroup2_order[group .. "::" .. subgroup]
+    if order then
+        for i = #order, 1, -1 do
+            if order[i] == subgroup2 then table.remove(order, i) end
+        end
+    end
+    save_saved_searches()
+end
+
+local _ct = function() return file_location.collections_tree end
+
+function save_collections_tree()
+    local ct = _ct()
+    if not ct then return end
+    local file = io.open(r.GetResourcePath() .. "/Scripts/TK_media_browser_collections.txt", "w")
+    if file then
+        local payload = {
+            version = 1,
+            items = ct.items or {},
+            group_meta = ct.group_meta or {},
+            subgroup_meta = ct.subgroup_meta or {},
+            subgroup2_meta = ct.subgroup2_meta or {},
+            group_order = ct.group_order or {},
+            subgroup_order = ct.subgroup_order or {},
+            subgroup2_order = ct.subgroup2_order or {},
+        }
+        file:write(serialize(payload))
+        file:close()
+    end
+end
+
+local function _migrate_old_collections_into_tree()
+    local ct = _ct()
+    local seen = {}
+    local files = {}
+    if r.EnumerateFiles then
+        local i = 0
+        while true do
+            local fn = r.EnumerateFiles(collections_dir, i)
+            if not fn then break end
+            if fn:lower():sub(-5) == ".json" then
+                files[#files + 1] = fn
+            end
+            i = i + 1
+        end
+    end
+    for _, fn in ipairs(files) do
+        local coll_name = fn:sub(1, -6)
+        local db
+        do
+            local f = io.open(collections_dir .. fn, "r")
+            if f then
+                local content = f:read("*all")
+                f:close()
+                if content and content ~= "" then
+                    local ok, decoded = pcall(json.decode, content)
+                    if ok then db = decoded end
+                end
+            end
+        end
+        if db and type(db.items) == "table" then
+            ct.group_order[#ct.group_order + 1] = coll_name
+            for _, it in ipairs(db.items) do
+                local path = it.path or it.full_path
+                if type(path) == "string" and path ~= "" then
+                    local cats = it.categories
+                    if type(cats) == "table" and #cats > 0 then
+                        for _, cat in ipairs(cats) do
+                            local key = coll_name .. "::" .. cat .. "::" .. path
+                            if not seen[key] then
+                                seen[key] = true
+                                ct.items[#ct.items + 1] = {
+                                    name = path:match("([^/\\]+)$") or path,
+                                    path = path,
+                                    group = coll_name,
+                                    subgroup = cat,
+                                    created = os.date("%Y-%m-%d %H:%M:%S"),
+                                }
+                            end
+                        end
+                    else
+                        local key = coll_name .. "::__nosub__::" .. path
+                        if not seen[key] then
+                            seen[key] = true
+                            ct.items[#ct.items + 1] = {
+                                name = path:match("([^/\\]+)$") or path,
+                                path = path,
+                                group = coll_name,
+                                subgroup = nil,
+                                created = os.date("%Y-%m-%d %H:%M:%S"),
+                            }
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+function load_collections_tree()
+    local ct = _ct()
+    ct.items = {}
+    ct.group_meta = {}
+    ct.subgroup_meta = {}
+    ct.subgroup2_meta = {}
+    ct.group_order = {}
+    ct.subgroup_order = {}
+    ct.subgroup2_order = {}
+    local file = io.open(r.GetResourcePath() .. "/Scripts/TK_media_browser_collections.txt", "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        if content and content ~= "" then
+            local chunk = load("return " .. content)
+            if chunk then
+                local ok, data = pcall(chunk)
+                if ok and type(data) == "table" and type(data.items) == "table" then
+                    ct.items           = data.items
+                    ct.group_meta      = data.group_meta or {}
+                    ct.subgroup_meta   = data.subgroup_meta or {}
+                    ct.subgroup2_meta  = data.subgroup2_meta or {}
+                    ct.group_order     = data.group_order or {}
+                    ct.subgroup_order  = data.subgroup_order or {}
+                    ct.subgroup2_order = data.subgroup2_order or {}
+                    for _, it in ipairs(ct.items) do
+                        if type(it.group) ~= "string" or it.group == "" then it.group = "Uncategorized" end
+                        if it.subgroup ~= nil and (type(it.subgroup) ~= "string" or it.subgroup == "") then
+                            it.subgroup = nil
+                        end
+                        if it.subgroup2 ~= nil and (type(it.subgroup2) ~= "string" or it.subgroup2 == "") then
+                            it.subgroup2 = nil
+                        end
+                    end
+                    return
+                end
+            end
+        end
+    end
+    _migrate_old_collections_into_tree()
+    save_collections_tree()
+end
+
+function _ct_ensure_group_order(group)
+    local ct = _ct()
+    ct.group_order = ct.group_order or {}
+    for _, g in ipairs(ct.group_order) do
+        if g == group then return end
+    end
+    if group == "Uncategorized" then
+        table.insert(ct.group_order, group)
+    else
+        local insert_at = #ct.group_order + 1
+        for idx, g in ipairs(ct.group_order) do
+            if g == "Uncategorized" then insert_at = idx break end
+        end
+        table.insert(ct.group_order, insert_at, group)
+    end
+end
+
+function _ct_ensure_subgroup_order(group, sub)
+    local ct = _ct()
+    ct.subgroup_order = ct.subgroup_order or {}
+    ct.subgroup_order[group] = ct.subgroup_order[group] or {}
+    for _, s in ipairs(ct.subgroup_order[group]) do
+        if s == sub then return end
+    end
+    table.insert(ct.subgroup_order[group], sub)
+end
+
+function _ct_ensure_subgroup2_order(group, sub, sub2)
+    local ct = _ct()
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    local key = group .. "::" .. sub
+    ct.subgroup2_order[key] = ct.subgroup2_order[key] or {}
+    for _, s2 in ipairs(ct.subgroup2_order[key]) do
+        if s2 == sub2 then return end
+    end
+    table.insert(ct.subgroup2_order[key], sub2)
+end
+
+function get_collections_group_color(group)
+    local ct = _ct()
+    local m = ct.group_meta and ct.group_meta[group]
+    return m and m.color or nil
+end
+
+function set_collections_group_color(group, color)
+    local ct = _ct()
+    ct.group_meta = ct.group_meta or {}
+    ct.group_meta[group] = ct.group_meta[group] or {}
+    ct.group_meta[group].color = color
+    save_collections_tree()
+end
+
+function get_collections_subgroup_color(group, sub)
+    local ct = _ct()
+    local key = group .. "::" .. sub
+    local m = ct.subgroup_meta and ct.subgroup_meta[key]
+    return m and m.color or nil
+end
+
+function set_collections_subgroup_color(group, sub, color)
+    local ct = _ct()
+    ct.subgroup_meta = ct.subgroup_meta or {}
+    local key = group .. "::" .. sub
+    ct.subgroup_meta[key] = ct.subgroup_meta[key] or {}
+    ct.subgroup_meta[key].color = color
+    save_collections_tree()
+end
+
+function get_collections_subgroup2_color(group, sub, sub2)
+    local ct = _ct()
+    local key = group .. "::" .. sub .. "::" .. sub2
+    local m = ct.subgroup2_meta and ct.subgroup2_meta[key]
+    return m and m.color or nil
+end
+
+function set_collections_subgroup2_color(group, sub, sub2, color)
+    local ct = _ct()
+    ct.subgroup2_meta = ct.subgroup2_meta or {}
+    local key = group .. "::" .. sub .. "::" .. sub2
+    ct.subgroup2_meta[key] = ct.subgroup2_meta[key] or {}
+    ct.subgroup2_meta[key].color = color
+    save_collections_tree()
+end
+
+function move_collections_group(group, dir)
+    local ct = _ct()
+    local order = ct.group_order or {}
+    local idx
+    for i, g in ipairs(order) do if g == group then idx = i break end end
+    if not idx then return end
+    local target = idx + dir
+    if target < 1 or target > #order then return end
+    order[idx], order[target] = order[target], order[idx]
+    save_collections_tree()
+end
+
+function move_collections_subgroup(group, sub, dir)
+    local ct = _ct()
+    ct.subgroup_order = ct.subgroup_order or {}
+    local order = ct.subgroup_order[group] or {}
+    local idx
+    for i, s in ipairs(order) do if s == sub then idx = i break end end
+    if not idx then return end
+    local target = idx + dir
+    if target < 1 or target > #order then return end
+    order[idx], order[target] = order[target], order[idx]
+    save_collections_tree()
+end
+
+function move_collections_subgroup2(group, sub, sub2, dir)
+    local ct = _ct()
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    local key = group .. "::" .. sub
+    local order = ct.subgroup2_order[key] or {}
+    local idx
+    for i, s2 in ipairs(order) do if s2 == sub2 then idx = i break end end
+    if not idx then return end
+    local target = idx + dir
+    if target < 1 or target > #order then return end
+    order[idx], order[target] = order[target], order[idx]
+    save_collections_tree()
+end
+
+function get_collections_groups()
+    local ct = _ct()
+    local seen, list = {}, {}
+    for _, it in ipairs(ct.items) do
+        local g = it.group or "Uncategorized"
+        if not seen[g] then
+            seen[g] = true
+            list[#list+1] = g
+        end
+    end
+    ct.group_order = ct.group_order or {}
+    for _, g in ipairs(ct.group_order) do
+        if not seen[g] then
+            seen[g] = true
+            list[#list+1] = g
+        end
+    end
+    if not seen["Uncategorized"] then
+        list[#list+1] = "Uncategorized"
+        seen["Uncategorized"] = true
+    end
+    for _, g in ipairs(list) do _ct_ensure_group_order(g) end
+    local order_idx = {}
+    for i, g in ipairs(ct.group_order) do order_idx[g] = i end
+    table.sort(list, function(a, b)
+        return (order_idx[a] or 1e9) < (order_idx[b] or 1e9)
+    end)
+    return list
+end
+
+function get_collections_subgroups(group)
+    local ct = _ct()
+    local seen, list = {}, {}
+    for _, it in ipairs(ct.items) do
+        if (it.group or "Uncategorized") == group and it.subgroup and it.subgroup ~= "" then
+            if not seen[it.subgroup] then
+                seen[it.subgroup] = true
+                list[#list+1] = it.subgroup
+            end
+        end
+    end
+    ct.subgroup_order = ct.subgroup_order or {}
+    local order = ct.subgroup_order[group] or {}
+    for _, s in ipairs(order) do
+        if not seen[s] then
+            seen[s] = true
+            list[#list+1] = s
+        end
+    end
+    for _, s in ipairs(list) do _ct_ensure_subgroup_order(group, s) end
+    local order_idx = {}
+    for i, s in ipairs(ct.subgroup_order[group] or {}) do order_idx[s] = i end
+    table.sort(list, function(a, b)
+        return (order_idx[a] or 1e9) < (order_idx[b] or 1e9)
+    end)
+    return list
+end
+
+function get_collections_subgroups2(group, sub)
+    local ct = _ct()
+    local seen, list = {}, {}
+    for _, it in ipairs(ct.items) do
+        if (it.group or "Uncategorized") == group and it.subgroup == sub and it.subgroup2 and it.subgroup2 ~= "" then
+            if not seen[it.subgroup2] then
+                seen[it.subgroup2] = true
+                list[#list+1] = it.subgroup2
+            end
+        end
+    end
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    local key = group .. "::" .. sub
+    local order = ct.subgroup2_order[key] or {}
+    for _, s2 in ipairs(order) do
+        if not seen[s2] then
+            seen[s2] = true
+            list[#list+1] = s2
+        end
+    end
+    for _, s2 in ipairs(list) do _ct_ensure_subgroup2_order(group, sub, s2) end
+    local order_idx = {}
+    for i, s2 in ipairs(ct.subgroup2_order[key] or {}) do order_idx[s2] = i end
+    table.sort(list, function(a, b)
+        return (order_idx[a] or 1e9) < (order_idx[b] or 1e9)
+    end)
+    return list
+end
+
+function get_collections_items_in(group, subgroup, subgroup2)
+    local ct = _ct()
+    local out = {}
+    for i, it in ipairs(ct.items) do
+        local g = it.group or "Uncategorized"
+        local sg = it.subgroup
+        local sg2 = it.subgroup2
+        if g == group and (sg or "") == (subgroup or "") and (sg2 or "") == (subgroup2 or "") then
+            out[#out+1] = { index = i, item = it }
+        end
+    end
+    return out
+end
+
+function add_collections_item(path, group, subgroup, subgroup2)
+    if type(path) ~= "string" or path == "" then return false end
+    local ct = _ct()
+    if type(group) ~= "string" or group == "" then group = "Uncategorized" end
+    if subgroup == "" then subgroup = nil end
+    if subgroup2 == "" or subgroup == nil then subgroup2 = nil end
+    for _, it in ipairs(ct.items) do
+        if it.path == path
+            and (it.group or "Uncategorized") == group
+            and (it.subgroup or "") == (subgroup or "")
+            and (it.subgroup2 or "") == (subgroup2 or "") then
+            return false
+        end
+    end
+    ct.items[#ct.items+1] = {
+        name = path:match("([^/\\]+)$") or path,
+        path = path,
+        group = group,
+        subgroup = subgroup,
+        subgroup2 = subgroup2,
+        created = os.date("%Y-%m-%d %H:%M:%S"),
+    }
+    _ct_ensure_group_order(group)
+    if subgroup then _ct_ensure_subgroup_order(group, subgroup) end
+    if subgroup and subgroup2 then _ct_ensure_subgroup2_order(group, subgroup, subgroup2) end
+    save_collections_tree()
+    return true
+end
+
+function remove_collections_item_by_path(path, group, subgroup, subgroup2)
+    local ct = _ct()
+    for i = #ct.items, 1, -1 do
+        local it = ct.items[i]
+        if it.path == path
+            and (group == nil or (it.group or "Uncategorized") == group)
+            and (subgroup == nil or (it.subgroup or "") == (subgroup or ""))
+            and (subgroup2 == nil or (it.subgroup2 or "") == (subgroup2 or "")) then
+            table.remove(ct.items, i)
+        end
+    end
+    save_collections_tree()
+end
+
+function rename_collections_group(old_name, new_name)
+    new_name = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if new_name == "" then return false, "Empty name" end
+    if old_name == new_name then return true end
+    local ct = _ct()
+    for _, it in ipairs(ct.items) do
+        if (it.group or "Uncategorized") == old_name then
+            it.group = new_name
+        end
+    end
+    ct.group_meta = ct.group_meta or {}
+    if ct.group_meta[old_name] then
+        ct.group_meta[new_name] = ct.group_meta[old_name]
+        ct.group_meta[old_name] = nil
+    end
+    ct.group_order = ct.group_order or {}
+    for i, g in ipairs(ct.group_order) do
+        if g == old_name then ct.group_order[i] = new_name break end
+    end
+    ct.subgroup_order = ct.subgroup_order or {}
+    if ct.subgroup_order[old_name] then
+        ct.subgroup_order[new_name] = ct.subgroup_order[old_name]
+        ct.subgroup_order[old_name] = nil
+    end
+    ct.subgroup_meta = ct.subgroup_meta or {}
+    local renamed = {}
+    for k, v in pairs(ct.subgroup_meta) do
+        local g, s = k:match("^(.-)::(.+)$")
+        if g == old_name then
+            renamed[new_name .. "::" .. s] = v
+        else
+            renamed[k] = v
+        end
+    end
+    ct.subgroup_meta = renamed
+
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    local s2_order_renamed = {}
+    for k, v in pairs(ct.subgroup2_order) do
+        local g, s = k:match("^(.-)::(.+)$")
+        if g == old_name then
+            s2_order_renamed[new_name .. "::" .. s] = v
+        else
+            s2_order_renamed[k] = v
+        end
+    end
+    ct.subgroup2_order = s2_order_renamed
+
+    ct.subgroup2_meta = ct.subgroup2_meta or {}
+    local s2_meta_renamed = {}
+    for k, v in pairs(ct.subgroup2_meta) do
+        local g, s, s2 = k:match("^(.-)::(.-)::(.+)$")
+        if g == old_name then
+            s2_meta_renamed[new_name .. "::" .. s .. "::" .. s2] = v
+        else
+            s2_meta_renamed[k] = v
+        end
+    end
+    ct.subgroup2_meta = s2_meta_renamed
+
+    save_collections_tree()
+    return true
+end
+
+function rename_collections_subgroup(group, old_name, new_name)
+    new_name = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if new_name == "" then return false, "Empty name" end
+    if old_name == new_name then return true end
+    local ct = _ct()
+    for _, it in ipairs(ct.items) do
+        if (it.group or "Uncategorized") == group and it.subgroup == old_name then
+            it.subgroup = new_name
+        end
+    end
+    ct.subgroup_meta = ct.subgroup_meta or {}
+    local old_key = group .. "::" .. old_name
+    local new_key = group .. "::" .. new_name
+    if ct.subgroup_meta[old_key] then
+        ct.subgroup_meta[new_key] = ct.subgroup_meta[old_key]
+        ct.subgroup_meta[old_key] = nil
+    end
+    ct.subgroup_order = ct.subgroup_order or {}
+    local order = ct.subgroup_order[group]
+    if order then
+        for i, s in ipairs(order) do
+            if s == old_name then order[i] = new_name break end
+        end
+    end
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    if ct.subgroup2_order[old_key] then
+        ct.subgroup2_order[new_key] = ct.subgroup2_order[old_key]
+        ct.subgroup2_order[old_key] = nil
+    end
+    ct.subgroup2_meta = ct.subgroup2_meta or {}
+    local prefix = old_key .. "::"
+    local s2_renamed = {}
+    for k, v in pairs(ct.subgroup2_meta) do
+        if k:sub(1, #prefix) == prefix then
+            s2_renamed[new_key .. "::" .. k:sub(#prefix + 1)] = v
+        else
+            s2_renamed[k] = v
+        end
+    end
+    ct.subgroup2_meta = s2_renamed
+    save_collections_tree()
+    return true
+end
+
+function rename_collections_subgroup2(group, sub, old_name, new_name)
+    new_name = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if new_name == "" then return false, "Empty name" end
+    if old_name == new_name then return true end
+    local ct = _ct()
+    for _, it in ipairs(ct.items) do
+        if (it.group or "Uncategorized") == group and it.subgroup == sub and it.subgroup2 == old_name then
+            it.subgroup2 = new_name
+        end
+    end
+    ct.subgroup2_meta = ct.subgroup2_meta or {}
+    local old_key = group .. "::" .. sub .. "::" .. old_name
+    local new_key = group .. "::" .. sub .. "::" .. new_name
+    if ct.subgroup2_meta[old_key] then
+        ct.subgroup2_meta[new_key] = ct.subgroup2_meta[old_key]
+        ct.subgroup2_meta[old_key] = nil
+    end
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    local order = ct.subgroup2_order[group .. "::" .. sub]
+    if order then
+        for i, s2 in ipairs(order) do
+            if s2 == old_name then order[i] = new_name break end
+        end
+    end
+    save_collections_tree()
+    return true
+end
+
+function delete_collections_group(group, mode)
+    local ct = _ct()
+    if group == "Uncategorized" and mode ~= "delete_items" then
+        for _, it in ipairs(ct.items) do
+            if (it.group or "Uncategorized") == "Uncategorized" then
+                it.subgroup = nil
+                it.subgroup2 = nil
+            end
+        end
+        save_collections_tree()
+        return
+    end
+    if mode == "delete_items" then
+        for i = #ct.items, 1, -1 do
+            if (ct.items[i].group or "Uncategorized") == group then
+                table.remove(ct.items, i)
+            end
+        end
+    else
+        for _, it in ipairs(ct.items) do
+            if (it.group or "Uncategorized") == group then
+                it.group = "Uncategorized"
+                it.subgroup = nil
+                it.subgroup2 = nil
+            end
+        end
+    end
+    ct.group_meta = ct.group_meta or {}
+    ct.group_meta[group] = nil
+    ct.group_order = ct.group_order or {}
+    for i = #ct.group_order, 1, -1 do
+        if ct.group_order[i] == group then
+            table.remove(ct.group_order, i)
+        end
+    end
+    ct.subgroup_order = ct.subgroup_order or {}
+    ct.subgroup_order[group] = nil
+    ct.subgroup_meta = ct.subgroup_meta or {}
+    local prefix = group .. "::"
+    for k in pairs(ct.subgroup_meta) do
+        if k:sub(1, #prefix) == prefix then
+            ct.subgroup_meta[k] = nil
+        end
+    end
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    for k in pairs(ct.subgroup2_order) do
+        if k:sub(1, #prefix) == prefix then
+            ct.subgroup2_order[k] = nil
+        end
+    end
+    ct.subgroup2_meta = ct.subgroup2_meta or {}
+    for k in pairs(ct.subgroup2_meta) do
+        if k:sub(1, #prefix) == prefix then
+            ct.subgroup2_meta[k] = nil
+        end
+    end
+    save_collections_tree()
+end
+
+function delete_collections_subgroup(group, subgroup, mode)
+    local ct = _ct()
+    if mode == "delete_items" then
+        for i = #ct.items, 1, -1 do
+            local it = ct.items[i]
+            if (it.group or "Uncategorized") == group and it.subgroup == subgroup then
+                table.remove(ct.items, i)
+            end
+        end
+    else
+        for _, it in ipairs(ct.items) do
+            if (it.group or "Uncategorized") == group and it.subgroup == subgroup then
+                it.subgroup = nil
+                it.subgroup2 = nil
+            end
+        end
+    end
+    ct.subgroup_meta = ct.subgroup_meta or {}
+    ct.subgroup_meta[group .. "::" .. subgroup] = nil
+    ct.subgroup_order = ct.subgroup_order or {}
+    local order = ct.subgroup_order[group]
+    if order then
+        for i = #order, 1, -1 do
+            if order[i] == subgroup then table.remove(order, i) end
+        end
+    end
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    ct.subgroup2_order[group .. "::" .. subgroup] = nil
+    ct.subgroup2_meta = ct.subgroup2_meta or {}
+    local prefix2 = group .. "::" .. subgroup .. "::"
+    for k in pairs(ct.subgroup2_meta) do
+        if k:sub(1, #prefix2) == prefix2 then
+            ct.subgroup2_meta[k] = nil
+        end
+    end
+    save_collections_tree()
+end
+
+function delete_collections_subgroup2(group, subgroup, subgroup2, mode)
+    local ct = _ct()
+    if mode == "delete_items" then
+        for i = #ct.items, 1, -1 do
+            local it = ct.items[i]
+            if (it.group or "Uncategorized") == group and it.subgroup == subgroup and it.subgroup2 == subgroup2 then
+                table.remove(ct.items, i)
+            end
+        end
+    else
+        for _, it in ipairs(ct.items) do
+            if (it.group or "Uncategorized") == group and it.subgroup == subgroup and it.subgroup2 == subgroup2 then
+                it.subgroup2 = nil
+            end
+        end
+    end
+    ct.subgroup2_meta = ct.subgroup2_meta or {}
+    ct.subgroup2_meta[group .. "::" .. subgroup .. "::" .. subgroup2] = nil
+    ct.subgroup2_order = ct.subgroup2_order or {}
+    local order = ct.subgroup2_order[group .. "::" .. subgroup]
+    if order then
+        for i = #order, 1, -1 do
+            if order[i] == subgroup2 then table.remove(order, i) end
+        end
+    end
+    save_collections_tree()
+end
+
+function apply_collections_selection(group, subgroup, subgroup2)
+    file_location.collections_selected_group = group
+    file_location.collections_selected_subgroup = subgroup
+    file_location.collections_selected_subgroup2 = subgroup2
+    local entries = get_collections_items_in(group, subgroup, subgroup2)
+    file_location.current_files = {}
+    search_filter.cached_flat_files = {}
+    for _, e in ipairs(entries) do
+        local it = e.item
+        local file_entry = {
+            name = it.name or (it.path:match("([^/\\]+)$") or it.path),
+            full_path = it.path,
+            is_dir = false,
+            _collection_group = group,
+            _collection_subgroup = subgroup,
+            _collection_subgroup2 = subgroup2,
+        }
+        table.insert(file_location.current_files, file_entry)
+        table.insert(search_filter.cached_flat_files, file_entry)
+    end
+    if subgroup2 then
+        file_location.current_location = "Collection: " .. group .. " / " .. subgroup .. " / " .. subgroup2
+    elseif subgroup then
+        file_location.current_location = "Collection: " .. group .. " / " .. subgroup
+    else
+        file_location.current_location = "Collection: " .. group
+    end
+    search_filter.cached_location = file_location.current_location
+    search_filter.filtered_files = search_filter.cached_flat_files
+    file_location.flat_view = true
+    clear_file_selection()
+    clear_sort_cache()
+end
+
+function render_add_to_collection_menu(file_path, file_paths)
+    if not file_path or file_path == "" then return end
+    local function do_add(group, subgroup, subgroup2)
+        if file_paths and #file_paths > 1 then
+            for _, p in ipairs(file_paths) do
+                add_collections_item(p, group, subgroup, subgroup2)
+            end
+        else
+            add_collections_item(file_path, group, subgroup, subgroup2)
+        end
+        if ui.current_view_mode == "collections"
+            and file_location.collections_selected_group == group
+            and (file_location.collections_selected_subgroup or "") == (subgroup or "")
+            and (file_location.collections_selected_subgroup2 or "") == (subgroup2 or "") then
+            apply_collections_selection(group, subgroup, subgroup2)
+        end
+    end
+    local groups = get_collections_groups()
+    for _, group in ipairs(groups) do
+        local subgroups = get_collections_subgroups(group)
+        if #subgroups > 0 then
+            if r.ImGui_BeginMenu(ctx, group .. " >>") then
+                if r.ImGui_MenuItem(ctx, "(no subgroup)") then
+                    do_add(group, nil, nil)
+                end
+                r.ImGui_Separator(ctx)
+                for _, sub in ipairs(subgroups) do
+                    local subgroups2 = get_collections_subgroups2(group, sub)
+                    if #subgroups2 > 0 then
+                        if r.ImGui_BeginMenu(ctx, sub .. " >>") then
+                            if r.ImGui_MenuItem(ctx, "(no sub-subgroup)") then
+                                do_add(group, sub, nil)
+                            end
+                            r.ImGui_Separator(ctx)
+                            for _, sub2 in ipairs(subgroups2) do
+                                if r.ImGui_MenuItem(ctx, sub2) then
+                                    do_add(group, sub, sub2)
+                                end
+                            end
+                            r.ImGui_Separator(ctx)
+                            if r.ImGui_MenuItem(ctx, "+ New sub-subgroup...") then
+                                local rv, nn = r.GetUserInputs("New sub-subgroup", 1, "Sub-subgroup name:,extrawidth=200", "")
+                                if rv then
+                                    local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                                    if t ~= "" then do_add(group, sub, t) end
+                                end
+                            end
+                            r.ImGui_EndMenu(ctx)
+                        end
+                    else
+                        if r.ImGui_MenuItem(ctx, sub) then
+                            do_add(group, sub, nil)
+                        end
+                    end
+                end
+                r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "+ New subgroup...") then
+                    local rv, nn = r.GetUserInputs("New subgroup", 1, "Subgroup name:,extrawidth=200", "")
+                    if rv then
+                        local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                        if t ~= "" then do_add(group, t, nil) end
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+        else
+            if r.ImGui_MenuItem(ctx, group) then
+                do_add(group, nil, nil)
+            end
+        end
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "+ New group...") then
+        local rv, csv = r.GetUserInputs("New group", 2, "Group name:,Subgroup (optional):,extrawidth=200", ",")
+        if rv then
+            local fields = {}
+            for f in (csv .. ","):gmatch("(.-),") do fields[#fields+1] = f end
+            local g = (fields[1] or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            local s = (fields[2] or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if s == "" then s = nil end
+            if g ~= "" and g ~= "Uncategorized" then
+                do_add(g, s, nil)
+            end
+        end
+    end
+end
+
+function render_remove_from_collection_menu(file_path, file_paths)
+    if not (ui.current_view_mode == "collections" and file_location.collections_selected_group) then
+        return
+    end
+    local g = file_location.collections_selected_group
+    local s = file_location.collections_selected_subgroup
+    local s2 = file_location.collections_selected_subgroup2
+    local count = (file_paths and #file_paths > 1) and #file_paths or 1
+    local label = (count > 1) and string.format("Remove %d files from collection", count) or "Remove from collection"
+    if r.ImGui_MenuItem(ctx, label) then
+        if file_paths and #file_paths > 1 then
+            for _, p in ipairs(file_paths) do
+                remove_collections_item_by_path(p, g, s, s2)
+            end
+        else
+            remove_collections_item_by_path(file_path, g, s, s2)
+        end
+        apply_collections_selection(g, s, s2)
+    end
+    r.ImGui_Separator(ctx)
 end
 
 function search_name_exists(name, except_index)
@@ -2647,14 +3743,20 @@ function search_name_exists(name, except_index)
     return false
 end
 
-function snapshot_current_search(name)
+function snapshot_current_search(name, group, subgroup, subgroup2)
     local effective_mode = ui.current_view_mode
     if effective_mode == "searches" then
         effective_mode = saved_searches.previous_view_mode or "folders"
     end
+    if type(group) ~= "string" or group == "" then group = "Uncategorized" end
+    if subgroup == "" then subgroup = nil end
+    if subgroup2 == "" or subgroup == nil then subgroup2 = nil end
     local entry = {
         name = name,
         created = os.date("%Y-%m-%d %H:%M:%S"),
+        group = group,
+        subgroup = subgroup,
+        subgroup2 = subgroup2,
         search_term = search_filter.search_term or "",
         filters = {
             audio = ui_settings.filter_audio,
@@ -2679,11 +3781,9 @@ function snapshot_current_search(name)
             entry.flat_view = file_location.saved_folder_flat_view
         end
     elseif effective_mode == "collections" then
-        if ui.current_view_mode == "collections" then
-            entry.collection = file_location.selected_collection
-        else
-            entry.collection = file_location.last_collection_name
-        end
+        entry.collection_group = file_location.collections_selected_group
+        entry.collection_subgroup = file_location.collections_selected_subgroup
+        entry.collection_subgroup2 = file_location.collections_selected_subgroup2
     elseif effective_mode == "auto" then
         entry.location = ui.auto_source_location
         entry.location_index = ui.auto_source_index
@@ -2692,11 +3792,11 @@ function snapshot_current_search(name)
     return entry
 end
 
-function add_saved_search(name)
+function add_saved_search(name, group, subgroup, subgroup2)
     name = (name or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if name == "" then return false, "Empty name" end
     if search_name_exists(name) then return false, "Name already exists" end
-    table.insert(saved_searches.items, snapshot_current_search(name))
+    table.insert(saved_searches.items, snapshot_current_search(name, group, subgroup, subgroup2))
     save_saved_searches()
     return true
 end
@@ -2756,6 +3856,7 @@ end
 load_options()
 load_search_history()
 load_saved_searches()
+load_collections_tree()
 
 update_fonts()
 playback.pending_sync_refresh = true
@@ -3400,16 +4501,18 @@ function apply_saved_search(index)
     end
 
     local target_mode = item.view_mode or "folders"
+    local no_jump = ui_settings.saved_search_no_jump and true or false
 
     if target_mode == "folders" then
         local idx = find_location_index(item.location) or item.location_index
         if idx and file_location.locations[idx] then
-            ui.current_view_mode = "folders"
-            ui.show_collection_section = false
-            file_location.selected_location_index = idx
+            if not no_jump then
+                ui.current_view_mode = "folders"
+                file_location.selected_location_index = idx
+                file_location.last_folder_location = file_location.locations[idx]
+                file_location.last_folder_index = idx
+            end
             file_location.current_location = file_location.locations[idx]
-            file_location.last_folder_location = file_location.current_location
-            file_location.last_folder_index = idx
             local want_flat = item.flat_view
             if (item.search_term or "") ~= "" then want_flat = true end
             file_location.flat_view = want_flat ~= nil and want_flat or false
@@ -3427,41 +4530,24 @@ function apply_saved_search(index)
             end
         end
     elseif target_mode == "collections" then
-        if item.collection then
+        if not no_jump then
             ui.current_view_mode = "collections"
-            ui.show_collection_section = true
-            load_collections()
-            file_location.selected_collection = item.collection
-            file_location.last_collection_name = item.collection
-            file_location.selected_category = "All"
-            local db_data = load_collection(item.collection)
-            if db_data then
-                local items = get_collection_items_by_category(item.collection, file_location.selected_category)
-                file_location.current_files = {}
-                search_filter.cached_flat_files = {}
-                for _, it in ipairs(items) do
-                    local file_entry = {
-                        name = it.path:match("([^/\\]+)$"),
-                        full_path = it.path,
-                        is_dir = false
-                    }
-                    table.insert(file_location.current_files, file_entry)
-                    table.insert(search_filter.cached_flat_files, file_entry)
-                end
-                file_location.current_location = "Collection: " .. item.collection
-                search_filter.cached_location = file_location.current_location
-                file_location.flat_view = true
-            end
+        end
+        if item.collection_group then
+            apply_collections_selection(item.collection_group, item.collection_subgroup, item.collection_subgroup2)
+        elseif item.collection then
+            apply_collections_selection(item.collection, nil, nil)
         end
     elseif target_mode == "auto" then
         local idx = find_location_index(item.location) or item.location_index
         if idx and file_location.locations[idx] then
-            ui.current_view_mode = "auto"
-            ui.show_collection_section = false
-            ui.auto_source_location = file_location.locations[idx]
-            ui.auto_source_index = idx
+            if not no_jump then
+                ui.current_view_mode = "auto"
+                ui.auto_source_location = file_location.locations[idx]
+                ui.auto_source_index = idx
+                file_location.selected_location_index = idx
+            end
             file_location.current_location = file_location.locations[idx]
-            file_location.selected_location_index = idx
             ui.auto_selected_category = item.auto_category or "All"
             file_location.flat_view = true
             local flat = get_flat_file_list(file_location.current_location)
@@ -4358,6 +5444,158 @@ local function insert_with_reasamplomatic(file_path)
     r.Undo_EndBlock("Insert with ReaSamplomatic5000", -1)
 end
 
+local function cartridge_get_config_dir()
+    local appdata = os.getenv("APPDATA")
+    if not appdata then
+        local home = os.getenv("HOME") or ""
+        local os_str = r.GetOS()
+        if os_str:match("OSX") or os_str:match("macOS") then
+            appdata = home .. "/Library/Application Support"
+        else
+            appdata = home .. "/.config"
+        end
+    end
+    local dir = appdata .. "/Cartridge"
+    r.RecursiveCreateDirectory(dir, 0)
+    return dir
+end
+
+local function cartridge_get_tk_selection(file_path)
+    if not waveform or not waveform.selection_active then return nil, nil end
+    if waveform.monitor_file_path ~= file_path then return nil, nil end
+    local s = waveform.normalized_sel_start
+    local e = waveform.normalized_sel_end
+    if type(s) ~= "number" or type(e) ~= "number" then return nil, nil end
+    if s > e then s, e = e, s end
+    if s < 0 or s >= e or e > 1 then return nil, nil end
+    if (e - s) < 0.001 then return nil, nil end
+    return s, e
+end
+
+local function cartridge_trigger_load(track, fx_idx, sample_path)
+    local dir = cartridge_get_config_dir()
+    local f = io.open(dir .. "/pending_load.txt", "w")
+    if f then
+        f:write(sample_path)
+        f:close()
+    end
+    for i = 0, r.TrackFX_GetNumParams(track, fx_idx) - 1 do
+        local _, name = r.TrackFX_GetParamName(track, fx_idx, i, "")
+        if name == "Load Trigger" then
+            local val = r.TrackFX_GetParam(track, fx_idx, i)
+            r.TrackFX_SetParam(track, fx_idx, i, val < 0.5 and 1 or 0)
+            break
+        end
+    end
+end
+
+local function cartridge_apply_trim(track, fx_idx, sel_start, sel_end)
+    if not sel_start or not sel_end then return end
+    for i = 0, r.TrackFX_GetNumParams(track, fx_idx) - 1 do
+        local _, name = r.TrackFX_GetParamName(track, fx_idx, i, "")
+        if name == "Sample Start" then
+            r.TrackFX_SetParam(track, fx_idx, i, sel_start)
+        elseif name == "Sample End" then
+            r.TrackFX_SetParam(track, fx_idx, i, sel_end)
+        elseif name == "Zoom To Fit" then
+            local val = r.TrackFX_GetParam(track, fx_idx, i)
+            r.TrackFX_SetParam(track, fx_idx, i, val < 0.5 and 1 or 0)
+        end
+    end
+end
+
+local function cartridge_is_cartridge(track, fx_idx)
+    local _, fx_name = r.TrackFX_GetFXName(track, fx_idx, "")
+    return fx_name and fx_name:lower():find("cartridge") ~= nil
+end
+
+local function cartridge_find_focused()
+    for t = 0, r.CountTracks(0) - 1 do
+        local track = r.GetTrack(0, t)
+        for fx = 0, r.TrackFX_GetCount(track) - 1 do
+            if r.TrackFX_GetOpen(track, fx) and cartridge_is_cartridge(track, fx) then
+                return track, fx
+            end
+        end
+    end
+    local master = r.GetMasterTrack(0)
+    for fx = 0, r.TrackFX_GetCount(master) - 1 do
+        if r.TrackFX_GetOpen(master, fx) and cartridge_is_cartridge(master, fx) then
+            return master, fx
+        end
+    end
+    return nil, nil
+end
+
+local function create_track_with_cartridge(file_path)
+    local ext = file_path:match("%.([^%.]+)$")
+    if not ext then return end
+    ext = ext:lower()
+    if ext == "mid" or ext == "midi" then return end
+
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+
+    local idx = r.CountTracks(0)
+    r.InsertTrackAtIndex(idx, true)
+    local track = r.GetTrack(0, idx)
+    if not track then
+        r.PreventUIRefresh(-1)
+        r.Undo_EndBlock("Create track with Cartridge", -1)
+        return
+    end
+
+    local name = file_path:match("([^/\\]+)$") or "Cartridge"
+    name = name:gsub("%.[^.]+$", "")
+    r.GetSetMediaTrackInfo_String(track, "P_NAME", name, true)
+
+    r.SetMediaTrackInfo_Value(track, "I_RECINPUT", 6112)
+    r.SetMediaTrackInfo_Value(track, "I_RECARM", 1)
+    r.SetMediaTrackInfo_Value(track, "I_RECMON", 1)
+
+    local fx = r.TrackFX_AddByName(track, "Cartridge", false, -1)
+    if fx < 0 then
+        fx = r.TrackFX_AddByName(track, "VST3:Cartridge", false, -1)
+    end
+    if fx < 0 then
+        r.PreventUIRefresh(-1)
+        r.ShowMessageBox("Cartridge not found.\nMake sure it's installed.", "TK Media Browser", 0)
+        r.Undo_EndBlock("Create track with Cartridge (plugin not found)", -1)
+        return
+    end
+
+    cartridge_trigger_load(track, fx, file_path)
+    local sel_start, sel_end = cartridge_get_tk_selection(file_path)
+    cartridge_apply_trim(track, fx, sel_start, sel_end)
+
+    r.TrackFX_Show(track, fx, 3)
+    r.SetOnlyTrackSelected(track)
+
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Create track with Cartridge: " .. name, -1)
+end
+
+local function load_sample_to_cartridge_focused(file_path)
+    local ext = file_path:match("%.([^%.]+)$")
+    if not ext then return end
+    ext = ext:lower()
+    if ext == "mid" or ext == "midi" then return end
+
+    local track, fx = cartridge_find_focused()
+    if not track then
+        r.ShowMessageBox("No open Cartridge instance found.\nOpen the Cartridge UI on a track first.", "TK Media Browser", 0)
+        return
+    end
+
+    r.Undo_BeginBlock()
+    cartridge_trigger_load(track, fx, file_path)
+    local sel_start, sel_end = cartridge_get_tk_selection(file_path)
+    cartridge_apply_trim(track, fx, sel_start, sel_end)
+    r.Undo_EndBlock("Load sample to Cartridge", -1)
+end
+
 local function replace_reasamplomatic_sample(file_path)
     local ext = file_path:match("%.([^%.]+)$")
     if not ext then return end
@@ -5124,10 +6362,10 @@ end
 
 local function draw_file_list()
     if file_location.current_location ~= "" then
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 8)
-            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 2, 8)  
             local child_flags = r.ImGui_WindowFlags_HorizontalScrollbar() | r.ImGui_WindowFlags_NoBackground()
             if r.ImGui_BeginChild(ctx, "file_list", 0, 0, 1, child_flags) then
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 8)
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 2, 8)
                 local function folder_has_matching_files(items, search_lower)
                     if search_lower == "" then return true end
                     for _, item in ipairs(items) do
@@ -5274,10 +6512,6 @@ local function draw_file_list()
                                 end
                                 
                                 if r.ImGui_BeginPopupContextItem(ctx, "tree_file_context_" .. item.name) then
-                                    if #file_location.collections == 0 then
-                                        load_collections()
-                                    end
-                                    
                                     local insert_track = r.GetSelectedTrack(0, 0)
                                     if insert_track then
                                         if r.ImGui_MenuItem(ctx, "Insert at Edit Cursor") then
@@ -5286,33 +6520,7 @@ local function draw_file_list()
                                         r.ImGui_Separator(ctx)
                                     end
 
-                                    if ui.current_view_mode == "collections" and file_location.selected_collection then
-                                        if r.ImGui_MenuItem(ctx, "Remove from Collection") then
-                                            for idx, f in ipairs(file_location.current_files) do
-                                                if f.full_path == file_path then
-                                                    remove_file_from_collection(file_location.selected_collection, idx)
-                                                    clear_sort_cache()  
-                                                    local db_data = load_collection(file_location.selected_collection)
-                                                    if db_data and db_data.items then
-                                                        file_location.current_files = {}
-                                                        search_filter.cached_flat_files = {}
-                                                        for _, item in ipairs(db_data.items) do
-                                                            local file_entry = {
-                                                                name = item.path:match("([^/\\]+)$"),
-                                                                full_path = item.path,
-                                                                is_dir = false
-                                                            }
-                                                            table.insert(file_location.current_files, file_entry)
-                                                            table.insert(search_filter.cached_flat_files, file_entry)
-                                                        end
-                                                        search_filter.filtered_files = search_filter.cached_flat_files
-                                                    end
-                                                    break
-                                                end
-                                            end
-                                        end
-                                        r.ImGui_Separator(ctx)
-                                    end
+                                    render_remove_from_collection_menu(file_path, nil)
                                     
                                     local ext = file_path:match("%.([^%.]+)$")
                                     if ext then
@@ -5323,6 +6531,12 @@ local function draw_file_list()
                                             end
                                             if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
                                                 replace_reasamplomatic_sample(file_path)
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Add to new track with Cartridge") then
+                                                create_track_with_cartridge(file_path)
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Load sample to focused Cartridge") then
+                                                load_sample_to_cartridge_focused(file_path)
                                             end
                                             
                                             local track = r.GetSelectedTrack(0, 0)
@@ -5414,40 +6628,7 @@ local function draw_file_list()
                                     
                                     r.ImGui_Text(ctx, "Add to Collection:")
                                     r.ImGui_Separator(ctx)
-                                    
-                                    if #file_location.collections > 0 then
-                                        for _, db_name in ipairs(file_location.collections) do
-                                            local db = load_collection(db_name)
-                                            if db and db.categories and #db.categories > 0 then
-                                                if r.ImGui_BeginMenu(ctx, db_name .. " >>") then
-                                                    if r.ImGui_MenuItem(ctx, "No Category") then
-                                                        add_file_to_collection(db_name, file_path, nil)
-                                                    end
-                                                    r.ImGui_Separator(ctx)
-                                                    for _, cat in ipairs(db.categories) do
-                                                        if r.ImGui_MenuItem(ctx, cat) then
-                                                            add_file_to_collection(db_name, file_path, {cat})
-                                                        end
-                                                    end
-                                                    r.ImGui_EndMenu(ctx)
-                                                end
-                                            else
-                                                if r.ImGui_MenuItem(ctx, db_name) then
-                                                    add_file_to_collection(db_name, file_path, nil)
-                                                end
-                                            end
-                                        end
-                                        r.ImGui_Separator(ctx)
-                                    end
-                                    
-                                    if r.ImGui_MenuItem(ctx, "+ New Collection...") then
-                                        local retval, new_db_name = r.GetUserInputs("New Collection", 1, "Collection Name:", "")
-                                        if retval and new_db_name ~= "" then
-                                            create_new_collection(new_db_name)
-                                            add_file_to_collection(new_db_name, file_path)
-                                            load_collections()
-                                        end
-                                    end
+                                    render_add_to_collection_menu(file_path, nil)
                                     
                                     r.ImGui_EndPopup(ctx)
                                 end
@@ -5944,22 +7125,17 @@ local function draw_file_list()
                                 end
                                 
                                 if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_DelayNormal()) then
-                                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 6, 4)
-                                    r.ImGui_BeginTooltip(ctx)
-                                    r.ImGui_PushFont(ctx, small_font, small_font_size)
-                                    r.ImGui_Text(ctx, "Shift+Click: Insert at Edit Cursor")
-                                    r.ImGui_Text(ctx, "Ctrl+Click: Toggle Selection")
-                                    r.ImGui_Text(ctx, "Right-Click: Context Menu")
-                                    r.ImGui_PopFont(ctx)
-                                    r.ImGui_EndTooltip(ctx)
-                                    r.ImGui_PopStyleVar(ctx)
+                                    if r.ImGui_BeginTooltip(ctx) then
+                                        r.ImGui_PushFont(ctx, small_font, small_font_size)
+                                        r.ImGui_Text(ctx, "Shift+Click: Insert at Edit Cursor")
+                                        r.ImGui_Text(ctx, "Ctrl+Click: Toggle Selection")
+                                        r.ImGui_Text(ctx, "Right-Click: Context Menu")
+                                        r.ImGui_PopFont(ctx)
+                                        r.ImGui_EndTooltip(ctx)
+                                    end
                                 end
 
                                 if r.ImGui_BeginPopupContextItem(ctx, "file_context_" .. tostring(i)) then
-                                    if #file_location.collections == 0 then
-                                        load_collections()
-                                    end
-                                    
                                     local files_to_process = {}
                                     if #file_location.selected_files > 0 then
                                         files_to_process = file_location.selected_files
@@ -5980,46 +7156,7 @@ local function draw_file_list()
                                         r.ImGui_Separator(ctx)
                                     end
 
-                                    if ui.current_view_mode == "collections" and file_location.selected_collection then
-                                        local remove_label = #file_location.selected_files > 0 
-                                            and string.format("Remove %d files from Collection", #file_location.selected_files)
-                                            or "Remove from Collection"
-                                        
-                                        if r.ImGui_MenuItem(ctx, remove_label) then
-                                            local db_data = load_collection(file_location.selected_collection)
-                                            if db_data and db_data.items then
-                                                local paths_to_remove = {}
-                                                if #file_location.selected_files > 0 then
-                                                    for _, sel_path in ipairs(file_location.selected_files) do
-                                                        paths_to_remove[sel_path] = true
-                                                    end
-                                                else
-                                                    paths_to_remove[file.full_path] = true
-                                                end
-                                                for idx = #db_data.items, 1, -1 do
-                                                    if paths_to_remove[db_data.items[idx].path] then
-                                                        table.remove(db_data.items, idx)
-                                                    end
-                                                end
-                                                save_collection(file_location.selected_collection, db_data)
-                                                clear_sort_cache()
-                                                file_location.current_files = {}
-                                                search_filter.cached_flat_files = {}
-                                                for _, item in ipairs(db_data.items) do
-                                                    local file_entry = {
-                                                        name = item.path:match("([^/\\]+)$"),
-                                                        full_path = item.path,
-                                                        is_dir = false
-                                                    }
-                                                    table.insert(file_location.current_files, file_entry)
-                                                    table.insert(search_filter.cached_flat_files, file_entry)
-                                                end
-                                                search_filter.filtered_files = search_filter.cached_flat_files
-                                            end
-                                            clear_file_selection()
-                                        end
-                                        r.ImGui_Separator(ctx)
-                                    end
+                                    render_remove_from_collection_menu(file.full_path, files_to_process)
                                     
                                     local ext = file.full_path:match("%.([^%.]+)$")
                                     if ext then
@@ -6030,6 +7167,12 @@ local function draw_file_list()
                                             end
                                             if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
                                                 replace_reasamplomatic_sample(file.full_path)
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Add to new track with Cartridge") then
+                                                create_track_with_cartridge(file.full_path)
+                                            end
+                                            if r.ImGui_MenuItem(ctx, "Load sample to focused Cartridge") then
+                                                load_sample_to_cartridge_focused(file.full_path)
                                             end
                                             
                                             local track = r.GetSelectedTrack(0, 0)
@@ -6121,60 +7264,7 @@ local function draw_file_list()
                                     
                                     r.ImGui_Text(ctx, "Add to Collection:")
                                     r.ImGui_Separator(ctx)
-                                    
-                                    if #file_location.collections > 0 then
-                                        for _, db_name in ipairs(file_location.collections) do
-                                            local db = load_collection(db_name)
-                                            if db and db.categories and #db.categories > 0 then
-                                                if r.ImGui_BeginMenu(ctx, db_name .. " >>") then
-                                                    if r.ImGui_MenuItem(ctx, "No Category") then
-                                                        if #files_to_process > 1 then
-                                                            add_multiple_files_to_collection(db_name, files_to_process, nil)
-                                                            clear_file_selection()
-                                                        else
-                                                            add_file_to_collection(db_name, file.full_path, nil)
-                                                        end
-                                                    end
-                                                    r.ImGui_Separator(ctx)
-                                                    for _, cat in ipairs(db.categories) do
-                                                        if r.ImGui_MenuItem(ctx, cat) then
-                                                            if #files_to_process > 1 then
-                                                                add_multiple_files_to_collection(db_name, files_to_process, {cat})
-                                                                clear_file_selection()
-                                                            else
-                                                                add_file_to_collection(db_name, file.full_path, {cat})
-                                                            end
-                                                        end
-                                                    end
-                                                    r.ImGui_EndMenu(ctx)
-                                                end
-                                            else
-                                                if r.ImGui_MenuItem(ctx, db_name) then
-                                                    if #files_to_process > 1 then
-                                                        add_multiple_files_to_collection(db_name, files_to_process, nil)
-                                                        clear_file_selection()
-                                                    else
-                                                        add_file_to_collection(db_name, file.full_path, nil)
-                                                    end
-                                                end
-                                            end
-                                        end
-                                        r.ImGui_Separator(ctx)
-                                    end
-                                    
-                                    if r.ImGui_MenuItem(ctx, "+ New Collection...") then
-                                        local retval, new_db_name = r.GetUserInputs("New Collection", 1, "Collection Name:", "")
-                                        if retval and new_db_name ~= "" then
-                                            create_new_collection(new_db_name)
-                                            if #files_to_process > 1 then
-                                                add_multiple_files_to_collection(new_db_name, files_to_process)
-                                                clear_file_selection()
-                                            else
-                                                add_file_to_collection(new_db_name, file.full_path)
-                                            end
-                                            load_collections()
-                                        end
-                                    end
+                                    render_add_to_collection_menu(file.full_path, files_to_process)
                                     
                                     r.ImGui_EndPopup(ctx)
                                 end
@@ -6332,9 +7422,9 @@ local function draw_file_list()
                     r.ImGui_PopStyleColor(ctx, 3)  
                 end
                 
+                r.ImGui_PopStyleVar(ctx, 2)
+                r.ImGui_EndChild(ctx)
             end
-            r.ImGui_EndChild(ctx)
-            r.ImGui_PopStyleVar(ctx, 2) 
         end
 end
 local function draw_file_info()
@@ -6362,76 +7452,6 @@ local function calculate_window_height()
         min_height = 200
     end
     return min_height
-end
-
-local function draw_category_manager()
-    if not file_location.show_category_manager then return end
-    
-    r.ImGui_SetNextWindowSize(ctx, 400, 300, r.ImGui_Cond_FirstUseEver())
-    local visible, open = r.ImGui_Begin(ctx, "Category Manager##catmanager", true)
-    file_location.show_category_manager = open
-    
-    if visible then
-        if not file_location.selected_collection then
-            r.ImGui_TextWrapped(ctx, "Please select a collection first.")
-            r.ImGui_End(ctx)
-            return
-        end
-        
-        local db = load_collection(file_location.selected_collection)
-        if not db then
-            r.ImGui_TextWrapped(ctx, "Failed to load collection.")
-            r.ImGui_End(ctx)
-            return
-        end
-        
-        r.ImGui_SeparatorText(ctx, "Categories for: " .. file_location.selected_collection)
-        
-        db.categories = db.categories or {}
-        if #db.categories == 0 then
-            r.ImGui_TextWrapped(ctx, "No categories yet. Add one below.")
-        else
-            r.ImGui_BeginChild(ctx, "CategoryList", 0, -60)
-            for i, category in ipairs(db.categories) do
-                r.ImGui_Text(ctx, category)
-                r.ImGui_SameLine(ctx)
-                r.ImGui_PushID(ctx, "del_" .. i)
-                if r.ImGui_Button(ctx, "Remove") then
-                    remove_category_from_collection(file_location.selected_collection, category)
-                    
-                    local items = get_collection_items_by_category(file_location.selected_collection, file_location.selected_category)
-                    file_location.current_files = {}
-                    search_filter.cached_flat_files = {}
-                    for _, item in ipairs(items) do
-                        local file_entry = {
-                            name = item.path:match("([^/\\]+)$"),
-                            full_path = item.path,
-                            is_dir = false
-                        }
-                        table.insert(file_location.current_files, file_entry)
-                        table.insert(search_filter.cached_flat_files, file_entry)
-                    end
-                    search_filter.filtered_files = search_filter.cached_flat_files
-                end
-                r.ImGui_PopID(ctx)
-            end
-            r.ImGui_EndChild(ctx)
-        end
-        
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Add New Category:")
-        local changed, new_text = r.ImGui_InputText(ctx, "##newcat", file_location.new_category_name)
-        if changed then file_location.new_category_name = new_text end
-        
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Add") and file_location.new_category_name ~= "" then
-            if add_category_to_collection(file_location.selected_collection, file_location.new_category_name) then
-                file_location.new_category_name = ""
-            end
-        end
-        
-        r.ImGui_End(ctx)
-    end
 end
 
 local function draw_rename_folder_popup()
@@ -6795,32 +7815,11 @@ local function draw_progress_window()
 end
 
 local function loop()
-    if not file_location.collection_restored and ui.current_view_mode == "collections" and file_location.last_collection_name then
-        load_collections()
-        file_location.selected_collection = file_location.last_collection_name
-        clear_sort_cache() 
-        local db_data = load_collection(file_location.last_collection_name)
-        if db_data and db_data.items then
-            file_location.current_files = {}
-            search_filter.cached_flat_files = {}
-            for _, item in ipairs(db_data.items) do
-                local file_entry = {
-                    name = item.path:match("([^/\\]+)$"),
-                    full_path = item.path,
-                    is_dir = false
-                }
-                table.insert(file_location.current_files, file_entry)
-                table.insert(search_filter.cached_flat_files, file_entry)
-            end
-            file_location.current_location = "Collection: " .. file_location.last_collection_name
-            search_filter.cached_location = file_location.current_location
-            search_filter.filtered_files = search_filter.cached_flat_files
-            file_location.flat_view = true
-            
-        end
-        file_location.collection_restored = true
+    if ui.pending_view_mode then
+        ui.current_view_mode = ui.pending_view_mode
+        ui.pending_view_mode = nil
+        save_options()
     end
-    
     if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         ctx = r.ImGui_CreateContext('TK Media Browser')
         normal_font = r.ImGui_CreateFont('sans-serif', font_size)
@@ -6972,9 +7971,6 @@ local function loop()
                 ui_settings.pushed_color = 1
             end
             if r.ImGui_Button(ctx, "Folders", header_button_width, LEFT_HEADER_H) then
-                if ui.current_view_mode == "collections" and file_location.selected_collection then
-                    file_location.last_collection_name = file_location.selected_collection
-                end
                 if ui.current_view_mode == "auto" then
                     file_location.saved_folder_flat_view = file_location.flat_view
                 end
@@ -6986,7 +7982,6 @@ local function loop()
                 
                 clear_sort_cache()  
                 ui.current_view_mode = "folders"
-                ui.show_collection_section = false
                 clear_file_selection()
                 file_location.flat_view = file_location.saved_folder_flat_view
                 
@@ -7010,7 +8005,7 @@ local function loop()
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_color)
                 ui_settings.pushed_color = 1
             end
-            if r.ImGui_Button(ctx, "Favs", header_button_width, LEFT_HEADER_H) then
+            if r.ImGui_Button(ctx, "Collections", header_button_width, LEFT_HEADER_H) then
                 if ui.current_view_mode == "folders" and file_location.current_location ~= "" then
                     file_location.last_folder_location = file_location.current_location
                     file_location.last_folder_index = file_location.selected_location_index
@@ -7027,32 +8022,17 @@ local function loop()
                 
                 clear_sort_cache()  
                 ui.current_view_mode = "collections"
-                ui.show_collection_section = true
                 clear_file_selection()
-                load_collections()
                 
-                if file_location.last_collection_name then
-                    file_location.selected_collection = file_location.last_collection_name
-                    local db_data = load_collection(file_location.last_collection_name)
-                    if db_data then
-                        local items = get_collection_items_by_category(file_location.last_collection_name, file_location.selected_category)
-                        file_location.current_files = {}
-                        search_filter.cached_flat_files = {}
-                        for _, item in ipairs(items) do
-                            local file_entry = {
-                                name = item.path:match("([^/\\]+)$"),
-                                full_path = item.path,
-                                is_dir = false
-                            }
-                            table.insert(file_location.current_files, file_entry)
-                            table.insert(search_filter.cached_flat_files, file_entry)
-                        end
-                        file_location.current_location = "Collection: " .. file_location.last_collection_name
-                        search_filter.cached_location = file_location.current_location
-                        search_filter.filtered_files = search_filter.cached_flat_files
-                        file_location.flat_view = true
-                        
-                    end
+                file_location.current_files = {}
+                search_filter.cached_flat_files = {}
+                search_filter.filtered_files = {}
+                if file_location.collections_selected_group then
+                    apply_collections_selection(file_location.collections_selected_group, file_location.collections_selected_subgroup, file_location.collections_selected_subgroup2)
+                else
+                    file_location.current_location = "Collections"
+                    search_filter.cached_location = file_location.current_location
+                    file_location.flat_view = true
                 end
                 
                 save_options()
@@ -7072,9 +8052,6 @@ local function loop()
                     file_location.last_folder_index = file_location.selected_location_index
                     file_location.saved_folder_flat_view = file_location.flat_view
                 end
-                if ui.current_view_mode == "collections" and file_location.selected_collection then
-                    file_location.last_collection_name = file_location.selected_collection
-                end
                 
                 if search_filter.last_sort_column >= 0 then
                     search_filter.remembered_sort_column = search_filter.last_sort_column
@@ -7083,7 +8060,6 @@ local function loop()
                 
                 clear_sort_cache()
                 ui.current_view_mode = "auto"
-                ui.show_collection_section = false
                 clear_file_selection()
                 
                 if ui.auto_source_location ~= "" then
@@ -7132,9 +8108,6 @@ local function loop()
                     file_location.last_folder_index = file_location.selected_location_index
                     file_location.saved_folder_flat_view = file_location.flat_view
                 end
-                if ui.current_view_mode == "collections" and file_location.selected_collection then
-                    file_location.last_collection_name = file_location.selected_collection
-                end
                 if ui.current_view_mode ~= "searches" then
                     saved_searches.previous_view_mode = ui.current_view_mode
                 end
@@ -7144,7 +8117,6 @@ local function loop()
                 end
                 clear_sort_cache()
                 ui.current_view_mode = "searches"
-                ui.show_collection_section = false
                 save_options()
             end
             if ui_settings.pushed_color > 0 then
@@ -7468,188 +8440,452 @@ local function loop()
         if ui.current_view_mode == "collections" then
             local total_width = reaper.ImGui_GetContentRegionAvail(ctx)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
-            
+
             local unselected_button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
             local button_text_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_text_brightness, ui_settings.button_text_brightness, ui_settings.button_text_brightness, 1.0)
             local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
             local accent_hover_color = hsv_to_color(ui_settings.accent_hue, 0.8, 1.0)
             local accent_active_color = hsv_to_color(ui_settings.accent_hue, 1.0, 0.8)
-            
+
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), accent_hover_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), accent_active_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), button_text_color)
-            
-            for i, db_name in ipairs(file_location.collections) do
-                local is_selected = (file_location.selected_collection == db_name)
-                
-                local base_color
-                if is_selected then
-                    base_color = accent_color
-                elseif file_location.custom_collection_colors[db_name] then
-                    local c = file_location.custom_collection_colors[db_name]
-                    base_color = hsv_to_color(c.h, c.s, c.v)
-                else
-                    base_color = unselected_button_color
-                end
-                
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), base_color)
-                
-                local is_renaming = (file_location.renaming_collection == db_name)
-                if is_renaming then
-                    if not file_location.renaming_collection_initialized then
-                        ui_settings.rename_inline_text = db_name
-                        file_location.renaming_collection_initialized = true
+
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), unselected_button_color)
+            if r.ImGui_Button(ctx, "+ New group", total_width, ui_settings.button_height) then
+                local rv, nn = r.GetUserInputs("New group", 1, "Group name:,extrawidth=200", "")
+                if rv then
+                    local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    if t ~= "" and t ~= "Uncategorized" then
+                        _ct_ensure_group_order(t)
+                        local ct = file_location.collections_tree
+                        ct.group_meta = ct.group_meta or {}
+                        ct.group_meta[t] = ct.group_meta[t] or {}
+                        save_collections_tree()
                     end
-                    r.ImGui_PushItemWidth(ctx, total_width - 260)
-                    local enter_pressed, new_inline = r.ImGui_InputText(ctx, "##inline_rename_db_" .. i, ui_settings.rename_inline_text, r.ImGui_InputTextFlags_EnterReturnsTrue())
-                    ui_settings.rename_inline_text = new_inline
-                    r.ImGui_PopItemWidth(ctx)
-                    r.ImGui_SameLine(ctx)
-                    local ok_disabled = (ui_settings.rename_inline_text:gsub("^%s+", ""):gsub("%s+$", "") == "")
-                    if ok_disabled then r.ImGui_BeginDisabled(ctx, true) end
-                    local ok_clicked = r.ImGui_Button(ctx, "OK", 120, ui_settings.button_height)
-                    if ok_disabled then r.ImGui_EndDisabled(ctx) end
-                    r.ImGui_SameLine(ctx)
-                    local cancel_clicked = r.ImGui_Button(ctx, "Cancel", 120, ui_settings.button_height)
-                    if ok_clicked or enter_pressed then
-                        local trimmed = ui_settings.rename_inline_text:gsub("^%s+", ""):gsub("%s+$", "")
-                        if trimmed ~= "" and trimmed ~= db_name then
-                            local success, msg = rename_collection(db_name, trimmed)
-                            if not success then
-                                r.ShowMessageBox("Error renaming collection: " .. (msg or "Unknown error"), "Rename Error", 0)
-                            else
-                                save_options()
+                end
+            end
+            r.ImGui_PopStyleColor(ctx, 1)
+
+            r.ImGui_Spacing(ctx)
+            r.ImGui_Separator(ctx)
+            r.ImGui_Spacing(ctx)
+
+            local function ct_rgba32_to_rgb24(c) return (c >> 8) & 0xFFFFFF end
+            local function ct_rgb24_to_rgba32(c) return ((c & 0xFFFFFF) << 8) | 0xFF end
+            local function ct_darken(c, f)
+                local r8 = math.floor(((c >> 24) & 0xFF) * f)
+                local g8 = math.floor(((c >> 16) & 0xFF) * f)
+                local b8 = math.floor(((c >> 8)  & 0xFF) * f)
+                local a8 = c & 0xFF
+                return (r8 << 24) | (g8 << 16) | (b8 << 8) | a8
+            end
+            local function ct_lighten(c, f)
+                local r8 = (c >> 24) & 0xFF
+                local g8 = (c >> 16) & 0xFF
+                local b8 = (c >> 8)  & 0xFF
+                local a8 = c & 0xFF
+                r8 = math.floor(r8 + (255 - r8) * f)
+                g8 = math.floor(g8 + (255 - g8) * f)
+                b8 = math.floor(b8 + (255 - b8) * f)
+                return (r8 << 24) | (g8 << 16) | (b8 << 8) | a8
+            end
+            local function ct_color_picker_menu(current_rgba32, on_pick, on_reset, opts)
+                if r.ImGui_BeginMenu(ctx, "Set color") then
+                    local cur24 = current_rgba32 and ct_rgba32_to_rgb24(current_rgba32) or 0x4078A0
+                    local changed, new24 = r.ImGui_ColorPicker3(ctx, "##ct_color", cur24, r.ImGui_ColorEditFlags_DisplayHSV())
+                    if changed then on_pick(ct_rgb24_to_rgba32(new24)) end
+                    r.ImGui_EndMenu(ctx)
+                end
+                if opts and opts.on_inherit then
+                    if r.ImGui_MenuItem(ctx, "Inherit parent color", nil, opts.inherit_active and true or false) then
+                        opts.on_inherit()
+                    end
+                end
+                if opts and opts.on_gradient then
+                    if r.ImGui_MenuItem(ctx, "Use gradient on children", nil, opts.gradient_active and true or false) then
+                        opts.on_gradient()
+                    end
+                end
+                if current_rgba32 or (opts and opts.has_extra) then
+                    if r.ImGui_MenuItem(ctx, "Reset color") then on_reset() end
+                end
+            end
+
+            local function ct_group_header_context(group)
+                if r.ImGui_BeginPopupContextItem(ctx, "ctx_ctgroup_" .. group) then
+                    if r.ImGui_MenuItem(ctx, "New subgroup...") then
+                        local rv, nn = r.GetUserInputs("New subgroup", 1, "Subgroup name:,extrawidth=200", "")
+                        if rv then
+                            local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                            if t ~= "" then
+                                _ct_ensure_subgroup_order(group, t)
+                                save_collections_tree()
                             end
                         end
-                        file_location.renaming_collection = nil
-                        file_location.renaming_collection_initialized = false
-                        ui_settings.rename_inline_text = ""
-                    elseif cancel_clicked then
-                        file_location.renaming_collection = nil
-                        file_location.renaming_collection_initialized = false
-                        ui_settings.rename_inline_text = ""
-                    end
-                else
-                    if r.ImGui_Button(ctx, db_name, total_width, ui_settings.button_height) then
-                    file_location.selected_collection = db_name
-                    file_location.selected_category = "All"  
-                    
-                    local db_data = load_collection(db_name)
-                    if db_data then
-                        local items = get_collection_items_by_category(db_name, file_location.selected_category)
-                        file_location.current_files = {}
-                        search_filter.cached_flat_files = {}
-                        for _, item in ipairs(items) do
-                            local file_entry = {
-                                name = item.path:match("([^/\\]+)$"),
-                                full_path = item.path,
-                                is_dir = false
-                            }
-                            table.insert(file_location.current_files, file_entry)
-                            table.insert(search_filter.cached_flat_files, file_entry)
-                        end
-                        file_location.current_location = "Collection: " .. db_name
-                        search_filter.cached_location = file_location.current_location
-                        search_filter.filtered_files = search_filter.cached_flat_files
-                        file_location.flat_view = true
-                        clear_file_selection()
-                        
-                        
-                        file_location.last_collection_name = db_name
-                        save_options()
-                    end
-                end
-                end
-                r.ImGui_PopStyleColor(ctx, 1)
-                
-                if r.ImGui_BeginPopupContextItem(ctx) then
-                    if r.ImGui_MenuItem(ctx, "Rename") then
-                        file_location.renaming_collection = db_name
-                        file_location.renaming_collection_initialized = false
-                    end
-                    if r.ImGui_MenuItem(ctx, "Delete") then
-                        delete_collection(db_name)
-                        load_collections()
-                        if file_location.selected_collection == db_name then
-                            file_location.selected_collection = nil
-                            file_location.current_files = {}
-                        end
-                    end
-                    
+                    end                    r.ImGui_Separator(ctx)
+                    ct_color_picker_menu(
+                        get_collections_group_color(group),
+                        function(c) set_collections_group_color(group, c) end,
+                        function()
+                            local ct = file_location.collections_tree
+                            ct.group_meta[group] = ct.group_meta[group] or {}
+                            ct.group_meta[group].color = nil
+                            ct.group_meta[group].gradient = nil
+                            save_collections_tree()
+                        end,
+                        {
+                            on_gradient = function()
+                                local ct = file_location.collections_tree
+                                ct.group_meta[group] = ct.group_meta[group] or {}
+                                ct.group_meta[group].gradient = not ct.group_meta[group].gradient
+                                save_collections_tree()
+                            end,
+                            gradient_active = (file_location.collections_tree.group_meta[group] or {}).gradient and true or false,
+                            has_extra = (file_location.collections_tree.group_meta[group] or {}).gradient and true or false,
+                        }
+                    )
                     r.ImGui_Separator(ctx)
-                    
-                    if r.ImGui_BeginMenu(ctx, "Set Custom Color") then
-                        local current_color = file_location.custom_collection_colors[db_name] or {h = 0.55, s = 0.8, v = 0.6}
-                        
-                        local r_val, g_val, b_val
-                        local hue, sat, val = current_color.h, current_color.s, current_color.v
-                        local i = math.floor(hue * 6)
-                        local f = hue * 6 - i
-                        local p = val * (1 - sat)
-                        local q = val * (1 - f * sat)
-                        local t = val * (1 - (1 - f) * sat)
-                        i = i % 6
-                        if i == 0 then r_val, g_val, b_val = val, t, p
-                        elseif i == 1 then r_val, g_val, b_val = q, val, p
-                        elseif i == 2 then r_val, g_val, b_val = p, val, t
-                        elseif i == 3 then r_val, g_val, b_val = p, q, val
-                        elseif i == 4 then r_val, g_val, b_val = t, p, val
-                        else r_val, g_val, b_val = val, p, q
+                    if r.ImGui_MenuItem(ctx, "Move up") then move_collections_group(group, -1) end
+                    if r.ImGui_MenuItem(ctx, "Move down") then move_collections_group(group, 1) end
+                    if group ~= "Uncategorized" then
+                        r.ImGui_Separator(ctx)
+                        if r.ImGui_MenuItem(ctx, "Rename group...") then
+                            local rv, nn = r.GetUserInputs("Rename group", 1, "New name:,extrawidth=200", group)
+                            if rv then
+                                local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                                if t ~= "" then rename_collections_group(group, t) end
+                            end
                         end
-                        
-                        local packed_color = (math.floor(r_val * 255) << 16) | (math.floor(g_val * 255) << 8) | math.floor(b_val * 255)
-                        
-                        local changed, new_color = r.ImGui_ColorPicker3(ctx, "##collection_color", packed_color, r.ImGui_ColorEditFlags_DisplayHSV())
-                        if changed then
-                            local new_r = ((new_color >> 16) & 0xFF) / 255
-                            local new_g = ((new_color >> 8) & 0xFF) / 255
-                            local new_b = (new_color & 0xFF) / 255
-                            local h, s, v = rgb_to_hsv(new_r, new_g, new_b)
-                            file_location.custom_collection_colors[db_name] = {h = h, s = s, v = v}
-                            save_options()
-                        end
-                        r.ImGui_EndMenu(ctx)
-                    end
-                    
-                    if file_location.custom_collection_colors[db_name] then
-                        if r.ImGui_MenuItem(ctx, "Reset to Default Color") then
-                            file_location.custom_collection_colors[db_name] = nil
-                            save_options()
+                        if r.ImGui_BeginMenu(ctx, "Delete group") then
+                            if r.ImGui_MenuItem(ctx, "Move items to Uncategorized") then
+                                delete_collections_group(group, "move")
+                                if file_location.collections_selected_group == group then
+                                    file_location.collections_selected_group = nil
+                                    file_location.collections_selected_subgroup = nil
+                                    file_location.collections_selected_subgroup2 = nil
+                                    file_location.current_files = {}
+                                    search_filter.cached_flat_files = {}
+                                    search_filter.filtered_files = {}
+                                end
+                            end
+                            if r.ImGui_MenuItem(ctx, "Delete group AND all items") then
+                                delete_collections_group(group, "delete_items")
+                                if file_location.collections_selected_group == group then
+                                    file_location.collections_selected_group = nil
+                                    file_location.collections_selected_subgroup = nil
+                                    file_location.collections_selected_subgroup2 = nil
+                                    file_location.current_files = {}
+                                    search_filter.cached_flat_files = {}
+                                    search_filter.filtered_files = {}
+                                end
+                            end
+                            r.ImGui_EndMenu(ctx)
                         end
                     end
-                    
                     r.ImGui_EndPopup(ctx)
                 end
             end
-            
-            local button_size = 24
-            local pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
-            local center_x = pos_x + total_width / 2
-            local center_y = pos_y + button_size / 2
-            
-            if r.ImGui_InvisibleButton(ctx, "##AddCollection", total_width, button_size) then
-                local retval, new_db_name = r.GetUserInputs("New Collection", 1, "Collection Name:", "")
-                if retval and new_db_name ~= "" then
-                    create_new_collection(new_db_name)
-                    load_collections()
+
+            local function ct_subgroup_header_context(group, subgroup)
+                if r.ImGui_BeginPopupContextItem(ctx, "ctx_ctsub_" .. group .. "__" .. subgroup) then
+                    if r.ImGui_MenuItem(ctx, "New sub-subgroup...") then
+                        local rv, nn = r.GetUserInputs("New sub-subgroup", 1, "Sub-subgroup name:,extrawidth=200", "")
+                        if rv then
+                            local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                            if t ~= "" then
+                                _ct_ensure_subgroup2_order(group, subgroup, t)
+                                save_collections_tree()
+                            end
+                        end
+                    end
+                    if r.ImGui_MenuItem(ctx, "Rename subgroup...") then
+                        local rv, nn = r.GetUserInputs("Rename subgroup", 1, "New name:,extrawidth=200", subgroup)
+                        if rv then
+                            local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                            if t ~= "" then rename_collections_subgroup(group, subgroup, t) end
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    ct_color_picker_menu(
+                        get_collections_subgroup_color(group, subgroup),
+                        function(c)
+                            local ct = file_location.collections_tree
+                            local key = group .. "::" .. subgroup
+                            ct.subgroup_meta[key] = ct.subgroup_meta[key] or {}
+                            ct.subgroup_meta[key].inherit = nil
+                            set_collections_subgroup_color(group, subgroup, c)
+                        end,
+                        function()
+                            local ct = file_location.collections_tree
+                            local key = group .. "::" .. subgroup
+                            ct.subgroup_meta[key] = ct.subgroup_meta[key] or {}
+                            ct.subgroup_meta[key].color = nil
+                            ct.subgroup_meta[key].inherit = nil
+                            ct.subgroup_meta[key].gradient = nil
+                            save_collections_tree()
+                        end,
+                        {
+                            on_inherit = function()
+                                local ct = file_location.collections_tree
+                                local key = group .. "::" .. subgroup
+                                ct.subgroup_meta[key] = ct.subgroup_meta[key] or {}
+                                ct.subgroup_meta[key].inherit = not ct.subgroup_meta[key].inherit
+                                ct.subgroup_meta[key].color = nil
+                                save_collections_tree()
+                            end,
+                            inherit_active = (file_location.collections_tree.subgroup_meta[group .. "::" .. subgroup] or {}).inherit and true or false,
+                            on_gradient = function()
+                                local ct = file_location.collections_tree
+                                local key = group .. "::" .. subgroup
+                                ct.subgroup_meta[key] = ct.subgroup_meta[key] or {}
+                                ct.subgroup_meta[key].gradient = not ct.subgroup_meta[key].gradient
+                                save_collections_tree()
+                            end,
+                            gradient_active = (file_location.collections_tree.subgroup_meta[group .. "::" .. subgroup] or {}).gradient and true or false,
+                            has_extra = ((file_location.collections_tree.subgroup_meta[group .. "::" .. subgroup] or {}).inherit
+                                or (file_location.collections_tree.subgroup_meta[group .. "::" .. subgroup] or {}).gradient) and true or false,
+                        }
+                    )
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Move up") then move_collections_subgroup(group, subgroup, -1) end
+                    if r.ImGui_MenuItem(ctx, "Move down") then move_collections_subgroup(group, subgroup, 1) end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_BeginMenu(ctx, "Delete subgroup") then
+                        if r.ImGui_MenuItem(ctx, "Move items out of subgroup") then
+                            delete_collections_subgroup(group, subgroup, "move")
+                            if file_location.collections_selected_group == group and file_location.collections_selected_subgroup == subgroup then
+                                file_location.collections_selected_subgroup = nil
+                                file_location.collections_selected_subgroup2 = nil
+                                apply_collections_selection(group, nil, nil)
+                            end
+                        end
+                        if r.ImGui_MenuItem(ctx, "Delete subgroup AND all items") then
+                            delete_collections_subgroup(group, subgroup, "delete_items")
+                            if file_location.collections_selected_group == group and file_location.collections_selected_subgroup == subgroup then
+                                file_location.collections_selected_group = nil
+                                file_location.collections_selected_subgroup = nil
+                                file_location.collections_selected_subgroup2 = nil
+                                file_location.current_files = {}
+                                search_filter.cached_flat_files = {}
+                                search_filter.filtered_files = {}
+                            end
+                        end
+                        r.ImGui_EndMenu(ctx)
+                    end
+                    r.ImGui_EndPopup(ctx)
                 end
             end
-            
-            local drawList = r.ImGui_GetWindowDrawList(ctx)
-            local circle_color = r.ImGui_IsItemHovered(ctx) and 0x808080FF or 0x606060FF
-            local radius = button_size * 0.4
-            r.ImGui_DrawList_AddCircle(drawList, center_x, center_y, radius, circle_color, 0, 1.5)
-            local plus_size = radius * 0.6
-            r.ImGui_DrawList_AddLine(drawList,
-                center_x - plus_size, center_y,
-                center_x + plus_size, center_y,
-                circle_color, 1.5)
-            r.ImGui_DrawList_AddLine(drawList,
-                center_x, center_y - plus_size,
-                center_x, center_y + plus_size,
-                circle_color, 1.5)
-            
-            r.ImGui_PopStyleColor(ctx, 3)  
+
+            local function ct_subgroup2_header_context(group, subgroup, subgroup2)
+                if r.ImGui_BeginPopupContextItem(ctx, "ctx_ctsub2_" .. group .. "__" .. subgroup .. "__" .. subgroup2) then
+                    if r.ImGui_MenuItem(ctx, "Rename sub-subgroup...") then
+                        local rv, nn = r.GetUserInputs("Rename sub-subgroup", 1, "New name:,extrawidth=200", subgroup2)
+                        if rv then
+                            local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                            if t ~= "" then rename_collections_subgroup2(group, subgroup, subgroup2, t) end
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    ct_color_picker_menu(
+                        get_collections_subgroup2_color(group, subgroup, subgroup2),
+                        function(c)
+                            local ct = file_location.collections_tree
+                            local key = group .. "::" .. subgroup .. "::" .. subgroup2
+                            ct.subgroup2_meta[key] = ct.subgroup2_meta[key] or {}
+                            ct.subgroup2_meta[key].inherit = nil
+                            set_collections_subgroup2_color(group, subgroup, subgroup2, c)
+                        end,
+                        function()
+                            local ct = file_location.collections_tree
+                            local key = group .. "::" .. subgroup .. "::" .. subgroup2
+                            ct.subgroup2_meta[key] = ct.subgroup2_meta[key] or {}
+                            ct.subgroup2_meta[key].color = nil
+                            ct.subgroup2_meta[key].inherit = nil
+                            save_collections_tree()
+                        end,
+                        {
+                            on_inherit = function()
+                                local ct = file_location.collections_tree
+                                local key = group .. "::" .. subgroup .. "::" .. subgroup2
+                                ct.subgroup2_meta[key] = ct.subgroup2_meta[key] or {}
+                                ct.subgroup2_meta[key].inherit = not ct.subgroup2_meta[key].inherit
+                                ct.subgroup2_meta[key].color = nil
+                                save_collections_tree()
+                            end,
+                            inherit_active = (file_location.collections_tree.subgroup2_meta[group .. "::" .. subgroup .. "::" .. subgroup2] or {}).inherit and true or false,
+                            has_extra = (file_location.collections_tree.subgroup2_meta[group .. "::" .. subgroup .. "::" .. subgroup2] or {}).inherit and true or false,
+                        }
+                    )
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Move up") then move_collections_subgroup2(group, subgroup, subgroup2, -1) end
+                    if r.ImGui_MenuItem(ctx, "Move down") then move_collections_subgroup2(group, subgroup, subgroup2, 1) end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_BeginMenu(ctx, "Delete sub-subgroup") then
+                        if r.ImGui_MenuItem(ctx, "Move items out of sub-subgroup") then
+                            delete_collections_subgroup2(group, subgroup, subgroup2, "move")
+                            if file_location.collections_selected_group == group
+                                and file_location.collections_selected_subgroup == subgroup
+                                and file_location.collections_selected_subgroup2 == subgroup2 then
+                                file_location.collections_selected_subgroup2 = nil
+                                apply_collections_selection(group, subgroup, nil)
+                            end
+                        end
+                        if r.ImGui_MenuItem(ctx, "Delete sub-subgroup AND all items") then
+                            delete_collections_subgroup2(group, subgroup, subgroup2, "delete_items")
+                            if file_location.collections_selected_group == group
+                                and file_location.collections_selected_subgroup == subgroup
+                                and file_location.collections_selected_subgroup2 == subgroup2 then
+                                file_location.collections_selected_subgroup2 = nil
+                                file_location.current_files = {}
+                                search_filter.cached_flat_files = {}
+                                search_filter.filtered_files = {}
+                            end
+                        end
+                        r.ImGui_EndMenu(ctx)
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+            end
+
+            local sel_g = file_location.collections_selected_group
+            local sel_s = file_location.collections_selected_subgroup
+            local sel_s2 = file_location.collections_selected_subgroup2
+
+            local groups = get_collections_groups()
+            for _, group in ipairs(groups) do
+                local entries_no_sub = get_collections_items_in(group, nil, nil)
+                local subgroups = get_collections_subgroups(group)
+                local ct = file_location.collections_tree
+
+                local total_count = #entries_no_sub
+                for _, s in ipairs(subgroups) do
+                    total_count = total_count + #get_collections_items_in(group, s, nil)
+                    local sub2list = get_collections_subgroups2(group, s)
+                    for _, s2 in ipairs(sub2list) do
+                        total_count = total_count + #get_collections_items_in(group, s, s2)
+                    end
+                end
+
+                if total_count > 0 or #subgroups > 0 or group == "Uncategorized" or ct.group_order then
+                    r.ImGui_PushID(ctx, "ctgrp_" .. group)
+                    local is_sel_g = (sel_g == group and (sel_s == nil or sel_s == ""))
+                    local node_flags = r.ImGui_TreeNodeFlags_DefaultOpen() | r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_Framed() | r.ImGui_TreeNodeFlags_OpenOnArrow() | r.ImGui_TreeNodeFlags_OpenOnDoubleClick()
+                    if is_sel_g then node_flags = node_flags | r.ImGui_TreeNodeFlags_Selected() end
+                    local header_label = group .. "  (" .. total_count .. ")"
+                    local g_color = get_collections_group_color(group)
+                    local g_pushed = 0
+                    if g_color then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),         g_color)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(),  ct_darken(g_color, 0.85))
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),   ct_darken(g_color, 0.70))
+                        g_pushed = 3
+                    end
+                    local open = r.ImGui_TreeNodeEx(ctx, "node_ctgrp_" .. group, header_label, node_flags)
+                    if r.ImGui_IsItemClicked(ctx) and not r.ImGui_IsItemToggledOpen(ctx) then
+                        apply_collections_selection(group, nil, nil)
+                    end
+                    if g_pushed > 0 then r.ImGui_PopStyleColor(ctx, g_pushed) end
+                    ct_group_header_context(group)
+                    if open then
+                        for i_sub, sub in ipairs(subgroups) do
+                            r.ImGui_PushID(ctx, "ctsub_" .. sub)
+                            local sub_entries = get_collections_items_in(group, sub, nil)
+                            local subgroups2 = get_collections_subgroups2(group, sub)
+                            local is_sel_s = (sel_g == group and sel_s == sub and (sel_s2 == nil or sel_s2 == ""))
+                            local has_sub2 = #subgroups2 > 0
+                            local sub_flags = r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_Framed() | r.ImGui_TreeNodeFlags_OpenOnArrow() | r.ImGui_TreeNodeFlags_OpenOnDoubleClick()
+                            if not has_sub2 then
+                                sub_flags = sub_flags | r.ImGui_TreeNodeFlags_Leaf() | r.ImGui_TreeNodeFlags_NoTreePushOnOpen()
+                            else
+                                sub_flags = sub_flags | r.ImGui_TreeNodeFlags_DefaultOpen()
+                            end
+                            if is_sel_s then sub_flags = sub_flags | r.ImGui_TreeNodeFlags_Selected() end
+                            local sub_total = #sub_entries
+                            for _, s2 in ipairs(subgroups2) do
+                                sub_total = sub_total + #get_collections_items_in(group, sub, s2)
+                            end
+                            local sub_label = sub .. "  (" .. sub_total .. ")"
+                            local s_color = get_collections_subgroup_color(group, sub)
+                            if not s_color then
+                                local smeta = ct.subgroup_meta and ct.subgroup_meta[group .. "::" .. sub] or nil
+                                local inherit = smeta and smeta.inherit
+                                local gmeta = ct.group_meta and ct.group_meta[group] or nil
+                                local gradient = gmeta and gmeta.gradient
+                                local p_color = gmeta and gmeta.color
+                                if p_color and (gradient or inherit) then
+                                    if gradient then
+                                        local total = math.max(#subgroups, 1)
+                                        local f = (i_sub / (total + 1)) * 0.55
+                                        s_color = ct_lighten(p_color, f)
+                                    else
+                                        s_color = p_color
+                                    end
+                                end
+                            end
+                            local s_pushed = 0
+                            if s_color then
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),         s_color)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(),  ct_darken(s_color, 0.85))
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),   ct_darken(s_color, 0.70))
+                                s_pushed = 3
+                            end
+                            local sub_open = r.ImGui_TreeNodeEx(ctx, "node_ctsub_" .. sub, sub_label, sub_flags)
+                            if r.ImGui_IsItemClicked(ctx) and not r.ImGui_IsItemToggledOpen(ctx) then
+                                apply_collections_selection(group, sub, nil)
+                            end
+                            if s_pushed > 0 then r.ImGui_PopStyleColor(ctx, s_pushed) end
+                            ct_subgroup_header_context(group, sub)
+                            if has_sub2 and sub_open then
+                                local sub_gmeta = ct.subgroup_meta and ct.subgroup_meta[group .. "::" .. sub] or nil
+                                local sub_gradient = sub_gmeta and sub_gmeta.gradient
+                                for i_sub2, sub2 in ipairs(subgroups2) do
+                                    r.ImGui_PushID(ctx, "ctsub2_" .. sub2)
+                                    local sub2_entries = get_collections_items_in(group, sub, sub2)
+                                    local is_sel_s2 = (sel_g == group and sel_s == sub and sel_s2 == sub2)
+                                    local sub2_flags = r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_Framed() | r.ImGui_TreeNodeFlags_Leaf() | r.ImGui_TreeNodeFlags_NoTreePushOnOpen()
+                                    if is_sel_s2 then sub2_flags = sub2_flags | r.ImGui_TreeNodeFlags_Selected() end
+                                    local sub2_label = sub2 .. "  (" .. #sub2_entries .. ")"
+                                    local s2_color = get_collections_subgroup2_color(group, sub, sub2)
+                                    if not s2_color then
+                                        local s2meta = ct.subgroup2_meta and ct.subgroup2_meta[group .. "::" .. sub .. "::" .. sub2] or nil
+                                        local s2_inherit = s2meta and s2meta.inherit
+                                        if s_color and (sub_gradient or s2_inherit) then
+                                            if sub_gradient then
+                                                local total2 = math.max(#subgroups2, 1)
+                                                local f2 = (i_sub2 / (total2 + 1)) * 0.55
+                                                s2_color = ct_lighten(s_color, f2)
+                                            else
+                                                s2_color = s_color
+                                            end
+                                        end
+                                    end
+                                    local s2_pushed = 0
+                                    if s2_color then
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),         s2_color)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(),  ct_darken(s2_color, 0.85))
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),   ct_darken(s2_color, 0.70))
+                                        s2_pushed = 3
+                                    end
+                                    r.ImGui_TreeNodeEx(ctx, "node_ctsub2_" .. sub2, sub2_label, sub2_flags)
+                                    if r.ImGui_IsItemClicked(ctx) then
+                                        apply_collections_selection(group, sub, sub2)
+                                    end
+                                    if s2_pushed > 0 then r.ImGui_PopStyleColor(ctx, s2_pushed) end
+                                    ct_subgroup2_header_context(group, sub, sub2)
+                                    r.ImGui_PopID(ctx)
+                                end
+                                r.ImGui_TreePop(ctx)
+                            end
+                            r.ImGui_PopID(ctx)
+                        end
+                        r.ImGui_TreePop(ctx)
+                    end
+                    r.ImGui_PopID(ctx)
+                end
+            end
+
+            r.ImGui_PopStyleColor(ctx, 3)
             r.ImGui_PopStyleVar(ctx, 1)
         end
         
@@ -7786,17 +9022,59 @@ local function loop()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), button_text_color)
 
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), unselected_button_color)
-            if r.ImGui_Button(ctx, "+ Save current search", total_width, ui_settings.button_height) then
-                local retval, new_name = r.GetUserInputs("Save Search", 1, "Name:,extrawidth=200", "")
+            local plus_btn_size = ui_settings.button_height
+            local save_btn_w = total_width - plus_btn_size - 6
+            if r.ImGui_Button(ctx, "+ Save current search", save_btn_w, ui_settings.button_height) then
+                local retval, csv = r.GetUserInputs("Save Search", 4,
+                    "Name:,Group (optional):,Subgroup (optional):,Sub-subgroup (optional):,extrawidth=200", ",,,")
                 if retval then
-                    local trimmed = (new_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
-                    if trimmed == "" then
+                    local fields = {}
+                    for f in (csv .. ","):gmatch("(.-),") do fields[#fields+1] = f end
+                    local nm   = (fields[1] or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    local gr   = (fields[2] or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    local sgr  = (fields[3] or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    local sgr2 = (fields[4] or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    if nm == "" then
                         r.ShowMessageBox("Please enter a name", "Save Search", 0)
                     else
-                        local ok, err = add_saved_search(trimmed)
+                        if gr == "" then gr = "Uncategorized" end
+                        if sgr == "" then sgr = nil end
+                        if sgr2 == "" then sgr2 = nil end
+                        local ok, err = add_saved_search(nm, gr, sgr, sgr2)
                         if not ok then
                             r.ShowMessageBox(err or "Could not save search", "Save Search", 0)
                         end
+                    end
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            local plus_cx, plus_cy = r.ImGui_GetCursorScreenPos(ctx)
+            local plus_clicked = r.ImGui_InvisibleButton(ctx, "##new_group_btn", plus_btn_size, ui_settings.button_height)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "New group")
+            end
+            do
+                local dl = r.ImGui_GetWindowDrawList(ctx)
+                local accent = hsv_to_color(ui_settings.accent_hue, 0.8, 0.9)
+                local hover  = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
+                local col = r.ImGui_IsItemHovered(ctx) and hover or accent
+                local cxp = plus_cx + plus_btn_size * 0.5
+                local cyp = plus_cy + ui_settings.button_height * 0.5
+                local rad = math.min(plus_btn_size, ui_settings.button_height) * 0.42
+                r.ImGui_DrawList_AddCircle(dl, cxp, cyp, rad, col, 24, 1.5)
+                local pl = rad * 0.55
+                r.ImGui_DrawList_AddLine(dl, cxp - pl, cyp, cxp + pl, cyp, col, 2)
+                r.ImGui_DrawList_AddLine(dl, cxp, cyp - pl, cxp, cyp + pl, col, 2)
+            end
+            if plus_clicked then
+                local rv, nn = r.GetUserInputs("New group", 1, "Group name:,extrawidth=200", "")
+                if rv then
+                    local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    if t ~= "" and t ~= "Uncategorized" then
+                        _ss_ensure_group_order(t)
+                        saved_searches.group_meta = saved_searches.group_meta or {}
+                        saved_searches.group_meta[t] = saved_searches.group_meta[t] or {}
+                        save_saved_searches()
                     end
                 end
             end
@@ -7815,7 +9093,7 @@ local function loop()
 
             local mode_icon = { folders = "[F]", collections = "[C]", auto = "[A]", searches = "[S]" }
 
-            for i, item in ipairs(saved_searches.items) do
+            local function render_saved_search_item(i, item)
                 r.ImGui_PushID(ctx, "saved_search_" .. i)
                 local is_renaming = (saved_searches.renaming_index == i)
                 if is_renaming then
@@ -7851,14 +9129,27 @@ local function loop()
                         ui_settings.rename_inline_text = ""
                     end
                 else
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), unselected_button_color)
+                    local item_btn_color = saved_searches._current_item_color
+                    if item_btn_color then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(),        item_btn_color)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), ss_lighten(item_btn_color, 0.18))
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(),  ss_darken(item_btn_color, 0.80))
+                    else
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), unselected_button_color)
+                    end
                     local prefix = mode_icon[item.view_mode or "folders"] or "[?]"
                     local term_preview = (item.search_term ~= nil and item.search_term ~= "") and item.search_term or "(no text)"
                     local label = prefix .. " " .. item.name .. "  -  " .. term_preview
-                    if r.ImGui_Button(ctx, label, total_width, ui_settings.button_height) then
+                    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+                    if not avail_w or avail_w < 80 then avail_w = total_width end
+                    if r.ImGui_Button(ctx, label, avail_w, ui_settings.button_height) then
                         apply_saved_search(i)
                     end
-                    r.ImGui_PopStyleColor(ctx, 1)
+                    if item_btn_color then
+                        r.ImGui_PopStyleColor(ctx, 3)
+                    else
+                        r.ImGui_PopStyleColor(ctx, 1)
+                    end
 
                     if r.ImGui_BeginPopupContextItem(ctx) then
                         if r.ImGui_MenuItem(ctx, "Apply") then
@@ -7869,9 +9160,77 @@ local function loop()
                             saved_searches.renaming_initialized = false
                         end
                         if r.ImGui_MenuItem(ctx, "Update with current search") then
-                            local updated = snapshot_current_search(item.name)
+                            local updated = snapshot_current_search(item.name, item.group, item.subgroup, item.subgroup2)
                             saved_searches.items[i] = updated
                             save_saved_searches()
+                        end
+                        r.ImGui_Separator(ctx)
+                        if r.ImGui_BeginMenu(ctx, "Move to group") then
+                            local groups = get_saved_search_groups()
+                            for _, g in ipairs(groups) do
+                                local sel = (item.group or "Uncategorized") == g
+                                if r.ImGui_MenuItem(ctx, g, nil, sel) then
+                                    move_saved_search(i, g, nil, nil)
+                                end
+                            end
+                            r.ImGui_Separator(ctx)
+                            if r.ImGui_MenuItem(ctx, "New group...") then
+                                local rv, nn = r.GetUserInputs("New group", 1, "Group name:,extrawidth=200", "")
+                                if rv then
+                                    local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                                    if t ~= "" then move_saved_search(i, t, nil, nil) end
+                                end
+                            end
+                            r.ImGui_EndMenu(ctx)
+                        end
+                        if r.ImGui_BeginMenu(ctx, "Move to subgroup") then
+                            local cur_group = item.group or "Uncategorized"
+                            local subs = get_saved_search_subgroups(cur_group)
+                            if r.ImGui_MenuItem(ctx, "(none)", nil, item.subgroup == nil) then
+                                move_saved_search(i, cur_group, nil, nil)
+                            end
+                            for _, s in ipairs(subs) do
+                                local sel = item.subgroup == s and item.subgroup2 == nil
+                                if r.ImGui_MenuItem(ctx, s, nil, sel) then
+                                    move_saved_search(i, cur_group, s, nil)
+                                end
+                            end
+                            r.ImGui_Separator(ctx)
+                            if r.ImGui_MenuItem(ctx, "New subgroup...") then
+                                local rv, nn = r.GetUserInputs("New subgroup", 1, "Subgroup name:,extrawidth=200", "")
+                                if rv then
+                                    local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                                    if t ~= "" then move_saved_search(i, cur_group, t, nil) end
+                                end
+                            end
+                            r.ImGui_EndMenu(ctx)
+                        end
+                        if r.ImGui_BeginMenu(ctx, "Move to sub-subgroup") then
+                            local cur_group = item.group or "Uncategorized"
+                            local cur_sub = item.subgroup
+                            if not cur_sub then
+                                r.ImGui_MenuItem(ctx, "(select subgroup first)", nil, false, false)
+                            else
+                                local subs2 = get_saved_search_subgroups2(cur_group, cur_sub)
+                                if r.ImGui_MenuItem(ctx, "(none)", nil, item.subgroup2 == nil) then
+                                    move_saved_search(i, cur_group, cur_sub, nil)
+                                end
+                                for _, s2 in ipairs(subs2) do
+                                    local sel = item.subgroup2 == s2
+                                    if r.ImGui_MenuItem(ctx, s2, nil, sel) then
+                                        move_saved_search(i, cur_group, cur_sub, s2)
+                                    end
+                                end
+                                r.ImGui_Separator(ctx)
+                                if r.ImGui_MenuItem(ctx, "New sub-subgroup...") then
+                                    local rv, nn = r.GetUserInputs("New sub-subgroup", 1, "Sub-subgroup name:,extrawidth=200", "")
+                                    if rv then
+                                        local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                                        if t ~= "" then move_saved_search(i, cur_group, cur_sub, t) end
+                                    end
+                                end
+                            end
+                            r.ImGui_EndMenu(ctx)
                         end
                         r.ImGui_Separator(ctx)
                         local delete_clicked = false
@@ -7882,12 +9241,390 @@ local function loop()
                         if delete_clicked then
                             delete_saved_search(i)
                             r.ImGui_PopID(ctx)
-                            break
+                            return false
                         end
                     end
                 end
                 r.ImGui_PopID(ctx)
-                ::continue_saved_search_loop::
+                return true
+            end
+
+            local function ss_rgb24_to_rgba32(c) return ((c & 0xFFFFFF) << 8) | 0xFF end
+            local function ss_rgba32_to_rgb24(c) return (c >> 8) & 0xFFFFFF end
+            function ss_darken(c, f)
+                local r8 = math.floor(((c >> 24) & 0xFF) * f)
+                local g8 = math.floor(((c >> 16) & 0xFF) * f)
+                local b8 = math.floor(((c >> 8)  & 0xFF) * f)
+                local a8 = c & 0xFF
+                return (r8 << 24) | (g8 << 16) | (b8 << 8) | a8
+            end
+            function ss_lighten(c, f)
+                local r8 = (c >> 24) & 0xFF
+                local g8 = (c >> 16) & 0xFF
+                local b8 = (c >> 8)  & 0xFF
+                local a8 = c & 0xFF
+                r8 = math.floor(r8 + (255 - r8) * f)
+                g8 = math.floor(g8 + (255 - g8) * f)
+                b8 = math.floor(b8 + (255 - b8) * f)
+                return (r8 << 24) | (g8 << 16) | (b8 << 8) | a8
+            end
+
+            local function ss_color_picker_menu(current_rgba32, on_pick, on_reset, opts)
+                if r.ImGui_BeginMenu(ctx, "Set color") then
+                    local cur24 = current_rgba32 and ss_rgba32_to_rgb24(current_rgba32) or 0x4078A0
+                    local changed, new24 = r.ImGui_ColorPicker3(ctx, "##ss_color", cur24, r.ImGui_ColorEditFlags_DisplayHSV())
+                    if changed then on_pick(ss_rgb24_to_rgba32(new24)) end
+                    r.ImGui_EndMenu(ctx)
+                end
+                if opts and opts.on_inherit then
+                    if r.ImGui_MenuItem(ctx, "Inherit parent color", nil, opts.inherit_active and true or false) then
+                        opts.on_inherit()
+                    end
+                end
+                if opts and opts.on_gradient then
+                    if r.ImGui_MenuItem(ctx, "Use gradient on children", nil, opts.gradient_active and true or false) then
+                        opts.on_gradient()
+                    end
+                end
+                if current_rgba32 or (opts and opts.has_extra) then
+                    if r.ImGui_MenuItem(ctx, "Reset color") then on_reset() end
+                end
+            end
+
+            local function group_header_context(group)
+                if r.ImGui_BeginPopupContextItem(ctx, "ctx_group_" .. group) then
+                    if r.ImGui_MenuItem(ctx, "New subgroup...") then
+                        local rv, nn = r.GetUserInputs("New subgroup", 1, "Subgroup name:,extrawidth=200", "")
+                        if rv then
+                            local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                            if t ~= "" then
+                                _ss_ensure_subgroup_order(group, t)
+                                save_saved_searches()
+                            end
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    ss_color_picker_menu(
+                        get_saved_search_group_color(group),
+                        function(c) set_saved_search_group_color(group, c) end,
+                        function()
+                            saved_searches.group_meta[group] = saved_searches.group_meta[group] or {}
+                            saved_searches.group_meta[group].color = nil
+                            saved_searches.group_meta[group].gradient = nil
+                            save_saved_searches()
+                        end,
+                        {
+                            on_gradient = function()
+                                saved_searches.group_meta[group] = saved_searches.group_meta[group] or {}
+                                saved_searches.group_meta[group].gradient = not saved_searches.group_meta[group].gradient
+                                save_saved_searches()
+                            end,
+                            gradient_active = (saved_searches.group_meta[group] or {}).gradient and true or false,
+                            has_extra = (saved_searches.group_meta[group] or {}).gradient and true or false,
+                        }
+                    )
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Move up") then
+                        move_saved_search_group(group, -1)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Move down") then
+                        move_saved_search_group(group, 1)
+                    end
+                    if group ~= "Uncategorized" then
+                        r.ImGui_Separator(ctx)
+                        if r.ImGui_MenuItem(ctx, "Rename group...") then
+                            local rv, nn = r.GetUserInputs("Rename group", 1, "New name:,extrawidth=200", group)
+                            if rv then
+                                local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                                if t ~= "" then rename_saved_search_group(group, t) end
+                            end
+                        end
+                        if r.ImGui_BeginMenu(ctx, "Delete group") then
+                            if r.ImGui_MenuItem(ctx, "Move items to Uncategorized") then
+                                delete_saved_search_group(group, "move")
+                            end
+                            if r.ImGui_MenuItem(ctx, "Delete group AND all items") then
+                                delete_saved_search_group(group, "delete_items")
+                            end
+                            r.ImGui_EndMenu(ctx)
+                        end
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+            end
+
+            local function subgroup_header_context(group, subgroup)
+                if r.ImGui_BeginPopupContextItem(ctx, "ctx_sub_" .. group .. "__" .. subgroup) then
+                    if r.ImGui_MenuItem(ctx, "New sub-subgroup...") then
+                        local rv, nn = r.GetUserInputs("New sub-subgroup", 1, "Sub-subgroup name:,extrawidth=200", "")
+                        if rv then
+                            local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                            if t ~= "" then
+                                _ss_ensure_subgroup2_order(group, subgroup, t)
+                                save_saved_searches()
+                            end
+                        end
+                    end
+                    if r.ImGui_MenuItem(ctx, "Rename subgroup...") then
+                        local rv, nn = r.GetUserInputs("Rename subgroup", 1, "New name:,extrawidth=200", subgroup)
+                        if rv then
+                            local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                            if t ~= "" then rename_saved_search_subgroup(group, subgroup, t) end
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    ss_color_picker_menu(
+                        get_saved_search_subgroup_color(group, subgroup),
+                        function(c)
+                            local key = group .. "::" .. subgroup
+                            saved_searches.subgroup_meta[key] = saved_searches.subgroup_meta[key] or {}
+                            saved_searches.subgroup_meta[key].inherit = nil
+                            set_saved_search_subgroup_color(group, subgroup, c)
+                        end,
+                        function()
+                            local key = group .. "::" .. subgroup
+                            saved_searches.subgroup_meta[key] = saved_searches.subgroup_meta[key] or {}
+                            saved_searches.subgroup_meta[key].color = nil
+                            saved_searches.subgroup_meta[key].inherit = nil
+                            saved_searches.subgroup_meta[key].gradient = nil
+                            save_saved_searches()
+                        end,
+                        {
+                            on_inherit = function()
+                                local key = group .. "::" .. subgroup
+                                saved_searches.subgroup_meta[key] = saved_searches.subgroup_meta[key] or {}
+                                saved_searches.subgroup_meta[key].inherit = not saved_searches.subgroup_meta[key].inherit
+                                saved_searches.subgroup_meta[key].color = nil
+                                save_saved_searches()
+                            end,
+                            inherit_active = (saved_searches.subgroup_meta[group .. "::" .. subgroup] or {}).inherit and true or false,
+                            on_gradient = function()
+                                local key = group .. "::" .. subgroup
+                                saved_searches.subgroup_meta[key] = saved_searches.subgroup_meta[key] or {}
+                                saved_searches.subgroup_meta[key].gradient = not saved_searches.subgroup_meta[key].gradient
+                                save_saved_searches()
+                            end,
+                            gradient_active = (saved_searches.subgroup_meta[group .. "::" .. subgroup] or {}).gradient and true or false,
+                            has_extra = ((saved_searches.subgroup_meta[group .. "::" .. subgroup] or {}).inherit
+                                or (saved_searches.subgroup_meta[group .. "::" .. subgroup] or {}).gradient) and true or false,
+                        }
+                    )
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Move up") then
+                        move_saved_search_subgroup(group, subgroup, -1)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Move down") then
+                        move_saved_search_subgroup(group, subgroup, 1)
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_BeginMenu(ctx, "Delete subgroup") then
+                        if r.ImGui_MenuItem(ctx, "Move items out of subgroup") then
+                            delete_saved_search_subgroup(group, subgroup, "move")
+                        end
+                        if r.ImGui_MenuItem(ctx, "Delete subgroup AND all items") then
+                            delete_saved_search_subgroup(group, subgroup, "delete_items")
+                        end
+                        r.ImGui_EndMenu(ctx)
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+            end
+
+            local function subgroup2_header_context(group, subgroup, subgroup2)
+                if r.ImGui_BeginPopupContextItem(ctx, "ctx_sub2_" .. group .. "__" .. subgroup .. "__" .. subgroup2) then
+                    if r.ImGui_MenuItem(ctx, "Rename sub-subgroup...") then
+                        local rv, nn = r.GetUserInputs("Rename sub-subgroup", 1, "New name:,extrawidth=200", subgroup2)
+                        if rv then
+                            local t = (nn or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                            if t ~= "" then rename_saved_search_subgroup2(group, subgroup, subgroup2, t) end
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    ss_color_picker_menu(
+                        get_saved_search_subgroup2_color(group, subgroup, subgroup2),
+                        function(c)
+                            local key = group .. "::" .. subgroup .. "::" .. subgroup2
+                            saved_searches.subgroup2_meta[key] = saved_searches.subgroup2_meta[key] or {}
+                            saved_searches.subgroup2_meta[key].inherit = nil
+                            set_saved_search_subgroup2_color(group, subgroup, subgroup2, c)
+                        end,
+                        function()
+                            local key = group .. "::" .. subgroup .. "::" .. subgroup2
+                            saved_searches.subgroup2_meta[key] = saved_searches.subgroup2_meta[key] or {}
+                            saved_searches.subgroup2_meta[key].color = nil
+                            saved_searches.subgroup2_meta[key].inherit = nil
+                            save_saved_searches()
+                        end,
+                        {
+                            on_inherit = function()
+                                local key = group .. "::" .. subgroup .. "::" .. subgroup2
+                                saved_searches.subgroup2_meta[key] = saved_searches.subgroup2_meta[key] or {}
+                                saved_searches.subgroup2_meta[key].inherit = not saved_searches.subgroup2_meta[key].inherit
+                                saved_searches.subgroup2_meta[key].color = nil
+                                save_saved_searches()
+                            end,
+                            inherit_active = (saved_searches.subgroup2_meta[group .. "::" .. subgroup .. "::" .. subgroup2] or {}).inherit and true or false,
+                            has_extra = (saved_searches.subgroup2_meta[group .. "::" .. subgroup .. "::" .. subgroup2] or {}).inherit and true or false,
+                        }
+                    )
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Move up") then
+                        move_saved_search_subgroup2(group, subgroup, subgroup2, -1)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Move down") then
+                        move_saved_search_subgroup2(group, subgroup, subgroup2, 1)
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_BeginMenu(ctx, "Delete sub-subgroup") then
+                        if r.ImGui_MenuItem(ctx, "Move items out of sub-subgroup") then
+                            delete_saved_search_subgroup2(group, subgroup, subgroup2, "move")
+                        end
+                        if r.ImGui_MenuItem(ctx, "Delete sub-subgroup AND all items") then
+                            delete_saved_search_subgroup2(group, subgroup, subgroup2, "delete_items")
+                        end
+                        r.ImGui_EndMenu(ctx)
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+            end
+
+            local groups = get_saved_search_groups()
+            for _, group in ipairs(groups) do
+                local entries_no_sub = get_saved_searches_in(group, nil, nil)
+                local subgroups = get_saved_search_subgroups(group)
+                local extra_subs = saved_searches._new_empty_subgroups and saved_searches._new_empty_subgroups[group] or nil
+                if extra_subs then
+                    for s, _ in pairs(extra_subs) do
+                        local found = false
+                        for _, exist in ipairs(subgroups) do if exist == s then found = true break end end
+                        if not found then subgroups[#subgroups+1] = s end
+                    end
+                    table.sort(subgroups, function(a, b) return a:lower() < b:lower() end)
+                end
+                if #entries_no_sub > 0 or #subgroups > 0 or group == "Uncategorized" or saved_searches.group_order then
+                    r.ImGui_PushID(ctx, "grp_" .. group)
+                    local node_flags = r.ImGui_TreeNodeFlags_DefaultOpen() | r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_Framed()
+                    local total_count = #entries_no_sub
+                    for _, s in ipairs(subgroups) do
+                        total_count = total_count + #get_saved_searches_in(group, s, nil)
+                        local s2list = get_saved_search_subgroups2(group, s)
+                        for _, s2 in ipairs(s2list) do
+                            total_count = total_count + #get_saved_searches_in(group, s, s2)
+                        end
+                    end
+                    local header_label = group .. "  (" .. total_count .. ")"
+                    local g_color = get_saved_search_group_color(group)
+                    local g_pushed = 0
+                    if g_color then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),         g_color)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(),  ss_darken(g_color, 0.85))
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),   ss_darken(g_color, 0.70))
+                        g_pushed = 3
+                    end
+                    local open = r.ImGui_TreeNodeEx(ctx, "node_" .. group, header_label, node_flags)
+                    if g_pushed > 0 then r.ImGui_PopStyleColor(ctx, g_pushed) end
+                    group_header_context(group)
+                    if open then
+                        saved_searches._current_item_color = g_color
+                        for _, entry in ipairs(entries_no_sub) do
+                            if not render_saved_search_item(entry.index, entry.item) then break end
+                        end
+                        saved_searches._current_item_color = nil
+                        for i_sub, sub in ipairs(subgroups) do
+                            r.ImGui_PushID(ctx, "sub_" .. sub)
+                            local sub_entries = get_saved_searches_in(group, sub, nil)
+                            local subgroups2 = get_saved_search_subgroups2(group, sub)
+                            local sub_flags = r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_Framed()
+                            if #subgroups2 > 0 then
+                                sub_flags = sub_flags | r.ImGui_TreeNodeFlags_DefaultOpen()
+                            end
+                            local sub_total = #sub_entries
+                            for _, s2 in ipairs(subgroups2) do
+                                sub_total = sub_total + #get_saved_searches_in(group, sub, s2)
+                            end
+                            local sub_label = sub .. "  (" .. sub_total .. ")"
+                            local s_color = get_saved_search_subgroup_color(group, sub)
+                            if not s_color then
+                                local smeta = saved_searches.subgroup_meta and saved_searches.subgroup_meta[group .. "::" .. sub] or nil
+                                local inherit = smeta and smeta.inherit
+                                local gmeta = saved_searches.group_meta and saved_searches.group_meta[group] or nil
+                                local gradient = gmeta and gmeta.gradient
+                                local p_color = gmeta and gmeta.color
+                                if p_color and (gradient or inherit) then
+                                    if gradient then
+                                        local total = math.max(#subgroups, 1)
+                                        local f = (i_sub / (total + 1)) * 0.55
+                                        s_color = ss_lighten(p_color, f)
+                                    else
+                                        s_color = p_color
+                                    end
+                                end
+                            end
+                            local s_pushed = 0
+                            if s_color then
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),         s_color)
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(),  ss_darken(s_color, 0.85))
+                                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),   ss_darken(s_color, 0.70))
+                                s_pushed = 3
+                            end
+                            local sub_open = r.ImGui_TreeNodeEx(ctx, "node_sub_" .. sub, sub_label, sub_flags)
+                            if s_pushed > 0 then r.ImGui_PopStyleColor(ctx, s_pushed) end
+                            subgroup_header_context(group, sub)
+                            if sub_open then
+                                saved_searches._current_item_color = s_color
+                                for _, entry in ipairs(sub_entries) do
+                                    if not render_saved_search_item(entry.index, entry.item) then break end
+                                end
+                                saved_searches._current_item_color = nil
+                                local sub_gmeta = saved_searches.subgroup_meta and saved_searches.subgroup_meta[group .. "::" .. sub] or nil
+                                local sub_gradient = sub_gmeta and sub_gmeta.gradient
+                                for i_sub2, sub2 in ipairs(subgroups2) do
+                                    r.ImGui_PushID(ctx, "sub2_" .. sub2)
+                                    local sub2_entries = get_saved_searches_in(group, sub, sub2)
+                                    local sub2_flags = r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_Framed()
+                                    local sub2_label = sub2 .. "  (" .. #sub2_entries .. ")"
+                                    local s2_color = get_saved_search_subgroup2_color(group, sub, sub2)
+                                    if not s2_color then
+                                        local s2meta = saved_searches.subgroup2_meta and saved_searches.subgroup2_meta[group .. "::" .. sub .. "::" .. sub2] or nil
+                                        local s2_inherit = s2meta and s2meta.inherit
+                                        if s_color and (sub_gradient or s2_inherit) then
+                                            if sub_gradient then
+                                                local total2 = math.max(#subgroups2, 1)
+                                                local f2 = (i_sub2 / (total2 + 1)) * 0.55
+                                                s2_color = ss_lighten(s_color, f2)
+                                            else
+                                                s2_color = s_color
+                                            end
+                                        end
+                                    end
+                                    local s2_pushed = 0
+                                    if s2_color then
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(),         s2_color)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(),  ss_darken(s2_color, 0.85))
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(),   ss_darken(s2_color, 0.70))
+                                        s2_pushed = 3
+                                    end
+                                    local sub2_open = r.ImGui_TreeNodeEx(ctx, "node_sub2_" .. sub2, sub2_label, sub2_flags)
+                                    if s2_pushed > 0 then r.ImGui_PopStyleColor(ctx, s2_pushed) end
+                                    subgroup2_header_context(group, sub, sub2)
+                                    if sub2_open then
+                                        saved_searches._current_item_color = s2_color
+                                        for _, entry in ipairs(sub2_entries) do
+                                            if not render_saved_search_item(entry.index, entry.item) then break end
+                                        end
+                                        saved_searches._current_item_color = nil
+                                        r.ImGui_TreePop(ctx)
+                                    end
+                                    r.ImGui_PopID(ctx)
+                                end
+                                r.ImGui_TreePop(ctx)
+                            end
+                            r.ImGui_PopID(ctx)
+                        end
+                        r.ImGui_TreePop(ctx)
+                    end
+                    r.ImGui_PopID(ctx)
+                end
             end
 
             r.ImGui_PopStyleColor(ctx, 3)
@@ -7946,32 +9683,33 @@ local function loop()
                             -- end
                             -- ui_settings.audio_buffer = filtered_buffer
                             
-                            if ui.pitch_detection_enabled and #ui_settings.audio_buffer > 200 and current_time - (waveform.last_pitch_update or 0) > 0.2 then
+                            local pitch_update_interval = ui_settings.pitch_update_interval_sec or 0.2
+                            local pitch_history_max     = math.max(2, math.floor(ui_settings.pitch_history_size or 5))
+                            local pitch_consistency_tol = ui_settings.pitch_consistency_tolerance or 0.15
+                            local pitch_note_tol        = ui_settings.pitch_note_change_tolerance or 0.05
+                            local pitch_stability_time  = ui_settings.pitch_stability_time_sec or 0.6
+                            if ui.pitch_detection_enabled and #ui_settings.audio_buffer > 200 and current_time - (waveform.last_pitch_update or 0) > pitch_update_interval then
                                 waveform.pitch_debug = "Analyzing..."
                                 local success, detected_freq = pcall(detect_pitch_autocorrelation, ui_settings.audio_buffer, sample_rate)
                                 
                                 if success and detected_freq then
-                                    -- Add to pitch history for smoothing
                                     table.insert(waveform.pitch_history, detected_freq)
                                     
-                                    -- Keep only last 5 detections (longer history for better stability)
-                                    while #waveform.pitch_history > 5 do
+                                    while #waveform.pitch_history > pitch_history_max do
                                         table.remove(waveform.pitch_history, 1)
                                     end
                                     
-                                    -- Calculate average pitch
                                     local avg_freq = 0
                                     for _, freq in ipairs(waveform.pitch_history) do
                                         avg_freq = avg_freq + freq
                                     end
                                     avg_freq = avg_freq / #waveform.pitch_history
                                     
-                                    -- Only update stable pitch if we have enough history and pitch is reasonably consistent
-                                    if #waveform.pitch_history >= 3 then
-                                        -- Check consistency: all values should be within 15% of average (balanced for accuracy vs stability)
+                                    local min_history_for_stable = math.max(2, math.floor(pitch_history_max * 0.6))
+                                    if #waveform.pitch_history >= min_history_for_stable then
                                         local is_consistent = true
                                         for _, freq in ipairs(waveform.pitch_history) do
-                                            if math.abs(freq - avg_freq) / avg_freq > 0.15 then
+                                            if math.abs(freq - avg_freq) / avg_freq > pitch_consistency_tol then
                                                 is_consistent = false
                                                 break
                                             end
@@ -7981,17 +9719,13 @@ local function loop()
                                             local new_stable_freq = avg_freq
                                             local new_stable_note = freq_to_note(avg_freq)
                                             
-                                            -- Check if pitch changed
-                                            if waveform.stable_pitch_hz and math.abs(new_stable_freq - waveform.stable_pitch_hz) / waveform.stable_pitch_hz < 0.05 then
-                                                -- Same pitch, increase timer
-                                                waveform.stable_pitch_timer = waveform.stable_pitch_timer + 0.2
+                                            if waveform.stable_pitch_hz and math.abs(new_stable_freq - waveform.stable_pitch_hz) / waveform.stable_pitch_hz < pitch_note_tol then
+                                                waveform.stable_pitch_timer = waveform.stable_pitch_timer + pitch_update_interval
                                             else
-                                                -- Different pitch, reset timer
                                                 waveform.stable_pitch_timer = 0
                                             end
                                             
-                                            -- Only show stable pitch if it has been consistent for at least 0.6 seconds
-                                            if waveform.stable_pitch_timer >= 0.6 then
+                                            if waveform.stable_pitch_timer >= pitch_stability_time then
                                                 waveform.stable_pitch_hz = new_stable_freq
                                                 waveform.stable_pitch_note = new_stable_note
                                             end
@@ -9478,11 +11212,10 @@ local function loop()
             local settings_pos_x, settings_pos_y = r.ImGui_GetCursorScreenPos(ctx)
             if r.ImGui_InvisibleButton(ctx, "##settings", settings_button_size, settings_button_size) then
                 if ui.current_view_mode ~= "settings" then
-                    ui.current_view_mode = "settings"
+                    ui.pending_view_mode = "settings"
                 else
-                    ui.current_view_mode = "folders"
+                    ui.pending_view_mode = "folders"
                 end
-                save_options()
             end
             local settings_color = r.ImGui_IsItemHovered(ctx) and hover_color or base_color
             local gear_center_x = settings_pos_x + settings_button_size / 2
@@ -9501,9 +11234,9 @@ local function loop()
             local shortcuts_pos_x, shortcuts_pos_y = r.ImGui_GetCursorScreenPos(ctx)
             if r.ImGui_InvisibleButton(ctx, "##shortcuts", settings_button_size, settings_button_size) then
                 if ui.current_view_mode ~= "shortcuts" then
-                    ui.current_view_mode = "shortcuts"
+                    ui.pending_view_mode = "shortcuts"
                 else
-                    ui.current_view_mode = "folders"
+                    ui.pending_view_mode = "folders"
                 end
             end
             local shortcuts_color = r.ImGui_IsItemHovered(ctx) and hover_color or base_color
@@ -9552,81 +11285,6 @@ local function loop()
             
             r.ImGui_Separator(ctx)
             
-            if ui.current_view_mode == "collections" and file_location.selected_collection then
-                local db = load_collection(file_location.selected_collection)
-                if db then
-                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x404040FF)
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x505050FF)
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x606060FF)
-                    if r.ImGui_Button(ctx, "Set Categories") then
-                        file_location.show_category_manager = true
-                    end
-                    r.ImGui_PopStyleColor(ctx, 3)
-                    r.ImGui_PopStyleVar(ctx, 1)
-                    
-                    if db.categories and #db.categories > 0 then
-                        r.ImGui_SameLine(ctx, 0, 5)
-                        r.ImGui_Text(ctx, "Filter:")
-                        r.ImGui_SameLine(ctx, 0, 5)
-                        r.ImGui_SetNextItemWidth(ctx, 120)
-                        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x404040FF)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x505050FF)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x505050FF)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x404040FF)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x505050FF)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x606060FF)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
-                        
-                        local item_count = #db.categories + 1
-                        local item_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                        local max_height = item_height * item_count + 10
-                        r.ImGui_SetNextWindowSizeConstraints(ctx, 120, max_height, 300, max_height)
-                        
-                        if r.ImGui_BeginCombo(ctx, "##CategoryFilter", file_location.selected_category) then
-                            if r.ImGui_Selectable(ctx, "All", file_location.selected_category == "All") then
-                                file_location.selected_category = "All"
-                                local items = get_collection_items_by_category(file_location.selected_collection, "All")
-                                file_location.current_files = {}
-                                search_filter.cached_flat_files = {}
-                                for _, item in ipairs(items) do
-                                    local file_entry = {
-                                        name = item.path:match("([^/\\]+)$"),
-                                        full_path = item.path,
-                                        is_dir = false
-                                    }
-                                    table.insert(file_location.current_files, file_entry)
-                                    table.insert(search_filter.cached_flat_files, file_entry)
-                                end
-                                search_filter.filtered_files = search_filter.cached_flat_files
-                            end
-                            for _, cat in ipairs(db.categories) do
-                                if r.ImGui_Selectable(ctx, cat, file_location.selected_category == cat) then
-                                    file_location.selected_category = cat
-                                    local items = get_collection_items_by_category(file_location.selected_collection, cat)
-                                    file_location.current_files = {}
-                                    search_filter.cached_flat_files = {}
-                                    for _, item in ipairs(items) do
-                                        local file_entry = {
-                                            name = item.path:match("([^/\\]+)$"),
-                                            full_path = item.path,
-                                            is_dir = false
-                                        }
-                                        table.insert(file_location.current_files, file_entry)
-                                        table.insert(search_filter.cached_flat_files, file_entry)
-                                    end
-                                    search_filter.filtered_files = search_filter.cached_flat_files
-                                end
-                            end
-                            r.ImGui_EndCombo(ctx)
-                        end
-                        r.ImGui_PopStyleColor(ctx, 7)
-                        r.ImGui_PopStyleVar(ctx, 1)
-                    end
-                    r.ImGui_SameLine(ctx, 0, 15)
-            end
-        end
         
         if ui.current_view_mode ~= "settings" and ui.current_view_mode ~= "shortcuts" then
             if (file_location.flat_view and file_location.current_location ~= "") or ui.current_view_mode == "collections" or ui.current_view_mode == "auto" then
@@ -9696,13 +11354,12 @@ local function loop()
             r.ImGui_Separator(ctx)
         end
         
-        local scrollbar_pushed = false
+        local rp_flags = 0
         if ui_settings.hide_scrollbar then
-                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
-                scrollbar_pushed = true
-            end
-            
-            if r.ImGui_BeginChild(ctx, "RightPanelContent", 0, -FOOTER_H) then
+            rp_flags = r.ImGui_WindowFlags_NoScrollbar()
+        end
+
+        if r.ImGui_BeginChild(ctx, "RightPanelContent", 0, -FOOTER_H, 0, rp_flags) then
                 if ui.current_view_mode == "settings" then
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
@@ -9971,6 +11628,76 @@ local function loop()
                     end
                     if r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_SetTooltip(ctx, "Show real-time pitch detection during audio playback in the waveform view.\nDisplays the detected musical note and frequency.")
+                    end
+
+                    if ui.pitch_detection_enabled then
+                        r.ImGui_Indent(ctx, 16)
+                        r.ImGui_Text(ctx, "Preset:")
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_SmallButton(ctx, "Fast##pitch_preset_fast") then
+                            ui_settings.pitch_stability_time_sec = 0.25
+                            ui_settings.pitch_update_interval_sec = 0.1
+                            ui_settings.pitch_consistency_tolerance = 0.20
+                            ui_settings.pitch_history_size = 3
+                            save_options()
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_SmallButton(ctx, "Balanced##pitch_preset_bal") then
+                            ui_settings.pitch_stability_time_sec = 0.6
+                            ui_settings.pitch_update_interval_sec = 0.2
+                            ui_settings.pitch_consistency_tolerance = 0.15
+                            ui_settings.pitch_history_size = 5
+                            save_options()
+                        end
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_SmallButton(ctx, "Smooth##pitch_preset_smooth") then
+                            ui_settings.pitch_stability_time_sec = 1.0
+                            ui_settings.pitch_update_interval_sec = 0.25
+                            ui_settings.pitch_consistency_tolerance = 0.10
+                            ui_settings.pitch_history_size = 7
+                            save_options()
+                        end
+                        r.ImGui_Spacing(ctx)
+                        local stab_ms = math.floor((ui_settings.pitch_stability_time_sec or 0.6) * 1000 + 0.5)
+                        local stab_changed, new_stab = r.ImGui_SliderInt(ctx, "Pitch Stability (ms)##pitch_stab", stab_ms, 100, 1500)
+                        if stab_changed then
+                            ui_settings.pitch_stability_time_sec = new_stab / 1000
+                            save_options()
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "How long a pitch must remain consistent before being shown.\nHigher = more stable but slower; lower = more responsive.")
+                        end
+
+                        local upd_ms = math.floor((ui_settings.pitch_update_interval_sec or 0.2) * 1000 + 0.5)
+                        local upd_changed, new_upd = r.ImGui_SliderInt(ctx, "Pitch Update (ms)##pitch_upd", upd_ms, 50, 500)
+                        if upd_changed then
+                            ui_settings.pitch_update_interval_sec = new_upd / 1000
+                            save_options()
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "How often pitch is re-analyzed.\nLower = more CPU; higher = slower reaction.")
+                        end
+
+                        local tol_pct = math.floor((ui_settings.pitch_consistency_tolerance or 0.15) * 100 + 0.5)
+                        local tol_changed, new_tol = r.ImGui_SliderInt(ctx, "Pitch Sensitivity (%)##pitch_tol", tol_pct, 5, 30)
+                        if tol_changed then
+                            ui_settings.pitch_consistency_tolerance = new_tol / 100
+                            save_options()
+                        end
+                        if r.ImGui_IsItemHovered(ctx) then
+                            r.ImGui_SetTooltip(ctx, "Allowed deviation between consecutive measurements before pitch is considered jumping.\nLower = stricter (more stable on clean tones); higher = tolerates vibrato/noise.")
+                        end
+                        r.ImGui_Unindent(ctx, 16)
+                    end
+
+                    r.ImGui_Spacing(ctx)
+                    local nojump_changed, nojump_new = r.ImGui_Checkbox(ctx, "Saved Searches: don't jump to folder", ui_settings.saved_search_no_jump)
+                    if nojump_changed then
+                        ui_settings.saved_search_no_jump = nojump_new
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "When enabled, applying a saved search only loads its content\n(files, filters, search term) without switching the active view\nor changing the selected folder/location in the side panel.")
                     end
                     
                     r.ImGui_Spacing(ctx)
@@ -10266,14 +11993,10 @@ local function loop()
                     r.ImGui_BulletText(ctx, "Load Preset        Restore Saved Settings")
                     r.ImGui_BulletText(ctx, "Delete Preset      Remove Saved Preset")
                     
-                elseif ui.current_view_mode == "folders" or ui.current_view_mode == "collections" or ui.current_view_mode == "auto" then
+                elseif ui.current_view_mode == "folders" or ui.current_view_mode == "collections" or ui.current_view_mode == "auto" or ui.current_view_mode == "searches" then
                     draw_file_list()
                 end
-            end
-            r.ImGui_EndChild(ctx)
-            
-            if scrollbar_pushed then
-                r.ImGui_PopStyleVar(ctx, 1)
+                r.ImGui_EndChild(ctx)
             end
 
             local divider_w = r.ImGui_GetContentRegionAvail(ctx)
@@ -10993,9 +12716,8 @@ local function loop()
                     end
                 end
             end
+            r.ImGui_EndChild(ctx)
         end
-        
-        r.ImGui_EndChild(ctx)
         
         r.ImGui_End(ctx)
     end
@@ -11069,7 +12791,6 @@ local function loop()
             advance_to_next_file()
         end
     end
-    draw_category_manager()
     draw_rename_folder_popup()
 
     if ui.image_viewer_open and ui.image_viewer_path ~= "" then
@@ -11140,7 +12861,6 @@ local function exit_script()
 end
 r.atexit(exit_script)
 load_locations()
-load_collections()
 
 local startup_deferred_load = false
 
@@ -11185,6 +12905,7 @@ check_numa_player_installed()
 load_browser_position()
 
 r.defer(loop)
+
 
 
 
