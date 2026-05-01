@@ -823,6 +823,17 @@ v1.7.0:
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Arrange_Background_Presets.lua</source>
         </version>
     </reapack>
+
+    <reapack name="TK_Add_Send_To_Selected_Tracks.lua" type="script" desc="TK Add Send To Selected Tracks">
+        <version name="1.0" author="TouristKiller" time="2026-05-01T21:40:00Z">
+            <changelog><![CDATA[
++ Popup menu with existing send destinations from current project
++ Sorted by usage (most used first)
++ Adds send to all selected tracks, skips duplicates
+]]></changelog>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Add_Send_To_Selected_Tracks.lua</source>
+        </version>
+    </reapack>
 </category>
 
  <category name="Requests">
