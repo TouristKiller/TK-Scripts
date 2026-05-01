@@ -314,16 +314,6 @@ v0.7.9:
         </version>
     </reapack>
     
-+ Applying a saved search restores the search term in the search bar
-+ Fixed: search field had no effect in folder browse mode (latent bug)
-+ Fixed: applying a saved search showed all files instead of the filtered results
-+ Fixed: ImGui PopID error when deleting a saved search via the context menu
-+ Fixed: in tree mode the sample played twice (once on mouse press, once on release)
-
-     ]]></changelog>
-        </version>
-    </reapack>
-    
     <reapack name="TK_MediaExplorer_WebBridge.lua" type="script" desc="TK Media Explorer Web Controller - Bridge Script">
         <version name="3.0" author="TouristKiller" time="2025-11-23T12:45:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MediaExplorer_WebBridge.lua</source>
